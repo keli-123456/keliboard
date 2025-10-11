@@ -460,9 +460,7 @@ class MigrateFromV2b extends Command
 
         $updated = 0;
         foreach ($servers as $server) {
-            // parent_id 存储的是原始的 ID，需要拼接成 "协议_ID" 格式查找
-            $parentCode = $server->type . '_' . $server->parent_id;
-            
+            // parent_id 存储的是原始的 ID，直接用数字查找（code 只存数字）
             $parentId = DB::table('v2_server')
                 ->where('type', $server->type)
                 ->where('code', (string)$server->parent_id)
@@ -537,8 +535,21 @@ class MigrateFromV2b extends Command
             return null;
         }
         
-        $decoded = json_decode($value, true);
-        return $decoded !== null ? $decoded : null;
+        // 如果已经是数组或对象，直接返回（转为数组）
+        if (is_array($value)) {
+            return $value;
+        }
+        if (is_object($value)) {
+            return json_decode(json_encode($value), true);
+        }
+        
+        // 如果是 JSON 字符串，解码
+        if (is_string($value)) {
+            $decoded = json_decode($value, true);
+            return $decoded !== null ? $decoded : null;
+        }
+        
+        return null;
     }
 
     /**
@@ -793,7 +804,7 @@ class MigrateFromV2b extends Command
             // 准备基础数据（注意 Xboard 使用 group_ids 和 route_ids 复数形式）
             $serverData = [
                 'type' => $type,
-                'code' => (string)$server->id,
+                'code' => (string)$server->id,  // ✅ code 只保存数字，节点后端用这个对接
                 'group_ids' => isset($server->group_id) ? (is_string($server->group_id) ? $server->group_id : json_encode($server->group_id)) : '[]',
                 'route_ids' => isset($server->route_id) ? (is_string($server->route_id) ? $server->route_id : json_encode($server->route_id)) : '[]',
                 'name' => $server->name,
@@ -901,9 +912,21 @@ class MigrateFromV2b extends Command
                     'tls' => $server->tls ?? 0,
                     'network' => $server->network ?? 'tcp',
                 ];
+                
+                // 处理 TLS/Reality 配置
                 if (isset($server->tls_settings)) {
-                    $settings['tls_settings'] = $this->parseJson($server->tls_settings);
+                    $tlsSettings = $this->parseJson($server->tls_settings);
+                    
+                    // 如果是 Reality (tls=2)，同时保存到 tls_settings 和 reality_settings
+                    if (($server->tls ?? 0) == 2) {
+                        $settings['tls_settings'] = $tlsSettings;
+                        $settings['reality_settings'] = $tlsSettings; // ✅ Xboard 前端从这里读取
+                    } else {
+                        // 普通 TLS
+                        $settings['tls_settings'] = $tlsSettings;
+                    }
                 }
+                
                 if (isset($server->network_settings)) {
                     $settings['network_settings'] = $this->parseJson($server->network_settings);
                 }
