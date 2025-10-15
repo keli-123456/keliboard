@@ -840,13 +840,28 @@ class MigrateFromV2b extends Command
      */
     protected function backupOtherData()
     {
-        // 备份v2_giftcard表（如果存在）
+        // 清理旧的 v2_giftcard 表（不迁移，礼品卡不是重要数据）
         if (DB::getSchemaBuilder()->hasTable('v2_giftcard')) {
-            $giftcards = DB::table('v2_giftcard')->get();
-            if ($giftcards->count() > 0) {
-                DB::statement("CREATE TABLE IF NOT EXISTS `v2_giftcard_backup` AS SELECT * FROM `v2_giftcard`");
-                $this->line("  ✅ 备份 v2_giftcard: " . $giftcards->count() . " 条记录");
+            $giftcardCount = DB::table('v2_giftcard')->count();
+            
+            if ($giftcardCount > 0) {
+                $this->warn("  ⚠️  发现旧的 v2_giftcard 表 ({$giftcardCount} 条记录)");
+                $this->line("  🗑️  礼品卡不是重要数据，将直接删除");
+                DB::statement("DROP TABLE v2_giftcard");
+                $this->line("  ✅ v2_giftcard 表已删除");
+            } else {
+                $this->line("  🗑️  删除空的 v2_giftcard 表");
+                DB::statement("DROP TABLE v2_giftcard");
             }
+        }
+        
+        // 清理可能存在的备份表
+        if (DB::getSchemaBuilder()->hasTable('v2_giftcard_backup')) {
+            $backupCount = DB::table('v2_giftcard_backup')->count();
+            $this->warn("  ⚠️  发现旧的备份表 v2_giftcard_backup ({$backupCount} 条记录)");
+            $this->line("  🗑️  删除备份表");
+            DB::statement("DROP TABLE v2_giftcard_backup");
+            $this->line("  ✅ v2_giftcard_backup 表已删除");
         }
     }
     
@@ -1616,6 +1631,29 @@ class MigrateFromV2b extends Command
         } catch (\Exception $e) {
             $this->error("     ❌ API 查询失败: " . $e->getMessage());
             throw $e; // 重新抛出异常，让迁移失败
+        }
+        
+        // 8. 确保旧的礼品卡表已清理
+        $this->line('  8️⃣  确认旧礼品卡表已清理...');
+        try {
+            $tablesToClean = ['v2_giftcard', 'v2_giftcard_backup'];
+            $cleaned = 0;
+            
+            foreach ($tablesToClean as $table) {
+                if (DB::getSchemaBuilder()->hasTable($table)) {
+                    $this->warn("     ⚠️  发现残留的 {$table} 表，正在删除...");
+                    DB::statement("DROP TABLE {$table}");
+                    $cleaned++;
+                }
+            }
+            
+            if ($cleaned > 0) {
+                $this->line("     ✅ 已清理 {$cleaned} 个旧礼品卡表");
+            } else {
+                $this->line("     ✅ 旧礼品卡表已清理");
+            }
+        } catch (\Exception $e) {
+            $this->warn("     ⚠️  清理礼品卡表失败: " . $e->getMessage());
         }
         
         $this->line('');
