@@ -735,16 +735,18 @@ class MigrateFromV2b extends Command
      */
     protected function backupServerData()
     {
-        // 创建临时备份表
-        DB::statement("CREATE TABLE IF NOT EXISTS `v2_server_backup_temp` (
+        // 强制删除旧的临时备份表（如果存在）
+        DB::statement("DROP TABLE IF EXISTS `v2_server_backup_temp`");
+        $this->line("  🗑️  已删除旧临时表（如果存在）");
+        
+        // 创建全新的临时备份表
+        DB::statement("CREATE TABLE `v2_server_backup_temp` (
             `id` int NOT NULL,
             `type` varchar(20) NOT NULL,
             `data` longtext NOT NULL,
             PRIMARY KEY (`type`, `id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
-        
-        // 清空旧备份
-        DB::table('v2_server_backup_temp')->truncate();
+        $this->line("  ✅ 临时备份表已创建");
         
         // 备份其他重要数据
         $this->backupOtherData();
