@@ -26,6 +26,7 @@ class CommController extends Controller
             'recaptcha_v3_score_threshold' => admin_setting('recaptcha_v3_score_threshold', 0.5),
             'turnstile_site_key' => admin_setting('turnstile_site_key'),
             'app_description' => admin_setting('app_description'),
+            'app_name' => admin_setting('app_name'),
             'app_url' => admin_setting('app_url'),
             'logo' => admin_setting('logo'),
             // 保持向后兼容
