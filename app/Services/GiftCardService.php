@@ -374,9 +374,12 @@ class GiftCardService
             'max_usage' => $this->code->max_usage,
         ];
         if ($this->template->type === GiftCardTemplate::TYPE_PLAN) {
-            $plan = Plan::find($this->code->template->rewards['plan_id']);
-            if ($plan) {
-                $info['plan_info'] = PlanResource::make($plan)->toArray(request());
+            // 添加安全检查，防止访问不存在的键
+            if (isset($this->template->rewards['plan_id'])) {
+                $plan = Plan::find($this->template->rewards['plan_id']);
+                if ($plan) {
+                    $info['plan_info'] = PlanResource::make($plan)->toArray(request());
+                }
             }
         }
         return $info;
