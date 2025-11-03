@@ -112,7 +112,7 @@ class GiftCardService
                 $this->code->setActualRewards($actualRewards);
             }
 
-            $this->giveRewards($actualRewards);
+            $rewardResult = $this->giveRewards($actualRewards);
 
             $inviteRewards = null;
             if ($this->user->invite_user_id && isset($actualRewards['invite_reward_rate'])) {
@@ -136,6 +136,7 @@ class GiftCardService
                 'invite_rewards' => $inviteRewards,
                 'code' => $this->code->code,
                 'template_name' => $this->template->name,
+                'operation_info' => $rewardResult['operation_info'] ?? null,
             ];
         });
     }
@@ -143,7 +144,7 @@ class GiftCardService
     /**
      * 发放奖励
      */
-    protected function giveRewards(array $rewards): void
+    protected function giveRewards(array $rewards): array
     {
         $userService = app(UserService::class);
 
@@ -162,19 +163,53 @@ class GiftCardService
         }
 
         if (isset($rewards['reset_package']) && $rewards['reset_package']) {
+            // 修复：允许有套餐的用户（包括过期套餐）重置流量
             if ($this->user->plan_id) {
-                app(TrafficResetService::class)->performReset($this->user, TrafficResetLog::SOURCE_GIFT_CARD);
+                $this->performGiftCardTrafficReset();
             }
         }
+
+        $operationInfo = [];
 
         if (isset($rewards['plan_id'])) {
             $plan = Plan::find($rewards['plan_id']);
             if ($plan) {
-                $userService->assignPlan(
-                    $this->user,
-                    $plan,
-                    $rewards['plan_validity_days'] ?? null
-                );
+                $validityDays = $rewards['plan_validity_days'] ?? 0;
+                
+                // 智能套餐处理逻辑
+                if ($this->user->plan_id && $this->user->plan_id === $plan->id) {
+                    // 相同套餐：只延长有效期，不重置流量
+                    if ($validityDays > 0) {
+                        $userService->extendSubscription($this->user, $validityDays);
+                        $operationInfo['plan_action'] = 'extend';
+                        $operationInfo['plan_name'] = $plan->name;
+                        $operationInfo['extended_days'] = $validityDays;
+                        $operationInfo['message'] = "套餐「{$plan->name}」有效期已延长 {$validityDays} 天";
+                    }
+                } else {
+                    // 不同套餐或无套餐：分配新套餐并重置流量
+                    $oldPlanName = $this->user->plan ? $this->user->plan->name : '无套餐';
+                    $hadPlan = (bool) $this->user->plan_id;
+                    
+                    // 只有当用户有套餐时才重置流量
+                    if ($hadPlan) {
+                        $this->performGiftCardTrafficReset();
+                        $operationInfo['traffic_reset'] = true;
+                    }
+                    
+                    $userService->assignPlan($this->user, $plan, $validityDays);
+                    
+                    $operationInfo['plan_action'] = $hadPlan ? 'replace' : 'assign';
+                    $operationInfo['old_plan_name'] = $oldPlanName;
+                    $operationInfo['new_plan_name'] = $plan->name;
+                    $operationInfo['validity_days'] = $validityDays;
+                    
+                    if ($hadPlan) {
+                        $operationInfo['message'] = "套餐已从「{$oldPlanName}」更换为「{$plan->name}」，流量已重置";
+                    } else {
+                        $operationInfo['message'] = "已分配套餐「{$plan->name}」";
+                    }
+                }
             }
         } else {
             // 只有在不是套餐卡的情况下，才处理独立的有效期奖励
@@ -187,6 +222,10 @@ class GiftCardService
         if (!$this->user->save()) {
             throw new ApiException('用户信息更新失败');
         }
+
+        return [
+            'operation_info' => $operationInfo
+        ];
     }
 
     /**
@@ -314,6 +353,55 @@ class GiftCardService
     public function getTemplate(): GiftCardTemplate
     {
         return $this->template;
+    }
+
+    /**
+     * 执行礼品卡流量重置（允许过期用户）
+     */
+    protected function performGiftCardTrafficReset(): bool
+    {
+        try {
+            return DB::transaction(function () {
+                $oldUpload = $this->user->u ?? 0;
+                $oldDownload = $this->user->d ?? 0;
+                $oldTotal = $oldUpload + $oldDownload;
+
+                // 重置流量
+                $this->user->update([
+                    'u' => 0,
+                    'd' => 0,
+                    'last_reset_at' => time(),
+                    'reset_count' => $this->user->reset_count + 1,
+                ]);
+
+                // 记录重置日志
+                TrafficResetLog::create([
+                    'user_id' => $this->user->id,
+                    'reset_time' => time(),
+                    'reset_type' => 'gift_card',
+                    'trigger_source' => TrafficResetLog::SOURCE_GIFT_CARD,
+                    'old_upload' => $oldUpload,
+                    'old_download' => $oldDownload,
+                    'old_total' => $oldTotal,
+                    'new_upload' => 0,
+                    'new_download' => 0,
+                    'new_total' => 0,
+                    'metadata' => [
+                        'gift_card_code' => $this->code->code,
+                        'template_name' => $this->template->name,
+                    ],
+                ]);
+
+                return true;
+            });
+        } catch (\Exception $e) {
+            Log::error('礼品卡流量重置失败', [
+                'user_id' => $this->user->id,
+                'error' => $e->getMessage(),
+                'code' => $this->code->code,
+            ]);
+            return false;
+        }
     }
 
     /**

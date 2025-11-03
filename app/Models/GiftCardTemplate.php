@@ -120,17 +120,12 @@ class GiftCardTemplate extends Model
     {
         switch ($this->type) {
             case self::TYPE_GENERAL:
-                $rewards = $this->rewards ?? [];
-                if (isset($rewards['transfer_enable']) || isset($rewards['expire_days']) || isset($rewards['reset_package'])) {
-                    if (!$user->plan_id) {
-                        return false;
-                    }
-                }
+                // 通用礼品卡：所有用户都可以兑换，不限制是否有套餐
+                // 移除了原来对有套餐用户的限制逻辑
                 break;
             case self::TYPE_PLAN:
-                if ($user->isActive()) {
-                    return false;
-                }
+                // 套餐礼品卡：允许所有用户兑换（包括有活跃套餐的用户）
+                // 移除了原来对活跃用户的限制，允许升级或续费套餐
                 break;
         }
 

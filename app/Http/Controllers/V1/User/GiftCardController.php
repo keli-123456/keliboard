@@ -74,11 +74,18 @@ class GiftCardController extends Controller
                 'rewards' => $result['rewards'],
             ]);
 
+            // 根据操作信息生成更具体的成功消息
+            $message = '兑换成功！';
+            if (isset($result['operation_info']['message'])) {
+                $message = '兑换成功！' . $result['operation_info']['message'];
+            }
+
             return $this->success([
-                'message' => '兑换成功！',
+                'message' => $message,
                 'rewards' => $result['rewards'],
                 'invite_rewards' => $result['invite_rewards'],
                 'template_name' => $result['template_name'],
+                'operation_info' => $result['operation_info'] ?? null,
             ]);
 
         } catch (ApiException $e) {
