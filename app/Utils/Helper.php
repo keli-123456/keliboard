@@ -185,7 +185,7 @@ class Helper
     }
 
     public static function getRandFingerprint() {
-        $fingerprints = ['chrome', 'firefox', 'safari', 'ios', 'edge', 'qq'];
+        $fingerprints = ['firefox'];
         return Arr::random($fingerprints);
     }
 
