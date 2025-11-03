@@ -209,7 +209,7 @@ class GiftCardTemplate extends Model
      */
     public function calculateActualRewards(User $user): array
     {
-        $baseRewards = $this->rewards;
+        $baseRewards = $this->rewards ?? [];
         $actualRewards = $baseRewards;
 
         // 处理盲盒随机奖励
@@ -354,5 +354,4 @@ class GiftCardTemplate extends Model
         $result = $this->checkUsageLimitWithReason($user);
         return $result['can_use'];
     }
-}
 }
