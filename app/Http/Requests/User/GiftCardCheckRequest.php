@@ -22,7 +22,22 @@ class GiftCardCheckRequest extends FormRequest
     public function rules(): array
     {
         return [
-            //
+            'code' => 'required|string|min:8|max:32|regex:/^[A-Z0-9]+$/',
+        ];
+    }
+
+    /**
+     * Get custom messages for validator errors.
+     *
+     * @return array
+     */
+    public function messages(): array
+    {
+        return [
+            'code.required' => '请输入兑换码',
+            'code.min' => '兑换码长度不能少于8位',
+            'code.max' => '兑换码长度不能超过32位',
+            'code.regex' => '兑换码格式不正确，只能包含大写字母和数字',
         ];
     }
 }

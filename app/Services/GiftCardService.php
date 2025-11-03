@@ -75,25 +75,32 @@ class GiftCardService
         if (!$this->user) {
             return [
                 'can_redeem' => false,
-                'reason' => '用户信息未提供'
+                'reason' => '用户信息未提供',
+                'reason_code' => 'user_not_set'
             ];
         }
 
-        if (!$this->template->checkUserConditions($this->user)) {
+        // 使用新的详细检查方法
+        $conditionsCheck = $this->template->checkUserConditionsWithReason($this->user);
+        if (!$conditionsCheck['can_use']) {
             return [
                 'can_redeem' => false,
-                'reason' => '您不满足此礼品卡的使用条件'
+                'reason' => $conditionsCheck['reason'],
+                'reason_code' => $conditionsCheck['reason_code'] ?? 'condition_not_met'
             ];
         }
 
-        if (!$this->template->checkUsageLimit($this->user)) {
+        // 检查使用频率限制（使用新的优化方法）
+        $usageLimitCheck = $this->template->checkUsageLimitWithReason($this->user);
+        if (!$usageLimitCheck['can_use']) {
             return [
                 'can_redeem' => false,
-                'reason' => '您已达到此礼品卡的使用限制'
+                'reason' => $usageLimitCheck['reason'],
+                'reason_code' => $usageLimitCheck['reason_code']
             ];
         }
 
-        return ['can_redeem' => true, 'reason' => null];
+        return ['can_redeem' => true, 'reason' => null, 'reason_code' => null];
     }
 
     /**
@@ -106,6 +113,22 @@ class GiftCardService
         }
 
         return DB::transaction(function () use ($options) {
+            // 在事务内再次验证，防止并发问题
+            // 重新加载兑换码和用户数据（带行锁）
+            $this->code->refresh();
+            $this->user->refresh();
+            
+            // 再次检查兑换码是否可用
+            if (!$this->code->isAvailable()) {
+                throw new ApiException('兑换码已被使用或不可用');
+            }
+            
+            // 再次检查用户资格（防止check和redeem之间状态变化）
+            $eligibility = $this->checkUserEligibility();
+            if (!$eligibility['can_redeem']) {
+                throw new ApiException($eligibility['reason']);
+            }
+            
             $actualRewards = $this->template->calculateActualRewards($this->user);
 
             if ($this->template->type === GiftCardTemplate::TYPE_MYSTERY) {
@@ -173,6 +196,15 @@ class GiftCardService
 
         if (isset($rewards['plan_id'])) {
             $plan = Plan::find($rewards['plan_id']);
+            if (!$plan) {
+                Log::error('礼品卡套餐不存在', [
+                    'plan_id' => $rewards['plan_id'],
+                    'template_id' => $this->template->id,
+                    'code' => $this->code->code,
+                ]);
+                throw new ApiException('礼品卡配置的套餐不存在，请联系管理员');
+            }
+            
             if ($plan) {
                 $validityDays = $rewards['plan_validity_days'] ?? 0;
                 
@@ -239,6 +271,19 @@ class GiftCardService
 
         $inviteUser = User::find($this->user->invite_user_id);
         if (!$inviteUser) {
+            Log::warning('邀请人不存在', [
+                'user_id' => $this->user->id,
+                'invite_user_id' => $this->user->invite_user_id,
+            ]);
+            return null;
+        }
+
+        // 检查邀请人状态（如果被禁用则不发放奖励）
+        if (isset($inviteUser->banned) && $inviteUser->banned) {
+            Log::info('邀请人已被禁用，跳过奖励发放', [
+                'user_id' => $this->user->id,
+                'invite_user_id' => $inviteUser->id,
+            ]);
             return null;
         }
 
@@ -251,22 +296,32 @@ class GiftCardService
         if (isset($rewards['balance']) && $rewards['balance'] > 0) {
             $inviteBalance = intval($rewards['balance'] * $rate);
             if ($inviteBalance > 0) {
-                $userService->addBalance($inviteUser->id, $inviteBalance);
-                $inviteRewards['balance'] = $inviteBalance;
+                if ($userService->addBalance($inviteUser->id, $inviteBalance)) {
+                    $inviteRewards['balance'] = $inviteBalance;
+                    Log::info('邀请人获得余额奖励', [
+                        'invite_user_id' => $inviteUser->id,
+                        'balance' => $inviteBalance,
+                    ]);
+                }
             }
         }
 
-        // 邀请人流量奖励
+        // 邀请人流量奖励（统一使用模型操作确保一致性）
         if (isset($rewards['transfer_enable']) && $rewards['transfer_enable'] > 0) {
             $inviteTransfer = intval($rewards['transfer_enable'] * $rate);
             if ($inviteTransfer > 0) {
                 $inviteUser->transfer_enable = ($inviteUser->transfer_enable ?? 0) + $inviteTransfer;
-                $inviteUser->save();
-                $inviteRewards['transfer_enable'] = $inviteTransfer;
+                if ($inviteUser->save()) {
+                    $inviteRewards['transfer_enable'] = $inviteTransfer;
+                    Log::info('邀请人获得流量奖励', [
+                        'invite_user_id' => $inviteUser->id,
+                        'transfer_enable' => $inviteTransfer,
+                    ]);
+                }
             }
         }
 
-        return $inviteRewards;
+        return $inviteRewards ?: null;
     }
 
     /**
@@ -336,7 +391,129 @@ class GiftCardService
             throw new ApiException('未设置使用用户');
         }
 
-        return $this->template->calculateActualRewards($this->user);
+        $rewards = $this->template->calculateActualRewards($this->user);
+        
+        // 格式化奖励信息，使其更友好
+        $formatted = [];
+        
+        if (isset($rewards['balance']) && $rewards['balance'] > 0) {
+            $formatted['balance'] = [
+                'raw' => $rewards['balance'],
+                'formatted' => number_format($rewards['balance'] / 100, 2) . ' 元',
+                'description' => '余额奖励'
+            ];
+        }
+        
+        if (isset($rewards['transfer_enable']) && $rewards['transfer_enable'] > 0) {
+            $gb = round($rewards['transfer_enable'] / (1024 * 1024 * 1024), 2);
+            $formatted['transfer_enable'] = [
+                'raw' => $rewards['transfer_enable'],
+                'formatted' => $gb >= 1 ? number_format($gb, 2) . ' GB' : number_format($rewards['transfer_enable'] / (1024 * 1024), 2) . ' MB',
+                'description' => '流量奖励'
+            ];
+        }
+        
+        if (isset($rewards['device_limit']) && $rewards['device_limit'] > 0) {
+            $formatted['device_limit'] = [
+                'raw' => $rewards['device_limit'],
+                'formatted' => $rewards['device_limit'] . ' 个设备',
+                'description' => '设备数奖励'
+            ];
+        }
+        
+        if (isset($rewards['expire_days']) && $rewards['expire_days'] > 0) {
+            $formatted['expire_days'] = [
+                'raw' => $rewards['expire_days'],
+                'formatted' => $rewards['expire_days'] . ' 天',
+                'description' => '有效期延长'
+            ];
+        }
+        
+        if (isset($rewards['reset_package']) && $rewards['reset_package']) {
+            $formatted['reset_package'] = [
+                'raw' => true,
+                'formatted' => '是',
+                'description' => '重置流量'
+            ];
+        }
+        
+        if (isset($rewards['plan_id'])) {
+            $plan = Plan::find($rewards['plan_id']);
+            $formatted['plan'] = [
+                'id' => $rewards['plan_id'],
+                'name' => $plan ? $plan->name : '未知套餐',
+                'description' => '套餐奖励',
+                'validity_days' => $rewards['plan_validity_days'] ?? null,
+            ];
+        }
+        
+        return [
+            'raw' => $rewards,
+            'formatted' => $formatted
+        ];
+    }
+
+    /**
+     * 预判套餐操作（用于check接口）
+     */
+    public function predictPlanOperation(): ?array
+    {
+        if (!$this->user) {
+            return null;
+        }
+        
+        $rewards = $this->template->rewards ?? [];
+        if (!isset($rewards['plan_id'])) {
+            return null;
+        }
+        
+        $plan = Plan::find($rewards['plan_id']);
+        if (!$plan) {
+            return null;
+        }
+        
+        $validityDays = $rewards['plan_validity_days'] ?? 0;
+        
+        // 判断操作类型
+        if ($this->user->plan_id && $this->user->plan_id === $plan->id) {
+            // 相同套餐：延长有效期
+            $currentPlan = $this->user->plan;
+            return [
+                'operation_type' => 'extend',
+                'current_plan_id' => $this->user->plan_id,
+                'current_plan_name' => $currentPlan ? $currentPlan->name : '当前套餐',
+                'new_plan_id' => $plan->id,
+                'new_plan_name' => $plan->name,
+                'validity_days' => $validityDays,
+                'traffic_reset' => false,
+                'warning' => null,
+                'message' => "将延长套餐「{$plan->name}」的有效期 {$validityDays} 天，不重置流量"
+            ];
+        } else {
+            // 不同套餐或无套餐：覆盖套餐
+            $currentPlan = $this->user->plan;
+            $currentPlanName = $currentPlan ? $currentPlan->name : '无套餐';
+            $hasPlan = (bool) $this->user->plan_id;
+            
+            $warning = null;
+            if ($hasPlan) {
+                $warning = "⚠️ 兑换后将替换您当前的套餐「{$currentPlanName}」，流量将被重置";
+            }
+            
+            return [
+                'operation_type' => $hasPlan ? 'replace' : 'assign',
+                'current_plan_id' => $this->user->plan_id,
+                'current_plan_name' => $currentPlanName,
+                'new_plan_id' => $plan->id,
+                'new_plan_name' => $plan->name,
+                'validity_days' => $validityDays,
+                'traffic_reset' => $hasPlan,
+                'warning' => $warning,
+                'message' => $hasPlan 
+                    ? "将把套餐从「{$currentPlanName}」更换为「{$plan->name}」，流量将被重置"
+                    : "将分配套餐「{$plan->name}」给您"
+            ];
+        }
     }
 
     /**

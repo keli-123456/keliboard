@@ -253,17 +253,21 @@ class GiftCardController extends Controller
                 $options
             );
 
-            // 查询本次生成的所有兑换码
-            $codes = GiftCardCode::where('batch_id', $batchId)->get();
-
             // 判断是否导出 CSV
             if ($request->input('download_csv')) {
+                $fileName = 'gift_codes_' . $batchId . '_' . date('YmdHis') . '.csv';
                 $headers = [
-                    'Content-Type' => 'text/csv',
-                    'Content-Disposition' => 'attachment; filename="gift_codes.csv"',
+                    'Content-Type' => 'text/csv; charset=UTF-8',
+                    'Content-Disposition' => 'attachment; filename="' . $fileName . '"',
                 ];
-                $callback = function () use ($codes, $template) {
+                
+                // 使用流式查询和输出，避免内存溢出
+                $callback = function () use ($batchId, $template) {
                     $handle = fopen('php://output', 'w');
+                    
+                    // 添加BOM头以支持Excel打开中文
+                    fprintf($handle, chr(0xEF).chr(0xBB).chr(0xBF));
+                    
                     // 表头
                     fputcsv($handle, [
                         '兑换码',
@@ -280,36 +284,43 @@ class GiftCardController extends Controller
                         '使用时间',
                         '备注'
                     ]);
-                    foreach ($codes as $code) {
-                        $expireDate = $code->expires_at ? date('Y-m-d H:i:s', $code->expires_at) : '长期有效';
-                        $createDate = date('Y-m-d H:i:s', $code->created_at);
-                        $templateName = $template->name ?? '';
-                        $templateType = $template->type ?? '';
-                        $templateRewards = $template->rewards ? json_encode($template->rewards, JSON_UNESCAPED_UNICODE) : '';
-                        // 状态判断
-                        $status = $code->status_name;
-                        $usedBy = $code->user_id ?? '';
-                        $usedAt = $code->used_at ? date('Y-m-d H:i:s', $code->used_at) : '';
-                        $remark = $code->remark ?? '';
-                        fputcsv($handle, [
-                            $code->code,
-                            $code->prefix ?? '',
-                            $expireDate,
-                            $code->max_usage,
-                            $code->batch_id,
-                            $createDate,
-                            $templateName,
-                            $templateType,
-                            $templateRewards,
-                            $status,
-                            $usedBy,
-                            $usedAt,
-                            $remark,
-                        ]);
-                    }
+                    
+                    // 分块查询，每次1000条
+                    GiftCardCode::where('batch_id', $batchId)
+                        ->chunk(1000, function ($codes) use ($handle, $template) {
+                            foreach ($codes as $code) {
+                                $expireDate = $code->expires_at ? date('Y-m-d H:i:s', $code->expires_at) : '长期有效';
+                                $createDate = date('Y-m-d H:i:s', $code->created_at);
+                                $templateName = $template->name ?? '';
+                                $templateType = $template->type ?? '';
+                                $templateRewards = $template->rewards ? json_encode($template->rewards, JSON_UNESCAPED_UNICODE) : '';
+                                $status = $code->status_name;
+                                $usedBy = $code->user_id ?? '';
+                                $usedAt = $code->used_at ? date('Y-m-d H:i:s', $code->used_at) : '';
+                                $remark = $code->remark ?? '';
+                                
+                                fputcsv($handle, [
+                                    $code->code,
+                                    $code->prefix ?? '',
+                                    $expireDate,
+                                    $code->max_usage,
+                                    $code->batch_id,
+                                    $createDate,
+                                    $templateName,
+                                    $templateType,
+                                    $templateRewards,
+                                    $status,
+                                    $usedBy,
+                                    $usedAt,
+                                    $remark,
+                                ]);
+                            }
+                        });
+                    
                     fclose($handle);
                 };
-                return response()->streamDownload($callback, 'gift_codes.csv', $headers);
+                
+                return response()->streamDownload($callback, $fileName, $headers);
             }
 
             Log::info('批量生成兑换码', [

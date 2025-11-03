@@ -31,12 +31,20 @@ class GiftCardController extends Controller
             // 3. 获取卡片信息和奖励预览
             $codeInfo = $giftCardService->getCodeInfo();
             $rewardPreview = $giftCardService->previewRewards();
+            
+            // 4. 预判套餐操作（仅套餐礼品卡）
+            $planOperation = null;
+            if ($codeInfo['template']['type'] === \App\Models\GiftCardTemplate::TYPE_PLAN) {
+                $planOperation = $giftCardService->predictPlanOperation();
+            }
 
             return $this->success([
                 'code_info' => $codeInfo, // 这里面已经包含 plan_info
                 'reward_preview' => $rewardPreview,
                 'can_redeem' => $eligibility['can_redeem'],
                 'reason' => $eligibility['reason'],
+                'reason_code' => $eligibility['reason_code'] ?? null,
+                'plan_operation' => $planOperation, // 套餐操作预判信息
             ]);
 
         } catch (ApiException $e) {
@@ -109,25 +117,68 @@ class GiftCardController extends Controller
         $request->validate([
             'page' => 'integer|min:1',
             'per_page' => 'integer|min:1|max:100',
+            'template_type' => 'nullable|integer|in:1,2,3',
+            'start_time' => 'nullable|integer|min:0',
+            'end_time' => 'nullable|integer|min:0',
         ]);
 
         $perPage = $request->input('per_page', 15);
 
-        $usages = GiftCardUsage::with(['template', 'code'])
-            ->where('user_id', $request->user()->id)
-            ->orderBy('created_at', 'desc')
-            ->paginate($perPage);
+        $query = GiftCardUsage::with(['template', 'code'])
+            ->where('user_id', $request->user()->id);
+        
+        // 按模板类型筛选
+        if ($request->has('template_type')) {
+            $query->whereHas('template', function ($q) use ($request) {
+                $q->where('type', $request->input('template_type'));
+            });
+        }
+        
+        // 按时间范围筛选
+        if ($request->has('start_time')) {
+            $query->where('created_at', '>=', $request->input('start_time'));
+        }
+        if ($request->has('end_time')) {
+            $query->where('created_at', '<=', $request->input('end_time'));
+        }
+
+        $usages = $query->orderBy('created_at', 'desc')->paginate($perPage);
 
         $data = $usages->getCollection()->map(function (GiftCardUsage $usage) {
+            // 格式化奖励展示
+            $formattedRewards = [];
+            $rewards = $usage->rewards_given ?? [];
+            
+            if (isset($rewards['balance']) && $rewards['balance'] > 0) {
+                $formattedRewards[] = '余额 ' . number_format($rewards['balance'] / 100, 2) . ' 元';
+            }
+            if (isset($rewards['transfer_enable']) && $rewards['transfer_enable'] > 0) {
+                $gb = round($rewards['transfer_enable'] / (1024 * 1024 * 1024), 2);
+                $formattedRewards[] = '流量 ' . ($gb >= 1 ? $gb . ' GB' : round($rewards['transfer_enable'] / (1024 * 1024), 2) . ' MB');
+            }
+            if (isset($rewards['device_limit']) && $rewards['device_limit'] > 0) {
+                $formattedRewards[] = '设备数 +' . $rewards['device_limit'];
+            }
+            if (isset($rewards['expire_days']) && $rewards['expire_days'] > 0) {
+                $formattedRewards[] = '有效期 +' . $rewards['expire_days'] . ' 天';
+            }
+            if (isset($rewards['plan_id'])) {
+                $formattedRewards[] = '套餐奖励';
+            }
+            if (isset($rewards['reset_package']) && $rewards['reset_package']) {
+                $formattedRewards[] = '流量已重置';
+            }
+            
             return [
                 'id' => $usage->id,
                 'code' => ($usage->code instanceof \App\Models\GiftCardCode && $usage->code->code)
                     ? (substr($usage->code->code, 0, 8) . '****')
-                    : '',
-                'template_name' => $usage->template->name ?? '',
-                'template_type' => $usage->template->type ?? '',
-                'template_type_name' => $usage->template->type_name ?? '',
+                    : '[已删除]',
+                'template_name' => $usage->template->name ?? '[模板已删除]',
+                'template_type' => $usage->template->type ?? 0,
+                'template_type_name' => $usage->template->type_name ?? '未知',
                 'rewards_given' => $usage->rewards_given,
+                'rewards_summary' => implode('、', $formattedRewards) ?: '无奖励',
                 'invite_rewards' => $usage->invite_rewards,
                 'multiplier_applied' => $usage->multiplier_applied,
                 'created_at' => $usage->created_at,
