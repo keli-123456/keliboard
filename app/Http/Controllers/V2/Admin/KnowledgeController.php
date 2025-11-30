@@ -15,11 +15,10 @@ class KnowledgeController extends Controller
     public function fetch(Request $request)
     {
         if ($request->input('id')) {
-            $knowledge = Knowledge::find($request->input('id'));
-            if (!$knowledge) {
+            $knowledge = Knowledge::find($request->input('id'))->toArray();
+            if (!$knowledge)
                 return $this->fail([400202, '知识不存在']);
-            }
-            return $this->success($knowledge->toArray());
+            return $this->success($knowledge);
         }
         $data = Knowledge::select(['title', 'id', 'updated_at', 'category', 'show'])
             ->orderBy('sort', 'ASC')
@@ -37,21 +36,14 @@ class KnowledgeController extends Controller
         $params = $request->validated();
 
         if (!$request->input('id')) {
-            try {
-                Knowledge::create($params);
-            } catch (\Throwable $e) {
-                \Log::error('知识库创建失败: ' . $e->getMessage(), ['exception' => $e]);
+            if (!Knowledge::create($params)) {
                 return $this->fail([500, '创建失败']);
             }
         } else {
             try {
-                $knowledge = Knowledge::find($request->input('id'));
-                if (!$knowledge) {
-                    return $this->fail([400202, '知识不存在']);
-                }
-                $knowledge->update($params);
-            } catch (\Throwable $e) {
-                \Log::error('知识库更新失败: ' . $e->getMessage(), ['exception' => $e]);
+                Knowledge::find($request->input('id'))->update($params);
+            } catch (\Exception $e) {
+                \Log::error($e);
                 return $this->fail([500, '创建失败']);
             }
         }
