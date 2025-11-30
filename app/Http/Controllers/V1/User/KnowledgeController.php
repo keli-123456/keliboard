@@ -25,7 +25,7 @@ class KnowledgeController extends Controller
     {
         $request->validate([
             'id' => 'nullable|sometimes|integer|min:1',
-            'language' => 'nullable|sometimes|string|max:10',
+            'language' => 'nullable|sometimes|string|max:16',
             'keyword' => 'nullable|sometimes|string|max:255',
         ]);
 

@@ -41,7 +41,7 @@ class KnowledgeController extends Controller
                 Knowledge::create($params);
             } catch (\Throwable $e) {
                 \Log::error('知识库创建失败: ' . $e->getMessage(), ['exception' => $e]);
-                return $this->fail([500, '创建失败']);
+                return $this->fail([500, $this->buildErrorMessage('创建失败', $e)]);
             }
         } else {
             try {
@@ -52,7 +52,7 @@ class KnowledgeController extends Controller
                 $knowledge->update($params);
             } catch (\Throwable $e) {
                 \Log::error('知识库更新失败: ' . $e->getMessage(), ['exception' => $e]);
-                return $this->fail([500, '创建失败']);
+                return $this->fail([500, $this->buildErrorMessage('创建失败', $e)]);
             }
         }
 
@@ -117,5 +117,10 @@ class KnowledgeController extends Controller
         }
 
         return $this->success(true);
+    }
+
+    private function buildErrorMessage(string $default, \Throwable $e): string
+    {
+        return config('app.debug') ? ($default . ': ' . $e->getMessage()) : $default;
     }
 }
