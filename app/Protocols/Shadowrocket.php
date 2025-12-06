@@ -66,7 +66,8 @@ class Shadowrocket extends AbstractProtocol
             }
         }
         return response(base64_encode($uri))
-            ->header('content-type', 'text/plain');
+            ->header('content-type', 'text/plain')
+            ->header('profile-title', $appName);
     }
 
 
