@@ -68,6 +68,7 @@ class Shadowrocket extends AbstractProtocol
             ->header('content-type', 'text/plain')
             // Shadowrocket uses profile-title/Subscription-Userinfo headers for the list remark; send plain title (plus filename for some clients).
             ->header('profile-title', $appName)
+            ->header('title', $appName)
             ->header('Subscription-Userinfo', "upload={$user['u']}; download={$user['d']}; total={$user['transfer_enable']}; expire={$user['expired_at']}")
             ->header('Content-Disposition', 'attachment; filename="' . rawurlencode($appName) . '.txt"');
     }
