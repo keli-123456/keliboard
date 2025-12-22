@@ -17,6 +17,32 @@ class TicketController extends Controller
                 $key = $filter['id'];
                 $value = $filter['value'];
                 $builder->where(function ($query) use ($key, $value) {
+                    if (in_array($key, ['keyword', 'q'], true)) {
+                        $raw = is_string($value) || is_numeric($value) ? trim((string) $value) : '';
+                        if ($raw === '') {
+                            return;
+                        }
+
+                        $tokens = preg_split('/\s+/', $raw, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+                        $tokens = array_values(array_filter(array_map(fn($t) => trim((string) $t), $tokens)));
+
+                        foreach ($tokens as $token) {
+                            $query->where(function ($sub) use ($token) {
+                                $sub->where('subject', 'like', "%{$token}%")
+                                    ->orWhereHas('user', function ($q) use ($token) {
+                                        $q->where('email', 'like', "%{$token}%");
+                                    });
+
+                                if (is_numeric($token)) {
+                                    $n = (int) $token;
+                                    $sub->orWhere('id', $n)
+                                        ->orWhere('user_id', $n);
+                                }
+                            });
+                        }
+                        return;
+                    }
+
                     if (is_array($value)) {
                         $query->whereIn($key, $value);
                     } else {
