@@ -181,6 +181,18 @@ class GiftCardTemplate extends Model
             }
         }
 
+        // 检查禁止的套餐
+        if (isset($conditions['banned_plans']) && !empty($conditions['banned_plans'])) {
+            if ($user->plan_id && in_array($user->plan_id, $conditions['banned_plans'])) {
+                $userPlanName = $user->plan ? $user->plan->name : '当前套餐';
+                return [
+                    'can_use' => false,
+                    'reason' => "此礼品卡禁止特定套餐用户使用，您的「{$userPlanName}」在禁止列表中",
+                    'reason_code' => 'plan_banned'
+                ];
+            }
+        }
+
         // 检查是否需要邀请人
         if (isset($conditions['require_invite']) && $conditions['require_invite']) {
             if (!$user->invite_user_id) {
