@@ -353,6 +353,7 @@ class GiftCardController extends Controller
         $request->validate([
             'template_id' => 'integer|exists:v2_gift_card_template,id',
             'batch_id' => 'string',
+            'keyword' => 'string|max:255',
             'status' => 'integer|in:0,1,2,3',
             'page' => 'integer|min:1',
             'per_page' => 'integer|min:1|max:500',
@@ -366,6 +367,17 @@ class GiftCardController extends Controller
 
         if ($request->has('batch_id')) {
             $query->where('batch_id', $request->input('batch_id'));
+        }
+
+        if ($request->filled('keyword')) {
+            $keyword = $request->input('keyword');
+            $query->where(function ($q) use ($keyword) {
+                $q->where('code', 'like', '%' . $keyword . '%')
+                    ->orWhere('batch_id', 'like', '%' . $keyword . '%')
+                    ->orWhereHas('template', function ($t) use ($keyword) {
+                        $t->where('name', 'like', '%' . $keyword . '%');
+                    });
+            });
         }
 
         if ($request->has('status')) {
