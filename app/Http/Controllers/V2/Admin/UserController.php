@@ -114,6 +114,12 @@ class UserController extends Controller
                                 ->orWhere('invite_user_id', $n)
                                 ->orWhere('plan_id', $n)
                                 ->orWhere('group_id', $n);
+
+                            // Fuzzy match numeric IDs (e.g., search "123" matches id 5123).
+                            $q->orWhereRaw('CAST(id AS CHAR) LIKE ?', ["%{$token}%"])
+                                ->orWhereRaw('CAST(invite_user_id AS CHAR) LIKE ?', ["%{$token}%"])
+                                ->orWhereRaw('CAST(plan_id AS CHAR) LIKE ?', ["%{$token}%"])
+                                ->orWhereRaw('CAST(group_id AS CHAR) LIKE ?', ["%{$token}%"]);
                         }
                     });
                 }
