@@ -63,7 +63,7 @@ class StatController extends Controller
                 'ticket_pending_total' => Ticket::where('status', 0)
                     ->count(),
                 'commission_pending_total' => Order::where('commission_status', 0)
-                    ->where('invite_user_id', '!=', NULL)
+                    ->whereNotNull('invite_user_id')
                     ->whereNotIn('status', [0, 2])
                     ->where('commission_balance', '>', 0)
                     ->count(),
@@ -366,7 +366,7 @@ class StatController extends Controller
         // 获取待处理工单和佣金数据
         $ticketPendingTotal = Ticket::where('status', 0)->count();
         $commissionPendingTotal = Order::where('commission_status', 0)
-            ->where('invite_user_id', '!=', NULL)
+            ->whereNotNull('invite_user_id')
             ->whereIn('status', [Order::STATUS_COMPLETED])
             ->where('commission_balance', '>', 0)
             ->count();

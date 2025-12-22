@@ -49,7 +49,7 @@ class CheckCommission extends Command
     {
         if ((int)admin_setting('commission_auto_check_enable', 1)) {
             Order::where('commission_status', 0)
-                ->where('invite_user_id', '!=', NULL)
+                ->whereNotNull('invite_user_id')
                 ->where('status', 3)
                 ->where('updated_at', '<=', strtotime('-3 day', time()))
                 ->update([
@@ -61,7 +61,7 @@ class CheckCommission extends Command
     public function autoPayCommission()
     {
         $orders = Order::where('commission_status', 1)
-            ->where('invite_user_id', '!=', NULL)
+            ->whereNotNull('invite_user_id')
             ->get();
         foreach ($orders as $order) {
             try{
