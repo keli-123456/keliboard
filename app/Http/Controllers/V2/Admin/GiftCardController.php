@@ -382,7 +382,12 @@ class GiftCardController extends Controller
         }
 
         if ($request->has('status')) {
-            $query->where('status', $request->input('status'));
+            $status = (int) $request->input('status');
+            if ($status === GiftCardCode::STATUS_EXPIRED) {
+                $query->whereIn('status', [GiftCardCode::STATUS_EXPIRED, GiftCardCode::STATUS_DISABLED]);
+            } else {
+                $query->where('status', $status);
+            }
         }
 
         $perPage = $request->input('per_page', 15);
