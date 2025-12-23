@@ -7,6 +7,7 @@ use App\Models\Log as LogModel;
 use App\Utils\CacheKey;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\File;
 use Laravel\Horizon\Contracts\JobRepository;
 use Laravel\Horizon\Contracts\MasterSupervisorRepository;
 use Laravel\Horizon\Contracts\MetricsRepository;
@@ -132,27 +133,314 @@ class SystemController extends Controller
         $level = $request->input('level');
         $keyword = $request->input('keyword');
 
-        $builder = LogModel::orderBy('created_at', 'DESC')
-            ->when($level, function ($query) use ($level) {
-                return $query->where('level', strtoupper($level));
-            })
-            ->when($keyword, function ($query) use ($keyword) {
-                return $query->where(function ($q) use ($keyword) {
-                    $q->where('data', 'like', '%' . $keyword . '%')
-                        ->orWhere('context', 'like', '%' . $keyword . '%')
-                        ->orWhere('title', 'like', '%' . $keyword . '%')
-                        ->orWhere('uri', 'like', '%' . $keyword . '%');
+        try {
+            $builder = LogModel::orderBy('created_at', 'DESC')
+                ->when($level, function ($query) use ($level) {
+                    return $query->where('level', strtoupper($level));
+                })
+                ->when($keyword, function ($query) use ($keyword) {
+                    return $query->where(function ($q) use ($keyword) {
+                        $q->where('data', 'like', '%' . $keyword . '%')
+                            ->orWhere('context', 'like', '%' . $keyword . '%')
+                            ->orWhere('title', 'like', '%' . $keyword . '%')
+                            ->orWhere('uri', 'like', '%' . $keyword . '%');
+                    });
                 });
-            });
 
-        $total = $builder->count();
-        $res = $builder->forPage($current, $pageSize)
-            ->get();
+            $total = $builder->count();
+            if ($total > 0) {
+                $res = $builder->forPage($current, $pageSize)->get();
+                return response([
+                    'data' => $res,
+                    'total' => $total
+                ]);
+            }
+        } catch (\Throwable) {
+            // fall back to file logs
+        }
 
-        return response([
-            'data' => $res,
-            'total' => $total
-        ]);
+        $fallback = $this->getFileSystemLogs($current, $pageSize, $level, $keyword);
+        return response($fallback);
+    }
+
+    /**
+     * Fallback for environments where DB log channel isn't used or DB inserts fail.
+     */
+    private function getFileSystemLogs(int $current, int $pageSize, ?string $level, ?string $keyword): array
+    {
+        $files = $this->getSystemLogFiles();
+        if (empty($files)) {
+            return [
+                'data' => [],
+                'total' => 0,
+                'source' => 'file'
+            ];
+        }
+
+        $entries = [];
+        foreach ($files as $file) {
+            $entries = array_merge($entries, $this->parseLogFile($file, 3000));
+            if (count($entries) >= 6000) {
+                break;
+            }
+        }
+
+        usort($entries, fn($a, $b) => ($b['created_at'] ?? 0) <=> ($a['created_at'] ?? 0));
+
+        $normalizedLevel = $level ? strtoupper($level) : null;
+        $keyword = $keyword ? (string) $keyword : null;
+
+        $filtered = array_values(array_filter($entries, function ($row) use ($normalizedLevel, $keyword) {
+            if ($normalizedLevel && strtoupper((string) ($row['level'] ?? '')) !== $normalizedLevel) {
+                return false;
+            }
+            if ($keyword) {
+                $haystacks = [
+                    (string) ($row['title'] ?? ''),
+                    (string) ($row['uri'] ?? ''),
+                    (string) ($row['context'] ?? ''),
+                ];
+                foreach ($haystacks as $haystack) {
+                    if ($haystack !== '' && stripos($haystack, $keyword) !== false) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            return true;
+        }));
+
+        $total = count($filtered);
+        $current = max(1, $current);
+        $offset = ($current - 1) * $pageSize;
+        $page = array_slice($filtered, $offset, $pageSize);
+
+        return [
+            'data' => $page,
+            'total' => $total,
+            'source' => 'file'
+        ];
+    }
+
+    /**
+     * @return array<int, string> ordered by mtime desc
+     */
+    private function getSystemLogFiles(): array
+    {
+        $paths = [];
+
+        $backup = storage_path('logs/backup.log');
+        if (File::exists($backup) && File::isFile($backup)) {
+            $paths[] = $backup;
+        }
+
+        $logsDir = storage_path('logs');
+        if (File::exists($logsDir) && File::isDirectory($logsDir)) {
+            $candidates = collect(File::files($logsDir))
+                ->filter(fn($file) => preg_match('/^laravel(-\\d{4}-\\d{2}-\\d{2})?\\.log$/', $file->getFilename()))
+                ->sortByDesc(fn($file) => $file->getMTime())
+                ->take(3)
+                ->map(fn($file) => $file->getRealPath())
+                ->filter()
+                ->values()
+                ->all();
+
+            $paths = array_merge($paths, $candidates);
+        }
+
+        return array_values(array_unique($paths));
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function parseLogFile(string $path, int $maxLines): array
+    {
+        $lines = $this->tailLines($path, $maxLines);
+        if (empty($lines)) {
+            return [];
+        }
+
+        $entries = [];
+        $current = null;
+        foreach ($lines as $line) {
+            $parsed = $this->parseLogStartLine($line);
+            if ($parsed) {
+                if ($current) {
+                    $entries[] = $this->normalizeFileLogEntry($current);
+                }
+                $current = $parsed;
+                continue;
+            }
+
+            if ($current) {
+                $current['raw'] = isset($current['raw']) && $current['raw'] !== ''
+                    ? ($current['raw'] . "\n" . $line)
+                    : $line;
+            }
+        }
+
+        if ($current) {
+            $entries[] = $this->normalizeFileLogEntry($current);
+        }
+
+        return $entries;
+    }
+
+    /**
+     * @return array{created_at:int,level:string,title:string,context_array:array<string,mixed>,uri:?string,method:?string,host:?string,ip:?string,data:?string,raw:?string}|null
+     */
+    private function parseLogStartLine(string $line): ?array
+    {
+        if (!preg_match('/^\\[(?<dt>[^\\]]+)\\]\\s+(?<env>[^\\.]+)\\.(?<level>[A-Z]+):\\s+(?<body>.*)$/', $line, $matches)) {
+            return null;
+        }
+
+        $timestamp = strtotime($matches['dt']);
+        if ($timestamp === false) {
+            $timestamp = time();
+        }
+
+        [$message, $context] = $this->splitMessageAndContext($matches['body']);
+
+        return [
+            'created_at' => (int) $timestamp,
+            'level' => strtoupper($matches['level']),
+            'title' => $message,
+            'context_array' => $context ?? [],
+            'uri' => null,
+            'method' => null,
+            'host' => null,
+            'ip' => null,
+            'data' => null,
+            'raw' => null,
+        ];
+    }
+
+    /**
+     * @return array{0:string,1:?array<string,mixed>}
+     */
+    private function splitMessageAndContext(string $body): array
+    {
+        $body = rtrim($body);
+        $pos = strrpos($body, ' {');
+        if ($pos === false) {
+            return [$body, null];
+        }
+
+        $maybeJson = substr($body, $pos + 1);
+        $decoded = json_decode($maybeJson, true);
+        if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded)) {
+            return [$body, null];
+        }
+
+        $message = rtrim(substr($body, 0, $pos));
+        return [$message, $decoded];
+    }
+
+    /**
+     * @param array{created_at:int,level:string,title:string,context_array:array<string,mixed>,uri:?string,method:?string,host:?string,ip:?string,data:?string,raw:?string} $entry
+     * @return array<string, mixed>
+     */
+    private function normalizeFileLogEntry(array $entry): array
+    {
+        $context = $entry['context_array'] ?? [];
+
+        // Normalize exception shape so the admin UI can render it (expects \0*\0traceAsString etc.).
+        if (isset($context['exception']) && is_array($context['exception'])) {
+            $ex = $context['exception'];
+            $context['exception'] = [
+                "\0*\0message" => (string) ($ex['message'] ?? ''),
+                "\0*\0file" => (string) ($ex['file'] ?? ''),
+                "\0*\0line" => (string) ($ex['line'] ?? ''),
+                "\0*\0traceAsString" => (string) ($ex['traceAsString'] ?? $ex['trace'] ?? ''),
+            ];
+        }
+
+        if (!empty($entry['raw'])) {
+            $context['raw'] = (string) $entry['raw'];
+        }
+
+        // Extract request metadata from our backup logger fallback if present.
+        if (isset($context['log']) && is_array($context['log'])) {
+            $entry['host'] = $entry['host'] ?? ($context['log']['host'] ?? null);
+            $entry['uri'] = $entry['uri'] ?? ($context['log']['uri'] ?? null);
+            $entry['method'] = $entry['method'] ?? ($context['log']['method'] ?? null);
+        }
+
+        $contextJson = json_encode(
+            $context,
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR
+        );
+
+        return [
+            'id' => $entry['created_at'] . '-' . substr(sha1(($entry['title'] ?? '') . ($entry['raw'] ?? '')), 0, 8),
+            'title' => $entry['title'] ?? '',
+            'level' => strtoupper((string) ($entry['level'] ?? 'INFO')),
+            'host' => $entry['host'],
+            'uri' => $entry['uri'],
+            'method' => $entry['method'],
+            'ip' => $entry['ip'],
+            'data' => $entry['data'],
+            'context' => $contextJson ?: null,
+            'created_at' => $entry['created_at'],
+            'updated_at' => $entry['created_at'],
+        ];
+    }
+
+    /**
+     * Read last N lines from a file without loading the whole file.
+     *
+     * @return array<int, string>
+     */
+    private function tailLines(string $path, int $maxLines, int $maxBytes = 1048576): array
+    {
+        if (!File::exists($path) || !File::isFile($path)) {
+            return [];
+        }
+
+        $handle = @fopen($path, 'rb');
+        if (!$handle) {
+            return [];
+        }
+
+        $buffer = '';
+        $chunkSize = 4096;
+
+        fseek($handle, 0, SEEK_END);
+        $pos = ftell($handle);
+        if (!is_int($pos)) {
+            fclose($handle);
+            return [];
+        }
+
+        $lineCount = 0;
+        while ($pos > 0 && $lineCount <= $maxLines && strlen($buffer) < $maxBytes) {
+            $readSize = min($chunkSize, $pos);
+            $pos -= $readSize;
+            fseek($handle, $pos);
+
+            $chunk = fread($handle, $readSize);
+            if ($chunk === false) {
+                break;
+            }
+
+            $buffer = $chunk . $buffer;
+            $lineCount = substr_count($buffer, "\n");
+        }
+
+        fclose($handle);
+
+        $lines = preg_split("/\\r?\\n/", trim($buffer));
+        if (!$lines) {
+            return [];
+        }
+
+        if (count($lines) > $maxLines) {
+            $lines = array_slice($lines, -$maxLines);
+        }
+
+        return array_values(array_filter($lines, fn($line) => $line !== ''));
     }
 
     public function getHorizonFailedJobs(Request $request, JobRepository $jobRepository)
