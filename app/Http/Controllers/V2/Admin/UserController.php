@@ -11,6 +11,7 @@ use App\Models\Plan;
 use App\Models\User;
 use App\Services\AuthService;
 use App\Services\UserService;
+use App\Services\UserOnlineService;
 use App\Traits\QueryOperators;
 use App\Utils\Helper;
 use Illuminate\Database\Eloquent\Builder;
@@ -255,6 +256,22 @@ class UserController extends Controller
         ]);
         $user = User::find($request->input('id'))->load('invite_user');
         return $this->success($user);
+    }
+
+    public function getOnlineDevices(Request $request): JsonResponse
+    {
+        $request->validate([
+            'id' => 'required|integer|min:1'
+        ], [
+            'id.required' => '用户ID不能为空'
+        ]);
+
+        $userId = (int) $request->input('id');
+        if (!User::whereKey($userId)->exists()) {
+            return $this->fail([400202, '用户不存在']);
+        }
+
+        return $this->success(UserOnlineService::getUserDeviceIps($userId));
     }
 
     public function update(UserUpdate $request)

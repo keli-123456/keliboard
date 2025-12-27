@@ -71,6 +71,33 @@ class UserOnlineService
         ];
     }
 
+    /**
+     * 获取指定用户的在线 IP 列表（按设备数限制模式去重）
+     */
+    public static function getUserDeviceIps(int $userId): array
+    {
+        $mode = (int) admin_setting('device_limit_mode', 0);
+        $data = cache()->get(self::CACHE_PREFIX . $userId, []);
+        if (empty($data)) {
+            return ['mode' => $mode, 'total_count' => 0, 'ips' => []];
+        }
+
+        $ips = collect($data)
+            ->filter(fn(mixed $item): bool => is_array($item) && isset($item['aliveips']))
+            ->flatMap(fn(array $nodeData): array => collect($nodeData['aliveips'])
+                ->map(fn(string $ipNodeId): string => Str::before($ipNodeId, '_'))
+                ->all())
+            ->when($mode === 1, fn(Collection $collection): Collection => $collection->unique())
+            ->values()
+            ->all();
+
+        return [
+            'mode' => $mode,
+            'total_count' => $data['alive_ip'] ?? count($ips),
+            'ips' => $ips
+        ];
+    }
+
 
     /**
      * 批量获取用户在线设备数
