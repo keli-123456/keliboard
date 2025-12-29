@@ -28,14 +28,30 @@ class UniProxyController extends Controller
         return $request->attributes->get('node_info');
     }
 
+    /**
+     * 统一节点状态缓存的服务端 ID（子节点归属到父节点）
+     */
+    private function getNodeCacheServerId($node): int
+    {
+        return (int) ($node->parent_id ?: $node->id);
+    }
+
+    /**
+     * 更新节点最后检查时间，用于面板在线状态判断
+     */
+    private function touchNodeLastCheckAt($node): void
+    {
+        $nodeType = (string) $node->type;
+        $nodeId = $this->getNodeCacheServerId($node);
+        Cache::put(CacheKey::get('SERVER_' . strtoupper($nodeType) . '_LAST_CHECK_AT', $nodeId), time(), 3600);
+    }
+
     // 后端获取用户
     public function user(Request $request)
     {
         ini_set('memory_limit', -1);
         $node = $this->getNodeInfo($request);
-        $nodeType = $node->type;
-        $nodeId = $node->id;
-        Cache::put(CacheKey::get('SERVER_' . strtoupper($nodeType) . '_LAST_CHECK_AT', $nodeId), time(), 3600);
+        $this->touchNodeLastCheckAt($node);
         $users = ServerService::getAvailableUsers($node);
 
         $response = ['users' => $users];
@@ -83,12 +99,13 @@ class UniProxyController extends Controller
                 && is_numeric($item[0])
                 && is_numeric($item[1]);
         });
+        $node = $this->getNodeInfo($request);
+        $this->touchNodeLastCheckAt($node);
         if (empty($data)) {
             return $this->success(true);
         }
-        $node = $this->getNodeInfo($request);
         $nodeType = $node->type;
-        $nodeId = $node->id;
+        $nodeId = $this->getNodeCacheServerId($node);
 
         Cache::put(
             CacheKey::get('SERVER_' . strtoupper($nodeType) . '_ONLINE_USER', $nodeId),
@@ -110,6 +127,7 @@ class UniProxyController extends Controller
     public function config(Request $request)
     {
         $node = $this->getNodeInfo($request);
+        $this->touchNodeLastCheckAt($node);
         $nodeType = $node->type;
         $protocolSettings = $node->protocol_settings;
         $isV2Node = (bool) $request->attributes->get('is_v2node', false);
@@ -237,6 +255,7 @@ class UniProxyController extends Controller
     public function alivelist(Request $request): JsonResponse
     {
         $node = $this->getNodeInfo($request);
+        $this->touchNodeLastCheckAt($node);
         $deviceLimitUsers = ServerService::getAvailableUsers($node, true);
         $alive = $this->userOnlineService->getAliveList($deviceLimitUsers);
         return response()->json(['alive' => (object) $alive]);
@@ -246,6 +265,7 @@ class UniProxyController extends Controller
     public function alive(Request $request): JsonResponse
     {
         $node = $this->getNodeInfo($request);
+        $this->touchNodeLastCheckAt($node);
         $data = json_decode(request()->getContent(), true);
         if ($data === null) {
             return response()->json([
@@ -260,6 +280,7 @@ class UniProxyController extends Controller
     public function status(Request $request): JsonResponse
     {
         $node = $this->getNodeInfo($request);
+        $this->touchNodeLastCheckAt($node);
 
         $data = $request->validate([
             'cpu' => 'required|numeric|min:0|max:100',
@@ -272,7 +293,7 @@ class UniProxyController extends Controller
         ]);
 
         $nodeType = $node->type;
-        $nodeId = $node->id;
+        $nodeId = $this->getNodeCacheServerId($node);
 
         $statusData = [
             'cpu' => (float) $data['cpu'],
