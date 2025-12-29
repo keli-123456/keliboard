@@ -41,11 +41,25 @@ class UniProxyController extends Controller
         $response = ['users' => $users];
 
         $eTagContext = hash_init('sha1');
-        foreach ($users as $user) {
-            $userId = (int) ($user->id ?? 0);
-            $uuid = (string) ($user->uuid ?? '');
-            $speedLimit = (int) ($user->speed_limit ?? 0);
-            $deviceLimit = (int) ($user->device_limit ?? 0);
+        foreach ($users as $index => $user) {
+            $userId = (int) data_get($user, 'id', 0);
+            $uuid = (string) data_get($user, 'uuid', '');
+            $speedLimit = (int) data_get($user, 'speed_limit', 0);
+            $deviceLimit = (int) data_get($user, 'device_limit', 0);
+
+            if (is_object($user)) {
+                $user->id = $userId;
+                $user->uuid = $uuid;
+                $user->speed_limit = $speedLimit;
+                $user->device_limit = $deviceLimit;
+            } elseif (is_array($user)) {
+                $user['id'] = $userId;
+                $user['uuid'] = $uuid;
+                $user['speed_limit'] = $speedLimit;
+                $user['device_limit'] = $deviceLimit;
+                $users[$index] = $user;
+            }
+
             hash_update($eTagContext, "{$userId}:{$uuid}:{$speedLimit}:{$deviceLimit};");
         }
         $eTag = hash_final($eTagContext);
