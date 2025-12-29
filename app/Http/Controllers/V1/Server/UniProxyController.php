@@ -38,9 +38,17 @@ class UniProxyController extends Controller
         Cache::put(CacheKey::get('SERVER_' . strtoupper($nodeType) . '_LAST_CHECK_AT', $nodeId), time(), 3600);
         $users = ServerService::getAvailableUsers($node);
 
-        $response['users'] = $users;
+        $response = ['users' => $users];
 
-        $eTag = sha1(json_encode($response));
+        $eTagContext = hash_init('sha1');
+        foreach ($users as $user) {
+            $userId = (int) ($user->id ?? 0);
+            $uuid = (string) ($user->uuid ?? '');
+            $speedLimit = (int) ($user->speed_limit ?? 0);
+            $deviceLimit = (int) ($user->device_limit ?? 0);
+            hash_update($eTagContext, "{$userId}:{$uuid}:{$speedLimit}:{$deviceLimit};");
+        }
+        $eTag = hash_final($eTagContext);
         if (strpos($request->header('If-None-Match', ''), $eTag) !== false) {
             return response(null, 304);
         }
@@ -215,8 +223,7 @@ class UniProxyController extends Controller
     public function alivelist(Request $request): JsonResponse
     {
         $node = $this->getNodeInfo($request);
-        $deviceLimitUsers = ServerService::getAvailableUsers($node)
-            ->where('device_limit', '>', 0);
+        $deviceLimitUsers = ServerService::getAvailableUsers($node, true);
         $alive = $this->userOnlineService->getAliveList($deviceLimitUsers);
         return response()->json(['alive' => (object) $alive]);
     }

@@ -61,13 +61,11 @@ class ServerService
     }
 
     /**
-     * 根据权限组获取可用的用户列表
-     * @param array $groupIds
-     * @return Collection
+     * 获取节点可用用户列表
      */
-    public static function getAvailableUsers(Server $node)
+    public static function getAvailableUsers(Server $node, bool $onlyDeviceLimited = false): Collection
     {
-        $users = User::toBase()
+        $query = User::toBase()
             ->whereIn('group_id', $node->group_ids)
             ->whereRaw('u + d < transfer_enable')
             ->where(function ($query) {
@@ -81,8 +79,15 @@ class ServerService
                 'speed_limit',
                 'device_limit'
             ])
-            ->get();
-        return HookManager::filter('server.users.get', $users, $node);
+            ->orderBy('id', 'asc');
+
+        if ($onlyDeviceLimited) {
+            $query->where('device_limit', '>', 0);
+        }
+
+        $users = $query->get();
+        $users = HookManager::filter('server.users.get', $users, $node);
+        return collect($users)->sortBy('id')->values();
     }
 
     // 获取路由规则
