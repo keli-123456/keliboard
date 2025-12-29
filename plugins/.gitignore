@@ -5,4 +5,8 @@
 !Coinbase
 !Epay
 !Mgate
+!Bepusdt/
+!Bepusdt/**
 !Telegram
+!RemoteCheckProxy/
+!RemoteCheckProxy/**

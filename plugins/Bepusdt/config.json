@@ -1,0 +1,25 @@
+{
+    "name": "BEP USDT",
+    "code": "bepusdt",
+    "type": "payment",
+    "version": "1.0.0",
+    "description": "BEP USDT payment plugin (BEasyPaymentUSDT)",
+    "author": "XBoard Team",
+    "config": {
+        "enabled": {
+            "type": "boolean",
+            "default": true,
+            "label": "启用插件"
+        },
+        "display_name": {
+            "type": "string",
+            "default": "BEP USDT",
+            "label": "展示名称"
+        },
+        "icon": {
+            "type": "string",
+            "default": "🪙",
+            "label": "图标"
+        }
+    }
+}

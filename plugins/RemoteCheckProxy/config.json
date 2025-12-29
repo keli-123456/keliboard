@@ -1,0 +1,43 @@
+{
+    "name": "远程检测转发",
+    "code": "remote_check_proxy",
+    "version": "1.0.0",
+    "description": "请求上游检测接口并原样转发结果",
+    "author": "XBoard",
+    "type": "feature",
+    "require": {
+        "xboard": ">=1.0.0"
+    },
+    "config": {
+        "upstream_url": {
+            "type": "string",
+            "default": "",
+            "label": "上游接口地址",
+            "description": "返回 JSON 列表，字段保持原样转发（必填，建议使用环境变量）"
+        },
+        "timeout_seconds": {
+            "type": "number",
+            "default": 10,
+            "label": "请求超时（秒）",
+            "description": "请求上游接口的超时时间"
+        },
+        "random_ip_url": {
+            "type": "string",
+            "default": "",
+            "label": "随机IP接口地址",
+            "description": "返回格式示例：{\"ip\":\"172.245.45.138\"}（必填，建议使用环境变量）"
+        },
+        "enable_cache": {
+            "type": "boolean",
+            "default": false,
+            "label": "启用缓存",
+            "description": "开启后相同请求将在缓存有效期内直接返回缓存结果"
+        },
+        "cache_ttl_seconds": {
+            "type": "number",
+            "default": 60,
+            "label": "缓存时间（秒）",
+            "description": "为 0 则不缓存，建议根据上游接口刷新频率配置"
+        }
+    }
+}

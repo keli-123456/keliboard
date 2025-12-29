@@ -1,0 +1,96 @@
+{
+    "name": "订阅风控",
+    "code": "subscription_control",
+    "version": "1.0.0",
+    "description": "提供订阅链接的主动风险控制能力，防止节点被恶意扫描。支持UA黑名单、订阅IP限制、阅后即焚功能。",
+    "author": "XBoard",
+    "require": {
+        "xboard": ">=1.0.0"
+    },
+    "config": {
+        "enable_ua_blacklist": {
+            "type": "boolean",
+            "default": false,
+            "label": "启用UA黑名单",
+            "description": "开启后将检测并拦截黑名单中的User-Agent"
+        },
+        "ua_blacklist": {
+            "type": "string",
+            "default": "BadBot",
+            "label": "UA黑名单列表（逗号或换行分隔，模糊匹配）",
+            "description": "被禁止访问的User-Agent关键词，逗号或换行分隔，支持模糊匹配"
+        },
+        "enable_ua_reset_token": {
+            "type": "boolean",
+            "default": false,
+            "label": "命中UA时重置token/uuid",
+            "description": "开启后，当UA命中重置关键词，将重置用户token/uuid并阻断订阅"
+        },
+        "ua_reset_keywords": {
+            "type": "text",
+            "default": "",
+            "label": "重置UA关键词列表（逗号或换行分隔）",
+            "description": "命中后重置用户token/uuid并阻断订阅"
+        },
+        "enable_ip_limit": {
+            "type": "boolean",
+            "default": false,
+            "label": "启用订阅IP限制",
+            "description": "开启后将限制时间窗口内不同IP的访问数量"
+        },
+        "ip_limit_count": {
+            "type": "number",
+            "default": 3,
+            "label": "时间窗口内允许的不同IP数量",
+            "description": "在时间窗口内允许访问的不同IP数量"
+        },
+        "ip_limit_window": {
+            "type": "number",
+            "default": 600,
+            "label": "时间窗口（秒）",
+            "description": "IP限制的时间窗口"
+        },
+        "ip_limit_action": {
+            "type": "string",
+            "default": "限制访问",
+            "label": "触发限制后的操作",
+            "description": "当超过IP限制后的处理方式"
+        },
+        "enable_rate_limit": {
+            "type": "boolean",
+            "default": false,
+            "label": "启用订阅拉取频率限制",
+            "description": "限制订阅链接的访问频率"
+        },
+        "rate_limit_requests": {
+            "type": "number",
+            "default": 10,
+            "label": "时间窗口内允许的最大拉取次数",
+            "description": "时间窗口内允许的最大请求次数"
+        },
+        "rate_limit_window": {
+            "type": "number",
+            "default": 86400,
+            "label": "频率限制时间窗口（秒）",
+            "description": "频率限制的时间窗口"
+        },
+        "enable_one_time": {
+            "type": "boolean",
+            "default": true,
+            "label": "启用阅后即焚功能",
+            "description": "生成的阅后即焚链接仅能使用有限次数"
+        },
+        "one_time_max_uses": {
+            "type": "number",
+            "default": 10,
+            "label": "生成的阅后即焚链接可被使用的最大次数",
+            "description": "阅后即焚链接的最大使用次数"
+        },
+        "one_time_duration": {
+            "type": "number",
+            "default": 3600,
+            "label": "生成的阅后即焚链接的有效时间（秒）",
+            "description": "阅后即焚链接的有效期"
+        }
+    }
+}
