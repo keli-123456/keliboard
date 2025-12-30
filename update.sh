@@ -18,6 +18,7 @@ fi
 
 git config --global --add safe.directory "$(pwd)" >/dev/null 2>&1 || true
 
+OLD_HEAD="$(git rev-parse HEAD)"
 git fetch --all
 
 UPSTREAM="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
@@ -30,6 +31,11 @@ else
       break
     fi
   done
+fi
+
+NEW_HEAD="$(git rev-parse HEAD)"
+if [ "${XBOARD_UPDATE_REEXEC:-0}" != "1" ] && [ "${OLD_HEAD}" != "${NEW_HEAD}" ]; then
+  XBOARD_UPDATE_REEXEC=1 exec sh "$0" "$@"
 fi
 
 COMPOSE_BIN=""
