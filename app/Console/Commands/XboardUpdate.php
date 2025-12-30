@@ -55,11 +55,27 @@ class XboardUpdate extends Command
         // Artisan::call('reset:traffic', ['--fix-null' => true]);
         $this->info('正在重新计算所有用户的重置时间...');
         Artisan::call('reset:traffic', ['--force' => true]);
-        $updateService = new UpdateService();
-        $updateService->updateVersionCache();
-        $themeService = app(ThemeService::class);
-        $themeService->refreshCurrentTheme();
-        Artisan::call('horizon:terminate');
+
+        try {
+            $updateService = new UpdateService();
+            $updateService->updateVersionCache();
+        } catch (\Throwable $e) {
+            $this->warn('更新版本缓存失败（可忽略）: ' . $e->getMessage());
+        }
+
+        try {
+            $themeService = app(ThemeService::class);
+            $themeService->refreshCurrentTheme();
+        } catch (\Throwable $e) {
+            $this->warn('刷新主题失败（可忽略）: ' . $e->getMessage());
+        }
+
+        try {
+            Artisan::call('horizon:terminate');
+        } catch (\Throwable $e) {
+            $this->warn('重启队列服务失败（可忽略）: ' . $e->getMessage());
+        }
+
         $this->info('更新完毕，队列服务已重启，你无需进行任何操作。');
     }
 }

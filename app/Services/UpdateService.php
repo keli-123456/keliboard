@@ -36,24 +36,29 @@ class UpdateService
      */
     public function updateVersionCache(): void
     {
+        $date = date('Ymd');
+        $hash = null;
+
         try {
             $result = Process::run('git log -1 --format=%cd:%H --date=format:%Y%m%d');
             if ($result->successful()) {
-                list($date, $hash) = explode(':', trim($result->output()));
-                Cache::forever(self::CACHE_VERSION_DATE, $date);
-                Cache::forever(self::CACHE_VERSION, substr($hash, 0, 7));
-                // Log::info('Version cache updated: ' . $date . '-' . substr($hash, 0, 7));
-                return;
+                list($date, $fullHash) = explode(':', trim($result->output()));
+                $hash = substr($fullHash, 0, 7);
             }
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error('Failed to get version with date: ' . $e->getMessage());
         }
 
-        // Fallback
-        Cache::forever(self::CACHE_VERSION_DATE, date('Ymd'));
-        $fallbackHash = $this->getCurrentCommit();
-        Cache::forever(self::CACHE_VERSION, $fallbackHash);
-        Log::info('Version cache updated (fallback): ' . date('Ymd') . '-' . $fallbackHash);
+        if (!$hash) {
+            $hash = $this->getCurrentCommit();
+        }
+
+        try {
+            Cache::forever(self::CACHE_VERSION_DATE, $date);
+            Cache::forever(self::CACHE_VERSION, $hash);
+        } catch (\Throwable $e) {
+            Log::warning('Failed to write version cache: ' . $e->getMessage());
+        }
     }
 
     public function checkForUpdates(): array

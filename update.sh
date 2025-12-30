@@ -1,12 +1,12 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/usr/bin/env sh
+set -eu
 
 if [ ! -d ".git" ]; then
   echo "Please deploy using Git."
   exit 1
 fi
 
-if ! command -v git &> /dev/null; then
+if ! command -v git >/dev/null 2>&1; then
   echo "Git is not installed! Please install git and try again."
   exit 1
 fi
@@ -16,7 +16,7 @@ if [ -f "/.dockerenv" ]; then
   IN_DOCKER=1
 fi
 
-git config --global --add safe.directory "$(pwd)"
+git config --global --add safe.directory "$(pwd)" >/dev/null 2>&1 || true
 
 git fetch --all
 
@@ -32,28 +32,37 @@ else
   done
 fi
 
-COMPOSE_CMD=()
-if command -v docker &> /dev/null && docker compose version >/dev/null 2>&1; then
-  COMPOSE_CMD=(docker compose)
-elif command -v docker-compose &> /dev/null; then
-  COMPOSE_CMD=(docker-compose)
+COMPOSE_BIN=""
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+  COMPOSE_BIN="docker"
+elif command -v docker-compose >/dev/null 2>&1; then
+  COMPOSE_BIN="docker-compose"
 fi
 
-COMPOSE_FILE_ARGS=()
-if [ -f "compose.yaml" ]; then
-  COMPOSE_FILE_ARGS=(-f compose.yaml)
-elif [ -f "compose.yml" ]; then
-  COMPOSE_FILE_ARGS=(-f compose.yml)
-elif [ -f "docker-compose.yaml" ]; then
-  COMPOSE_FILE_ARGS=(-f docker-compose.yaml)
-elif [ -f "docker-compose.yml" ]; then
-  COMPOSE_FILE_ARGS=(-f docker-compose.yml)
-fi
+COMPOSE_FILE=""
+for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+  if [ -f "$f" ]; then
+    COMPOSE_FILE="$f"
+    break
+  fi
+done
 
 USE_COMPOSE=0
-if [ ${#COMPOSE_CMD[@]} -gt 0 ] && [ ${#COMPOSE_FILE_ARGS[@]} -gt 0 ]; then
+if [ -n "$COMPOSE_BIN" ] && [ -n "$COMPOSE_FILE" ]; then
   USE_COMPOSE=1
 fi
+
+compose() {
+  if [ "${USE_COMPOSE}" != "1" ]; then
+    return 1
+  fi
+
+  if [ "${COMPOSE_BIN}" = "docker" ]; then
+    docker compose -f "${COMPOSE_FILE}" "$@"
+  else
+    "${COMPOSE_BIN}" -f "${COMPOSE_FILE}" "$@"
+  fi
+}
 
 if [ "${USE_COMPOSE}" = "1" ] && [ "${IN_DOCKER}" = "0" ]; then
   mkdir -p .docker/.data/redis .docker/.data/redis-cache || true
@@ -61,11 +70,12 @@ if [ "${USE_COMPOSE}" = "1" ] && [ "${IN_DOCKER}" = "0" ]; then
     chmod -R 777 .docker/.data || true
   fi
 
-  if ! "${COMPOSE_CMD[@]}" "${COMPOSE_FILE_ARGS[@]}" up -d redis redis-cache; then
-    "${COMPOSE_CMD[@]}" "${COMPOSE_FILE_ARGS[@]}" up -d redis || true
+  if ! compose up -d redis redis-cache; then
+    compose up -d redis || true
   fi
 
-  for _ in {1..30}; do
+  i=0
+  while [ "${i}" -lt 30 ]; do
     ok=1
     if [ -d ".docker/.data/redis" ] && [ ! -S ".docker/.data/redis/redis.sock" ]; then
       ok=0
@@ -77,19 +87,20 @@ if [ "${USE_COMPOSE}" = "1" ] && [ "${IN_DOCKER}" = "0" ]; then
       break
     fi
     sleep 0.2
+    i=$((i + 1))
   done
 fi
 
 rm -rf composer.lock composer.phar
-if command -v wget &> /dev/null; then
+if command -v wget >/dev/null 2>&1; then
   wget https://github.com/composer/composer/releases/latest/download/composer.phar -O composer.phar
 else
   curl -fsSL https://github.com/composer/composer/releases/latest/download/composer.phar -o composer.phar
 fi
 
 if [ "${USE_COMPOSE}" = "1" ] && [ "${IN_DOCKER}" = "0" ]; then
-  "${COMPOSE_CMD[@]}" "${COMPOSE_FILE_ARGS[@]}" run --rm -T web sh -lc "cd /www && php composer.phar update -vvv"
-  "${COMPOSE_CMD[@]}" "${COMPOSE_FILE_ARGS[@]}" run --rm -T web sh -lc "cd /www && php artisan xboard:update"
+  compose run --rm -T web sh -lc "cd /www && php composer.phar update -vvv"
+  compose run --rm -T web sh -lc "cd /www && php artisan xboard:update"
 else
   php composer.phar update -vvv
   php artisan xboard:update
@@ -105,10 +116,10 @@ fi
 
 if [ "${USE_COMPOSE}" = "1" ]; then
   mkdir -p .docker/.data/redis-cache || true
-  "${COMPOSE_CMD[@]}" "${COMPOSE_FILE_ARGS[@]}" up -d --remove-orphans || true
-  "${COMPOSE_CMD[@]}" "${COMPOSE_FILE_ARGS[@]}" exec -T web php artisan config:cache || true
-  "${COMPOSE_CMD[@]}" "${COMPOSE_FILE_ARGS[@]}" exec -T horizon php artisan horizon:terminate || true
-  "${COMPOSE_CMD[@]}" "${COMPOSE_FILE_ARGS[@]}" restart web horizon || true
+  compose up -d --remove-orphans || true
+  compose exec -T web php artisan config:cache || true
+  compose exec -T horizon php artisan horizon:terminate || true
+  compose restart web horizon || true
 fi
 
 echo "xboardpro updated"
