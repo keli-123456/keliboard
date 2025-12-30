@@ -73,6 +73,11 @@ return [
 
         'redis' => [
             'driver' => 'redis',
+            'connection' => env('CACHE_REDIS_CONNECTION', 'default'),
+        ],
+
+        'redis-cache' => [
+            'driver' => 'redis',
             'connection' => 'cache',
         ],
         

@@ -29,6 +29,16 @@ class UniProxyController extends Controller
         return $request->attributes->get('node_info');
     }
 
+    private function getServerApiCache()
+    {
+        $store = config('server_api_cache.store');
+        try {
+            return is_string($store) && $store !== '' ? Cache::store($store) : Cache::store();
+        } catch (Throwable) {
+            return Cache::store();
+        }
+    }
+
     /**
      * 统一节点状态缓存的服务端 ID（子节点归属到父节点）
      */
@@ -48,40 +58,44 @@ class UniProxyController extends Controller
     }
 
     // 后端获取用户
-	    public function user(Request $request)
-	    {
-	        ini_set('memory_limit', -1);
-	        $node = $this->getNodeInfo($request);
-	        $this->touchNodeLastCheckAt($node);
+		    public function user(Request $request)
+		    {
+		        ini_set('memory_limit', -1);
+		        $node = $this->getNodeInfo($request);
+		        $this->touchNodeLastCheckAt($node);
 	        $cacheTtl = (int) config('server_api_cache.user_ttl', 0);
 	        $lockTtl = (int) config('server_api_cache.lock_ttl', 10);
 	        $lockWait = (int) config('server_api_cache.lock_wait', 3);
 
-	        if ($cacheTtl > 0) {
-	            $cacheKey = "server_api:user:{$node->id}";
-	            $cached = Cache::get($cacheKey);
-	            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
-	                return $this->respondCacheEntry($request, $cached);
-	            }
+		        if ($cacheTtl > 0) {
+		            $cache = $this->getServerApiCache();
+		            $cacheKey = "server_api:user:{$node->id}";
+		            $cached = $cache->get($cacheKey);
+		            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
+		                return $this->respondCacheEntry($request, $cached);
+		            }
 
-	            try {
-	                $lock = Cache::lock("lock:{$cacheKey}", $lockTtl);
-                $cached = $lock->block($lockWait, function () use ($cacheKey, $cacheTtl, $node) {
-                    $existing = Cache::get($cacheKey);
-                    if (is_array($existing) && isset($existing['etag'], $existing['body'])) {
-                        return $existing;
-                    }
-                    $entry = $this->buildUserCacheEntry($node);
-                    Cache::put($cacheKey, $entry, $cacheTtl);
-                    return $entry;
-                });
-            } catch (Throwable) {
-                $cached = $this->buildUserCacheEntry($node);
-                Cache::put($cacheKey, $cached, $cacheTtl);
-	            }
+		            try {
+		                $lock = $cache->lock("lock:{$cacheKey}", $lockTtl);
+	                $cached = $lock->block($lockWait, function () use ($cache, $cacheKey, $cacheTtl, $node) {
+	                    $existing = $cache->get($cacheKey);
+	                    if (is_array($existing) && isset($existing['etag'], $existing['body'])) {
+	                        return $existing;
+	                    }
+	                    $entry = $this->buildUserCacheEntry($node);
+	                    $cache->put($cacheKey, $entry, $cacheTtl);
+	                    return $entry;
+	                });
+	            } catch (Throwable) {
+	                $cached = $this->buildUserCacheEntry($node);
+	                try {
+	                    $cache->put($cacheKey, $cached, $cacheTtl);
+	                } catch (Throwable) {
+	                }
+		            }
 
-	            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
-	                return $this->respondCacheEntry($request, $cached);
+		            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
+		                return $this->respondCacheEntry($request, $cached);
 	            }
 	        }
 
@@ -126,41 +140,45 @@ class UniProxyController extends Controller
     }
 
     // 后端获取配置
-	    public function config(Request $request)
-	    {
-	        $node = $this->getNodeInfo($request);
-	        $this->touchNodeLastCheckAt($node);
-	        $isV2Node = (bool) $request->attributes->get('is_v2node', false);
+		    public function config(Request $request)
+		    {
+		        $node = $this->getNodeInfo($request);
+		        $this->touchNodeLastCheckAt($node);
+		        $isV2Node = (bool) $request->attributes->get('is_v2node', false);
 
 	        $cacheTtl = (int) config('server_api_cache.config_ttl', 0);
-	        $lockTtl = (int) config('server_api_cache.lock_ttl', 10);
-	        $lockWait = (int) config('server_api_cache.lock_wait', 3);
-	        if ($cacheTtl > 0) {
-	            $cacheKeySuffix = $isV2Node ? 'v2node' : 'default';
-	            $cacheKey = "server_api:config:{$node->id}:{$cacheKeySuffix}";
-	            $cached = Cache::get($cacheKey);
-	            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
-	                return $this->respondCacheEntry($request, $cached);
-	            }
+		        $lockTtl = (int) config('server_api_cache.lock_ttl', 10);
+		        $lockWait = (int) config('server_api_cache.lock_wait', 3);
+		        if ($cacheTtl > 0) {
+		            $cache = $this->getServerApiCache();
+		            $cacheKeySuffix = $isV2Node ? 'v2node' : 'default';
+		            $cacheKey = "server_api:config:{$node->id}:{$cacheKeySuffix}";
+		            $cached = $cache->get($cacheKey);
+		            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
+		                return $this->respondCacheEntry($request, $cached);
+		            }
 
-	            try {
-	                $lock = Cache::lock("lock:{$cacheKey}", $lockTtl);
-	                $cached = $lock->block($lockWait, function () use ($cacheKey, $cacheTtl, $node, $isV2Node) {
-	                    $existing = Cache::get($cacheKey);
-	                    if (is_array($existing) && isset($existing['etag'], $existing['body'])) {
-	                        return $existing;
-	                    }
-	                    $entry = $this->buildConfigCacheEntry($node, $isV2Node);
-	                    Cache::put($cacheKey, $entry, $cacheTtl);
-	                    return $entry;
-	                });
-	            } catch (Throwable) {
-	                $cached = $this->buildConfigCacheEntry($node, $isV2Node);
-	                Cache::put($cacheKey, $cached, $cacheTtl);
-	            }
+		            try {
+		                $lock = $cache->lock("lock:{$cacheKey}", $lockTtl);
+		                $cached = $lock->block($lockWait, function () use ($cache, $cacheKey, $cacheTtl, $node, $isV2Node) {
+		                    $existing = $cache->get($cacheKey);
+		                    if (is_array($existing) && isset($existing['etag'], $existing['body'])) {
+		                        return $existing;
+		                    }
+		                    $entry = $this->buildConfigCacheEntry($node, $isV2Node);
+		                    $cache->put($cacheKey, $entry, $cacheTtl);
+		                    return $entry;
+		                });
+		            } catch (Throwable) {
+		                $cached = $this->buildConfigCacheEntry($node, $isV2Node);
+		                try {
+		                    $cache->put($cacheKey, $cached, $cacheTtl);
+		                } catch (Throwable) {
+		                }
+		            }
 
-	            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
-	                return $this->respondCacheEntry($request, $cached);
+		            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
+		                return $this->respondCacheEntry($request, $cached);
 	            }
 	        }
 
