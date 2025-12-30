@@ -3,11 +3,19 @@ services:
     image: ghcr.io/keli-123456/keliboard:main
     volumes:
       - ./.docker/.data/redis/:/data/
+      - ./.docker/.data/redis-cache/:/data-cache/
       - ./:/www/
     environment:
       - docker=true
+      # Queue / sessions / horizon use default Redis (unix socket)
+      - REDIS_HOST=/data/redis.sock
+      - REDIS_PORT=0
+      # Cache uses dedicated Redis (unix socket)
+      - REDIS_CACHE_HOST=/data-cache/redis.sock
+      - REDIS_CACHE_PORT=0
     depends_on:
       - redis
+      - redis-cache
     network_mode: host
     command: php artisan octane:start --port=7001 --host=0.0.0.0
     restart: always
@@ -15,17 +23,27 @@ services:
     image: ghcr.io/keli-123456/keliboard:main
     volumes:
       - ./.docker/.data/redis/:/data/
+      - ./.docker/.data/redis-cache/:/data-cache/
       - ./:/www/
     restart: always
     network_mode: host
     command: php artisan horizon
     depends_on:
       - redis
+      - redis-cache
   redis:
     image: redis:7-alpine
-    command: redis-server --unixsocket /data/redis.sock --unixsocketperm 777
+    command: redis-server --port 0 --unixsocket /data/redis.sock --unixsocketperm 777
     restart: unless-stopped
     volumes:
       - ./.docker/.data/redis:/data
+    sysctls:
+      net.core.somaxconn: 1024
+  redis-cache:
+    image: redis:7-alpine
+    command: redis-server --port 0 --unixsocket /data/redis.sock --unixsocketperm 777 --save "" --appendonly no
+    restart: unless-stopped
+    volumes:
+      - ./.docker/.data/redis-cache:/data
     sysctls:
       net.core.somaxconn: 1024

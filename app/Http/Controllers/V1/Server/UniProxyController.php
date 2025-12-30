@@ -12,6 +12,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use App\Services\UserOnlineService;
 use Illuminate\Http\JsonResponse;
+use Throwable;
 
 class UniProxyController extends Controller
 {
@@ -47,44 +48,45 @@ class UniProxyController extends Controller
     }
 
     // 后端获取用户
-    public function user(Request $request)
-    {
-        ini_set('memory_limit', -1);
-        $node = $this->getNodeInfo($request);
-        $this->touchNodeLastCheckAt($node);
-        $users = ServerService::getAvailableUsers($node);
+	    public function user(Request $request)
+	    {
+	        ini_set('memory_limit', -1);
+	        $node = $this->getNodeInfo($request);
+	        $this->touchNodeLastCheckAt($node);
+	        $cacheTtl = (int) config('server_api_cache.user_ttl', 0);
+	        $lockTtl = (int) config('server_api_cache.lock_ttl', 10);
+	        $lockWait = (int) config('server_api_cache.lock_wait', 3);
 
-        $response = ['users' => $users];
+	        if ($cacheTtl > 0) {
+	            $cacheKey = "server_api:user:{$node->id}";
+	            $cached = Cache::get($cacheKey);
+	            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
+	                return $this->respondCacheEntry($request, $cached);
+	            }
 
-        $eTagContext = hash_init('sha1');
-        foreach ($users as $index => $user) {
-            $userId = (int) data_get($user, 'id', 0);
-            $uuid = (string) data_get($user, 'uuid', '');
-            $speedLimit = (int) data_get($user, 'speed_limit', 0);
-            $deviceLimit = (int) data_get($user, 'device_limit', 0);
+	            try {
+	                $lock = Cache::lock("lock:{$cacheKey}", $lockTtl);
+                $cached = $lock->block($lockWait, function () use ($cacheKey, $cacheTtl, $node) {
+                    $existing = Cache::get($cacheKey);
+                    if (is_array($existing) && isset($existing['etag'], $existing['body'])) {
+                        return $existing;
+                    }
+                    $entry = $this->buildUserCacheEntry($node);
+                    Cache::put($cacheKey, $entry, $cacheTtl);
+                    return $entry;
+                });
+            } catch (Throwable) {
+                $cached = $this->buildUserCacheEntry($node);
+                Cache::put($cacheKey, $cached, $cacheTtl);
+	            }
 
-            if (is_object($user)) {
-                $user->id = $userId;
-                $user->uuid = $uuid;
-                $user->speed_limit = $speedLimit;
-                $user->device_limit = $deviceLimit;
-            } elseif (is_array($user)) {
-                $user['id'] = $userId;
-                $user['uuid'] = $uuid;
-                $user['speed_limit'] = $speedLimit;
-                $user['device_limit'] = $deviceLimit;
-                $users[$index] = $user;
-            }
+	            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
+	                return $this->respondCacheEntry($request, $cached);
+	            }
+	        }
 
-            hash_update($eTagContext, "{$userId}:{$uuid}:{$speedLimit}:{$deviceLimit};");
-        }
-        $eTag = hash_final($eTagContext);
-        if (strpos($request->header('If-None-Match', ''), $eTag) !== false) {
-            return response(null, 304);
-        }
-
-        return response($response)->header('ETag', "\"{$eTag}\"");
-    }
+	        return $this->respondCacheEntry($request, $this->buildUserCacheEntry($node));
+	    }
 
     // 后端提交数据
     public function push(Request $request)
@@ -124,132 +126,46 @@ class UniProxyController extends Controller
     }
 
     // 后端获取配置
-    public function config(Request $request)
-    {
-        $node = $this->getNodeInfo($request);
-        $this->touchNodeLastCheckAt($node);
-        $nodeType = $node->type;
-        $protocolSettings = $node->protocol_settings;
-        $isV2Node = (bool) $request->attributes->get('is_v2node', false);
+	    public function config(Request $request)
+	    {
+	        $node = $this->getNodeInfo($request);
+	        $this->touchNodeLastCheckAt($node);
+	        $isV2Node = (bool) $request->attributes->get('is_v2node', false);
 
-        $serverPort = $node->server_port;
-        $host = $node->host;
+	        $cacheTtl = (int) config('server_api_cache.config_ttl', 0);
+	        $lockTtl = (int) config('server_api_cache.lock_ttl', 10);
+	        $lockWait = (int) config('server_api_cache.lock_wait', 3);
+	        if ($cacheTtl > 0) {
+	            $cacheKeySuffix = $isV2Node ? 'v2node' : 'default';
+	            $cacheKey = "server_api:config:{$node->id}:{$cacheKeySuffix}";
+	            $cached = Cache::get($cacheKey);
+	            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
+	                return $this->respondCacheEntry($request, $cached);
+	            }
 
-        $baseConfig = [
-            'protocol' => $nodeType,
-            'listen_ip' => '0.0.0.0',
-            'server_port' => (int) $serverPort,
-            'network' => data_get($protocolSettings, 'network'),
-            'networkSettings' => data_get($protocolSettings, 'network_settings') ?: null,
-        ];
+	            try {
+	                $lock = Cache::lock("lock:{$cacheKey}", $lockTtl);
+	                $cached = $lock->block($lockWait, function () use ($cacheKey, $cacheTtl, $node, $isV2Node) {
+	                    $existing = Cache::get($cacheKey);
+	                    if (is_array($existing) && isset($existing['etag'], $existing['body'])) {
+	                        return $existing;
+	                    }
+	                    $entry = $this->buildConfigCacheEntry($node, $isV2Node);
+	                    Cache::put($cacheKey, $entry, $cacheTtl);
+	                    return $entry;
+	                });
+	            } catch (Throwable) {
+	                $cached = $this->buildConfigCacheEntry($node, $isV2Node);
+	                Cache::put($cacheKey, $cached, $cacheTtl);
+	            }
 
-        $response = match ($nodeType) {
-            'shadowsocks' => [
-                ...$baseConfig,
-                'cipher' => $protocolSettings['cipher'],
-                'plugin' => $protocolSettings['plugin'],
-                'plugin_opts' => $protocolSettings['plugin_opts'],
-                'server_key' => match ($protocolSettings['cipher']) {
-                        '2022-blake3-aes-128-gcm' => Helper::getServerKey($node->created_at, 16),
-                        '2022-blake3-aes-256-gcm' => Helper::getServerKey($node->created_at, 32),
-                        default => null
-                    }
-            ],
-            'vmess' => [
-                ...$baseConfig,
-                'tls' => (int) $protocolSettings['tls']
-            ],
-            'trojan' => [
-                ...$baseConfig,
-                'host' => $host,
-                'server_name' => $protocolSettings['server_name'],
-            ],
-            'vless' => [
-                ...$baseConfig,
-                'tls' => (int) $protocolSettings['tls'],
-                'flow' => $protocolSettings['flow'],
-                'tls_settings' =>
-                        match ((int) $protocolSettings['tls']) {
-                            2 => $protocolSettings['reality_settings'],
-                            default => $protocolSettings['tls_settings']
-                        }
-            ],
-            'hysteria' => [
-                ...$baseConfig,
-                'server_port' => (int) $serverPort,
-                'version' => (int) $protocolSettings['version'],
-                'host' => $host,
-                'server_name' => $protocolSettings['tls']['server_name'],
-                'up_mbps' => (int) $protocolSettings['bandwidth']['up'],
-                'down_mbps' => (int) $protocolSettings['bandwidth']['down'],
-                ...match ((int) $protocolSettings['version']) {
-                        1 => ['obfs' => $protocolSettings['obfs']['password'] ?? null],
-                        2 => [
-                            'obfs' => $protocolSettings['obfs']['open'] ? $protocolSettings['obfs']['type'] : null,
-                            'obfs-password' => $protocolSettings['obfs']['password'] ?? null
-                        ],
-                        default => []
-                    }
-            ],
-            'tuic' => [
-                ...$baseConfig,
-                'version' => (int) $protocolSettings['version'],
-                'server_port' => (int) $serverPort,
-                'server_name' => $protocolSettings['tls']['server_name'],
-                'congestion_control' => $protocolSettings['congestion_control'],
-                'auth_timeout' => '3s',
-                'zero_rtt_handshake' => (bool) data_get($protocolSettings, 'zero_rtt_handshake', false),
-                'heartbeat' => "3s",
-            ],
-            'anytls' => [
-                ...$baseConfig,
-                'server_port' => (int) $serverPort,
-                'server_name' => $protocolSettings['tls']['server_name'],
-                'padding_scheme' => $protocolSettings['padding_scheme'],
-            ],
-            'socks' => [
-                ...$baseConfig,
-                'server_port' => (int) $serverPort,
-            ],
-            'naive' => [
-                ...$baseConfig,
-                'server_port' => (int) $serverPort,
-                'tls' => (int) $protocolSettings['tls'],
-                'tls_settings' => $protocolSettings['tls_settings']
-            ],
-            'http' => [
-                ...$baseConfig,
-                'server_port' => (int) $serverPort,
-                'tls' => (int) $protocolSettings['tls'],
-                'tls_settings' => $protocolSettings['tls_settings']
-            ],
-            'mieru' => [
-                ...$baseConfig,
-                'server_port' => (string) $serverPort,
-                'protocol' => (int) $protocolSettings['protocol'],
-            ],
-            default => []
-        };
+	            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
+	                return $this->respondCacheEntry($request, $cached);
+	            }
+	        }
 
-        $response['base_config'] = [
-            'push_interval' => (int) admin_setting('server_push_interval', 60),
-            'pull_interval' => (int) admin_setting('server_pull_interval', 60)
-        ];
-
-        if (!empty($node['route_ids'])) {
-            $response['routes'] = ServerService::getRoutes($node['route_ids']);
-        }
-
-        if ($isV2Node) {
-            $response = $this->adaptConfigForV2Node($response, $node);
-        }
-
-        $eTag = sha1(json_encode($response));
-        if (strpos($request->header('If-None-Match', ''), $eTag) !== false) {
-            return response(null, 304);
-        }
-        return response($response)->header('ETag', "\"{$eTag}\"");
-    }
+	        return $this->respondCacheEntry($request, $this->buildConfigCacheEntry($node, $isV2Node));
+	    }
 
     // 获取在线用户数据（wyx2685
     public function alivelist(Request $request): JsonResponse
@@ -451,8 +367,8 @@ class UniProxyController extends Controller
         return (array) data_get($protocolSettings, 'tls_settings', []);
     }
 
-    private function resolveV2NodeServerName($node, string $nodeType, array $protocolSettings, int $tls, array $baseTlsSettings): string
-    {
+	    private function resolveV2NodeServerName($node, string $nodeType, array $protocolSettings, int $tls, array $baseTlsSettings): string
+	    {
         $serverName = match ($nodeType) {
             'trojan' => (string) data_get($protocolSettings, 'server_name', ''),
             'hysteria', 'tuic', 'anytls' => (string) data_get($protocolSettings, 'tls.server_name', ''),
@@ -463,6 +379,185 @@ class UniProxyController extends Controller
             $serverName = (string) data_get($protocolSettings, 'reality_settings.server_name', $serverName);
         }
 
-        return $serverName ?: (string) $node->host;
-    }
+	        return $serverName ?: (string) $node->host;
+	    }
+
+	    private function respondCacheEntry(Request $request, array $entry)
+	    {
+	        $etag = (string) ($entry['etag'] ?? '');
+	        if ($etag !== '' && strpos($request->header('If-None-Match', ''), $etag) !== false) {
+	            return response(null, 304)->header('ETag', "\"{$etag}\"");
+	        }
+
+	        return response((string) ($entry['body'] ?? ''), 200, ['Content-Type' => 'application/json; charset=UTF-8'])
+	            ->header('ETag', "\"{$etag}\"");
+	    }
+
+	    private function buildUserCacheEntry($node): array
+	    {
+	        $users = ServerService::getAvailableUsers($node);
+        $eTagContext = hash_init('sha1');
+        foreach ($users as $index => $user) {
+            $userId = (int) data_get($user, 'id', 0);
+            $uuid = (string) data_get($user, 'uuid', '');
+            $speedLimit = (int) data_get($user, 'speed_limit', 0);
+            $deviceLimit = (int) data_get($user, 'device_limit', 0);
+
+            if (is_object($user)) {
+                $user->id = $userId;
+                $user->uuid = $uuid;
+                $user->speed_limit = $speedLimit;
+                $user->device_limit = $deviceLimit;
+            } elseif (is_array($user)) {
+                $user['id'] = $userId;
+                $user['uuid'] = $uuid;
+                $user['speed_limit'] = $speedLimit;
+                $user['device_limit'] = $deviceLimit;
+                $users[$index] = $user;
+            }
+
+            hash_update($eTagContext, "{$userId}:{$uuid}:{$speedLimit}:{$deviceLimit};");
+        }
+
+        $response = ['users' => $users];
+        $eTag = hash_final($eTagContext);
+        $body = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+	        return [
+	            'etag' => $eTag,
+	            'body' => $body === false ? '{"users":[]}' : $body,
+	        ];
+	    }
+
+	    private function buildConfigResponse($node, bool $isV2Node): array
+	    {
+	        $nodeType = $node->type;
+	        $protocolSettings = $node->protocol_settings;
+
+	        $serverPort = $node->server_port;
+	        $host = $node->host;
+
+	        $baseConfig = [
+	            'protocol' => $nodeType,
+	            'listen_ip' => '0.0.0.0',
+	            'server_port' => (int) $serverPort,
+	            'network' => data_get($protocolSettings, 'network'),
+	            'networkSettings' => data_get($protocolSettings, 'network_settings') ?: null,
+	        ];
+
+	        $response = match ($nodeType) {
+	            'shadowsocks' => [
+	                ...$baseConfig,
+	                'cipher' => $protocolSettings['cipher'],
+	                'plugin' => $protocolSettings['plugin'],
+	                'plugin_opts' => $protocolSettings['plugin_opts'],
+	                'server_key' => match ($protocolSettings['cipher']) {
+	                        '2022-blake3-aes-128-gcm' => Helper::getServerKey($node->created_at, 16),
+	                        '2022-blake3-aes-256-gcm' => Helper::getServerKey($node->created_at, 32),
+	                        default => null
+	                    }
+	            ],
+	            'vmess' => [
+	                ...$baseConfig,
+	                'tls' => (int) $protocolSettings['tls']
+	            ],
+	            'trojan' => [
+	                ...$baseConfig,
+	                'host' => $host,
+	                'server_name' => $protocolSettings['server_name'],
+	            ],
+	            'vless' => [
+	                ...$baseConfig,
+	                'tls' => (int) $protocolSettings['tls'],
+	                'flow' => $protocolSettings['flow'],
+	                'tls_settings' =>
+	                        match ((int) $protocolSettings['tls']) {
+	                            2 => $protocolSettings['reality_settings'],
+	                            default => $protocolSettings['tls_settings']
+	                        }
+	            ],
+	            'hysteria' => [
+	                ...$baseConfig,
+	                'server_port' => (int) $serverPort,
+	                'version' => (int) $protocolSettings['version'],
+	                'host' => $host,
+	                'server_name' => $protocolSettings['tls']['server_name'],
+	                'up_mbps' => (int) $protocolSettings['bandwidth']['up'],
+	                'down_mbps' => (int) $protocolSettings['bandwidth']['down'],
+	                ...match ((int) $protocolSettings['version']) {
+	                        1 => ['obfs' => $protocolSettings['obfs']['password'] ?? null],
+	                        2 => [
+	                            'obfs' => $protocolSettings['obfs']['open'] ? $protocolSettings['obfs']['type'] : null,
+	                            'obfs-password' => $protocolSettings['obfs']['password'] ?? null
+	                        ],
+	                        default => []
+	                    }
+	            ],
+	            'tuic' => [
+	                ...$baseConfig,
+	                'version' => (int) $protocolSettings['version'],
+	                'server_port' => (int) $serverPort,
+	                'server_name' => $protocolSettings['tls']['server_name'],
+	                'congestion_control' => $protocolSettings['congestion_control'],
+	                'auth_timeout' => '3s',
+	                'zero_rtt_handshake' => (bool) data_get($protocolSettings, 'zero_rtt_handshake', false),
+	                'heartbeat' => "3s",
+	            ],
+	            'anytls' => [
+	                ...$baseConfig,
+	                'server_port' => (int) $serverPort,
+	                'server_name' => $protocolSettings['tls']['server_name'],
+	                'padding_scheme' => $protocolSettings['padding_scheme'],
+	            ],
+	            'socks' => [
+	                ...$baseConfig,
+	                'server_port' => (int) $serverPort,
+	            ],
+	            'naive' => [
+	                ...$baseConfig,
+	                'server_port' => (int) $serverPort,
+	                'tls' => (int) $protocolSettings['tls'],
+	                'tls_settings' => $protocolSettings['tls_settings']
+	            ],
+	            'http' => [
+	                ...$baseConfig,
+	                'server_port' => (int) $serverPort,
+	                'tls' => (int) $protocolSettings['tls'],
+	                'tls_settings' => $protocolSettings['tls_settings']
+	            ],
+	            'mieru' => [
+	                ...$baseConfig,
+	                'server_port' => (string) $serverPort,
+	                'protocol' => (int) $protocolSettings['protocol'],
+	            ],
+	            default => []
+	        };
+
+	        $response['base_config'] = [
+	            'push_interval' => (int) admin_setting('server_push_interval', 60),
+	            'pull_interval' => (int) admin_setting('server_pull_interval', 60)
+	        ];
+
+	        if (!empty($node['route_ids'])) {
+	            $response['routes'] = ServerService::getRoutes($node['route_ids']);
+	        }
+
+	        if ($isV2Node) {
+	            $response = $this->adaptConfigForV2Node($response, $node);
+	        }
+
+	        return $response;
+	    }
+
+	    private function buildConfigCacheEntry($node, bool $isV2Node): array
+	    {
+	        $response = $this->buildConfigResponse($node, $isV2Node);
+	        $body = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+	        $eTag = sha1($body === false ? '' : $body);
+
+	        return [
+	            'etag' => $eTag,
+	            'body' => $body === false ? '{}' : $body,
+	        ];
+	    }
 }
