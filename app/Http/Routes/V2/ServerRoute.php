@@ -17,6 +17,7 @@ class ServerRoute
         ], function ($route) {
             $route->get('config', [UniProxyController::class, 'config']);
             $route->get('user', [UniProxyController::class, 'user']);
+            $route->get('user_delta', [UniProxyController::class, 'userDelta']);
             $route->post('push', [UniProxyController::class, 'push']);
             $route->post('alive', [UniProxyController::class, 'alive']);
             $route->get('alivelist', [UniProxyController::class, 'alivelist']);

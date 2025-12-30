@@ -38,6 +38,9 @@ class Kernel extends ConsoleKernel
         // reset
         $schedule->command('reset:traffic')->everyMinute()->onOneServer();
         $schedule->command('reset:log')->daily()->onOneServer();
+        // user sync (users_revision)
+        $schedule->command('usersync:reconcile')->everyMinute()->onOneServer()->withoutOverlapping(2);
+        $schedule->command('usersync:cleanup')->dailyAt('3:10')->onOneServer();
         // send
         $schedule->command('send:remindMail', ['--force'])->dailyAt('11:30')->onOneServer();
         // horizon metrics

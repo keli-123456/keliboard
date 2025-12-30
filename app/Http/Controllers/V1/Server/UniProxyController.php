@@ -8,6 +8,7 @@ use App\Services\ServerService;
 use App\Services\UserService;
 use App\Utils\CacheKey;
 use App\Utils\Helper;
+use App\Models\UserSyncEvent;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use App\Services\UserOnlineService;
@@ -58,11 +59,11 @@ class UniProxyController extends Controller
     }
 
     // 后端获取用户
-		    public function user(Request $request)
-		    {
-		        ini_set('memory_limit', -1);
-		        $node = $this->getNodeInfo($request);
-		        $this->touchNodeLastCheckAt($node);
+			    public function user(Request $request)
+			    {
+			        ini_set('memory_limit', -1);
+			        $node = $this->getNodeInfo($request);
+			        $this->touchNodeLastCheckAt($node);
 	        $cacheTtl = (int) config('server_api_cache.user_ttl', 0);
 	        $lockTtl = (int) config('server_api_cache.lock_ttl', 10);
 	        $lockWait = (int) config('server_api_cache.lock_wait', 3);
@@ -99,8 +100,120 @@ class UniProxyController extends Controller
 	            }
 	        }
 
-	        return $this->respondCacheEntry($request, $this->buildUserCacheEntry($node));
-	    }
+		        return $this->respondCacheEntry($request, $this->buildUserCacheEntry($node));
+		    }
+
+            // 后端增量获取用户 (users_revision)
+            public function userDelta(Request $request)
+            {
+                ini_set('memory_limit', -1);
+                $node = $this->getNodeInfo($request);
+                $this->touchNodeLastCheckAt($node);
+
+                $since = (int) $request->query('since', 0);
+                $limitCfg = (int) config('user_sync.delta_limit', 5000);
+                $limit = (int) $request->query('limit', $limitCfg);
+                if ($limit <= 0) {
+                    $limit = $limitCfg;
+                }
+                $limit = min($limit, $limitCfg);
+
+                $maxId = (int) (UserSyncEvent::query()->max('id') ?? 0);
+
+                // First sync or no events yet: return full snapshot.
+                if ($since <= 0 || $maxId <= 0) {
+                    $users = ServerService::getAvailableUsers($node);
+                    return response()->json([
+                        'full' => true,
+                        'revision' => $maxId,
+                        'users' => $users,
+                    ]);
+                }
+
+                $oldestId = (int) (UserSyncEvent::query()->orderBy('id', 'asc')->value('id') ?? 0);
+                if ($oldestId > 0 && $since < $oldestId) {
+                    $users = ServerService::getAvailableUsers($node);
+                    return response()->json([
+                        'full' => true,
+                        'revision' => $maxId,
+                        'users' => $users,
+                    ]);
+                }
+
+                $groups = (array) ($node->group_ids ?? []);
+                $groupIds = array_values(array_unique(array_map('intval', $groups)));
+                if (empty($groupIds)) {
+                    return response()->json([
+                        'full' => false,
+                        'revision' => $maxId,
+                        'deleted' => [],
+                        'upsert' => [],
+                    ]);
+                }
+
+                $events = UserSyncEvent::query()
+                    ->where('id', '>', $since)
+                    ->where(function ($q) use ($groupIds) {
+                        $q->whereIn('group_id', $groupIds)
+                            ->orWhereIn('old_group_id', $groupIds);
+                    })
+                    ->orderBy('id', 'asc')
+                    ->limit($limit)
+                    ->get();
+
+                $deleted = [];
+                $upsert = [];
+
+                foreach ($events as $event) {
+                    $oldVisible = (bool) $event->old_available
+                        && $event->old_group_id !== null
+                        && in_array((int) $event->old_group_id, $groupIds, true);
+                    $newVisible = (bool) $event->available
+                        && $event->group_id !== null
+                        && in_array((int) $event->group_id, $groupIds, true);
+
+                    if ($oldVisible && !$newVisible) {
+                        $deleted[] = [
+                            'id' => (int) $event->user_id,
+                            'uuid' => (string) ($event->old_uuid ?: $event->uuid),
+                            'speed_limit' => 0,
+                            'device_limit' => 0,
+                        ];
+                        continue;
+                    }
+
+                    if ($oldVisible && $newVisible && $event->old_uuid && $event->old_uuid !== $event->uuid) {
+                        $deleted[] = [
+                            'id' => (int) $event->user_id,
+                            'uuid' => (string) $event->old_uuid,
+                            'speed_limit' => 0,
+                            'device_limit' => 0,
+                        ];
+                    }
+
+                    if ($newVisible) {
+                        $upsert[] = [
+                            'id' => (int) $event->user_id,
+                            'uuid' => (string) $event->uuid,
+                            'speed_limit' => (int) $event->speed_limit,
+                            'device_limit' => (int) $event->device_limit,
+                        ];
+                    }
+                }
+
+                // If no relevant events, allow node to jump to max revision.
+                $nextRevision = $maxId;
+                if ($events->isNotEmpty() && $events->count() >= $limit) {
+                    $nextRevision = (int) $events->last()->id;
+                }
+
+                return response()->json([
+                    'full' => false,
+                    'revision' => $nextRevision,
+                    'deleted' => $deleted,
+                    'upsert' => $upsert,
+                ]);
+            }
 
     // 后端提交数据
     public function push(Request $request)
