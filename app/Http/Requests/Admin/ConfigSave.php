@@ -52,6 +52,12 @@ class ConfigSave extends FormRequest
         'device_limit_mode' => 'in:0,1',
         'node_report_min_traffic' => 'integer|min:0',
         'device_online_min_traffic' => 'integer|min:0',
+        'server_api_user_cache_ttl' => 'integer|min:0|max:3600',
+        'server_api_config_cache_ttl' => 'integer|min:0|max:3600',
+        'server_api_cache_lock_ttl' => 'integer|min:1|max:300',
+        'server_api_cache_lock_wait' => 'integer|min:0|max:30',
+        'user_sync_retention_days' => 'integer|min:1|max:365',
+        'user_sync_delta_limit' => 'integer|min:1|max:100000',
         // frontend
         'frontend_theme' => '',
         'frontend_theme_sidebar' => 'nullable|in:dark,light',

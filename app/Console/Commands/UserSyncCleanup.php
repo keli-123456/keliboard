@@ -12,7 +12,10 @@ class UserSyncCleanup extends Command
 
     public function handle(): int
     {
-        $days = (int) ($this->option('days') ?: config('user_sync.retention_days', 30));
+        $days = (int) ($this->option('days') ?: admin_setting('user_sync_retention_days', config('user_sync.retention_days', 30)));
+        if ($days <= 0) {
+            $days = (int) config('user_sync.retention_days', 30);
+        }
         if ($days <= 0) {
             $days = 30;
         }
@@ -23,4 +26,3 @@ class UserSyncCleanup extends Command
         return self::SUCCESS;
     }
 }
-

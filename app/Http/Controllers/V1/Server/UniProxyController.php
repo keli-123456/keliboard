@@ -64,9 +64,18 @@ class UniProxyController extends Controller
 			        ini_set('memory_limit', -1);
 			        $node = $this->getNodeInfo($request);
 			        $this->touchNodeLastCheckAt($node);
-	        $cacheTtl = (int) config('server_api_cache.user_ttl', 0);
-	        $lockTtl = (int) config('server_api_cache.lock_ttl', 10);
-	        $lockWait = (int) config('server_api_cache.lock_wait', 3);
+	        $cacheTtl = (int) admin_setting('server_api_user_cache_ttl', config('server_api_cache.user_ttl', 0));
+	        $lockTtl = (int) admin_setting('server_api_cache_lock_ttl', config('server_api_cache.lock_ttl', 10));
+	        $lockWait = (int) admin_setting('server_api_cache_lock_wait', config('server_api_cache.lock_wait', 3));
+	        if ($cacheTtl < 0) {
+	            $cacheTtl = 0;
+	        }
+	        if ($lockTtl <= 0) {
+	            $lockTtl = (int) config('server_api_cache.lock_ttl', 10);
+	        }
+	        if ($lockWait < 0) {
+	            $lockWait = 0;
+	        }
 
 		        if ($cacheTtl > 0) {
 		            $cache = $this->getServerApiCache();
@@ -111,7 +120,10 @@ class UniProxyController extends Controller
                 $this->touchNodeLastCheckAt($node);
 
                 $since = (int) $request->query('since', 0);
-                $limitCfg = (int) config('user_sync.delta_limit', 5000);
+                $limitCfg = (int) admin_setting('user_sync_delta_limit', config('user_sync.delta_limit', 5000));
+                if ($limitCfg <= 0) {
+                    $limitCfg = 5000;
+                }
                 $limit = (int) $request->query('limit', $limitCfg);
                 if ($limit <= 0) {
                     $limit = $limitCfg;
@@ -259,9 +271,18 @@ class UniProxyController extends Controller
 		        $this->touchNodeLastCheckAt($node);
 		        $isV2Node = (bool) $request->attributes->get('is_v2node', false);
 
-	        $cacheTtl = (int) config('server_api_cache.config_ttl', 0);
-		        $lockTtl = (int) config('server_api_cache.lock_ttl', 10);
-		        $lockWait = (int) config('server_api_cache.lock_wait', 3);
+	        $cacheTtl = (int) admin_setting('server_api_config_cache_ttl', config('server_api_cache.config_ttl', 0));
+		        $lockTtl = (int) admin_setting('server_api_cache_lock_ttl', config('server_api_cache.lock_ttl', 10));
+		        $lockWait = (int) admin_setting('server_api_cache_lock_wait', config('server_api_cache.lock_wait', 3));
+		        if ($cacheTtl < 0) {
+		            $cacheTtl = 0;
+		        }
+		        if ($lockTtl <= 0) {
+		            $lockTtl = (int) config('server_api_cache.lock_ttl', 10);
+		        }
+		        if ($lockWait < 0) {
+		            $lockWait = 0;
+		        }
 		        if ($cacheTtl > 0) {
 		            $cache = $this->getServerApiCache();
 		            $cacheKeySuffix = $isV2Node ? 'v2node' : 'default';

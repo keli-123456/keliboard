@@ -159,6 +159,12 @@ class ConfigController extends Controller
                 'device_limit_mode' => (int) admin_setting('device_limit_mode', 0),
                 'node_report_min_traffic' => (int) admin_setting('node_report_min_traffic', 0),
                 'device_online_min_traffic' => (int) admin_setting('device_online_min_traffic', 0),
+                'server_api_user_cache_ttl' => (int) admin_setting('server_api_user_cache_ttl', config('server_api_cache.user_ttl', 0)),
+                'server_api_config_cache_ttl' => (int) admin_setting('server_api_config_cache_ttl', config('server_api_cache.config_ttl', 0)),
+                'server_api_cache_lock_ttl' => (int) admin_setting('server_api_cache_lock_ttl', config('server_api_cache.lock_ttl', 10)),
+                'server_api_cache_lock_wait' => (int) admin_setting('server_api_cache_lock_wait', config('server_api_cache.lock_wait', 3)),
+                'user_sync_retention_days' => (int) admin_setting('user_sync_retention_days', config('user_sync.retention_days', 30)),
+                'user_sync_delta_limit' => (int) admin_setting('user_sync_delta_limit', config('user_sync.delta_limit', 5000)),
             ],
             'email' => [
                 'email_template' => admin_setting('email_template', 'default'),
