@@ -104,6 +104,9 @@ if [ "${USE_COMPOSE}" = "1" ] && [ "${IN_DOCKER}" = "0" ]; then
 else
   php composer.phar update -vvv
   php artisan xboard:update
+  php artisan config:clear || true
+  php artisan config:cache || true
+  php artisan horizon:terminate || true
 fi
 
 if [ -f "/etc/init.d/bt" ] || [ -f "/.dockerenv" ]; then
@@ -117,6 +120,7 @@ fi
 if [ "${USE_COMPOSE}" = "1" ]; then
   mkdir -p .docker/.data/redis-cache || true
   compose up -d --remove-orphans || true
+  compose exec -T web php artisan config:clear || true
   compose exec -T web php artisan config:cache || true
   compose exec -T horizon php artisan horizon:terminate || true
   compose restart web horizon || true
