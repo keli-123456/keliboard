@@ -88,8 +88,8 @@ else
 fi
 
 if [ "${USE_COMPOSE}" = "1" ] && [ "${IN_DOCKER}" = "0" ]; then
-  "${COMPOSE_CMD[@]}" "${COMPOSE_FILE_ARGS[@]}" run --rm -T web bash -lc "cd /www && php composer.phar update -vvv"
-  "${COMPOSE_CMD[@]}" "${COMPOSE_FILE_ARGS[@]}" run --rm -T web bash -lc "cd /www && php artisan xboard:update"
+  "${COMPOSE_CMD[@]}" "${COMPOSE_FILE_ARGS[@]}" run --rm -T web sh -lc "cd /www && php composer.phar update -vvv"
+  "${COMPOSE_CMD[@]}" "${COMPOSE_FILE_ARGS[@]}" run --rm -T web sh -lc "cd /www && php artisan xboard:update"
 else
   php composer.phar update -vvv
   php artisan xboard:update
