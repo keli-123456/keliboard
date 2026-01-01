@@ -8,12 +8,15 @@ use App\Http\Requests\User\TicketWithdraw;
 use App\Http\Resources\TicketResource;
 use App\Models\Ticket;
 use App\Models\TicketMessage;
+use App\Models\TicketMessageAttachment;
 use App\Models\User;
 use App\Services\TicketService;
 use App\Utils\Dict;
 use Illuminate\Http\Request;
 use App\Services\Plugin\HookManager;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Log;
+use App\Exceptions\ApiException;
 
 class TicketController extends Controller
 {
@@ -27,7 +30,9 @@ class TicketController extends Controller
             if (!$ticket) {
                 return $this->fail([400, __('Ticket does not exist')]);
             }
-            $ticket['message'] = TicketMessage::where('ticket_id', $ticket->id)->get();
+            $ticket['message'] = TicketMessage::where('ticket_id', $ticket->id)
+                ->with(['ticket', 'attachments'])
+                ->get();
             $ticket['message']->each(function ($message) use ($ticket) {
                 $message['is_me'] = ($message['user_id'] == $ticket->user_id);
             });
@@ -42,11 +47,14 @@ class TicketController extends Controller
     public function save(TicketSave $request)
     {
         $ticketService = new TicketService();
+        $images = $request->file('images');
+        $images = is_array($images) ? $images : ($images ? [$images] : []);
         $ticket = $ticketService->createTicket(
             $request->user()->id,
             $request->input('subject'),
             $request->input('level'),
-            $request->input('message')
+            (string) $request->input('message', ''),
+            $images
         );
         HookManager::call('ticket.create.after', $ticket);
         return $this->success(true);
@@ -55,12 +63,19 @@ class TicketController extends Controller
 
     public function reply(Request $request)
     {
-        if (empty($request->input('id'))) {
-            return $this->fail([400, __('Invalid parameter')]);
-        }
-        if (empty($request->input('message'))) {
-            return $this->fail([400, __('Message cannot be empty')]);
-        }
+        $maxImages = (int) config('tickets.attachments.max_images', 3);
+        $maxKb = (int) config('tickets.attachments.max_kb', 5120);
+        $request->validate([
+            'id' => 'required|numeric',
+            'message' => 'required_without:images|string',
+            'images' => 'nullable|array|max:' . $maxImages,
+            'images.*' => 'file|image|mimes:jpg,jpeg,png,webp|max:' . $maxKb
+        ], [
+            'id.required' => __('Invalid parameter'),
+            'message.required_without' => __('Message cannot be empty')
+        ]);
+        $images = $request->file('images');
+        $images = is_array($images) ? $images : ($images ? [$images] : []);
         $ticket = Ticket::where('id', $request->input('id'))
             ->where('user_id', $request->user()->id)
             ->first();
@@ -77,8 +92,9 @@ class TicketController extends Controller
         if (
             !$ticketService->reply(
                 $ticket,
-                $request->input('message'),
-                $request->user()->id
+                (string) $request->input('message', ''),
+                $request->user()->id,
+                $images
             )
         ) {
             return $this->fail([400, __('Ticket reply failed')]);
@@ -111,6 +127,37 @@ class TicketController extends Controller
         return TicketMessage::where('ticket_id', $ticketId)
             ->orderBy('id', 'DESC')
             ->first();
+    }
+
+    public function attachment(Request $request, int $id)
+    {
+        $attachment = TicketMessageAttachment::find($id);
+        if (!$attachment) {
+            throw new ApiException('Not Found', 404);
+        }
+
+        $ticket = Ticket::where('id', $attachment->ticket_id)
+            ->where('user_id', $request->user()->id)
+            ->first();
+        if (!$ticket) {
+            throw new ApiException('Unauthorized', 403);
+        }
+
+        $disk = $attachment->disk ?: (string) config('tickets.attachments.disk', 'local');
+        $path = $attachment->path;
+        if (!$path || !Storage::disk($disk)->exists($path)) {
+            throw new ApiException('Not Found', 404);
+        }
+
+        $absolute = Storage::disk($disk)->path($path);
+        $headers = [
+            'Cache-Control' => 'private, max-age=3600',
+        ];
+        if ($attachment->mime) {
+            $headers['Content-Type'] = $attachment->mime;
+        }
+
+        return response()->file($absolute, $headers);
     }
 
     public function withdraw(TicketWithdraw $request)

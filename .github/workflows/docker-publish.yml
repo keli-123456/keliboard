@@ -2,7 +2,7 @@ name: Docker Build and Publish
 
 on:
   push:
-    branches: ["master", "new-dev"]
+    branches: ["main", "master", "new-dev"]
   workflow_dispatch:
 
 env:
@@ -59,8 +59,8 @@ jobs:
           tags: |
             type=ref,event=branch
             type=sha,format=long
-            type=raw,value=new,enable=${{ github.ref == 'refs/heads/master' }}
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
+            type=raw,value=new,enable=${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
             type=raw,value=${{ steps.get_version.outputs.version }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}

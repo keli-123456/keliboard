@@ -6,15 +6,18 @@ use App\Exceptions\ApiException;
 use App\Jobs\SendEmailJob;
 use App\Models\Ticket;
 use App\Models\TicketMessage;
+use App\Models\TicketMessageAttachment;
 use App\Models\User;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use App\Services\Plugin\HookManager;
+use Illuminate\Support\Facades\Storage;
 
 class TicketService
 {
-    public function reply($ticket, $message, $userId)
+    public function reply($ticket, $message, $userId, array $images = [])
     {
+        $stored = [];
         try {
             DB::beginTransaction();
             $ticketMessage = TicketMessage::create([
@@ -22,6 +25,28 @@ class TicketService
                 'ticket_id' => $ticket->id,
                 'message' => $message
             ]);
+
+            if (!empty($images)) {
+                $attachmentService = new TicketAttachmentService();
+                $stored = $attachmentService->storeUploadedImages($images, (int) $ticket->id, (int) $ticketMessage->id);
+                foreach ($stored as $meta) {
+                    $ok = TicketMessageAttachment::create([
+                        'ticket_id' => $ticket->id,
+                        'ticket_message_id' => $ticketMessage->id,
+                        'user_id' => $userId,
+                        'disk' => $meta['disk'],
+                        'path' => $meta['path'],
+                        'mime' => $meta['mime'],
+                        'size' => $meta['size'],
+                        'width' => $meta['width'],
+                        'height' => $meta['height'],
+                    ]);
+                    if (!$ok) {
+                        throw new \Exception();
+                    }
+                }
+            }
+
             if ($userId !== $ticket->user_id) {
                 $ticket->reply_status = Ticket::STATUS_OPENING;
             } else {
@@ -34,6 +59,12 @@ class TicketService
             return $ticketMessage;
         } catch (\Exception $e) {
             DB::rollback();
+            foreach ($stored as $meta) {
+                try {
+                    Storage::disk($meta['disk'])->delete($meta['path']);
+                } catch (\Exception) {
+                }
+            }
             return false;
         }
     }
@@ -70,8 +101,9 @@ class TicketService
         $this->sendEmailNotify($ticket, $ticketMessage);
     }
 
-    public function createTicket($userId, $subject, $level, $message)
+    public function createTicket($userId, $subject, $level, $message, array $images = [])
     {
+        $stored = [];
         try {
             DB::beginTransaction();
             if (Ticket::where('status', 0)->where('user_id', $userId)->lockForUpdate()->first()) {
@@ -95,10 +127,38 @@ class TicketService
                 DB::rollBack();
                 throw new ApiException('工单消息创建失败');
             }
+
+            if (!empty($images)) {
+                $attachmentService = new TicketAttachmentService();
+                $stored = $attachmentService->storeUploadedImages($images, (int) $ticket->id, (int) $ticketMessage->id);
+                foreach ($stored as $meta) {
+                    $ok = TicketMessageAttachment::create([
+                        'ticket_id' => $ticket->id,
+                        'ticket_message_id' => $ticketMessage->id,
+                        'user_id' => $userId,
+                        'disk' => $meta['disk'],
+                        'path' => $meta['path'],
+                        'mime' => $meta['mime'],
+                        'size' => $meta['size'],
+                        'width' => $meta['width'],
+                        'height' => $meta['height'],
+                    ]);
+                    if (!$ok) {
+                        throw new ApiException('工单附件创建失败');
+                    }
+                }
+            }
+
             DB::commit();
             return $ticket;
         } catch (\Exception $e) {
             DB::rollBack();
+            foreach ($stored as $meta) {
+                try {
+                    Storage::disk($meta['disk'])->delete($meta['path']);
+                } catch (\Exception) {
+                }
+            }
             throw $e;
         }
     }

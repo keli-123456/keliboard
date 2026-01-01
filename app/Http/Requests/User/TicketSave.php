@@ -13,10 +13,14 @@ class TicketSave extends FormRequest
      */
     public function rules()
     {
+        $maxImages = (int) config('tickets.attachments.max_images', 3);
+        $maxKb = (int) config('tickets.attachments.max_kb', 5120);
         return [
             'subject' => 'required',
             'level' => 'required|in:0,1,2',
-            'message' => 'required'
+            'message' => 'required_without:images',
+            'images' => 'nullable|array|max:' . $maxImages,
+            'images.*' => 'file|image|mimes:jpg,jpeg,png,webp|max:' . $maxKb
         ];
     }
 
@@ -26,7 +30,13 @@ class TicketSave extends FormRequest
             'subject.required' => __('Ticket subject cannot be empty'),
             'level.required' => __('Ticket level cannot be empty'),
             'level.in' => __('Incorrect ticket level format'),
-            'message.required' => __('Message cannot be empty')
+            'message.required_without' => __('Message cannot be empty'),
+            'images.array' => __('Invalid parameter'),
+            'images.max' => __('Invalid parameter'),
+            'images.*.file' => __('Invalid parameter'),
+            'images.*.image' => __('Invalid parameter'),
+            'images.*.mimes' => __('Invalid parameter'),
+            'images.*.max' => __('Invalid parameter')
         ];
     }
 }

@@ -3,10 +3,13 @@
 namespace App\Http\Controllers\V2\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\TicketMessageAttachment;
 use App\Models\Ticket;
 use App\Services\TicketService;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
+use App\Exceptions\ApiException;
 
 class TicketController extends Controller
 {
@@ -76,7 +79,7 @@ class TicketController extends Controller
      */
     private function fetchTicketById(Request $request)
     {
-        $ticket = Ticket::with('messages', 'user')->find($request->input('id'));
+        $ticket = Ticket::with(['messages.ticket', 'messages.attachments', 'user'])->find($request->input('id'));
 
         if (!$ticket) {
             return $this->fail([400202, '工单不存在']);
@@ -178,5 +181,28 @@ class TicketController extends Controller
         return response()->json([
             'data' => $ticket
         ]);
+    }
+
+    public function attachment(int $id)
+    {
+        $attachment = TicketMessageAttachment::find($id);
+        if (!$attachment) {
+            throw new ApiException('Not Found', 404);
+        }
+
+        $disk = $attachment->disk ?: (string) config('tickets.attachments.disk', 'local');
+        $path = $attachment->path;
+        if (!$path || !Storage::disk($disk)->exists($path)) {
+            throw new ApiException('Not Found', 404);
+        }
+
+        $absolute = Storage::disk($disk)->path($path);
+        $headers = [
+            'Cache-Control' => 'private, max-age=3600',
+        ];
+        if ($attachment->mime) {
+            $headers['Content-Type'] = $attachment->mime;
+        }
+        return response()->file($absolute, $headers);
     }
 }
