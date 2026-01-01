@@ -133,18 +133,25 @@ class TicketController extends Controller
 
     public function reply(Request $request)
     {
+        $maxImages = (int) config('tickets.attachments.max_images', 3);
+        $maxKb = (int) config('tickets.attachments.max_kb', 5120);
         $request->validate([
             'id' => 'required|numeric',
-            'message' => 'required|string'
+            'message' => 'required_without:images|string',
+            'images' => 'nullable|array|max:' . $maxImages,
+            'images.*' => 'file|image|mimes:jpg,jpeg,png,webp|max:' . $maxKb
         ], [
             'id.required' => '工单ID不能为空',
-            'message.required' => '消息不能为空'
+            'message.required_without' => '消息不能为空'
         ]);
+        $images = $request->file('images');
+        $images = is_array($images) ? $images : ($images ? [$images] : []);
         $ticketService = new TicketService();
         $ticketService->replyByAdmin(
             $request->input('id'),
-            $request->input('message'),
-            $request->user()->id
+            (string) $request->input('message', ''),
+            $request->user()->id,
+            $images
         );
         return $this->success(true);
     }

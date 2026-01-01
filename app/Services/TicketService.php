@@ -69,7 +69,7 @@ class TicketService
         }
     }
 
-    public function replyByAdmin($ticketId, $message, $userId): void
+    public function replyByAdmin($ticketId, $message, $userId, array $images = []): void
     {
         $ticket = Ticket::where('id', $ticketId)
             ->first();
@@ -77,6 +77,7 @@ class TicketService
             throw new ApiException('工单不存在');
         }
         $ticket->status = Ticket::STATUS_OPENING;
+        $stored = [];
         try {
             DB::beginTransaction();
             $ticketMessage = TicketMessage::create([
@@ -84,6 +85,28 @@ class TicketService
                 'ticket_id' => $ticket->id,
                 'message' => $message
             ]);
+
+            if (!empty($images)) {
+                $attachmentService = new TicketAttachmentService();
+                $stored = $attachmentService->storeUploadedImages($images, (int) $ticket->id, (int) $ticketMessage->id);
+                foreach ($stored as $meta) {
+                    $ok = TicketMessageAttachment::create([
+                        'ticket_id' => $ticket->id,
+                        'ticket_message_id' => $ticketMessage->id,
+                        'user_id' => $userId,
+                        'disk' => $meta['disk'],
+                        'path' => $meta['path'],
+                        'mime' => $meta['mime'],
+                        'size' => $meta['size'],
+                        'width' => $meta['width'],
+                        'height' => $meta['height'],
+                    ]);
+                    if (!$ok) {
+                        throw new ApiException('工单附件创建失败');
+                    }
+                }
+            }
+
             if ($userId !== $ticket->user_id) {
                 $ticket->reply_status = Ticket::STATUS_OPENING;
             } else {
@@ -96,6 +119,12 @@ class TicketService
             HookManager::call('ticket.reply.admin.after', [$ticket, $ticketMessage]);
         } catch (\Exception $e) {
             DB::rollBack();
+            foreach ($stored as $meta) {
+                try {
+                    Storage::disk($meta['disk'])->delete($meta['path']);
+                } catch (\Exception) {
+                }
+            }
             throw $e;
         }
         $this->sendEmailNotify($ticket, $ticketMessage);
