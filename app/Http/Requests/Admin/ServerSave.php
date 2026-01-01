@@ -8,6 +8,15 @@ use Illuminate\Foundation\Http\FormRequest;
 
 class ServerSave extends FormRequest
 {
+    private const TLS_CERT_RULES = [
+        'tls_settings.cert_mode' => 'nullable|string|in:file,dns,http,self',
+        'tls_settings.cert_file' => 'nullable|string',
+        'tls_settings.key_file' => 'nullable|string',
+        'tls_settings.provider' => 'nullable|string',
+        'tls_settings.dns_env' => 'nullable|string',
+        'tls_settings.reject_unknown_sni' => 'nullable|in:0,1',
+    ];
+
     private const PROTOCOL_RULES = [
         'shadowsocks' => [
             'cipher' => 'required|string',
@@ -23,12 +32,14 @@ class ServerSave extends FormRequest
             'network_settings' => 'nullable|array',
             'tls_settings.server_name' => 'nullable|string',
             'tls_settings.allow_insecure' => 'nullable|boolean',
+            ...self::TLS_CERT_RULES,
         ],
         'trojan' => [
             'network' => 'required|string',
             'network_settings' => 'nullable|array',
             'server_name' => 'nullable|string',
             'allow_insecure' => 'nullable|boolean',
+            ...self::TLS_CERT_RULES,
         ],
         'hysteria' => [
             'version' => 'required|integer',
@@ -38,6 +49,7 @@ class ServerSave extends FormRequest
             'obfs.password' => 'string|nullable',
             'tls.server_name' => 'nullable|string',
             'tls.allow_insecure' => 'nullable|boolean',
+            ...self::TLS_CERT_RULES,
             'bandwidth.up' => 'nullable|integer',
             'bandwidth.down' => 'nullable|integer',
             'hop_interval' => 'integer|nullable',
@@ -49,6 +61,7 @@ class ServerSave extends FormRequest
             'flow' => 'nullable|string',
             'tls_settings.server_name' => 'nullable|string',
             'tls_settings.allow_insecure' => 'nullable|boolean',
+            ...self::TLS_CERT_RULES,
             'reality_settings.allow_insecure' => 'nullable|boolean',
             'reality_settings.server_name' => 'nullable|string',
             'reality_settings.server_port' => 'nullable|integer',
@@ -74,6 +87,7 @@ class ServerSave extends FormRequest
             'tls' => 'nullable|array',
             'alpn' => 'nullable|string',
             'padding_scheme' => 'nullable|array',
+            ...self::TLS_CERT_RULES,
         ],
     ];
 
