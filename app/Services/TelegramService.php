@@ -268,6 +268,16 @@ class TelegramService
             $items = array_slice($items, 0, 10);
         }
 
+        if (is_string($caption) && $caption !== '') {
+            $limit = 1024;
+            $len = function_exists('mb_strlen') ? @mb_strlen($caption, 'UTF-8') : strlen($caption);
+            if (is_int($len) && $len > $limit) {
+                $slice = $limit - 1;
+                $caption = function_exists('mb_substr') ? @mb_substr($caption, 0, $slice, 'UTF-8') : substr($caption, 0, $slice);
+                $caption .= '…';
+            }
+        }
+
         $media = [];
         $resources = [];
         $request = $this->http;

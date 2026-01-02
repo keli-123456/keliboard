@@ -91,26 +91,25 @@ class Plugin extends AbstractPlugin
     $plan = $user->plan;
     $ip = request()?->ip() ?? '';
     $region = $ip ? (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ? (new \Ip2Region())->simple($ip) : 'NULL') : '';
-    $TGmessage = "📮 *工单提醒* #{$ticket->id}\n";
+    $TGmessage = "工单ID: {$ticket->id}\n";
     $TGmessage .= "━━━━━━━━━━━━━━━━━━━━\n";
-    $TGmessage .= "📧 邮箱: `{$user->email}`\n";
-    $TGmessage .= "📍 位置: `{$region}`\n";
+    $TGmessage .= "📧 邮箱: {$user->email}\n";
+    $TGmessage .= "📍 位置: {$region}\n";
 
     if ($plan) {
-      $TGmessage .= "📦 套餐: `{$plan->name}`\n";
+      $TGmessage .= "📦 套餐: {$plan->name}\n";
       $TGmessage .= "📊 流量: `{$remaining_traffic}G / {$transfer_enable}G` (剩余/总计)\n";
       $TGmessage .= "⬆️⬇️ 已用: `{$u}G / {$d}G`\n";
       $TGmessage .= "⏰ 到期: `{$expired_at}`\n";
     } else {
-      $TGmessage .= "📦 套餐: `未订购任何套餐`\n";
+      $TGmessage .= "📦 套餐: 未订购任何套餐\n";
     }
 
-    $TGmessage .= "💰 余额: `{$money}元`\n";
-    $TGmessage .= "💸 佣金: `{$affmoney}元`\n";
+    $TGmessage .= "💰 余额: {$money}元\n";
+    $TGmessage .= "💸 佣金: {$affmoney}元\n";
     $TGmessage .= "━━━━━━━━━━━━━━━━━━━━\n";
-    $TGmessage .= "📝 *主题*: `{$ticket->subject}`\n";
-    $TGmessage .= "💬 *内容*: `{$message->message}`";
-    $this->telegramService->sendMessageWithAdmin($TGmessage, true);
+    $TGmessage .= "📝 主题: {$ticket->subject}\n";
+    $TGmessage .= "💬 内容: {$message->message}";
 
     $message->load('attachments');
     $attachments = $message->attachments ?? collect();
@@ -137,9 +136,11 @@ class Plugin extends AbstractPlugin
     }
 
     if (!empty($files)) {
-      $caption = "工单ID: {$ticket->id} 附件";
-      $this->telegramService->sendMediaGroupPhotosWithAdmin($files, $caption, true);
+      $this->telegramService->sendMediaGroupPhotosWithAdmin($files, $TGmessage, true);
+      return;
     }
+
+    $this->telegramService->sendMessageWithAdmin($TGmessage, true);
   }
 
   protected function registerDefaultCommands(): void
