@@ -114,6 +114,10 @@ class TelegramController extends Controller
             'is_private' => ($message['chat']['type'] ?? '') === 'private',
         ];
 
+        if (isset($message['media_group_id']) && (is_string($message['media_group_id']) || is_numeric($message['media_group_id']))) {
+            $this->msg->media_group_id = (string) $message['media_group_id'];
+        }
+
         if ($isReply) {
             $reply = $message['reply_to_message'];
             $replyText = '';

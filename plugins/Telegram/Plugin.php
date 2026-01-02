@@ -10,6 +10,7 @@ use App\Services\Plugin\HookManager;
 use App\Services\TelegramService;
 use App\Services\TicketService;
 use App\Utils\Helper;
+use App\Jobs\ProcessTelegramTicketMediaGroupReplyJob;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -464,6 +465,59 @@ class Plugin extends AbstractPlugin
     $imageMetas = $msg->images ?? [];
     $imageMetas = is_array($imageMetas) ? $imageMetas : [];
     $imageMetas = array_slice($imageMetas, 0, max(0, $maxImages));
+
+    $mediaGroupId = isset($msg->media_group_id) && is_string($msg->media_group_id) ? trim($msg->media_group_id) : '';
+    if ($mediaGroupId !== '') {
+      $key = "tg_ticket_media_group_reply:{$msg->chat_id}:{$mediaGroupId}";
+      $data = Cache::get($key);
+      if (!is_array($data) || (int) ($data['ticket_id'] ?? 0) !== $ticketId || (int) ($data['user_id'] ?? 0) !== (int) $user->id) {
+        $data = [
+          'ticket_id' => $ticketId,
+          'user_id' => (int) $user->id,
+          'text' => '',
+          'images' => [],
+          'updated_at' => 0,
+        ];
+      }
+
+      if (trim($text) !== '' && trim((string) ($data['text'] ?? '')) === '') {
+        $data['text'] = $text;
+      }
+
+      $existingImages = $data['images'] ?? [];
+      $existingImages = is_array($existingImages) ? array_values($existingImages) : [];
+      $existingIds = [];
+      foreach ($existingImages as $it) {
+        if (is_array($it) && isset($it['file_id']) && is_string($it['file_id'])) {
+          $existingIds[$it['file_id']] = true;
+        }
+      }
+
+      foreach ($imageMetas as $meta) {
+        if (!is_array($meta)) {
+          continue;
+        }
+        $fileId = $meta['file_id'] ?? null;
+        if (!is_string($fileId) || $fileId === '' || isset($existingIds[$fileId])) {
+          continue;
+        }
+        $existingImages[] = [
+          'file_id' => $fileId,
+          'file_size' => $meta['file_size'] ?? null,
+          'file_name' => $meta['file_name'] ?? null,
+        ];
+        $existingIds[$fileId] = true;
+        if ($maxImages > 0 && count($existingImages) >= $maxImages) {
+          break;
+        }
+      }
+
+      $data['images'] = $existingImages;
+      $data['updated_at'] = time();
+      Cache::put($key, $data, now()->addMinutes(10));
+      ProcessTelegramTicketMediaGroupReplyJob::dispatch((int) $msg->chat_id, $mediaGroupId)->delay(now()->addSeconds(2));
+      return;
+    }
 
     $tempPaths = [];
     $files = [];
