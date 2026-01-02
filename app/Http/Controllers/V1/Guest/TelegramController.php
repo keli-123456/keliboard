@@ -81,7 +81,9 @@ class TelegramController extends Controller
         }
 
         $hasText = isset($message['text']) && is_string($message['text']);
-        $hasReplyText = isset($message['reply_to_message']['text']) && is_string($message['reply_to_message']['text']);
+        $hasReplyText =
+            (isset($message['reply_to_message']['text']) && is_string($message['reply_to_message']['text'])) ||
+            (isset($message['reply_to_message']['caption']) && is_string($message['reply_to_message']['caption']));
 
         // Only handle: normal text messages OR reply messages (to parse ticket reply), others are ignored.
         if (!$hasText && !$hasReplyText) {
@@ -107,7 +109,10 @@ class TelegramController extends Controller
         ];
 
         if ($hasReplyText) {
-            $this->msg->reply_text = $message['reply_to_message']['text'];
+            $this->msg->reply_text =
+                (isset($message['reply_to_message']['text']) && is_string($message['reply_to_message']['text']))
+                    ? $message['reply_to_message']['text']
+                    : $message['reply_to_message']['caption'];
         }
 
         $images = [];

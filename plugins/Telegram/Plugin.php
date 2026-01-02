@@ -129,8 +129,8 @@ class Plugin extends AbstractPlugin
 
       $absolute = Storage::disk($disk)->path($path);
       $filename = basename($path);
-      $caption = "🖼️ 工单 #{$ticket->id} 附件";
-      $this->telegramService->sendDocumentWithAdmin($absolute, $filename, $caption, true);
+      $caption = "工单ID: {$ticket->id} 附件";
+      $this->telegramService->sendPhotoWithAdmin($absolute, $filename, $caption, true);
     }
   }
 
@@ -463,6 +463,12 @@ class Plugin extends AbstractPlugin
 
         $preferredName = isset($meta['file_name']) && is_string($meta['file_name']) ? $meta['file_name'] : null;
         $downloaded = $this->telegramService->downloadFileToTemp($fileId, $preferredName);
+        $downloadedSize = @filesize($downloaded['path']);
+        if (is_int($downloadedSize) && $downloadedSize > ($maxKb * 1024)) {
+          $this->sendMessage($msg, '图片过大，已忽略');
+          @unlink($downloaded['path']);
+          continue;
+        }
         $tempPaths[] = $downloaded['path'];
         $files[] = new UploadedFile($downloaded['path'], $downloaded['filename'], null, null, true);
       }

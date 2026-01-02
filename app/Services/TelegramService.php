@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Exceptions\ApiException;
 use App\Jobs\SendTelegramDocumentJob;
+use App\Jobs\SendTelegramPhotoJob;
 use App\Jobs\SendTelegramJob;
 use App\Models\User;
 use App\Services\Plugin\HookManager;
@@ -77,6 +78,55 @@ class TelegramService
             }
         } catch (\Exception $e) {
             Log::error('Telegram API sendDocument 失败', [
+                'chat_id' => $chatId,
+                'filename' => $filename,
+                'error' => $e->getMessage(),
+            ]);
+            throw new ApiException("Telegram 服务错误: {$e->getMessage()}");
+        } finally {
+            try {
+                fclose($resource);
+            } catch (\Exception) {
+            }
+        }
+    }
+
+    public function sendPhoto(int $chatId, string $absoluteFilePath, string $filename, ?string $caption = null, string $parseMode = ''): void
+    {
+        if (!is_file($absoluteFilePath) || !is_readable($absoluteFilePath)) {
+            throw new ApiException('Telegram 文件不存在或不可读');
+        }
+
+        $params = [
+            'chat_id' => $chatId,
+            'caption' => $caption ?: null,
+            'parse_mode' => $parseMode ?: null,
+        ];
+
+        $resource = fopen($absoluteFilePath, 'r');
+        if ($resource === false) {
+            throw new ApiException('Telegram 文件打开失败');
+        }
+
+        try {
+            $response = $this->http
+                ->attach('photo', $resource, $filename)
+                ->post($this->apiUrl . 'sendPhoto', array_filter($params, fn($v) => $v !== null));
+
+            if (!$response->successful()) {
+                throw new ApiException("HTTP 请求失败: {$response->status()}");
+            }
+
+            $data = $response->object();
+            if (!isset($data->ok)) {
+                throw new ApiException('无效的 Telegram API 响应');
+            }
+            if (!$data->ok) {
+                $description = $data->description ?? '未知错误';
+                throw new ApiException("Telegram API 错误: {$description}");
+            }
+        } catch (\Exception $e) {
+            Log::error('Telegram API sendPhoto 失败', [
                 'chat_id' => $chatId,
                 'filename' => $filename,
                 'error' => $e->getMessage(),
@@ -187,6 +237,19 @@ class TelegramService
         $users = $query->get();
         foreach ($users as $user) {
             SendTelegramDocumentJob::dispatch($user->telegram_id, $absoluteFilePath, $filename, $caption, 'markdown');
+        }
+    }
+
+    public function sendPhotoWithAdmin(string $absoluteFilePath, string $filename, ?string $caption = null, bool $isStaff = false): void
+    {
+        $query = User::where('telegram_id', '!=', null);
+        $query->where(
+            fn($q) => $q->where('is_admin', 1)
+                ->when($isStaff, fn($q) => $q->orWhere('is_staff', 1))
+        );
+        $users = $query->get();
+        foreach ($users as $user) {
+            SendTelegramPhotoJob::dispatch($user->telegram_id, $absoluteFilePath, $filename, $caption, '');
         }
     }
 
