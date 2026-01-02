@@ -81,6 +81,102 @@ class SingBox extends AbstractProtocol
             ->header('profile-update-interval', '24');
     }
 
+    /**
+     * Generate a sing-box config for app clients.
+     *
+     * Note: The returned config is the raw sing-box JSON (no wrappers).
+     */
+    public function generateConfig(?string $defaultOutboundTag = null, ?string $platform = null): array
+    {
+        $this->config = $this->loadConfig();
+        $this->buildOutbounds();
+        $this->buildRule();
+
+        if ($defaultOutboundTag) {
+            $this->applyDefaultOutboundTag($defaultOutboundTag);
+        }
+
+        if ($platform) {
+            $this->applyPlatformOverrides($platform);
+        }
+
+        return $this->config;
+    }
+
+    protected function applyDefaultOutboundTag(string $defaultOutboundTag): void
+    {
+        $outbounds = $this->config['outbounds'] ?? null;
+        if (!is_array($outbounds)) {
+            return;
+        }
+
+        $firstSelectorIndex = null;
+        $preferredSelectorIndex = null;
+
+        foreach ($outbounds as $index => $outbound) {
+            if (!is_array($outbound)) {
+                continue;
+            }
+            if (($outbound['type'] ?? null) !== 'selector') {
+                continue;
+            }
+
+            $firstSelectorIndex ??= $index;
+
+            if (($outbound['tag'] ?? null) === '节点选择') {
+                $preferredSelectorIndex = $index;
+                break;
+            }
+        }
+
+        $selectorIndex = $preferredSelectorIndex ?? $firstSelectorIndex;
+        if ($selectorIndex === null) {
+            return;
+        }
+
+        if (!isset($this->config['outbounds'][$selectorIndex]) || !is_array($this->config['outbounds'][$selectorIndex])) {
+            return;
+        }
+
+        $selector = &$this->config['outbounds'][$selectorIndex];
+        $selector['default'] = $defaultOutboundTag;
+
+        if (!isset($selector['outbounds']) || !is_array($selector['outbounds'])) {
+            $selector['outbounds'] = [];
+        }
+
+        if (!in_array($defaultOutboundTag, $selector['outbounds'], true)) {
+            $selector['outbounds'][] = $defaultOutboundTag;
+        }
+    }
+
+    protected function applyPlatformOverrides(string $platform): void
+    {
+        if ($platform !== 'android') {
+            return;
+        }
+
+        $inbounds = $this->config['inbounds'] ?? null;
+        if (!is_array($inbounds)) {
+            return;
+        }
+
+        foreach ($this->config['inbounds'] as &$inbound) {
+            if (!is_array($inbound)) {
+                continue;
+            }
+            if (($inbound['type'] ?? null) !== 'tun') {
+                continue;
+            }
+
+            // sing-box for Android (VpnService) does not implement strict_route.
+            if (array_key_exists('strict_route', $inbound)) {
+                $inbound['strict_route'] = false;
+            }
+        }
+        unset($inbound);
+    }
+
     protected function loadConfig()
     {
         $jsonData = admin_setting('subscribe_template_singbox', File::exists(base_path(self::CUSTOM_TEMPLATE_FILE))
