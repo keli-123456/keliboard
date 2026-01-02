@@ -117,9 +117,6 @@ class Plugin extends AbstractPlugin
     $attachments = $message->attachments ?? collect();
     $maxImages = (int) config('tickets.attachments.max_images', 3);
     $attachments = $attachments->take($maxImages);
-    if ($attachments->isEmpty()) {
-      return;
-    }
 
     $files = [];
     foreach ($attachments as $att) {

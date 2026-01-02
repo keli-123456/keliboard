@@ -287,6 +287,7 @@ class TelegramService
         $media = [];
         $resources = [];
         $request = $this->http;
+        $captionAdded = false;
         try {
             foreach ($items as $i => $file) {
                 $path = (string) ($file['path'] ?? '');
@@ -306,8 +307,9 @@ class TelegramService
                     'type' => 'photo',
                     'media' => "attach://{$attachName}",
                 ];
-                if (is_string($caption) && $caption !== '') {
+                if (!$captionAdded && is_string($caption) && $caption !== '') {
                     $item['caption'] = $caption;
+                    $captionAdded = true;
                 }
                 $media[] = $item;
             }
