@@ -43,7 +43,7 @@ class TelegramService
         ]);
     }
 
-    public function sendDocument(int $chatId, string $absoluteFilePath, string $filename, ?string $caption = null, string $parseMode = ''): void
+    public function sendDocument(int $chatId, string $absoluteFilePath, string $filename, ?string $caption = null, string $parseMode = ''): int
     {
         if (!is_file($absoluteFilePath) || !is_readable($absoluteFilePath)) {
             throw new ApiException('Telegram 文件不存在或不可读');
@@ -77,6 +77,9 @@ class TelegramService
                 $description = $data->description ?? '未知错误';
                 throw new ApiException("Telegram API 错误: {$description}");
             }
+
+            $messageId = $data->result->message_id ?? null;
+            return is_numeric($messageId) ? (int) $messageId : 0;
         } catch (\Exception $e) {
             Log::error('Telegram API sendDocument 失败', [
                 'chat_id' => $chatId,
@@ -92,7 +95,7 @@ class TelegramService
         }
     }
 
-    public function sendPhoto(int $chatId, string $absoluteFilePath, string $filename, ?string $caption = null, string $parseMode = ''): void
+    public function sendPhoto(int $chatId, string $absoluteFilePath, string $filename, ?string $caption = null, string $parseMode = ''): int
     {
         if (!is_file($absoluteFilePath) || !is_readable($absoluteFilePath)) {
             throw new ApiException('Telegram 文件不存在或不可读');
@@ -126,6 +129,9 @@ class TelegramService
                 $description = $data->description ?? '未知错误';
                 throw new ApiException("Telegram API 错误: {$description}");
             }
+
+            $messageId = $data->result->message_id ?? null;
+            return is_numeric($messageId) ? (int) $messageId : 0;
         } catch (\Exception $e) {
             Log::error('Telegram API sendPhoto 失败', [
                 'chat_id' => $chatId,
@@ -257,7 +263,7 @@ class TelegramService
     /**
      * @param array<int, array{path:string,filename:string}> $files
      */
-    public function sendMediaGroupPhotos(int $chatId, array $files, ?string $caption = null): void
+    public function sendMediaGroupPhotos(int $chatId, array $files, ?string $caption = null): array
     {
         $items = array_values($files);
         $count = count($items);
@@ -327,6 +333,22 @@ class TelegramService
                 $description = $data->description ?? '未知错误';
                 throw new ApiException("Telegram API 错误: {$description}");
             }
+
+            $result = $data->result ?? [];
+            if (!is_array($result)) {
+                return [];
+            }
+            $ids = [];
+            foreach ($result as $msg) {
+                if (!is_object($msg)) {
+                    continue;
+                }
+                $messageId = $msg->message_id ?? null;
+                if (is_numeric($messageId)) {
+                    $ids[] = (int) $messageId;
+                }
+            }
+            return $ids;
         } catch (\Exception $e) {
             Log::error('Telegram API sendMediaGroup 失败', [
                 'chat_id' => $chatId,
@@ -347,7 +369,7 @@ class TelegramService
     /**
      * @param array<int, array{path:string,filename:string}> $files
      */
-    public function sendMediaGroupPhotosWithAdmin(array $files, ?string $caption = null, bool $isStaff = false): void
+    public function sendMediaGroupPhotosWithAdmin(array $files, ?string $caption = null, bool $isStaff = false, ?int $ticketId = null): void
     {
         $query = User::where('telegram_id', '!=', null);
         $query->where(
@@ -356,7 +378,7 @@ class TelegramService
         );
         $users = $query->get();
         foreach ($users as $user) {
-            SendTelegramMediaGroupJob::dispatch($user->telegram_id, $files, $caption);
+            SendTelegramMediaGroupJob::dispatch($user->telegram_id, $files, $caption, $ticketId);
         }
     }
 

@@ -11,6 +11,7 @@ use App\Services\TelegramService;
 use App\Services\TicketService;
 use App\Utils\Helper;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
@@ -136,7 +137,7 @@ class Plugin extends AbstractPlugin
     }
 
     if (!empty($files)) {
-      $this->telegramService->sendMediaGroupPhotosWithAdmin($files, $TGmessage, true);
+      $this->telegramService->sendMediaGroupPhotosWithAdmin($files, $TGmessage, true, (int) $ticket->id);
       return;
     }
 
@@ -266,6 +267,17 @@ class Plugin extends AbstractPlugin
     foreach ($this->commands['replies'] as $regex => $handler) {
       if (preg_match($regex, $msg->reply_text, $matches)) {
         call_user_func($handler, $msg, $matches);
+        return true;
+      }
+    }
+
+    // Fallback: media-group messages might not contain caption/text on the replied item,
+    // so we also map reply_to_message_id -> ticket id.
+    $replyMessageId = $msg->reply_message_id ?? null;
+    if (is_numeric($replyMessageId)) {
+      $ticketId = Cache::get("tg_ticket_reply:{$msg->chat_id}:" . (int) $replyMessageId);
+      if (is_numeric($ticketId) && (int) $ticketId > 0) {
+        $this->handleTicketReply($msg, [null, '工单ID: ', (string) $ticketId]);
         return true;
       }
     }

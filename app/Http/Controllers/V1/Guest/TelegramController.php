@@ -80,20 +80,26 @@ class TelegramController extends Controller
             return;
         }
 
+        $isReply = isset($message['reply_to_message']) && is_array($message['reply_to_message']);
         $hasText = isset($message['text']) && is_string($message['text']);
-        $hasReplyText =
-            (isset($message['reply_to_message']['text']) && is_string($message['reply_to_message']['text'])) ||
-            (isset($message['reply_to_message']['caption']) && is_string($message['reply_to_message']['caption']));
+        $hasCaption = isset($message['caption']) && is_string($message['caption']);
+        $hasPhoto = isset($message['photo']) && is_array($message['photo']) && !empty($message['photo']);
+        $hasDoc = isset($message['document']) && is_array($message['document']) && isset($message['document']['file_id']);
 
-        // Only handle: normal text messages OR reply messages (to parse ticket reply), others are ignored.
-        if (!$hasText && !$hasReplyText) {
+        // Only handle:
+        // - normal text messages (commands)
+        // - reply messages that include text/caption/images (ticket replies)
+        if (!$isReply && !$hasText) {
+            return;
+        }
+        if ($isReply && !$hasText && !$hasCaption && !$hasPhoto && !$hasDoc) {
             return;
         }
 
         $textContent = '';
         if ($hasText) {
             $textContent = $message['text'];
-        } elseif (isset($message['caption']) && is_string($message['caption'])) {
+        } elseif ($hasCaption) {
             $textContent = $message['caption'];
         }
 
@@ -103,20 +109,28 @@ class TelegramController extends Controller
             'args' => array_slice($parts, 1),
             'chat_id' => $message['chat']['id'],
             'message_id' => $message['message_id'],
-            'message_type' => $hasReplyText ? 'reply_message' : 'message',
+            'message_type' => $isReply ? 'reply_message' : 'message',
             'text' => $textContent,
             'is_private' => ($message['chat']['type'] ?? '') === 'private',
         ];
 
-        if ($hasReplyText) {
-            $this->msg->reply_text =
-                (isset($message['reply_to_message']['text']) && is_string($message['reply_to_message']['text']))
-                    ? $message['reply_to_message']['text']
-                    : $message['reply_to_message']['caption'];
+        if ($isReply) {
+            $reply = $message['reply_to_message'];
+            $replyText = '';
+            if (isset($reply['text']) && is_string($reply['text'])) {
+                $replyText = $reply['text'];
+            } elseif (isset($reply['caption']) && is_string($reply['caption'])) {
+                $replyText = $reply['caption'];
+            }
+
+            $this->msg->reply_text = $replyText;
+            if (isset($reply['message_id']) && is_numeric($reply['message_id'])) {
+                $this->msg->reply_message_id = (int) $reply['message_id'];
+            }
         }
 
         $images = [];
-        if (isset($message['photo']) && is_array($message['photo']) && !empty($message['photo'])) {
+        if ($hasPhoto) {
             $largest = end($message['photo']);
             if (is_array($largest) && isset($largest['file_id'])) {
                 $images[] = [
@@ -130,7 +144,7 @@ class TelegramController extends Controller
             }
         }
 
-        if (isset($message['document']) && is_array($message['document']) && isset($message['document']['file_id'])) {
+        if ($hasDoc) {
             $mime = $message['document']['mime_type'] ?? null;
             if (is_string($mime) && str_starts_with($mime, 'image/')) {
                 $images[] = [
