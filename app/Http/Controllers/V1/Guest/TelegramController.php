@@ -75,25 +75,72 @@ class TelegramController extends Controller
 
     private function formatMessage(array $data): void
     {
-        if (!isset($data['message']['text']))
+        $message = $data['message'] ?? null;
+        if (!$message || !is_array($message)) {
             return;
+        }
 
-        $message = $data['message'];
-        $text = explode(' ', $message['text']);
+        $hasText = isset($message['text']) && is_string($message['text']);
+        $hasReplyText = isset($message['reply_to_message']['text']) && is_string($message['reply_to_message']['text']);
 
+        // Only handle: normal text messages OR reply messages (to parse ticket reply), others are ignored.
+        if (!$hasText && !$hasReplyText) {
+            return;
+        }
+
+        $textContent = '';
+        if ($hasText) {
+            $textContent = $message['text'];
+        } elseif (isset($message['caption']) && is_string($message['caption'])) {
+            $textContent = $message['caption'];
+        }
+
+        $parts = $textContent !== '' ? explode(' ', $textContent) : [''];
         $this->msg = (object) [
-            'command' => $text[0],
-            'args' => array_slice($text, 1),
+            'command' => $parts[0] ?? '',
+            'args' => array_slice($parts, 1),
             'chat_id' => $message['chat']['id'],
             'message_id' => $message['message_id'],
-            'message_type' => 'message',
-            'text' => $message['text'],
-            'is_private' => $message['chat']['type'] === 'private',
+            'message_type' => $hasReplyText ? 'reply_message' : 'message',
+            'text' => $textContent,
+            'is_private' => ($message['chat']['type'] ?? '') === 'private',
         ];
 
-        if (isset($message['reply_to_message']['text'])) {
-            $this->msg->message_type = 'reply_message';
+        if ($hasReplyText) {
             $this->msg->reply_text = $message['reply_to_message']['text'];
+        }
+
+        $images = [];
+        if (isset($message['photo']) && is_array($message['photo']) && !empty($message['photo'])) {
+            $largest = end($message['photo']);
+            if (is_array($largest) && isset($largest['file_id'])) {
+                $images[] = [
+                    'type' => 'photo',
+                    'file_id' => $largest['file_id'],
+                    'file_unique_id' => $largest['file_unique_id'] ?? null,
+                    'file_size' => $largest['file_size'] ?? null,
+                    'width' => $largest['width'] ?? null,
+                    'height' => $largest['height'] ?? null,
+                ];
+            }
+        }
+
+        if (isset($message['document']) && is_array($message['document']) && isset($message['document']['file_id'])) {
+            $mime = $message['document']['mime_type'] ?? null;
+            if (is_string($mime) && str_starts_with($mime, 'image/')) {
+                $images[] = [
+                    'type' => 'document',
+                    'file_id' => $message['document']['file_id'],
+                    'file_unique_id' => $message['document']['file_unique_id'] ?? null,
+                    'file_size' => $message['document']['file_size'] ?? null,
+                    'file_name' => $message['document']['file_name'] ?? null,
+                    'mime_type' => $mime,
+                ];
+            }
+        }
+
+        if (!empty($images)) {
+            $this->msg->images = $images;
         }
     }
 

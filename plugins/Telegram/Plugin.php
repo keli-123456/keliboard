@@ -10,7 +10,9 @@ use App\Services\Plugin\HookManager;
 use App\Services\TelegramService;
 use App\Services\TicketService;
 use App\Utils\Helper;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 class Plugin extends AbstractPlugin
 {
@@ -72,6 +74,9 @@ class Plugin extends AbstractPlugin
     }
 
     $message = $ticket->messages()->latest()->first();
+    if (!$message) {
+      return;
+    }
     $user = User::find($ticket->user_id);
     if (!$user)
       return;
@@ -106,6 +111,27 @@ class Plugin extends AbstractPlugin
     $TGmessage .= "📝 *主题*: `{$ticket->subject}`\n";
     $TGmessage .= "💬 *内容*: `{$message->message}`";
     $this->telegramService->sendMessageWithAdmin($TGmessage, true);
+
+    $message->load('attachments');
+    $attachments = $message->attachments ?? collect();
+    $maxImages = (int) config('tickets.attachments.max_images', 3);
+    $attachments = $attachments->take($maxImages);
+    if ($attachments->isEmpty()) {
+      return;
+    }
+
+    foreach ($attachments as $att) {
+      $disk = $att->disk ?: (string) config('tickets.attachments.disk', 'local');
+      $path = $att->path;
+      if (!$path || !Storage::disk($disk)->exists($path)) {
+        continue;
+      }
+
+      $absolute = Storage::disk($disk)->path($path);
+      $filename = basename($path);
+      $caption = "🖼️ 工单 #{$ticket->id} 附件";
+      $this->telegramService->sendDocumentWithAdmin($absolute, $filename, $caption, true);
+    }
   }
 
   protected function registerDefaultCommands(): void
@@ -391,6 +417,11 @@ class Plugin extends AbstractPlugin
       return;
     }
 
+    if (!$user->is_admin && !$user->is_staff) {
+      $this->sendMessage($msg, '无权限');
+      return;
+    }
+
     if (!isset($matches[2]) || !is_numeric($matches[2])) {
       Log::warning('Telegram 工单回复正则未匹配到工单ID', ['matches' => $matches, 'msg' => $msg]);
       $this->sendMessage($msg, '未能识别工单ID，请直接回复工单提醒消息。');
@@ -405,11 +436,58 @@ class Plugin extends AbstractPlugin
     }
 
     $ticketService = new TicketService();
-    $ticketService->replyByAdmin(
-      $ticketId,
-      $msg->text,
-      $user->id
-    );
+    $maxImages = (int) config('tickets.attachments.max_images', 3);
+    $maxKb = (int) config('tickets.attachments.max_kb', 5120);
+
+    $text = is_string($msg->text ?? null) ? (string) $msg->text : '';
+    $imageMetas = $msg->images ?? [];
+    $imageMetas = is_array($imageMetas) ? $imageMetas : [];
+    $imageMetas = array_slice($imageMetas, 0, max(0, $maxImages));
+
+    $tempPaths = [];
+    $files = [];
+    try {
+      foreach ($imageMetas as $meta) {
+        if (!is_array($meta)) {
+          continue;
+        }
+        $fileId = $meta['file_id'] ?? null;
+        if (!is_string($fileId) || $fileId === '') {
+          continue;
+        }
+        $fileSize = $meta['file_size'] ?? null;
+        if (is_numeric($fileSize) && (int) $fileSize > ($maxKb * 1024)) {
+          $this->sendMessage($msg, '图片过大，已忽略');
+          continue;
+        }
+
+        $preferredName = isset($meta['file_name']) && is_string($meta['file_name']) ? $meta['file_name'] : null;
+        $downloaded = $this->telegramService->downloadFileToTemp($fileId, $preferredName);
+        $tempPaths[] = $downloaded['path'];
+        $files[] = new UploadedFile($downloaded['path'], $downloaded['filename'], null, null, true);
+      }
+
+      if (trim($text) === '' && empty($files)) {
+        $this->sendMessage($msg, '请发送文字或图片');
+        return;
+      }
+
+      $ticketService->replyByAdmin(
+        $ticketId,
+        $text,
+        $user->id,
+        $files
+      );
+    } finally {
+      foreach ($tempPaths as $p) {
+        try {
+          if (is_string($p) && $p !== '' && is_file($p)) {
+            @unlink($p);
+          }
+        } catch (\Exception) {
+        }
+      }
+    }
 
     $this->sendMessage($msg, "工单 #{$ticketId} 回复成功");
   }
