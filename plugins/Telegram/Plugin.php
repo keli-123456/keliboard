@@ -120,6 +120,7 @@ class Plugin extends AbstractPlugin
       return;
     }
 
+    $files = [];
     foreach ($attachments as $att) {
       $disk = $att->disk ?: (string) config('tickets.attachments.disk', 'local');
       $path = $att->path;
@@ -129,8 +130,15 @@ class Plugin extends AbstractPlugin
 
       $absolute = Storage::disk($disk)->path($path);
       $filename = basename($path);
+      $files[] = [
+        'path' => $absolute,
+        'filename' => $filename,
+      ];
+    }
+
+    if (!empty($files)) {
       $caption = "工单ID: {$ticket->id} 附件";
-      $this->telegramService->sendPhotoWithAdmin($absolute, $filename, $caption, true);
+      $this->telegramService->sendMediaGroupPhotosWithAdmin($files, $caption, true);
     }
   }
 

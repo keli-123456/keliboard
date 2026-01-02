@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Exceptions\ApiException;
 use App\Jobs\SendTelegramDocumentJob;
+use App\Jobs\SendTelegramMediaGroupJob;
 use App\Jobs\SendTelegramPhotoJob;
 use App\Jobs\SendTelegramJob;
 use App\Models\User;
@@ -250,6 +251,102 @@ class TelegramService
         $users = $query->get();
         foreach ($users as $user) {
             SendTelegramPhotoJob::dispatch($user->telegram_id, $absoluteFilePath, $filename, $caption, '');
+        }
+    }
+
+    /**
+     * @param array<int, array{path:string,filename:string}> $files
+     */
+    public function sendMediaGroupPhotos(int $chatId, array $files, ?string $caption = null): void
+    {
+        $items = array_values($files);
+        $count = count($items);
+        if ($count < 1) {
+            throw new ApiException('Telegram media group is empty');
+        }
+        if ($count > 10) {
+            $items = array_slice($items, 0, 10);
+        }
+
+        $media = [];
+        $resources = [];
+        $request = $this->http;
+        try {
+            foreach ($items as $i => $file) {
+                $path = (string) ($file['path'] ?? '');
+                if ($path === '' || !is_file($path) || !is_readable($path)) {
+                    continue;
+                }
+                $filename = (string) ($file['filename'] ?? basename($path));
+                $attachName = "file{$i}";
+                $resource = fopen($path, 'r');
+                if ($resource === false) {
+                    continue;
+                }
+                $resources[] = $resource;
+                $request = $request->attach($attachName, $resource, $filename);
+
+                $item = [
+                    'type' => 'photo',
+                    'media' => "attach://{$attachName}",
+                ];
+                if (is_string($caption) && $caption !== '') {
+                    $item['caption'] = $caption;
+                }
+                $media[] = $item;
+            }
+
+            if (empty($media)) {
+                throw new ApiException('Telegram media group has no valid files');
+            }
+
+            $response = $request->post($this->apiUrl . 'sendMediaGroup', [
+                'chat_id' => $chatId,
+                'media' => json_encode($media, JSON_UNESCAPED_UNICODE),
+            ]);
+
+            if (!$response->successful()) {
+                throw new ApiException("HTTP 请求失败: {$response->status()}");
+            }
+
+            $data = $response->object();
+            if (!isset($data->ok)) {
+                throw new ApiException('无效的 Telegram API 响应');
+            }
+            if (!$data->ok) {
+                $description = $data->description ?? '未知错误';
+                throw new ApiException("Telegram API 错误: {$description}");
+            }
+        } catch (\Exception $e) {
+            Log::error('Telegram API sendMediaGroup 失败', [
+                'chat_id' => $chatId,
+                'count' => count($items),
+                'error' => $e->getMessage(),
+            ]);
+            throw $e instanceof ApiException ? $e : new ApiException("Telegram 服务错误: {$e->getMessage()}");
+        } finally {
+            foreach ($resources as $r) {
+                try {
+                    fclose($r);
+                } catch (\Exception) {
+                }
+            }
+        }
+    }
+
+    /**
+     * @param array<int, array{path:string,filename:string}> $files
+     */
+    public function sendMediaGroupPhotosWithAdmin(array $files, ?string $caption = null, bool $isStaff = false): void
+    {
+        $query = User::where('telegram_id', '!=', null);
+        $query->where(
+            fn($q) => $q->where('is_admin', 1)
+                ->when($isStaff, fn($q) => $q->orWhere('is_staff', 1))
+        );
+        $users = $query->get();
+        foreach ($users as $user) {
+            SendTelegramMediaGroupJob::dispatch($user->telegram_id, $files, $caption);
         }
     }
 
