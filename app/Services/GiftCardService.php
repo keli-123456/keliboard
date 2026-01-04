@@ -394,6 +394,23 @@ class GiftCardService
             throw new ApiException('未设置使用用户');
         }
 
+        // 盲盒礼品卡：保持“开盒后揭晓”的语义，查询阶段不返回具体命中奖励，避免提前泄露。
+        if ($this->template->type === GiftCardTemplate::TYPE_MYSTERY) {
+            return [
+                'raw' => [
+                    'mystery' => true,
+                ],
+                'formatted' => [
+                    'mystery' => [
+                        'raw' => true,
+                        'formatted' => '兑换后揭晓',
+                        'description' => '盲盒奖励',
+                    ],
+                ],
+                'summary' => '盲盒奖励：兑换后揭晓',
+            ];
+        }
+
         $rewards = $this->template->calculateActualRewards($this->user);
         
         // 格式化奖励信息，使其更友好
