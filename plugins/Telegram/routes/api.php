@@ -10,5 +10,6 @@ Route::prefix('api/plugin/telegram')
     ->middleware(['api'])
     ->group(function () {
         Route::post('/login', [LoginController::class, 'login']);
+        Route::post('/login/start', [LoginController::class, 'start']);
+        Route::post('/login/poll', [LoginController::class, 'poll']);
     });
-

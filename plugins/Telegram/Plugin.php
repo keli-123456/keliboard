@@ -18,6 +18,8 @@ use Illuminate\Support\Facades\Storage;
 
 class Plugin extends AbstractPlugin
 {
+  private const LOGIN_SESSION_PREFIX = 'tg_login:session:';
+
   protected array $commands = [];
   protected TelegramService $telegramService;
 
@@ -256,6 +258,13 @@ class Plugin extends AbstractPlugin
 
   public function handleStartCommand(object $msg): void
   {
+    if ($msg->is_private && isset($msg->args) && is_array($msg->args) && isset($msg->args[0]) && is_string($msg->args[0])) {
+      $payload = trim((string) $msg->args[0]);
+      if ($payload !== '' && $this->handleLoginStartPayload($msg, $payload)) {
+        return;
+      }
+    }
+
     $welcomeTitle = $this->getConfig('start_welcome_title', '🎉 欢迎使用 XBoard Telegram Bot！');
     $botDescription = $this->getConfig('start_bot_description', '🤖 我是您的专属助手，可以帮助您：\\n• 绑定您的 XBoard 账号\\n• 查看流量使用情况\\n• 获取最新订阅链接\\n• 管理账号绑定状态');
     $footer = $this->getConfig('start_footer', '💡 提示：所有命令都需要在私聊中使用');
@@ -275,6 +284,71 @@ class Plugin extends AbstractPlugin
     $welcomeText = str_replace('\\n', "\n", $welcomeText);
 
     $this->sendMessage($msg, $welcomeText);
+  }
+
+  protected function handleLoginStartPayload(object $msg, string $payload): bool
+  {
+    if (!str_starts_with($payload, 'login_')) {
+      return false;
+    }
+
+    $session = substr($payload, strlen('login_'));
+    $session = trim((string) $session);
+    if (!$this->isValidLoginSessionId($session)) {
+      $this->sendMessage($msg, '登录参数无效，请回到网页重新发起 Telegram 登录');
+      return true;
+    }
+
+    $cacheKey = self::LOGIN_SESSION_PREFIX . $session;
+    $record = Cache::get($cacheKey);
+    if (!is_array($record)) {
+      $this->sendMessage($msg, '登录已过期，请回到网页重新发起 Telegram 登录');
+      return true;
+    }
+
+    $user = User::where('telegram_id', $msg->chat_id)->first();
+    if (!$user) {
+      $guide = $this->getConfig(
+        'start_bind_guide',
+        '🔗 请先绑定您的 XBoard 账号：\\n1. 登录您的 XBoard 账户\\n2. 复制您的订阅 Token\\n3. 发送 /bind + 订阅 Token'
+      );
+      $guide = str_replace('\\n', "\n", $guide);
+      $this->sendMessage($msg, "❌ 该 Telegram 账号未绑定\n\n{$guide}", ['disable_web_page_preview' => true]);
+      return true;
+    }
+    if ((bool) $user->banned) {
+      $this->sendMessage($msg, '账号已被封禁');
+      return true;
+    }
+
+    if (($record['approved'] ?? false) && isset($record['user_id']) && is_numeric($record['user_id'])) {
+      $site = trim((string) ($record['site'] ?? ''));
+      $siteLine = $site !== '' ? "\n站点：{$site}" : '';
+      $this->sendMessage($msg, "✅ 已确认登录{$siteLine}\n\n请回到网页继续完成登录", ['disable_web_page_preview' => true]);
+      return true;
+    }
+
+    $record['approved'] = true;
+    $record['approved_at'] = time();
+    $record['user_id'] = $user->id;
+    $record['telegram_id'] = $msg->chat_id;
+    $expiresAt = (int) ($record['expires_at'] ?? 0);
+    $ttl = $expiresAt > 0 ? $expiresAt - time() : 300;
+    if ($ttl <= 0) $ttl = 60;
+    Cache::put($cacheKey, $record, $ttl);
+
+    $site = trim((string) ($record['site'] ?? ''));
+    $siteLine = $site !== '' ? "\n站点：{$site}" : '';
+    $this->sendMessage($msg, "✅ 已确认登录{$siteLine}\n\n请回到网页继续完成登录", ['disable_web_page_preview' => true]);
+    return true;
+  }
+
+  protected function isValidLoginSessionId(string $value): bool
+  {
+    $raw = trim($value);
+    if ($raw === '') return false;
+    if (strlen($raw) < 16 || strlen($raw) > 48) return false;
+    return (bool) preg_match('/^[a-zA-Z0-9_-]+$/', $raw);
   }
 
   public function handleMessage(bool $handled, array $data): bool
