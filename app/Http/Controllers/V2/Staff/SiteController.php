@@ -16,42 +16,43 @@ class SiteController extends Controller
      */
     private function loadSites(): array
     {
-        $sites = admin_setting(self::SITES_KEY, null);
-        if (is_array($sites)) {
-            return $sites;
-        }
-
+        // Prefer per-site rows directly from DB to avoid stale admin_settings cache.
         $rows = SettingModel::query()
             ->where('name', 'like', self::SITE_KEY_PREFIX . '%')
             ->orderBy('name')
             ->get(['name', 'value']);
 
         $items = [];
-        foreach ($rows as $row) {
-            $name = (string) ($row->name ?? '');
-            if ($name === '' || !Str::startsWith($name, self::SITE_KEY_PREFIX)) {
-                continue;
-            }
-            $id = trim(Str::after($name, self::SITE_KEY_PREFIX));
-            if ($id === '') {
-                continue;
-            }
-
-            $value = $row->value;
-            if (is_string($value)) {
-                $decoded = json_decode($value, true);
-                if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-                    $value = $decoded;
+        if ($rows->isNotEmpty()) {
+            foreach ($rows as $row) {
+                $name = (string) ($row->name ?? '');
+                if ($name === '' || !Str::startsWith($name, self::SITE_KEY_PREFIX)) {
+                    continue;
                 }
-            }
-            if (!is_array($value)) {
-                continue;
-            }
+                $id = trim(Str::after($name, self::SITE_KEY_PREFIX));
+                if ($id === '') {
+                    continue;
+                }
 
-            $value['id'] = $id;
-            $items[] = $value;
+                $value = $row->value;
+                if (is_string($value)) {
+                    $decoded = json_decode($value, true);
+                    if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                        $value = $decoded;
+                    }
+                }
+                if (!is_array($value)) {
+                    continue;
+                }
+
+                $value['id'] = $id;
+                $items[] = $value;
+            }
+            return $items;
         }
-        return $items;
+
+        $sites = admin_setting(self::SITES_KEY, null);
+        return is_array($sites) ? $sites : [];
     }
 
     public function fetch()

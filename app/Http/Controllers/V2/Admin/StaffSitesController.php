@@ -62,43 +62,48 @@ class StaffSitesController extends Controller
      */
     private function loadSites(): array
     {
-        $sites = admin_setting(self::SITES_KEY, null);
-        if (is_array($sites)) {
-            return $this->normalizeSites($sites);
-        }
-
+        // Prefer per-site rows directly from DB to avoid stale admin_settings cache in multi-instance deployments.
         $rows = SettingModel::query()
             ->where('name', 'like', self::SITE_KEY_PREFIX . '%')
             ->orderBy('name')
             ->get(['name', 'value']);
 
         $items = [];
-        foreach ($rows as $row) {
-            $name = (string) ($row->name ?? '');
-            if ($name === '' || !Str::startsWith($name, self::SITE_KEY_PREFIX)) {
-                continue;
-            }
-            $id = trim(Str::after($name, self::SITE_KEY_PREFIX));
-            if ($id === '') {
-                continue;
-            }
-
-            $value = $row->value;
-            if (is_string($value)) {
-                $decoded = json_decode($value, true);
-                if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-                    $value = $decoded;
+        if ($rows->isNotEmpty()) {
+            foreach ($rows as $row) {
+                $name = (string) ($row->name ?? '');
+                if ($name === '' || !Str::startsWith($name, self::SITE_KEY_PREFIX)) {
+                    continue;
                 }
-            }
-            if (!is_array($value)) {
-                continue;
+                $id = trim(Str::after($name, self::SITE_KEY_PREFIX));
+                if ($id === '') {
+                    continue;
+                }
+
+                $value = $row->value;
+                if (is_string($value)) {
+                    $decoded = json_decode($value, true);
+                    if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                        $value = $decoded;
+                    }
+                }
+                if (!is_array($value)) {
+                    continue;
+                }
+
+                $value['id'] = $id;
+                $items[] = $value;
             }
 
-            $value['id'] = $id;
-            $items[] = $value;
+            return $this->normalizeSites($items);
         }
 
-        return $this->normalizeSites($items);
+        $sites = admin_setting(self::SITES_KEY, null);
+        if (is_array($sites)) {
+            return $this->normalizeSites($sites);
+        }
+
+        return [];
     }
 
     private function encodeJson(array $value): string
@@ -140,25 +145,21 @@ class StaffSitesController extends Controller
             ->where('name', 'like', self::SITE_KEY_PREFIX . '%')
             ->delete();
 
-        $payload = [
-            self::SITES_KEY => $this->encodeJson($sites),
-        ];
-
         foreach ($sites as $site) {
             $id = (string) ($site['id'] ?? '');
             if ($id === '') {
                 continue;
             }
 
-            $payload[self::SITE_KEY_PREFIX . $id] = $this->encodeJson([
+            SettingModel::createOrUpdate(self::SITE_KEY_PREFIX . $id, $this->encodeJson([
                 'name' => (string) ($site['name'] ?? ''),
                 'baseUrl' => (string) ($site['baseUrl'] ?? ''),
                 'adminPath' => (string) ($site['adminPath'] ?? ''),
                 'enabled' => (bool) ($site['enabled'] ?? true),
-            ]);
+            ]));
         }
 
-        admin_setting($payload);
+        SettingModel::createOrUpdate(self::SITES_KEY, $this->encodeJson($sites));
 
         // Safety: ensure cache is cleared even if settings store changes.
         try {
