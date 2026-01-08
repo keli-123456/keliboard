@@ -680,12 +680,18 @@ class Plugin extends AbstractPlugin
         return;
       }
 
-      $ticketService->replyByAdmin(
-        $ticketId,
-        $text,
-        $user->id,
-        $files
-      );
+      try {
+        $ticketService->replyByAdmin(
+          $ticketId,
+          $text,
+          $user->id,
+          $files
+        );
+      } catch (\App\Exceptions\ApiException $e) {
+        $err = trim((string) $e->getMessage());
+        $this->sendMessage($msg, $err !== '' ? $err : '工单回复失败');
+        return;
+      }
     } finally {
       foreach ($tempPaths as $p) {
         try {

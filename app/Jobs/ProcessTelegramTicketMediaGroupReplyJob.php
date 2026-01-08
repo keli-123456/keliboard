@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Exceptions\ApiException;
 use App\Services\TelegramService;
 use App\Services\TicketService;
 use Illuminate\Bus\Queueable;
@@ -130,7 +131,14 @@ class ProcessTelegramTicketMediaGroupReplyJob implements ShouldQueue
 
             try {
                 $telegram = new TelegramService();
-                $telegram->sendMessage($this->chatId, '工单回复失败，请重试');
+                $message = '工单回复失败，请重试';
+                if ($e instanceof ApiException) {
+                    $err = trim((string) $e->getMessage());
+                    if ($err !== '') {
+                        $message = $err;
+                    }
+                }
+                $telegram->sendMessage($this->chatId, $message);
             } catch (\Exception) {
             }
         } finally {
@@ -176,4 +184,3 @@ class ProcessTelegramTicketMediaGroupReplyJob implements ShouldQueue
         }
     }
 }
-

@@ -2,6 +2,8 @@
 
 return [
     'retention_days' => (int) env('TICKET_RETENTION_DAYS', 90),
+    // 员工（is_staff）在用户未回复前最多可连续回复的次数，0 表示不限制
+    'staff_reply_limit' => (int) env('TICKET_STAFF_REPLY_LIMIT', 2),
     'attachments' => [
         'disk' => env('TICKET_ATTACHMENTS_DISK', 'local'),
         'base_dir' => env('TICKET_ATTACHMENTS_DIR', 'ticket_attachments'),

@@ -15,6 +15,39 @@ use Illuminate\Support\Facades\Storage;
 
 class TicketService
 {
+    private function assertStaffReplyAllowed(Ticket $ticket, int $userId): void
+    {
+        $limit = (int) config('tickets.staff_reply_limit', 2);
+        if ($limit <= 0) {
+            return;
+        }
+
+        $actor = User::find($userId);
+        if (!$actor || !$actor->is_staff || $actor->is_admin) {
+            return;
+        }
+
+        $recentUserIds = TicketMessage::query()
+            ->where('ticket_id', $ticket->id)
+            ->orderByDesc('id')
+            ->limit($limit)
+            ->pluck('user_id')
+            ->all();
+
+        if (count($recentUserIds) < $limit) {
+            return;
+        }
+
+        $ticketOwnerId = (int) $ticket->user_id;
+        foreach ($recentUserIds as $uid) {
+            if ((int) $uid === $ticketOwnerId) {
+                return;
+            }
+        }
+
+        throw new ApiException("用户未回复前，员工最多连续回复{$limit}条消息", 400);
+    }
+
     public function reply($ticket, $message, $userId, array $images = [])
     {
         $stored = [];
@@ -71,15 +104,18 @@ class TicketService
 
     public function replyByAdmin($ticketId, $message, $userId, array $images = []): void
     {
-        $ticket = Ticket::where('id', $ticketId)
-            ->first();
-        if (!$ticket) {
-            throw new ApiException('工单不存在');
-        }
-        $ticket->status = Ticket::STATUS_OPENING;
         $stored = [];
         try {
             DB::beginTransaction();
+            /** @var Ticket|null $ticket */
+            $ticket = Ticket::where('id', $ticketId)->lockForUpdate()->first();
+            if (!$ticket) {
+                throw new ApiException('工单不存在');
+            }
+
+            $this->assertStaffReplyAllowed($ticket, (int) $userId);
+
+            $ticket->status = Ticket::STATUS_OPENING;
             $ticketMessage = TicketMessage::create([
                 'user_id' => $userId,
                 'ticket_id' => $ticket->id,
