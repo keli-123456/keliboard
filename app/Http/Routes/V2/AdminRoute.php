@@ -18,6 +18,7 @@ use App\Http\Controllers\V2\Admin\PaymentController;
 use App\Http\Controllers\V2\Admin\SystemController;
 use App\Http\Controllers\V2\Admin\ThemeController;
 use App\Http\Controllers\V2\Admin\TrafficResetController;
+use App\Http\Controllers\V2\Admin\StaffSitesController;
 use Illuminate\Contracts\Routing\Registrar;
 
 class AdminRoute
@@ -270,6 +271,14 @@ class AdminRoute
                 $router->get('stats', [TrafficResetController::class, 'stats']);
                 $router->get('user/{userId}/history', [TrafficResetController::class, 'userHistory']);
                 $router->post('reset-user', [TrafficResetController::class, 'resetUser']);
+            });
+
+            // Staff desk (multi-site) config
+            $router->group([
+                'prefix' => 'staff-sites'
+            ], function ($router) {
+                $router->get('/fetch', [StaffSitesController::class, 'fetch']);
+                $router->post('/save', [StaffSitesController::class, 'save']);
             });
         });
 

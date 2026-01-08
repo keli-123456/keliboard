@@ -1,6 +1,7 @@
 <?php
 namespace App\Http\Routes\V2;
 
+use App\Http\Controllers\V2\Staff\SiteController;
 use App\Http\Controllers\V2\Staff\TicketController;
 use App\Http\Controllers\V2\Staff\UserController;
 use Illuminate\Contracts\Routing\Registrar;
@@ -30,7 +31,13 @@ class StaffRoute
                 $router->get('/getUserInfoById', [UserController::class, 'getUserInfoById']);
                 $router->get('/getUserInfoByEmail', [UserController::class, 'getUserInfoByEmail']);
             });
+
+            // Sites (read-only config for staff desk)
+            $router->group([
+                'prefix' => 'site'
+            ], function ($router) {
+                $router->get('/fetch', [SiteController::class, 'fetch']);
+            });
         });
     }
 }
-
