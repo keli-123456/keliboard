@@ -1,13 +1,31 @@
 {
     "name": "Telegram Bot 集成",
     "code": "telegram",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "Telegram Bot 消息处理和命令系统",
     "author": "XBoard Team",
     "require": {
         "xboard": ">=1.0.0"
     },
     "config": {
+        "enable_login": {
+            "type": "boolean",
+            "default": true,
+            "label": "启用 Telegram 登录",
+            "description": "开启后，已绑定 Telegram 的用户可在登录页使用 Telegram 一键登录"
+        },
+        "login_auth_timeout": {
+            "type": "number",
+            "default": 300,
+            "label": "Telegram 登录有效期（秒）",
+            "description": "Telegram 登录回调 auth_date 与当前时间差超过该值将拒绝"
+        },
+        "bot_username": {
+            "type": "string",
+            "default": "",
+            "label": "Bot 用户名（可选）",
+            "description": "用于登录页渲染 Telegram 登录按钮，留空将自动调用 Telegram API 获取（可能受网络影响）"
+        },
         "enable_ticket_notify": {
             "type": "boolean",
             "default": true,
@@ -34,7 +52,7 @@
         },
         "start_bind_guide": {
             "type": "text",
-            "default": "🔗 请先绑定您的 XBoard 账号：\\n1. 登录您的 XBoard 账户\\n2. 复制您的订阅链接\\n3. 发送 /bind + 订阅链接",
+            "default": "🔗 请先绑定您的 XBoard 账号：\\n1. 登录您的 XBoard 账户\\n2. 复制您的订阅 Token\\n3. 发送 /bind + 订阅 Token",
             "label": "绑定指导",
             "description": "未绑定用户显示的绑定指导文本"
         },
@@ -46,7 +64,7 @@
         },
         "start_bind_commands": {
             "type": "text",
-            "default": "📋 可用命令：\\n/bind [订阅链接] - 绑定账号",
+            "default": "📋 可用命令：\\n/bind [订阅 Token] - 绑定账号",
             "label": "未绑定用户命令列表",
             "description": "未绑定用户显示的命令列表"
         },
@@ -58,7 +76,7 @@
         },
         "help_text": {
             "type": "text",
-            "default": "请使用以下命令：\\n/bind - 绑定账号\\n/traffic - 查看流量\\n/getlatesturl - 获取最新链接",
+            "default": "请使用以下命令：\\n/bind [订阅 Token] - 绑定账号\\n/traffic - 查看流量\\n/getlatesturl - 获取最新订阅链接",
             "label": "帮助文本",
             "description": "未知命令时显示的帮助文本"
         }

@@ -41,6 +41,66 @@ class Plugin extends AbstractPlugin
     $this->listen('ticket.create.after', [$this, 'sendTicketNotify'], 10);
     $this->listen('ticket.reply.user.after', [$this, 'sendTicketNotify'], 10);
     $this->listen('payment.notify.success', [$this, 'sendPaymentNotify'], 10);
+    $this->filter('guest_comm_config', [$this, 'injectGuestConfig'], 10);
+  }
+
+  public function injectGuestConfig(array $config): array
+  {
+    $loginEnabled = $this->getConfig('enable_login', true);
+    if (!($loginEnabled === true || $loginEnabled === 1 || $loginEnabled === '1' || $loginEnabled === 'true')) {
+      $config['telegram_login_enable'] = 0;
+      $config['telegram_bot_username'] = '';
+      return $config;
+    }
+
+    $botEnabled = (int) admin_setting('telegram_bot_enable', 0) ? 1 : 0;
+    $botToken = trim((string) admin_setting('telegram_bot_token', ''));
+
+    if (!$botEnabled || $botToken === '') {
+      $config['telegram_login_enable'] = 0;
+      $config['telegram_bot_username'] = '';
+      return $config;
+    }
+
+    $username = $this->resolveBotUsernameForLogin($botToken);
+    if ($username === '') {
+      $config['telegram_login_enable'] = 0;
+      $config['telegram_bot_username'] = '';
+      return $config;
+    }
+
+    $config['telegram_login_enable'] = 1;
+    $config['telegram_bot_username'] = '@' . $username;
+    return $config;
+  }
+
+  protected function resolveBotUsernameForLogin(string $botToken): string
+  {
+    $fromConfig = trim((string) $this->getConfig('bot_username', ''));
+    $fromConfig = ltrim($fromConfig, '@');
+    if ($this->isValidBotUsername($fromConfig)) {
+      return $fromConfig;
+    }
+
+    $cacheKey = 'telegram:bot_username:' . md5($botToken);
+    return (string) Cache::remember($cacheKey, 3600, function () {
+      try {
+        $resp = $this->telegramService->getMe();
+        $username = isset($resp->result?->username) ? (string) $resp->result->username : '';
+        $username = ltrim(trim($username), '@');
+        return $this->isValidBotUsername($username) ? $username : '';
+      } catch (\Throwable) {
+        return '';
+      }
+    });
+  }
+
+  protected function isValidBotUsername(string $value): bool
+  {
+    $raw = trim($value);
+    if ($raw === '') return false;
+    if (strlen($raw) > 64) return false;
+    return (bool) preg_match('/^[a-zA-Z0-9_]{5,64}$/', $raw);
   }
 
   public function sendPaymentNotify(Order $order): void
@@ -207,8 +267,8 @@ class Plugin extends AbstractPlugin
       $welcomeText .= "✅ 您已绑定账号：{$user->email}\n\n";
       $welcomeText .= $this->getConfig('start_unbind_guide', '📋 可用命令：\\n/traffic - 查看流量使用情况\\n/getlatesturl - 获取订阅链接\\n/unbind - 解绑账号');
     } else {
-      $welcomeText .= $this->getConfig('start_bind_guide', '🔗 请先绑定您的 XBoard 账号：\\n1. 登录您的 XBoard 账户\\n2. 复制您的订阅链接\\n3. 发送 /bind + 订阅链接') . "\n\n";
-      $welcomeText .= $this->getConfig('start_bind_commands', '📋 可用命令：\\n/bind [订阅链接] - 绑定账号');
+      $welcomeText .= $this->getConfig('start_bind_guide', '🔗 请先绑定您的 XBoard 账号：\\n1. 登录您的 XBoard 账户\\n2. 复制您的订阅 Token\\n3. 发送 /bind + 订阅 Token') . "\n\n";
+      $welcomeText .= $this->getConfig('start_bind_commands', '📋 可用命令：\\n/bind [订阅 Token] - 绑定账号');
     }
 
     $welcomeText .= "\n\n" . $footer;
@@ -314,13 +374,13 @@ class Plugin extends AbstractPlugin
 
     $subscribeUrl = $msg->args[0] ?? null;
     if (!$subscribeUrl) {
-      $this->sendMessage($msg, '参数有误，请携带订阅地址发送');
+      $this->sendMessage($msg, '参数有误，请携带订阅 Token 发送');
       return;
     }
 
     $token = $this->extractTokenFromUrl($subscribeUrl);
     if (!$token) {
-      $this->sendMessage($msg, '订阅地址无效');
+      $this->sendMessage($msg, '订阅 Token 无效');
       return;
     }
 
