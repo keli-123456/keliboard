@@ -224,9 +224,9 @@ class Plugin extends AbstractPlugin
   /**
    * 发送消息给用户
    */
-  protected function sendMessage(object $msg, string $message): void
+  protected function sendMessage(object $msg, string $message, array $options = []): void
   {
-    $this->telegramService->sendMessage($msg->chat_id, $message, 'markdown');
+    $this->telegramService->sendMessage($msg->chat_id, $message, 'markdown', $options);
   }
 
   /**
@@ -466,7 +466,7 @@ class Plugin extends AbstractPlugin
     $subscribeUrl = Helper::getSubscribeUrl($user->token);
     $text = sprintf("🔗 您的订阅链接：\n\n%s", $subscribeUrl);
 
-    $this->sendMessage($msg, $text);
+    $this->sendMessage($msg, $text, ['disable_web_page_preview' => true]);
   }
 
   public function handleUnbindCommand(object $msg): void

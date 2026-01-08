@@ -32,15 +32,21 @@ class TelegramService
             ]);
     }
 
-    public function sendMessage(int $chatId, string $text, string $parseMode = ''): void
+    public function sendMessage(int $chatId, string $text, string $parseMode = '', array $options = []): void
     {
         $text = $parseMode === 'markdown' ? str_replace('_', '\_', $text) : $text;
 
-        $this->request('sendMessage', [
+        $params = [
             'chat_id' => $chatId,
             'text' => $text,
             'parse_mode' => $parseMode ?: null,
-        ]);
+        ];
+
+        if (array_key_exists('disable_web_page_preview', $options)) {
+            $params['disable_web_page_preview'] = (bool) $options['disable_web_page_preview'];
+        }
+
+        $this->request('sendMessage', array_filter($params, fn($v) => $v !== null));
     }
 
     public function sendDocument(int $chatId, string $absoluteFilePath, string $filename, ?string $caption = null, string $parseMode = ''): int
