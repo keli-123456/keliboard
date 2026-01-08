@@ -322,9 +322,7 @@ class Plugin extends AbstractPlugin
     }
 
     if (($record['approved'] ?? false) && isset($record['user_id']) && is_numeric($record['user_id'])) {
-      $site = trim((string) ($record['site'] ?? ''));
-      $siteLine = $site !== '' ? "\n站点：{$site}" : '';
-      $this->sendMessage($msg, "✅ 已确认登录{$siteLine}\n\n请回到网页继续完成登录", ['disable_web_page_preview' => true]);
+      $this->sendMessage($msg, "✅ 已确认登录\n\n请回到网页继续完成登录", ['disable_web_page_preview' => true]);
       return true;
     }
 
@@ -337,9 +335,7 @@ class Plugin extends AbstractPlugin
     if ($ttl <= 0) $ttl = 60;
     Cache::put($cacheKey, $record, $ttl);
 
-    $site = trim((string) ($record['site'] ?? ''));
-    $siteLine = $site !== '' ? "\n站点：{$site}" : '';
-    $this->sendMessage($msg, "✅ 已确认登录{$siteLine}\n\n请回到网页继续完成登录", ['disable_web_page_preview' => true]);
+    $this->sendMessage($msg, "✅ 已确认登录\n\n请回到网页继续完成登录", ['disable_web_page_preview' => true]);
     return true;
   }
 
