@@ -58,6 +58,18 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Trusted Proxies (Xboard)
+    |--------------------------------------------------------------------------
+    |
+    | Comma/space separated proxy IPs/CIDRs that are allowed to set
+    | X-Forwarded-* headers. Use "*" only if you understand the spoofing risk.
+    |
+    */
+
+    'trusted_proxies' => env('XBOARD_TRUSTED_PROXIES', env('TRUSTED_PROXIES')),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Timezone
     |--------------------------------------------------------------------------
     |

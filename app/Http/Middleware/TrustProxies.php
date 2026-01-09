@@ -36,7 +36,7 @@ class TrustProxies extends Middleware
 
     public function __construct()
     {
-        $extra = env('XBOARD_TRUSTED_PROXIES', env('TRUSTED_PROXIES', ''));
+        $extra = config('app.trusted_proxies') ?? '';
         if (is_string($extra)) {
             $raw = trim($extra);
             if ($raw === '*') {
