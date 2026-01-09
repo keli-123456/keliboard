@@ -19,6 +19,7 @@ use App\Http\Controllers\V2\Admin\SystemController;
 use App\Http\Controllers\V2\Admin\ThemeController;
 use App\Http\Controllers\V2\Admin\TrafficResetController;
 use App\Http\Controllers\V2\Admin\StaffSitesController;
+use App\Http\Controllers\V2\Admin\RiskController;
 use Illuminate\Contracts\Routing\Registrar;
 
 class AdminRoute
@@ -225,6 +226,15 @@ class AdminRoute
                 $router->get('/getHorizonFailedJobs', [SystemController::class, 'getHorizonFailedJobs']);
                 $router->post('/clearSystemLog', [SystemController::class, 'clearSystemLog']);
                 $router->get('/getLogClearStats', [SystemController::class, 'getLogClearStats']);
+            });
+
+            // Risk Center (admin-only)
+            $router->group([
+                'prefix' => 'risk'
+            ], function ($router) {
+                $router->post('/ip/summary', [RiskController::class, 'ipSummary']);
+                $router->post('/ip/detail', [RiskController::class, 'ipDetail']);
+                $router->post('/user/detail', [RiskController::class, 'userDetail']);
             });
 
             // Update

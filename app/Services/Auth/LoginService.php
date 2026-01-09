@@ -4,6 +4,7 @@ namespace App\Services\Auth;
 
 use App\Models\User;
 use App\Services\Plugin\HookManager;
+use App\Services\RiskEventService;
 use App\Utils\CacheKey;
 use App\Utils\Helper;
 use Illuminate\Support\Facades\Cache;
@@ -19,10 +20,29 @@ class LoginService
      */
     public function login(string $email, string $password): array
     {
+        $requestIp = null;
+        $requestUa = null;
+        try {
+            $requestIp = request()->getClientIp();
+            $requestUa = request()->userAgent();
+        } catch (\Throwable $ignored) {
+            // ignore
+        }
+
         // 检查密码错误限制
         if ((int) admin_setting('password_limit_enable', true)) {
             $passwordErrorCount = (int) Cache::get(CacheKey::get('PASSWORD_ERROR_LIMIT', $email), 0);
             if ($passwordErrorCount >= (int) admin_setting('password_limit_count', 5)) {
+                RiskEventService::record('login_failed', [
+                    'ip' => $requestIp,
+                    'ua' => $requestUa,
+                    'status_code' => 429,
+                    'meta' => [
+                        'email' => $email,
+                        'reason' => 'password_error_limit',
+                        'count' => $passwordErrorCount,
+                    ],
+                ]);
                 return [
                     false,
                     [
@@ -38,6 +58,15 @@ class LoginService
         // 查找用户
         $user = User::where('email', $email)->first();
         if (!$user) {
+            RiskEventService::record('login_failed', [
+                'ip' => $requestIp,
+                'ua' => $requestUa,
+                'status_code' => 400,
+                'meta' => [
+                    'email' => $email,
+                    'reason' => 'user_not_found',
+                ],
+            ]);
             return [false, [400, __('Incorrect email or password')]];
         }
 
@@ -50,6 +79,16 @@ class LoginService
                 $user->password
             )
         ) {
+            RiskEventService::record('login_failed', [
+                'user_id' => $user->id,
+                'ip' => $requestIp,
+                'ua' => $requestUa,
+                'status_code' => 400,
+                'meta' => [
+                    'email' => $email,
+                    'reason' => 'invalid_password',
+                ],
+            ]);
             // 增加密码错误计数
             if ((int) admin_setting('password_limit_enable', true)) {
                 $passwordErrorCount = (int) Cache::get(CacheKey::get('PASSWORD_ERROR_LIMIT', $email), 0);
@@ -64,12 +103,33 @@ class LoginService
 
         // 检查账户状态
         if ($user->banned) {
+            RiskEventService::record('login_failed', [
+                'user_id' => $user->id,
+                'ip' => $requestIp,
+                'ua' => $requestUa,
+                'status_code' => 400,
+                'meta' => [
+                    'email' => $email,
+                    'reason' => 'banned',
+                ],
+            ]);
             return [false, [400, __('Your account has been suspended')]];
         }
 
         // 更新最后登录时间
         $user->last_login_at = time();
         $user->save();
+
+        RiskEventService::record('login_success', [
+            'user_id' => $user->id,
+            'ip' => $requestIp,
+            'ua' => $requestUa,
+            'status_code' => 200,
+            'meta' => [
+                'email' => $email,
+                'is_admin' => (bool) $user->is_admin,
+            ],
+        ]);
 
         HookManager::call('user.login.after', $user);
         return [true, $user];

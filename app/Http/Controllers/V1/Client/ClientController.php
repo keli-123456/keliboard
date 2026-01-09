@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Server;
 use App\Protocols\General;
 use App\Services\Plugin\HookManager;
+use App\Services\RiskEventService;
 use App\Services\ServerService;
 use App\Services\UserService;
 use App\Utils\Helper;
@@ -59,6 +60,7 @@ class ClientController extends Controller
         }
 
         $clientInfo = $this->getClientInfo($request);
+        $this->recordSubscribeEvent($request, $user, $clientInfo);
 
         $requestedTypes = $this->parseRequestedTypes($request->input('types'));
         $filterKeywords = $this->parseFilterKeywords($request->input('filter'));
@@ -84,6 +86,29 @@ class ClientController extends Controller
         ]);
 
         return $protocolInstance->handle();
+    }
+
+    private function recordSubscribeEvent(Request $request, $user, array $clientInfo): void
+    {
+        try {
+            RiskEventService::record('subscribe', [
+                'user_id' => $user?->id ?? null,
+                'token' => $user?->token ?? null,
+                'ip' => $request->getClientIp(),
+                'ua' => $request->userAgent(),
+                'client_name' => $clientInfo['name'] ?? null,
+                'client_version' => $clientInfo['version'] ?? null,
+                'route' => (string) ($request->route()?->getName() ?? 'client.subscribe'),
+                'status_code' => 200,
+                'meta' => [
+                    'types' => $request->input('types'),
+                    'filter' => $request->input('filter'),
+                    'flag' => $request->input('flag'),
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            // ignore
+        }
     }
 
     /**
