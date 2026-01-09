@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use Closure;
 use Illuminate\Http\Middleware\TrustProxies as Middleware;
 use Illuminate\Http\Request;
 
@@ -52,6 +53,25 @@ class TrustProxies extends Middleware
                 }
             }
         }
+    }
+
+    public function handle(Request $request, Closure $next)
+    {
+        $secret = config('app.proxy_trust_secret');
+        if (is_string($secret) && $secret !== '') {
+            $headerName = config('app.proxy_trust_secret_header', 'X-Xboard-Proxy-Secret');
+            $provided = $request->header((string) $headerName);
+            if (is_string($provided) && $provided !== '' && hash_equals($secret, $provided)) {
+                $remoteAddr = $request->server('REMOTE_ADDR');
+                if (is_string($remoteAddr) && $remoteAddr !== '') {
+                    $this->proxies = [$remoteAddr];
+                } else {
+                    $this->proxies = '*';
+                }
+            }
+        }
+
+        return parent::handle($request, $next);
     }
 
     /**

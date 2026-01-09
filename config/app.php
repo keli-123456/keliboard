@@ -70,6 +70,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Proxy Secret Trust (Xboard)
+    |--------------------------------------------------------------------------
+    |
+    | If your upstream proxy egress IP changes frequently, you can configure a
+    | shared secret. When a request contains the secret header, Xboard will
+    | trust the proxy's X-Forwarded-* headers for that request.
+    |
+    */
+
+    'proxy_trust_secret' => env('XBOARD_PROXY_SECRET'),
+    'proxy_trust_secret_header' => env('XBOARD_PROXY_SECRET_HEADER', 'X-Xboard-Proxy-Secret'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Timezone
     |--------------------------------------------------------------------------
     |
