@@ -91,6 +91,15 @@ class ClientController extends Controller
     private function recordSubscribeEvent(Request $request, $user, array $clientInfo): void
     {
         try {
+            $network = [
+                'remote_addr' => $request->server('REMOTE_ADDR'),
+                'x_forwarded_for' => $request->header('X-Forwarded-For'),
+                'x_real_ip' => $request->header('X-Real-IP'),
+                'forwarded' => $request->header('Forwarded'),
+                'cf_connecting_ip' => $request->header('CF-Connecting-IP'),
+            ];
+            $network = array_filter($network, fn($v) => $v !== null && $v !== '');
+
             RiskEventService::record('subscribe', [
                 'user_id' => $user?->id ?? null,
                 'token' => $user?->token ?? null,
@@ -104,6 +113,7 @@ class ClientController extends Controller
                     'types' => $request->input('types'),
                     'filter' => $request->input('filter'),
                     'flag' => $request->input('flag'),
+                    'network' => $network ?: null,
                 ],
             ]);
         } catch (\Throwable $e) {

@@ -22,9 +22,23 @@ class LoginService
     {
         $requestIp = null;
         $requestUa = null;
+        $baseMeta = [];
         try {
-            $requestIp = request()->getClientIp();
-            $requestUa = request()->userAgent();
+            $req = request();
+            $requestIp = $req->getClientIp();
+            $requestUa = $req->userAgent();
+
+            $network = [
+                'remote_addr' => $req->server('REMOTE_ADDR'),
+                'x_forwarded_for' => $req->header('X-Forwarded-For'),
+                'x_real_ip' => $req->header('X-Real-IP'),
+                'forwarded' => $req->header('Forwarded'),
+                'cf_connecting_ip' => $req->header('CF-Connecting-IP'),
+            ];
+            $network = array_filter($network, fn($v) => $v !== null && $v !== '');
+            if ($network) {
+                $baseMeta = ['network' => $network];
+            }
         } catch (\Throwable $ignored) {
             // ignore
         }
@@ -37,11 +51,11 @@ class LoginService
                     'ip' => $requestIp,
                     'ua' => $requestUa,
                     'status_code' => 429,
-                    'meta' => [
+                    'meta' => array_merge([
                         'email' => $email,
                         'reason' => 'password_error_limit',
                         'count' => $passwordErrorCount,
-                    ],
+                    ], $baseMeta),
                 ]);
                 return [
                     false,
@@ -62,10 +76,10 @@ class LoginService
                 'ip' => $requestIp,
                 'ua' => $requestUa,
                 'status_code' => 400,
-                'meta' => [
+                'meta' => array_merge([
                     'email' => $email,
                     'reason' => 'user_not_found',
-                ],
+                ], $baseMeta),
             ]);
             return [false, [400, __('Incorrect email or password')]];
         }
@@ -84,10 +98,10 @@ class LoginService
                 'ip' => $requestIp,
                 'ua' => $requestUa,
                 'status_code' => 400,
-                'meta' => [
+                'meta' => array_merge([
                     'email' => $email,
                     'reason' => 'invalid_password',
-                ],
+                ], $baseMeta),
             ]);
             // 增加密码错误计数
             if ((int) admin_setting('password_limit_enable', true)) {
@@ -108,10 +122,10 @@ class LoginService
                 'ip' => $requestIp,
                 'ua' => $requestUa,
                 'status_code' => 400,
-                'meta' => [
+                'meta' => array_merge([
                     'email' => $email,
                     'reason' => 'banned',
-                ],
+                ], $baseMeta),
             ]);
             return [false, [400, __('Your account has been suspended')]];
         }
@@ -125,10 +139,10 @@ class LoginService
             'ip' => $requestIp,
             'ua' => $requestUa,
             'status_code' => 200,
-            'meta' => [
+            'meta' => array_merge([
                 'email' => $email,
                 'is_admin' => (bool) $user->is_admin,
-            ],
+            ], $baseMeta),
         ]);
 
         HookManager::call('user.login.after', $user);

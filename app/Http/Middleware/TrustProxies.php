@@ -34,6 +34,26 @@ class TrustProxies extends Middleware
         "127.0.0.0/8",
     ];
 
+    public function __construct()
+    {
+        $extra = env('XBOARD_TRUSTED_PROXIES', env('TRUSTED_PROXIES', ''));
+        if (is_string($extra)) {
+            $raw = trim($extra);
+            if ($raw === '*') {
+                $this->proxies = '*';
+                return;
+            }
+            if ($raw !== '') {
+                $items = preg_split('/[,\s]+/', $raw, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+                $items = array_values(array_filter(array_map(fn($v) => trim((string) $v), $items)));
+                if ($items) {
+                    $current = is_array($this->proxies) ? $this->proxies : [];
+                    $this->proxies = array_values(array_unique(array_merge($current, $items)));
+                }
+            }
+        }
+    }
+
     /**
      * 代理头映射
      * @var int
