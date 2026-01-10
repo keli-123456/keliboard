@@ -284,6 +284,21 @@ class RiskController extends Controller
         return $types ?: ['subscribe'];
     }
 
+    private function getEventTypesOrNull(Request $request): ?array
+    {
+        $raw = $request->input('event_types');
+        if ($raw === null) {
+            return null;
+        }
+        if (is_string($raw) && trim($raw) === '') {
+            return null;
+        }
+        if (is_array($raw) && count($raw) === 0) {
+            return null;
+        }
+        return $this->getEventTypes($request);
+    }
+
     private function ensureTableReady()
     {
         if (Schema::hasTable('v2_risk_event')) {
@@ -381,6 +396,90 @@ class RiskController extends Controller
         return $this->success(true);
     }
 
+    public function purge(Request $request)
+    {
+        if ($resp = $this->ensureTableReady()) {
+            return $resp;
+        }
+
+        $data = $request->validate([
+            'mode' => 'nullable|in:older_than,all',
+            'keep_days' => 'nullable|integer|min:1|max:365',
+            'dry_run' => 'nullable|boolean',
+            'batch_size' => 'nullable|integer|min:500|max:20000',
+            'max_seconds' => 'nullable|integer|min:1|max:120',
+            'confirm' => 'nullable|string|max:32',
+        ]);
+
+        $mode = $data['mode'] ?? 'older_than';
+        $dryRun = $this->parseBool($data['dry_run'] ?? null, false);
+
+        $builder = DB::table('v2_risk_event');
+        $beforeTs = null;
+
+        if ($mode === 'older_than') {
+            $keepDays = (int) ($data['keep_days'] ?? self::DEFAULT_DAYS);
+            $keepDays = max(1, min(365, $keepDays));
+            $beforeTs = time() - ($keepDays * 86400);
+            $builder->where('created_at', '<', $beforeTs);
+        } else {
+            $confirm = (string) ($data['confirm'] ?? '');
+            if ($confirm !== 'DELETE') {
+                return $this->fail([400, '清理全部数据需要 confirm=DELETE']);
+            }
+        }
+
+        $eventTypes = $this->getEventTypesOrNull($request);
+        if ($eventTypes) {
+            $builder->whereIn('event_type', $eventTypes);
+        }
+
+        $wouldDelete = (clone $builder)->count();
+
+        if ($dryRun) {
+            return $this->success([
+                'mode' => $mode,
+                'before_ts' => $beforeTs,
+                'event_types' => $eventTypes,
+                'would_delete' => $wouldDelete,
+            ]);
+        }
+
+        $batchSize = (int) ($data['batch_size'] ?? 5000);
+        $maxSeconds = (int) ($data['max_seconds'] ?? 20);
+        $batchSize = max(500, min(20000, $batchSize));
+        $maxSeconds = max(1, min(120, $maxSeconds));
+
+        $deleted = 0;
+        $startedAt = microtime(true);
+
+        while (true) {
+            if ((microtime(true) - $startedAt) > $maxSeconds) {
+                break;
+            }
+
+            $ids = (clone $builder)
+                ->orderBy('id')
+                ->limit($batchSize)
+                ->pluck('id');
+
+            if ($ids->isEmpty()) {
+                break;
+            }
+
+            $deleted += DB::table('v2_risk_event')->whereIn('id', $ids)->delete();
+        }
+
+        return $this->success([
+            'mode' => $mode,
+            'before_ts' => $beforeTs,
+            'event_types' => $eventTypes,
+            'would_delete' => $wouldDelete,
+            'deleted' => $deleted,
+            'done' => $deleted >= $wouldDelete,
+        ]);
+    }
+
     public function ipSummary(Request $request)
     {
         if ($resp = $this->ensureTableReady()) {
@@ -425,6 +524,70 @@ class RiskController extends Controller
         $total = DB::query()->fromSub(clone $builder, 't')->count();
         $rows = $builder
             ->orderByDesc('user_count')
+            ->orderByDesc('last_seen')
+            ->forPage($current, $pageSize)
+            ->get();
+
+        return response([
+            'data' => $rows,
+            'total' => $total,
+        ]);
+    }
+
+    public function uaSummary(Request $request)
+    {
+        if ($resp = $this->ensureTableReady()) {
+            return response(['data' => [], 'total' => 0]);
+        }
+        if (!$this->isRiskCenterEnabled()) {
+            return response(['data' => [], 'total' => 0]);
+        }
+
+        $since = $this->getSinceTs($request);
+        $eventTypes = $this->getEventTypes($request);
+
+        $minUsers = (int) $request->input('min_users', self::DEFAULT_MIN_USERS);
+        $minUsers = max(1, min(1000, $minUsers));
+        $minIps = (int) $request->input('min_ips', 3);
+        $minIps = max(1, min(1000, $minIps));
+
+        $q = trim((string) $request->input('q', ''));
+
+        $current = (int) $request->input('current', 1);
+        $pageSize = (int) $request->input('pageSize', 20);
+        $current = max(1, $current);
+        $pageSize = max(1, min(200, $pageSize));
+
+        $excludedIps = $this->getExcludedIpsForSummary($request);
+
+        $builder = DB::table('v2_risk_event')
+            ->where('created_at', '>=', $since)
+            ->whereIn('event_type', $eventTypes)
+            ->whereNotNull('ua_hash')
+            ->where('ua_hash', '<>', '')
+            ->whereNotNull('ip')
+            ->where('ip', '<>', '')
+            ->selectRaw('ua_hash, MAX(ua) as ua, COUNT(*) AS event_count, COUNT(DISTINCT user_id) AS user_count, COUNT(DISTINCT ip) AS ip_count, MAX(created_at) AS last_seen')
+            ->groupBy('ua_hash')
+            ->having('user_count', '>=', $minUsers)
+            ->having('ip_count', '>=', $minIps);
+
+        if ($excludedIps) {
+            $builder->whereNotIn('ip', $excludedIps);
+        }
+
+        if ($q !== '') {
+            if (preg_match('/^[0-9a-fA-F]{6,64}$/', $q)) {
+                $builder->where('ua_hash', 'like', strtolower($q) . '%');
+            } else {
+                $builder->where('ua', 'like', '%' . $q . '%');
+            }
+        }
+
+        $total = DB::query()->fromSub(clone $builder, 't')->count();
+        $rows = $builder
+            ->orderByDesc('user_count')
+            ->orderByDesc('ip_count')
             ->orderByDesc('last_seen')
             ->forPage($current, $pageSize)
             ->get();
@@ -498,6 +661,73 @@ class RiskController extends Controller
             'users' => $users,
             'uas' => $uas,
             'clients' => $clients,
+        ]);
+    }
+
+    public function uaDetail(Request $request)
+    {
+        if ($resp = $this->ensureTableReady()) {
+            return $resp;
+        }
+        if (!$this->isRiskCenterEnabled()) {
+            return $this->fail([403, '风控中心未启用']);
+        }
+
+        $request->validate([
+            'ua_hash' => 'required|string|max:64',
+        ], [
+            'ua_hash.required' => 'UA Hash不能为空',
+        ]);
+
+        $uaHash = strtolower(trim((string) $request->input('ua_hash')));
+        if (!preg_match('/^[0-9a-f]{64}$/', $uaHash)) {
+            return $this->fail([422, 'UA Hash格式不正确']);
+        }
+
+        $since = $this->getSinceTs($request);
+        $eventTypes = $this->getEventTypes($request);
+
+        $excludedIps = $this->getExcludedIpsForSummary($request);
+
+        $base = DB::table('v2_risk_event as e')
+            ->where('e.created_at', '>=', $since)
+            ->whereIn('e.event_type', $eventTypes)
+            ->where('e.ua_hash', '=', $uaHash)
+            ->whereNotNull('e.ip')
+            ->where('e.ip', '<>', '');
+
+        if ($excludedIps) {
+            $base->whereNotIn('e.ip', $excludedIps);
+        }
+
+        $summary = (clone $base)
+            ->selectRaw('e.ua_hash, MAX(e.ua) as ua, COUNT(*) AS event_count, COUNT(DISTINCT e.user_id) AS user_count, COUNT(DISTINCT e.ip) AS ip_count, MAX(e.created_at) AS last_seen')
+            ->first();
+
+        $users = (clone $base)
+            ->join('v2_user as u', 'u.id', '=', 'e.user_id')
+            ->selectRaw('u.id as user_id, u.email, u.is_admin, u.banned, u.plan_id, COUNT(*) as event_count, COUNT(DISTINCT e.ip) as ip_count, MAX(e.created_at) as last_seen')
+            ->groupBy('u.id', 'u.email', 'u.is_admin', 'u.banned', 'u.plan_id')
+            ->orderByDesc('event_count')
+            ->orderByDesc('last_seen')
+            ->limit(200)
+            ->get();
+
+        $ips = (clone $base)
+            ->selectRaw('e.ip, COUNT(*) as event_count, COUNT(DISTINCT e.user_id) as user_count, MAX(e.created_at) as last_seen')
+            ->groupBy('e.ip')
+            ->orderByDesc('user_count')
+            ->orderByDesc('last_seen')
+            ->limit(200)
+            ->get();
+
+        return $this->success([
+            'ua_hash' => $uaHash,
+            'since' => $since,
+            'event_types' => $eventTypes,
+            'summary' => $summary,
+            'users' => $users,
+            'ips' => $ips,
         ]);
     }
 

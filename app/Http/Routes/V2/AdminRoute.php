@@ -234,8 +234,11 @@ class AdminRoute
             ], function ($router) {
                 $router->get('/config', [RiskController::class, 'getConfig']);
                 $router->post('/config', [RiskController::class, 'saveConfig']);
+                $router->post('/purge', [RiskController::class, 'purge']);
                 $router->post('/ip/summary', [RiskController::class, 'ipSummary']);
                 $router->post('/ip/detail', [RiskController::class, 'ipDetail']);
+                $router->post('/ua/summary', [RiskController::class, 'uaSummary']);
+                $router->post('/ua/detail', [RiskController::class, 'uaDetail']);
                 $router->post('/user/detail', [RiskController::class, 'userDetail']);
             });
 
