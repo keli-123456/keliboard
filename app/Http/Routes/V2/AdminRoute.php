@@ -234,11 +234,18 @@ class AdminRoute
             ], function ($router) {
                 $router->get('/config', [RiskController::class, 'getConfig']);
                 $router->post('/config', [RiskController::class, 'saveConfig']);
+                $router->post('/alerts/check', [RiskController::class, 'alertsCheck']);
                 $router->post('/purge', [RiskController::class, 'purge']);
                 $router->post('/ip/summary', [RiskController::class, 'ipSummary']);
                 $router->post('/ip/detail', [RiskController::class, 'ipDetail']);
                 $router->post('/ua/summary', [RiskController::class, 'uaSummary']);
                 $router->post('/ua/detail', [RiskController::class, 'uaDetail']);
+                $router->post('/token/summary', [RiskController::class, 'tokenSummary']);
+                $router->post('/token/detail', [RiskController::class, 'tokenDetail']);
+                $router->post('/login_failed/ip/summary', [RiskController::class, 'loginFailedIpSummary']);
+                $router->post('/login_failed/ip/detail', [RiskController::class, 'loginFailedIpDetail']);
+                $router->post('/login_failed/ua/summary', [RiskController::class, 'loginFailedUaSummary']);
+                $router->post('/login_failed/ua/detail', [RiskController::class, 'loginFailedUaDetail']);
                 $router->post('/user/detail', [RiskController::class, 'userDetail']);
             });
 

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\V2\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\TelegramService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -16,6 +17,15 @@ class RiskController extends Controller
     private const DEFAULT_MIN_USERS = 3;
     // Node host -> IP cache TTL (includes DNS resolution for domains).
     private const EXCLUDE_SERVER_IPS_CACHE_TTL = 86400; // 24h
+    // Alerts defaults
+    private const DEFAULT_ALERT_WINDOW_MINUTES = 10;
+    private const DEFAULT_ALERT_COOLDOWN_MINUTES = 30;
+    private const DEFAULT_ALERT_MAX_ITEMS = 10;
+    private const DEFAULT_ALERT_SUBSCRIBE_IP_THRESHOLD = 200;
+    private const DEFAULT_ALERT_SUBSCRIBE_TOKEN_THRESHOLD = 50;
+    private const DEFAULT_ALERT_SUBSCRIBE_UA_THRESHOLD = 300;
+    private const DEFAULT_ALERT_LOGIN_FAILED_IP_THRESHOLD = 30;
+    private const DEFAULT_ALERT_LOGIN_FAILED_UA_THRESHOLD = 50;
 
     private function isRiskCenterEnabled(): bool
     {
@@ -60,6 +70,21 @@ class RiskController extends Controller
         }
         $filtered = filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
         return $filtered ?? $default;
+    }
+
+    private function parseInt(mixed $value, int $default, int $min, int $max): int
+    {
+        if ($value === null) {
+            return $default;
+        }
+        if (is_string($value) && trim($value) === '') {
+            return $default;
+        }
+        if (!is_numeric($value)) {
+            return $default;
+        }
+        $n = (int) $value;
+        return max($min, min($max, $n));
     }
 
     private function normalizeIpHost(mixed $host): ?string
@@ -334,6 +359,19 @@ class RiskController extends Controller
         $serverToken = admin_setting('server_token');
         $serverTokenSet = is_string($serverToken) && strlen(trim($serverToken)) >= 16;
 
+        $alertEnable = $this->parseBool(admin_setting('risk_alert_enable', false), false);
+        $alertNotifyTelegram = $this->parseBool(admin_setting('risk_alert_notify_telegram', false), false);
+        $alertWindowMinutes = $this->parseInt(admin_setting('risk_alert_window_minutes', self::DEFAULT_ALERT_WINDOW_MINUTES), self::DEFAULT_ALERT_WINDOW_MINUTES, 1, 120);
+        $alertCooldownMinutes = $this->parseInt(admin_setting('risk_alert_cooldown_minutes', self::DEFAULT_ALERT_COOLDOWN_MINUTES), self::DEFAULT_ALERT_COOLDOWN_MINUTES, 1, 1440);
+        $alertMaxItems = $this->parseInt(admin_setting('risk_alert_max_items', self::DEFAULT_ALERT_MAX_ITEMS), self::DEFAULT_ALERT_MAX_ITEMS, 1, 50);
+
+        $alertSubscribeIpThreshold = $this->parseInt(admin_setting('risk_alert_subscribe_ip_threshold', self::DEFAULT_ALERT_SUBSCRIBE_IP_THRESHOLD), self::DEFAULT_ALERT_SUBSCRIBE_IP_THRESHOLD, 1, 1000000);
+        $alertSubscribeTokenThreshold = $this->parseInt(admin_setting('risk_alert_subscribe_token_threshold', self::DEFAULT_ALERT_SUBSCRIBE_TOKEN_THRESHOLD), self::DEFAULT_ALERT_SUBSCRIBE_TOKEN_THRESHOLD, 1, 1000000);
+        $alertSubscribeUaThreshold = $this->parseInt(admin_setting('risk_alert_subscribe_ua_threshold', self::DEFAULT_ALERT_SUBSCRIBE_UA_THRESHOLD), self::DEFAULT_ALERT_SUBSCRIBE_UA_THRESHOLD, 1, 1000000);
+
+        $alertLoginFailedIpThreshold = $this->parseInt(admin_setting('risk_alert_login_failed_ip_threshold', self::DEFAULT_ALERT_LOGIN_FAILED_IP_THRESHOLD), self::DEFAULT_ALERT_LOGIN_FAILED_IP_THRESHOLD, 1, 1000000);
+        $alertLoginFailedUaThreshold = $this->parseInt(admin_setting('risk_alert_login_failed_ua_threshold', self::DEFAULT_ALERT_LOGIN_FAILED_UA_THRESHOLD), self::DEFAULT_ALERT_LOGIN_FAILED_UA_THRESHOLD, 1, 1000000);
+
         return $this->success([
             'risk_center_enable' => $enabled,
             'risk_exclude_ips' => (string) admin_setting('risk_exclude_ips', ''),
@@ -343,6 +381,16 @@ class RiskController extends Controller
             'proxy_trust_secret_header' => $proxySecretHeader,
             'proxy_trust_secret_from_server_token' => $proxySecretFromServerToken,
             'server_token_set' => $serverTokenSet,
+            'risk_alert_enable' => $alertEnable,
+            'risk_alert_notify_telegram' => $alertNotifyTelegram,
+            'risk_alert_window_minutes' => $alertWindowMinutes,
+            'risk_alert_cooldown_minutes' => $alertCooldownMinutes,
+            'risk_alert_max_items' => $alertMaxItems,
+            'risk_alert_subscribe_ip_threshold' => $alertSubscribeIpThreshold,
+            'risk_alert_subscribe_token_threshold' => $alertSubscribeTokenThreshold,
+            'risk_alert_subscribe_ua_threshold' => $alertSubscribeUaThreshold,
+            'risk_alert_login_failed_ip_threshold' => $alertLoginFailedIpThreshold,
+            'risk_alert_login_failed_ua_threshold' => $alertLoginFailedUaThreshold,
         ]);
     }
 
@@ -356,6 +404,16 @@ class RiskController extends Controller
             'proxy_trust_secret' => 'nullable|string|max:256',
             'proxy_trust_secret_header' => 'nullable|string|max:64',
             'proxy_trust_secret_from_server_token' => 'nullable|boolean',
+            'risk_alert_enable' => 'nullable|boolean',
+            'risk_alert_notify_telegram' => 'nullable|boolean',
+            'risk_alert_window_minutes' => 'nullable|integer|min:1|max:120',
+            'risk_alert_cooldown_minutes' => 'nullable|integer|min:1|max:1440',
+            'risk_alert_max_items' => 'nullable|integer|min:1|max:50',
+            'risk_alert_subscribe_ip_threshold' => 'nullable|integer|min:1|max:1000000',
+            'risk_alert_subscribe_token_threshold' => 'nullable|integer|min:1|max:1000000',
+            'risk_alert_subscribe_ua_threshold' => 'nullable|integer|min:1|max:1000000',
+            'risk_alert_login_failed_ip_threshold' => 'nullable|integer|min:1|max:1000000',
+            'risk_alert_login_failed_ua_threshold' => 'nullable|integer|min:1|max:1000000',
         ]);
 
         $updates = [];
@@ -388,12 +446,331 @@ class RiskController extends Controller
             $updates['proxy_trust_secret'] = $raw !== '' ? $raw : null;
         }
 
+        if (array_key_exists('risk_alert_enable', $data)) {
+            $updates['risk_alert_enable'] = $this->parseBool($data['risk_alert_enable'], false) ? 1 : 0;
+        }
+        if (array_key_exists('risk_alert_notify_telegram', $data)) {
+            $updates['risk_alert_notify_telegram'] = $this->parseBool($data['risk_alert_notify_telegram'], false) ? 1 : 0;
+        }
+        if (array_key_exists('risk_alert_window_minutes', $data)) {
+            $updates['risk_alert_window_minutes'] = $this->parseInt($data['risk_alert_window_minutes'], self::DEFAULT_ALERT_WINDOW_MINUTES, 1, 120);
+        }
+        if (array_key_exists('risk_alert_cooldown_minutes', $data)) {
+            $updates['risk_alert_cooldown_minutes'] = $this->parseInt($data['risk_alert_cooldown_minutes'], self::DEFAULT_ALERT_COOLDOWN_MINUTES, 1, 1440);
+        }
+        if (array_key_exists('risk_alert_max_items', $data)) {
+            $updates['risk_alert_max_items'] = $this->parseInt($data['risk_alert_max_items'], self::DEFAULT_ALERT_MAX_ITEMS, 1, 50);
+        }
+        if (array_key_exists('risk_alert_subscribe_ip_threshold', $data)) {
+            $updates['risk_alert_subscribe_ip_threshold'] = $this->parseInt($data['risk_alert_subscribe_ip_threshold'], self::DEFAULT_ALERT_SUBSCRIBE_IP_THRESHOLD, 1, 1000000);
+        }
+        if (array_key_exists('risk_alert_subscribe_token_threshold', $data)) {
+            $updates['risk_alert_subscribe_token_threshold'] = $this->parseInt($data['risk_alert_subscribe_token_threshold'], self::DEFAULT_ALERT_SUBSCRIBE_TOKEN_THRESHOLD, 1, 1000000);
+        }
+        if (array_key_exists('risk_alert_subscribe_ua_threshold', $data)) {
+            $updates['risk_alert_subscribe_ua_threshold'] = $this->parseInt($data['risk_alert_subscribe_ua_threshold'], self::DEFAULT_ALERT_SUBSCRIBE_UA_THRESHOLD, 1, 1000000);
+        }
+        if (array_key_exists('risk_alert_login_failed_ip_threshold', $data)) {
+            $updates['risk_alert_login_failed_ip_threshold'] = $this->parseInt($data['risk_alert_login_failed_ip_threshold'], self::DEFAULT_ALERT_LOGIN_FAILED_IP_THRESHOLD, 1, 1000000);
+        }
+        if (array_key_exists('risk_alert_login_failed_ua_threshold', $data)) {
+            $updates['risk_alert_login_failed_ua_threshold'] = $this->parseInt($data['risk_alert_login_failed_ua_threshold'], self::DEFAULT_ALERT_LOGIN_FAILED_UA_THRESHOLD, 1, 1000000);
+        }
+
         if ($updates) {
             admin_setting($updates);
         }
         Cache::forget('risk:exclude_server_ips');
 
         return $this->success(true);
+    }
+
+    public function alertsCheck(Request $request)
+    {
+        if ($resp = $this->ensureTableReady()) {
+            return $resp;
+        }
+        if (!$this->isRiskCenterEnabled()) {
+            return $this->success([
+                'enabled' => false,
+                'alert_enabled' => false,
+                'window_minutes' => self::DEFAULT_ALERT_WINDOW_MINUTES,
+                'notified' => false,
+                'items' => [],
+            ]);
+        }
+
+        $alertEnabled = $this->parseBool(admin_setting('risk_alert_enable', false), false);
+        if (!$alertEnabled) {
+            return $this->success([
+                'enabled' => true,
+                'alert_enabled' => false,
+                'window_minutes' => self::DEFAULT_ALERT_WINDOW_MINUTES,
+                'notified' => false,
+                'items' => [],
+            ]);
+        }
+
+        $windowMinutes = $this->parseInt(
+            $request->input('window_minutes', admin_setting('risk_alert_window_minutes', self::DEFAULT_ALERT_WINDOW_MINUTES)),
+            self::DEFAULT_ALERT_WINDOW_MINUTES,
+            1,
+            120
+        );
+        $since = time() - ($windowMinutes * 60);
+
+        $maxItems = $this->parseInt(
+            $request->input('max_items', admin_setting('risk_alert_max_items', self::DEFAULT_ALERT_MAX_ITEMS)),
+            self::DEFAULT_ALERT_MAX_ITEMS,
+            1,
+            50
+        );
+
+        $notify = $this->parseBool(
+            $request->input('notify', admin_setting('risk_alert_notify_telegram', false)),
+            false
+        );
+        $cooldownMinutes = $this->parseInt(
+            $request->input('cooldown_minutes', admin_setting('risk_alert_cooldown_minutes', self::DEFAULT_ALERT_COOLDOWN_MINUTES)),
+            self::DEFAULT_ALERT_COOLDOWN_MINUTES,
+            1,
+            1440
+        );
+        $cooldownSeconds = $cooldownMinutes * 60;
+
+        $thresholdSubscribeIp = $this->parseInt(admin_setting('risk_alert_subscribe_ip_threshold', self::DEFAULT_ALERT_SUBSCRIBE_IP_THRESHOLD), self::DEFAULT_ALERT_SUBSCRIBE_IP_THRESHOLD, 1, 1000000);
+        $thresholdSubscribeToken = $this->parseInt(admin_setting('risk_alert_subscribe_token_threshold', self::DEFAULT_ALERT_SUBSCRIBE_TOKEN_THRESHOLD), self::DEFAULT_ALERT_SUBSCRIBE_TOKEN_THRESHOLD, 1, 1000000);
+        $thresholdSubscribeUa = $this->parseInt(admin_setting('risk_alert_subscribe_ua_threshold', self::DEFAULT_ALERT_SUBSCRIBE_UA_THRESHOLD), self::DEFAULT_ALERT_SUBSCRIBE_UA_THRESHOLD, 1, 1000000);
+        $thresholdLoginFailedIp = $this->parseInt(admin_setting('risk_alert_login_failed_ip_threshold', self::DEFAULT_ALERT_LOGIN_FAILED_IP_THRESHOLD), self::DEFAULT_ALERT_LOGIN_FAILED_IP_THRESHOLD, 1, 1000000);
+        $thresholdLoginFailedUa = $this->parseInt(admin_setting('risk_alert_login_failed_ua_threshold', self::DEFAULT_ALERT_LOGIN_FAILED_UA_THRESHOLD), self::DEFAULT_ALERT_LOGIN_FAILED_UA_THRESHOLD, 1, 1000000);
+
+        $excludedIps = $this->getExcludedIpsForSummary($request);
+
+        $items = [];
+
+        $subscribeIpRows = DB::table('v2_risk_event')
+            ->where('created_at', '>=', $since)
+            ->where('event_type', '=', 'subscribe')
+            ->whereNotNull('ip')
+            ->where('ip', '<>', '')
+            ->selectRaw('ip, COUNT(*) AS event_count, COUNT(DISTINCT token_hash) AS token_count, COUNT(DISTINCT ua_hash) AS ua_count, MAX(created_at) AS last_seen')
+            ->groupBy('ip')
+            ->having('event_count', '>=', $thresholdSubscribeIp)
+            ->orderByDesc('event_count')
+            ->limit($maxItems);
+        if ($excludedIps) {
+            $subscribeIpRows->whereNotIn('ip', $excludedIps);
+        }
+        foreach ($subscribeIpRows->get() as $row) {
+            $items[] = [
+                'type' => 'subscribe_ip',
+                'key' => (string) $row->ip,
+                'event_count' => (int) $row->event_count,
+                'token_count' => (int) $row->token_count,
+                'ua_count' => (int) $row->ua_count,
+                'last_seen' => (int) $row->last_seen,
+            ];
+        }
+
+        $subscribeTokenRows = DB::table('v2_risk_event')
+            ->where('created_at', '>=', $since)
+            ->where('event_type', '=', 'subscribe')
+            ->whereNotNull('token_hash')
+            ->where('token_hash', '<>', '')
+            ->whereNotNull('ip')
+            ->where('ip', '<>', '')
+            ->selectRaw('token_hash, MAX(user_id) AS user_id, COUNT(*) AS event_count, COUNT(DISTINCT ip) AS ip_count, COUNT(DISTINCT ua_hash) AS ua_count, MAX(created_at) AS last_seen')
+            ->groupBy('token_hash')
+            ->having('event_count', '>=', $thresholdSubscribeToken)
+            ->orderByDesc('event_count')
+            ->limit($maxItems);
+        if ($excludedIps) {
+            $subscribeTokenRows->whereNotIn('ip', $excludedIps);
+        }
+        foreach ($subscribeTokenRows->get() as $row) {
+            $items[] = [
+                'type' => 'subscribe_token',
+                'key' => (string) $row->token_hash,
+                'user_id' => $row->user_id !== null ? (int) $row->user_id : null,
+                'event_count' => (int) $row->event_count,
+                'ip_count' => (int) $row->ip_count,
+                'ua_count' => (int) $row->ua_count,
+                'last_seen' => (int) $row->last_seen,
+            ];
+        }
+
+        $subscribeUaRows = DB::table('v2_risk_event')
+            ->where('created_at', '>=', $since)
+            ->where('event_type', '=', 'subscribe')
+            ->whereNotNull('ua_hash')
+            ->where('ua_hash', '<>', '')
+            ->whereNotNull('ip')
+            ->where('ip', '<>', '')
+            ->selectRaw('ua_hash, MAX(ua) AS ua, COUNT(*) AS event_count, COUNT(DISTINCT ip) AS ip_count, COUNT(DISTINCT user_id) AS user_count, MAX(created_at) AS last_seen')
+            ->groupBy('ua_hash')
+            ->having('event_count', '>=', $thresholdSubscribeUa)
+            ->orderByDesc('event_count')
+            ->limit($maxItems);
+        if ($excludedIps) {
+            $subscribeUaRows->whereNotIn('ip', $excludedIps);
+        }
+        foreach ($subscribeUaRows->get() as $row) {
+            $items[] = [
+                'type' => 'subscribe_ua',
+                'key' => (string) $row->ua_hash,
+                'ua' => $row->ua !== null ? (string) $row->ua : null,
+                'event_count' => (int) $row->event_count,
+                'ip_count' => (int) $row->ip_count,
+                'user_count' => (int) $row->user_count,
+                'last_seen' => (int) $row->last_seen,
+            ];
+        }
+
+        $loginFailedIpRows = DB::table('v2_risk_event')
+            ->where('created_at', '>=', $since)
+            ->where('event_type', '=', 'login_failed')
+            ->whereNotNull('ip')
+            ->where('ip', '<>', '')
+            ->selectRaw('ip, COUNT(*) AS event_count, COUNT(DISTINCT ua_hash) AS ua_count, MAX(created_at) AS last_seen')
+            ->groupBy('ip')
+            ->having('event_count', '>=', $thresholdLoginFailedIp)
+            ->orderByDesc('event_count')
+            ->limit($maxItems);
+        if ($excludedIps) {
+            $loginFailedIpRows->whereNotIn('ip', $excludedIps);
+        }
+        foreach ($loginFailedIpRows->get() as $row) {
+            $items[] = [
+                'type' => 'login_failed_ip',
+                'key' => (string) $row->ip,
+                'event_count' => (int) $row->event_count,
+                'ua_count' => (int) $row->ua_count,
+                'last_seen' => (int) $row->last_seen,
+            ];
+        }
+
+        $loginFailedUaRows = DB::table('v2_risk_event')
+            ->where('created_at', '>=', $since)
+            ->where('event_type', '=', 'login_failed')
+            ->whereNotNull('ua_hash')
+            ->where('ua_hash', '<>', '')
+            ->whereNotNull('ip')
+            ->where('ip', '<>', '')
+            ->selectRaw('ua_hash, MAX(ua) AS ua, COUNT(*) AS event_count, COUNT(DISTINCT ip) AS ip_count, MAX(created_at) AS last_seen')
+            ->groupBy('ua_hash')
+            ->having('event_count', '>=', $thresholdLoginFailedUa)
+            ->orderByDesc('event_count')
+            ->limit($maxItems);
+        if ($excludedIps) {
+            $loginFailedUaRows->whereNotIn('ip', $excludedIps);
+        }
+        foreach ($loginFailedUaRows->get() as $row) {
+            $items[] = [
+                'type' => 'login_failed_ua',
+                'key' => (string) $row->ua_hash,
+                'ua' => $row->ua !== null ? (string) $row->ua : null,
+                'event_count' => (int) $row->event_count,
+                'ip_count' => (int) $row->ip_count,
+                'last_seen' => (int) $row->last_seen,
+            ];
+        }
+
+        if (!$items) {
+            return $this->success([
+                'enabled' => true,
+                'alert_enabled' => true,
+                'window_minutes' => $windowMinutes,
+                'notified' => false,
+                'items' => [],
+            ]);
+        }
+
+        $telegramBotToken = trim((string) admin_setting('telegram_bot_token', ''));
+        $telegramNotifyOk = $notify && $telegramBotToken !== '';
+
+        $notifiedAny = false;
+        foreach ($items as &$item) {
+            $type = (string) ($item['type'] ?? '');
+            $key = (string) ($item['key'] ?? '');
+            $cacheKey = 'risk:alert:cooldown:' . $type . ':' . $key;
+
+            $item['cooldown_hit'] = Cache::has($cacheKey);
+            $item['notified'] = false;
+
+            if (!$notify || $item['cooldown_hit']) {
+                continue;
+            }
+            if (!$telegramNotifyOk) {
+                $item['notify_error'] = 'telegram_not_configured';
+                continue;
+            }
+
+            $message = $this->formatAlertMessage($type, $item, $windowMinutes);
+            try {
+                app(TelegramService::class)->sendMessageWithAdmin($message, true);
+                Cache::put($cacheKey, 1, $cooldownSeconds);
+                $item['notified'] = true;
+                $notifiedAny = true;
+            } catch (\Throwable) {
+                $item['notify_error'] = 'telegram_send_failed';
+            }
+        }
+        unset($item);
+
+        return $this->success([
+            'enabled' => true,
+            'alert_enabled' => true,
+            'window_minutes' => $windowMinutes,
+            'notified' => $notifiedAny,
+            'items' => $items,
+        ]);
+    }
+
+    private function formatAlertMessage(string $type, array $item, int $windowMinutes): string
+    {
+        $title = match ($type) {
+            'subscribe_ip' => '订阅 IP 异常',
+            'subscribe_token' => '订阅 Token 异常',
+            'subscribe_ua' => '订阅 UA 异常',
+            'login_failed_ip' => '登录失败 IP 异常',
+            'login_failed_ua' => '登录失败 UA 异常',
+            default => '风控异常',
+        };
+
+        $lines = [];
+        $lines[] = "【风控告警】{$title}（{$windowMinutes} 分钟）";
+
+        if (isset($item['key'])) {
+            $k = (string) $item['key'];
+            $label = str_contains($type, 'ip') ? 'IP' : (str_contains($type, 'token') ? 'TokenHash' : 'UAHash');
+            $lines[] = "{$label}: {$k}";
+        }
+        if (isset($item['event_count'])) {
+            $lines[] = '事件: ' . (int) $item['event_count'];
+        }
+
+        foreach (['token_count' => 'Token数', 'ua_count' => 'UA数', 'ip_count' => 'IP数', 'user_count' => '用户数'] as $k => $label) {
+            if (array_key_exists($k, $item)) {
+                $lines[] = "{$label}: " . (int) $item[$k];
+            }
+        }
+
+        if (isset($item['user_id']) && $item['user_id'] !== null) {
+            $lines[] = '用户ID: ' . (int) $item['user_id'];
+        }
+        if (isset($item['ua']) && is_string($item['ua']) && trim($item['ua']) !== '') {
+            $ua = trim($item['ua']);
+            if (function_exists('mb_strlen') && mb_strlen($ua, 'UTF-8') > 180) {
+                $ua = mb_substr($ua, 0, 180, 'UTF-8') . '…';
+            } elseif (strlen($ua) > 180) {
+                $ua = substr($ua, 0, 180) . '…';
+            }
+            $lines[] = "UA: {$ua}";
+        }
+        if (isset($item['last_seen'])) {
+            $lines[] = '最后: ' . date('Y-m-d H:i:s', (int) $item['last_seen']);
+        }
+        return implode("\n", $lines);
     }
 
     public function purge(Request $request)
@@ -509,7 +886,7 @@ class RiskController extends Controller
             ->whereIn('event_type', $eventTypes)
             ->whereNotNull('ip')
             ->where('ip', '<>', '')
-            ->selectRaw('ip, COUNT(*) AS event_count, COUNT(DISTINCT user_id) AS user_count, COUNT(DISTINCT ua_hash) AS ua_count, MAX(created_at) AS last_seen')
+            ->selectRaw('ip, COUNT(*) AS event_count, COUNT(DISTINCT user_id) AS user_count, COUNT(DISTINCT token_hash) AS token_count, COUNT(DISTINCT ua_hash) AS ua_count, MAX(created_at) AS last_seen')
             ->groupBy('ip')
             ->having('user_count', '>=', $minUsers);
 
@@ -654,6 +1031,19 @@ class RiskController extends Controller
             ->limit(30)
             ->get();
 
+        $tokens = DB::table('v2_risk_event as e')
+            ->where('e.created_at', '>=', $since)
+            ->whereIn('e.event_type', $eventTypes)
+            ->where('e.ip', '=', $ip)
+            ->whereNotNull('e.token_hash')
+            ->where('e.token_hash', '<>', '')
+            ->selectRaw('e.token_hash, COUNT(*) as event_count, COUNT(DISTINCT e.user_id) as user_count, MAX(e.created_at) as last_seen')
+            ->groupBy('e.token_hash')
+            ->orderByDesc('event_count')
+            ->orderByDesc('last_seen')
+            ->limit(60)
+            ->get();
+
         return $this->success([
             'ip' => $ip,
             'since' => $since,
@@ -661,6 +1051,537 @@ class RiskController extends Controller
             'users' => $users,
             'uas' => $uas,
             'clients' => $clients,
+            'tokens' => $tokens,
+        ]);
+    }
+
+    public function tokenSummary(Request $request)
+    {
+        if ($resp = $this->ensureTableReady()) {
+            return response(['data' => [], 'total' => 0]);
+        }
+        if (!$this->isRiskCenterEnabled()) {
+            return response(['data' => [], 'total' => 0]);
+        }
+
+        $since = $this->getSinceTs($request);
+
+        $minIps = (int) $request->input('min_ips', 3);
+        $minIps = max(1, min(1000, $minIps));
+
+        $q = trim((string) $request->input('q', ''));
+
+        $current = (int) $request->input('current', 1);
+        $pageSize = (int) $request->input('pageSize', 20);
+        $current = max(1, $current);
+        $pageSize = max(1, min(200, $pageSize));
+
+        $excludedIps = $this->getExcludedIpsForSummary($request);
+
+        $agg = DB::table('v2_risk_event as e')
+            ->where('e.created_at', '>=', $since)
+            ->where('e.event_type', '=', 'subscribe')
+            ->whereNotNull('e.token_hash')
+            ->where('e.token_hash', '<>', '')
+            ->whereNotNull('e.ip')
+            ->where('e.ip', '<>', '')
+            ->selectRaw('e.token_hash, MAX(e.user_id) as user_id, COUNT(*) AS event_count, COUNT(DISTINCT e.user_id) AS user_count, COUNT(DISTINCT e.ip) AS ip_count, COUNT(DISTINCT e.ua_hash) AS ua_count, MAX(e.created_at) AS last_seen')
+            ->groupBy('e.token_hash')
+            ->having('ip_count', '>=', $minIps);
+
+        if ($excludedIps) {
+            $agg->whereNotIn('e.ip', $excludedIps);
+        }
+
+        if ($q !== '') {
+            if (preg_match('/^[0-9a-fA-F]{6,64}$/', $q)) {
+                $agg->where('e.token_hash', 'like', strtolower($q) . '%');
+            } elseif (is_numeric($q)) {
+                $agg->where('e.user_id', '=', (int) $q);
+            }
+        }
+
+        $builder = DB::query()
+            ->fromSub(clone $agg, 't')
+            ->leftJoin('v2_user as u', 'u.id', '=', 't.user_id')
+            ->select([
+                't.token_hash',
+                't.user_id',
+                'u.email',
+                'u.is_admin',
+                'u.banned',
+                'u.plan_id',
+                't.event_count',
+                't.user_count',
+                't.ip_count',
+                't.ua_count',
+                't.last_seen',
+            ]);
+
+        if ($q !== '' && !preg_match('/^[0-9a-fA-F]{6,64}$/', $q) && !is_numeric($q)) {
+            $builder->where('u.email', 'like', '%' . $q . '%');
+        }
+
+        $total = DB::query()->fromSub(clone $builder, 'x')->count();
+        $rows = $builder
+            ->orderByDesc('t.ip_count')
+            ->orderByDesc('t.ua_count')
+            ->orderByDesc('t.last_seen')
+            ->forPage($current, $pageSize)
+            ->get();
+
+        return response([
+            'data' => $rows,
+            'total' => $total,
+        ]);
+    }
+
+    public function tokenDetail(Request $request)
+    {
+        if ($resp = $this->ensureTableReady()) {
+            return $resp;
+        }
+        if (!$this->isRiskCenterEnabled()) {
+            return $this->fail([403, '风控中心未启用']);
+        }
+
+        $request->validate([
+            'token_hash' => 'required|string|max:64',
+        ], [
+            'token_hash.required' => 'Token Hash不能为空',
+        ]);
+
+        $tokenHash = strtolower(trim((string) $request->input('token_hash')));
+        if (!preg_match('/^[0-9a-f]{64}$/', $tokenHash)) {
+            return $this->fail([422, 'Token Hash格式不正确']);
+        }
+
+        $since = $this->getSinceTs($request);
+        $excludedIps = $this->getExcludedIpsForSummary($request);
+
+        $base = DB::table('v2_risk_event as e')
+            ->where('e.created_at', '>=', $since)
+            ->where('e.event_type', '=', 'subscribe')
+            ->where('e.token_hash', '=', $tokenHash)
+            ->whereNotNull('e.ip')
+            ->where('e.ip', '<>', '');
+
+        if ($excludedIps) {
+            $base->whereNotIn('e.ip', $excludedIps);
+        }
+
+        $summary = (clone $base)
+            ->selectRaw('e.token_hash, MAX(e.user_id) as user_id, COUNT(*) AS event_count, COUNT(DISTINCT e.user_id) AS user_count, COUNT(DISTINCT e.ip) AS ip_count, COUNT(DISTINCT e.ua_hash) AS ua_count, MAX(e.created_at) AS last_seen')
+            ->first();
+
+        $users = (clone $base)
+            ->whereNotNull('e.user_id')
+            ->join('v2_user as u', 'u.id', '=', 'e.user_id')
+            ->selectRaw('u.id as user_id, u.email, u.is_admin, u.banned, u.plan_id, COUNT(*) as event_count, COUNT(DISTINCT e.ip) as ip_count, COUNT(DISTINCT e.ua_hash) as ua_count, MAX(e.created_at) as last_seen')
+            ->groupBy('u.id', 'u.email', 'u.is_admin', 'u.banned', 'u.plan_id')
+            ->orderByDesc('event_count')
+            ->orderByDesc('last_seen')
+            ->limit(200)
+            ->get();
+
+        $ips = (clone $base)
+            ->selectRaw('e.ip, COUNT(*) as event_count, COUNT(DISTINCT e.user_id) as user_count, COUNT(DISTINCT e.ua_hash) as ua_count, MAX(e.created_at) as last_seen')
+            ->groupBy('e.ip')
+            ->orderByDesc('event_count')
+            ->orderByDesc('last_seen')
+            ->limit(200)
+            ->get();
+
+        $uas = (clone $base)
+            ->whereNotNull('e.ua_hash')
+            ->where('e.ua_hash', '<>', '')
+            ->selectRaw('e.ua_hash, MAX(e.ua) as ua, COUNT(*) as event_count, COUNT(DISTINCT e.ip) as ip_count, COUNT(DISTINCT e.user_id) as user_count, MAX(e.created_at) as last_seen')
+            ->groupBy('e.ua_hash')
+            ->orderByDesc('event_count')
+            ->orderByDesc('last_seen')
+            ->limit(200)
+            ->get();
+
+        $topIps = $ips->pluck('ip')->filter(fn($v) => is_string($v) && $v !== '')->values()->all();
+        $ipTokenCounts = [];
+        if ($topIps) {
+            $tokenCounts = DB::table('v2_risk_event')
+                ->where('created_at', '>=', $since)
+                ->where('event_type', '=', 'subscribe')
+                ->whereIn('ip', $topIps)
+                ->whereNotNull('token_hash')
+                ->where('token_hash', '<>', '')
+                ->selectRaw('ip, COUNT(DISTINCT token_hash) as token_count')
+                ->groupBy('ip')
+                ->get();
+            foreach ($tokenCounts as $row) {
+                $ipTokenCounts[(string) $row->ip] = (int) $row->token_count;
+            }
+        }
+
+        $ipsWithTokenCount = $ips->map(function ($row) use ($ipTokenCounts) {
+            $ip = (string) ($row->ip ?? '');
+            $row->token_count = $ip !== '' ? ($ipTokenCounts[$ip] ?? 0) : 0;
+            return $row;
+        });
+
+        return $this->success([
+            'token_hash' => $tokenHash,
+            'since' => $since,
+            'summary' => $summary,
+            'users' => $users,
+            'ips' => $ipsWithTokenCount,
+            'uas' => $uas,
+        ]);
+    }
+
+    public function loginFailedIpSummary(Request $request)
+    {
+        if ($resp = $this->ensureTableReady()) {
+            return response(['data' => [], 'total' => 0]);
+        }
+        if (!$this->isRiskCenterEnabled()) {
+            return response(['data' => [], 'total' => 0]);
+        }
+
+        $since = $this->getSinceTs($request);
+
+        $minEvents = (int) $request->input('min_events', 20);
+        $minEvents = max(1, min(1000000, $minEvents));
+
+        $q = trim((string) $request->input('q', ''));
+
+        $current = (int) $request->input('current', 1);
+        $pageSize = (int) $request->input('pageSize', 20);
+        $current = max(1, $current);
+        $pageSize = max(1, min(200, $pageSize));
+
+        $excludedIps = $this->getExcludedIpsForSummary($request);
+
+        $select = 'ip, COUNT(*) AS event_count, COUNT(DISTINCT ua_hash) AS ua_count, MAX(created_at) AS last_seen';
+
+        $driver = null;
+        try {
+            $driver = DB::connection()->getDriverName();
+        } catch (\Throwable) {
+        }
+        if (in_array($driver, ['mysql', 'mariadb'], true)) {
+            $select .= ", COUNT(DISTINCT (CASE WHEN meta IS NOT NULL AND JSON_VALID(meta) THEN JSON_UNQUOTE(JSON_EXTRACT(meta, '$.email')) ELSE NULL END)) AS email_count";
+        } else {
+            $select .= ', 0 AS email_count';
+        }
+
+        $builder = DB::table('v2_risk_event')
+            ->where('created_at', '>=', $since)
+            ->where('event_type', '=', 'login_failed')
+            ->whereNotNull('ip')
+            ->where('ip', '<>', '')
+            ->selectRaw($select)
+            ->groupBy('ip')
+            ->having('event_count', '>=', $minEvents);
+
+        if ($excludedIps) {
+            $builder->whereNotIn('ip', $excludedIps);
+        }
+        if ($q !== '') {
+            $builder->where('ip', 'like', '%' . $q . '%');
+        }
+
+        $total = DB::query()->fromSub(clone $builder, 't')->count();
+        $rows = $builder
+            ->orderByDesc('event_count')
+            ->orderByDesc('last_seen')
+            ->forPage($current, $pageSize)
+            ->get();
+
+        return response([
+            'data' => $rows,
+            'total' => $total,
+        ]);
+    }
+
+    public function loginFailedIpDetail(Request $request)
+    {
+        if ($resp = $this->ensureTableReady()) {
+            return $resp;
+        }
+        if (!$this->isRiskCenterEnabled()) {
+            return $this->fail([403, '风控中心未启用']);
+        }
+
+        $request->validate([
+            'ip' => 'required|string|max:64',
+        ], [
+            'ip.required' => 'IP不能为空',
+        ]);
+
+        $ip = trim((string) $request->input('ip'));
+        $since = $this->getSinceTs($request);
+
+        $events = DB::table('v2_risk_event')
+            ->where('created_at', '>=', $since)
+            ->where('event_type', '=', 'login_failed')
+            ->where('ip', '=', $ip)
+            ->orderByDesc('created_at')
+            ->limit(2000)
+            ->get([
+                'id',
+                'ip',
+                'ua',
+                'ua_hash',
+                'status_code',
+                'meta',
+                'created_at',
+            ]);
+
+        $emailCounts = [];
+        $uaCounts = [];
+        $lastSeen = 0;
+
+        foreach ($events as $ev) {
+            $ts = (int) ($ev->created_at ?? 0);
+            if ($ts > $lastSeen) {
+                $lastSeen = $ts;
+            }
+
+            $email = null;
+            $meta = $ev->meta ?? null;
+            if (is_string($meta) && $meta !== '' && str_starts_with(ltrim($meta), '{')) {
+                try {
+                    $decoded = json_decode($meta, true, 512, JSON_THROW_ON_ERROR);
+                    $email = is_array($decoded) && isset($decoded['email']) ? (string) $decoded['email'] : null;
+                } catch (\Throwable) {
+                }
+            }
+            if (is_string($email) && trim($email) !== '') {
+                $email = strtolower(trim($email));
+                $emailCounts[$email] = ($emailCounts[$email] ?? 0) + 1;
+            }
+
+            $uaHash = is_string($ev->ua_hash ?? null) ? (string) $ev->ua_hash : '';
+            if ($uaHash !== '') {
+                $uaCounts[$uaHash] = ($uaCounts[$uaHash] ?? 0) + 1;
+            }
+        }
+
+        arsort($emailCounts);
+        arsort($uaCounts);
+
+        $topEmails = [];
+        foreach (array_slice($emailCounts, 0, 50, true) as $email => $count) {
+            $topEmails[] = [
+                'email' => $email,
+                'count' => $count,
+            ];
+        }
+
+        $uas = DB::table('v2_risk_event as e')
+            ->where('e.created_at', '>=', $since)
+            ->where('e.event_type', '=', 'login_failed')
+            ->where('e.ip', '=', $ip)
+            ->whereNotNull('e.ua_hash')
+            ->where('e.ua_hash', '<>', '')
+            ->selectRaw('e.ua_hash, MAX(e.ua) as ua, COUNT(*) as event_count, MAX(e.created_at) as last_seen')
+            ->groupBy('e.ua_hash')
+            ->orderByDesc('event_count')
+            ->orderByDesc('last_seen')
+            ->limit(200)
+            ->get();
+
+        return $this->success([
+            'ip' => $ip,
+            'since' => $since,
+            'summary' => [
+                'event_count' => $events->count(),
+                'email_count' => count($emailCounts),
+                'ua_count' => count($uaCounts),
+                'last_seen' => $lastSeen ?: null,
+            ],
+            'top_emails' => $topEmails,
+            'uas' => $uas,
+            'events' => $events->take(200),
+        ]);
+    }
+
+    public function loginFailedUaSummary(Request $request)
+    {
+        if ($resp = $this->ensureTableReady()) {
+            return response(['data' => [], 'total' => 0]);
+        }
+        if (!$this->isRiskCenterEnabled()) {
+            return response(['data' => [], 'total' => 0]);
+        }
+
+        $since = $this->getSinceTs($request);
+
+        $minEvents = (int) $request->input('min_events', 20);
+        $minEvents = max(1, min(1000000, $minEvents));
+        $minIps = (int) $request->input('min_ips', 3);
+        $minIps = max(1, min(1000, $minIps));
+
+        $q = trim((string) $request->input('q', ''));
+
+        $current = (int) $request->input('current', 1);
+        $pageSize = (int) $request->input('pageSize', 20);
+        $current = max(1, $current);
+        $pageSize = max(1, min(200, $pageSize));
+
+        $excludedIps = $this->getExcludedIpsForSummary($request);
+
+        $select = 'ua_hash, MAX(ua) as ua, COUNT(*) AS event_count, COUNT(DISTINCT ip) AS ip_count, MAX(created_at) AS last_seen';
+
+        $driver = null;
+        try {
+            $driver = DB::connection()->getDriverName();
+        } catch (\Throwable) {
+        }
+        if (in_array($driver, ['mysql', 'mariadb'], true)) {
+            $select .= ", COUNT(DISTINCT (CASE WHEN meta IS NOT NULL AND JSON_VALID(meta) THEN JSON_UNQUOTE(JSON_EXTRACT(meta, '$.email')) ELSE NULL END)) AS email_count";
+        } else {
+            $select .= ', 0 AS email_count';
+        }
+
+        $builder = DB::table('v2_risk_event')
+            ->where('created_at', '>=', $since)
+            ->where('event_type', '=', 'login_failed')
+            ->whereNotNull('ua_hash')
+            ->where('ua_hash', '<>', '')
+            ->whereNotNull('ip')
+            ->where('ip', '<>', '')
+            ->selectRaw($select)
+            ->groupBy('ua_hash')
+            ->having('event_count', '>=', $minEvents)
+            ->having('ip_count', '>=', $minIps);
+
+        if ($excludedIps) {
+            $builder->whereNotIn('ip', $excludedIps);
+        }
+
+        if ($q !== '') {
+            if (preg_match('/^[0-9a-fA-F]{6,64}$/', $q)) {
+                $builder->where('ua_hash', 'like', strtolower($q) . '%');
+            } else {
+                $builder->where('ua', 'like', '%' . $q . '%');
+            }
+        }
+
+        $total = DB::query()->fromSub(clone $builder, 't')->count();
+        $rows = $builder
+            ->orderByDesc('event_count')
+            ->orderByDesc('ip_count')
+            ->orderByDesc('last_seen')
+            ->forPage($current, $pageSize)
+            ->get();
+
+        return response([
+            'data' => $rows,
+            'total' => $total,
+        ]);
+    }
+
+    public function loginFailedUaDetail(Request $request)
+    {
+        if ($resp = $this->ensureTableReady()) {
+            return $resp;
+        }
+        if (!$this->isRiskCenterEnabled()) {
+            return $this->fail([403, '风控中心未启用']);
+        }
+
+        $request->validate([
+            'ua_hash' => 'required|string|max:64',
+        ], [
+            'ua_hash.required' => 'UA Hash不能为空',
+        ]);
+
+        $uaHash = strtolower(trim((string) $request->input('ua_hash')));
+        if (!preg_match('/^[0-9a-f]{64}$/', $uaHash)) {
+            return $this->fail([422, 'UA Hash格式不正确']);
+        }
+
+        $since = $this->getSinceTs($request);
+
+        $events = DB::table('v2_risk_event')
+            ->where('created_at', '>=', $since)
+            ->where('event_type', '=', 'login_failed')
+            ->where('ua_hash', '=', $uaHash)
+            ->orderByDesc('created_at')
+            ->limit(2000)
+            ->get([
+                'id',
+                'ip',
+                'ua',
+                'ua_hash',
+                'status_code',
+                'meta',
+                'created_at',
+            ]);
+
+        $emailCounts = [];
+        $ipCounts = [];
+        $lastSeen = 0;
+
+        foreach ($events as $ev) {
+            $ts = (int) ($ev->created_at ?? 0);
+            if ($ts > $lastSeen) {
+                $lastSeen = $ts;
+            }
+
+            $ip = is_string($ev->ip ?? null) ? (string) $ev->ip : '';
+            if ($ip !== '') {
+                $ipCounts[$ip] = ($ipCounts[$ip] ?? 0) + 1;
+            }
+
+            $email = null;
+            $meta = $ev->meta ?? null;
+            if (is_string($meta) && $meta !== '' && str_starts_with(ltrim($meta), '{')) {
+                try {
+                    $decoded = json_decode($meta, true, 512, JSON_THROW_ON_ERROR);
+                    $email = is_array($decoded) && isset($decoded['email']) ? (string) $decoded['email'] : null;
+                } catch (\Throwable) {
+                }
+            }
+            if (is_string($email) && trim($email) !== '') {
+                $email = strtolower(trim($email));
+                $emailCounts[$email] = ($emailCounts[$email] ?? 0) + 1;
+            }
+        }
+
+        arsort($emailCounts);
+        arsort($ipCounts);
+
+        $topEmails = [];
+        foreach (array_slice($emailCounts, 0, 50, true) as $email => $count) {
+            $topEmails[] = [
+                'email' => $email,
+                'count' => $count,
+            ];
+        }
+
+        $topIps = [];
+        foreach (array_slice($ipCounts, 0, 200, true) as $ip => $count) {
+            $topIps[] = [
+                'ip' => $ip,
+                'count' => $count,
+            ];
+        }
+
+        $ua = $events->first()?->ua ?? null;
+        $ua = is_string($ua) ? $ua : null;
+
+        return $this->success([
+            'ua_hash' => $uaHash,
+            'ua' => $ua,
+            'since' => $since,
+            'summary' => [
+                'event_count' => $events->count(),
+                'email_count' => count($emailCounts),
+                'ip_count' => count($ipCounts),
+                'last_seen' => $lastSeen ?: null,
+            ],
+            'top_emails' => $topEmails,
+            'top_ips' => $topIps,
+            'events' => $events->take(200),
         ]);
     }
 
