@@ -14,7 +14,8 @@ class RiskController extends Controller
     private const MAX_DAYS = 90;
     private const DEFAULT_DAYS = 30;
     private const DEFAULT_MIN_USERS = 3;
-    private const EXCLUDE_SERVER_IPS_CACHE_TTL = 600;
+    // Node host -> IP cache TTL (includes DNS resolution for domains).
+    private const EXCLUDE_SERVER_IPS_CACHE_TTL = 86400; // 24h
 
     private function isRiskCenterEnabled(): bool
     {
@@ -85,6 +86,101 @@ class RiskController extends Controller
         return $host;
     }
 
+    private function normalizeHost(mixed $host): ?string
+    {
+        if ($host === null) {
+            return null;
+        }
+
+        $raw = trim((string) $host);
+        if ($raw === '') {
+            return null;
+        }
+
+        $parsed = null;
+        if (str_contains($raw, '://')) {
+            $parsed = parse_url($raw);
+        } else {
+            $parsed = parse_url('tcp://' . $raw);
+        }
+
+        if (is_array($parsed) && isset($parsed['host']) && is_string($parsed['host']) && trim($parsed['host']) !== '') {
+            $raw = (string) $parsed['host'];
+        }
+
+        $raw = trim($raw);
+        if ($raw === '') {
+            return null;
+        }
+
+        // [IPv6] -> IPv6
+        if (str_starts_with($raw, '[') && str_ends_with($raw, ']')) {
+            $raw = substr($raw, 1, -1);
+        }
+
+        $raw = rtrim($raw, '.');
+        return $raw !== '' ? $raw : null;
+    }
+
+    private function resolveDomainIps(string $domain): array
+    {
+        $domain = trim($domain);
+        if ($domain === '') {
+            return [];
+        }
+        if (filter_var($domain, FILTER_VALIDATE_IP)) {
+            return [$domain];
+        }
+
+        // IDN to ASCII (best-effort)
+        if (function_exists('idn_to_ascii') && preg_match('/[^\x20-\x7E]/', $domain)) {
+            try {
+                $ascii = idn_to_ascii($domain, IDNA_DEFAULT, INTL_IDNA_VARIANT_UTS46);
+                if (is_string($ascii) && trim($ascii) !== '') {
+                    $domain = trim($ascii);
+                }
+            } catch (\Throwable) {
+            }
+        }
+
+        $ips = [];
+
+        if (function_exists('dns_get_record')) {
+            $a = @dns_get_record($domain, DNS_A);
+            if (is_array($a)) {
+                foreach ($a as $rec) {
+                    $ip = $rec['ip'] ?? null;
+                    if (is_string($ip) && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                        $ips[] = $ip;
+                    }
+                }
+            }
+
+            $aaaa = @dns_get_record($domain, DNS_AAAA);
+            if (is_array($aaaa)) {
+                foreach ($aaaa as $rec) {
+                    $ip = $rec['ipv6'] ?? null;
+                    if (is_string($ip) && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+                        $ips[] = $ip;
+                    }
+                }
+            }
+        }
+
+        if (!$ips && function_exists('gethostbynamel')) {
+            $v4s = @gethostbynamel($domain);
+            if (is_array($v4s)) {
+                foreach ($v4s as $ip) {
+                    if (is_string($ip) && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                        $ips[] = $ip;
+                    }
+                }
+            }
+        }
+
+        return array_values(array_unique($ips));
+    }
+
     private function parseExcludeIpList(mixed $raw): array
     {
         if (is_array($raw)) {
@@ -115,11 +211,24 @@ class RiskController extends Controller
             }
 
             $ips = [];
+            $domains = [];
             foreach ($hosts as $host) {
-                $ip = $this->normalizeIpHost($host);
+                $normalizedHost = $this->normalizeHost($host);
+                if (!$normalizedHost) {
+                    continue;
+                }
+
+                $ip = $this->normalizeIpHost($normalizedHost);
                 if ($ip) {
                     $ips[] = $ip;
+                    continue;
                 }
+                // Keep domains for DNS resolving (once per 24h)
+                $domains[] = $normalizedHost;
+            }
+
+            foreach (array_values(array_unique($domains)) as $domain) {
+                $ips = array_merge($ips, $this->resolveDomainIps($domain));
             }
             return array_values(array_unique($ips));
         });
@@ -267,6 +376,7 @@ class RiskController extends Controller
         if ($updates) {
             admin_setting($updates);
         }
+        Cache::forget('risk:exclude_server_ips');
 
         return $this->success(true);
     }
