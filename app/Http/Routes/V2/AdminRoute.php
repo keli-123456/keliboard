@@ -232,6 +232,8 @@ class AdminRoute
             $router->group([
                 'prefix' => 'risk'
             ], function ($router) {
+                $router->get('/config', [RiskController::class, 'getConfig']);
+                $router->post('/config', [RiskController::class, 'saveConfig']);
                 $router->post('/ip/summary', [RiskController::class, 'ipSummary']);
                 $router->post('/ip/detail', [RiskController::class, 'ipDetail']);
                 $router->post('/user/detail', [RiskController::class, 'userDetail']);

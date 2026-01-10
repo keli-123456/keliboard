@@ -19,6 +19,19 @@ class RiskEventService
         }
 
         try {
+            $enabledRaw = admin_setting('risk_center_enable', true);
+            $enabled = filter_var($enabledRaw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            if ($enabled === null) {
+                $enabled = (bool) $enabledRaw;
+            }
+            if (!$enabled) {
+                return;
+            }
+        } catch (\Throwable) {
+            // If settings cannot be loaded, keep primary flow safe.
+        }
+
+        try {
             $now = time();
 
             $ua = self::normalizeString($payload['ua'] ?? null, self::MAX_UA_CHARS);
@@ -91,4 +104,3 @@ class RiskEventService
         return substr($value, 0, $maxBytes);
     }
 }
-

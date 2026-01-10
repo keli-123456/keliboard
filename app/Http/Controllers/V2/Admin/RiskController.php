@@ -16,6 +16,14 @@ class RiskController extends Controller
     private const DEFAULT_MIN_USERS = 3;
     private const EXCLUDE_SERVER_IPS_CACHE_TTL = 600;
 
+    private function isRiskCenterEnabled(): bool
+    {
+        return $this->parseBool(
+            admin_setting('risk_center_enable', true),
+            true
+        );
+    }
+
     private function getSinceTs(Request $request): int
     {
         $days = (int) $request->input('days', self::DEFAULT_DAYS);
@@ -128,7 +136,10 @@ class RiskController extends Controller
             $this->parseExcludeIpList(admin_setting('risk_exclude_ips'))
         );
 
-        $defaultExcludeNodes = $this->parseBool(env('XBOARD_RISK_EXCLUDE_NODE_IPS', true), true);
+        $defaultExcludeNodes = $this->parseBool(
+            admin_setting('risk_exclude_node_ips', env('XBOARD_RISK_EXCLUDE_NODE_IPS', true)),
+            true
+        );
         $excludeNodeIps = $this->parseBool($request->input('exclude_node_ips', null), $defaultExcludeNodes);
         if ($excludeNodeIps) {
             $excluded = array_merge($excluded, $this->getServerHostIps());
@@ -172,9 +183,100 @@ class RiskController extends Controller
         return $this->fail([500000, '风控事件表不存在，请先执行数据库迁移（php artisan migrate）']);
     }
 
+    public function getConfig(Request $request)
+    {
+        $enabled = $this->isRiskCenterEnabled();
+
+        $excludeNodeIps = $this->parseBool(
+            admin_setting('risk_exclude_node_ips', env('XBOARD_RISK_EXCLUDE_NODE_IPS', true)),
+            true
+        );
+
+        $trustedProxies = admin_setting('trusted_proxies', config('app.trusted_proxies', ''));
+
+        $proxySecretHeader = trim((string) admin_setting('proxy_trust_secret_header', config('app.proxy_trust_secret_header', 'X-Xboard-Proxy-Secret')));
+        if ($proxySecretHeader === '') {
+            $proxySecretHeader = 'X-Xboard-Proxy-Secret';
+        }
+
+        $proxySecretFromServerToken = $this->parseBool(
+            admin_setting('proxy_trust_secret_from_server_token', config('app.proxy_trust_secret_from_server_token', false)),
+            false
+        );
+
+        $proxySecret = admin_setting('proxy_trust_secret', config('app.proxy_trust_secret'));
+        $proxySecretSet = is_string($proxySecret) && trim($proxySecret) !== '';
+
+        $serverToken = admin_setting('server_token');
+        $serverTokenSet = is_string($serverToken) && strlen(trim($serverToken)) >= 16;
+
+        return $this->success([
+            'risk_center_enable' => $enabled,
+            'risk_exclude_ips' => (string) admin_setting('risk_exclude_ips', ''),
+            'risk_exclude_node_ips' => $excludeNodeIps,
+            'trusted_proxies' => is_string($trustedProxies) ? $trustedProxies : '',
+            'proxy_trust_secret_set' => $proxySecretSet,
+            'proxy_trust_secret_header' => $proxySecretHeader,
+            'proxy_trust_secret_from_server_token' => $proxySecretFromServerToken,
+            'server_token_set' => $serverTokenSet,
+        ]);
+    }
+
+    public function saveConfig(Request $request)
+    {
+        $data = $request->validate([
+            'risk_center_enable' => 'nullable|boolean',
+            'risk_exclude_ips' => 'nullable|string|max:4096',
+            'risk_exclude_node_ips' => 'nullable|boolean',
+            'trusted_proxies' => 'nullable|string|max:2048',
+            'proxy_trust_secret' => 'nullable|string|max:256',
+            'proxy_trust_secret_header' => 'nullable|string|max:64',
+            'proxy_trust_secret_from_server_token' => 'nullable|boolean',
+        ]);
+
+        $updates = [];
+
+        if (array_key_exists('risk_center_enable', $data)) {
+            $updates['risk_center_enable'] = $this->parseBool($data['risk_center_enable'], true) ? 1 : 0;
+        }
+        if (array_key_exists('risk_exclude_ips', $data)) {
+            $raw = is_string($data['risk_exclude_ips']) ? trim($data['risk_exclude_ips']) : '';
+            $updates['risk_exclude_ips'] = $raw !== '' ? $raw : null;
+        }
+        if (array_key_exists('risk_exclude_node_ips', $data)) {
+            $updates['risk_exclude_node_ips'] = $this->parseBool($data['risk_exclude_node_ips'], true) ? 1 : 0;
+        }
+
+        if (array_key_exists('trusted_proxies', $data)) {
+            $raw = is_string($data['trusted_proxies']) ? trim($data['trusted_proxies']) : '';
+            $updates['trusted_proxies'] = $raw !== '' ? $raw : null;
+        }
+
+        if (array_key_exists('proxy_trust_secret_from_server_token', $data)) {
+            $updates['proxy_trust_secret_from_server_token'] = $this->parseBool($data['proxy_trust_secret_from_server_token'], false) ? 1 : 0;
+        }
+        if (array_key_exists('proxy_trust_secret_header', $data)) {
+            $raw = is_string($data['proxy_trust_secret_header']) ? trim($data['proxy_trust_secret_header']) : '';
+            $updates['proxy_trust_secret_header'] = $raw !== '' ? $raw : null;
+        }
+        if (array_key_exists('proxy_trust_secret', $data)) {
+            $raw = is_string($data['proxy_trust_secret']) ? trim($data['proxy_trust_secret']) : '';
+            $updates['proxy_trust_secret'] = $raw !== '' ? $raw : null;
+        }
+
+        if ($updates) {
+            admin_setting($updates);
+        }
+
+        return $this->success(true);
+    }
+
     public function ipSummary(Request $request)
     {
         if ($resp = $this->ensureTableReady()) {
+            return response(['data' => [], 'total' => 0]);
+        }
+        if (!$this->isRiskCenterEnabled()) {
             return response(['data' => [], 'total' => 0]);
         }
 
@@ -227,6 +329,9 @@ class RiskController extends Controller
     {
         if ($resp = $this->ensureTableReady()) {
             return $resp;
+        }
+        if (!$this->isRiskCenterEnabled()) {
+            return $this->fail([403, '风控中心未启用']);
         }
 
         $request->validate([
@@ -290,6 +395,9 @@ class RiskController extends Controller
     {
         if ($resp = $this->ensureTableReady()) {
             return $resp;
+        }
+        if (!$this->isRiskCenterEnabled()) {
+            return $this->fail([403, '风控中心未启用']);
         }
 
         $request->validate([

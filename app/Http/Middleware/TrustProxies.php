@@ -35,9 +35,39 @@ class TrustProxies extends Middleware
         "127.0.0.0/8",
     ];
 
+    private function parseBool(mixed $value, bool $default): bool
+    {
+        if ($value === null) {
+            return $default;
+        }
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_numeric($value)) {
+            return ((int) $value) !== 0;
+        }
+        if (is_string($value)) {
+            $v = strtolower(trim($value));
+            if ($v === '') {
+                return $default;
+            }
+            if (in_array($v, ['1', 'true', 'yes', 'y', 'on'], true)) {
+                return true;
+            }
+            if (in_array($v, ['0', 'false', 'no', 'n', 'off'], true)) {
+                return false;
+            }
+        }
+        return $default;
+    }
+
     public function __construct()
     {
-        $extra = config('app.trusted_proxies') ?? '';
+        try {
+            $extra = admin_setting('trusted_proxies', config('app.trusted_proxies') ?? '');
+        } catch (\Throwable) {
+            $extra = config('app.trusted_proxies') ?? '';
+        }
         if (is_string($extra)) {
             $raw = trim($extra);
             if ($raw === '*') {
@@ -57,8 +87,18 @@ class TrustProxies extends Middleware
 
     public function handle(Request $request, Closure $next)
     {
-        $secret = config('app.proxy_trust_secret');
-        if ((!is_string($secret) || trim($secret) === '') && (bool) config('app.proxy_trust_secret_from_server_token', false)) {
+        try {
+            $secret = admin_setting('proxy_trust_secret', config('app.proxy_trust_secret'));
+        } catch (\Throwable) {
+            $secret = config('app.proxy_trust_secret');
+        }
+
+        $fromServerToken = $this->parseBool(
+            admin_setting('proxy_trust_secret_from_server_token', config('app.proxy_trust_secret_from_server_token', false)),
+            false
+        );
+
+        if ((!is_string($secret) || trim($secret) === '') && $fromServerToken) {
             try {
                 $secret = admin_setting('server_token');
             } catch (\Throwable) {
@@ -67,7 +107,12 @@ class TrustProxies extends Middleware
         }
 
         if (is_string($secret) && trim($secret) !== '') {
-            $headerName = config('app.proxy_trust_secret_header', 'X-Xboard-Proxy-Secret');
+            try {
+                $headerName = admin_setting('proxy_trust_secret_header', config('app.proxy_trust_secret_header', 'X-Xboard-Proxy-Secret'));
+            } catch (\Throwable) {
+                $headerName = config('app.proxy_trust_secret_header', 'X-Xboard-Proxy-Secret');
+            }
+            $headerName = is_string($headerName) && trim($headerName) !== '' ? trim($headerName) : 'X-Xboard-Proxy-Secret';
             $provided = $request->header((string) $headerName);
             if (is_string($provided) && $provided !== '' && hash_equals((string) $secret, $provided)) {
                 $remoteAddr = $request->server('REMOTE_ADDR');
