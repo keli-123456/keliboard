@@ -58,10 +58,18 @@ class TrustProxies extends Middleware
     public function handle(Request $request, Closure $next)
     {
         $secret = config('app.proxy_trust_secret');
-        if (is_string($secret) && $secret !== '') {
+        if ((!is_string($secret) || trim($secret) === '') && (bool) config('app.proxy_trust_secret_from_server_token', false)) {
+            try {
+                $secret = admin_setting('server_token');
+            } catch (\Throwable) {
+                $secret = null;
+            }
+        }
+
+        if (is_string($secret) && trim($secret) !== '') {
             $headerName = config('app.proxy_trust_secret_header', 'X-Xboard-Proxy-Secret');
             $provided = $request->header((string) $headerName);
-            if (is_string($provided) && $provided !== '' && hash_equals($secret, $provided)) {
+            if (is_string($provided) && $provided !== '' && hash_equals((string) $secret, $provided)) {
                 $remoteAddr = $request->server('REMOTE_ADDR');
                 if (is_string($remoteAddr) && $remoteAddr !== '') {
                     $this->proxies = [$remoteAddr];
