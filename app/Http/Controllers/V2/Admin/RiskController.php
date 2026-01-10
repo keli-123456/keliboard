@@ -5,6 +5,7 @@ namespace App\Http\Controllers\V2\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
@@ -13,12 +14,128 @@ class RiskController extends Controller
     private const MAX_DAYS = 90;
     private const DEFAULT_DAYS = 30;
     private const DEFAULT_MIN_USERS = 3;
+    private const EXCLUDE_SERVER_IPS_CACHE_TTL = 600;
 
     private function getSinceTs(Request $request): int
     {
         $days = (int) $request->input('days', self::DEFAULT_DAYS);
         $days = max(1, min(self::MAX_DAYS, $days));
         return time() - ($days * 86400);
+    }
+
+    private function parseBool(mixed $value, bool $default): bool
+    {
+        if ($value === null) {
+            return $default;
+        }
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_numeric($value)) {
+            return ((int) $value) !== 0;
+        }
+        if (is_string($value)) {
+            $v = strtolower(trim($value));
+            if ($v === '') {
+                return $default;
+            }
+            if (in_array($v, ['1', 'true', 'yes', 'y', 'on'], true)) {
+                return true;
+            }
+            if (in_array($v, ['0', 'false', 'no', 'n', 'off'], true)) {
+                return false;
+            }
+        }
+        if (is_array($value) || is_object($value)) {
+            return $default;
+        }
+        $filtered = filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+        return $filtered ?? $default;
+    }
+
+    private function normalizeIpHost(mixed $host): ?string
+    {
+        if ($host === null) {
+            return null;
+        }
+        $host = trim((string) $host);
+        if ($host === '') {
+            return null;
+        }
+
+        // Handle "host:port" for IPv4.
+        if (str_contains($host, ':') && !filter_var($host, FILTER_VALIDATE_IP)) {
+            $parsed = parse_url('tcp://' . $host);
+            if (is_array($parsed) && isset($parsed['host'])) {
+                $host = (string) $parsed['host'];
+            }
+        }
+
+        if (!filter_var($host, FILTER_VALIDATE_IP)) {
+            return null;
+        }
+        return $host;
+    }
+
+    private function parseExcludeIpList(mixed $raw): array
+    {
+        if (is_array($raw)) {
+            $values = $raw;
+        } elseif (is_string($raw)) {
+            $values = preg_split('/[,\s]+/', trim($raw), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        } else {
+            return [];
+        }
+
+        $ips = [];
+        foreach ($values as $v) {
+            $ip = $this->normalizeIpHost($v);
+            if ($ip) {
+                $ips[] = $ip;
+            }
+        }
+        return array_values(array_unique($ips));
+    }
+
+    private function getServerHostIps(): array
+    {
+        return Cache::remember('risk:exclude_server_ips', self::EXCLUDE_SERVER_IPS_CACHE_TTL, function (): array {
+            try {
+                $hosts = DB::table('v2_server')->pluck('host');
+            } catch (\Throwable) {
+                return [];
+            }
+
+            $ips = [];
+            foreach ($hosts as $host) {
+                $ip = $this->normalizeIpHost($host);
+                if ($ip) {
+                    $ips[] = $ip;
+                }
+            }
+            return array_values(array_unique($ips));
+        });
+    }
+
+    private function getExcludedIpsForSummary(Request $request): array
+    {
+        $excluded = [];
+
+        // Manual exclude list (env/admin_setting), only supports exact IPs.
+        $excluded = array_merge(
+            $excluded,
+            $this->parseExcludeIpList(env('XBOARD_RISK_EXCLUDE_IPS', '')),
+            $this->parseExcludeIpList(admin_setting('risk_exclude_ips'))
+        );
+
+        $defaultExcludeNodes = $this->parseBool(env('XBOARD_RISK_EXCLUDE_NODE_IPS', true), true);
+        $excludeNodeIps = $this->parseBool($request->input('exclude_node_ips', null), $defaultExcludeNodes);
+        if ($excludeNodeIps) {
+            $excluded = array_merge($excluded, $this->getServerHostIps());
+        }
+
+        $excluded = array_values(array_unique(array_filter($excluded, fn($v) => is_string($v) && $v !== '')));
+        return $excluded;
     }
 
     private function getEventTypes(Request $request): array
@@ -74,6 +191,8 @@ class RiskController extends Controller
         $current = max(1, $current);
         $pageSize = max(1, min(200, $pageSize));
 
+        $excludedIps = $this->getExcludedIpsForSummary($request);
+
         $builder = DB::table('v2_risk_event')
             ->where('created_at', '>=', $since)
             ->whereIn('event_type', $eventTypes)
@@ -82,6 +201,10 @@ class RiskController extends Controller
             ->selectRaw('ip, COUNT(*) AS event_count, COUNT(DISTINCT user_id) AS user_count, COUNT(DISTINCT ua_hash) AS ua_count, MAX(created_at) AS last_seen')
             ->groupBy('ip')
             ->having('user_count', '>=', $minUsers);
+
+        if ($excludedIps) {
+            $builder->whereNotIn('ip', $excludedIps);
+        }
 
         if ($q !== '') {
             $builder->where('ip', 'like', '%' . $q . '%');
