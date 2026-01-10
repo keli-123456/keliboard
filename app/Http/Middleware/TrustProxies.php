@@ -107,6 +107,7 @@ class TrustProxies extends Middleware
         }
 
         if (is_string($secret) && trim($secret) !== '') {
+            $secret = trim($secret);
             try {
                 $headerName = admin_setting('proxy_trust_secret_header', config('app.proxy_trust_secret_header', 'X-Xboard-Proxy-Secret'));
             } catch (\Throwable) {
@@ -114,7 +115,7 @@ class TrustProxies extends Middleware
             }
             $headerName = is_string($headerName) && trim($headerName) !== '' ? trim($headerName) : 'X-Xboard-Proxy-Secret';
             $provided = $request->header((string) $headerName);
-            if (is_string($provided) && $provided !== '' && hash_equals((string) $secret, $provided)) {
+            if (is_string($provided) && trim($provided) !== '' && hash_equals($secret, trim($provided))) {
                 $remoteAddr = $request->server('REMOTE_ADDR');
                 if (is_string($remoteAddr) && $remoteAddr !== '') {
                     $this->proxies = [$remoteAddr];
