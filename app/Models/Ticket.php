@@ -34,6 +34,9 @@ class Ticket extends Model
 
     const STATUS_OPENING = 0;
     const STATUS_CLOSED = 1;
+
+    const REPLY_STATUS_WAITING_USER = 0;
+    const REPLY_STATUS_WAITING_ADMIN = 1;
     public static $statusMap = [
         self::STATUS_OPENING => '开启',
         self::STATUS_CLOSED => '关闭'

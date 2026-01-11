@@ -81,9 +81,9 @@ class TicketService
             }
 
             if ($userId !== $ticket->user_id) {
-                $ticket->reply_status = Ticket::STATUS_OPENING;
+                $ticket->reply_status = Ticket::REPLY_STATUS_WAITING_USER;
             } else {
-                $ticket->reply_status = Ticket::STATUS_CLOSED;
+                $ticket->reply_status = Ticket::REPLY_STATUS_WAITING_ADMIN;
             }
             if (!$ticketMessage || !$ticket->save()) {
                 throw new \Exception();
@@ -144,9 +144,9 @@ class TicketService
             }
 
             if ($userId !== $ticket->user_id) {
-                $ticket->reply_status = Ticket::STATUS_OPENING;
+                $ticket->reply_status = Ticket::REPLY_STATUS_WAITING_USER;
             } else {
-                $ticket->reply_status = Ticket::STATUS_CLOSED;
+                $ticket->reply_status = Ticket::REPLY_STATUS_WAITING_ADMIN;
             }
             if (!$ticketMessage || !$ticket->save()) {
                 throw new ApiException('工单回复失败');
@@ -178,7 +178,9 @@ class TicketService
             $ticket = Ticket::create([
                 'user_id' => $userId,
                 'subject' => $subject,
-                'level' => $level
+                'level' => $level,
+                'status' => Ticket::STATUS_OPENING,
+                'reply_status' => Ticket::REPLY_STATUS_WAITING_ADMIN,
             ]);
             if (!$ticket) {
                 throw new ApiException('工单创建失败');
