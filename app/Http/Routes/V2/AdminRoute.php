@@ -246,6 +246,7 @@ class AdminRoute
                 $router->post('/login_failed/ip/detail', [RiskController::class, 'loginFailedIpDetail']);
                 $router->post('/login_failed/ua/summary', [RiskController::class, 'loginFailedUaSummary']);
                 $router->post('/login_failed/ua/detail', [RiskController::class, 'loginFailedUaDetail']);
+                $router->post('/user/behavior/summary', [RiskController::class, 'userBehaviorSummary']);
                 $router->post('/user/detail', [RiskController::class, 'userDetail']);
             });
 

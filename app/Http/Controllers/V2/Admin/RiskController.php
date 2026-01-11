@@ -1701,6 +1701,96 @@ class RiskController extends Controller
         ]);
     }
 
+    /**
+     * 危险用户榜单：订阅拉取频繁但流量很少（疑似采集节点）
+     */
+    public function userBehaviorSummary(Request $request)
+    {
+        if ($resp = $this->ensureTableReady()) {
+            return response(['data' => [], 'total' => 0]);
+        }
+        if (!$this->isRiskCenterEnabled()) {
+            return response(['data' => [], 'total' => 0]);
+        }
+
+        $since = $this->getSinceTs($request);
+        $excludedIps = $this->getExcludedIpsForSummary($request);
+
+        $minSubscribe = (int) $request->input('min_subscribe', 50);
+        $minSubscribe = max(1, min(1000000, $minSubscribe));
+
+        $minActiveDays = (int) $request->input('min_active_days', 3);
+        $minActiveDays = max(1, min(self::MAX_DAYS, $minActiveDays));
+
+        $maxTrafficMbRaw = $request->input('max_traffic_mb', null);
+        $maxTrafficBytes = null;
+        if ($maxTrafficMbRaw !== null && !(is_string($maxTrafficMbRaw) && trim($maxTrafficMbRaw) === '')) {
+            $maxTrafficMb = (int) $maxTrafficMbRaw;
+            $maxTrafficMb = max(0, min(1000000, $maxTrafficMb));
+            $maxTrafficBytes = $maxTrafficMb * 1024 * 1024;
+        }
+
+        $q = trim((string) $request->input('q', ''));
+
+        $current = (int) $request->input('current', 1);
+        $pageSize = (int) $request->input('pageSize', 20);
+        $current = max(1, $current);
+        $pageSize = max(1, min(200, $pageSize));
+
+        $subscribeAgg = DB::table('v2_risk_event as e')
+            ->where('e.created_at', '>=', $since)
+            ->where('e.event_type', '=', 'subscribe')
+            ->whereNotNull('e.user_id')
+            ->where('e.user_id', '>', 0)
+            ->whereNotNull('e.ip')
+            ->where('e.ip', '<>', '')
+            ->selectRaw('e.user_id, COUNT(*) as subscribe_count, COUNT(DISTINCT e.ip) as ip_count, COUNT(DISTINCT e.ua_hash) as ua_count, COUNT(DISTINCT FLOOR(e.created_at / 86400)) as active_days, MAX(e.created_at) as last_seen')
+            ->groupBy('e.user_id')
+            ->having('subscribe_count', '>=', $minSubscribe)
+            ->having('active_days', '>=', $minActiveDays);
+
+        if ($excludedIps) {
+            $subscribeAgg->whereNotIn('e.ip', $excludedIps);
+        }
+
+        $trafficAgg = DB::table('v2_stat_user as s')
+            ->where('s.record_at', '>=', $since)
+            ->selectRaw('s.user_id, SUM(s.u + s.d) as traffic_total')
+            ->groupBy('s.user_id');
+
+        $builder = DB::query()
+            ->fromSub($subscribeAgg, 't')
+            ->join('v2_user as u', 'u.id', '=', 't.user_id')
+            ->leftJoinSub($trafficAgg, 's', 's.user_id', '=', 't.user_id')
+            ->selectRaw('t.user_id, u.email, u.is_admin, u.banned, u.plan_id, t.subscribe_count, t.active_days, t.ip_count, t.ua_count, t.last_seen, COALESCE(s.traffic_total, 0) as traffic_total, ROUND(t.subscribe_count / ((COALESCE(s.traffic_total, 0) / 1048576) + 1), 4) as score');
+
+        if ($maxTrafficBytes !== null) {
+            $builder->whereRaw('COALESCE(s.traffic_total, 0) <= ?', [$maxTrafficBytes]);
+        }
+
+        if ($q !== '') {
+            if (is_numeric($q)) {
+                $builder->where('u.id', '=', (int) $q);
+            } else {
+                $builder->where('u.email', 'like', '%' . $q . '%');
+            }
+        }
+
+        $total = DB::query()->fromSub(clone $builder, 'x')->count();
+        $rows = $builder
+            ->orderByDesc('score')
+            ->orderByDesc('subscribe_count')
+            ->orderByDesc('active_days')
+            ->orderByDesc('last_seen')
+            ->forPage($current, $pageSize)
+            ->get();
+
+        return response([
+            'data' => $rows,
+            'total' => $total,
+        ]);
+    }
+
     public function userDetail(Request $request)
     {
         if ($resp = $this->ensureTableReady()) {
