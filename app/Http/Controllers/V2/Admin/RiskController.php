@@ -332,6 +332,38 @@ class RiskController extends Controller
         return $this->fail([500000, '风控事件表不存在，请先执行数据库迁移（php artisan migrate）']);
     }
 
+    private function parseUaWhitelist(?string $raw): array
+    {
+        $raw = is_string($raw) ? trim($raw) : '';
+        if ($raw === '') {
+            return [];
+        }
+        $items = preg_split('/[,\r\n]+/', $raw, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $items = array_values(array_filter(array_map(fn($v) => trim((string) $v), $items), fn($v) => $v !== ''));
+        return array_slice($items, 0, 200);
+    }
+
+    private function isUaWhitelisted(?string $ua, array $patterns): bool
+    {
+        if (!$patterns) {
+            return false;
+        }
+        $ua = is_string($ua) ? strtolower(trim($ua)) : '';
+        if ($ua === '') {
+            return false;
+        }
+        foreach ($patterns as $p) {
+            $p = strtolower(trim((string) $p));
+            if ($p === '') {
+                continue;
+            }
+            if (str_contains($ua, $p)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public function getConfig(Request $request)
     {
         $enabled = $this->isRiskCenterEnabled();
@@ -376,6 +408,7 @@ class RiskController extends Controller
             'risk_center_enable' => $enabled,
             'risk_exclude_ips' => (string) admin_setting('risk_exclude_ips', ''),
             'risk_exclude_node_ips' => $excludeNodeIps,
+            'risk_ua_whitelist' => (string) admin_setting('risk_ua_whitelist', ''),
             'trusted_proxies' => is_string($trustedProxies) ? $trustedProxies : '',
             'proxy_trust_secret_set' => $proxySecretSet,
             'proxy_trust_secret_header' => $proxySecretHeader,
@@ -400,6 +433,7 @@ class RiskController extends Controller
             'risk_center_enable' => 'nullable|boolean',
             'risk_exclude_ips' => 'nullable|string|max:4096',
             'risk_exclude_node_ips' => 'nullable|boolean',
+            'risk_ua_whitelist' => 'nullable|string|max:4096',
             'trusted_proxies' => 'nullable|string|max:2048',
             'proxy_trust_secret' => 'nullable|string|max:256',
             'proxy_trust_secret_header' => 'nullable|string|max:64',
@@ -427,6 +461,10 @@ class RiskController extends Controller
         }
         if (array_key_exists('risk_exclude_node_ips', $data)) {
             $updates['risk_exclude_node_ips'] = $this->parseBool($data['risk_exclude_node_ips'], true) ? 1 : 0;
+        }
+        if (array_key_exists('risk_ua_whitelist', $data)) {
+            $raw = is_string($data['risk_ua_whitelist']) ? trim($data['risk_ua_whitelist']) : '';
+            $updates['risk_ua_whitelist'] = $raw !== '' ? $raw : null;
         }
 
         if (array_key_exists('trusted_proxies', $data)) {
@@ -545,6 +583,7 @@ class RiskController extends Controller
         $thresholdLoginFailedUa = $this->parseInt(admin_setting('risk_alert_login_failed_ua_threshold', self::DEFAULT_ALERT_LOGIN_FAILED_UA_THRESHOLD), self::DEFAULT_ALERT_LOGIN_FAILED_UA_THRESHOLD, 1, 1000000);
 
         $excludedIps = $this->getExcludedIpsForSummary($request);
+        $uaWhitelist = $this->parseUaWhitelist((string) admin_setting('risk_ua_whitelist', ''));
 
         $items = [];
 
@@ -615,10 +654,14 @@ class RiskController extends Controller
             $subscribeUaRows->whereNotIn('ip', $excludedIps);
         }
         foreach ($subscribeUaRows->get() as $row) {
+            $ua = $row->ua !== null ? (string) $row->ua : null;
+            if ($this->isUaWhitelisted($ua, $uaWhitelist)) {
+                continue;
+            }
             $items[] = [
                 'type' => 'subscribe_ua',
                 'key' => (string) $row->ua_hash,
-                'ua' => $row->ua !== null ? (string) $row->ua : null,
+                'ua' => $ua,
                 'event_count' => (int) $row->event_count,
                 'ip_count' => (int) $row->ip_count,
                 'user_count' => (int) $row->user_count,
@@ -665,10 +708,14 @@ class RiskController extends Controller
             $loginFailedUaRows->whereNotIn('ip', $excludedIps);
         }
         foreach ($loginFailedUaRows->get() as $row) {
+            $ua = $row->ua !== null ? (string) $row->ua : null;
+            if ($this->isUaWhitelisted($ua, $uaWhitelist)) {
+                continue;
+            }
             $items[] = [
                 'type' => 'login_failed_ua',
                 'key' => (string) $row->ua_hash,
-                'ua' => $row->ua !== null ? (string) $row->ua : null,
+                'ua' => $ua,
                 'event_count' => (int) $row->event_count,
                 'ip_count' => (int) $row->ip_count,
                 'last_seen' => (int) $row->last_seen,
