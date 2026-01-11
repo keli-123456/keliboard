@@ -1172,6 +1172,7 @@ class RiskController extends Controller
 
         $summary = (clone $base)
             ->selectRaw('e.token_hash, MAX(e.user_id) as user_id, COUNT(*) AS event_count, COUNT(DISTINCT e.user_id) AS user_count, COUNT(DISTINCT e.ip) AS ip_count, COUNT(DISTINCT e.ua_hash) AS ua_count, MAX(e.created_at) AS last_seen')
+            ->groupBy('e.token_hash')
             ->first();
 
         $users = (clone $base)
@@ -1623,6 +1624,7 @@ class RiskController extends Controller
 
         $summary = (clone $base)
             ->selectRaw('e.ua_hash, MAX(e.ua) as ua, COUNT(*) AS event_count, COUNT(DISTINCT e.user_id) AS user_count, COUNT(DISTINCT e.ip) AS ip_count, MAX(e.created_at) AS last_seen')
+            ->groupBy('e.ua_hash')
             ->first();
 
         $users = (clone $base)

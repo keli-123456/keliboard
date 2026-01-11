@@ -116,6 +116,22 @@ class TrustProxies extends Middleware
             $headerName = is_string($headerName) && trim($headerName) !== '' ? trim($headerName) : 'X-Xboard-Proxy-Secret';
             $provided = $request->header((string) $headerName);
             if (is_string($provided) && trim($provided) !== '' && hash_equals($secret, trim($provided))) {
+                try {
+                    $clientIpHeader = admin_setting('proxy_trust_client_ip_header', config('app.proxy_trust_client_ip_header', 'X-Xboard-Client-IP'));
+                } catch (\Throwable) {
+                    $clientIpHeader = config('app.proxy_trust_client_ip_header', 'X-Xboard-Client-IP');
+                }
+                $clientIpHeader = is_string($clientIpHeader) && trim($clientIpHeader) !== '' ? trim($clientIpHeader) : 'X-Xboard-Client-IP';
+
+                $clientIp = $request->header((string) $clientIpHeader);
+                if (is_string($clientIp)) {
+                    $clientIp = trim($clientIp);
+                }
+                if (is_string($clientIp) && $clientIp !== '' && filter_var($clientIp, FILTER_VALIDATE_IP)) {
+                    $request->headers->set('X-Forwarded-For', $clientIp);
+                    $request->headers->set('X-Real-IP', $clientIp);
+                }
+
                 $remoteAddr = $request->server('REMOTE_ADDR');
                 if (is_string($remoteAddr) && $remoteAddr !== '') {
                     $this->proxies = [$remoteAddr];
