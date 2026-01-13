@@ -109,7 +109,7 @@ mark_vendor_git_safe() {
     return 0
   fi
 
-  find vendor -type d -name .git 2>/dev/null \
+  find vendor -mindepth 3 -maxdepth 3 -type d -name .git 2>/dev/null \
     | while IFS= read -r gitdir; do
       repodir="$(dirname "$gitdir")"
       git config --global --add safe.directory "$(pwd)/${repodir}" >/dev/null 2>&1 || true
@@ -121,7 +121,7 @@ if [ "${USE_COMPOSE}" = "1" ] && [ "${IN_DOCKER}" = "0" ]; then
     cd /www || exit 1
     git config --global --add safe.directory /www >/dev/null 2>&1 || true
     if [ -d vendor ]; then
-      find vendor -type d -name .git 2>/dev/null \
+      find vendor -mindepth 3 -maxdepth 3 -type d -name .git 2>/dev/null \
         | while IFS= read -r gitdir; do
           repodir="$(dirname "$gitdir")"
           git config --global --add safe.directory "$(pwd)/${repodir}" >/dev/null 2>&1 || true
