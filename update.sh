@@ -104,10 +104,34 @@ else
   curl -fsSL https://github.com/composer/composer/releases/latest/download/composer.phar -o composer.phar
 fi
 
+mark_vendor_git_safe() {
+  if [ ! -d "vendor" ]; then
+    return 0
+  fi
+
+  find vendor -mindepth 2 -maxdepth 2 -type d -name .git 2>/dev/null \
+    | while IFS= read -r gitdir; do
+      repodir="$(dirname "$gitdir")"
+      git config --global --add safe.directory "$(pwd)/${repodir}" >/dev/null 2>&1 || true
+    done
+}
+
 if [ "${USE_COMPOSE}" = "1" ] && [ "${IN_DOCKER}" = "0" ]; then
-  compose run --rm -T web sh -lc "cd /www && php composer.phar update -vvv"
+  compose run --rm -T web sh -lc '
+    cd /www || exit 1
+    git config --global --add safe.directory /www >/dev/null 2>&1 || true
+    if [ -d vendor ]; then
+      find vendor -mindepth 2 -maxdepth 2 -type d -name .git 2>/dev/null \
+        | while IFS= read -r gitdir; do
+          repodir="$(dirname "$gitdir")"
+          git config --global --add safe.directory "$(pwd)/${repodir}" >/dev/null 2>&1 || true
+        done
+    fi
+    php composer.phar update -vvv
+  '
   compose run --rm -T web sh -lc "cd /www && php artisan xboard:update"
 else
+  mark_vendor_git_safe
   php composer.phar update -vvv
   php artisan xboard:update
   php artisan config:clear || true
