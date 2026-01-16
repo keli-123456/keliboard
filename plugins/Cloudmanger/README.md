@@ -29,6 +29,10 @@ API 前缀：`/api/cm/v1`
 - `GET /api/cm/v1/admin/users/{userId}/worker-configs/{worker}`
 - `PUT /api/cm/v1/admin/users/{userId}/worker-configs/{worker}`（body: `{ "config": {...}, "note": "..." }`）
 - `DELETE /api/cm/v1/admin/users/{userId}/worker-configs/{worker}`
+- `GET /api/cm/v1/admin/users/{userId}/worker-scripts/{worker}`
+- `GET /api/cm/v1/admin/users/{userId}/worker-scripts/{worker}/{scriptId}`
+- `PUT /api/cm/v1/admin/users/{userId}/worker-scripts/{worker}/{scriptId}`（body: `{ "content": "#!/bin/bash\\n...", "note": "..." }`）
+- `DELETE /api/cm/v1/admin/users/{userId}/worker-scripts/{worker}/{scriptId}`
 - `GET /api/cm/v1/admin/users/{userId}/tokens`
 - `POST /api/cm/v1/admin/users/{userId}/tokens`（body: `{ "worker": "dns_redis_web", "expires_at": 1730000000 }`）
 - `DELETE /api/cm/v1/admin/users/{userId}/tokens/{tokenId}`
@@ -36,6 +40,8 @@ API 前缀：`/api/cm/v1`
 ### Worker 拉取（需要 Bearer Token）
 
 - `GET /api/cm/v1/worker-configs/{worker}/rendered`
+- `GET /api/cm/v1/worker-scripts/{worker}`（返回该 worker 的脚本集合）
+- `GET /api/cm/v1/worker-scripts/{worker}/{scriptId}`（返回单个脚本）
 
 token 规则：
 - token 名称固定为 `cm-worker:{worker}` 或 `cm-worker:*`（`*` 表示可拉取任意 worker）
@@ -80,3 +86,12 @@ curl -fsSL "https://YOUR-PANEL/api/cm/v1/worker-configs/dns_redis_web/rendered" 
 
 ./dns_redis_web --config config.json
 ```
+
+## 脚本存储（建议）
+
+`dns_redis_web` 默认按子域名前缀寻找脚本，例如子域名 `sg1.example.com` 对应脚本 `script_id=sg1`。
+
+建议把脚本存入数据库（`cm_worker_scripts`），由 worker 通过 API 拉取（避免依赖本地脚本文件）：
+
+- 管理端写入：`PUT /api/cm/v1/admin/users/{userId}/worker-scripts/dns_redis_web/sg1`
+- worker 拉取：`GET /api/cm/v1/worker-scripts/dns_redis_web/sg1` 或批量 `GET /api/cm/v1/worker-scripts/dns_redis_web`
