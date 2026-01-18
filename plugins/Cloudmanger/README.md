@@ -60,7 +60,10 @@ curl -X PUT "https://YOUR-PANEL/api/cm/v1/admin/users/1/worker-configs/dns_redis
   "note": "prod",
   "config": {
     "mysql_host": "127.0.0.1",
-    "mysql_port": 3306
+    "mysql_port": 3306,
+    "aliyun_access_key": "YOUR_ALIYUN_ACCESS_KEY",
+    "aliyun_access_secret": "YOUR_ALIYUN_ACCESS_SECRET",
+    "domain": "example.com"
   }
 }
 JSON
