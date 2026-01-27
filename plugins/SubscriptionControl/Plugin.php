@@ -20,6 +20,9 @@ class Plugin extends AbstractPlugin
     {
         // 使用 filter 钩子，在获取服务器列表前进行风控检查
         $this->filter('client.subscribe.servers', [$this, 'checkSubscribeAccess'], 5);
+
+        // 在用户侧获取订阅信息时，附带风控提示（用于前端展示）
+        $this->filter('user.subscribe.response', [$this, 'attachSubscribeNotice'], 5);
     }
 
     /**
@@ -49,34 +52,38 @@ class Plugin extends AbstractPlugin
                     'ua' => $userAgent,
                     'ip' => $ip
                 ]);
-                $this->blockAccess('UA可疑，重置凭据', $user->id);
+                $this->blockAccess('ua_reset', 'UA 可疑，已重置订阅链接', $user->id, [
+                    'action' => 'reset_token_uuid',
+                ]);
             }
 
             // 1. 检查UA黑名单
             if ($this->getConfig('enable_ua_blacklist', false)) {
                 if ($this->isBlacklistedUA($userAgentLower)) {
-                    $this->blockAccess('UA黑名单拦截', $user->id);
+                    $this->blockAccess('ua_blacklist', 'UA 拦截', $user->id);
                 }
             }
 
             // 2. 检查IP限制（时间窗口内不同IP数量）
             if ($this->getConfig('enable_ip_limit', false)) {
                 if (!$this->checkIpLimit($user->id, $ip)) {
-                    $this->blockAccess('IP数量超限', $user->id);
+                    $this->blockAccess('ip_limit', 'IP 数量超限', $user->id);
                 }
             }
 
             // 3. 检查访问频率限制
             if ($this->getConfig('enable_rate_limit', false)) {
                 if (!$this->checkRateLimit($user->id)) {
-                    $this->blockAccess('访问频率超限', $user->id);
+                    $this->blockAccess('rate_limit', '访问频率超限', $user->id);
                 }
             }
 
             // 4. 检查阅后即焚（直接限制订阅链接的使用次数）
             if ($this->getConfig('enable_one_time', false)) {
                 if (!$this->checkSubscriptionUsage($user->id, $user->token)) {
-                    $this->blockAccess('订阅链接使用次数已达上限', $user->id);
+                    $this->blockAccess('one_time', '订阅链接使用次数已达上限', $user->id, [
+                        'action' => 'reset_token',
+                    ]);
                 }
             }
 
@@ -89,6 +96,52 @@ class Plugin extends AbstractPlugin
 
         // 返回服务器列表（filter钩子必须返回值）
         return $servers;
+    }
+
+    /**
+     * 为前端订阅信息附加风控提示（不改变风控行为，仅用于展示/定位）
+     */
+    public function attachSubscribeNotice($subscribe)
+    {
+        try {
+            $userId = request()->user()?->id;
+        } catch (\Throwable) {
+            $userId = null;
+        }
+
+        $notice = [
+            'features' => [
+                'ua_reset_token' => (bool) $this->getConfig('enable_ua_reset_token', false),
+                'ua_blacklist' => (bool) $this->getConfig('enable_ua_blacklist', false),
+                'ip_limit' => (bool) $this->getConfig('enable_ip_limit', false),
+                'rate_limit' => (bool) $this->getConfig('enable_rate_limit', false),
+                'one_time' => (bool) $this->getConfig('enable_one_time', false),
+            ],
+            'limits' => [
+                'ip_limit_count' => (int) $this->getConfig('ip_limit_count', 3),
+                'ip_limit_window' => (int) $this->getConfig('ip_limit_window', 600),
+                'rate_limit_requests' => (int) $this->getConfig('rate_limit_requests', 10),
+                'rate_limit_window' => (int) $this->getConfig('rate_limit_window', 86400),
+                'one_time_max_uses' => (int) $this->getConfig('one_time_max_uses', 10),
+                'one_time_duration' => (int) $this->getConfig('one_time_duration', 3600),
+            ],
+        ];
+
+        if ($userId) {
+            $notice['last_event'] = Cache::get("subscription_control:last_event:{$userId}");
+        }
+
+        if (is_array($subscribe)) {
+            $subscribe['subscription_control'] = $notice;
+            return $subscribe;
+        }
+
+        if (is_object($subscribe) && method_exists($subscribe, 'offsetSet')) {
+            $subscribe->offsetSet('subscription_control', $notice);
+            return $subscribe;
+        }
+
+        return $subscribe;
     }
 
     /**
@@ -346,15 +399,52 @@ class Plugin extends AbstractPlugin
     /**
      * 阻止访问
      */
-    private function blockAccess(string $reason, int $userId = null): never
+    private function blockAccess(string $code, string $reason, int $userId = null, array $meta = []): never
     {
         // 增加拦截计数
         Cache::increment('subscription_control:blocked_count:' . date('Y-m-d'));
-        
-        // 返回403错误
-        $this->intercept(response('', 403, [
-            'Content-Type' => 'text/plain'
+
+        // 记录最近一次拦截事件，便于用户在面板中定位原因
+        if ($userId) {
+            $eventTtl = 60 * 60 * 24 * 3;
+            Cache::put("subscription_control:last_event:{$userId}", [
+                'code' => $code,
+                'action' => $meta['action'] ?? 'block',
+                'reason' => $reason,
+                'at' => time(),
+            ], $eventTtl);
+        }
+
+        // 返回403错误（部分客户端会展示响应体，帮助用户自查/自救）
+        $message = $this->buildBlockMessage($code, $reason, $meta);
+        $this->intercept(response($message, 403, [
+            'Content-Type' => 'text/plain; charset=UTF-8',
         ]));
+    }
+
+    private function buildBlockMessage(string $code, string $reason, array $meta = []): string
+    {
+        $action = (string) ($meta['action'] ?? 'block');
+        $lines = [
+            '订阅请求已被系统拦截（403）。',
+        ];
+
+        if (in_array($action, ['reset_token', 'reset_token_uuid'], true)) {
+            $lines[] = '订阅链接可能已被重置：旧链接将立即失效，请登录面板复制新链接并重新导入客户端。';
+        } else {
+            $lines[] = '请检查客户端/网络环境后重试，或登录面板查看提示信息。';
+        }
+
+        // 不直接暴露UA关键词等敏感细节，仅给出粗粒度原因，便于定位
+        $displayReason = trim((string) $reason);
+        if ($displayReason !== '') {
+            $lines[] = "原因：{$displayReason}";
+        }
+
+        // 追加通用自查项
+        $lines[] = '常见触发：浏览器/不支持的客户端访问订阅、频繁刷新订阅、短时间内切换过多IP。';
+
+        return implode("\n", $lines) . "\n";
     }
 
     /**
