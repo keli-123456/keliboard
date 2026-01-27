@@ -47,10 +47,16 @@ class UserService
 
     public function isAvailable(User $user)
     {
-        if (!$user->banned && $user->transfer_enable && ($user->expired_at > time() || $user->expired_at === NULL)) {
+        if ($user->banned || !$user->transfer_enable) {
+            return false;
+        }
+
+        $expiredAt = $user->expired_at;
+        if ($expiredAt === null || (int) $expiredAt === 0) {
             return true;
         }
-        return false;
+
+        return $expiredAt > time();
     }
 
     public function getAvailableUsers()

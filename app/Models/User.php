@@ -142,9 +142,9 @@ class User extends Authenticatable
      */
     public function isActive(): bool
     {
-        return !$this->banned && 
-               ($this->expired_at === null || $this->expired_at > time()) &&
-               $this->plan_id !== null;
+        return !$this->banned
+            && ($this->expired_at === null || (int) $this->expired_at === 0 || $this->expired_at > time())
+            && $this->plan_id !== null;
     }
 
     /**
