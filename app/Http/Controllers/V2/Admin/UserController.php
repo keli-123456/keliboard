@@ -295,12 +295,16 @@ class UserController extends Controller
             unset($params['password']);
         }
         // 处理订阅计划
-        if (isset($params['plan_id'])) {
-            $plan = Plan::find($params['plan_id']);
-            if (!$plan) {
-                return $this->fail([400202, '订阅计划不存在']);
+        if (array_key_exists('plan_id', $params)) {
+            if ($params['plan_id'] === null) {
+                $params['group_id'] = null;
+            } else {
+                $plan = Plan::find((int) $params['plan_id']);
+                if (!$plan) {
+                    return $this->fail([400202, '订阅计划不存在']);
+                }
+                $params['group_id'] = $plan->group_id;
             }
-            $params['group_id'] = $plan->group_id;
         }
         // 处理邀请用户
         if ($request->input('invite_user_email') && $inviteUser = User::where('email', $request->input('invite_user_email'))->first()) {
