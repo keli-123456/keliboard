@@ -20,6 +20,10 @@ class QuantumultX extends AbstractProtocol
         $servers = $this->servers;
         $user = $this->user;
         $uri = '';
+        $upload = $user['u'] ?? 0;
+        $download = $user['d'] ?? 0;
+        $total = $user['transfer_enable'] ?? 0;
+        $expire = $user['expired_at'] ?? 0;
 
         foreach ($servers as $item) {
             $type = $item['type'] ?? null;
@@ -52,18 +56,25 @@ class QuantumultX extends AbstractProtocol
 
         return response(base64_encode($uri))
             ->header('content-type', 'text/plain')
-            ->header('subscription-userinfo', "upload={$user['u']}; download={$user['d']}; total={$user['transfer_enable']}; expire={$user['expired_at']}");
+            ->header('subscription-userinfo', "upload={$upload}; download={$download}; total={$total}; expire={$expire}");
     }
 
     public static function buildShadowsocks($password, $server)
     {
-        $protocol_settings = $server['protocol_settings'];
+        $protocol_settings = data_get($server, 'protocol_settings', []);
         $password = data_get($server, 'password', $password);
+        $obfs = null;
+        $obfsHost = null;
+        $obfsPath = null;
+        $cipher = trim((string) data_get($protocol_settings, 'cipher', ''));
+        if ($cipher === '') {
+            return '';
+        }
         $config = [
             "shadowsocks={$server['host']}:{$server['port']}",
-            "method={$protocol_settings['cipher']}",
+            "method={$cipher}",
             "password={$password}",
-            'fast-open=true',
+            'fast-open=false',
             'udp-relay=true',
             "tag={$server['name']}"
         ];
@@ -83,16 +94,36 @@ class QuantumultX extends AbstractProtocol
                 ->all();
             switch ($plugin) {
                 case 'obfs':
-                    $config[] = "obfs={$parsedOpts['obfs']}";
-                    if (isset($parsedOpts['obfs-host'])) {
-                        $config[] = "obfs-host={$parsedOpts['obfs-host']}";
-                    }
-                    if (isset($parsedOpts['path'])) {
-                        $config[] = "obfs-uri={$parsedOpts['path']}";
-                    }
+                    $obfs = isset($parsedOpts['obfs']) ? trim((string) $parsedOpts['obfs']) : null;
+                    $obfsHost = $parsedOpts['obfs-host'] ?? null;
+                    $obfsPath = $parsedOpts['path'] ?? null;
                     break;
             }
         }
+
+        if (!$obfs && ($legacyObfs = data_get($protocol_settings, 'obfs'))) {
+            $legacyObfs = trim((string) $legacyObfs);
+            if ($legacyObfs !== '') {
+                $obfs = $legacyObfs;
+                $obfsHost = data_get($protocol_settings, 'obfs_settings.host')
+                    ?: data_get($protocol_settings, 'network_settings.headers.Host')
+                    ?: data_get($protocol_settings, 'network_settings.Host');
+                $obfsPath = data_get($protocol_settings, 'obfs_settings.path')
+                    ?: data_get($protocol_settings, 'network_settings.path');
+            }
+        }
+
+        if ($obfs) {
+            $config[] = "obfs={$obfs}";
+            if ($obfsHost) {
+                $config[] = "obfs-host={$obfsHost}";
+            }
+            if ($obfsPath) {
+                $config[] = "obfs-uri={$obfsPath}";
+            }
+        }
+
+        $config = array_filter($config);
         $uri = implode(',', $config);
         $uri .= "\r\n";
         return $uri;
@@ -246,6 +277,9 @@ class QuantumultX extends AbstractProtocol
     public static function buildTrojan($password, $server)
     {
         $protocol_settings = $server['protocol_settings'];
+        $serverName = data_get($protocol_settings, 'server_name') ?: data_get($protocol_settings, 'tls_settings.server_name');
+        $allowInsecure = (bool) data_get($protocol_settings, 'allow_insecure', false)
+            || (bool) data_get($protocol_settings, 'tls_settings.allow_insecure', false);
         $config = [
             "trojan={$server['host']}:{$server['port']}",
             "password={$password}",
@@ -257,24 +291,22 @@ class QuantumultX extends AbstractProtocol
         if (data_get($protocol_settings, 'network') === 'ws') {
             // When using websocket over tls you should not set over-tls and tls-host options anymore
             $config[] = 'obfs=wss';
-            if ($host = data_get($protocol_settings, 'network_settings.headers.Host') ?: data_get($protocol_settings, 'server_name')) {
+            if ($host = data_get($protocol_settings, 'network_settings.headers.Host') ?: $serverName) {
                 $config[] = "obfs-host={$host}";
             }
             if ($path = data_get($protocol_settings, 'network_settings.path')) {
                 $config[] = "obfs-uri={$path}";
             }
-            if ((bool) data_get($protocol_settings, 'allow_insecure', false)) {
+            if ($allowInsecure) {
                 $config[] = 'tls-verification=false';
             }
         } else {
             $config[] = 'over-tls=true';
-            if ($serverName = data_get($protocol_settings, 'server_name')) {
+            if ($serverName) {
                 $config[] = "tls-host={$serverName}";
             }
             // Tips: allowInsecure=false = tls-verification=true
-            $config[] = (bool) data_get($protocol_settings, 'allow_insecure', false)
-                ? 'tls-verification=false'
-                : 'tls-verification=true';
+            $config[] = $allowInsecure ? 'tls-verification=false' : 'tls-verification=true';
         }
 
         $config = array_filter($config);
