@@ -85,7 +85,12 @@ class TicketController extends Controller
         if ($ticket->status) {
             return $this->fail([400, __('The ticket is closed and cannot be replied')]);
         }
-        if ($request->user()->id == $this->getLastMessage($ticket->id)->user_id) {
+        $lastMessage = $this->getLastMessage($ticket->id);
+        if (
+            $lastMessage &&
+            (int) $request->user()->id === (int) $lastMessage->user_id &&
+            !(bool) ($lastMessage->is_auto_reply ?? false)
+        ) {
             return $this->fail(codeResponse: [400, __('Please wait for the technical enginneer to reply')]);
         }
         $ticketService = new TicketService();
@@ -100,6 +105,33 @@ class TicketController extends Controller
             return $this->fail([400, __('Ticket reply failed')]);
         }
         HookManager::call('ticket.reply.user.after', $ticket);
+        return $this->success(true);
+    }
+
+    public function escalate(Request $request)
+    {
+        $request->validate([
+            'id' => 'required|numeric',
+        ], [
+            'id.required' => __('Invalid parameter'),
+        ]);
+
+        $ticket = Ticket::query()
+            ->where('id', (int) $request->input('id'))
+            ->where('user_id', (int) $request->user()->id)
+            ->first();
+        if (!$ticket) {
+            return $this->fail([400, __('Ticket does not exist')]);
+        }
+        if ((int) $ticket->status === Ticket::STATUS_CLOSED) {
+            return $this->fail([400, __('The ticket is closed and cannot be replied')]);
+        }
+
+        $ticket->reply_status = Ticket::REPLY_STATUS_WAITING_ADMIN;
+        if (!$ticket->save()) {
+            return $this->fail([400, __('Ticket reply failed')]);
+        }
+
         return $this->success(true);
     }
 

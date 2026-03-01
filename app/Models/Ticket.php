@@ -28,6 +28,8 @@ class Ticket extends Model
     protected $dateFormat = 'U';
     protected $guarded = ['id'];
     protected $casts = [
+        'auto_reply_count' => 'integer',
+        'auto_reply_last_at' => 'integer',
         'created_at' => 'timestamp',
         'updated_at' => 'timestamp'
     ];
@@ -37,6 +39,7 @@ class Ticket extends Model
 
     const REPLY_STATUS_WAITING_USER = 0;
     const REPLY_STATUS_WAITING_ADMIN = 1;
+    const REPLY_STATUS_AUTO_REPLIED = 2;
     public static $statusMap = [
         self::STATUS_OPENING => '开启',
         self::STATUS_CLOSED => '关闭'

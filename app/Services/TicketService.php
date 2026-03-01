@@ -11,6 +11,7 @@ use App\Models\User;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use App\Services\Plugin\HookManager;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 class TicketService
@@ -80,10 +81,22 @@ class TicketService
                 }
             }
 
-            if ($userId !== $ticket->user_id) {
+            $autoReplied = null;
+            if ((int) $userId === (int) $ticket->user_id) {
+                $autoReplied = $this->tryAutoReplyToUserMessage(
+                    $ticket,
+                    (string) ($ticket->subject ?? ''),
+                    (string) $message,
+                    false
+                );
+            }
+
+            if ((int) $userId !== (int) $ticket->user_id) {
                 $ticket->reply_status = Ticket::REPLY_STATUS_WAITING_USER;
             } else {
-                $ticket->reply_status = Ticket::REPLY_STATUS_WAITING_ADMIN;
+                $ticket->reply_status = $autoReplied
+                    ? Ticket::REPLY_STATUS_AUTO_REPLIED
+                    : Ticket::REPLY_STATUS_WAITING_ADMIN;
             }
             if (!$ticketMessage || !$ticket->save()) {
                 throw new \Exception();
@@ -216,6 +229,19 @@ class TicketService
                 }
             }
 
+            $autoReplied = $this->tryAutoReplyToUserMessage(
+                $ticket,
+                (string) $subject,
+                (string) $message,
+                true
+            );
+            $ticket->reply_status = $autoReplied
+                ? Ticket::REPLY_STATUS_AUTO_REPLIED
+                : Ticket::REPLY_STATUS_WAITING_ADMIN;
+            if (!$ticket->save()) {
+                throw new ApiException('工单状态更新失败');
+            }
+
             DB::commit();
             return $ticket;
         } catch (\Exception $e) {
@@ -228,6 +254,331 @@ class TicketService
             }
             throw $e;
         }
+    }
+
+    /**
+     * @return array{message_id:int, rule_label:?string}|null
+     */
+    private function tryAutoReplyToUserMessage(Ticket $ticket, string $subject, string $message, bool $isNewTicket): ?array
+    {
+        try {
+            return $this->autoReplyToUserMessage($ticket, $subject, $message, $isNewTicket);
+        } catch (\Throwable $e) {
+            Log::warning('ticket auto-reply failed', [
+                'ticket_id' => (int) $ticket->id,
+                'is_new_ticket' => $isNewTicket,
+                'message' => $e->getMessage(),
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * @return array{message_id:int, rule_label:?string}|null
+     */
+    private function autoReplyToUserMessage(Ticket $ticket, string $subject, string $message, bool $isNewTicket): ?array
+    {
+        if (!(bool) admin_setting('ticket_auto_reply_enable', 0)) {
+            return null;
+        }
+        if (!$isNewTicket && !(bool) admin_setting('ticket_auto_reply_on_user_reply', 1)) {
+            return null;
+        }
+        if ((bool) admin_setting('ticket_auto_reply_reply_once_per_ticket', 1) && $this->hasAutoReplyAlready($ticket)) {
+            return null;
+        }
+
+        $maxPerTicket = max(0, (int) admin_setting('ticket_auto_reply_max_per_ticket', 3));
+        if ($maxPerTicket > 0 && (int) ($ticket->auto_reply_count ?? 0) >= $maxPerTicket) {
+            return null;
+        }
+
+        $cooldownSeconds = max(0, (int) admin_setting('ticket_auto_reply_cooldown_seconds', 0));
+        $lastAutoReplyAt = (int) ($ticket->auto_reply_last_at ?? 0);
+        if ($cooldownSeconds > 0 && $lastAutoReplyAt > 0 && (time() - $lastAutoReplyAt) < $cooldownSeconds) {
+            return null;
+        }
+
+        $decision = $this->resolveAutoReplyDecision($subject, $message, $isNewTicket);
+        if ($decision === null) {
+            return null;
+        }
+
+        $senderId = $this->resolveAutoReplySenderId((int) $ticket->user_id);
+        if ($senderId === null) {
+            return null;
+        }
+
+        $ticketMessage = TicketMessage::create([
+            'user_id' => $senderId,
+            'ticket_id' => $ticket->id,
+            'message' => $decision['reply'],
+            'is_auto_reply' => 1,
+            'auto_reply_rule' => $decision['rule_label'],
+        ]);
+
+        if (!$ticketMessage) {
+            throw new ApiException('工单自动回复失败');
+        }
+
+        $ticket->auto_reply_count = max(0, (int) ($ticket->auto_reply_count ?? 0)) + 1;
+        $ticket->auto_reply_last_at = time();
+        $ticket->last_auto_reply_rule = $decision['rule_label'];
+        if (!$ticket->save()) {
+            throw new ApiException('工单自动回复状态更新失败');
+        }
+
+        return [
+            'message_id' => (int) $ticketMessage->id,
+            'rule_label' => $decision['rule_label'],
+        ];
+    }
+
+    private function hasAutoReplyAlready(Ticket $ticket): bool
+    {
+        return TicketMessage::query()
+            ->where('ticket_id', $ticket->id)
+            ->where('is_auto_reply', 1)
+            ->exists();
+    }
+
+    /**
+     * @return array{reply: string, rule_label: ?string}|null
+     */
+    private function resolveAutoReplyDecision(string $subject, string $message, bool $isNewTicket): ?array
+    {
+        $rules = $this->normalizeAutoReplyRules(admin_setting('ticket_auto_reply_rules', []));
+        foreach ($rules as $rule) {
+            if (!$rule['enabled']) {
+                continue;
+            }
+            if ($rule['keyword'] === '' || $rule['reply'] === '') {
+                continue;
+            }
+            if ($this->matchesAutoReplyRule($rule, $subject, $message)) {
+                return [
+                    'reply' => $rule['reply'],
+                    'rule_label' => $this->buildAutoReplyRuleLabel($rule),
+                ];
+            }
+        }
+
+        // 默认回复仅在“新建工单”且“未配置任何关键词规则”时生效
+        if (!$isNewTicket) {
+            return null;
+        }
+        if (count($rules) > 0) {
+            return null;
+        }
+
+        $defaultMessage = trim((string) admin_setting('ticket_auto_reply_default_message', ''));
+        if ($defaultMessage === '') {
+            return null;
+        }
+
+        return [
+            'reply' => $defaultMessage,
+            'rule_label' => 'default',
+        ];
+    }
+
+    /**
+     * @return array<int, array{
+     *   enabled: bool,
+     *   name: string,
+     *   keyword: string,
+     *   exclude_keyword: string,
+     *   scope: string,
+     *   match_mode: string,
+     *   priority: int,
+     *   reply: string
+     * }>
+     */
+    private function normalizeAutoReplyRules(mixed $raw): array
+    {
+        if (!is_array($raw)) {
+            return [];
+        }
+
+        $rules = [];
+        foreach ($raw as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $scope = strtolower(trim((string) ($item['scope'] ?? 'both')));
+            if (!in_array($scope, ['subject', 'message', 'both'], true)) {
+                $scope = 'both';
+            }
+            $matchMode = strtolower(trim((string) ($item['match_mode'] ?? 'contains')));
+            if (!in_array($matchMode, ['contains', 'exact', 'regex'], true)) {
+                $matchMode = 'contains';
+            }
+            $rules[] = [
+                'enabled' => isset($item['enabled']) ? (bool) $item['enabled'] : true,
+                'name' => trim((string) ($item['name'] ?? '')),
+                'keyword' => trim((string) ($item['keyword'] ?? '')),
+                'exclude_keyword' => trim((string) ($item['exclude_keyword'] ?? '')),
+                'scope' => $scope,
+                'match_mode' => $matchMode,
+                'priority' => max(0, (int) ($item['priority'] ?? 0)),
+                'reply' => trim((string) ($item['reply'] ?? '')),
+                '__index' => count($rules),
+            ];
+        }
+
+        usort($rules, function (array $a, array $b) {
+            $priorityCmp = ((int) $b['priority']) <=> ((int) $a['priority']);
+            if ($priorityCmp !== 0) {
+                return $priorityCmp;
+            }
+            return ((int) $a['__index']) <=> ((int) $b['__index']);
+        });
+
+        return array_map(function (array $item) {
+            unset($item['__index']);
+            return $item;
+        }, $rules);
+    }
+
+    private function matchesAutoReplyRule(array $rule, string $subject, string $message): bool
+    {
+        $haystack = match ($rule['scope']) {
+            'subject' => $subject,
+            'message' => $message,
+            default => trim($subject . "\n" . $message),
+        };
+        if ($haystack === '') {
+            return false;
+        }
+
+        $keywords = $this->splitAutoReplyKeywords((string) ($rule['keyword'] ?? ''));
+        if (count($keywords) === 0) {
+            return false;
+        }
+
+        $excludeKeywords = $this->splitAutoReplyKeywords((string) ($rule['exclude_keyword'] ?? ''));
+        if ($this->containsAnyKeyword($haystack, $excludeKeywords)) {
+            return false;
+        }
+
+        $matchMode = (string) ($rule['match_mode'] ?? 'contains');
+        foreach ($keywords as $keyword) {
+            if ($this->matchAutoReplyKeyword($haystack, $keyword, $matchMode)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function splitAutoReplyKeywords(string $keywordRaw): array
+    {
+        $parts = preg_split('/[\r\n,，]+/u', $keywordRaw) ?: [];
+        $keywords = [];
+        foreach ($parts as $part) {
+            $item = trim((string) $part);
+            if ($item !== '') {
+                $keywords[] = $item;
+            }
+        }
+        return $keywords;
+    }
+
+    /**
+     * @param array<int, string> $keywords
+     */
+    private function containsAnyKeyword(string $haystack, array $keywords): bool
+    {
+        foreach ($keywords as $keyword) {
+            if (mb_stripos($haystack, $keyword, 0, 'UTF-8') !== false) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function matchAutoReplyKeyword(string $haystack, string $keyword, string $matchMode): bool
+    {
+        $mode = strtolower(trim($matchMode));
+        if ($mode === 'exact') {
+            return mb_strtolower(trim($haystack), 'UTF-8') === mb_strtolower(trim($keyword), 'UTF-8');
+        }
+
+        if ($mode === 'regex') {
+            $pattern = $this->normalizeRegexPattern($keyword);
+            if ($pattern === null) {
+                return false;
+            }
+            $matched = @preg_match($pattern, $haystack);
+            return $matched === 1;
+        }
+
+        return mb_stripos($haystack, $keyword, 0, 'UTF-8') !== false;
+    }
+
+    private function normalizeRegexPattern(string $pattern): ?string
+    {
+        $candidate = trim($pattern);
+        if ($candidate === '') {
+            return null;
+        }
+
+        $first = $candidate[0];
+        $lastPos = strrpos($candidate, $first);
+        if (in_array($first, ['/', '#', '~', '%'], true) && $lastPos !== false && $lastPos > 0) {
+            return $candidate;
+        }
+
+        return '/' . $candidate . '/u';
+    }
+
+    /**
+     * @param array{
+     *   name: string,
+     *   keyword: string
+     * } $rule
+     */
+    private function buildAutoReplyRuleLabel(array $rule): ?string
+    {
+        $name = trim((string) ($rule['name'] ?? ''));
+        if ($name !== '') {
+            return mb_substr($name, 0, 120, 'UTF-8');
+        }
+
+        $keywords = $this->splitAutoReplyKeywords((string) ($rule['keyword'] ?? ''));
+        if (count($keywords) === 0) {
+            return null;
+        }
+
+        return mb_substr((string) $keywords[0], 0, 120, 'UTF-8');
+    }
+
+    private function resolveAutoReplySenderId(int $ticketOwnerId): ?int
+    {
+        $sender = User::query()
+            ->where('is_admin', 1)
+            ->where('id', '!=', $ticketOwnerId)
+            ->orderBy('id')
+            ->first(['id']);
+
+        if ($sender) {
+            return (int) $sender->id;
+        }
+
+        $staff = User::query()
+            ->where('is_staff', 1)
+            ->where('id', '!=', $ticketOwnerId)
+            ->orderBy('id')
+            ->first(['id']);
+
+        if ($staff) {
+            return (int) $staff->id;
+        }
+
+        // 兜底使用系统发送人，避免与用户 ID 冲突导致用户无法继续回复
+        return 0;
     }
 
     // 半小时内不再重复通知

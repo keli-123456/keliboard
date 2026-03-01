@@ -26,6 +26,7 @@ class TicketMessage extends Model
     protected $dateFormat = 'U';
     protected $guarded = ['id'];
     protected $casts = [
+        'is_auto_reply' => 'boolean',
         'created_at' => 'timestamp',
         'updated_at' => 'timestamp'
     ];

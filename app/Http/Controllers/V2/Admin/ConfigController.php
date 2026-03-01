@@ -118,6 +118,17 @@ class ConfigController extends Controller
                 'commission_distribution_l2' => admin_setting('commission_distribution_l2'),
                 'commission_distribution_l3' => admin_setting('commission_distribution_l3')
             ],
+            'ticket' => [
+                'ticket_auto_reply_enable' => (bool) admin_setting('ticket_auto_reply_enable', 0),
+                'ticket_auto_reply_on_user_reply' => (bool) admin_setting('ticket_auto_reply_on_user_reply', 1),
+                'ticket_auto_reply_reply_once_per_ticket' => (bool) admin_setting('ticket_auto_reply_reply_once_per_ticket', 1),
+                'ticket_auto_reply_cooldown_seconds' => max(0, (int) admin_setting('ticket_auto_reply_cooldown_seconds', 0)),
+                'ticket_auto_reply_max_per_ticket' => max(0, (int) admin_setting('ticket_auto_reply_max_per_ticket', 3)),
+                'ticket_auto_reply_default_message' => (string) admin_setting('ticket_auto_reply_default_message', ''),
+                'ticket_auto_reply_rules' => $this->normalizeTicketAutoReplyRules(
+                    admin_setting('ticket_auto_reply_rules', [])
+                ),
+            ],
             'site' => [
                 'logo' => admin_setting('logo'),
                 'force_https' => (int) admin_setting('force_https', 0),
@@ -226,6 +237,56 @@ class ConfigController extends Controller
                 'subscribe_template_surfboard' => admin_setting('subscribe_template_surfboard', $this->getDefaultTemplate('surfboard'))
             ]
         ];
+    }
+
+    /**
+     * 规范化工单自动回复规则，确保返回给前端的数据结构稳定。
+     *
+     * @param mixed $rules
+     * @return array<int, array{
+     *   enabled: bool,
+     *   name: string,
+     *   keyword: string,
+     *   exclude_keyword: string,
+     *   scope: string,
+     *   match_mode: string,
+     *   priority: int,
+     *   reply: string
+     * }>
+     */
+    private function normalizeTicketAutoReplyRules(mixed $rules): array
+    {
+        if (!is_array($rules)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($rules as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $scope = strtolower(trim((string) ($item['scope'] ?? 'both')));
+            if (!in_array($scope, ['subject', 'message', 'both'], true)) {
+                $scope = 'both';
+            }
+            $matchMode = strtolower(trim((string) ($item['match_mode'] ?? 'contains')));
+            if (!in_array($matchMode, ['contains', 'exact', 'regex'], true)) {
+                $matchMode = 'contains';
+            }
+
+            $normalized[] = [
+                'enabled' => isset($item['enabled']) ? (bool) $item['enabled'] : true,
+                'name' => trim((string) ($item['name'] ?? '')),
+                'keyword' => trim((string) ($item['keyword'] ?? '')),
+                'exclude_keyword' => trim((string) ($item['exclude_keyword'] ?? '')),
+                'scope' => $scope,
+                'match_mode' => $matchMode,
+                'priority' => max(0, (int) ($item['priority'] ?? 0)),
+                'reply' => trim((string) ($item['reply'] ?? '')),
+            ];
+        }
+
+        return $normalized;
     }
 
     public function save(ConfigSave $request)

@@ -54,6 +54,7 @@ class UserRoute
             $router->get('/notice/fetch', [NoticeController::class, 'fetch']);
             // Ticket
             $router->post('/ticket/reply', [TicketController::class, 'reply']);
+            $router->post('/ticket/escalate', [TicketController::class, 'escalate']);
             $router->post('/ticket/close', [TicketController::class, 'close']);
             $router->post('/ticket/save', [TicketController::class, 'save']);
             $router->get('/ticket/fetch', [TicketController::class, 'fetch']);

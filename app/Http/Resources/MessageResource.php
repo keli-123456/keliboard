@@ -18,6 +18,8 @@ class MessageResource extends JsonResource
             "id" => $this['id'],
             "ticket_id" => $this['ticket_id'],
             "is_me" => $this['is_from_user'],
+            "is_auto_reply" => (bool) ($this['is_auto_reply'] ?? false),
+            "auto_reply_rule" => $this['auto_reply_rule'] ?? null,
             "message"  => $this["message"],
             "attachments" => TicketMessageAttachmentResource::collection($this['attachments'] ?? []),
             "created_at" => $this['created_at'],

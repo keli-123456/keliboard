@@ -5,9 +5,11 @@ namespace App\Http\Controllers\V2\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\TicketMessageAttachment;
 use App\Models\Ticket;
+use App\Models\TicketMessage;
 use App\Services\TicketService;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use App\Exceptions\ApiException;
 
@@ -187,6 +189,56 @@ class TicketController extends Controller
         // 自动包含 is_me 属性
         return response()->json([
             'data' => $ticket
+        ]);
+    }
+
+    public function autoReplyStats(Request $request)
+    {
+        $days = max(1, min(90, (int) $request->input('days', 7)));
+        $since = time() - ($days * 86400);
+
+        $baseQuery = TicketMessage::query()
+            ->where('is_auto_reply', 1)
+            ->where('created_at', '>=', $since);
+
+        $autoReplyTotal = (clone $baseQuery)->count();
+        $autoReplyTicketTotal = (clone $baseQuery)
+            ->distinct('ticket_id')
+            ->count('ticket_id');
+
+        $topRules = (clone $baseQuery)
+            ->select('auto_reply_rule', DB::raw('COUNT(*) as total'))
+            ->groupBy('auto_reply_rule')
+            ->orderByDesc('total')
+            ->limit(10)
+            ->get()
+            ->map(function ($item) {
+                $label = trim((string) ($item->auto_reply_rule ?? ''));
+                return [
+                    'rule' => $label !== '' ? $label : 'default',
+                    'total' => (int) ($item->total ?? 0),
+                ];
+            })
+            ->values();
+
+        $pendingAutoReplied = Ticket::query()
+            ->where('status', Ticket::STATUS_OPENING)
+            ->where('reply_status', Ticket::REPLY_STATUS_AUTO_REPLIED)
+            ->count();
+
+        $waitingAdmin = Ticket::query()
+            ->where('status', Ticket::STATUS_OPENING)
+            ->where('reply_status', Ticket::REPLY_STATUS_WAITING_ADMIN)
+            ->count();
+
+        return $this->success([
+            'days' => $days,
+            'since' => $since,
+            'auto_reply_total' => (int) $autoReplyTotal,
+            'auto_reply_ticket_total' => (int) $autoReplyTicketTotal,
+            'pending_auto_replied' => (int) $pendingAutoReplied,
+            'waiting_admin' => (int) $waitingAdmin,
+            'top_rules' => $topRules,
         ]);
     }
 
