@@ -10,6 +10,23 @@ use Illuminate\Support\Facades\Cache;
 
 class MailLinkService
 {
+    private function normalizeRedirect(?string $redirect): string
+    {
+        $raw = trim((string) $redirect);
+        if ($raw === '') {
+            return 'dashboard';
+        }
+
+        if (preg_match('/^(https?:)?\\/\\//i', $raw)) {
+            return 'dashboard';
+        }
+
+        $raw = ltrim($raw, '/');
+        $raw = preg_replace('/\\/{2,}/', '/', $raw) ?: 'dashboard';
+
+        return $raw !== '' ? $raw : 'dashboard';
+    }
+
     /**
      * 处理邮件链接登录逻辑
      *
@@ -37,7 +54,7 @@ class MailLinkService
         Cache::put($key, $user->id, 300);
         Cache::put(CacheKey::get('LAST_SEND_LOGIN_WITH_MAIL_LINK_TIMESTAMP', $email), time(), 60);
 
-        $redirectUrl = '/#/login?verify=' . $code . '&redirect=' . ($redirect ? $redirect : 'dashboard');
+        $redirectUrl = '/#/login?verify=' . $code . '&redirect=' . rawurlencode($this->normalizeRedirect($redirect));
         if (admin_setting('app_url')) {
             $link = admin_setting('app_url') . $redirectUrl;
         } else {
@@ -46,7 +63,7 @@ class MailLinkService
 
         $this->sendMailLinkEmail($user, $link);
 
-        return [true, $link];
+        return [true, true];
     }
 
     /**

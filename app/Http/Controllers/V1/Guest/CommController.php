@@ -16,6 +16,7 @@ class CommController extends Controller
             'tos_url' => admin_setting('tos_url'),
             'is_email_verify' => (int) admin_setting('email_verify', 0) ? 1 : 0,
             'is_invite_force' => (int) admin_setting('invite_force', 0) ? 1 : 0,
+            'login_with_mail_link_enable' => (int) admin_setting('login_with_mail_link_enable', 0) ? 1 : 0,
             'email_whitelist_suffix' => (int) admin_setting('email_whitelist_enable', 0)
                 ? Helper::getEmailSuffix()
                 : 0,
@@ -28,6 +29,8 @@ class CommController extends Controller
             'app_description' => admin_setting('app_description'),
             'app_name' => admin_setting('app_name'),
             'app_url' => admin_setting('app_url'),
+            'currency_symbol' => admin_setting('currency_symbol', '¥'),
+            'invite_gen_limit' => (int) admin_setting('invite_gen_limit', 5),
             'logo' => admin_setting('logo'),
             // 保持向后兼容
             'is_recaptcha' => (int) admin_setting('captcha_enable', 0) ? 1 : 0,
