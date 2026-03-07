@@ -92,16 +92,44 @@ class OrderService
         });
     }
 
+    public static function createRechargeOrder(User $user, int $amount): Order
+    {
+        return DB::transaction(function () use ($user, $amount) {
+            $order = new Order([
+                'user_id' => $user->id,
+                'plan_id' => 0,
+                'period' => 'recharge',
+                'trade_no' => Helper::generateOrderNo(),
+                'total_amount' => $amount,
+                'type' => Order::TYPE_RECHARGE,
+            ]);
+
+            if (!$order->save()) {
+                throw new ApiException(__('Failed to create order'));
+            }
+
+            return $order;
+        });
+    }
+
     public function open(): void
     {
         $order = $this->order;
         $this->user = User::find($order->user_id);
-        $plan = Plan::find($order->plan_id);
+        if (!$this->user) {
+            throw new \RuntimeException('用户不存在');
+        }
+
+        $isRechargeOrder = $this->isRechargeOrder($order);
+        $plan = $isRechargeOrder ? null : Plan::find($order->plan_id);
+        if (!$isRechargeOrder && !$plan) {
+            throw new \RuntimeException('套餐不存在');
+        }
 
         HookManager::call('order.open.before', $order);
 
 
-        DB::transaction(function () use ($order, $plan) {
+        DB::transaction(function () use ($order, $plan, $isRechargeOrder) {
             if ($order->refund_amount) {
                 $this->user->balance += $order->refund_amount;
             }
@@ -111,14 +139,18 @@ class OrderService
                     ->update(['status' => Order::STATUS_DISCOUNTED]);
             }
 
-            match ((string) $order->period) {
-                Plan::PERIOD_ONETIME => $this->buyByOneTime($plan),
-                Plan::PERIOD_RESET_TRAFFIC => app(TrafficResetService::class)->performReset($this->user, TrafficResetLog::SOURCE_ORDER),
-                default => $this->buyByPeriod($order, $plan),
-            };
+            if ($isRechargeOrder) {
+                $this->user->balance += (int) $order->total_amount;
+            } else {
+                match ((string) $order->period) {
+                    Plan::PERIOD_ONETIME => $this->buyByOneTime($plan),
+                    Plan::PERIOD_RESET_TRAFFIC => app(TrafficResetService::class)->performReset($this->user, TrafficResetLog::SOURCE_ORDER),
+                    default => $this->buyByPeriod($order, $plan),
+                };
 
-            $this->setSpeedLimit($plan->speed_limit);
-            $this->setDeviceLimit($plan->device_limit);
+                $this->setSpeedLimit($plan->speed_limit);
+                $this->setDeviceLimit($plan->device_limit);
+            }
 
             if (!$this->user->save()) {
                 throw new \RuntimeException('用户信息保存失败');
@@ -142,6 +174,11 @@ class OrderService
         }
 
         HookManager::call('order.open.after', $order);
+    }
+
+    private function isRechargeOrder(Order $order): bool
+    {
+        return (int) $order->plan_id === 0 || (string) $order->period === 'recharge';
     }
 
 

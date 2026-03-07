@@ -48,7 +48,7 @@ class OrderController extends Controller
             return $this->fail([400, __('Order does not exist or has been paid')]);
         }
         $order['try_out_plan_id'] = (int) admin_setting('try_out_plan_id');
-        if (!$order->plan) {
+        if (!$order->plan && (int) $order->plan_id !== 0) {
             return $this->fail([400, __('Subscription plan does not exist')]);
         }
         if ($order->surplus_order_ids) {
@@ -83,6 +83,28 @@ class OrderController extends Controller
             $request->input('coupon_code')
         );
 
+        return $this->success($order->trade_no);
+    }
+
+    public function recharge(Request $request)
+    {
+        $request->validate([
+            'amount' => 'required|numeric|min:1|max:100000'
+        ]);
+
+        $user = User::findOrFail($request->user()->id);
+        $userService = app(UserService::class);
+
+        if ($userService->isNotCompleteOrderByUserId($user->id)) {
+            throw new ApiException(__('You have an unpaid or pending order, please try again later or cancel it'));
+        }
+
+        $amount = (int) round(((float) $request->input('amount')) * 100);
+        if ($amount < 100) {
+            throw new ApiException(__('Recharge amount must be at least 1'));
+        }
+
+        $order = OrderService::createRechargeOrder($user, $amount);
         return $this->success($order->trade_no);
     }
 
@@ -138,6 +160,9 @@ class OrderController extends Controller
         $payment = Payment::find($method);
         if (!$payment || !$payment->enable) {
             return $this->fail([400, __('Payment method is not available')]);
+        }
+        if ((int) $order->plan_id === 0 && $payment->payment === 'balance') {
+            return $this->fail([400, __('Balance payment is not available for recharge orders')]);
         }
         $paymentService = new PaymentService($payment->payment, $payment->id);
         $order->handling_amount = NULL;
