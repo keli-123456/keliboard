@@ -25,6 +25,8 @@ class BootstrapController extends Controller
                 'banned',
                 'remind_expire',
                 'remind_traffic',
+                'auto_renew_enable',
+                'auto_renew_period',
                 'expired_at',
                 'balance',
                 'commission_balance',
@@ -54,6 +56,8 @@ class BootstrapController extends Controller
             'banned' => $user->banned,
             'remind_expire' => $user->remind_expire,
             'remind_traffic' => $user->remind_traffic,
+            'auto_renew_enable' => $user->auto_renew_enable,
+            'auto_renew_period' => $user->auto_renew_period,
             'expired_at' => $user->expired_at,
             'balance' => $user->balance,
             'commission_balance' => $user->commission_balance,
@@ -111,4 +115,3 @@ class BootstrapController extends Controller
         ]);
     }
 }
-

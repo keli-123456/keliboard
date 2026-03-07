@@ -28,6 +28,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int|null $banned 是否封禁
  * @property int|null $remind_expire 到期提醒
  * @property int|null $remind_traffic 流量提醒
+ * @property int|null $auto_renew_enable 是否开启余额自动续费
+ * @property string|null $auto_renew_period 自动续费周期
  * @property int|null $expired_at 过期时间
  * @property int|null $balance 余额
  * @property int|null $commission_balance 佣金余额
@@ -71,6 +73,7 @@ class User extends Authenticatable
         'is_staff' => 'boolean',
         'remind_expire' => 'boolean',
         'remind_traffic' => 'boolean',
+        'auto_renew_enable' => 'boolean',
         'commission_auto_check' => 'boolean',
         'commission_rate' => 'float',
         'next_reset_at' => 'timestamp',
@@ -81,6 +84,24 @@ class User extends Authenticatable
     public const COMMISSION_TYPE_SYSTEM = 0;
     public const COMMISSION_TYPE_PERIOD = 1;
     public const COMMISSION_TYPE_ONETIME = 2;
+    public const AUTO_RENEW_PERIODS = [
+        'month_price',
+        'quarter_price',
+        'half_year_price',
+        'year_price',
+        'two_year_price',
+        'three_year_price',
+    ];
+
+    public static function getAutoRenewPeriods(): array
+    {
+        return self::AUTO_RENEW_PERIODS;
+    }
+
+    public static function isAutoRenewPeriod(?string $period): bool
+    {
+        return $period !== null && in_array($period, self::AUTO_RENEW_PERIODS, true);
+    }
 
     // 获取邀请人信息
     public function invite_user(): BelongsTo

@@ -96,6 +96,8 @@ class UserController extends Controller
                 'banned',
                 'remind_expire',
                 'remind_traffic',
+                'auto_renew_enable',
+                'auto_renew_period',
                 'expired_at',
                 'balance',
                 'commission_balance',
@@ -179,7 +181,9 @@ class UserController extends Controller
     {
         $updateData = $request->only([
             'remind_expire',
-            'remind_traffic'
+            'remind_traffic',
+            'auto_renew_enable',
+            'auto_renew_period',
         ]);
 
         $user = User::find($request->user()->id);
@@ -187,12 +191,55 @@ class UserController extends Controller
             return $this->fail([400, __('The user does not exist')]);
         }
         try {
+            $this->validateAutoRenewSettings($user, $updateData);
             $user->update($updateData);
         } catch (\Exception $e) {
-            return $this->fail([400, __('Save failed')]);
+            return $this->fail([400, $e->getMessage() ?: __('Save failed')]);
         }
 
         return $this->success(true);
+    }
+
+    protected function validateAutoRenewSettings(User $user, array $updateData): void
+    {
+        if (!array_key_exists('auto_renew_enable', $updateData) && !array_key_exists('auto_renew_period', $updateData)) {
+            return;
+        }
+
+        $autoRenewEnable = array_key_exists('auto_renew_enable', $updateData)
+            ? (bool) $updateData['auto_renew_enable']
+            : (bool) $user->auto_renew_enable;
+
+        if (!$autoRenewEnable) {
+            return;
+        }
+
+        $autoRenewPeriod = array_key_exists('auto_renew_period', $updateData)
+            ? $updateData['auto_renew_period']
+            : $user->auto_renew_period;
+
+        if (!$user->plan_id || !$user->expired_at) {
+            throw new \RuntimeException(__('Current subscription does not support auto renewal'));
+        }
+
+        $plan = Plan::find($user->plan_id);
+        if (!$plan || !$plan->renew) {
+            throw new \RuntimeException(__('Current subscription does not support auto renewal'));
+        }
+
+        if (!User::isAutoRenewPeriod($autoRenewPeriod)) {
+            throw new \RuntimeException(__('Incorrect auto renewal period'));
+        }
+
+        $periodKey = \App\Services\PlanService::getPeriodKey($autoRenewPeriod);
+        if (in_array($periodKey, [Plan::PERIOD_ONETIME, Plan::PERIOD_RESET_TRAFFIC], true)) {
+            throw new \RuntimeException(__('Current subscription does not support auto renewal'));
+        }
+
+        $price = $plan->prices[$periodKey] ?? null;
+        if ($price === null || (float) $price <= 0) {
+            throw new \RuntimeException(__('This payment period cannot be renewed automatically'));
+        }
     }
 
     public function transfer(UserTransfer $request)
