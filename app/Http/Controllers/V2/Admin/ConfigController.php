@@ -157,6 +157,7 @@ class ConfigController extends Controller
                 'default_remind_traffic' => (bool) admin_setting('default_remind_traffic', 1),
                 'subscribe_path' => admin_setting('subscribe_path', 's'),
                 'recharge_bonus_enable' => (bool) admin_setting('recharge_bonus_enable', 0),
+                'recharge_bonus_mode' => app(RechargeBonusService::class)->getMode(),
                 'recharge_bonus_rules' => app(RechargeBonusService::class)->getRules(),
             ],
             'frontend' => [
@@ -297,6 +298,14 @@ class ConfigController extends Controller
         $data = $request->validated();
         if (array_key_exists('recharge_bonus_enable', $data)) {
             $data['recharge_bonus_enable'] = (bool) $data['recharge_bonus_enable'];
+        }
+        if (array_key_exists('recharge_bonus_mode', $data)) {
+            $data['recharge_bonus_mode'] = in_array($data['recharge_bonus_mode'], [
+                RechargeBonusService::MODE_HIGHEST,
+                RechargeBonusService::MODE_REPEAT,
+            ], true)
+                ? $data['recharge_bonus_mode']
+                : RechargeBonusService::MODE_HIGHEST;
         }
         if (array_key_exists('recharge_bonus_rules', $data)) {
             $data['recharge_bonus_rules'] = app(RechargeBonusService::class)->normalizeRules($data['recharge_bonus_rules']);

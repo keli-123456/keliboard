@@ -4,9 +4,21 @@ namespace App\Services;
 
 class RechargeBonusService
 {
+    public const MODE_HIGHEST = 'highest';
+    public const MODE_REPEAT = 'repeat';
+
     public function isEnabled(): bool
     {
         return (bool) admin_setting('recharge_bonus_enable', false);
+    }
+
+    public function getMode(): string
+    {
+        $mode = strtolower(trim((string) admin_setting('recharge_bonus_mode', self::MODE_HIGHEST)));
+
+        return in_array($mode, [self::MODE_HIGHEST, self::MODE_REPEAT], true)
+            ? $mode
+            : self::MODE_HIGHEST;
     }
 
     public function getRules(): array
@@ -18,6 +30,7 @@ class RechargeBonusService
     {
         return [
             'recharge_bonus_enable' => $this->isEnabled(),
+            'recharge_bonus_mode' => $this->getMode(),
             'recharge_bonus_rules' => $this->getRules(),
         ];
     }
@@ -28,21 +41,10 @@ class RechargeBonusService
             return 0;
         }
 
-        $matchedBonus = 0;
-        foreach ($this->getRules() as $rule) {
-            $thresholdAmount = $this->toAmountInCents($rule['amount'] ?? 0);
-            $bonusAmount = $this->toAmountInCents($rule['bonus'] ?? 0);
-
-            if ($thresholdAmount <= 0 || $bonusAmount <= 0) {
-                continue;
-            }
-
-            if ($amount >= $thresholdAmount) {
-                $matchedBonus = $bonusAmount;
-            }
-        }
-
-        return $matchedBonus;
+        return match ($this->getMode()) {
+            self::MODE_REPEAT => $this->calculateRepeatBonus($amount),
+            default => $this->calculateHighestBonus($amount),
+        };
     }
 
     public function normalizeRules(mixed $rules): array
@@ -83,5 +85,44 @@ class RechargeBonusService
         }
 
         return max(0, (int) round(((float) $amount) * 100));
+    }
+
+    private function calculateHighestBonus(int $amount): int
+    {
+        $matchedBonus = 0;
+
+        foreach ($this->getRules() as $rule) {
+            $thresholdAmount = $this->toAmountInCents($rule['amount'] ?? 0);
+            $bonusAmount = $this->toAmountInCents($rule['bonus'] ?? 0);
+
+            if ($thresholdAmount <= 0 || $bonusAmount <= 0) {
+                continue;
+            }
+
+            if ($amount >= $thresholdAmount) {
+                $matchedBonus = $bonusAmount;
+            }
+        }
+
+        return $matchedBonus;
+    }
+
+    private function calculateRepeatBonus(int $amount): int
+    {
+        $matchedBonus = 0;
+
+        foreach ($this->getRules() as $rule) {
+            $thresholdAmount = $this->toAmountInCents($rule['amount'] ?? 0);
+            $bonusAmount = $this->toAmountInCents($rule['bonus'] ?? 0);
+
+            if ($thresholdAmount <= 0 || $bonusAmount <= 0 || $amount < $thresholdAmount) {
+                continue;
+            }
+
+            $times = intdiv($amount, $thresholdAmount);
+            $matchedBonus = max($matchedBonus, $times * $bonusAmount);
+        }
+
+        return $matchedBonus;
     }
 }
