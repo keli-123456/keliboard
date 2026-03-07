@@ -127,6 +127,10 @@ class ConfigSave extends FormRequest
         'password_limit_expire' => 'integer',
         'default_remind_expire' => 'boolean',
         'default_remind_traffic' => 'boolean',
+        'recharge_bonus_enable' => 'boolean',
+        'recharge_bonus_rules' => 'nullable|array',
+        'recharge_bonus_rules.*.amount' => 'nullable|numeric|min:0.01|max:1000000',
+        'recharge_bonus_rules.*.bonus' => 'nullable|numeric|min:0.01|max:1000000',
         'subscribe_template_singbox' => 'nullable',
         'subscribe_template_clash' => 'nullable',
         'subscribe_template_clashmeta' => 'nullable',
@@ -159,7 +163,11 @@ class ConfigSave extends FormRequest
             'captcha_type.in' => '人机验证类型只能选择 recaptcha、turnstile 或 recaptcha-v3',
             'recaptcha_v3_score_threshold.numeric' => 'reCAPTCHA v3 分数阈值必须为数字',
             'recaptcha_v3_score_threshold.min' => 'reCAPTCHA v3 分数阈值不能小于0',
-            'recaptcha_v3_score_threshold.max' => 'reCAPTCHA v3 分数阈值不能大于1'
+            'recaptcha_v3_score_threshold.max' => 'reCAPTCHA v3 分数阈值不能大于1',
+            'recharge_bonus_rules.*.amount.numeric' => '充值门槛必须为数字',
+            'recharge_bonus_rules.*.amount.min' => '充值门槛必须大于 0',
+            'recharge_bonus_rules.*.bonus.numeric' => '赠送金额必须为数字',
+            'recharge_bonus_rules.*.bonus.min' => '赠送金额必须大于 0'
         ];
     }
 }

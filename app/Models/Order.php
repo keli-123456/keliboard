@@ -33,6 +33,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int|null $commission_auto_check
  * @property int|null $commission_balance
  * @property int|null $discount_amount
+ * @property int|null $bonus_amount
  * @property int|null $paid_at
  * @property string|null $callback_no
  *
@@ -50,7 +51,8 @@ class Order extends Model
         'created_at' => 'timestamp',
         'updated_at' => 'timestamp',
         'surplus_order_ids' => 'array',
-        'handling_amount' => 'integer'
+        'handling_amount' => 'integer',
+        'bonus_amount' => 'integer',
     ];
 
     const STATUS_PENDING = 0; // 待支付

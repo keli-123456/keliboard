@@ -11,6 +11,7 @@ use App\Protocols\Stash;
 use App\Protocols\Surfboard;
 use App\Protocols\Surge;
 use App\Services\MailService;
+use App\Services\RechargeBonusService;
 use App\Services\TelegramService;
 use App\Services\ThemeService;
 use App\Utils\Dict;
@@ -155,6 +156,8 @@ class ConfigController extends Controller
                 'default_remind_expire' => (bool) admin_setting('default_remind_expire', 1),
                 'default_remind_traffic' => (bool) admin_setting('default_remind_traffic', 1),
                 'subscribe_path' => admin_setting('subscribe_path', 's'),
+                'recharge_bonus_enable' => (bool) admin_setting('recharge_bonus_enable', 0),
+                'recharge_bonus_rules' => app(RechargeBonusService::class)->getRules(),
             ],
             'frontend' => [
                 'frontend_theme' => admin_setting('frontend_theme', 'Xboard'),
@@ -292,6 +295,12 @@ class ConfigController extends Controller
     public function save(ConfigSave $request)
     {
         $data = $request->validated();
+        if (array_key_exists('recharge_bonus_enable', $data)) {
+            $data['recharge_bonus_enable'] = (bool) $data['recharge_bonus_enable'];
+        }
+        if (array_key_exists('recharge_bonus_rules', $data)) {
+            $data['recharge_bonus_rules'] = app(RechargeBonusService::class)->normalizeRules($data['recharge_bonus_rules']);
+        }
 
         foreach ($data as $k => $v) {
             if ($k == 'frontend_theme') {

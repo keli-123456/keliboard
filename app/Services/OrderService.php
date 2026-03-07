@@ -92,15 +92,16 @@ class OrderService
         });
     }
 
-    public static function createRechargeOrder(User $user, int $amount): Order
+    public static function createRechargeOrder(User $user, int $amount, int $bonusAmount = 0): Order
     {
-        return DB::transaction(function () use ($user, $amount) {
+        return DB::transaction(function () use ($user, $amount, $bonusAmount) {
             $order = new Order([
                 'user_id' => $user->id,
                 'plan_id' => 0,
                 'period' => 'recharge',
                 'trade_no' => Helper::generateOrderNo(),
                 'total_amount' => $amount,
+                'bonus_amount' => max(0, $bonusAmount),
                 'type' => Order::TYPE_RECHARGE,
             ]);
 
@@ -140,7 +141,7 @@ class OrderService
             }
 
             if ($isRechargeOrder) {
-                $this->user->balance += (int) $order->total_amount;
+                $this->user->balance += (int) $order->total_amount + (int) $order->bonus_amount;
             } else {
                 match ((string) $order->period) {
                     Plan::PERIOD_ONETIME => $this->buyByOneTime($plan),

@@ -14,6 +14,7 @@ use App\Services\CouponService;
 use App\Services\OrderService;
 use App\Services\PaymentService;
 use App\Services\PlanService;
+use App\Services\RechargeBonusService;
 use App\Services\UserService;
 use Illuminate\Http\Request;
 
@@ -104,7 +105,8 @@ class OrderController extends Controller
             throw new ApiException(__('Recharge amount must be at least 1'));
         }
 
-        $order = OrderService::createRechargeOrder($user, $amount);
+        $bonusAmount = app(RechargeBonusService::class)->calculateBonus($amount);
+        $order = OrderService::createRechargeOrder($user, $amount, $bonusAmount);
         return $this->success($order->trade_no);
     }
 

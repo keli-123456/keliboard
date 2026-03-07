@@ -5,6 +5,7 @@ namespace App\Http\Controllers\V1\User;
 use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
 use App\Models\Payment;
+use App\Services\RechargeBonusService;
 use App\Utils\Dict;
 use Illuminate\Http\Request;
 
@@ -28,6 +29,7 @@ class CommController extends Controller
             'commission_distribution_l3' => admin_setting('commission_distribution_l3'),
             'commission_first_time_enable' => (int)admin_setting('commission_first_time_enable', 1),
         ];
+        $data = array_merge($data, app(RechargeBonusService::class)->getConfig());
         return $this->success($data);
     }
 
