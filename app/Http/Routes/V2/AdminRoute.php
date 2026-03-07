@@ -72,6 +72,7 @@ class AdminRoute
                 'prefix' => 'server/manage'
             ], function ($router) {
                 $router->get('/getNodes', [ManageController::class, 'getNodes']);
+                $router->get('/getOptions', [ManageController::class, 'getOptions']);
                 $router->post('/sort', [ManageController::class, 'sort']);
             });
 
