@@ -508,4 +508,69 @@ class StatController extends Controller
             'data' => $result
         ];
     }
+
+    public function getInviteRank(Request $request)
+    {
+        $request->validate([
+            'start_time' => 'nullable|integer|min:1000000000|max:9999999999',
+            'end_time' => 'nullable|integer|min:1000000000|max:9999999999',
+            'limit' => 'nullable|integer|min:1|max:50',
+        ]);
+
+        $startDate = (int) $request->input('start_time', strtotime('-30 days'));
+        $endDate = (int) $request->input('end_time', time());
+        $limit = (int) $request->input('limit', 10);
+
+        $rangeSeconds = $endDate - $startDate;
+        if (date('Y-m-d', $startDate) === date('Y-m-d', $endDate)) {
+            $rangeSeconds = 86400;
+        }
+        $previousStartDate = $startDate - $rangeSeconds;
+        $previousEndDate = $startDate;
+
+        $currentData = User::selectRaw('invite_user_id as id, COUNT(*) as value')
+            ->where('created_at', '>=', $startDate)
+            ->where('created_at', '<=', $endDate)
+            ->whereNotNull('invite_user_id')
+            ->groupBy('invite_user_id')
+            ->orderBy('value', 'DESC')
+            ->limit($limit)
+            ->get();
+
+        $previousData = User::selectRaw('invite_user_id as id, COUNT(*) as value')
+            ->where('created_at', '>=', $previousStartDate)
+            ->where('created_at', '<', $previousEndDate)
+            ->whereNotNull('invite_user_id')
+            ->whereIn('invite_user_id', $currentData->pluck('id'))
+            ->groupBy('invite_user_id')
+            ->get()
+            ->keyBy('id');
+
+        $users = User::whereIn('id', $currentData->pluck('id'))->get()->keyBy('id');
+
+        $result = [];
+        foreach ($currentData as $data) {
+            $previousValue = isset($previousData[$data->id]) ? (int) $previousData[$data->id]->value : 0;
+            $currentValue = (int) $data->value;
+            $change = $previousValue > 0
+                ? round(($currentValue - $previousValue) / $previousValue * 100, 1)
+                : 0;
+
+            $user = $users->get($data->id);
+
+            $result[] = [
+                'id' => (string) $data->id,
+                'name' => $user?->email ?? "User {$data->id}",
+                'value' => $currentValue,
+                'previousValue' => $previousValue,
+                'change' => $change,
+                'timestamp' => date('c', $endDate),
+            ];
+        }
+
+        return [
+            'timestamp' => date('c'),
+            'data' => $result,
+        ];
+    }
 }

@@ -129,6 +129,7 @@ class AdminRoute
                 $router->get('/getRanking', [StatController::class, 'getRanking']);
                 $router->get('/getStatRecord', [StatController::class, 'getStatRecord']);
                 $router->get('/getTrafficRank', [StatController::class, 'getTrafficRank']);
+                $router->get('/getInviteRank', [StatController::class, 'getInviteRank']);
             });
 
             // Notice
