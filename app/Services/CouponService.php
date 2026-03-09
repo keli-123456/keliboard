@@ -29,10 +29,10 @@ class CouponService
         $this->check();
         switch ($this->coupon->type) {
             case 1:
-                $order->discount_amount = $this->coupon->value;
+                $order->discount_amount = max(0, (int) $this->coupon->value);
                 break;
             case 2:
-                $order->discount_amount = $order->total_amount * ($this->coupon->value / 100);
+                $order->discount_amount = OrderService::percentageOfAmount((int) $order->total_amount, $this->coupon->value);
                 break;
         }
         if ($order->discount_amount > $order->total_amount) {

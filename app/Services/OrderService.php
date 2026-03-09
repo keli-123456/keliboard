@@ -63,7 +63,7 @@ class OrderService
                 'plan_id' => $plan->id,
                 'period' => $newPeriod,
                 'trade_no' => Helper::generateOrderNo(),
-                'total_amount' => (int) (optional($plan->prices)[$newPeriod] * 100),
+                'total_amount' => self::amountToCents($plan->prices[$newPeriod] ?? 0),
             ]);
 
             $orderService = new self($order);
@@ -111,6 +111,24 @@ class OrderService
 
             return $order;
         });
+    }
+
+    public static function amountToCents(int|float|string|null $amount): int
+    {
+        if ($amount === null || $amount === '') {
+            return 0;
+        }
+
+        return max(0, (int) round(((float) $amount) * 100));
+    }
+
+    public static function percentageOfAmount(int $amount, int|float|string|null $percentage): int
+    {
+        if ($amount <= 0 || $percentage === null || $percentage === '') {
+            return 0;
+        }
+
+        return max(0, (int) round($amount * (((float) $percentage) / 100)));
     }
 
     public function open(): void
@@ -210,10 +228,15 @@ class OrderService
     public function setVipDiscount(User $user)
     {
         $order = $this->order;
+        $baseAmount = max(0, (int) $order->total_amount);
+        $discountAmount = max(0, (int) $order->discount_amount);
+
         if ($user->discount) {
-            $order->discount_amount = $order->discount_amount + ($order->total_amount * ($user->discount / 100));
+            $discountAmount += self::percentageOfAmount($baseAmount, $user->discount);
         }
-        $order->total_amount = $order->total_amount - $order->discount_amount;
+
+        $order->discount_amount = min($baseAmount, $discountAmount);
+        $order->total_amount = max(0, $baseAmount - $order->discount_amount);
     }
 
     public function setInvite(User $user): void
@@ -242,9 +265,9 @@ class OrderService
         if (!$isCommission)
             return;
         if ($inviter->commission_rate) {
-            $order->commission_balance = $order->total_amount * ($inviter->commission_rate / 100);
+            $order->commission_balance = self::percentageOfAmount((int) $order->total_amount, $inviter->commission_rate);
         } else {
-            $order->commission_balance = $order->total_amount * (admin_setting('invite_commission', 10) / 100);
+            $order->commission_balance = self::percentageOfAmount((int) $order->total_amount, admin_setting('invite_commission', 10));
         }
     }
 

@@ -144,13 +144,13 @@ class AutoRenewOrders extends Command
     private function getAutoRenewAmount(User $user, Plan $plan, string $period): int
     {
         $periodKey = PlanService::getPeriodKey($period);
-        $baseAmount = (int) round(((float) ($plan->prices[$periodKey] ?? 0)) * 100);
+        $baseAmount = OrderService::amountToCents($plan->prices[$periodKey] ?? 0);
         if ($baseAmount <= 0) {
             return 0;
         }
 
         $discountAmount = $user->discount
-            ? (int) round($baseAmount * ($user->discount / 100))
+            ? OrderService::percentageOfAmount($baseAmount, $user->discount)
             : 0;
 
         return max(0, $baseAmount - $discountAmount);
