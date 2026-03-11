@@ -87,6 +87,7 @@ class TicketController extends Controller
         }
         $lastMessage = $this->getLastMessage($ticket->id);
         if (
+            (bool) admin_setting('ticket_must_wait_reply', 1) &&
             $lastMessage &&
             (int) $request->user()->id === (int) $lastMessage->user_id &&
             !(bool) ($lastMessage->is_auto_reply ?? false)

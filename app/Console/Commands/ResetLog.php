@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\AdminAuditLog;
 use App\Models\Log;
 use App\Models\RiskEvent;
 use App\Models\StatServer;
@@ -45,7 +46,12 @@ class ResetLog extends Command
     {
         StatUser::where('record_at', '<', strtotime('-2 month', time()))->delete();
         StatServer::where('record_at', '<', strtotime('-2 month', time()))->delete();
-        Log::where('created_at', '<', strtotime('-1 month', time()))->delete();
+        if (Schema::hasTable('v2_log')) {
+            Log::where('created_at', '<', strtotime('-1 month', time()))->delete();
+        }
+        if (Schema::hasTable('v2_admin_audit_log')) {
+            AdminAuditLog::where('created_at', '<', strtotime('-3 month', time()))->delete();
+        }
         if (Schema::hasTable('v2_risk_event')) {
             RiskEvent::where('created_at', '<', strtotime('-30 days', time()))->delete();
         }

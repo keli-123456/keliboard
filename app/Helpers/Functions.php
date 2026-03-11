@@ -1,4 +1,5 @@
 <?php
+use App\Models\SubscribeTemplate;
 use App\Support\Setting;
 use Illuminate\Support\Facades\App;
 
@@ -69,5 +70,25 @@ if (!function_exists('source_base_url')) {
         $baseUrl = rtrim($baseUrl, '/');
         $path = ltrim($path, '/');
         return $baseUrl . '/' . $path;
+    }
+}
+
+if (!function_exists('subscribe_template')) {
+    /**
+     * 获取订阅模板内容，优先读取独立模板表，其次回退旧设置项。
+     */
+    function subscribe_template(string $name, $default = null)
+    {
+        $content = SubscribeTemplate::getContent($name);
+        if ($content !== null) {
+            return $content;
+        }
+
+        $legacy = admin_setting('subscribe_template_' . $name);
+        if ($legacy !== null) {
+            return $legacy;
+        }
+
+        return $default;
     }
 }

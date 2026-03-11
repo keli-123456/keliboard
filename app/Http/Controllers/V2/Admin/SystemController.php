@@ -3,7 +3,7 @@
 namespace App\Http\Controllers\V2\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Models\Log as LogModel;
+use App\Models\AdminAuditLog;
 use App\Utils\CacheKey;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -36,7 +36,6 @@ class SystemController extends Controller
      */
     protected function getLogStatistics(): array
     {
-        // 初始化日志统计数组
         $statistics = [
             'info' => 0,
             'warning' => 0,
@@ -44,14 +43,19 @@ class SystemController extends Controller
             'total' => 0
         ];
 
-        if (class_exists(LogModel::class) && LogModel::count() > 0) {
-            $statistics['info'] = LogModel::where('level', 'INFO')->count();
-            $statistics['warning'] = LogModel::where('level', 'WARNING')->count();
-            $statistics['error'] = LogModel::where('level', 'ERROR')->count();
-            $statistics['total'] = LogModel::count();
-
-            return $statistics;
+        $logs = $this->getFileSystemLogs(1, 2000, null, null)['data'] ?? [];
+        foreach ($logs as $log) {
+            $level = strtoupper((string) ($log['level'] ?? 'INFO'));
+            if ($level === 'ERROR') {
+                $statistics['error']++;
+            } elseif ($level === 'WARNING') {
+                $statistics['warning']++;
+            } else {
+                $statistics['info']++;
+            }
+            $statistics['total']++;
         }
+
         return $statistics;
     }
 
@@ -133,34 +137,7 @@ class SystemController extends Controller
         $level = $request->input('level');
         $keyword = $request->input('keyword');
 
-        try {
-            $builder = LogModel::orderBy('created_at', 'DESC')
-                ->when($level, function ($query) use ($level) {
-                    return $query->where('level', strtoupper($level));
-                })
-                ->when($keyword, function ($query) use ($keyword) {
-                    return $query->where(function ($q) use ($keyword) {
-                        $q->where('data', 'like', '%' . $keyword . '%')
-                            ->orWhere('context', 'like', '%' . $keyword . '%')
-                            ->orWhere('title', 'like', '%' . $keyword . '%')
-                            ->orWhere('uri', 'like', '%' . $keyword . '%');
-                    });
-                });
-
-            $total = $builder->count();
-            if ($total > 0) {
-                $res = $builder->forPage($current, $pageSize)->get();
-                return response([
-                    'data' => $res,
-                    'total' => $total
-                ]);
-            }
-        } catch (\Throwable) {
-            // fall back to file logs
-        }
-
-        $fallback = $this->getFileSystemLogs($current, $pageSize, $level, $keyword);
-        return response($fallback);
+        return response($this->getFileSystemLogs($current, $pageSize, $level, $keyword));
     }
 
     /**
@@ -240,6 +217,34 @@ class SystemController extends Controller
                 ->filter(fn($file) => preg_match('/^laravel(-\\d{4}-\\d{2}-\\d{2})?\\.log$/', $file->getFilename()))
                 ->sortByDesc(fn($file) => $file->getMTime())
                 ->take(3)
+                ->map(fn($file) => $file->getRealPath())
+                ->filter()
+                ->values()
+                ->all();
+
+            $paths = array_merge($paths, $candidates);
+        }
+
+        return array_values(array_unique($paths));
+    }
+
+    /**
+     * @return array<int, string> ordered by mtime desc
+     */
+    private function getAllSystemLogFiles(): array
+    {
+        $paths = [];
+
+        $backup = storage_path('logs/backup.log');
+        if (File::exists($backup) && File::isFile($backup)) {
+            $paths[] = $backup;
+        }
+
+        $logsDir = storage_path('logs');
+        if (File::exists($logsDir) && File::isDirectory($logsDir)) {
+            $candidates = collect(File::files($logsDir))
+                ->filter(fn($file) => preg_match('/^laravel(-\\d{4}-\\d{2}-\\d{2})?\\.log$/', $file->getFilename()))
+                ->sortByDesc(fn($file) => $file->getMTime())
                 ->map(fn($file) => $file->getRealPath())
                 ->filter()
                 ->values()
@@ -443,6 +448,111 @@ class SystemController extends Controller
         return array_values(array_filter($lines, fn($line) => $line !== ''));
     }
 
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function parseLogBlocks(string $path): array
+    {
+        if (!File::exists($path) || !File::isFile($path)) {
+            return [];
+        }
+
+        $content = File::get($path);
+        if ($content === '') {
+            return [];
+        }
+
+        $lines = preg_split("/\\r?\\n/", rtrim($content, "\r\n"));
+        if (!is_array($lines) || empty($lines)) {
+            return [];
+        }
+
+        $entries = [];
+        $current = null;
+        $currentLines = [];
+
+        foreach ($lines as $line) {
+            $parsed = $this->parseLogStartLine($line);
+            if ($parsed) {
+                if ($current !== null) {
+                    $current['raw_lines'] = $currentLines;
+                    $current['raw'] = count($currentLines) > 1 ? implode("\n", array_slice($currentLines, 1)) : null;
+                    $entries[] = $current;
+                }
+                $current = $parsed;
+                $currentLines = [$line];
+                continue;
+            }
+
+            if ($current !== null) {
+                $currentLines[] = $line;
+            }
+        }
+
+        if ($current !== null) {
+            $current['raw_lines'] = $currentLines;
+            $current['raw'] = count($currentLines) > 1 ? implode("\n", array_slice($currentLines, 1)) : null;
+            $entries[] = $current;
+        }
+
+        return $entries;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $blocks
+     */
+    private function writeLogBlocks(string $path, array $blocks): void
+    {
+        $content = collect($blocks)
+            ->map(fn($block) => implode(PHP_EOL, $block['raw_lines'] ?? []))
+            ->filter(fn($block) => $block !== '')
+            ->implode(PHP_EOL);
+
+        if ($content !== '') {
+            $content .= PHP_EOL;
+        }
+
+        File::put($path, $content);
+    }
+
+    private function shouldMatchClearCondition(array $entry, int $cutoffTimestamp, string $level): bool
+    {
+        if ((int) ($entry['created_at'] ?? 0) >= $cutoffTimestamp) {
+            return false;
+        }
+
+        if ($level === 'all') {
+            return true;
+        }
+
+        return strtoupper((string) ($entry['level'] ?? 'INFO')) === strtoupper($level);
+    }
+
+    public function getAuditLog(Request $request)
+    {
+        $current = max(1, (int) $request->input('current', 1));
+        $pageSize = max(10, (int) $request->input('page_size', 10));
+
+        $builder = AdminAuditLog::with('admin:id,email,is_admin,is_staff')
+            ->orderBy('id', 'DESC')
+            ->when($request->input('action'), fn($query, $value) => $query->where('action', $value))
+            ->when($request->input('admin_id'), fn($query, $value) => $query->where('admin_id', $value))
+            ->when($request->input('keyword'), function ($query, $keyword) {
+                $query->where(function ($query) use ($keyword) {
+                    $query->where('uri', 'like', '%' . $keyword . '%')
+                        ->orWhere('request_data', 'like', '%' . $keyword . '%');
+                });
+            });
+
+        $total = $builder->count();
+        $res = $builder->forPage($current, $pageSize)->get();
+
+        return response([
+            'data' => $res,
+            'total' => $total,
+        ]);
+    }
+
     public function getHorizonFailedJobs(Request $request, JobRepository $jobRepository)
     {
         $current = max(1, (int) $request->input('current', 1));
@@ -492,57 +602,54 @@ class SystemController extends Controller
 
         try {
             $cutoffDate = now()->subDays($days);
+            $cutoffTimestamp = $cutoffDate->timestamp;
+            $totalCount = 0;
+            $deletedCount = 0;
+            $files = array_reverse($this->getAllSystemLogFiles());
 
-            // 构建查询条件
-            $query = LogModel::where('created_at', '<', $cutoffDate->timestamp);
+            foreach ($files as $file) {
+                $blocks = $this->parseLogBlocks($file);
+                if (empty($blocks)) {
+                    continue;
+                }
 
-            if ($level !== 'all') {
-                $query->where('level', strtoupper($level));
+                $changed = false;
+                $keptBlocks = [];
+
+                foreach ($blocks as $block) {
+                    if ($this->shouldMatchClearCondition($block, $cutoffTimestamp, $level)) {
+                        $totalCount++;
+                        if ($deletedCount < $limit) {
+                            $deletedCount++;
+                            $changed = true;
+                            continue;
+                        }
+                    }
+
+                    $keptBlocks[] = $block;
+                }
+
+                if ($changed) {
+                    $this->writeLogBlocks($file, $keptBlocks);
+                }
             }
-
-            // 获取要删除的记录数量
-            $totalCount = $query->count();
 
             if ($totalCount === 0) {
                 return $this->success([
                     'message' => '没有找到符合条件的日志记录',
                     'deleted_count' => 0,
-                    'total_count' => $totalCount
+                    'total_count' => 0,
+                    'remaining_count' => 0,
+                    'source' => 'file',
                 ]);
-            }
-
-            // 分批删除，避免单次删除过多数据
-            $deletedCount = 0;
-            $batchSize = min($limit, 1000); // 每批最多1000条
-
-            while ($deletedCount < $limit && $deletedCount < $totalCount) {
-                $remainingLimit = min($batchSize, $limit - $deletedCount);
-
-                $batchQuery = LogModel::where('created_at', '<', $cutoffDate->timestamp);
-                if ($level !== 'all') {
-                    $batchQuery->where('level', strtoupper($level));
-                }
-
-                $idsToDelete = $batchQuery->limit($remainingLimit)->pluck('id');
-
-                if ($idsToDelete->isEmpty()) {
-                    break;
-                }
-
-                $batchDeleted = LogModel::whereIn('id', $idsToDelete)->delete();
-                $deletedCount += $batchDeleted;
-
-                // 避免长时间占用数据库连接
-                if ($deletedCount < $limit && $deletedCount < $totalCount) {
-                    usleep(100000); // 暂停0.1秒
-                }
             }
 
             return $this->success([
                 'message' => '日志清除完成',
                 'deleted_count' => $deletedCount,
                 'total_count' => $totalCount,
-                'remaining_count' => max(0, $totalCount - $deletedCount)
+                'remaining_count' => max(0, $totalCount - $deletedCount),
+                'source' => 'file',
             ]);
 
         } catch (\Exception $e) {
@@ -563,20 +670,39 @@ class SystemController extends Controller
 
         try {
             $cutoffDate = now()->subDays($days);
+            $cutoffTimestamp = $cutoffDate->timestamp;
+            $files = $this->getAllSystemLogFiles();
+            $totalLogs = 0;
+            $logsToClear = 0;
+            $oldestLog = null;
+            $newestLog = null;
 
-            $query = LogModel::where('created_at', '<', $cutoffDate->timestamp);
-            if ($level !== 'all') {
-                $query->where('level', strtoupper($level));
+            foreach ($files as $file) {
+                foreach ($this->parseLogBlocks($file) as $block) {
+                    $totalLogs++;
+
+                    if ($this->shouldMatchClearCondition($block, $cutoffTimestamp, $level)) {
+                        $logsToClear++;
+                    }
+
+                    if ($oldestLog === null || (int) $block['created_at'] < (int) $oldestLog['created_at']) {
+                        $oldestLog = $block;
+                    }
+                    if ($newestLog === null || (int) $block['created_at'] > (int) $newestLog['created_at']) {
+                        $newestLog = $block;
+                    }
+                }
             }
 
             $stats = [
                 'days' => $days,
                 'level' => $level,
                 'cutoff_date' => $cutoffDate->format(format: 'Y-m-d H:i:s'),
-                'total_logs' => LogModel::count(),
-                'logs_to_clear' => $query->count(),
-                'oldest_log' => LogModel::orderBy('created_at', 'asc')->first(),
-                'newest_log' => LogModel::orderBy('created_at', 'desc')->first(),
+                'total_logs' => $totalLogs,
+                'logs_to_clear' => $logsToClear,
+                'oldest_log' => $oldestLog ? $this->normalizeFileLogEntry($oldestLog) : null,
+                'newest_log' => $newestLog ? $this->normalizeFileLogEntry($newestLog) : null,
+                'source' => 'file',
             ];
 
             return $this->success($stats);

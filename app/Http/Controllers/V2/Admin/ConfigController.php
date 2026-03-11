@@ -4,6 +4,7 @@ namespace App\Http\Controllers\V2\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\ConfigSave;
+use App\Models\SubscribeTemplate;
 use App\Protocols\Clash;
 use App\Protocols\ClashMeta;
 use App\Protocols\SingBox;
@@ -72,17 +73,22 @@ class ConfigController extends Controller
 
     public function setTelegramWebhook(Request $request)
     {
-        $app_url = admin_setting('app_url');
-        if (blank($app_url))
-            return $this->fail([422, '请先设置站点网址']);
-        $hookUrl = $app_url . '/api/v1/guest/telegram/webhook?' . http_build_query([
+        $hookUrl = $this->resolveTelegramWebhookUrl();
+        if (blank($hookUrl)) {
+            return $this->fail([422, 'Telegram Webhook地址未配置']);
+        }
+        $hookUrl .= '?' . http_build_query([
             'access_token' => md5(admin_setting('telegram_bot_token', $request->input('telegram_bot_token')))
         ]);
         $telegramService = new TelegramService($request->input('telegram_bot_token'));
         $telegramService->getMe();
         $telegramService->setWebhook($hookUrl);
         $telegramService->registerBotCommands();
-        return $this->success(true);
+        return $this->success([
+            'success' => true,
+            'webhook_url' => $hookUrl,
+            'webhook_base_url' => $this->getTelegramWebhookBaseUrl(),
+        ]);
     }
 
     public function fetch(Request $request)
@@ -120,6 +126,7 @@ class ConfigController extends Controller
                 'commission_distribution_l3' => admin_setting('commission_distribution_l3')
             ],
             'ticket' => [
+                'ticket_must_wait_reply' => (bool) admin_setting('ticket_must_wait_reply', 1),
                 'ticket_auto_reply_enable' => (bool) admin_setting('ticket_auto_reply_enable', 0),
                 'ticket_auto_reply_on_user_reply' => (bool) admin_setting('ticket_auto_reply_on_user_reply', 1),
                 'ticket_auto_reply_reply_once_per_ticket' => (bool) admin_setting('ticket_auto_reply_reply_once_per_ticket', 1),
@@ -194,6 +201,7 @@ class ConfigController extends Controller
             'telegram' => [
                 'telegram_bot_enable' => (bool) admin_setting('telegram_bot_enable', 0),
                 'telegram_bot_token' => admin_setting('telegram_bot_token'),
+                'telegram_webhook_url' => admin_setting('telegram_webhook_url'),
                 'telegram_discuss_link' => admin_setting('telegram_discuss_link')
             ],
             'app' => [
@@ -231,14 +239,14 @@ class ConfigController extends Controller
             ],
             'subscribe_template' => [
                 'subscribe_template_singbox' => $this->formatTemplateContent(
-                    admin_setting('subscribe_template_singbox', $this->getDefaultTemplate('singbox')),
+                    subscribe_template('singbox', $this->getDefaultTemplate('singbox')),
                     'json'
                 ),
-                'subscribe_template_clash' => admin_setting('subscribe_template_clash', $this->getDefaultTemplate('clash')),
-                'subscribe_template_clashmeta' => admin_setting('subscribe_template_clashmeta', $this->getDefaultTemplate('clashmeta')),
-                'subscribe_template_stash' => admin_setting('subscribe_template_stash', $this->getDefaultTemplate('stash')),
-                'subscribe_template_surge' => admin_setting('subscribe_template_surge', $this->getDefaultTemplate('surge')),
-                'subscribe_template_surfboard' => admin_setting('subscribe_template_surfboard', $this->getDefaultTemplate('surfboard'))
+                'subscribe_template_clash' => subscribe_template('clash', $this->getDefaultTemplate('clash')),
+                'subscribe_template_clashmeta' => subscribe_template('clashmeta', $this->getDefaultTemplate('clashmeta')),
+                'subscribe_template_stash' => subscribe_template('stash', $this->getDefaultTemplate('stash')),
+                'subscribe_template_surge' => subscribe_template('surge', $this->getDefaultTemplate('surge')),
+                'subscribe_template_surfboard' => subscribe_template('surfboard', $this->getDefaultTemplate('surfboard'))
             ]
         ];
     }
@@ -296,6 +304,15 @@ class ConfigController extends Controller
     public function save(ConfigSave $request)
     {
         $data = $request->validated();
+        $templateKeys = [
+            'subscribe_template_singbox' => 'singbox',
+            'subscribe_template_clash' => 'clash',
+            'subscribe_template_clashmeta' => 'clashmeta',
+            'subscribe_template_stash' => 'stash',
+            'subscribe_template_surge' => 'surge',
+            'subscribe_template_surfboard' => 'surfboard',
+        ];
+
         if (array_key_exists('recharge_bonus_enable', $data)) {
             $data['recharge_bonus_enable'] = (bool) $data['recharge_bonus_enable'];
         }
@@ -312,6 +329,10 @@ class ConfigController extends Controller
         }
 
         foreach ($data as $k => $v) {
+            if (isset($templateKeys[$k])) {
+                SubscribeTemplate::setContent($templateKeys[$k], $v);
+                continue;
+            }
             if ($k == 'frontend_theme') {
                 $themeService = app(ThemeService::class);
                 $themeService->switch($v);
@@ -399,5 +420,34 @@ class ConfigController extends Controller
         }
 
         return '';
+    }
+
+    private function getTelegramWebhookBaseUrl(): ?string
+    {
+        $customUrl = trim((string) admin_setting('telegram_webhook_url', ''));
+        if ($customUrl !== '') {
+            return rtrim($customUrl, '/');
+        }
+
+        $appUrl = trim((string) admin_setting('app_url', ''));
+        if ($appUrl !== '') {
+            return rtrim($appUrl, '/');
+        }
+
+        return null;
+    }
+
+    private function resolveTelegramWebhookUrl(): ?string
+    {
+        $baseUrl = $this->getTelegramWebhookBaseUrl();
+        if (!$baseUrl) {
+            return null;
+        }
+
+        if (str_contains($baseUrl, '/api/v1/guest/telegram/webhook')) {
+            return $baseUrl;
+        }
+
+        return $baseUrl . '/api/v1/guest/telegram/webhook';
     }
 }

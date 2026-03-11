@@ -18,6 +18,11 @@ trait HasPluginConfig
     protected ?string $pluginCode = null;
 
     /**
+     * 插件启用状态缓存（仅当前对象生命周期）
+     */
+    protected ?bool $pluginEnabled = null;
+
+    /**
      * 获取插件配置
      */
     public function getConfig(?string $key = null, $default = null): mixed
@@ -82,6 +87,7 @@ trait HasPluginConfig
     {
         $this->pluginCode = $pluginCode;
         $this->pluginConfig = null; // 重置配置缓存
+        $this->pluginEnabled = null;
     }
 
     /**
@@ -114,7 +120,15 @@ trait HasPluginConfig
      */
     public function isPluginEnabled(): bool
     {
-        return (bool) $this->getConfig('enable', false);
+        if ($this->pluginEnabled !== null) {
+            return $this->pluginEnabled;
+        }
+
+        $this->pluginEnabled = (bool) Plugin::query()
+            ->where('code', $this->getPluginCode())
+            ->value('is_enabled');
+
+        return $this->pluginEnabled;
     }
 
     /**
@@ -125,5 +139,6 @@ trait HasPluginConfig
         $pluginCode = $this->getPluginCode();
         Cache::forget("plugin_config_{$pluginCode}");
         $this->pluginConfig = null;
+        $this->pluginEnabled = null;
     }
-} 
+}

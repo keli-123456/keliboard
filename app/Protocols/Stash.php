@@ -79,7 +79,7 @@ class Stash extends AbstractProtocol
         $user = $this->user;
         $appName = admin_setting('app_name', 'XBoard');
 
-        $template = admin_setting('subscribe_template_stash', File::exists(base_path(self::CUSTOM_TEMPLATE_FILE))
+        $template = subscribe_template('stash', File::exists(base_path(self::CUSTOM_TEMPLATE_FILE))
             ? File::get(base_path(self::CUSTOM_TEMPLATE_FILE))
             : (
                 File::exists(base_path(self::CUSTOM_CLASH_TEMPLATE_FILE))
@@ -251,10 +251,13 @@ class Stash extends AbstractProtocol
 
         switch (data_get($protocol_settings, 'network')) {
             case 'tcp':
-                $array['network'] = data_get($protocol_settings, 'network_settings.header.type', 'http');
-                $array['http-opts']['path'] = data_get($protocol_settings, 'network_settings.header.request.path', ['/']);
-                if ($host = data_get($protocol_settings, 'network_settings.header.request.headers.Host')) {
-                    $array['http-opts']['headers']['Host'] = $host;
+                $headerType = data_get($protocol_settings, 'network_settings.header.type', 'tcp');
+                $array['network'] = ($headerType === 'http') ? 'http' : 'tcp';
+                if ($headerType === 'http') {
+                    $array['http-opts']['path'] = data_get($protocol_settings, 'network_settings.header.request.path', ['/']);
+                    if ($host = data_get($protocol_settings, 'network_settings.header.request.headers.Host')) {
+                        $array['http-opts']['headers']['Host'] = $host;
+                    }
                 }
                 break;
             case 'ws':
@@ -312,8 +315,9 @@ class Stash extends AbstractProtocol
 
         switch (data_get($protocol_settings, 'network')) {
             case 'tcp':
-                if ($headerType = data_get($protocol_settings, 'network_settings.header.type', 'tcp') != 'tcp') {
-                    $array['network'] = $headerType;
+                $headerType = data_get($protocol_settings, 'network_settings.header.type', 'tcp');
+                $array['network'] = ($headerType === 'http') ? 'http' : 'tcp';
+                if ($headerType === 'http') {
                     if ($httpOpts = array_filter([
                         'headers' => data_get($protocol_settings, 'network_settings.header.request.headers'),
                         'path' => data_get($protocol_settings, 'network_settings.header.request.path', ['/'])
@@ -355,8 +359,11 @@ class Stash extends AbstractProtocol
         $array['udp'] = true;
         switch (data_get($protocol_settings, 'network')) {
             case 'tcp':
-                $array['network'] = data_get($protocol_settings, 'network_settings.header.type');
-                $array['http-opts']['path'] = data_get($protocol_settings, 'network_settings.header.request.path', ['/']);
+                $headerType = data_get($protocol_settings, 'network_settings.header.type', 'tcp');
+                $array['network'] = ($headerType === 'http') ? 'http' : 'tcp';
+                if ($headerType === 'http') {
+                    $array['http-opts']['path'] = data_get($protocol_settings, 'network_settings.header.request.path', ['/']);
+                }
                 break;
             case 'ws':
                 $array['network'] = 'ws';
