@@ -2,6 +2,10 @@
 
 return [
     'retention_days' => (int) env('TICKET_RETENTION_DAYS', 90),
+    'auto_close' => [
+        'waiting_user_hours' => (int) env('TICKET_AUTO_CLOSE_WAITING_USER_HOURS', 24),
+        'waiting_admin_hours' => (int) env('TICKET_AUTO_CLOSE_WAITING_ADMIN_HOURS', 48),
+    ],
     // 员工（is_staff）在用户未回复前最多可连续回复的次数，0 表示不限制
     'staff_reply_limit' => (int) env('TICKET_STAFF_REPLY_LIMIT', 2),
     'attachments' => [
