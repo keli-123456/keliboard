@@ -201,15 +201,16 @@ class Surge extends AbstractProtocol
     public static function buildAnyTLS($password, $server)
     {
         $protocol_settings = data_get($server, 'protocol_settings', []);
+        $sentinel = new \stdClass();
         $config = [
             "{$server['name']}=anytls",
             "{$server['host']}",
             "{$server['port']}",
             "password={$password}",
+            'skip-cert-verify=false',
             'tfo=true',
         ];
 
-        $sentinel = new \stdClass();
         $sni = data_get($server, 'server_name', $sentinel);
         if ($sni === $sentinel) $sni = data_get($server, 'tls_settings.server_name', $sentinel);
         if ($sni === $sentinel) $sni = data_get($protocol_settings, 'server_name', $sentinel);
@@ -229,8 +230,8 @@ class Surge extends AbstractProtocol
         if ($allowInsecure === $sentinel) $allowInsecure = data_get($protocol_settings, 'allow_insecure', $sentinel);
         if ($allowInsecure === $sentinel) $allowInsecure = data_get($protocol_settings, 'tls.allow_insecure', $sentinel);
         if ($allowInsecure === $sentinel) $allowInsecure = data_get($protocol_settings, 'tls_settings.allow_insecure', $sentinel);
-        if ($allowInsecure !== $sentinel && (bool) $allowInsecure) {
-            $config[] = 'skip-cert-verify=true';
+        if ($allowInsecure !== $sentinel) {
+            $config[4] = 'skip-cert-verify=' . ((bool) $allowInsecure ? 'true' : 'false');
         }
 
         $config = array_filter($config);

@@ -468,7 +468,8 @@ class UniProxyController extends Controller
     {
         return match ($nodeType) {
             'vmess', 'vless' => (int) data_get($protocolSettings, 'tls', 0),
-            'trojan', 'hysteria', 'tuic', 'anytls' => 1,
+            'trojan', 'hysteria', 'tuic' => 1,
+            'anytls' => $this->resolveAnyTlsMode($protocolSettings),
             'shadowsocks' => 0,
             default => null,
         };
@@ -512,7 +513,7 @@ class UniProxyController extends Controller
 
     private function getBaseTlsSettingsForV2Node(string $nodeType, array $protocolSettings, int $tls): array
     {
-        if ($nodeType === 'vless' && $tls === 2) {
+        if (in_array($nodeType, ['vless', 'anytls'], true) && $tls === 2) {
             return (array) data_get($protocolSettings, 'reality_settings', []);
         }
 
@@ -527,12 +528,30 @@ class UniProxyController extends Controller
             default => (string) data_get($baseTlsSettings, 'server_name', ''),
         };
 
-        if ($nodeType === 'vless' && $tls === 2) {
+        if (in_array($nodeType, ['vless', 'anytls'], true) && $tls === 2) {
             $serverName = (string) data_get($protocolSettings, 'reality_settings.server_name', $serverName);
         }
 
 	        return $serverName ?: (string) $node->host;
 	    }
+
+    private function resolveAnyTlsMode(array $protocolSettings): int
+    {
+        $mode = (int) data_get($protocolSettings, 'tls_mode', 0);
+        if (in_array($mode, [1, 2], true)) {
+            return $mode;
+        }
+
+        $realitySettings = (array) data_get($protocolSettings, 'reality_settings', []);
+        $hasRealityConfig = collect($realitySettings)->contains(function ($value, $key) {
+            if ($key === 'allow_insecure') {
+                return (bool) $value;
+            }
+            return $value !== null && $value !== '';
+        });
+
+        return $hasRealityConfig ? 2 : 1;
+    }
 
 	    private function respondCacheEntry(Request $request, array $entry)
 	    {
@@ -658,7 +677,9 @@ class UniProxyController extends Controller
 	            'anytls' => [
 	                ...$baseConfig,
 	                'server_port' => (int) $serverPort,
-	                'server_name' => $protocolSettings['tls']['server_name'],
+	                'server_name' => $this->resolveAnyTlsMode($protocolSettings) === 2
+	                    ? data_get($protocolSettings, 'reality_settings.server_name')
+	                    : data_get($protocolSettings, 'tls.server_name'),
 	                'padding_scheme' => $protocolSettings['padding_scheme'],
 	            ],
 	            'socks' => [

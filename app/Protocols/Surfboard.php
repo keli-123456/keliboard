@@ -14,6 +14,7 @@ class Surfboard extends AbstractProtocol
         Server::TYPE_SHADOWSOCKS,
         Server::TYPE_VMESS,
         Server::TYPE_TROJAN,
+        Server::TYPE_ANYTLS,
     ];
     const CUSTOM_TEMPLATE_FILE = 'resources/rules/custom.surfboard.conf';
     const DEFAULT_TEMPLATE_FILE = 'resources/rules/default.surfboard.conf';
@@ -53,6 +54,12 @@ class Surfboard extends AbstractProtocol
             if ($item['type'] === Server::TYPE_TROJAN) {
                 // [Proxy]
                 $proxies .= self::buildTrojan($item['password'], $item);
+                // [Proxy Group]
+                $proxyGroup .= $item['name'] . ', ';
+            }
+            if ($item['type'] === Server::TYPE_ANYTLS) {
+                // [Proxy]
+                $proxies .= self::buildAnyTLS($item['password'], $item);
                 // [Proxy Group]
                 $proxyGroup .= $item['name'] . ', ';
             }
@@ -185,6 +192,29 @@ class Surfboard extends AbstractProtocol
         if (data_get($protocol_settings, 'allow_insecure')) {
             array_push($config, !!data_get($protocol_settings, 'allow_insecure') ? 'skip-cert-verify=true' : 'skip-cert-verify=false');
         }
+        $config = array_filter($config);
+        $uri = implode(',', $config);
+        $uri .= "\r\n";
+        return $uri;
+    }
+
+    public static function buildAnyTLS($password, $server)
+    {
+        $protocol_settings = data_get($server, 'protocol_settings', []);
+        $allowInsecure = (bool) data_get($protocol_settings, 'tls.allow_insecure', false);
+        $config = [
+            "{$server['name']}=anytls",
+            "{$server['host']}",
+            "{$server['port']}",
+            "password={$password}",
+            'skip-cert-verify=' . ($allowInsecure ? 'true' : 'false'),
+            'reuse=false'
+        ];
+
+        if ($serverName = data_get($protocol_settings, 'tls.server_name')) {
+            $config[] = "sni={$serverName}";
+        }
+
         $config = array_filter($config);
         $uri = implode(',', $config);
         $uri .= "\r\n";

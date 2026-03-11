@@ -231,6 +231,7 @@ class Server extends Model
             'device_online_min_traffic' => ['type' => 'integer', 'default' => 0],
         ],
         self::TYPE_ANYTLS => [
+            'tls_mode' => ['type' => 'integer', 'default' => 1],
             'network' => ['type' => 'string', 'default' => null],
             'network_settings' => ['type' => 'array', 'default' => null],
             'padding_scheme' => [
@@ -252,6 +253,20 @@ class Server extends Model
                 'fields' => [
                     'server_name' => ['type' => 'string', 'default' => null],
                     'allow_insecure' => ['type' => 'boolean', 'default' => false]
+                ]
+            ],
+            'reality_settings' => [
+                'type' => 'object',
+                'fields' => [
+                    'allow_insecure' => ['type' => 'boolean', 'default' => false],
+                    'server_port' => ['type' => 'string', 'default' => null],
+                    'server_name' => ['type' => 'string', 'default' => null],
+                    'dest' => ['type' => 'string', 'default' => null],
+                    'public_key' => ['type' => 'string', 'default' => null],
+                    'private_key' => ['type' => 'string', 'default' => null],
+                    'short_id' => ['type' => 'string', 'default' => null],
+                    'mldsa65Seed' => ['type' => 'string', 'default' => null],
+                    'xver' => ['type' => 'string', 'default' => null],
                 ]
             ],
             'tls_settings' => ['type' => 'array', 'default' => null],
