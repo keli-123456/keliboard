@@ -188,6 +188,10 @@ rules:
 
   # 抗 DNS 污染
   - DOMAIN-KEYWORD,amazon,SELECT
+  - DOMAIN-SUFFIX,openai.com,SELECT
+  - DOMAIN-SUFFIX,chatgpt.com,SELECT
+  - DOMAIN-SUFFIX,anthropic.com,SELECT
+  - DOMAIN-SUFFIX,claude.ai,SELECT
   - DOMAIN-KEYWORD,google,SELECT
   - DOMAIN-KEYWORD,gmail,SELECT
   - DOMAIN-KEYWORD,youtube,SELECT

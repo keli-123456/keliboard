@@ -213,6 +213,10 @@ rules:
 
   # 抗 DNS 污染
   - DOMAIN-KEYWORD,amazon,$app_name
+  - DOMAIN-SUFFIX,openai.com,$app_name
+  - DOMAIN-SUFFIX,chatgpt.com,$app_name
+  - DOMAIN-SUFFIX,anthropic.com,$app_name
+  - DOMAIN-SUFFIX,claude.ai,$app_name
   - DOMAIN-KEYWORD,google,$app_name
   - DOMAIN-KEYWORD,gmail,$app_name
   - DOMAIN-KEYWORD,youtube,$app_name
