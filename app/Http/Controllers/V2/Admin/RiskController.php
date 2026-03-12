@@ -30,8 +30,8 @@ class RiskController extends Controller
     private function isRiskCenterEnabled(): bool
     {
         return $this->parseBool(
-            admin_setting('risk_center_enable', true),
-            true
+            admin_setting('risk_center_enable', false),
+            false
         );
     }
 

@@ -19,7 +19,7 @@ class RiskEventService
         }
 
         try {
-            $enabledRaw = admin_setting('risk_center_enable', true);
+            $enabledRaw = admin_setting('risk_center_enable', false);
             $enabled = filter_var($enabledRaw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
             if ($enabled === null) {
                 $enabled = (bool) $enabledRaw;
