@@ -125,26 +125,32 @@ class WsServer extends Command
             });
         };
 
-        $server->onWebSocketConnect = function ($connection, $request) use (&$connections, $settings) {
+        $server->onConnect = function ($connection) use (&$connections, $settings) {
             if (!$settings->enabled()) {
                 $connection->close();
                 return;
             }
 
-            $params = [];
-            try {
-                $params = (array) $request->get();
-            } catch (\Throwable) {
-            }
             $connection->xboard_authenticated = false;
-            $connection->xboard_handshake_params = $params;
             $connections[$connection->id] = $connection;
         };
 
         $server->onMessage = function ($connection, $message) use ($authenticator) {
+            $payload = json_decode((string) $message, true);
+            if (!is_array($payload)) {
+                if (!(bool) ($connection->xboard_authenticated ?? false)) {
+                    $connection->close();
+                }
+                return;
+            }
+
             if (!(bool) ($connection->xboard_authenticated ?? false)) {
                 try {
-                    $auth = $authenticator->authenticate((array) ($connection->xboard_handshake_params ?? []));
+                    $auth = $authenticator->authenticate([
+                        'token' => $payload['token'] ?? null,
+                        'node_id' => $payload['node_id'] ?? null,
+                        'node_type' => $payload['node_type'] ?? null,
+                    ]);
                 } catch (\Throwable $e) {
                     Log::warning('Node realtime authentication failed with exception', [
                         'error' => $e->getMessage(),
@@ -176,11 +182,6 @@ class WsServer extends Command
                     'node_type' => $auth['is_v2node'] ? 'v2node' : ($auth['normalized_node_type'] ?? null),
                     'ts' => time(),
                 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-            }
-
-            $payload = json_decode((string) $message, true);
-            if (!is_array($payload)) {
-                return;
             }
 
             if (($payload['type'] ?? null) === 'ping') {
