@@ -7,7 +7,6 @@ use App\Services\NodeRealtime\NodeRealtimeSettings;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Redis;
 
 class WsServer extends Command
 {
@@ -34,8 +33,6 @@ class WsServer extends Command
         $settings = app(NodeRealtimeSettings::class);
         $host = $settings->listenHost();
         $port = $settings->listenPort();
-        $redisConnection = $settings->redisConnection();
-        $redisQueue = $settings->redisQueue();
         $pingInterval = $settings->pingInterval();
         $realtimeEnabled = $settings->enabled();
 
@@ -55,39 +52,7 @@ class WsServer extends Command
         $authenticator = app(NodeRealtimeAuthenticator::class);
         $connections = [];
 
-        $server->onWorkerStart = function () use (&$connections, $redisConnection, $redisQueue, $pingInterval, $timerClass, $realtimeEnabled) {
-            $timerClass::add(0.5, function () use (&$connections, $redisConnection, $redisQueue, $realtimeEnabled) {
-                try {
-                    $redis = Redis::connection($redisConnection);
-                    while (($payload = $redis->lpop($redisQueue)) !== null) {
-                        $message = (string) $payload;
-                        $decoded = json_decode($message, true);
-                        if (!$realtimeEnabled) {
-                            continue;
-                        }
-                        foreach ($connections as $id => $connection) {
-                            if (!(bool) ($connection->xboard_authenticated ?? false)) {
-                                continue;
-                            }
-                            if (!$this->shouldDeliverMessage($connection, is_array($decoded) ? $decoded : null)) {
-                                continue;
-                            }
-                            try {
-                                $connection->send($message);
-                            } catch (\Throwable) {
-                                unset($connections[$id]);
-                                try {
-                                    $connection->close();
-                                } catch (\Throwable) {
-                                }
-                            }
-                        }
-                    }
-                } catch (\Throwable $e) {
-                    Log::warning('Node realtime queue drain failed', ['error' => $e->getMessage()]);
-                }
-            });
-
+        $server->onWorkerStart = function () use (&$connections, $pingInterval, $timerClass, $realtimeEnabled) {
             $timerClass::add($pingInterval, function () use (&$connections, $realtimeEnabled) {
                 if (!$realtimeEnabled) {
                     foreach ($connections as $id => $connection) {
@@ -126,17 +91,12 @@ class WsServer extends Command
             });
         };
 
-        $server->onConnect = function ($connection) use (&$connections, $realtimeEnabled) {
+        $server->onMessage = function ($connection, $message) use ($authenticator, &$connections, $realtimeEnabled) {
             if (!$realtimeEnabled) {
                 $connection->close();
                 return;
             }
 
-            $connection->xboard_authenticated = false;
-            $connections[$connection->id] = $connection;
-        };
-
-        $server->onMessage = function ($connection, $message) use ($authenticator) {
             $payload = json_decode((string) $message, true);
             if (!is_array($payload)) {
                 if (!(bool) ($connection->xboard_authenticated ?? false)) {
@@ -175,6 +135,7 @@ class WsServer extends Command
                 $connection->xboard_server_id = (int) $auth['server']->id;
                 $connection->xboard_is_v2node = (bool) $auth['is_v2node'];
                 $connection->xboard_group_ids = $this->normalizeIntList((array) ($auth['server']->group_ids ?? []));
+                $connections[$connection->id] = $connection;
 
                 $connection->send(json_encode([
                     'type' => 'hello_ack',
