@@ -23,7 +23,13 @@ class NodeRealtimeStatusService
         $realtimeEnabled = $this->settings->enabledSetting();
         $activityWindowSeconds = $this->resolveActivityWindowSeconds();
         $recentActiveNodes = $realtimeEnabled ? $this->resolveRecentActiveNodes($activityWindowSeconds) : [];
-        $missingNodes = $realtimeEnabled ? $this->resolveMissingNodes($recentActiveNodes, $connections) : [];
+        $serverMeta = $this->loadServerMeta(array_values(array_unique(array_map(
+            fn (array $row) => (int) ($row['server_id'] ?? 0),
+            $connections
+        ))));
+        $connectedCacheServerIds = $this->resolveConnectedCacheServerIds($connections, $serverMeta);
+        $missingNodes = $realtimeEnabled ? $this->resolveMissingNodes($recentActiveNodes, $connectedCacheServerIds) : [];
+        $nodeStatuses = $realtimeEnabled ? $this->resolveNodeStatuses($recentActiveNodes, $connections, $serverMeta) : [];
 
         return [
             'enabled' => $realtimeEnabled,
@@ -36,8 +42,10 @@ class NodeRealtimeStatusService
             'connections' => $connections,
             'recent_active_window_seconds' => $activityWindowSeconds,
             'recent_active_nodes_count' => count($recentActiveNodes),
+            'healthy_nodes_count' => max(0, count($recentActiveNodes) - count($missingNodes)),
             'missing_nodes_count' => count($missingNodes),
             'missing_nodes' => $missingNodes,
+            'node_statuses' => $nodeStatuses,
         ];
     }
 
@@ -134,41 +142,143 @@ class NodeRealtimeStatusService
         return $rows;
     }
 
-    private function resolveMissingNodes(array $recentActiveNodes, array $connections): array
+    private function loadServerMeta(array $serverIds): array
     {
-        if ($recentActiveNodes === []) {
+        $serverIds = array_values(array_unique(array_filter(array_map('intval', $serverIds), fn (int $id) => $id > 0)));
+        if ($serverIds === []) {
             return [];
         }
 
-        $serverIds = array_values(array_unique(array_map(
-            fn (array $row) => (int) ($row['server_id'] ?? 0),
-            $connections
-        )));
+        return Server::query()
+            ->whereIn('id', $serverIds)
+            ->get(['id', 'code', 'name', 'type', 'parent_id'])
+            ->mapWithKeys(fn (Server $server) => [
+                (int) $server->id => [
+                    'server_id' => (int) $server->id,
+                    'cache_server_id' => (int) ($server->parent_id ?: $server->id),
+                    'node_id' => $this->resolveNodeId($server),
+                    'name' => (string) ($server->name ?? ''),
+                    'node_type' => (string) ($server->type ?? ''),
+                ],
+            ])
+            ->all();
+    }
 
-        $serverCacheMap = [];
-        if ($serverIds !== []) {
-            $serverCacheMap = Server::query()
-                ->whereIn('id', $serverIds)
-                ->get(['id', 'parent_id'])
-                ->mapWithKeys(fn (Server $server) => [
-                    (int) $server->id => (int) ($server->parent_id ?: $server->id),
-                ])
-                ->all();
-        }
-
+    private function resolveConnectedCacheServerIds(array $connections, array $serverMeta): array
+    {
         $connectedCacheServerIds = [];
         foreach ($connections as $connection) {
             $serverId = (int) ($connection['server_id'] ?? 0);
             if ($serverId <= 0) {
                 continue;
             }
-            $connectedCacheServerIds[] = $serverCacheMap[$serverId] ?? $serverId;
+            $connectedCacheServerIds[] = (int) ($serverMeta[$serverId]['cache_server_id'] ?? $serverId);
         }
-        $connectedCacheServerIds = array_values(array_unique(array_filter($connectedCacheServerIds, fn (int $id) => $id > 0)));
+
+        return array_values(array_unique(array_filter($connectedCacheServerIds, fn (int $id) => $id > 0)));
+    }
+
+    private function resolveMissingNodes(array $recentActiveNodes, array $connectedCacheServerIds): array
+    {
+        if ($recentActiveNodes === []) {
+            return [];
+        }
 
         return array_values(array_filter($recentActiveNodes, function (array $row) use ($connectedCacheServerIds): bool {
             return !in_array((int) ($row['cache_server_id'] ?? 0), $connectedCacheServerIds, true);
         }));
+    }
+
+    private function resolveNodeStatuses(array $recentActiveNodes, array $connections, array $serverMeta): array
+    {
+        $statuses = [];
+        $connectionMap = [];
+
+        foreach ($connections as $connection) {
+            $serverId = (int) ($connection['server_id'] ?? 0);
+            $meta = $serverMeta[$serverId] ?? [
+                'server_id' => $serverId,
+                'cache_server_id' => $serverId,
+                'node_id' => (string) ($connection['node_id'] ?? ''),
+                'name' => '',
+                'node_type' => (string) ($connection['node_type'] ?? ''),
+            ];
+            $cacheServerId = (int) ($meta['cache_server_id'] ?? $serverId);
+            if ($cacheServerId <= 0) {
+                continue;
+            }
+
+            $authenticatedAt = (string) ($connection['authenticated_at'] ?? '');
+            $current = $connectionMap[$cacheServerId] ?? null;
+            if ($current === null || strcmp($authenticatedAt, (string) ($current['authenticated_at'] ?? '')) >= 0) {
+                $connectionMap[$cacheServerId] = [
+                    'cache_server_id' => $cacheServerId,
+                    'server_id' => $serverId,
+                    'node_id' => (string) ($meta['node_id'] ?: ($connection['node_id'] ?? '')),
+                    'name' => (string) ($meta['name'] ?? ''),
+                    'node_type' => (string) (($connection['node_type'] ?? null) ?: ($meta['node_type'] ?? '')),
+                    'authenticated_at' => $connection['authenticated_at'] ?? null,
+                    'remote_ip' => $connection['remote_ip'] ?? null,
+                    'group_ids' => array_values(array_map('intval', (array) ($connection['group_ids'] ?? []))),
+                    'connection_count' => (int) (($current['connection_count'] ?? 0) + 1),
+                ];
+            } elseif ($current !== null) {
+                $current['connection_count'] = (int) ($current['connection_count'] ?? 0) + 1;
+                $connectionMap[$cacheServerId] = $current;
+            }
+        }
+
+        foreach ($recentActiveNodes as $row) {
+            $cacheServerId = (int) ($row['cache_server_id'] ?? 0);
+            $matchedConnection = $connectionMap[$cacheServerId] ?? null;
+
+            $statuses[] = [
+                'cache_server_id' => $cacheServerId,
+                'server_id' => (int) ($row['server_id'] ?? 0),
+                'node_id' => (string) ($row['node_id'] ?? ''),
+                'name' => (string) ($row['name'] ?? ''),
+                'node_type' => (string) ($row['node_type'] ?? ''),
+                'recent_active' => true,
+                'authenticated' => $matchedConnection !== null,
+                'status' => $matchedConnection !== null ? 'healthy' : 'missing',
+                'last_check_at' => $row['last_check_at'] ?? null,
+                'authenticated_at' => $matchedConnection['authenticated_at'] ?? null,
+                'remote_ip' => $matchedConnection['remote_ip'] ?? null,
+                'group_ids' => array_values(array_map('intval', (array) ($matchedConnection['group_ids'] ?? []))),
+                'connection_count' => (int) ($matchedConnection['connection_count'] ?? 0),
+            ];
+
+            unset($connectionMap[$cacheServerId]);
+        }
+
+        foreach ($connectionMap as $cacheServerId => $connection) {
+            $statuses[] = [
+                'cache_server_id' => (int) $cacheServerId,
+                'server_id' => (int) ($connection['server_id'] ?? 0),
+                'node_id' => (string) ($connection['node_id'] ?? ''),
+                'name' => (string) ($connection['name'] ?? ''),
+                'node_type' => (string) ($connection['node_type'] ?? ''),
+                'recent_active' => false,
+                'authenticated' => true,
+                'status' => 'idle',
+                'last_check_at' => null,
+                'authenticated_at' => $connection['authenticated_at'] ?? null,
+                'remote_ip' => $connection['remote_ip'] ?? null,
+                'group_ids' => array_values(array_map('intval', (array) ($connection['group_ids'] ?? []))),
+                'connection_count' => (int) ($connection['connection_count'] ?? 0),
+            ];
+        }
+
+        usort($statuses, function (array $left, array $right): int {
+            $priority = ['missing' => 0, 'healthy' => 1, 'idle' => 2];
+            $leftPriority = $priority[$left['status'] ?? 'idle'] ?? 9;
+            $rightPriority = $priority[$right['status'] ?? 'idle'] ?? 9;
+
+            return [$leftPriority, (int) ($left['server_id'] ?? 0), (string) ($left['node_id'] ?? '')]
+                <=> [$rightPriority, (int) ($right['server_id'] ?? 0), (string) ($right['node_id'] ?? '')];
+        });
+
+        return $statuses;
     }
 
     private function resolveNodeId(Server $server): string
