@@ -125,13 +125,8 @@ class WsServer extends Command
             });
         };
 
-        $server->onWebSocketConnect = function ($connection, $request) use (&$connections, $authenticator, $settings) {
+        $server->onWebSocketConnect = function ($connection, $request) use (&$connections, $settings) {
             if (!$settings->enabled()) {
-                $connection->send(json_encode([
-                    'type' => 'error',
-                    'message' => 'node realtime disabled',
-                    'ts' => time(),
-                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
                 $connection->close();
                 return;
             }
@@ -141,38 +136,46 @@ class WsServer extends Command
                 $params = (array) $request->get();
             } catch (\Throwable) {
             }
-
-            $auth = $authenticator->authenticate($params);
-            if (!$auth) {
-                $connection->send(json_encode([
-                    'type' => 'error',
-                    'message' => 'authentication failed',
-                    'ts' => time(),
-                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-                $connection->close();
-                return;
-            }
-
-            $connection->xboard_authenticated = true;
-            $connection->xboard_connection_key = $auth['connection_key'];
-            $connection->xboard_server_id = (int) $auth['server']->id;
-            $connection->xboard_is_v2node = (bool) $auth['is_v2node'];
-            $connection->xboard_group_ids = $this->normalizeIntList((array) ($auth['server']->group_ids ?? []));
+            $connection->xboard_authenticated = false;
+            $connection->xboard_handshake_params = $params;
             $connections[$connection->id] = $connection;
-
-            $connection->send(json_encode([
-                'type' => 'hello_ack',
-                'node_id' => (string) $auth['input_node_id'],
-                'server_id' => (int) $auth['server']->id,
-                'node_type' => $auth['is_v2node'] ? 'v2node' : ($auth['normalized_node_type'] ?? null),
-                'ts' => time(),
-            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
         };
 
-        $server->onMessage = function ($connection, $message) {
+        $server->onMessage = function ($connection, $message) use ($authenticator) {
             if (!(bool) ($connection->xboard_authenticated ?? false)) {
-                $connection->close();
-                return;
+                try {
+                    $auth = $authenticator->authenticate((array) ($connection->xboard_handshake_params ?? []));
+                } catch (\Throwable $e) {
+                    Log::warning('Node realtime authentication failed with exception', [
+                        'error' => $e->getMessage(),
+                    ]);
+                    $connection->close();
+                    return;
+                }
+
+                if (!$auth) {
+                    $connection->send(json_encode([
+                        'type' => 'error',
+                        'message' => 'authentication failed',
+                        'ts' => time(),
+                    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+                    $connection->close();
+                    return;
+                }
+
+                $connection->xboard_authenticated = true;
+                $connection->xboard_connection_key = $auth['connection_key'];
+                $connection->xboard_server_id = (int) $auth['server']->id;
+                $connection->xboard_is_v2node = (bool) $auth['is_v2node'];
+                $connection->xboard_group_ids = $this->normalizeIntList((array) ($auth['server']->group_ids ?? []));
+
+                $connection->send(json_encode([
+                    'type' => 'hello_ack',
+                    'node_id' => (string) $auth['input_node_id'],
+                    'server_id' => (int) $auth['server']->id,
+                    'node_type' => $auth['is_v2node'] ? 'v2node' : ($auth['normalized_node_type'] ?? null),
+                    'ts' => time(),
+                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
             }
 
             $payload = json_decode((string) $message, true);
