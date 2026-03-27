@@ -8,6 +8,13 @@ use Illuminate\Support\Facades\Redis;
 
 class NodeRealtimePublisher
 {
+    private NodeRealtimeSettings $settings;
+
+    public function __construct(NodeRealtimeSettings $settings)
+    {
+        $this->settings = $settings;
+    }
+
     public function invalidateConfig(string $reason = 'config.updated', array $payload = []): void
     {
         $this->publish('config', $reason, $payload);
@@ -50,13 +57,13 @@ class NodeRealtimePublisher
 
     public function publish(string $topic, string $reason, array $payload = [], array $targets = []): void
     {
-        if (!config('node_realtime.enabled', false)) {
+        if (!$this->settings->enabled()) {
             return;
         }
 
-        $queue = (string) config('node_realtime.redis.queue', 'xboard:node_realtime:events');
-        $connection = (string) config('node_realtime.redis.connection', 'default');
-        $maxLength = max(100, (int) config('node_realtime.redis.max_length', 10000));
+        $queue = $this->settings->redisQueue();
+        $connection = $this->settings->redisConnection();
+        $maxLength = $this->settings->redisMaxLength();
         $message = json_encode([
             'type' => 'invalidate',
             'topic' => $topic,

@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Services\NodeRealtime\NodeRealtimeAuthenticator;
+use App\Services\NodeRealtime\NodeRealtimeSettings;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
@@ -16,11 +17,6 @@ class WsServer extends Command
 
     public function handle(): int
     {
-        if (!config('node_realtime.enabled', false)) {
-            $this->warn('node realtime server is disabled');
-            return self::FAILURE;
-        }
-
         if (!class_exists(\Workerman\Worker::class) || !class_exists(\Workerman\Timer::class)) {
             $this->error('workerman/workerman is not installed. Run composer install first.');
             return self::FAILURE;
@@ -35,11 +31,12 @@ class WsServer extends Command
         $storagePath = storage_path('app/ws-server');
         File::ensureDirectoryExists($storagePath);
 
-        $host = (string) config('node_realtime.host', '0.0.0.0');
-        $port = max(1, (int) config('node_realtime.port', 7002));
-        $redisConnection = (string) config('node_realtime.redis.connection', 'default');
-        $redisQueue = (string) config('node_realtime.redis.queue', 'xboard:node_realtime:events');
-        $pingInterval = max(5, (int) config('node_realtime.ping_interval', 30));
+        $settings = app(NodeRealtimeSettings::class);
+        $host = $settings->listenHost();
+        $port = $settings->listenPort();
+        $redisConnection = $settings->redisConnection();
+        $redisQueue = $settings->redisQueue();
+        $pingInterval = $settings->pingInterval();
 
         $workerClass = \Workerman\Worker::class;
         $timerClass = \Workerman\Timer::class;
@@ -57,13 +54,16 @@ class WsServer extends Command
         $authenticator = app(NodeRealtimeAuthenticator::class);
         $connections = [];
 
-        $server->onWorkerStart = function () use (&$connections, $redisConnection, $redisQueue, $pingInterval, $timerClass) {
-            $timerClass::add(0.5, function () use (&$connections, $redisConnection, $redisQueue) {
+        $server->onWorkerStart = function () use (&$connections, $redisConnection, $redisQueue, $pingInterval, $timerClass, $settings) {
+            $timerClass::add(0.5, function () use (&$connections, $redisConnection, $redisQueue, $settings) {
                 try {
                     $redis = Redis::connection($redisConnection);
                     while (($payload = $redis->lpop($redisQueue)) !== null) {
                         $message = (string) $payload;
                         $decoded = json_decode($message, true);
+                        if (!$settings->enabled()) {
+                            continue;
+                        }
                         foreach ($connections as $id => $connection) {
                             if (!(bool) ($connection->xboard_authenticated ?? false)) {
                                 continue;
@@ -87,7 +87,18 @@ class WsServer extends Command
                 }
             });
 
-            $timerClass::add($pingInterval, function () use (&$connections) {
+            $timerClass::add($pingInterval, function () use (&$connections, $settings) {
+                if (!$settings->enabled()) {
+                    foreach ($connections as $id => $connection) {
+                        unset($connections[$id]);
+                        try {
+                            $connection->close();
+                        } catch (\Throwable) {
+                        }
+                    }
+                    return;
+                }
+
                 $payload = json_encode([
                     'type' => 'ping',
                     'ts' => time(),
@@ -114,7 +125,17 @@ class WsServer extends Command
             });
         };
 
-        $server->onWebSocketConnect = function ($connection, $request) use (&$connections, $authenticator) {
+        $server->onWebSocketConnect = function ($connection, $request) use (&$connections, $authenticator, $settings) {
+            if (!$settings->enabled()) {
+                $connection->send(json_encode([
+                    'type' => 'error',
+                    'message' => 'node realtime disabled',
+                    'ts' => time(),
+                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+                $connection->close();
+                return;
+            }
+
             $params = [];
             try {
                 $params = (array) $request->get();

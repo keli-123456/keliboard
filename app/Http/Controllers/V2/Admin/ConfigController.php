@@ -13,6 +13,7 @@ use App\Protocols\Surfboard;
 use App\Protocols\Surge;
 use App\Services\MailService;
 use App\Services\NodeRealtime\NodeRealtimePublisher;
+use App\Services\NodeRealtime\NodeRealtimeSettings;
 use App\Services\RechargeBonusService;
 use App\Services\TelegramService;
 use App\Services\ThemeService;
@@ -110,6 +111,8 @@ class ConfigController extends Controller
      */
     private function getConfigMappings(): array
     {
+        $nodeRealtime = app(NodeRealtimeSettings::class);
+
         return [
             'invite' => [
                 'invite_force' => (bool) admin_setting('invite_force', 0),
@@ -179,6 +182,11 @@ class ConfigController extends Controller
                 'server_token' => admin_setting('server_token'),
                 'server_pull_interval' => admin_setting('server_pull_interval', 60),
                 'server_push_interval' => admin_setting('server_push_interval', 60),
+                'node_realtime_enable' => $nodeRealtime->enabledSetting(),
+                'node_realtime_path' => $nodeRealtime->path(),
+                'node_realtime_public_url' => $nodeRealtime->configuredPublicUrl(),
+                'node_realtime_public_port' => $nodeRealtime->publicPort(),
+                'node_realtime_ping_interval' => $nodeRealtime->pingInterval(),
                 'device_limit_mode' => (int) admin_setting('device_limit_mode', 0),
                 'node_report_min_traffic' => (int) admin_setting('node_report_min_traffic', 0),
                 'device_online_min_traffic' => (int) admin_setting('device_online_min_traffic', 0),

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\V1\Server;
 use App\Http\Controllers\Controller;
 use App\Jobs\UpdateAliveDataJob;
 use App\Services\ServerService;
+use App\Services\NodeRealtime\NodeRealtimeSettings;
 use App\Services\UserService;
 use App\Utils\CacheKey;
 use App\Utils\Helper;
@@ -737,40 +738,19 @@ class UniProxyController extends Controller
 
     private function buildRealtimeBaseConfig(): array
     {
-        $url = $this->resolveRealtimePublicUrl();
-        $enabled = (bool) config('node_realtime.enabled', false) && $url !== '';
+        $settings = app(NodeRealtimeSettings::class);
+        $url = $settings->resolvedPublicUrl();
+        $enabled = $settings->enabled() && $url !== '';
 
         return [
             'enabled' => $enabled,
             'url' => $enabled ? $url : '',
-            'ping_interval' => max(5, (int) config('node_realtime.ping_interval', 30)),
+            'ping_interval' => $settings->pingInterval(),
         ];
     }
 
     private function resolveRealtimePublicUrl(): string
     {
-        $explicit = trim((string) config('node_realtime.public_url', ''));
-        if ($explicit !== '') {
-            return $explicit;
-        }
-
-        $appUrl = trim((string) admin_setting('app_url', ''));
-        if ($appUrl === '') {
-            return '';
-        }
-
-        $parts = parse_url($appUrl);
-        if (!is_array($parts) || empty($parts['host'])) {
-            return '';
-        }
-
-        $path = '/' . ltrim((string) config('node_realtime.path', '/ws/node'), '/');
-        $scheme = (($parts['scheme'] ?? 'http') === 'https') ? 'wss' : 'ws';
-        $host = (string) $parts['host'];
-        $port = max(1, (int) config('node_realtime.public_port', config('node_realtime.port', 7002)));
-        $defaultPort = $scheme === 'wss' ? 443 : 80;
-        $portSuffix = $port === $defaultPort ? '' : ':' . $port;
-
-        return "{$scheme}://{$host}{$portSuffix}{$path}";
+        return app(NodeRealtimeSettings::class)->resolvedPublicUrl();
     }
 }
