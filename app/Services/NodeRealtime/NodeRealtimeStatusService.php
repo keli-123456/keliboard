@@ -118,6 +118,7 @@ class NodeRealtimeStatusService
                 'node_type' => $row['node_type'] ?? null,
                 'group_ids' => array_values(array_map('intval', array_filter((array) ($row['group_ids'] ?? []), 'is_numeric'))),
                 'authenticated_at' => $row['authenticated_at'] ?? null,
+                'health' => $this->normalizeHealth((array) ($row['health'] ?? [])),
             ];
         }, $connections)));
     }
@@ -281,9 +282,13 @@ class NodeRealtimeStatusService
                     'remote_ip' => $connection['remote_ip'] ?? null,
                     'group_ids' => array_values(array_map('intval', (array) ($connection['group_ids'] ?? []))),
                     'connection_count' => (int) (($current['connection_count'] ?? 0) + 1),
+                    'health' => $connection['health'] ?? null,
                 ];
             } elseif ($current !== null) {
                 $current['connection_count'] = (int) ($current['connection_count'] ?? 0) + 1;
+                if (($current['health'] ?? null) === null && ($connection['health'] ?? null) !== null) {
+                    $current['health'] = $connection['health'];
+                }
                 $connectionMap[$cacheServerId] = $current;
             }
         }
@@ -306,6 +311,7 @@ class NodeRealtimeStatusService
                 'remote_ip' => $matchedConnection['remote_ip'] ?? null,
                 'group_ids' => array_values(array_map('intval', (array) ($matchedConnection['group_ids'] ?? []))),
                 'connection_count' => (int) ($matchedConnection['connection_count'] ?? 0),
+                'health' => $matchedConnection['health'] ?? null,
                 'last_config_receipt' => $receiptMap[$cacheServerId]['config'] ?? null,
                 'last_users_receipt' => $receiptMap[$cacheServerId]['users'] ?? null,
             ];
@@ -328,6 +334,7 @@ class NodeRealtimeStatusService
                 'remote_ip' => $connection['remote_ip'] ?? null,
                 'group_ids' => array_values(array_map('intval', (array) ($connection['group_ids'] ?? []))),
                 'connection_count' => (int) ($connection['connection_count'] ?? 0),
+                'health' => $connection['health'] ?? null,
                 'last_config_receipt' => $receiptMap[(int) $cacheServerId]['config'] ?? null,
                 'last_users_receipt' => $receiptMap[(int) $cacheServerId]['users'] ?? null,
             ];
@@ -358,5 +365,52 @@ class NodeRealtimeStatusService
         }
 
         return date(DATE_ATOM, $timestamp);
+    }
+
+    private function normalizeHealth(array $health): ?array
+    {
+        if ($health === []) {
+            return null;
+        }
+
+        $runtime = is_array($health['runtime'] ?? null) ? $health['runtime'] : [];
+
+        return [
+            'status' => ($status = trim((string) ($health['status'] ?? ''))) !== '' ? $status : null,
+            'ready' => $this->toBool($health['ready'] ?? false),
+            'version' => ($version = trim((string) ($health['version'] ?? ''))) !== '' ? $version : null,
+            'config_path' => ($configPath = trim((string) ($health['config_path'] ?? ''))) !== '' ? $configPath : null,
+            'started_at' => ($startedAt = trim((string) ($health['started_at'] ?? ''))) !== '' ? $startedAt : null,
+            'uptime_seconds' => max(0, (int) ($health['uptime_seconds'] ?? 0)),
+            'last_reload_at' => ($lastReloadAt = trim((string) ($health['last_reload_at'] ?? ''))) !== '' ? $lastReloadAt : null,
+            'node_count' => max(0, (int) ($health['node_count'] ?? 0)),
+            'realtime_enabled' => $this->toBool($health['realtime_enabled'] ?? false),
+            'health_port' => max(0, (int) ($health['health_port'] ?? 0)),
+            'goroutines' => max(0, (int) ($health['goroutines'] ?? 0)),
+            'runtime' => [
+                'gomemlimit' => ($goMemLimit = trim((string) ($runtime['gomemlimit'] ?? ''))) !== '' ? $goMemLimit : null,
+                'gomemlimit_bytes' => max(0, (int) ($runtime['gomemlimit_bytes'] ?? 0)),
+                'gogc' => (int) ($runtime['gogc'] ?? 0),
+            ],
+            'updated_at' => ($updatedAt = trim((string) ($health['updated_at'] ?? ''))) !== '' ? $updatedAt : null,
+        ];
+    }
+
+    private function toBool(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_numeric($value)) {
+            return (int) $value !== 0;
+        }
+
+        $normalized = strtolower(trim((string) $value));
+        if ($normalized === '') {
+            return false;
+        }
+
+        return in_array($normalized, ['1', 'true', 'on', 'yes'], true);
     }
 }

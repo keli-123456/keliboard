@@ -220,7 +220,6 @@ class WsServer extends Command
                 $connection->xboard_is_v2node = (bool) $auth['is_v2node'];
                 $connection->xboard_group_ids = $this->normalizeIntList((array) ($auth['server']->group_ids ?? []));
                 $connections[$connection->id] = $connection;
-                $this->writeSnapshot($snapshotPath, $host, $port, $realtimeEnabled, $connections);
 
                 Log::info('Node realtime authenticated', [
                     'connection_id' => $connection->id,
@@ -238,6 +237,14 @@ class WsServer extends Command
                     'node_type' => $connection->xboard_node_type,
                     'ts' => time(),
                 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+            }
+
+            if (array_key_exists('health', $payload)) {
+                $connection->xboard_health = $this->normalizeHealthPayload($payload['health']);
+            }
+
+            if ((bool) ($connection->xboard_authenticated ?? false)) {
+                $this->writeSnapshot($snapshotPath, $host, $port, $realtimeEnabled, $connections);
             }
 
             if (($payload['type'] ?? null) === 'ping') {
@@ -326,6 +333,7 @@ class WsServer extends Command
                 'node_type' => $connection->xboard_node_type ?? null,
                 'group_ids' => $this->normalizeIntList((array) ($connection->xboard_group_ids ?? [])),
                 'authenticated_at' => $this->formatTimestamp((int) ($connection->xboard_authenticated_at ?? 0)),
+                'health' => $this->normalizeHealthPayload($connection->xboard_health ?? null),
             ];
         }
 
@@ -495,6 +503,7 @@ class WsServer extends Command
                 (string) ($row['node_type'] ?? ''),
                 implode(',', (array) ($row['group_ids'] ?? [])),
                 (string) ($row['authenticated_at'] ?? ''),
+                $this->renderHealthSummary((array) ($row['health'] ?? [])),
             ];
         }
 
@@ -513,11 +522,49 @@ class WsServer extends Command
         }
 
         $this->table(
-            ['connection_id', 'remote_ip', 'node_id', 'server_id', 'node_type', 'group_ids', 'authenticated_at'],
+            ['connection_id', 'remote_ip', 'node_id', 'server_id', 'node_type', 'group_ids', 'authenticated_at', 'health'],
             $rows
         );
 
         return self::SUCCESS;
+    }
+
+    private function normalizeHealthPayload(mixed $payload): ?array
+    {
+        if (!is_array($payload)) {
+            return null;
+        }
+
+        $runtime = is_array($payload['runtime'] ?? null) ? $payload['runtime'] : [];
+
+        return [
+            'status' => ($status = trim((string) ($payload['status'] ?? ''))) !== '' ? $status : null,
+            'ready' => $this->toBool($payload['ready'] ?? false),
+            'version' => ($version = trim((string) ($payload['version'] ?? ''))) !== '' ? $version : null,
+            'config_path' => ($configPath = trim((string) ($payload['config_path'] ?? ''))) !== '' ? $configPath : null,
+            'started_at' => ($startedAt = trim((string) ($payload['started_at'] ?? ''))) !== '' ? $startedAt : null,
+            'uptime_seconds' => max(0, (int) ($payload['uptime_seconds'] ?? 0)),
+            'last_reload_at' => ($lastReloadAt = trim((string) ($payload['last_reload_at'] ?? ''))) !== '' ? $lastReloadAt : null,
+            'node_count' => max(0, (int) ($payload['node_count'] ?? 0)),
+            'realtime_enabled' => $this->toBool($payload['realtime_enabled'] ?? false),
+            'health_port' => max(0, (int) ($payload['health_port'] ?? 0)),
+            'goroutines' => max(0, (int) ($payload['goroutines'] ?? 0)),
+            'runtime' => [
+                'gomemlimit' => ($goMemLimit = trim((string) ($runtime['gomemlimit'] ?? ''))) !== '' ? $goMemLimit : null,
+                'gomemlimit_bytes' => max(0, (int) ($runtime['gomemlimit_bytes'] ?? 0)),
+                'gogc' => (int) ($runtime['gogc'] ?? 0),
+            ],
+            'updated_at' => ($updatedAt = trim((string) ($payload['updated_at'] ?? ''))) !== '' ? $updatedAt : null,
+        ];
+    }
+
+    private function renderHealthSummary(array $health): string
+    {
+        $status = trim((string) ($health['status'] ?? ''));
+        $ready = array_key_exists('ready', $health) ? ($this->toBool($health['ready']) ? 'ready' : 'not-ready') : '';
+        $parts = array_values(array_filter([$status, $ready], fn ($part) => $part !== ''));
+
+        return $parts !== [] ? implode(' / ', $parts) : '-';
     }
 
     private function loadSnapshot(string $snapshotPath): array
@@ -569,5 +616,23 @@ class WsServer extends Command
         sort($normalized);
 
         return $normalized;
+    }
+
+    private function toBool(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_numeric($value)) {
+            return (int) $value !== 0;
+        }
+
+        $normalized = strtolower(trim((string) $value));
+        if ($normalized === '') {
+            return false;
+        }
+
+        return in_array($normalized, ['1', 'true', 'on', 'yes'], true);
     }
 }
