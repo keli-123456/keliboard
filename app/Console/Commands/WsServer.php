@@ -37,6 +37,7 @@ class WsServer extends Command
         $redisConnection = $settings->redisConnection();
         $redisQueue = $settings->redisQueue();
         $pingInterval = $settings->pingInterval();
+        $realtimeEnabled = $settings->enabled();
 
         $workerClass = \Workerman\Worker::class;
         $timerClass = \Workerman\Timer::class;
@@ -54,14 +55,14 @@ class WsServer extends Command
         $authenticator = app(NodeRealtimeAuthenticator::class);
         $connections = [];
 
-        $server->onWorkerStart = function () use (&$connections, $redisConnection, $redisQueue, $pingInterval, $timerClass, $settings) {
-            $timerClass::add(0.5, function () use (&$connections, $redisConnection, $redisQueue, $settings) {
+        $server->onWorkerStart = function () use (&$connections, $redisConnection, $redisQueue, $pingInterval, $timerClass, $realtimeEnabled) {
+            $timerClass::add(0.5, function () use (&$connections, $redisConnection, $redisQueue, $realtimeEnabled) {
                 try {
                     $redis = Redis::connection($redisConnection);
                     while (($payload = $redis->lpop($redisQueue)) !== null) {
                         $message = (string) $payload;
                         $decoded = json_decode($message, true);
-                        if (!$settings->enabled()) {
+                        if (!$realtimeEnabled) {
                             continue;
                         }
                         foreach ($connections as $id => $connection) {
@@ -87,8 +88,8 @@ class WsServer extends Command
                 }
             });
 
-            $timerClass::add($pingInterval, function () use (&$connections, $settings) {
-                if (!$settings->enabled()) {
+            $timerClass::add($pingInterval, function () use (&$connections, $realtimeEnabled) {
+                if (!$realtimeEnabled) {
                     foreach ($connections as $id => $connection) {
                         unset($connections[$id]);
                         try {
@@ -125,8 +126,8 @@ class WsServer extends Command
             });
         };
 
-        $server->onConnect = function ($connection) use (&$connections, $settings) {
-            if (!$settings->enabled()) {
+        $server->onConnect = function ($connection) use (&$connections, $realtimeEnabled) {
+            if (!$realtimeEnabled) {
                 $connection->close();
                 return;
             }
