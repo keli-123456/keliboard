@@ -18,18 +18,21 @@ class NodeRealtimeStatusService
     {
         $storagePath = storage_path('app/ws-server');
         $snapshot = $this->loadSnapshot($storagePath . '/connections.json');
+        $receiptSnapshot = $this->loadSnapshot($storagePath . '/receipts.json');
         $pid = $this->readPid($storagePath . '/workerman.pid');
         $connections = $this->normalizeConnections((array) ($snapshot['connections'] ?? []));
+        $receiptRows = $this->normalizeReceipts((array) ($receiptSnapshot['receipts'] ?? []));
         $realtimeEnabled = $this->settings->enabledSetting();
         $activityWindowSeconds = $this->resolveActivityWindowSeconds();
         $recentActiveNodes = $realtimeEnabled ? $this->resolveRecentActiveNodes($activityWindowSeconds) : [];
         $serverMeta = $this->loadServerMeta(array_values(array_unique(array_map(
             fn (array $row) => (int) ($row['server_id'] ?? 0),
-            $connections
+            array_merge($connections, $receiptRows)
         ))));
         $connectedCacheServerIds = $this->resolveConnectedCacheServerIds($connections, $serverMeta);
+        $receiptMap = $this->resolveReceiptMap($receiptRows, $serverMeta);
         $missingNodes = $realtimeEnabled ? $this->resolveMissingNodes($recentActiveNodes, $connectedCacheServerIds) : [];
-        $nodeStatuses = $realtimeEnabled ? $this->resolveNodeStatuses($recentActiveNodes, $connections, $serverMeta) : [];
+        $nodeStatuses = $realtimeEnabled ? $this->resolveNodeStatuses($recentActiveNodes, $connections, $serverMeta, $receiptMap) : [];
 
         return [
             'enabled' => $realtimeEnabled,
@@ -38,6 +41,7 @@ class NodeRealtimeStatusService
             'listen' => sprintf('%s:%d', $this->settings->listenHost(), $this->settings->listenPort()),
             'public_url' => $this->settings->resolvedPublicUrl(),
             'updated_at' => $snapshot['updated_at'] ?? null,
+            'receipt_updated_at' => $receiptSnapshot['updated_at'] ?? null,
             'active_connections' => count($connections),
             'connections' => $connections,
             'recent_active_window_seconds' => $activityWindowSeconds,
@@ -118,6 +122,33 @@ class NodeRealtimeStatusService
         }, $connections)));
     }
 
+    private function normalizeReceipts(array $receipts): array
+    {
+        return array_values(array_filter(array_map(function ($row) {
+            if (!is_array($row)) {
+                return null;
+            }
+
+            $serverId = (int) ($row['server_id'] ?? 0);
+            $topic = trim((string) ($row['topic'] ?? ''));
+            if ($serverId <= 0 || !in_array($topic, ['config', 'users'], true)) {
+                return null;
+            }
+
+            return [
+                'server_id' => $serverId,
+                'node_id' => (string) ($row['node_id'] ?? ''),
+                'node_type' => $row['node_type'] ?? null,
+                'topic' => $topic,
+                'event_id' => (string) ($row['event_id'] ?? ''),
+                'reason' => (string) ($row['reason'] ?? ''),
+                'status' => (string) ($row['status'] ?? ''),
+                'message' => (string) ($row['message'] ?? ''),
+                'updated_at' => $row['updated_at'] ?? null,
+            ];
+        }, $receipts)));
+    }
+
     private function resolveRecentActiveNodes(int $activityWindowSeconds): array
     {
         $cutoff = time() - max(60, $activityWindowSeconds);
@@ -189,7 +220,36 @@ class NodeRealtimeStatusService
         }));
     }
 
-    private function resolveNodeStatuses(array $recentActiveNodes, array $connections, array $serverMeta): array
+    private function resolveReceiptMap(array $receiptRows, array $serverMeta): array
+    {
+        $receiptMap = [];
+
+        foreach ($receiptRows as $receipt) {
+            $serverId = (int) ($receipt['server_id'] ?? 0);
+            if ($serverId <= 0) {
+                continue;
+            }
+
+            $cacheServerId = (int) ($serverMeta[$serverId]['cache_server_id'] ?? $serverId);
+            if ($cacheServerId <= 0) {
+                continue;
+            }
+
+            $topic = (string) ($receipt['topic'] ?? '');
+            if ($topic === '') {
+                continue;
+            }
+
+            $current = $receiptMap[$cacheServerId][$topic] ?? null;
+            if ($current === null || strcmp((string) ($receipt['updated_at'] ?? ''), (string) ($current['updated_at'] ?? '')) >= 0) {
+                $receiptMap[$cacheServerId][$topic] = $receipt;
+            }
+        }
+
+        return $receiptMap;
+    }
+
+    private function resolveNodeStatuses(array $recentActiveNodes, array $connections, array $serverMeta, array $receiptMap): array
     {
         $statuses = [];
         $connectionMap = [];
@@ -246,6 +306,8 @@ class NodeRealtimeStatusService
                 'remote_ip' => $matchedConnection['remote_ip'] ?? null,
                 'group_ids' => array_values(array_map('intval', (array) ($matchedConnection['group_ids'] ?? []))),
                 'connection_count' => (int) ($matchedConnection['connection_count'] ?? 0),
+                'last_config_receipt' => $receiptMap[$cacheServerId]['config'] ?? null,
+                'last_users_receipt' => $receiptMap[$cacheServerId]['users'] ?? null,
             ];
 
             unset($connectionMap[$cacheServerId]);
@@ -266,6 +328,8 @@ class NodeRealtimeStatusService
                 'remote_ip' => $connection['remote_ip'] ?? null,
                 'group_ids' => array_values(array_map('intval', (array) ($connection['group_ids'] ?? []))),
                 'connection_count' => (int) ($connection['connection_count'] ?? 0),
+                'last_config_receipt' => $receiptMap[(int) $cacheServerId]['config'] ?? null,
+                'last_users_receipt' => $receiptMap[(int) $cacheServerId]['users'] ?? null,
             ];
         }
 

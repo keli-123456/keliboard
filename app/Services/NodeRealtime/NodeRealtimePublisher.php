@@ -6,6 +6,7 @@ use App\Models\Server;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
+use Illuminate\Support\Str;
 
 class NodeRealtimePublisher
 {
@@ -68,6 +69,11 @@ class NodeRealtimePublisher
     {
         if (!$this->settings->enabled()) {
             return;
+        }
+
+        $eventId = trim((string) ($payload['event_id'] ?? ''));
+        if ($eventId === '') {
+            $payload['event_id'] = (string) Str::uuid();
         }
 
         $queue = $this->settings->redisQueue();

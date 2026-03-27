@@ -35,11 +35,13 @@ class WsServer extends Command
         $host = $settings->listenHost();
         $port = $settings->listenPort();
         $snapshotPath = $storagePath . '/connections.json';
+        $receiptPath = $storagePath . '/receipts.json';
         $redisConnection = $settings->redisConnection();
         $redisQueue = $settings->redisQueue();
         $pingInterval = $settings->pingInterval();
         $realtimeEnabled = $settings->enabled();
         $queueBatchSize = 20;
+        $receiptState = $this->loadReceiptState($receiptPath);
 
         if ($action === 'status') {
             return $this->renderStatus($snapshotPath, $host, $port, $realtimeEnabled);
@@ -67,6 +69,7 @@ class WsServer extends Command
 
         $server->onWorkerStart = function () use (
             &$connections,
+            &$receiptState,
             $pingInterval,
             $timerClass,
             $realtimeEnabled,
@@ -74,10 +77,12 @@ class WsServer extends Command
             $redisQueue,
             $queueBatchSize,
             $snapshotPath,
+            $receiptPath,
             $host,
             $port
         ) {
             $this->writeSnapshot($snapshotPath, $host, $port, $realtimeEnabled, $connections);
+            $this->writeReceiptSnapshot($receiptPath, $receiptState);
 
             $timerClass::add(0.5, function () use (&$connections, $realtimeEnabled, $redisConnection, $redisQueue, $queueBatchSize) {
                 if (!$realtimeEnabled) {
@@ -159,7 +164,7 @@ class WsServer extends Command
             });
         };
 
-        $server->onMessage = function ($connection, $message) use ($authenticator, &$connections, $realtimeEnabled, $snapshotPath, $host, $port) {
+        $server->onMessage = function ($connection, $message) use ($authenticator, &$connections, &$receiptState, $realtimeEnabled, $snapshotPath, $receiptPath, $host, $port) {
             if (!$realtimeEnabled) {
                 $connection->close();
                 return;
@@ -240,6 +245,11 @@ class WsServer extends Command
                     'type' => 'pong',
                     'ts' => time(),
                 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+                return;
+            }
+
+            if (($payload['type'] ?? null) === 'receipt') {
+                $this->recordReceipt($receiptState, $receiptPath, $connection, $payload);
             }
         };
 
@@ -339,6 +349,118 @@ class WsServer extends Command
             File::put($snapshotPath, $payload);
         } catch (\Throwable $e) {
             Log::warning('Node realtime snapshot write failed', ['error' => $e->getMessage()]);
+        }
+    }
+
+    private function recordReceipt(array &$receiptState, string $receiptPath, object $connection, array $payload): void
+    {
+        if (!(bool) ($connection->xboard_authenticated ?? false)) {
+            return;
+        }
+
+        $topic = trim((string) ($payload['topic'] ?? ''));
+        if (!in_array($topic, ['config', 'users'], true)) {
+            return;
+        }
+
+        $serverId = (int) ($connection->xboard_server_id ?? 0);
+        if ($serverId <= 0) {
+            return;
+        }
+
+        $receiptState[$this->receiptStateKey($serverId, $topic)] = [
+            'server_id' => $serverId,
+            'node_id' => (string) ($connection->xboard_input_node_id ?? ''),
+            'node_type' => $connection->xboard_node_type ?? null,
+            'topic' => $topic,
+            'event_id' => trim((string) ($payload['event_id'] ?? '')),
+            'reason' => trim((string) ($payload['reason'] ?? '')),
+            'status' => trim((string) ($payload['status'] ?? '')),
+            'message' => trim((string) ($payload['message'] ?? '')),
+            'updated_at' => date(DATE_ATOM),
+        ];
+
+        Log::info('Node realtime receipt recorded', [
+            'server_id' => $serverId,
+            'node_id' => (string) ($connection->xboard_input_node_id ?? ''),
+            'topic' => $topic,
+            'status' => trim((string) ($payload['status'] ?? '')),
+            'event_id' => trim((string) ($payload['event_id'] ?? '')),
+        ]);
+
+        $this->writeReceiptSnapshot($receiptPath, $receiptState);
+    }
+
+    private function receiptStateKey(int $serverId, string $topic): string
+    {
+        return $serverId . ':' . $topic;
+    }
+
+    private function loadReceiptState(string $receiptPath): array
+    {
+        $snapshot = $this->loadSnapshot($receiptPath);
+        $state = [];
+
+        foreach ((array) ($snapshot['receipts'] ?? []) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $serverId = (int) ($row['server_id'] ?? 0);
+            $topic = trim((string) ($row['topic'] ?? ''));
+            if ($serverId <= 0 || $topic === '') {
+                continue;
+            }
+
+            $state[$this->receiptStateKey($serverId, $topic)] = [
+                'server_id' => $serverId,
+                'node_id' => (string) ($row['node_id'] ?? ''),
+                'node_type' => $row['node_type'] ?? null,
+                'topic' => $topic,
+                'event_id' => (string) ($row['event_id'] ?? ''),
+                'reason' => (string) ($row['reason'] ?? ''),
+                'status' => (string) ($row['status'] ?? ''),
+                'message' => (string) ($row['message'] ?? ''),
+                'updated_at' => $row['updated_at'] ?? null,
+            ];
+        }
+
+        return $state;
+    }
+
+    private function writeReceiptSnapshot(string $receiptPath, array $receiptState): void
+    {
+        $rows = array_values(array_map(function (array $row): array {
+            return [
+                'server_id' => (int) ($row['server_id'] ?? 0),
+                'node_id' => (string) ($row['node_id'] ?? ''),
+                'node_type' => $row['node_type'] ?? null,
+                'topic' => (string) ($row['topic'] ?? ''),
+                'event_id' => (string) ($row['event_id'] ?? ''),
+                'reason' => (string) ($row['reason'] ?? ''),
+                'status' => (string) ($row['status'] ?? ''),
+                'message' => (string) ($row['message'] ?? ''),
+                'updated_at' => $row['updated_at'] ?? null,
+            ];
+        }, $receiptState));
+
+        usort($rows, function (array $left, array $right): int {
+            return [$left['server_id'], $left['topic']] <=> [$right['server_id'], $right['topic']];
+        });
+
+        $payload = json_encode([
+            'updated_at' => date(DATE_ATOM),
+            'receipts' => $rows,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+
+        if ($payload === false) {
+            return;
+        }
+
+        try {
+            File::put($receiptPath, $payload);
+        } catch (\Throwable $e) {
+            Log::warning('Node realtime receipt snapshot write failed', ['error' => $e->getMessage()]);
         }
     }
 
