@@ -3,6 +3,7 @@
 namespace App\Services\NodeRealtime;
 
 use App\Models\Server;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
 
@@ -17,11 +18,15 @@ class NodeRealtimePublisher
 
     public function invalidateConfig(string $reason = 'config.updated', array $payload = []): void
     {
+        $this->clearConfigCache();
         $this->publish('config', $reason, $payload);
     }
 
     public function invalidateConfigForServers(array $serverIds, string $reason = 'config.updated', array $payload = []): void
     {
+        $serverIds = $this->normalizeIntList($serverIds);
+        $this->clearConfigCache($serverIds);
+
         $targets = $this->buildTargets(serverIds: $serverIds);
         if ($targets === null) {
             return;
@@ -42,11 +47,15 @@ class NodeRealtimePublisher
 
     public function invalidateUsers(string $reason = 'users.updated', array $payload = []): void
     {
+        $this->clearUserCache();
         $this->publish('users', $reason, $payload);
     }
 
     public function invalidateUsersForGroups(array $groupIds, string $reason = 'users.updated', array $payload = []): void
     {
+        $groupIds = $this->normalizeIntList($groupIds);
+        $this->clearUserCache($this->resolveServerIdsByGroupIds($groupIds));
+
         $targets = $this->buildTargets(groupIds: $groupIds);
         if ($targets === null) {
             return;
@@ -119,6 +128,75 @@ class NodeRealtimePublisher
             ->map(fn ($id) => (int) $id)
             ->values()
             ->all();
+    }
+
+    private function resolveServerIdsByGroupIds(array $groupIds): array
+    {
+        $groupIds = $this->normalizeIntList($groupIds);
+        if ($groupIds === []) {
+            return [];
+        }
+
+        return Server::query()
+            ->get(['id', 'group_ids'])
+            ->filter(function (Server $server) use ($groupIds): bool {
+                return array_intersect(
+                    $this->normalizeIntList((array) ($server->group_ids ?? [])),
+                    $groupIds
+                ) !== [];
+            })
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->values()
+            ->all();
+    }
+
+    private function clearConfigCache(?array $serverIds = null): void
+    {
+        $this->clearServerApiCacheEntries('config', ['default', 'v2node'], $serverIds);
+    }
+
+    private function clearUserCache(?array $serverIds = null): void
+    {
+        $this->clearServerApiCacheEntries('user', [''], $serverIds);
+    }
+
+    private function clearServerApiCacheEntries(string $prefix, array $suffixes, ?array $serverIds = null): void
+    {
+        $ids = $serverIds === null
+            ? Server::query()->pluck('id')->map(fn ($id) => (int) $id)->all()
+            : $this->normalizeIntList($serverIds);
+
+        if ($ids === []) {
+            return;
+        }
+
+        $cache = $this->getServerApiCache();
+        foreach ($ids as $serverId) {
+            foreach ($suffixes as $suffix) {
+                $key = $prefix === 'config'
+                    ? "server_api:config:{$serverId}:{$suffix}"
+                    : "server_api:user:{$serverId}";
+                try {
+                    $cache->forget($key);
+                } catch (\Throwable $e) {
+                    Log::warning('Node realtime cache clear failed', [
+                        'key' => $key,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+        }
+    }
+
+    private function getServerApiCache()
+    {
+        $store = config('server_api_cache.store');
+        try {
+            return is_string($store) && $store !== '' ? Cache::store($store) : Cache::store();
+        } catch (\Throwable) {
+            return Cache::store();
+        }
     }
 
     private function normalizeIntList(array $values): array

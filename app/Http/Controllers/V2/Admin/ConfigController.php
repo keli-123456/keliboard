@@ -26,6 +26,22 @@ use Illuminate\Support\Facades\File;
 
 class ConfigController extends Controller
 {
+    /**
+     * These settings change what nodes pull from /api/v2/server/config.
+     * app_url is included because realtime public URL may fallback to it.
+     */
+    private const NODE_CONFIG_INVALIDATION_KEYS = [
+        'app_url',
+        'server_pull_interval',
+        'server_push_interval',
+        'node_realtime_enable',
+        'node_realtime_path',
+        'node_realtime_public_url',
+        'node_realtime_public_port',
+        'node_realtime_ping_interval',
+        'node_report_min_traffic',
+        'device_online_min_traffic',
+    ];
 
 
     public function getEmailTemplate()
@@ -319,6 +335,7 @@ class ConfigController extends Controller
     public function save(ConfigSave $request)
     {
         $data = $request->validated();
+        $savedKeys = array_keys($data);
         $templateKeys = [
             'subscribe_template_singbox' => 'singbox',
             'subscribe_template_clash' => 'clash',
@@ -355,9 +372,23 @@ class ConfigController extends Controller
             admin_setting([$k => $v]);
         }
 
-        app(NodeRealtimePublisher::class)->invalidateConfig('admin.config.saved');
+        $this->dispatchNodeConfigInvalidation($savedKeys);
 
         return $this->success(true);
+    }
+
+    private function dispatchNodeConfigInvalidation(array $savedKeys): void
+    {
+        $affectedKeys = array_values(array_intersect($savedKeys, self::NODE_CONFIG_INVALIDATION_KEYS));
+        if ($affectedKeys === []) {
+            return;
+        }
+
+        sort($affectedKeys);
+
+        app(NodeRealtimePublisher::class)->invalidateConfig('admin.config.saved', [
+            'keys' => $affectedKeys,
+        ]);
     }
 
     /**
