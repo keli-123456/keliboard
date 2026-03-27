@@ -21,7 +21,7 @@ class NodeRealtimeStatusService
         $pid = $this->readPid($storagePath . '/workerman.pid');
         $connections = $this->normalizeConnections((array) ($snapshot['connections'] ?? []));
         $realtimeEnabled = $this->settings->enabledSetting();
-        $activityWindowSeconds = max(Server::CHECK_INTERVAL * 2, 600);
+        $activityWindowSeconds = $this->resolveActivityWindowSeconds();
         $recentActiveNodes = $realtimeEnabled ? $this->resolveRecentActiveNodes($activityWindowSeconds) : [];
         $missingNodes = $realtimeEnabled ? $this->resolveMissingNodes($recentActiveNodes, $connections) : [];
 
@@ -39,6 +39,19 @@ class NodeRealtimeStatusService
             'missing_nodes_count' => count($missingNodes),
             'missing_nodes' => $missingNodes,
         ];
+    }
+
+    private function resolveActivityWindowSeconds(): int
+    {
+        $minutes = (int) admin_setting('node_realtime_alert_window_minutes', 10);
+        if ($minutes < 5) {
+            $minutes = 5;
+        }
+        if ($minutes > 120) {
+            $minutes = 120;
+        }
+
+        return $minutes * 60;
     }
 
     private function loadSnapshot(string $path): array
