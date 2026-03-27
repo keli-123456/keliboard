@@ -7,6 +7,7 @@ use App\Services\NodeRealtime\NodeRealtimeSettings;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Redis;
 
 class WsServer extends Command
 {
@@ -33,8 +34,11 @@ class WsServer extends Command
         $settings = app(NodeRealtimeSettings::class);
         $host = $settings->listenHost();
         $port = $settings->listenPort();
+        $redisConnection = $settings->redisConnection();
+        $redisQueue = $settings->redisQueue();
         $pingInterval = $settings->pingInterval();
         $realtimeEnabled = $settings->enabled();
+        $queueBatchSize = 20;
 
         $workerClass = \Workerman\Worker::class;
         $timerClass = \Workerman\Timer::class;
@@ -52,7 +56,53 @@ class WsServer extends Command
         $authenticator = app(NodeRealtimeAuthenticator::class);
         $connections = [];
 
-        $server->onWorkerStart = function () use (&$connections, $pingInterval, $timerClass, $realtimeEnabled) {
+        $server->onWorkerStart = function () use (
+            &$connections,
+            $pingInterval,
+            $timerClass,
+            $realtimeEnabled,
+            $redisConnection,
+            $redisQueue,
+            $queueBatchSize
+        ) {
+            $timerClass::add(0.5, function () use (&$connections, $realtimeEnabled, $redisConnection, $redisQueue, $queueBatchSize) {
+                if (!$realtimeEnabled) {
+                    return;
+                }
+
+                try {
+                    $redis = Redis::connection($redisConnection);
+                    for ($i = 0; $i < $queueBatchSize; $i++) {
+                        $payload = $redis->lpop($redisQueue);
+                        if ($payload === null) {
+                            break;
+                        }
+
+                        $message = (string) $payload;
+                        $decoded = json_decode($message, true);
+                        foreach ($connections as $id => $connection) {
+                            if (!(bool) ($connection->xboard_authenticated ?? false)) {
+                                continue;
+                            }
+                            if (!$this->shouldDeliverMessage($connection, is_array($decoded) ? $decoded : null)) {
+                                continue;
+                            }
+                            try {
+                                $connection->send($message);
+                            } catch (\Throwable) {
+                                unset($connections[$id]);
+                                try {
+                                    $connection->close();
+                                } catch (\Throwable) {
+                                }
+                            }
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    Log::warning('Node realtime queue drain failed', ['error' => $e->getMessage()]);
+                }
+            });
+
             $timerClass::add($pingInterval, function () use (&$connections, $realtimeEnabled) {
                 if (!$realtimeEnabled) {
                     foreach ($connections as $id => $connection) {
