@@ -12,6 +12,7 @@ use App\Protocols\Stash;
 use App\Protocols\Surfboard;
 use App\Protocols\Surge;
 use App\Services\MailService;
+use App\Services\NodeRealtime\NodeRealtimePublisher;
 use App\Services\RechargeBonusService;
 use App\Services\TelegramService;
 use App\Services\ThemeService;
@@ -339,6 +340,8 @@ class ConfigController extends Controller
             }
             admin_setting([$k => $v]);
         }
+
+        app(NodeRealtimePublisher::class)->invalidateConfig('admin.config.saved');
 
         return $this->success(true);
     }

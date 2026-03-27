@@ -5,6 +5,7 @@ namespace App\Http\Controllers\V2\Admin\Server;
 use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
 use App\Models\ServerRoute;
+use App\Services\NodeRealtime\NodeRealtimePublisher;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
@@ -66,7 +67,11 @@ class RouteController extends Controller
         if ($request->input('id')) {
             try {
                 $route = ServerRoute::find($request->input('id'));
+                if (!$route) {
+                    throw new ApiException('路由不存在');
+                }
                 $route->update($params);
+                app(NodeRealtimePublisher::class)->invalidateConfigForRoutes([(int) $route->id], 'admin.server_route.saved');
                 return $this->success(true);
             } catch (\Exception $e) {
                 Log::error($e);
@@ -86,7 +91,9 @@ class RouteController extends Controller
     {
         $route = ServerRoute::find($request->input('id'));
         if (!$route) throw new ApiException('路由不存在');
+        $routeId = (int) $route->id;
         if (!$route->delete()) throw new ApiException('删除失败');
+        app(NodeRealtimePublisher::class)->invalidateConfigForRoutes([$routeId], 'admin.server_route.deleted');
         return [
             'data' => true
         ];

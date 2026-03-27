@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\User;
 use App\Models\UserSyncEvent;
 use App\Models\UserSyncState;
+use App\Services\NodeRealtime\NodeRealtimePublisher;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
@@ -161,6 +162,15 @@ class UserSyncService
     private function insertEvent(array $data): void
     {
         $data['created_at'] = now();
-        UserSyncEvent::query()->create($data);
+        $event = UserSyncEvent::query()->create($data);
+        $targetGroupIds = array_values(array_unique(array_filter([
+            isset($data['old_group_id']) ? (int) $data['old_group_id'] : 0,
+            isset($data['group_id']) ? (int) $data['group_id'] : 0,
+        ])));
+        DB::afterCommit(function () use ($event, $targetGroupIds) {
+            app(NodeRealtimePublisher::class)->invalidateUsersForGroups($targetGroupIds, 'user.delta', [
+                'revision' => (int) $event->id,
+            ]);
+        });
     }
 }

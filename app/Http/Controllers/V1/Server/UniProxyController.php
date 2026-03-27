@@ -706,10 +706,11 @@ class UniProxyController extends Controller
 	            default => []
 	        };
 
-	        $response['base_config'] = [
-	            'push_interval' => (int) admin_setting('server_push_interval', 60),
-	            'pull_interval' => (int) admin_setting('server_pull_interval', 60)
-	        ];
+        $response['base_config'] = [
+            'push_interval' => (int) admin_setting('server_push_interval', 60),
+            'pull_interval' => (int) admin_setting('server_pull_interval', 60),
+            'realtime' => $this->buildRealtimeBaseConfig(),
+        ];
 
 	        if (!empty($node['route_ids'])) {
 	            $response['routes'] = ServerService::getRoutes($node['route_ids']);
@@ -722,15 +723,54 @@ class UniProxyController extends Controller
 	        return $response;
 	    }
 
-	    private function buildConfigCacheEntry($node, bool $isV2Node): array
-	    {
-	        $response = $this->buildConfigResponse($node, $isV2Node);
-	        $body = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-	        $eTag = sha1($body === false ? '' : $body);
+    private function buildConfigCacheEntry($node, bool $isV2Node): array
+    {
+        $response = $this->buildConfigResponse($node, $isV2Node);
+        $body = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $eTag = sha1($body === false ? '' : $body);
 
 	        return [
-	            'etag' => $eTag,
-	            'body' => $body === false ? '{}' : $body,
-	        ];
-	    }
+            'etag' => $eTag,
+            'body' => $body === false ? '{}' : $body,
+        ];
+    }
+
+    private function buildRealtimeBaseConfig(): array
+    {
+        $url = $this->resolveRealtimePublicUrl();
+        $enabled = (bool) config('node_realtime.enabled', false) && $url !== '';
+
+        return [
+            'enabled' => $enabled,
+            'url' => $enabled ? $url : '',
+            'ping_interval' => max(5, (int) config('node_realtime.ping_interval', 30)),
+        ];
+    }
+
+    private function resolveRealtimePublicUrl(): string
+    {
+        $explicit = trim((string) config('node_realtime.public_url', ''));
+        if ($explicit !== '') {
+            return $explicit;
+        }
+
+        $appUrl = trim((string) admin_setting('app_url', ''));
+        if ($appUrl === '') {
+            return '';
+        }
+
+        $parts = parse_url($appUrl);
+        if (!is_array($parts) || empty($parts['host'])) {
+            return '';
+        }
+
+        $path = '/' . ltrim((string) config('node_realtime.path', '/ws/node'), '/');
+        $scheme = (($parts['scheme'] ?? 'http') === 'https') ? 'wss' : 'ws';
+        $host = (string) $parts['host'];
+        $port = max(1, (int) config('node_realtime.public_port', config('node_realtime.port', 7002)));
+        $defaultPort = $scheme === 'wss' ? 443 : 80;
+        $portSuffix = $port === $defaultPort ? '' : ':' . $port;
+
+        return "{$scheme}://{$host}{$portSuffix}{$path}";
+    }
 }

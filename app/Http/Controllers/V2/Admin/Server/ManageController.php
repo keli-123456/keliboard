@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\ServerSave;
 use App\Models\Server;
 use App\Models\ServerGroup;
+use App\Services\NodeRealtime\NodeRealtimePublisher;
 use App\Services\ServerService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -112,6 +113,7 @@ class ManageController extends Controller
             }
             try {
                 $server->update($params);
+                app(NodeRealtimePublisher::class)->invalidateConfigForServers([(int) $server->id], 'admin.server.saved');
                 return $this->success(true);
             } catch (\Exception $e) {
                 Log::error($e);
@@ -153,9 +155,15 @@ class ManageController extends Controller
         $request->validate([
             'id' => 'required|integer',
         ]);
-        if (Server::where('id', $request->id)->delete() === false) {
+        $server = Server::find($request->id);
+        if (!$server) {
+            return $this->fail([400202, '服务器不存在']);
+        }
+        $serverId = (int) $server->id;
+        if ($server->delete() === false) {
             return $this->fail([500, '删除失败']);
         }
+        app(NodeRealtimePublisher::class)->invalidateConfigForServers([$serverId], 'admin.server.deleted');
         return $this->success(true);
     }
 
