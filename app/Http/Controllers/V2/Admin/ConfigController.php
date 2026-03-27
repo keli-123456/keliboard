@@ -14,6 +14,7 @@ use App\Protocols\Surge;
 use App\Services\MailService;
 use App\Services\NodeRealtime\NodeRealtimePublisher;
 use App\Services\NodeRealtime\NodeRealtimeSettings;
+use App\Services\NodeRealtime\NodeRealtimeStatusService;
 use App\Services\RechargeBonusService;
 use App\Services\TelegramService;
 use App\Services\ThemeService;
@@ -102,6 +103,11 @@ class ConfigController extends Controller
         }
 
         return $this->success($configMappings);
+    }
+
+    public function realtimeStatus(NodeRealtimeStatusService $statusService)
+    {
+        return $this->success($statusService->getStatus());
     }
 
     /**
