@@ -109,7 +109,8 @@ class Plugin extends AbstractPlugin implements PaymentInterface
         ksort($paramsForSign);
         $signString = stripslashes(urldecode(http_build_query($paramsForSign))) . $this->getConfig('bepusdt_apitoken');
 
-        if ($signature !== md5($signString)) {
+        $generatedSignature = md5($signString);
+        if (!hash_equals($generatedSignature, (string) $signature)) {
             return false;
         }
 
