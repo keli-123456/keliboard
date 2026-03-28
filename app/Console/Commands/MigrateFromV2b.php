@@ -4,8 +4,10 @@ namespace App\Console\Commands;
 
 use App\Models\Setting;
 use Illuminate\Console\Command;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class MigrateFromV2b extends Command
 {
@@ -18,11 +20,6 @@ class MigrateFromV2b extends Command
         if($version === 'config'){
             $this->MigrateV2ConfigToV2Settings();
             return;
-        }
-
-        // V2boardpro 特殊处理（需要迁移节点到统一表）
-        if ($version === 'v2boardpro') {
-            return $this->migrateFromV2boardpro();
         }
 
         // Define your SQL commands based on versions
@@ -123,12 +120,7 @@ class MigrateFromV2b extends Command
                     `updated_at` INT NOT NULL
                 );",
             ],
-            'wyx2685' => [
-                "ALTER TABLE `v2_plan` DROP COLUMN `device_limit`;",
-                "ALTER TABLE `v2_server_hysteria` DROP COLUMN `version`, DROP COLUMN `obfs`, DROP COLUMN `obfs_password`;",
-                "ALTER TABLE `v2_server_trojan` DROP COLUMN `network`, DROP COLUMN `network_settings`;",
-                "ALTER TABLE `v2_user` DROP COLUMN `device_limit`;"
-            ],
+            'wyx2685' => [],
             'v2boardpro' => [
                 // V2boardpro 表结构已是最新，无需修改
                 // 所有迁移由 xboard:update 中的 create_v2_server_table 自动处理
@@ -137,6 +129,14 @@ class MigrateFromV2b extends Command
 
         if (!$version) {
             $version = $this->choice('请选择你迁移前的V2board版本:', array_keys($sqlCommands));
+        }
+
+        if ($version === 'v2boardpro') {
+            return $this->migrateFromV2boardpro();
+        }
+
+        if ($version === 'wyx2685') {
+            return $this->migrateFromWyx2685();
         }
 
         if (array_key_exists($version, $sqlCommands)) {
@@ -198,9 +198,25 @@ class MigrateFromV2b extends Command
      */
     protected function migrateFromV2boardpro()
     {
+        return $this->migrateWithServerBackupFlow('V2boardpro', 'V2boardpro → Xboardpro');
+    }
+
+    /**
+     * 从 wyx2685/v2board 迁移节点数据
+     */
+    protected function migrateFromWyx2685()
+    {
+        return $this->migrateWithServerBackupFlow('wyx2685/v2board', 'wyx2685/v2board → Xboardpro');
+    }
+
+    /**
+     * 通过节点备份恢复的方式迁移旧版数据库
+     */
+    protected function migrateWithServerBackupFlow(string $sourceName, string $title)
+    {
         $this->info('');
         $this->info('========================================');
-        $this->info('  V2boardpro → Xboardpro 节点迁移工具');
+        $this->info("  {$title} 节点迁移工具");
         $this->info('========================================');
         $this->info('');
 
@@ -252,19 +268,25 @@ class MigrateFromV2b extends Command
             
             $this->info('');
             
-                $this->info('1️⃣  备份节点数据...');
-                // 在备份前强制清理临时表（确保干净的起始状态）
-                $this->cleanupTempBackupTable();
-                $this->backupServerData();
-                $this->info('✅ 节点数据已备份到临时表');
-                
-                $this->info('');
-                $this->info('2️⃣  删除旧节点表（对齐 Xboard 表结构）...');
-                $this->dropOldServerTables();
-                $this->info('✅ 旧节点表已删除');
-                
-                $this->info('');
-                $this->info('2.5️⃣  智能标记已存在字段的迁移...');
+            $this->info('1️⃣  备份节点数据...');
+            // 在备份前强制清理临时表（确保干净的起始状态）
+            $this->cleanupTempBackupTable();
+            $this->backupServerData();
+            $this->info('✅ 节点数据已备份到临时表');
+
+            $this->info('');
+            $this->info('2️⃣  初始化迁移记录...');
+            $this->call('db:seed', ['--class' => 'OriginV2bMigrationsTableSeeder']);
+            $this->markCreateServerTableMigration();
+            $this->info('✅ 数据库迁移记录初始化完成');
+
+            $this->info('');
+            $this->info('2.2️⃣  创建统一节点表...');
+            $this->createServerTableIfNotExists();
+            $this->info('✅ v2_server 表已就绪');
+
+            $this->info('');
+            $this->info('2.5️⃣  智能标记已存在字段的迁移...');
                 $this->markExistingColumnMigrations();
                 $this->info('✅ 字段检测完成');
                 
@@ -273,17 +295,22 @@ class MigrateFromV2b extends Command
                 $this->preFixStatTable();
                 $this->info('✅ v2_stat 表结构已预先修复');
                 
-                $this->info('');
-                $this->info('3️⃣  执行 Xboard 迁移（对齐表结构）...');
-                $this->line('  📝 跳过已存在字段的添加');
-                $this->line('  📝 执行字段修改和优化');
-                $this->call('migrate', ['--force' => true]);
-                $this->info('✅ Xboard 表结构对齐完成');
-                
-                $this->info('');
-                $this->info('4️⃣  从备份恢复节点数据到 v2_server...');
-                $this->restoreServerData();
-                $this->info('✅ 节点数据已恢复');
+            $this->info('');
+            $this->info('3️⃣  执行 Xboard 迁移（对齐表结构）...');
+            $this->line('  📝 跳过已存在字段的添加');
+            $this->line('  📝 执行字段修改和优化');
+            $this->call('migrate', ['--force' => true]);
+            $this->info('✅ Xboard 表结构对齐完成');
+
+            $this->info('');
+            $this->info('4️⃣  从备份恢复节点数据到 v2_server...');
+            $this->restoreServerData();
+            $this->info('✅ 节点数据已恢复');
+
+            $this->info('');
+            $this->info('4.5️⃣  清理旧节点分表...');
+            $this->dropOldServerTables();
+            $this->info('✅ 旧节点表已删除');
 
             $this->info('');
             $this->info('5️⃣  修复数据库配置和缓存...');
@@ -310,7 +337,7 @@ class MigrateFromV2b extends Command
             $this->info("🎉 数据库迁移成功！共迁移 {$totalMigrated} 个节点");
             $this->info('========================================');
             $this->info('');
-            $this->info('✅ V2boardpro 数据库已成功对齐到 Xboardpro');
+            $this->info("✅ {$sourceName} 数据库已成功对齐到 Xboardpro");
             $this->info('');
             $this->info('⚠️  重要提示：');
             $this->warn('  所有旧的 session 已清理，请重新登录管理面板');
@@ -793,8 +820,9 @@ class MigrateFromV2b extends Command
         DB::statement("CREATE TABLE `v2_server_backup_temp` (
             `id` int NOT NULL,
             `type` varchar(20) NOT NULL,
+            `source` varchar(64) NOT NULL,
             `data` longtext NOT NULL,
-            PRIMARY KEY (`type`, `id`)
+            PRIMARY KEY (`source`, `id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
         $this->line("  ✅ 临时备份表已创建");
         
@@ -810,6 +838,7 @@ class MigrateFromV2b extends Command
             'v2_server_hysteria' => 'hysteria',
             'v2_server_tuic' => 'tuic',
             'v2_server_anytls' => 'anytls',
+            'v2_server_v2node' => null,
         ];
         
         $totalBackedUp = 0;
@@ -819,17 +848,25 @@ class MigrateFromV2b extends Command
             if (DB::getSchemaBuilder()->hasTable($table)) {
                 $servers = DB::table($table)->get();
                 $typeBackedUp = 0;
+                $typeStats = [];
                 
                 foreach ($servers as $server) {
                     try {
+                        $normalizedType = $type ?? $this->normalizeLegacyNodeType($server->protocol ?? null);
+                        if (!$normalizedType) {
+                            $this->warn("    ⚠️  跳过不支持的节点协议: {$table} ID {$server->id}");
+                            $skippedDuplicates++;
+                            continue;
+                        }
+
                         // 检查是否已存在（避免重复插入）
                         $exists = DB::table('v2_server_backup_temp')
-                            ->where('type', $type)
+                            ->where('source', $table)
                             ->where('id', $server->id)
                             ->exists();
                         
                         if ($exists) {
-                            $this->warn("    ⚠️  跳过重复节点: {$type} ID {$server->id}");
+                            $this->warn("    ⚠️  跳过重复节点: {$table} ID {$server->id}");
                             $skippedDuplicates++;
                             continue;
                         }
@@ -837,21 +874,26 @@ class MigrateFromV2b extends Command
                         // 插入备份数据
                         DB::table('v2_server_backup_temp')->insert([
                             'id' => $server->id,
-                            'type' => $type,
+                            'type' => $normalizedType,
+                            'source' => $table,
                             'data' => json_encode($server)
                         ]);
                         $totalBackedUp++;
                         $typeBackedUp++;
+                        $typeStats[$normalizedType] = ($typeStats[$normalizedType] ?? 0) + 1;
                     } catch (\Exception $e) {
-                        $this->warn("    ⚠️  备份节点失败: {$type} ID {$server->id} - " . $e->getMessage());
+                        $this->warn("    ⚠️  备份节点失败: {$table} ID {$server->id} - " . $e->getMessage());
                         $skippedDuplicates++;
                     }
                 }
                 
                 if ($typeBackedUp > 0) {
-                    $this->line("  ✅ 备份 {$type}: {$typeBackedUp} 个节点");
+                    $detail = collect($typeStats)
+                        ->map(fn ($count, $serverType) => "{$serverType}: {$count}")
+                        ->implode(', ');
+                    $this->line("  ✅ 备份 {$table}: {$typeBackedUp} 个节点" . ($detail !== '' ? " ({$detail})" : ''));
                 } else {
-                    $this->line("  ⏭️  跳过 {$type}: 0 个节点");
+                    $this->line("  ⏭️  跳过 {$table}: 0 个节点");
                 }
             }
         }
@@ -877,17 +919,24 @@ class MigrateFromV2b extends Command
             return;
         }
         
-        $backups = DB::table('v2_server_backup_temp')->get();
+        $backups = DB::table('v2_server_backup_temp')
+            ->orderBy('source')
+            ->orderBy('id')
+            ->get();
         $totalRestored = 0;
+        $usedCodes = [];
+        $restoredIdMap = [];
+        $pendingParentUpdates = [];
         
         foreach ($backups as $backup) {
             $server = json_decode($backup->data);
             $type = $backup->type;
+            $code = $this->resolveLegacyServerCode($type, (string) $server->id, $backup->source, $usedCodes);
             
             // 准备基础数据（注意 Xboard 使用 group_ids 和 route_ids 复数形式）
             $serverData = [
                 'type' => $type,
-                'code' => (string)$server->id,  // ✅ code 只保存数字，节点后端用这个对接
+                'code' => $code,
                 'group_ids' => isset($server->group_id) ? (is_string($server->group_id) ? $server->group_id : json_encode($server->group_id)) : '[]',
                 'route_ids' => isset($server->route_id) ? (is_string($server->route_id) ? $server->route_id : json_encode($server->route_id)) : '[]',
                 'name' => $server->name,
@@ -904,11 +953,39 @@ class MigrateFromV2b extends Command
             ];
             
             // 根据类型设置 protocol_settings
-            $serverData['protocol_settings'] = $this->buildProtocolSettings($type, $server);
+            $serverData['protocol_settings'] = $this->buildProtocolSettings($type, $server, $backup->source);
             
             // 插入到 v2_server
-            DB::table('v2_server')->insert($serverData);
+            $insertedId = DB::table('v2_server')->insertGetId($serverData);
+            $restoredIdMap[$this->buildRestoreMapKey($backup->source, $type, (string) $server->id)] = $insertedId;
+            if (!empty($server->parent_id)) {
+                $pendingParentUpdates[] = [
+                    'server_id' => $insertedId,
+                    'source' => $backup->source,
+                    'type' => $type,
+                    'parent_id' => (string) $server->parent_id,
+                ];
+            }
             $totalRestored++;
+        }
+
+        foreach ($pendingParentUpdates as $pendingParent) {
+            $parentKey = $this->buildRestoreMapKey(
+                $pendingParent['source'],
+                $pendingParent['type'],
+                $pendingParent['parent_id']
+            );
+            $parentId = $restoredIdMap[$parentKey]
+                ?? DB::table('v2_server')
+                    ->where('type', $pendingParent['type'])
+                    ->where('code', $pendingParent['parent_id'])
+                    ->value('id');
+
+            if ($parentId) {
+                DB::table('v2_server')
+                    ->where('id', $pendingParent['server_id'])
+                    ->update(['parent_id' => $parentId]);
+            }
         }
         
         $this->line("  📊 总计恢复: {$totalRestored} 个节点");
@@ -951,12 +1028,18 @@ class MigrateFromV2b extends Command
     /**
      * 构建 protocol_settings JSON
      */
-    protected function buildProtocolSettings($type, $server)
+    protected function buildProtocolSettings($type, $server, ?string $source = null)
     {
+        if ($source === 'v2_server_v2node') {
+            return json_encode($this->buildProtocolSettingsFromV2node($type, $server));
+        }
+
         $settings = [];
         
         switch ($type) {
             case 'hysteria':
+                $obfsPassword = $server->obfs_password ?? null;
+                $obfsType = $server->obfs ?? 'salamander';
                 $settings = [
                     'version' => $server->version ?? 1,
                     'bandwidth' => [
@@ -964,28 +1047,29 @@ class MigrateFromV2b extends Command
                         'down' => $server->down_mbps ?? 100,
                     ],
                     'obfs' => [
-                        'open' => !empty($server->obfs_password),
-                        'type' => $server->obfs ?? 'salamander',
-                        'password' => $server->obfs_password ?? '',
+                        'open' => !empty($obfsPassword) || !empty($server->obfs),
+                        'type' => $obfsType,
+                        'password' => $obfsPassword,
                     ],
                     'tls' => [
                         'server_name' => $server->server_name ?? '',
-                        'allow_insecure' => $server->insecure ?? 0
+                        'allow_insecure' => (bool) ($server->insecure ?? 0)
                     ]
                 ];
                 if (isset($server->alpn)) {
-                    $settings['alpn'] = $server->alpn;
+                    $settings['alpn'] = $this->normalizeStringArray($server->alpn);
                 }
                 break;
                 
             case 'trojan':
                 $settings = [
                     'server_name' => $server->server_name ?? '',
-                    'allow_insecure' => $server->allow_insecure ?? 0,
+                    'allow_insecure' => (bool) ($server->allow_insecure ?? 0),
                     'network' => $server->network ?? 'tcp',
                 ];
-                if (isset($server->network_settings)) {
-                    $settings['network_settings'] = $this->parseJson($server->network_settings);
+                $networkSettings = $this->parseJson($server->network_settings ?? $server->networkSettings ?? null);
+                if ($networkSettings !== null) {
+                    $settings['network_settings'] = $networkSettings;
                 }
                 break;
                 
@@ -994,11 +1078,13 @@ class MigrateFromV2b extends Command
                     'tls' => $server->tls ?? 0,
                     'network' => $server->network ?? 'tcp',
                 ];
-                if (isset($server->tlsSettings)) {
-                    $settings['tls_settings'] = $this->parseJson($server->tlsSettings);
+                $tlsSettings = $this->parseJson($server->tlsSettings ?? $server->tls_settings ?? null);
+                if ($tlsSettings !== null) {
+                    $settings['tls_settings'] = $tlsSettings;
                 }
-                if (isset($server->networkSettings)) {
-                    $settings['network_settings'] = $this->parseJson($server->networkSettings);
+                $networkSettings = $this->parseJson($server->networkSettings ?? $server->network_settings ?? null);
+                if ($networkSettings !== null) {
+                    $settings['network_settings'] = $networkSettings;
                 }
                 if (isset($server->rules)) {
                     $settings['rules'] = $this->parseJson($server->rules);
@@ -1012,21 +1098,17 @@ class MigrateFromV2b extends Command
                 ];
                 
                 // 处理 TLS/Reality 配置
-                if (isset($server->tls_settings)) {
-                    $tlsSettings = $this->parseJson($server->tls_settings);
-                    
-                    // 如果是 Reality (tls=2)，同时保存到 tls_settings 和 reality_settings
+                $tlsSettings = $this->parseJson($server->tls_settings ?? $server->tlsSettings ?? null);
+                if ($tlsSettings !== null) {
+                    $settings['tls_settings'] = $tlsSettings;
                     if (($server->tls ?? 0) == 2) {
-                        $settings['tls_settings'] = $tlsSettings;
-                        $settings['reality_settings'] = $tlsSettings; // ✅ Xboard 前端从这里读取
-                    } else {
-                        // 普通 TLS
-                        $settings['tls_settings'] = $tlsSettings;
+                        $settings['reality_settings'] = $tlsSettings;
                     }
                 }
                 
-                if (isset($server->network_settings)) {
-                    $settings['network_settings'] = $this->parseJson($server->network_settings);
+                $networkSettings = $this->parseJson($server->network_settings ?? $server->networkSettings ?? null);
+                if ($networkSettings !== null) {
+                    $settings['network_settings'] = $networkSettings;
                 }
                 if (isset($server->flow)) {
                     $settings['flow'] = $server->flow;
@@ -1052,17 +1134,36 @@ class MigrateFromV2b extends Command
             case 'tuic':
                 $settings = [
                     'version' => $server->version ?? 5,
-                    'server_name' => $server->server_name ?? '',
                     'congestion_control' => $server->congestion_control ?? 'cubic',
-                    'allow_insecure' => $server->insecure ?? 0,
-                    'disable_sni' => $server->disable_sni ?? 0,
+                    'udp_relay_mode' => $server->udp_relay_mode ?? 'native',
+                    'zero_rtt_handshake' => (bool) ($server->zero_rtt_handshake ?? 0),
+                    'server_name' => $server->server_name ?? '',
+                    'allow_insecure' => (bool) ($server->insecure ?? 0),
+                    'tls' => [
+                        'server_name' => $server->server_name ?? '',
+                        'allow_insecure' => (bool) ($server->insecure ?? 0),
+                    ],
+                    'alpn' => ['h3'],
                 ];
+                $tlsSettings = $this->parseJson($server->tls_settings ?? null);
+                if ($tlsSettings !== null) {
+                    $settings['tls_settings'] = $tlsSettings;
+                }
+                if (isset($server->disable_sni)) {
+                    $settings['disable_sni'] = (bool) $server->disable_sni;
+                }
                 break;
                 
             case 'anytls':
                 $settings = [
+                    'tls_mode' => 1,
+                    'network' => $server->network ?? 'tcp',
                     'server_name' => $server->server_name ?? '',
-                    'allow_insecure' => $server->insecure ?? 0,
+                    'allow_insecure' => (bool) ($server->insecure ?? 0),
+                    'tls' => [
+                        'server_name' => $server->server_name ?? '',
+                        'allow_insecure' => (bool) ($server->insecure ?? 0),
+                    ],
                 ];
                 if (isset($server->padding_scheme)) {
                     $settings['padding_scheme'] = $this->parseJson($server->padding_scheme);
@@ -1071,6 +1172,185 @@ class MigrateFromV2b extends Command
         }
         
         return json_encode($settings);
+    }
+
+    /**
+     * 将 wyx2685 的 v2_server_v2node 记录映射到统一 protocol_settings
+     */
+    protected function buildProtocolSettingsFromV2node(string $type, object $server): array
+    {
+        $tlsSettings = $this->parseJson($server->tls_settings ?? null);
+        $networkSettings = $this->parseJson($server->network_settings ?? null);
+        $encryptionSettings = $this->parseJson($server->encryption_settings ?? null);
+        $paddingScheme = $this->normalizePaddingScheme($server->padding_scheme ?? null);
+        $serverName = data_get($tlsSettings, 'server_name', '');
+        $allowInsecure = (bool) data_get($tlsSettings, 'allow_insecure', false);
+
+        return match ($type) {
+            'trojan' => array_filter([
+                'server_name' => $serverName,
+                'allow_insecure' => $allowInsecure,
+                'network' => $server->network ?? 'tcp',
+                'network_settings' => $networkSettings,
+                'tls_settings' => $tlsSettings,
+            ], fn ($value) => $value !== null),
+            'vmess' => array_filter([
+                'tls' => (int) ($server->tls ?? 0),
+                'network' => $server->network ?? 'tcp',
+                'network_settings' => $networkSettings,
+                'tls_settings' => $tlsSettings,
+            ], fn ($value) => $value !== null),
+            'vless' => array_filter([
+                'tls' => (int) ($server->tls ?? 0),
+                'tls_settings' => $tlsSettings,
+                'reality_settings' => ((int) ($server->tls ?? 0) === 2) ? $tlsSettings : null,
+                'flow' => $server->flow ?? null,
+                'network' => $server->network ?? 'tcp',
+                'network_settings' => $networkSettings,
+                'encryption' => $server->encryption ?? null,
+                'encryption_settings' => $encryptionSettings,
+            ], fn ($value) => $value !== null),
+            'shadowsocks' => array_filter([
+                'cipher' => $server->cipher ?? 'aes-128-gcm',
+                'network' => $server->network ?? 'tcp',
+                'network_settings' => $networkSettings,
+            ], fn ($value) => $value !== null),
+            'hysteria' => [
+                'version' => 2,
+                'bandwidth' => [
+                    'up' => (int) ($server->up_mbps ?? 100),
+                    'down' => (int) ($server->down_mbps ?? 100),
+                ],
+                'obfs' => [
+                    'open' => !empty($server->obfs) || !empty($server->obfs_password),
+                    'type' => $server->obfs ?? 'salamander',
+                    'password' => $server->obfs_password ?? null,
+                ],
+                'tls' => [
+                    'server_name' => $serverName,
+                    'allow_insecure' => $allowInsecure,
+                ],
+                'tls_settings' => $tlsSettings,
+            ],
+            'tuic' => array_filter([
+                'version' => 5,
+                'congestion_control' => $server->congestion_control ?? 'cubic',
+                'udp_relay_mode' => $server->udp_relay_mode ?? 'native',
+                'zero_rtt_handshake' => (bool) ($server->zero_rtt_handshake ?? 0),
+                'disable_sni' => (bool) ($server->disable_sni ?? 0),
+                'alpn' => ['h3'],
+                'server_name' => $serverName,
+                'allow_insecure' => $allowInsecure,
+                'tls' => [
+                    'server_name' => $serverName,
+                    'allow_insecure' => $allowInsecure,
+                ],
+                'tls_settings' => $tlsSettings,
+            ], fn ($value) => $value !== null),
+            'anytls' => array_filter([
+                'tls_mode' => ((int) ($server->tls ?? 1) === 2) ? 2 : 1,
+                'network' => $server->network ?? 'tcp',
+                'network_settings' => $networkSettings,
+                'padding_scheme' => $paddingScheme,
+                'server_name' => $serverName,
+                'allow_insecure' => $allowInsecure,
+                'tls' => ((int) ($server->tls ?? 1) === 2) ? null : [
+                    'server_name' => $serverName,
+                    'allow_insecure' => $allowInsecure,
+                ],
+                'tls_settings' => $tlsSettings,
+                'reality_settings' => ((int) ($server->tls ?? 1) === 2) ? $tlsSettings : null,
+            ], fn ($value) => $value !== null),
+            default => [],
+        };
+    }
+
+    protected function normalizeLegacyNodeType($protocol): ?string
+    {
+        if (!is_string($protocol) || $protocol === '') {
+            return null;
+        }
+
+        return match ($protocol) {
+            'hysteria2' => 'hysteria',
+            'trojan', 'vmess', 'vless', 'shadowsocks', 'tuic', 'anytls' => $protocol,
+            default => null,
+        };
+    }
+
+    protected function resolveLegacyServerCode(string $type, string $originalCode, string $source, array &$usedCodes): string
+    {
+        $originalCode = trim($originalCode);
+        if ($originalCode === '') {
+            $originalCode = '0';
+        }
+
+        if (!isset($usedCodes[$type][$originalCode])) {
+            $usedCodes[$type][$originalCode] = true;
+            return $originalCode;
+        }
+
+        $prefix = str_replace('v2_server_', '', $source);
+        $candidate = "{$prefix}-{$originalCode}";
+        $suffix = 2;
+        while (isset($usedCodes[$type][$candidate])) {
+            $candidate = "{$prefix}-{$originalCode}-{$suffix}";
+            $suffix++;
+        }
+
+        $usedCodes[$type][$candidate] = true;
+        $this->warn("  ⚠️  检测到重复节点编码: {$type}#{$originalCode}，已改为 {$candidate}");
+
+        return $candidate;
+    }
+
+    protected function buildRestoreMapKey(string $source, string $type, string $originalId): string
+    {
+        return "{$source}:{$type}:{$originalId}";
+    }
+
+    protected function normalizeStringArray($value, array $default = []): array
+    {
+        $parsed = $this->parseJson($value);
+        if (is_array($parsed)) {
+            return array_values(array_filter(array_map(fn ($item) => trim((string) $item), $parsed), fn ($item) => $item !== ''));
+        }
+
+        if (is_string($value) && trim($value) !== '') {
+            return [trim($value)];
+        }
+
+        return $default;
+    }
+
+    protected function normalizePaddingScheme($value): ?array
+    {
+        $parsed = $this->parseJson($value);
+        if (is_array($parsed)) {
+            return $parsed;
+        }
+
+        if (is_string($value) && trim($value) !== '') {
+            return [trim($value)];
+        }
+
+        return null;
+    }
+
+    protected function markCreateServerTableMigration(): void
+    {
+        $migration = '2025_01_05_131425_create_v2_server_table';
+        $exists = DB::table('migrations')
+            ->where('migration', $migration)
+            ->exists();
+
+        if (!$exists) {
+            DB::table('migrations')->insert([
+                'migration' => $migration,
+                'batch' => 1,
+            ]);
+            $this->line("  ✅ 已标记: {$migration} (统一节点表改由迁移脚本手动创建)");
+        }
     }
 
     /**
@@ -1086,6 +1366,7 @@ class MigrateFromV2b extends Command
             'v2_server_hysteria',
             'v2_server_tuic',
             'v2_server_anytls',
+            'v2_server_v2node',
         ];
 
         foreach ($oldTables as $table) {
@@ -1108,8 +1389,27 @@ class MigrateFromV2b extends Command
             $this->line('  ✅ 旧表已删除');
         }
 
-        // 该方法已废弃，v2_server 表由 Xboard 迁移自动创建
-        $this->info('  ℹ️  v2_server 表将由 Xboard 迁移自动创建');
+        Schema::create('v2_server', function (Blueprint $table) {
+            $table->id('id');
+            $table->string('type')->comment('Server Type');
+            $table->string('code')->nullable()->comment('Server Spectific Key');
+            $table->unsignedInteger('parent_id')->nullable()->comment('Parent Server ID');
+            $table->json('group_ids')->nullable()->comment('Group ID');
+            $table->json('route_ids')->nullable()->comment('Route ID');
+            $table->string('name')->comment('Server Name');
+            $table->decimal('rate', 8, 2)->comment('Traffic Rate');
+            $table->json('tags')->nullable()->comment('Server Tags');
+            $table->string('host')->comment('Server Host');
+            $table->string('port')->comment('Client Port');
+            $table->integer('server_port')->comment('Server Port');
+            $table->json('protocol_settings')->nullable();
+            $table->boolean('show')->default(false)->comment('Show in List');
+            $table->integer('sort')->nullable()->unsigned()->index();
+            $table->timestamps();
+            $table->unique(['type', 'code']);
+        });
+
+        $this->info('  ℹ️  已手动创建 v2_server 表，并跳过自动节点表合并迁移');
     }
     
     /**
