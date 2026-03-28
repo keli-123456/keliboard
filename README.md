@@ -51,6 +51,8 @@ docker compose up -d
 - [Deploy with aaPanel](./docs/en/installation/aapanel.md)
 - [Deploy with aaPanel + Docker](./docs/en/installation/aapanel-docker.md) (Recommended)
 - [宝塔 + Docker 部署（中文）](./docs/zh/installation/aapanel-docker.md)
+- [宝塔 + Docker 快速部署（中文）](./docs/zh/installation/aapanel-docker-quickstart.md)
+- [宝塔 + Docker 运维手册（中文）](./docs/zh/operations/runbook.md)
 
 ### Migration Guides
 - [Migrate from v2board dev](./docs/en/migration/v2board-dev.md)
