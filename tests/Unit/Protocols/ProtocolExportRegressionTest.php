@@ -5,8 +5,13 @@ declare(strict_types=1);
 namespace Tests\Unit\Protocols;
 
 use App\Models\Server;
+use App\Protocols\Clash;
+use App\Protocols\ClashMeta;
+use App\Protocols\Loon;
 use App\Protocols\QuantumultX;
+use App\Protocols\Shadowrocket;
 use App\Protocols\Stash;
+use App\Protocols\SingBox;
 use App\Protocols\Surfboard;
 use App\Protocols\Surge;
 use Tests\TestCase;
@@ -246,5 +251,345 @@ final class ProtocolExportRegressionTest extends TestCase
         };
 
         $this->assertSame([], $protocol->exposeServers());
+    }
+
+    public function test_loon_build_hysteria2_exports_download_bandwidth_and_sni(): void
+    {
+        $uri = Loon::buildHysteria('secret', [
+            'name' => 'Loon Hy2',
+            'host' => 'loon.example.com',
+            'port' => 8443,
+            'protocol_settings' => [
+                'version' => 2,
+                'tls' => [
+                    'server_name' => 'loon-sni.example.com',
+                    'allow_insecure' => true,
+                ],
+                'bandwidth' => [
+                    'download_bandwidth' => 88,
+                ],
+            ],
+        ], [
+            'u' => 0,
+            'd' => 0,
+            'transfer_enable' => 0,
+            'expired_at' => 0,
+        ]);
+
+        $this->assertStringContainsString('Loon Hy2=Hysteria2', $uri);
+        $this->assertStringContainsString('sni=loon-sni.example.com', $uri);
+        $this->assertStringContainsString('skip-cert-verify=true', $uri);
+        $this->assertStringContainsString('download-bandwidth=88', $uri);
+    }
+
+    public function test_loon_filters_out_hysteria2_for_old_client_versions(): void
+    {
+        $protocol = new class([], [[
+            'name' => 'Legacy Loon Hy2',
+            'type' => Server::TYPE_HYSTERIA,
+            'protocol_settings' => ['version' => 2],
+        ]], 'loon', '636') extends Loon {
+            public function exposeServers(): array
+            {
+                return $this->servers;
+            }
+
+            public function handle()
+            {
+                return $this->servers;
+            }
+        };
+
+        $this->assertSame([], $protocol->exposeServers());
+    }
+
+    public function test_shadowrocket_build_vless_reality_exports_expected_query_fields(): void
+    {
+        $uri = Shadowrocket::buildVless('user-uuid', [
+            'name' => 'SR Reality',
+            'host' => 'sr.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 2,
+                'network' => 'ws',
+                'reality_settings' => [
+                    'server_name' => 'sr-sni.example.com',
+                    'public_key' => 'sr-public-key',
+                    'short_id' => 'sr-short-id',
+                ],
+                'network_settings' => [
+                    'path' => '/sr',
+                    'headers' => [
+                        'Host' => 'cdn.sr.example.com',
+                    ],
+                ],
+                'client_fingerprint' => 'chrome',
+            ],
+        ]);
+
+        $this->assertStringContainsString('vless://', $uri);
+        $this->assertStringContainsString('sni=sr-sni.example.com', $uri);
+        $this->assertStringContainsString('pbk=sr-public-key', $uri);
+        $this->assertStringContainsString('sid=sr-short-id', $uri);
+        $this->assertStringContainsString('fp=chrome', $uri);
+        $this->assertStringContainsString('obfs=websocket', $uri);
+        $this->assertStringContainsString('path=%2Fsr', $uri);
+        $this->assertStringContainsString('obfsParam=cdn.sr.example.com', $uri);
+    }
+
+    public function test_shadowrocket_build_hysteria2_and_anytls_export_current_fields(): void
+    {
+        $hysteria = Shadowrocket::buildHysteria('secret', [
+            'name' => 'SR Hy2',
+            'host' => 'sr-hy.example.com',
+            'port' => 8443,
+            'protocol_settings' => [
+                'version' => 2,
+                'tls' => [
+                    'server_name' => 'sr-hy-sni.example.com',
+                    'allow_insecure' => true,
+                ],
+                'obfs' => [
+                    'open' => true,
+                    'type' => 'salamander',
+                    'password' => 'mask-pass',
+                ],
+                'hop_interval' => 30,
+            ],
+            'ports' => '30000-30100',
+        ]);
+        $anytls = Shadowrocket::buildAnyTLS('secret', [
+            'name' => 'SR AnyTLS',
+            'host' => 'sr-anytls.example.com',
+            'port' => 9443,
+            'protocol_settings' => [
+                'tls' => [
+                    'server_name' => 'sr-anytls-sni.example.com',
+                    'allow_insecure' => true,
+                ],
+            ],
+        ]);
+
+        $this->assertStringContainsString('hysteria2://secret@sr-hy.example.com:8443', $hysteria);
+        $this->assertStringContainsString('peer=sr-hy-sni.example.com', $hysteria);
+        $this->assertStringContainsString('obfs=salamander', $hysteria);
+        $this->assertStringContainsString('obfs-password=mask-pass', $hysteria);
+        $this->assertStringContainsString('keepalive=30', $hysteria);
+        $this->assertStringContainsString('mport=30000-30100', $hysteria);
+        $this->assertStringContainsString('anytls://secret@sr-anytls.example.com:9443', $anytls);
+        $this->assertStringContainsString('sni=sr-anytls-sni.example.com', $anytls);
+        $this->assertStringContainsString('insecure=1', $anytls);
+    }
+
+    public function test_clashmeta_build_vless_reality_exports_meta_specific_fields(): void
+    {
+        $config = ClashMeta::buildVless('user-uuid', [
+            'name' => 'Meta Reality',
+            'host' => 'meta.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 2,
+                'network' => 'ws',
+                'reality_settings' => [
+                    'allow_insecure' => true,
+                    'server_name' => 'meta-sni.example.com',
+                    'public_key' => 'meta-public-key',
+                    'short_id' => 'meta-short-id',
+                ],
+                'client_fingerprint' => 'chrome',
+                'network_settings' => [
+                    'path' => '/meta',
+                    'headers' => [
+                        'Host' => 'cdn.meta.example.com',
+                    ],
+                ],
+            ],
+        ]);
+
+        $this->assertSame('vless', $config['type']);
+        $this->assertTrue($config['tls']);
+        $this->assertTrue($config['skip-cert-verify']);
+        $this->assertSame('meta-sni.example.com', $config['servername']);
+        $this->assertSame('meta-public-key', $config['reality-opts']['public-key']);
+        $this->assertSame('meta-short-id', $config['reality-opts']['short-id']);
+        $this->assertSame('chrome', $config['client-fingerprint']);
+        $this->assertSame('ws', $config['network']);
+        $this->assertSame('/meta', $config['ws-opts']['path']);
+        $this->assertSame('cdn.meta.example.com', $config['ws-opts']['headers']['Host']);
+    }
+
+    public function test_clashmeta_build_hysteria2_and_anytls_export_current_shape(): void
+    {
+        $hysteria = ClashMeta::buildHysteria('secret', [
+            'name' => 'Meta Hy2',
+            'host' => 'meta-hy.example.com',
+            'port' => 8443,
+            'protocol_settings' => [
+                'version' => 2,
+                'tls' => [
+                    'server_name' => 'meta-hy-sni.example.com',
+                    'allow_insecure' => true,
+                ],
+                'bandwidth' => [
+                    'up' => 120,
+                    'down' => 240,
+                ],
+                'obfs' => [
+                    'open' => true,
+                    'type' => 'salamander',
+                    'password' => 'meta-mask',
+                ],
+            ],
+        ], []);
+        $anytls = ClashMeta::buildAnyTLS('secret', [
+            'name' => 'Meta AnyTLS',
+            'host' => 'meta-anytls.example.com',
+            'port' => 9443,
+            'protocol_settings' => [
+                'tls' => [
+                    'server_name' => 'meta-anytls-sni.example.com',
+                    'allow_insecure' => true,
+                ],
+            ],
+        ]);
+
+        $this->assertSame('hysteria2', $hysteria['type']);
+        $this->assertSame('secret', $hysteria['password']);
+        $this->assertSame('meta-hy-sni.example.com', $hysteria['sni']);
+        $this->assertSame('salamander', $hysteria['obfs']);
+        $this->assertSame('meta-mask', $hysteria['obfs-password']);
+        $this->assertSame('anytls', $anytls['type']);
+        $this->assertSame('meta-anytls-sni.example.com', $anytls['sni']);
+        $this->assertTrue($anytls['skip-cert-verify']);
+    }
+
+    public function test_clashmeta_filters_out_hysteria2_for_old_clients(): void
+    {
+        $protocol = new class([], [[
+            'name' => 'Legacy Meta Hy2',
+            'type' => Server::TYPE_HYSTERIA,
+            'protocol_settings' => ['version' => 2],
+        ]], 'clashmetaforandroid', '2.8.9') extends ClashMeta {
+            public function exposeServers(): array
+            {
+                return $this->servers;
+            }
+
+            public function handle()
+            {
+                return $this->servers;
+            }
+        };
+
+        $this->assertSame([], $protocol->exposeServers());
+    }
+
+    public function test_singbox_build_vless_reality_and_anytls_export_expected_fields(): void
+    {
+        $protocol = new class([], []) extends SingBox {
+            public function handle()
+            {
+                return [];
+            }
+
+            public function buildVlessForTest(string $password, array $server): array
+            {
+                return $this->buildVless($password, $server);
+            }
+
+            public function buildAnyTlsForTest(string $password, array $server): array
+            {
+                return $this->buildAnyTLS($password, $server);
+            }
+        };
+
+        $vless = $protocol->buildVlessForTest('user-uuid', [
+            'name' => 'SingBox Reality',
+            'host' => 'sb.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 2,
+                'network' => 'ws',
+                'flow' => 'xtls-rprx-vision',
+                'client_fingerprint' => 'chrome',
+                'reality_settings' => [
+                    'server_name' => 'sb-sni.example.com',
+                    'public_key' => 'sb-public-key',
+                    'short_id' => 'sb-short-id',
+                ],
+                'network_settings' => [
+                    'path' => '/sb',
+                    'headers' => [
+                        'Host' => 'cdn.sb.example.com',
+                    ],
+                ],
+            ],
+        ]);
+        $anytls = $protocol->buildAnyTlsForTest('secret', [
+            'name' => 'SingBox AnyTLS',
+            'host' => 'sb-anytls.example.com',
+            'port' => 9443,
+            'protocol_settings' => [
+                'tls' => [
+                    'server_name' => 'sb-anytls-sni.example.com',
+                    'allow_insecure' => true,
+                ],
+                'alpn' => ['h3', 'http/1.1'],
+            ],
+        ]);
+
+        $this->assertSame('vless', $vless['type']);
+        $this->assertSame('sb-sni.example.com', $vless['tls']['server_name']);
+        $this->assertSame('sb-public-key', $vless['tls']['reality']['public_key']);
+        $this->assertSame('sb-short-id', $vless['tls']['reality']['short_id']);
+        $this->assertSame('chrome', $vless['tls']['utls']['fingerprint']);
+        $this->assertSame('ws', $vless['transport']['type']);
+        $this->assertSame('/sb', $vless['transport']['path']);
+        $this->assertSame('cdn.sb.example.com', $vless['transport']['headers']['Host']);
+        $this->assertSame('anytls', $anytls['type']);
+        $this->assertSame('sb-anytls-sni.example.com', $anytls['tls']['server_name']);
+        $this->assertTrue($anytls['tls']['insecure']);
+        $this->assertSame(['h3', 'http/1.1'], $anytls['tls']['alpn']);
+    }
+
+    public function test_clash_build_trojan_ws_and_socks_tls_export_expected_shape(): void
+    {
+        $trojan = Clash::buildTrojan('secret', [
+            'name' => 'Clash Trojan',
+            'host' => 'clash.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'server_name' => 'clash-sni.example.com',
+                'allow_insecure' => true,
+                'network' => 'ws',
+                'network_settings' => [
+                    'path' => '/clash',
+                    'headers' => [
+                        'Host' => 'cdn.clash.example.com',
+                    ],
+                ],
+            ],
+        ]);
+        $socks = Clash::buildSocks5('secret', [
+            'name' => 'Clash Socks',
+            'host' => 'socks.example.com',
+            'port' => 1080,
+            'protocol_settings' => [
+                'tls' => true,
+                'tls_settings' => [
+                    'allow_insecure' => true,
+                ],
+            ],
+        ]);
+
+        $this->assertSame('trojan', $trojan['type']);
+        $this->assertSame('ws', $trojan['network']);
+        $this->assertSame('/clash', $trojan['ws-opts']['path']);
+        $this->assertSame('cdn.clash.example.com', $trojan['ws-opts']['headers']['Host']);
+        $this->assertSame('clash-sni.example.com', $trojan['sni']);
+        $this->assertTrue($trojan['skip-cert-verify']);
+        $this->assertSame('socks5', $socks['type']);
+        $this->assertTrue($socks['tls']);
+        $this->assertTrue($socks['skip-cert-verify']);
     }
 }
