@@ -50,6 +50,7 @@ docker compose up -d
 - [Deploy with Docker Compose](./docs/en/installation/docker-compose.md)
 - [Deploy with aaPanel](./docs/en/installation/aapanel.md)
 - [Deploy with aaPanel + Docker](./docs/en/installation/aapanel-docker.md) (Recommended)
+- [宝塔 + Docker 部署（中文）](./docs/zh/installation/aapanel-docker.md)
 
 ### Migration Guides
 - [Migrate from v2board dev](./docs/en/migration/v2board-dev.md)
