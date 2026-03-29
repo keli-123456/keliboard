@@ -31,7 +31,7 @@ class CleanupExpiredOnlineStatus extends Command
             $affected = 0;
             User::query()
                 ->where('online_count', '>', 0)
-                ->where('last_online_at', '<', now()->subMinutes(5))
+                ->whereRaw('last_online_at < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 5 MINUTE)')
                 ->chunkById(1000, function ($users) use (&$affected) {
                     if ($users->isEmpty()) {
                         return;

@@ -10,6 +10,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
 use App\Services\UserOnlineService;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class UpdateAliveDataJob implements ShouldQueue
@@ -32,8 +33,6 @@ class UpdateAliveDataJob implements ShouldQueue
   {
     try {
       $updateAt = time();
-      $nowTs = time();
-      $now = now();
       $nodeKey = $this->nodeType . $this->nodeId;
       $userUpdates = [];
 
@@ -79,8 +78,8 @@ class UpdateAliveDataJob implements ShouldQueue
             collect($userUpdates)
               ->filter(fn($row) => in_array((int) ($row['id'] ?? 0), $existingIds, true))
               ->chunk(1000)
-              ->each(function ($chunk) use ($now) {
-                collect($chunk)->each(function ($update) use ($now) {
+              ->each(function ($chunk) {
+                collect($chunk)->each(function ($update) {
                   $id = (int) ($update['id'] ?? 0);
                   $count = (int) ($update['count'] ?? 0);
                   if ($id > 0) {
@@ -88,7 +87,7 @@ class UpdateAliveDataJob implements ShouldQueue
                       ->whereKey($id)
                       ->update([
                         'online_count' => $count,
-                        'last_online_at' => $now,
+                        'last_online_at' => DB::raw('CURRENT_TIMESTAMP'),
                       ]);
                   }
                 });
