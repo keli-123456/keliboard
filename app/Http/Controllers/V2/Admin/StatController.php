@@ -18,6 +18,8 @@ use Illuminate\Http\Request;
 
 class StatController extends Controller
 {
+    private const USER_TRAFFIC_NOISE_FLOOR_BYTES = 10240;
+
     private $service;
     public function __construct(StatisticalService $service)
     {
@@ -244,6 +246,7 @@ class StatController extends Controller
             ->where('record_at', '>=', $startAt)
             ->where('record_type', 'd')
             ->groupBy('user_id', 'record_at')
+            ->havingRaw('SUM(u) + SUM(d) >= ?', [self::USER_TRAFFIC_NOISE_FLOOR_BYTES])
             ->orderBy('record_at', 'DESC')
             ->get()
             ->map(function ($record) {
@@ -292,7 +295,7 @@ class StatController extends Controller
             ->where('record_at', $recordAt)
             ->where('record_type', 'd')
             ->groupBy('server_id', 'server_type')
-            ->havingRaw('SUM(u) + SUM(d) > 0')
+            ->havingRaw('SUM(u) + SUM(d) >= ?', [self::USER_TRAFFIC_NOISE_FLOOR_BYTES])
             ->orderByDesc('total')
             ->get();
 
