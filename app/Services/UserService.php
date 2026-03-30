@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Jobs\StatServerJob;
 use App\Jobs\StatUserJob;
+use App\Jobs\StatUserNodeDayJob;
 use App\Jobs\TrafficFetchJob;
 use App\Models\Order;
 use App\Models\Plan;
@@ -127,6 +128,7 @@ class UserService
         collect($data)->chunk(1000)->each(function ($chunk) use ($timestamp, $server, $protocol) {
             TrafficFetchJob::dispatch($server, $chunk->toArray(), $protocol, $timestamp);
             StatUserJob::dispatch($server, $chunk->toArray(), $protocol, 'd');
+            StatUserNodeDayJob::dispatch($server, $chunk->toArray(), $protocol, 'd');
             StatServerJob::dispatch($server, $chunk->toArray(), $protocol, 'd');
         });
     }

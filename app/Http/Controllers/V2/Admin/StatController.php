@@ -3,12 +3,14 @@
 namespace App\Http\Controllers\V2\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Resources\TrafficNodeLogResource;
 use App\Models\CommissionLog;
 use App\Models\Order;
 use App\Models\Server;
 use App\Models\Stat;
 use App\Models\StatServer;
 use App\Models\StatUser;
+use App\Models\StatUserNodeDay;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Services\StatisticalService;
@@ -234,14 +236,68 @@ class StatController extends Controller
         ]);
 
         $pageSize = $request->input('pageSize', 10);
-        $records = StatUser::orderBy('record_at', 'DESC')
+        $page = max(1, (int) $request->input('page', 1));
+        $startAt = now()->subDays(29)->startOfDay()->timestamp;
+        $records = StatUser::query()
+            ->selectRaw('MIN(id) as id, user_id, SUM(u) as u, SUM(d) as d, MIN(server_rate) as min_rate, MAX(server_rate) as max_rate, MIN(created_at) as created_at, MAX(updated_at) as updated_at, record_at')
             ->where('user_id', $request->input('user_id'))
-            ->paginate($pageSize);
+            ->where('record_at', '>=', $startAt)
+            ->where('record_type', 'd')
+            ->groupBy('user_id', 'record_at')
+            ->orderBy('record_at', 'DESC')
+            ->get()
+            ->map(function ($record) {
+                $minRate = (float) ($record->min_rate ?? 0);
+                $maxRate = (float) ($record->max_rate ?? 0);
+                $rateMixed = abs($minRate - $maxRate) >= 0.000001;
 
-        $data = $records->items();
+                return [
+                    'id' => (int) ($record->id ?? 0),
+                    'user_id' => (int) ($record->user_id ?? 0),
+                    'server_rate' => $rateMixed ? null : $maxRate,
+                    'rate_mixed' => $rateMixed,
+                    'u' => (int) ($record->u ?? 0),
+                    'd' => (int) ($record->d ?? 0),
+                    'record_type' => 'd',
+                    'record_at' => (int) ($record->record_at ?? 0),
+                    'created_at' => (int) ($record->created_at ?? 0),
+                    'updated_at' => (int) ($record->updated_at ?? 0),
+                ];
+            })
+            ->values();
+
+        $total = $records->count();
+        $offset = ($page - 1) * $pageSize;
+        $data = $records->slice($offset, $pageSize)->values()->all();
         return [
             'data' => $data,
-            'total' => $records->total(),
+            'total' => $total,
+        ];
+    }
+
+    public function getStatUserNodeLog(Request $request)
+    {
+        $request->validate([
+            'user_id' => 'required|integer',
+            'date' => 'nullable|date_format:Y-m-d',
+        ]);
+
+        $recordAt = $request->filled('date')
+            ? strtotime((string) $request->input('date'))
+            : strtotime(date('Y-m-d'));
+
+        $records = StatUserNodeDay::query()
+            ->selectRaw('server_id, server_type, MAX(server_name) as server_name, SUM(u) as u, SUM(d) as d, SUM(u + d) as total, MIN(server_rate) as min_rate, MAX(server_rate) as max_rate, ? as record_at', [$recordAt])
+            ->where('user_id', (int) $request->input('user_id'))
+            ->where('record_at', $recordAt)
+            ->where('record_type', 'd')
+            ->groupBy('server_id', 'server_type')
+            ->havingRaw('SUM(u) + SUM(d) > 0')
+            ->orderByDesc('total')
+            ->get();
+
+        return [
+            'data' => TrafficNodeLogResource::collection($records),
         ];
     }
 

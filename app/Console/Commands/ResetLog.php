@@ -7,6 +7,7 @@ use App\Models\Log;
 use App\Models\RiskEvent;
 use App\Models\StatServer;
 use App\Models\StatUser;
+use App\Models\StatUserNodeDay;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Schema;
 
@@ -46,6 +47,9 @@ class ResetLog extends Command
     {
         StatUser::where('record_at', '<', strtotime('-2 month', time()))->delete();
         StatServer::where('record_at', '<', strtotime('-2 month', time()))->delete();
+        if (Schema::hasTable('v2_stat_user_node_day')) {
+            StatUserNodeDay::where('record_at', '<', strtotime('-30 days', time()))->delete();
+        }
         if (Schema::hasTable('v2_log')) {
             Log::where('created_at', '<', strtotime('-1 month', time()))->delete();
         }

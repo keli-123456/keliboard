@@ -127,6 +127,7 @@ class AdminRoute
                 $router->get('/getServerYesterdayRank', [StatController::class, 'getServerYesterdayRank']);
                 $router->get('/getOrder', [StatController::class, 'getOrder']);
                 $router->any('/getStatUser', [StatController::class, 'getStatUser']);
+                $router->get('/getStatUserNodeLog', [StatController::class, 'getStatUserNodeLog']);
                 $router->get('/getRanking', [StatController::class, 'getRanking']);
                 $router->get('/getStatRecord', [StatController::class, 'getStatRecord']);
                 $router->get('/getTrafficRank', [StatController::class, 'getTrafficRank']);
