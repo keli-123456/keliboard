@@ -133,6 +133,108 @@ class ProtocolCapabilityService
             : SupportResult::drop("client {$family} has no compatible rule for protocol {$facts['protocol']}");
     }
 
+    public function assessClientSupport(?string $clientName, array $server): array
+    {
+        $facts = $this->extractFacts($server);
+        $normalizedClientName = is_string($clientName) ? strtolower(trim($clientName)) : null;
+        $family = $this->resolveClientFamily($normalizedClientName);
+
+        if (!$family) {
+            $result = $this->supportsUnknownClient($facts);
+            return [
+                'family' => null,
+                'status' => $result->supported ? 'allow' : 'block',
+                'reason' => $result->reason,
+                'matched_rule' => $result->matchedRule,
+            ];
+        }
+
+        $clientConfig = data_get($this->config, "clients.{$family}", []);
+        $variantConfig = is_string($normalizedClientName)
+            ? (data_get($clientConfig, "variants.{$normalizedClientName}", []) ?: [])
+            : [];
+
+        $allowedProtocols = $variantConfig['protocols'] ?? $clientConfig['protocols'] ?? null;
+        if (is_array($allowedProtocols) && !in_array($facts['protocol'], $allowedProtocols, true)) {
+            return [
+                'family' => $family,
+                'status' => 'block',
+                'reason' => "client {$family} does not export protocol {$facts['protocol']}",
+                'matched_rule' => null,
+            ];
+        }
+
+        $rules = array_merge(
+            data_get($clientConfig, "supports.{$facts['protocol']}", []),
+            data_get($variantConfig, "supports.{$facts['protocol']}", [])
+        );
+
+        if (!$rules) {
+            return [
+                'family' => $family,
+                'status' => 'allow',
+                'reason' => null,
+                'matched_rule' => null,
+            ];
+        }
+
+        $matchedAllow = false;
+        $matchedPartialRule = null;
+
+        foreach ($rules as $rule) {
+            if (!$this->matchRule($facts, $rule['when'] ?? [])) {
+                continue;
+            }
+
+            $support = $rule['support'] ?? 'unknown';
+            if ($support === 'no' || $support === 'unknown') {
+                return [
+                    'family' => $family,
+                    'status' => 'block',
+                    'reason' => (string) ($rule['reason'] ?? "client {$family} unsupported"),
+                    'matched_rule' => $rule,
+                ];
+            }
+
+            if ($support === 'yes') {
+                if (!empty($rule['min_version'])) {
+                    $matchedPartialRule = $rule;
+                    continue;
+                }
+
+                $matchedAllow = true;
+            }
+        }
+
+        if ($matchedPartialRule) {
+            $minVersion = (string) ($matchedPartialRule['min_version'] ?? '');
+            return [
+                'family' => $family,
+                'status' => 'partial',
+                'reason' => $minVersion !== ''
+                    ? "requires {$family} >= {$minVersion}"
+                    : "client {$family} may require a newer version",
+                'matched_rule' => $matchedPartialRule,
+            ];
+        }
+
+        if ($matchedAllow) {
+            return [
+                'family' => $family,
+                'status' => 'allow',
+                'reason' => null,
+                'matched_rule' => null,
+            ];
+        }
+
+        return [
+            'family' => $family,
+            'status' => 'block',
+            'reason' => "client {$family} has no compatible rule for protocol {$facts['protocol']}",
+            'matched_rule' => null,
+        ];
+    }
+
     public function filterServersForClient(array $servers, ?string $clientName, ?string $clientVersion): array
     {
         return collect($servers)
