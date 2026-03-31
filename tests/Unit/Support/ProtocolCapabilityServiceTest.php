@@ -742,6 +742,28 @@ final class ProtocolCapabilityServiceTest extends TestCase
         $this->assertFalse($result->supported);
     }
 
+    public function test_runtime_keeps_vmess_xhttp_when_v2node_supports_it(): void
+    {
+        $server = $this->makeServer('vmess', [
+            'network' => 'xhttp',
+        ]);
+
+        $result = $this->service->supportsRuntime('v2node', $server);
+
+        $this->assertTrue($result->supported);
+    }
+
+    public function test_runtime_keeps_trojan_grpc_when_v2node_supports_it(): void
+    {
+        $server = $this->makeServer('trojan', [
+            'network' => 'grpc',
+        ]);
+
+        $result = $this->service->supportsRuntime('v2node', $server);
+
+        $this->assertTrue($result->supported);
+    }
+
     private function makeServer(string $type, array $protocolSettings = [], array $extra = []): array
     {
         return array_merge([

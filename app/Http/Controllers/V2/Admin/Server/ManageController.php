@@ -95,6 +95,8 @@ class ManageController extends Controller
 
         $type = Server::normalizeType($requestedType);
         $types = $type ? [$type] : [
+            Server::TYPE_VMESS,
+            Server::TYPE_TROJAN,
             Server::TYPE_VLESS,
             Server::TYPE_ANYTLS,
             Server::TYPE_HYSTERIA,

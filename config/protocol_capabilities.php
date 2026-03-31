@@ -4,6 +4,12 @@ return [
     'runtimes' => [
         'v2node' => [
             'protocols' => [
+                'vmess' => [
+                    'networks' => ['tcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'splithttp'],
+                ],
+                'trojan' => [
+                    'networks' => ['tcp', 'ws', 'grpc'],
+                ],
                 'vless' => [
                     'networks' => ['tcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'splithttp'],
                     'tls_modes' => [0, 1, 2],

@@ -16,4 +16,17 @@ final class ServerSchemaTest extends TestCase
         $this->assertContains('splithttp', $networks);
         $this->assertNotContains('kcp', $networks);
     }
+
+    public function test_vmess_and_trojan_protocol_enums_stay_aligned_with_runtime_safe_networks(): void
+    {
+        $vmessNetworks = Server::getProtocolEnums(Server::TYPE_VMESS)['network'] ?? [];
+        $trojanNetworks = Server::getProtocolEnums(Server::TYPE_TROJAN)['network'] ?? [];
+        $tuicAlpn = Server::getProtocolEnums(Server::TYPE_TUIC)['alpn'] ?? [];
+
+        $this->assertContains('xhttp', $vmessNetworks);
+        $this->assertContains('splithttp', $vmessNetworks);
+        $this->assertNotContains('kcp', $vmessNetworks);
+        $this->assertSame(['tcp', 'ws', 'grpc'], $trojanNetworks);
+        $this->assertSame(['http/1.1', 'h2', 'h3'], $tuicAlpn);
+    }
 }

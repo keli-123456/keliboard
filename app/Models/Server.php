@@ -397,6 +397,12 @@ class Server extends Model
     public static function getProtocolEnums(string $type): array
     {
         return match (self::normalizeType($type)) {
+            self::TYPE_VMESS => [
+                'network' => ['tcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'splithttp'],
+            ],
+            self::TYPE_TROJAN => [
+                'network' => ['tcp', 'ws', 'grpc'],
+            ],
             self::TYPE_VLESS => [
                 'network' => ['tcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'splithttp'],
                 'flow' => ['none', 'xtls-rprx-vision', 'xtls-rprx-direct', 'xtls-rprx-splice'],
@@ -414,6 +420,7 @@ class Server extends Model
             ],
             self::TYPE_TUIC => [
                 'version' => [5, 4],
+                'alpn' => ['http/1.1', 'h2', 'h3'],
                 'congestion_control' => ['cubic', 'bbr', 'new_reno'],
                 'udp_relay_mode' => ['native', 'quic'],
             ],
