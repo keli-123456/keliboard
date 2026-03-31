@@ -70,6 +70,50 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertSame('', QuantumultX::buildVless('user-uuid', $server));
     }
 
+    public function test_quantumultx_skips_vless_encryption_extension(): void
+    {
+        $server = [
+            'name' => 'QX Enc',
+            'host' => 'enc.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 1,
+                'network' => 'ws',
+                'encryption' => 'mlkem768x25519plus',
+                'encryption_settings' => [
+                    'mode' => 'native',
+                    'private_key' => 'secret',
+                ],
+            ],
+        ];
+
+        $this->assertSame('', QuantumultX::buildVless('user-uuid', $server));
+    }
+
+    public function test_quantumultx_skips_unsupported_vmess_and_trojan_networks(): void
+    {
+        $vmess = [
+            'name' => 'QX VMess gRPC',
+            'host' => 'vmess-grpc.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 1,
+                'network' => 'grpc',
+            ],
+        ];
+        $trojan = [
+            'name' => 'QX Trojan gRPC',
+            'host' => 'trojan-grpc.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'network' => 'grpc',
+            ],
+        ];
+
+        $this->assertSame('', QuantumultX::buildVmess('user-uuid', $vmess));
+        $this->assertSame('', QuantumultX::buildTrojan('secret', $trojan));
+    }
+
     public function test_surge_build_anytls_reads_nested_tls_fields(): void
     {
         $server = [
@@ -164,6 +208,33 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertSame('ws', $config['network']);
         $this->assertSame('/stash', $config['ws-opts']['path']);
         $this->assertSame('cdn.stash.example.com', $config['ws-opts']['headers']['Host']);
+    }
+
+    public function test_stash_build_vless_h2_exports_h2_opts(): void
+    {
+        $config = (new Stash([], []))->buildVless('user-uuid', [
+            'name' => 'Stash H2',
+            'host' => 'stash-h2.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 1,
+                'network' => 'h2',
+                'tls_settings' => [
+                    'server_name' => 'stash-h2-sni.example.com',
+                ],
+                'network_settings' => [
+                    'host' => 'cdn.stash-h2.example.com',
+                    'path' => '/h2',
+                ],
+            ],
+        ]);
+
+        $this->assertSame('vless', $config['type']);
+        $this->assertTrue($config['tls']);
+        $this->assertSame('stash-h2-sni.example.com', $config['servername']);
+        $this->assertSame('h2', $config['network']);
+        $this->assertSame(['cdn.stash-h2.example.com'], $config['h2-opts']['host']);
+        $this->assertSame('/h2', $config['h2-opts']['path']);
     }
 
     public function test_stash_build_hysteria_marks_version_two_as_hysteria2(): void
@@ -418,6 +489,55 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertSame('cdn.meta.example.com', $config['ws-opts']['headers']['Host']);
     }
 
+    public function test_clashmeta_build_vless_http_and_h2_export_transport_specific_options(): void
+    {
+        $http = ClashMeta::buildVless('user-uuid', [
+            'name' => 'Meta HTTP',
+            'host' => 'meta-http.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 1,
+                'network' => 'http',
+                'tls_settings' => [
+                    'server_name' => 'meta-http-sni.example.com',
+                ],
+                'network_settings' => [
+                    'path' => '/http',
+                    'headers' => [
+                        'Host' => 'cdn.meta-http.example.com',
+                        'X-Test' => '1',
+                    ],
+                ],
+            ],
+        ]);
+
+        $h2 = ClashMeta::buildVless('user-uuid', [
+            'name' => 'Meta H2',
+            'host' => 'meta-h2.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 1,
+                'network' => 'h2',
+                'tls_settings' => [
+                    'server_name' => 'meta-h2-sni.example.com',
+                ],
+                'network_settings' => [
+                    'host' => 'cdn.meta-h2.example.com',
+                    'path' => '/h2',
+                ],
+            ],
+        ]);
+
+        $this->assertSame('http', $http['network']);
+        $this->assertSame('/http', $http['http-opts']['path']);
+        $this->assertSame('cdn.meta-http.example.com', $http['http-opts']['headers']['Host']);
+        $this->assertSame('1', $http['http-opts']['headers']['X-Test']);
+
+        $this->assertSame('h2', $h2['network']);
+        $this->assertSame(['cdn.meta-h2.example.com'], $h2['h2-opts']['host']);
+        $this->assertSame('/h2', $h2['h2-opts']['path']);
+    }
+
     public function test_clashmeta_build_hysteria2_and_anytls_export_current_shape(): void
     {
         $hysteria = ClashMeta::buildHysteria('secret', [
@@ -446,6 +566,11 @@ final class ProtocolExportRegressionTest extends TestCase
             'host' => 'meta-anytls.example.com',
             'port' => 9443,
             'protocol_settings' => [
+                'client_fingerprint' => 'chrome',
+                'alpn' => ['h2', 'http/1.1'],
+                'idle_session_check_interval' => 45,
+                'idle_session_timeout' => 60,
+                'min_idle_session' => 2,
                 'tls' => [
                     'server_name' => 'meta-anytls-sni.example.com',
                     'allow_insecure' => true,
@@ -459,6 +584,11 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertSame('salamander', $hysteria['obfs']);
         $this->assertSame('meta-mask', $hysteria['obfs-password']);
         $this->assertSame('anytls', $anytls['type']);
+        $this->assertSame('chrome', $anytls['client-fingerprint']);
+        $this->assertSame(['h2', 'http/1.1'], $anytls['alpn']);
+        $this->assertSame(45, $anytls['idle-session-check-interval']);
+        $this->assertSame(60, $anytls['idle-session-timeout']);
+        $this->assertSame(2, $anytls['min-idle-session']);
         $this->assertSame('meta-anytls-sni.example.com', $anytls['sni']);
         $this->assertTrue($anytls['skip-cert-verify']);
     }
@@ -530,11 +660,15 @@ final class ProtocolExportRegressionTest extends TestCase
             'host' => 'sb-anytls.example.com',
             'port' => 9443,
             'protocol_settings' => [
+                'client_fingerprint' => 'chrome',
+                'idle_session_check_interval' => 45,
+                'idle_session_timeout' => 60,
+                'min_idle_session' => 2,
                 'tls' => [
                     'server_name' => 'sb-anytls-sni.example.com',
                     'allow_insecure' => true,
                 ],
-                'alpn' => ['h3', 'http/1.1'],
+                'alpn' => ['h2', 'http/1.1'],
             ],
         ]);
 
@@ -549,7 +683,216 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertSame('anytls', $anytls['type']);
         $this->assertSame('sb-anytls-sni.example.com', $anytls['tls']['server_name']);
         $this->assertTrue($anytls['tls']['insecure']);
-        $this->assertSame(['h3', 'http/1.1'], $anytls['tls']['alpn']);
+        $this->assertSame(['h2', 'http/1.1'], $anytls['tls']['alpn']);
+        $this->assertTrue($anytls['tls']['utls']['enabled']);
+        $this->assertSame('chrome', $anytls['tls']['utls']['fingerprint']);
+        $this->assertSame('45s', $anytls['idle_session_check_interval']);
+        $this->assertSame('60s', $anytls['idle_session_timeout']);
+        $this->assertSame(2, $anytls['min_idle_session']);
+    }
+
+    public function test_singbox_build_vless_h2_and_quic_transport_export_expected_fields(): void
+    {
+        $protocol = new class([], []) extends SingBox {
+            public function handle()
+            {
+                return [];
+            }
+
+            public function buildVlessForTest(string $password, array $server): array
+            {
+                return $this->buildVless($password, $server);
+            }
+        };
+
+        $h2 = $protocol->buildVlessForTest('user-uuid', [
+            'name' => 'SingBox H2',
+            'host' => 'sb-h2.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 1,
+                'network' => 'h2',
+                'tls_settings' => [
+                    'server_name' => 'sb-h2-sni.example.com',
+                ],
+                'network_settings' => [
+                    'host' => 'cdn.sb-h2.example.com',
+                    'path' => '/h2',
+                    'headers' => [
+                        'X-Test' => '1',
+                    ],
+                ],
+            ],
+        ]);
+
+        $quic = $protocol->buildVlessForTest('user-uuid', [
+            'name' => 'SingBox QUIC',
+            'host' => 'sb-quic.example.com',
+            'port' => 8443,
+            'protocol_settings' => [
+                'tls' => 1,
+                'network' => 'quic',
+                'tls_settings' => [
+                    'server_name' => 'sb-quic-sni.example.com',
+                ],
+            ],
+        ]);
+
+        $this->assertSame('http', $h2['transport']['type']);
+        $this->assertSame(['cdn.sb-h2.example.com'], $h2['transport']['host']);
+        $this->assertSame('/h2', $h2['transport']['path']);
+        $this->assertSame(['X-Test' => '1'], $h2['transport']['headers']);
+        $this->assertSame('quic', $quic['transport']['type']);
+    }
+
+    public function test_singbox_build_outbounds_keeps_h2_and_quic_but_skips_xhttp(): void
+    {
+        $protocol = new class([], []) extends SingBox {
+            public function handle()
+            {
+                return [];
+            }
+
+            public function buildOutboundsForTest(array $servers): array
+            {
+                $this->servers = $servers;
+                $this->user = ['uuid' => 'user-uuid'];
+                $config = [
+                    'outbounds' => [
+                        [
+                            'type' => 'selector',
+                            'tag' => '节点选择',
+                            'outbounds' => [],
+                        ],
+                    ],
+                    'route' => [
+                        'rules' => [],
+                    ],
+                ];
+
+                $reflection = new \ReflectionProperty(SingBox::class, 'config');
+                $reflection->setAccessible(true);
+                $reflection->setValue($this, $config);
+                $this->buildOutbounds();
+
+                return $reflection->getValue($this)['outbounds'];
+            }
+        };
+
+        $outbounds = $protocol->buildOutboundsForTest([
+            [
+                'name' => 'H2 Node',
+                'type' => Server::TYPE_VLESS,
+                'host' => 'h2.example.com',
+                'port' => 443,
+                'protocol_settings' => [
+                    'tls' => 1,
+                    'network' => 'h2',
+                    'tls_settings' => [
+                        'server_name' => 'h2-sni.example.com',
+                    ],
+                    'network_settings' => [
+                        'host' => 'cdn.h2.example.com',
+                        'path' => '/h2',
+                    ],
+                ],
+            ],
+            [
+                'name' => 'QUIC Node',
+                'type' => Server::TYPE_VLESS,
+                'host' => 'quic.example.com',
+                'port' => 8443,
+                'protocol_settings' => [
+                    'tls' => 1,
+                    'network' => 'quic',
+                    'tls_settings' => [
+                        'server_name' => 'quic-sni.example.com',
+                    ],
+                ],
+            ],
+            [
+                'name' => 'XHTTP Node',
+                'type' => Server::TYPE_VLESS,
+                'host' => 'xhttp.example.com',
+                'port' => 9443,
+                'protocol_settings' => [
+                    'tls' => 1,
+                    'network' => 'xhttp',
+                    'tls_settings' => [
+                        'server_name' => 'xhttp-sni.example.com',
+                    ],
+                ],
+            ],
+        ]);
+
+        $tags = array_values(array_filter(array_map(
+            static fn (array $outbound): ?string => $outbound['tag'] ?? null,
+            $outbounds
+        )));
+
+        $this->assertContains('H2 Node', $tags);
+        $this->assertContains('QUIC Node', $tags);
+        $this->assertNotContains('XHTTP Node', $tags);
+    }
+
+    public function test_singbox_build_tuic_respects_zero_rtt_and_version_fields(): void
+    {
+        $protocol = new class([], []) extends SingBox {
+            public function handle()
+            {
+                return [];
+            }
+
+            public function buildTuicForTest(string $password, array $server): array
+            {
+                return $this->buildTuic($password, $server);
+            }
+        };
+
+        $v5 = $protocol->buildTuicForTest('secret', [
+            'name' => 'SingBox TUIC v5',
+            'host' => 'tuic-v5.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'version' => 5,
+                'congestion_control' => 'bbr',
+                'udp_relay_mode' => 'quic',
+                'zero_rtt_handshake' => false,
+                'tls' => [
+                    'server_name' => 'tuic-v5-sni.example.com',
+                    'allow_insecure' => true,
+                ],
+                'alpn' => ['h3', 'h2'],
+            ],
+        ]);
+
+        $v4 = $protocol->buildTuicForTest('legacy-secret', [
+            'name' => 'SingBox TUIC v4',
+            'host' => 'tuic-v4.example.com',
+            'port' => 8443,
+            'protocol_settings' => [
+                'version' => 4,
+                'zero_rtt_handshake' => true,
+                'tls' => [
+                    'server_name' => 'tuic-v4-sni.example.com',
+                ],
+            ],
+        ]);
+
+        $this->assertSame('tuic', $v5['type']);
+        $this->assertSame('secret', $v5['uuid']);
+        $this->assertSame('secret', $v5['password']);
+        $this->assertFalse($v5['zero_rtt_handshake']);
+        $this->assertSame('bbr', $v5['congestion_control']);
+        $this->assertSame('quic', $v5['udp_relay_mode']);
+        $this->assertSame(['h3', 'h2'], $v5['tls']['alpn']);
+        $this->assertTrue($v5['tls']['insecure']);
+
+        $this->assertSame('tuic', $v4['type']);
+        $this->assertSame('legacy-secret', $v4['token']);
+        $this->assertArrayNotHasKey('uuid', $v4);
+        $this->assertArrayNotHasKey('password', $v4);
+        $this->assertTrue($v4['zero_rtt_handshake']);
     }
 
     public function test_clash_build_trojan_ws_and_socks_tls_export_expected_shape(): void

@@ -10,7 +10,7 @@ use App\Support\AbstractProtocol;
 
 class ClashMeta extends AbstractProtocol
 {
-    public $flags = ['meta', 'verge', 'flclash', 'nekobox', 'clashmetaforandroid'];
+    public $flags = ['meta', 'verge', 'flclash', 'nekobox', 'nekoray', 'clashmetaforandroid', 'clashx meta', 'clashxmeta'];
     const CUSTOM_TEMPLATE_FILE = 'resources/rules/custom.clashmeta.yaml';
     const CUSTOM_CLASH_TEMPLATE_FILE = 'resources/rules/custom.clash.yaml';
     const DEFAULT_TEMPLATE_FILE = 'resources/rules/default.clash.yaml';
@@ -291,6 +291,13 @@ class ClashMeta extends AbstractProtocol
     public static function buildVless($password, $server)
     {
         $protocol_settings = data_get($server, 'protocol_settings', []);
+        $httpHosts = data_get($protocol_settings, 'network_settings.host');
+        if (empty($httpHosts)) {
+            $httpHosts = data_get($protocol_settings, 'network_settings.headers.Host');
+        }
+        if (!is_array($httpHosts)) {
+            $httpHosts = $httpHosts ? [$httpHosts] : [];
+        }
         $array = [
             'name' => $server['name'],
             'type' => 'vless',
@@ -338,6 +345,24 @@ class ClashMeta extends AbstractProtocol
                 $array['network'] = 'grpc';
                 if ($serviceName = data_get($protocol_settings, 'network_settings.serviceName'))
                     $array['grpc-opts']['grpc-service-name'] = $serviceName;
+                break;
+            case 'http':
+                $array['network'] = 'http';
+                if ($httpOpts = array_filter([
+                    'path' => data_get($protocol_settings, 'network_settings.path', '/'),
+                    'headers' => data_get($protocol_settings, 'network_settings.headers'),
+                ], fn ($value) => !is_null($value) && $value !== [])) {
+                    $array['http-opts'] = $httpOpts;
+                }
+                break;
+            case 'h2':
+                $array['network'] = 'h2';
+                if ($h2Opts = array_filter([
+                    'host' => $httpHosts,
+                    'path' => data_get($protocol_settings, 'network_settings.path', '/'),
+                ], fn ($value) => !is_null($value) && $value !== [])) {
+                    $array['h2-opts'] = $h2Opts;
+                }
                 break;
             default:
                 break;
@@ -470,6 +495,27 @@ class ClashMeta extends AbstractProtocol
             'password' => $password,
             'udp' => true,
         ];
+
+        $clientFingerprint = trim((string) data_get($protocol_settings, 'client_fingerprint', ''));
+        if ($clientFingerprint !== '') {
+            $array['client-fingerprint'] = Helper::getClientFingerprint($protocol_settings);
+        }
+
+        if ($alpn = array_values(array_filter((array) data_get($protocol_settings, 'alpn', [])))) {
+            $array['alpn'] = $alpn;
+        }
+
+        if (($idleSessionCheckInterval = data_get($protocol_settings, 'idle_session_check_interval')) !== null && $idleSessionCheckInterval !== '') {
+            $array['idle-session-check-interval'] = (int) $idleSessionCheckInterval;
+        }
+
+        if (($idleSessionTimeout = data_get($protocol_settings, 'idle_session_timeout')) !== null && $idleSessionTimeout !== '') {
+            $array['idle-session-timeout'] = (int) $idleSessionTimeout;
+        }
+
+        if (($minIdleSession = data_get($protocol_settings, 'min_idle_session')) !== null && $minIdleSession !== '') {
+            $array['min-idle-session'] = (int) $minIdleSession;
+        }
 
         if ($serverName = data_get($protocol_settings, 'tls.server_name')) {
             $array['sni'] = $serverName;

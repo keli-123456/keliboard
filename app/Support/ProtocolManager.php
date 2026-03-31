@@ -91,6 +91,46 @@ class ProtocolManager
             ->all();
     }
 
+    public function matchClientFlag(string $flag): ?string
+    {
+        $flags = $this->getAllFlags();
+        usort($flags, function ($left, $right) {
+            $leftLength = strlen($this->normalizeFlagValue((string) $left));
+            $rightLength = strlen($this->normalizeFlagValue((string) $right));
+            if ($leftLength === $rightLength) {
+                return strlen((string) $right) <=> strlen((string) $left);
+            }
+
+            return $rightLength <=> $leftLength;
+        });
+
+        foreach ($flags as $candidate) {
+            if ($this->matchesFlag($flag, (string) $candidate)) {
+                return (string) $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    public function extractClientVersion(string $flag, ?string $matchedFlag = null): ?string
+    {
+        $candidates = $matchedFlag ? [$matchedFlag] : $this->getAllFlags();
+
+        foreach ($candidates as $candidate) {
+            $candidate = (string) $candidate;
+            if (!$this->matchesFlag($flag, $candidate)) {
+                continue;
+            }
+
+            if ($version = $this->extractVersionUsingCandidate($flag, $candidate)) {
+                return $version;
+            }
+        }
+
+        return null;
+    }
+
     /**
      * 根据标识匹配合适的协议处理器类名
      *
@@ -112,7 +152,7 @@ class ProtocolManager
                 $instanceForFlags = $reflection->newInstanceWithoutConstructor();
                 $flags = $instanceForFlags->flags;
 
-                if (collect($flags)->contains(fn($f) => stripos($flag, (string) $f) !== false)) {
+                if (collect($flags)->contains(fn($f) => $this->matchesFlag($flag, (string) $f))) {
                     return $protocolClassString; // 返回类名字符串
                 }
             } catch (\ReflectionException $e) {
@@ -121,6 +161,50 @@ class ProtocolManager
             }
         }
         return null;
+    }
+
+    protected function matchesFlag(string $haystack, string $needle): bool
+    {
+        if ($needle === '') {
+            return false;
+        }
+
+        if (stripos($haystack, $needle) !== false) {
+            return true;
+        }
+
+        $normalizedHaystack = $this->normalizeFlagValue($haystack);
+        $normalizedNeedle = $this->normalizeFlagValue($needle);
+
+        return $normalizedNeedle !== ''
+            && str_contains($normalizedHaystack, $normalizedNeedle);
+    }
+
+    protected function extractVersionUsingCandidate(string $flag, string $candidate): ?string
+    {
+        $decodedFlag = rawurldecode($flag);
+        $decodedCandidate = rawurldecode($candidate);
+
+        $tokens = preg_split('/[^a-z0-9]+/i', strtolower($decodedCandidate), -1, PREG_SPLIT_NO_EMPTY);
+        if (empty($tokens)) {
+            return null;
+        }
+
+        $pattern = '/' . implode('[^a-z0-9]*', array_map(
+            static fn (string $token): string => preg_quote($token, '/'),
+            $tokens
+        )) . '[^0-9a-z]*v?(\d+(?:\.\d+){0,2})/i';
+
+        if (preg_match($pattern, $decodedFlag, $matches)) {
+            return $matches[1];
+        }
+
+        return null;
+    }
+
+    protected function normalizeFlagValue(string $value): string
+    {
+        return preg_replace('/[^a-z0-9]+/i', '', strtolower(rawurldecode($value))) ?? '';
     }
 
     /**

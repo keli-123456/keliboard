@@ -234,6 +234,11 @@ class Server extends Model
             'tls_mode' => ['type' => 'integer', 'default' => 1],
             'network' => ['type' => 'string', 'default' => null],
             'network_settings' => ['type' => 'array', 'default' => null],
+            'client_fingerprint' => ['type' => 'string', 'default' => null],
+            'alpn' => ['type' => 'array', 'default' => []],
+            'idle_session_check_interval' => ['type' => 'integer', 'default' => 30],
+            'idle_session_timeout' => ['type' => 'integer', 'default' => 30],
+            'min_idle_session' => ['type' => 'integer', 'default' => 0],
             'padding_scheme' => [
                 'type' => 'array',
                 'default' => [
@@ -376,6 +381,77 @@ class Server extends Model
     public static function isValidType(?string $type): bool
     {
         return $type ? in_array(self::normalizeType($type), self::VALID_TYPES, true) : true;
+    }
+
+    public static function getProtocolSchema(string $type): array
+    {
+        $type = self::normalizeType($type) ?? '';
+        return self::PROTOCOL_CONFIGURATIONS[$type] ?? [];
+    }
+
+    public static function getProtocolDefaults(string $type): array
+    {
+        return self::extractDefaultsFromSchema(self::getProtocolSchema($type));
+    }
+
+    public static function getProtocolEnums(string $type): array
+    {
+        return match (self::normalizeType($type)) {
+            self::TYPE_VLESS => [
+                'network' => ['tcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'splithttp'],
+                'flow' => ['none', 'xtls-rprx-vision', 'xtls-rprx-direct', 'xtls-rprx-splice'],
+                'client_fingerprint' => ['firefox', 'chrome', 'safari', 'ios', 'android', 'edge'],
+            ],
+            self::TYPE_ANYTLS => [
+                'tls_mode' => [1, 2],
+                'network' => ['tcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'splithttp'],
+                'client_fingerprint' => ['firefox', 'chrome', 'safari', 'ios', 'android', 'edge'],
+                'alpn' => ['h2', 'http/1.1'],
+            ],
+            self::TYPE_HYSTERIA => [
+                'version' => [2, 1],
+                'obfs.type' => ['salamander'],
+            ],
+            self::TYPE_TUIC => [
+                'version' => [5, 4],
+                'congestion_control' => ['cubic', 'bbr', 'new_reno'],
+                'udp_relay_mode' => ['native', 'quic'],
+            ],
+            default => [],
+        };
+    }
+
+    protected static function extractDefaultsFromSchema(array $schema): array
+    {
+        $defaults = [];
+        foreach ($schema as $field => $config) {
+            $defaults[$field] = self::extractDefaultValue($config);
+        }
+        return $defaults;
+    }
+
+    protected static function extractDefaultValue(array $config): mixed
+    {
+        $type = $config['type'] ?? null;
+
+        if ($type === 'object') {
+            $fields = $config['fields'] ?? [];
+            $out = [];
+            foreach ($fields as $key => $child) {
+                $out[$key] = self::extractDefaultValue($child);
+            }
+            return $out;
+        }
+
+        if (array_key_exists('default', $config)) {
+            return $config['default'];
+        }
+
+        return match ($type) {
+            'array' => [],
+            'boolean' => false,
+            default => null,
+        };
     }
 
     public function getAvailableStatusAttribute(): int

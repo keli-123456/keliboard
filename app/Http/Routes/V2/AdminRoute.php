@@ -74,6 +74,7 @@ class AdminRoute
             ], function ($router) {
                 $router->get('/getNodes', [ManageController::class, 'getNodes']);
                 $router->get('/getOptions', [ManageController::class, 'getOptions']);
+                $router->get('/getCapabilities', [ManageController::class, 'getCapabilities']);
                 $router->post('/sort', [ManageController::class, 'sort']);
             });
 

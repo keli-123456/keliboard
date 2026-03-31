@@ -281,6 +281,13 @@ class Stash extends AbstractProtocol
     public function buildVless($uuid, $server)
     {
         $protocol_settings = $server['protocol_settings'];
+        $httpHosts = data_get($protocol_settings, 'network_settings.host');
+        if (empty($httpHosts)) {
+            $httpHosts = data_get($protocol_settings, 'network_settings.headers.Host');
+        }
+        if (!is_array($httpHosts)) {
+            $httpHosts = $httpHosts ? [$httpHosts] : [];
+        }
         $array = [];
         $array['name'] = $server['name'];
         $array['type'] = 'vless';
@@ -337,11 +344,24 @@ class Stash extends AbstractProtocol
                 $array['network'] = 'grpc';
                 $array['grpc-opts']['grpc-service-name'] = data_get($protocol_settings, 'network_settings.serviceName');
                 break;
-                // case 'h2':
-                //     $array['network'] = 'h2';
-                //     $array['h2-opts']['host'] = data_get($protocol_settings, 'network_settings.host');
-                //     $array['h2-opts']['path'] = data_get($protocol_settings, 'network_settings.path');
-                //     break;
+            case 'http':
+                $array['network'] = 'http';
+                if ($httpOpts = array_filter([
+                    'headers' => data_get($protocol_settings, 'network_settings.headers'),
+                    'path' => data_get($protocol_settings, 'network_settings.path', '/')
+                ], fn ($value) => !is_null($value) && $value !== [])) {
+                    $array['http-opts'] = $httpOpts;
+                }
+                break;
+            case 'h2':
+                $array['network'] = 'h2';
+                if ($h2Opts = array_filter([
+                    'host' => $httpHosts,
+                    'path' => data_get($protocol_settings, 'network_settings.path', '/')
+                ], fn ($value) => !is_null($value) && $value !== [])) {
+                    $array['h2-opts'] = $h2Opts;
+                }
+                break;
         }
 
         return $array;

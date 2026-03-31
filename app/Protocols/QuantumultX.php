@@ -132,6 +132,10 @@ class QuantumultX extends AbstractProtocol
     public static function buildVmess($uuid, $server)
     {
         $protocol_settings = $server['protocol_settings'];
+        $network = (string) data_get($protocol_settings, 'network', 'tcp');
+        if (!in_array($network, ['tcp', 'ws'], true)) {
+            return '';
+        }
         $config = [
             "vmess={$server['host']}:{$server['port']}",
             'method=chacha20-poly1305',
@@ -277,6 +281,10 @@ class QuantumultX extends AbstractProtocol
     public static function buildTrojan($password, $server)
     {
         $protocol_settings = $server['protocol_settings'];
+        $network = (string) data_get($protocol_settings, 'network', 'tcp');
+        if (!in_array($network, ['tcp', 'ws'], true)) {
+            return '';
+        }
         $serverName = data_get($protocol_settings, 'server_name') ?: data_get($protocol_settings, 'tls_settings.server_name');
         $allowInsecure = (bool) data_get($protocol_settings, 'allow_insecure', false)
             || (bool) data_get($protocol_settings, 'tls_settings.allow_insecure', false);

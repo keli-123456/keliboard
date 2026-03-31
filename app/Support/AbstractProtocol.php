@@ -53,7 +53,7 @@ abstract class AbstractProtocol
     {
         $this->user = $user;
         $this->servers = $servers;
-        $this->clientName = $clientName;
+        $this->clientName = is_string($clientName) ? strtolower(trim($clientName)) : $clientName;
         $this->clientVersion = $clientVersion;
         $this->protocolRequirements = $this->normalizeProtocolRequirements($this->protocolRequirements);
         $this->servers = HookManager::filter('protocol.servers.filtered', $this->filterServersByVersion());
@@ -87,7 +87,7 @@ abstract class AbstractProtocol
         $hasGlobalConfig = isset($this->protocolRequirements['*']);
         $hasClientConfig = isset($this->protocolRequirements[$this->clientName]);
 
-        if ((blank($this->clientName) || blank($this->clientVersion)) && !$hasGlobalConfig) {
+        if (blank($this->clientName) && !$hasGlobalConfig) {
             return $this->servers;
         }
 
@@ -134,8 +134,18 @@ abstract class AbstractProtocol
      */
     private function checkRequirements(array $requirements, array $server): bool
     {
+        $baseVersion = $requirements['base_version'] ?? null;
+        if ($baseVersion !== null) {
+            if (blank($this->clientVersion)) {
+                return false;
+            }
+            if (version_compare($this->clientVersion, $baseVersion, '<')) {
+                return false;
+            }
+        }
+
         foreach ($requirements as $field => $filterRule) {
-            if (in_array($field, ['base_version', 'incompatible'])) {
+            if (in_array($field, ['base_version', 'incompatible'], true)) {
                 continue;
             }
 
@@ -155,8 +165,10 @@ abstract class AbstractProtocol
                         return false;
                     }
                     $requiredVersion = $allowedValues[$actualValue];
-                    if ($requiredVersion !== '0.0.0' && version_compare($this->clientVersion, $requiredVersion, '<')) {
-                        return false;
+                    if ($requiredVersion !== '0.0.0') {
+                        if (blank($this->clientVersion) || version_compare($this->clientVersion, $requiredVersion, '<')) {
+                            return false;
+                        }
                     }
                     continue;
                 }
@@ -175,8 +187,10 @@ abstract class AbstractProtocol
                 continue;
             }
             $requiredVersion = $allowedValues[$actualValue];
-            if ($requiredVersion !== '0.0.0' && version_compare($this->clientVersion, $requiredVersion, '<')) {
-                return false;
+            if ($requiredVersion !== '0.0.0') {
+                if (blank($this->clientVersion) || version_compare($this->clientVersion, $requiredVersion, '<')) {
+                    return false;
+                }
             }
         }
 
@@ -239,15 +253,18 @@ abstract class AbstractProtocol
         $result = [];
         foreach ($flat as $key => $value) {
             if (!str_contains($key, '.')) {
-                $result[$key] = $value;
+                $normalizedKey = $key === '*' ? $key : strtolower($key);
+                $result[$normalizedKey] = $value;
                 continue;
             }
             $segments = explode('.', $key, 3);
             if (count($segments) < 3) {
-                $result[$segments[0]][$segments[1] ?? '*'][''] = $value;
+                $client = $segments[0] === '*' ? $segments[0] : strtolower($segments[0]);
+                $result[$client][$segments[1] ?? '*'][''] = $value;
                 continue;
             }
             [$client, $type, $field] = $segments;
+            $client = $client === '*' ? $client : strtolower($client);
             $result[$client][$type][$field] = $value;
         }
         return $result;

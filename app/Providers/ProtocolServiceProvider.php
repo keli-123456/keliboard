@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Support\ProtocolCapabilityService;
 use App\Support\ProtocolManager;
 use Illuminate\Support\ServiceProvider;
 
@@ -14,6 +15,11 @@ class ProtocolServiceProvider extends ServiceProvider
    */
   public function register()
   {
+    $this->app->scoped(ProtocolCapabilityService::class, function () {
+      return new ProtocolCapabilityService(config('protocol_capabilities', []));
+    });
+    $this->app->alias(ProtocolCapabilityService::class, 'protocols.capabilities');
+
     $this->app->scoped('protocols.manager', function ($app) {
       return new ProtocolManager($app);
     });
@@ -43,6 +49,8 @@ class ProtocolServiceProvider extends ServiceProvider
   public function provides()
   {
     return [
+      ProtocolCapabilityService::class,
+      'protocols.capabilities',
       'protocols.manager',
       'protocols.flags',
     ];

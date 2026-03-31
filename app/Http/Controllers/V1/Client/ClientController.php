@@ -73,6 +73,11 @@ class ClientController extends Controller
             allowedTypes: $requestedTypes,
             filterKeywords: $filterKeywords
         );
+        $serversFiltered = app('protocols.capabilities')->filterServersForClient(
+            $serversFiltered,
+            $clientInfo['name'] ?? null,
+            $clientInfo['version'] ?? null
+        );
 
         $this->setSubscribeInfoToServers($serversFiltered, $user, count($servers) - count($serversFiltered));
         $serversFiltered = $this->addPrefixToServerName($serversFiltered);
@@ -182,6 +187,7 @@ class ClientController extends Controller
     private function getClientInfo(Request $request): array
     {
         $flag = strtolower($request->input('flag') ?? $request->header('User-Agent', ''));
+        $protocolManager = app('protocols.manager');
 
         $clientName = null;
         $clientVersion = null;
@@ -189,32 +195,15 @@ class ClientController extends Controller
         if (preg_match('/([a-zA-Z0-9\-_]+)[\/\s]+(v?[0-9]+(?:\.[0-9]+){0,2})/', $flag, $matches)) {
             $potentialName = strtolower($matches[1]);
             $clientVersion = preg_replace('/^v/', '', $matches[2]);
-
-            if (in_array($potentialName, app('protocols.flags'))) {
-                $clientName = $potentialName;
-            }
+            $clientName = $protocolManager->matchClientFlag($potentialName);
         }
 
         if (!$clientName) {
-            $flags = collect(app('protocols.flags'))->sortByDesc(fn($f) => strlen($f))->values()->all();
-            foreach ($flags as $name) {
-                if (stripos($flag, $name) !== false) {
-                    $clientName = $name;
-                    if (!$clientVersion) {
-                        $pattern = '/' . preg_quote($name, '/') . '[\/\s]+(v?[0-9]+(?:\.[0-9]+){0,2})/i';
-                        if (preg_match($pattern, $flag, $vMatches)) {
-                            $clientVersion = preg_replace('/^v/', '', $vMatches[1]);
-                        }
-                    }
-                    break;
-                }
-            }
+            $clientName = $protocolManager->matchClientFlag($flag);
         }
 
-        if (!$clientVersion) {
-            if (preg_match('/\/v?(\d+(?:\.\d+){0,2})/', $flag, $matches)) {
-                $clientVersion = $matches[1];
-            }
+        if ($clientName && !$clientVersion) {
+            $clientVersion = $protocolManager->extractClientVersion($flag, $clientName);
         }
 
         return [

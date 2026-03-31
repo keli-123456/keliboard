@@ -206,7 +206,7 @@ class SingBox extends AbstractProtocol
             }
             if (
                 $item['type'] === Server::TYPE_VLESS
-                && in_array(data_get($protocol_settings, 'network'), ['tcp', 'ws', 'grpc', 'http', 'quic', 'httpupgrade'])
+                && in_array(data_get($protocol_settings, 'network'), ['tcp', 'ws', 'grpc', 'http', 'h2', 'quic', 'httpupgrade'])
             ) {
                 $vlessConfig = $this->buildVless($this->user['uuid'], $item);
                 $proxies[] = $vlessConfig;
@@ -328,6 +328,7 @@ class SingBox extends AbstractProtocol
     protected function buildVless($password, $server)
     {
         $protocol_settings = data_get($server, 'protocol_settings', []);
+        $network = data_get($protocol_settings, 'network');
         $array = [
             "type" => "vless",
             "tag" => $server['name'],
@@ -367,7 +368,15 @@ class SingBox extends AbstractProtocol
             $array['tls'] = $tlsConfig;
         }
 
-        $transport = match ($protocol_settings['network']) {
+        $httpHosts = data_get($protocol_settings, 'network_settings.host');
+        if (empty($httpHosts)) {
+            $httpHosts = data_get($protocol_settings, 'network_settings.headers.Host');
+        }
+        if (!is_array($httpHosts)) {
+            $httpHosts = $httpHosts ? [$httpHosts] : null;
+        }
+
+        $transport = match ($network) {
             'tcp' => data_get($protocol_settings, 'network_settings.header.type') == 'http' ? [
                 'type' => 'http',
                 'path' => Arr::random(data_get($protocol_settings, 'network_settings.header.request.path', ['/']))
@@ -383,10 +392,14 @@ class SingBox extends AbstractProtocol
                 'type' => 'grpc',
                 'service_name' => data_get($protocol_settings, 'network_settings.serviceName')
             ],
-            'h2' => [
+            'http', 'h2' => array_filter([
                 'type' => 'http',
-                'host' => data_get($protocol_settings, 'network_settings.host'),
-                'path' => data_get($protocol_settings, 'network_settings.path')
+                'host' => $httpHosts,
+                'path' => data_get($protocol_settings, 'network_settings.path'),
+                'headers' => data_get($protocol_settings, 'network_settings.headers')
+            ], fn($value) => !is_null($value) && $value !== []),
+            'quic' => [
+                'type' => 'quic',
             ],
             'httpupgrade' => [
                 'type' => 'httpupgrade',
@@ -505,7 +518,7 @@ class SingBox extends AbstractProtocol
             'server_port' => $server['port'],
             'congestion_control' => data_get($protocol_settings, 'congestion_control', 'cubic'),
             'udp_relay_mode' => data_get($protocol_settings, 'udp_relay_mode', 'native'),
-            'zero_rtt_handshake' => true,
+            'zero_rtt_handshake' => (bool) data_get($protocol_settings, 'zero_rtt_handshake', false),
             'heartbeat' => '10s',
             'tls' => [
                 'enabled' => true,
@@ -540,7 +553,6 @@ class SingBox extends AbstractProtocol
             'tls' => [
                 'enabled' => true,
                 'insecure' => (bool) data_get($protocol_settings, 'tls.allow_insecure', false),
-                'alpn' => data_get($protocol_settings, 'alpn', ['h3']),
             ]
         ];
 
@@ -548,7 +560,46 @@ class SingBox extends AbstractProtocol
             $array['tls']['server_name'] = $serverName;
         }
 
+        $clientFingerprint = trim((string) data_get($protocol_settings, 'client_fingerprint', ''));
+        if ($clientFingerprint !== '') {
+            $array['tls']['utls'] = [
+                'enabled' => true,
+                'fingerprint' => Helper::getClientFingerprint($protocol_settings),
+            ];
+        }
+
+        if ($alpn = data_get($protocol_settings, 'alpn')) {
+            $array['tls']['alpn'] = array_values(array_filter((array) $alpn));
+        }
+
+        if (($interval = $this->normalizeAnytlsDuration(data_get($protocol_settings, 'idle_session_check_interval'))) !== null) {
+            $array['idle_session_check_interval'] = $interval;
+        }
+
+        if (($timeout = $this->normalizeAnytlsDuration(data_get($protocol_settings, 'idle_session_timeout'))) !== null) {
+            $array['idle_session_timeout'] = $timeout;
+        }
+
+        if (($minIdleSession = data_get($protocol_settings, 'min_idle_session')) !== null && $minIdleSession !== '') {
+            $array['min_idle_session'] = (int) $minIdleSession;
+        }
+
+        $array['tls'] = array_filter($array['tls'], fn ($value) => !is_null($value) && $value !== []);
+
         return $array;
+    }
+
+    protected function normalizeAnytlsDuration($value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if (is_int($value) || (is_string($value) && ctype_digit($value))) {
+            return sprintf('%ss', (int) $value);
+        }
+
+        return (string) $value;
     }
 
     protected function buildSocks($password, $server): array
