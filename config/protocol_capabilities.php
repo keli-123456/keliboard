@@ -17,15 +17,18 @@ return [
                 'anytls' => [
                     'networks' => ['tcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'splithttp'],
                     'tls_modes' => [1, 2],
-                    'features' => ['padding_scheme', 'reality', 'alpn', 'client_fingerprint', 'idle_session'],
+                    'features' => ['padding_scheme', 'reality', 'alpn'],
+                ],
+                'shadowsocks' => [
+                    'features' => ['ports'],
                 ],
                 'hysteria' => [
-                    'versions' => [1, 2],
+                    'versions' => [2],
                     'features' => ['ports', 'hop_interval', 'obfs', 'bandwidth'],
                 ],
                 'tuic' => [
-                    'versions' => [4, 5],
-                    'features' => ['alpn', 'congestion_control', 'udp_relay_mode', 'zero_rtt_handshake'],
+                    'versions' => [5],
+                    'features' => ['alpn', 'congestion_control', 'zero_rtt_handshake'],
                 ],
             ],
         ],
@@ -37,6 +40,32 @@ return [
             'version_kind' => 'semver',
             'unknown_version_policy' => 'conservative',
             'protocols' => ['shadowsocks', 'trojan', 'vmess', 'vless', 'hysteria', 'tuic', 'anytls', 'socks', 'http'],
+            'variants' => [
+                'hiddify' => [
+                    'supports' => [
+                        'hysteria' => [
+                            ['when' => ['version' => 1], 'support' => 'yes'],
+                            ['when' => ['version' => 2], 'support' => 'yes'],
+                            ['when' => ['feature' => 'ports'], 'support' => 'yes'],
+                            ['when' => ['feature' => 'hop_interval'], 'support' => 'yes'],
+                            ['when' => ['feature' => 'obfs'], 'support' => 'yes'],
+                            ['when' => ['feature' => 'bandwidth'], 'support' => 'yes'],
+                        ],
+                    ],
+                ],
+                'hiddifynext' => [
+                    'supports' => [
+                        'hysteria' => [
+                            ['when' => ['version' => 1], 'support' => 'yes'],
+                            ['when' => ['version' => 2], 'support' => 'yes'],
+                            ['when' => ['feature' => 'ports'], 'support' => 'yes'],
+                            ['when' => ['feature' => 'hop_interval'], 'support' => 'yes'],
+                            ['when' => ['feature' => 'obfs'], 'support' => 'yes'],
+                            ['when' => ['feature' => 'bandwidth'], 'support' => 'yes'],
+                        ],
+                    ],
+                ],
+            ],
             'supports' => [
                 'vless' => [
                     ['when' => ['network' => ['tcp', 'ws', 'grpc', 'http', 'h2', 'quic']], 'support' => 'yes'],
@@ -219,8 +248,17 @@ return [
             'aliases' => ['loon'],
             'version_kind' => 'build',
             'unknown_version_policy' => 'conservative',
-            'protocols' => ['shadowsocks', 'vmess', 'trojan', 'hysteria'],
+            'protocols' => ['shadowsocks', 'vmess', 'trojan', 'hysteria', 'anytls'],
             'supports' => [
+                'anytls' => [
+                    ['when' => ['network' => ['ws', 'grpc', 'httpupgrade', 'xhttp', 'splithttp']], 'support' => 'no', 'reason' => 'AnyTLS custom transport is not exported for loon'],
+                    ['when' => ['tls_mode' => 2], 'support' => 'no', 'reason' => 'AnyTLS reality is not exported for loon'],
+                    ['when' => ['feature' => 'alpn'], 'support' => 'no', 'reason' => 'AnyTLS ALPN is not exported for loon'],
+                    ['when' => ['feature' => 'client_fingerprint'], 'support' => 'no', 'reason' => 'AnyTLS client fingerprint is not exported for loon'],
+                    ['when' => ['feature' => 'idle_session'], 'support' => 'no', 'reason' => 'AnyTLS idle session fields are not exported for loon'],
+                    ['when' => ['feature' => 'padding_scheme'], 'support' => 'no', 'reason' => 'AnyTLS padding scheme is not exported for loon'],
+                    ['when' => [], 'min_version' => '941', 'support' => 'yes'],
+                ],
                 'hysteria' => [
                     ['when' => ['version' => 1], 'support' => 'no', 'reason' => 'Loon exporter only emits hysteria2'],
                     ['when' => ['version' => 2], 'min_version' => '637', 'support' => 'yes'],

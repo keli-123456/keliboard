@@ -5,9 +5,25 @@ namespace App\Http\Requests\Admin;
 
 use App\Models\Server;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Validator;
 
 class ServerSave extends FormRequest
 {
+    private const V2NODE_SUPPORTED_TYPES = [
+        Server::TYPE_VMESS,
+        Server::TYPE_VLESS,
+        Server::TYPE_TROJAN,
+        Server::TYPE_SHADOWSOCKS,
+        Server::TYPE_HYSTERIA,
+        Server::TYPE_TUIC,
+        Server::TYPE_ANYTLS,
+    ];
+
+    private const V2NODE_REALITY_UNSUPPORTED_NETWORKS = [
+        'ws',
+        'httpupgrade',
+    ];
+
     private const TLS_CERT_RULES = [
         'tls_settings.cert_mode' => 'nullable|string|in:file,dns,http,self',
         'tls_settings.cert_file' => 'nullable|string',
@@ -107,6 +123,7 @@ class ServerSave extends FormRequest
     {
         return [
             'type' => 'required|in:' . implode(',', Server::VALID_TYPES),
+            'runtime' => 'nullable|in:' . implode(',', Server::VALID_RUNTIMES),
             'spectific_key' => 'nullable|string',
             'code' => 'nullable|string',
             'show' => '',
@@ -142,10 +159,52 @@ class ServerSave extends FormRequest
         return $rules;
     }
 
+    protected function prepareForValidation(): void
+    {
+        $runtime = strtolower(trim((string) $this->input('runtime', Server::RUNTIME_GENERIC)));
+        if ($runtime === '') {
+            $runtime = Server::RUNTIME_GENERIC;
+        }
+
+        $this->merge([
+            'runtime' => $runtime,
+        ]);
+    }
+
+    public function withValidator(Validator $validator): void
+    {
+        $validator->after(function (Validator $validator) {
+            if ($this->input('runtime') !== Server::RUNTIME_V2NODE) {
+                return;
+            }
+
+            $type = Server::normalizeType($this->input('type'));
+            if (!in_array($type, self::V2NODE_SUPPORTED_TYPES, true)) {
+                $validator->errors()->add('runtime', '当前节点类型不支持 v2node 运行时');
+                return;
+            }
+
+            $settings = (array) $this->input('protocol_settings', []);
+
+            if ($type === Server::TYPE_HYSTERIA && (int) data_get($settings, 'version', 2) !== 2) {
+                $validator->errors()->add('protocol_settings.version', 'v2node 仅支持 Hysteria2');
+            }
+
+            $network = strtolower(trim((string) data_get($settings, 'network', '')));
+            $isReality = ($type === Server::TYPE_VLESS && (int) data_get($settings, 'tls', 0) === 2)
+                || ($type === Server::TYPE_ANYTLS && (int) data_get($settings, 'tls_mode', 1) === 2);
+
+            if ($isReality && in_array($network, self::V2NODE_REALITY_UNSUPPORTED_NETWORKS, true)) {
+                $validator->errors()->add('protocol_settings.network', 'v2node 当前不支持 Reality 与该传输协议组合');
+            }
+        });
+    }
+
     public function messages()
     {
         return [
             'name.required' => '节点名称不能为空',
+            'runtime.in' => '运行时类型不正确',
             'group_ids.required' => '权限组不能为空',
             'group_ids.array' => '权限组格式不正确',
             'route_ids.array' => '路由组格式不正确',

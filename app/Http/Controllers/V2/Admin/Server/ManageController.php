@@ -98,6 +98,7 @@ class ManageController extends Controller
             Server::TYPE_VMESS,
             Server::TYPE_TROJAN,
             Server::TYPE_VLESS,
+            Server::TYPE_SHADOWSOCKS,
             Server::TYPE_ANYTLS,
             Server::TYPE_HYSTERIA,
             Server::TYPE_TUIC,
@@ -124,6 +125,8 @@ class ManageController extends Controller
                 'aliases' => array_values($definition['aliases'] ?? []),
                 'version_kind' => $definition['version_kind'] ?? 'semver',
                 'unknown_version_policy' => $definition['unknown_version_policy'] ?? 'conservative',
+                'primary_scope' => $definition['primary_scope'] ?? ProtocolCapabilityService::DEFAULT_CLIENT_SCOPE,
+                'evaluated_scopes' => array_values($definition['evaluated_scopes'] ?? [ProtocolCapabilityService::DEFAULT_CLIENT_SCOPE]),
             ];
         }
 
@@ -155,6 +158,16 @@ class ManageController extends Controller
 
         return $this->success([
             'version' => 1,
+            'capability_scopes' => [
+                'subscription' => [
+                    'label' => '订阅导入',
+                    'description' => '当前兼容矩阵按订阅/远程配置导入评估，不按单节点 URI 参数完整度评估。',
+                ],
+                'node_uri' => [
+                    'label' => '单节点 URI',
+                    'description' => '单节点导入兼容性保留给单独矩阵，不与订阅导入结论混用。',
+                ],
+            ],
             'clients' => $clients,
             'runtimes' => $runtimeProtocols,
             'types' => $typeDefinitions,

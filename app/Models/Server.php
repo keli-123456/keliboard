@@ -17,6 +17,7 @@ use Illuminate\Database\Eloquent\Casts\Attribute;
  * @property int $id
  * @property string $name 节点名称
  * @property string $type 服务类型
+ * @property string $runtime 节点运行时
  * @property string $host 主机地址
  * @property string|int $port 端口
  * @property int|null $server_port 服务器端口
@@ -53,6 +54,8 @@ use Illuminate\Database\Eloquent\Casts\Attribute;
  */
 class Server extends Model
 {
+    public const RUNTIME_GENERIC = 'generic';
+    public const RUNTIME_V2NODE = 'v2node';
     public const TYPE_HYSTERIA = 'hysteria';
     public const TYPE_VLESS = 'vless';
     public const TYPE_TROJAN = 'trojan';
@@ -104,9 +107,17 @@ class Server extends Model
         self::TYPE_MIERU,
     ];
 
+    public const VALID_RUNTIMES = [
+        self::RUNTIME_GENERIC,
+        self::RUNTIME_V2NODE,
+    ];
+
     protected $table = 'v2_server';
 
     protected $guarded = ['id'];
+    protected $attributes = [
+        'runtime' => self::RUNTIME_GENERIC,
+    ];
     protected $casts = [
         'group_ids' => 'array',
         'route_ids' => 'array',
