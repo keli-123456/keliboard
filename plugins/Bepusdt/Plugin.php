@@ -9,6 +9,22 @@ use Curl\Curl;
 
 class Plugin extends AbstractPlugin implements PaymentInterface
 {
+    private const NETWORK_LABELS = [
+        'trc20' => 'Tron',
+        'erc20' => 'Ethereum',
+        'polygon' => 'Polygon',
+        'bep20' => 'BSC',
+        'aptos' => 'Aptos',
+        'solana' => 'Solana',
+        'xlayer' => 'X-Layer',
+        'arbitrum' => 'Arbitrum-One',
+        'base' => 'Base',
+        'plasma' => 'Plasma',
+        'tron' => 'Tron',
+        'ethereum' => 'Ethereum',
+        'bsc' => 'BSC',
+    ];
+
     public function boot(): void
     {
         $this->filter('available_payment_methods', function ($methods) {
@@ -91,9 +107,25 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             throw new ApiException('支付网关未返回支付地址');
         }
 
+        $paymentData = (array) $result->data;
+        $tradeTypeMeta = $this->parseTradeType($tradeType);
+        $token = isset($paymentData['token']) ? (string) $paymentData['token'] : '';
+
         return [
-            'type' => 1,
-            'data' => $result->data->payment_url,
+            'type' => 0,
+            'data' => [
+                'qr_data' => $token ?: (string) $paymentData['payment_url'],
+                'address' => $token,
+                'amount' => isset($paymentData['actual_amount']) ? (string) $paymentData['actual_amount'] : '',
+                'fiat_amount' => isset($paymentData['amount']) ? (string) $paymentData['amount'] : '',
+                'fiat' => isset($paymentData['fiat']) ? (string) $paymentData['fiat'] : 'CNY',
+                'currency' => $tradeTypeMeta['currency'],
+                'network' => $tradeTypeMeta['network'],
+                'trade_type' => $tradeType,
+                'trade_id' => isset($paymentData['trade_id']) ? (string) $paymentData['trade_id'] : '',
+                'payment_url' => (string) $paymentData['payment_url'],
+                'expiration_time' => isset($paymentData['expiration_time']) ? (int) $paymentData['expiration_time'] : null,
+            ],
         ];
     }
 
@@ -126,6 +158,30 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             'trade_no' => $params['order_id'],
             'callback_no' => $params['trade_id'],
             'custom_result' => 'ok',
+        ];
+    }
+
+    private function parseTradeType(string $tradeType): array
+    {
+        $parts = array_values(array_filter(explode('.', strtolower($tradeType))));
+        if (count($parts) !== 2) {
+            return [
+                'currency' => strtoupper($tradeType),
+                'network' => '',
+            ];
+        }
+
+        [$first, $second] = $parts;
+        if (in_array($first, ['usdt', 'usdc'], true)) {
+            return [
+                'currency' => strtoupper($first),
+                'network' => self::NETWORK_LABELS[$second] ?? strtoupper($second),
+            ];
+        }
+
+        return [
+            'currency' => strtoupper($second),
+            'network' => self::NETWORK_LABELS[$first] ?? strtoupper($first),
         ];
     }
 }
