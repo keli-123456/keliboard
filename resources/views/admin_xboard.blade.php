@@ -17,6 +17,8 @@
       version: "{{ $version }}",
       logo: "{{ $logo }}",
       secure_path: "{{ $secure_path }}",
+      admin_asset_version: "{{ $adminIndexJsVersion }}",
+      admin_asset_base: "/assets/admin-xboard",
     };
   </script>
   <script type="module" crossorigin src="/assets/admin-xboard/assets/index.js?v={{ $adminIndexJsVersion }}"></script>
