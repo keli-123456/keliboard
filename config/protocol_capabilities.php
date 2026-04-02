@@ -316,9 +316,11 @@ return [
             'supports' => [
                 'anytls' => [
                     ['when' => ['tls_mode' => 2], 'support' => 'no', 'reason' => 'AnyTLS reality is not exported for surfboard'],
+                    ['when' => ['network' => ['ws', 'grpc', 'httpupgrade', 'xhttp', 'splithttp']], 'support' => 'no', 'reason' => 'AnyTLS custom transport is not exported for surfboard'],
                     ['when' => ['feature' => 'alpn'], 'support' => 'no', 'reason' => 'AnyTLS ALPN is not exported for surfboard'],
                     ['when' => ['feature' => 'client_fingerprint'], 'support' => 'no', 'reason' => 'AnyTLS client fingerprint is not exported for surfboard'],
                     ['when' => ['feature' => 'idle_session'], 'support' => 'no', 'reason' => 'AnyTLS idle session fields are not exported for surfboard'],
+                    ['when' => ['feature' => 'padding_scheme'], 'support' => 'no', 'reason' => 'AnyTLS padding scheme is not exported for surfboard'],
                     ['when' => [], 'support' => 'yes'],
                 ],
             ],

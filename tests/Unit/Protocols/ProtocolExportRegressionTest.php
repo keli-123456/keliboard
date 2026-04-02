@@ -277,9 +277,50 @@ final class ProtocolExportRegressionTest extends TestCase
         ]);
 
         $this->assertStringContainsString('Surfboard AnyTLS=anytls', $uri);
+        $this->assertStringContainsString(',user-password,', $uri);
+        $this->assertStringNotContainsString('password=user-password', $uri);
         $this->assertStringContainsString('skip-cert-verify=true', $uri);
         $this->assertStringContainsString('sni=surf-sni.example.com', $uri);
         $this->assertStringContainsString('reuse=false', $uri);
+    }
+
+    public function test_surfboard_build_anytls_reads_legacy_tls_fields_and_skips_unsupported_modes(): void
+    {
+        $legacy = Surfboard::buildAnyTLS('user-password', [
+            'name' => 'Surfboard Legacy AnyTLS',
+            'host' => 'legacy.example.com',
+            'port' => 9443,
+            'server_name' => 'legacy-sni.example.com',
+            'allow_insecure' => true,
+            'protocol_settings' => [
+                'tls_mode' => 1,
+                'network' => 'tcp',
+            ],
+        ]);
+
+        $reality = Surfboard::buildAnyTLS('user-password', [
+            'name' => 'Surfboard Reality',
+            'host' => 'reality.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls_mode' => 2,
+            ],
+        ]);
+
+        $ws = Surfboard::buildAnyTLS('user-password', [
+            'name' => 'Surfboard WS',
+            'host' => 'ws.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls_mode' => 1,
+                'network' => 'ws',
+            ],
+        ]);
+
+        $this->assertStringContainsString('skip-cert-verify=true', $legacy);
+        $this->assertStringContainsString('sni=legacy-sni.example.com', $legacy);
+        $this->assertSame('', $reality);
+        $this->assertSame('', $ws);
     }
 
     public function test_surge_filters_out_hysteria2_for_old_client_versions(): void

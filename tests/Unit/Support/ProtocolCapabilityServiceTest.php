@@ -534,6 +534,19 @@ final class ProtocolCapabilityServiceTest extends TestCase
         $this->assertTrue($result->supported);
     }
 
+    public function test_surfboard_drops_anytls_custom_transport(): void
+    {
+        $server = $this->makeServer('anytls', [
+            'tls_mode' => 1,
+            'network' => 'ws',
+            'tls' => ['server_name' => 'example.com'],
+        ]);
+
+        $result = $this->service->supportsClient('surfboard', '1.0.0', $server);
+
+        $this->assertFalse($result->supported);
+    }
+
     public function test_shadowrocket_drops_anytls_reality_because_exporter_only_emits_basic_tls(): void
     {
         $server = $this->makeServer('anytls', [
@@ -617,6 +630,19 @@ final class ProtocolCapabilityServiceTest extends TestCase
             'tls_mode' => 1,
             'tls' => ['server_name' => 'example.com'],
             'idle_session_timeout' => 30,
+        ]);
+
+        $result = $this->service->supportsClient('surfboard', '1.0.0', $server);
+
+        $this->assertFalse($result->supported);
+    }
+
+    public function test_surfboard_drops_anytls_padding_scheme_because_exporter_ignores_it(): void
+    {
+        $server = $this->makeServer('anytls', [
+            'tls_mode' => 1,
+            'tls' => ['server_name' => 'example.com'],
+            'padding_scheme' => ['stop=8'],
         ]);
 
         $result = $this->service->supportsClient('surfboard', '1.0.0', $server);
