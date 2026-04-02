@@ -1,1 +1,0 @@
-import{g as t}from"./risk-center-A7p1pvnz.js";const o={fetch:()=>t.get("/plan/fetch"),save:p=>t.post("/plan/save",p),drop:p=>t.post("/plan/drop",{id:p}),update:p=>t.post("/plan/update",p),sort:p=>t.post("/plan/sort",{ids:p})};export{o as p};
