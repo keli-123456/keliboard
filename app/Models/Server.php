@@ -439,6 +439,14 @@ class Server extends Model
         };
     }
 
+    public static function getProtocolPresets(string $type): array
+    {
+        $type = self::normalizeType($type) ?? '';
+        $presets = config("protocol_presets.{$type}");
+
+        return is_array($presets) ? array_values($presets) : [];
+    }
+
     protected static function extractDefaultsFromSchema(array $schema): array
     {
         $defaults = [];

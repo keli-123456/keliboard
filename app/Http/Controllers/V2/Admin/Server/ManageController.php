@@ -145,6 +145,7 @@ class ManageController extends Controller
                 'schema' => Server::getProtocolSchema($serverType),
                 'defaults' => Server::getProtocolDefaults($serverType),
                 'enums' => Server::getProtocolEnums($serverType),
+                'presets' => $this->buildProtocolPresets($serverType, $capabilities),
                 'runtime_support' => [
                     'v2node' => [
                         'supported' => $capabilities->supportsRuntime('v2node', [
@@ -571,6 +572,67 @@ class ManageController extends Controller
                 ],
             ],
         ]);
+    }
+
+    private function buildProtocolPresets(string $serverType, ProtocolCapabilityService $capabilities): array
+    {
+        return array_values(array_map(function (array $preset) use ($serverType, $capabilities) {
+            $protocolSettings = is_array($preset['protocol_settings'] ?? null) ? $preset['protocol_settings'] : [];
+            $runtimeSupport = $capabilities->supportsRuntime('v2node', [
+                'type' => $serverType,
+                'protocol_settings' => $protocolSettings,
+            ]);
+            $warningKeys = $this->resolveV2NodePresetWarningKeys($serverType, $protocolSettings);
+
+            $preset['runtime_support'] = [
+                'v2node' => [
+                    'supported' => $runtimeSupport->supported && empty($warningKeys),
+                    'warnings' => array_values($warningKeys),
+                ],
+            ];
+
+            return $preset;
+        }, Server::getProtocolPresets($serverType)));
+    }
+
+    private function resolveV2NodePresetWarningKeys(string $serverType, array $protocolSettings): array
+    {
+        $warnings = [];
+        $type = Server::normalizeType($serverType) ?? $serverType;
+
+        if ($type === Server::TYPE_TUIC) {
+            if ((int) data_get($protocolSettings, 'version', 5) !== 5) {
+                $warnings[] = 'server.v2node.runtime_notice.tuic_version';
+            }
+
+            $udpRelayMode = strtolower(trim((string) data_get($protocolSettings, 'udp_relay_mode', 'native')));
+            if ($udpRelayMode !== '' && $udpRelayMode !== 'native') {
+                $warnings[] = 'server.v2node.runtime_notice.tuic_udp_relay_mode';
+            }
+        }
+
+        if ($type === Server::TYPE_ANYTLS) {
+            $clientFingerprint = trim((string) data_get($protocolSettings, 'client_fingerprint', ''));
+            if ($clientFingerprint !== '') {
+                $warnings[] = 'server.v2node.runtime_notice.anytls_client_fingerprint';
+            }
+
+            foreach (['idle_session_check_interval', 'idle_session_timeout', 'min_idle_session'] as $field) {
+                if (data_get($protocolSettings, $field) !== null) {
+                    $warnings[] = 'server.v2node.runtime_notice.anytls_idle_session';
+                    break;
+                }
+            }
+        }
+
+        if ($type === Server::TYPE_SHADOWSOCKS) {
+            $plugin = strtolower(trim((string) data_get($protocolSettings, 'plugin', '')));
+            if ($plugin !== '' && $plugin !== 'none') {
+                $warnings[] = 'server.v2node.runtime_notice.shadowsocks_plugin';
+            }
+        }
+
+        return array_values(array_unique($warnings));
     }
 
     public function sort(Request $request)
