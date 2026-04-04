@@ -1,0 +1,55 @@
+{
+    "name": "节点自动命名",
+    "code": "node_auto_rename",
+    "version": "1.0.0",
+    "description": "定时根据节点协议、当前解析 IP 所属国家和节点 ID 自动更新节点名称。",
+    "author": "Codex",
+    "type": "feature",
+    "require": {
+        "xboard": ">=1.0.0"
+    },
+    "config": {
+        "enable_auto_rename": {
+            "type": "boolean",
+            "default": true,
+            "label": "启用自动改名",
+            "description": "关闭后插件保留安装状态，但不会执行定时自动改名。"
+        },
+        "interval_minutes": {
+            "type": "number",
+            "default": 10,
+            "label": "扫描间隔（分钟）",
+            "description": "支持 1、5、10、15、30、60，超出范围会自动回退到 10 分钟。"
+        },
+        "template": {
+            "type": "string",
+            "default": "{protocol}-{country}-{node_id}",
+            "label": "命名模板",
+            "description": "支持占位符 {protocol}、{country}、{node_id}、{id}、{code}、{host}、{ip}、{runtime}。"
+        },
+        "include_types": {
+            "type": "text",
+            "default": "",
+            "label": "仅处理这些协议类型",
+            "description": "留空表示处理全部节点；支持逗号或换行分隔，如 vmess,vless,trojan。"
+        },
+        "overwrite_existing": {
+            "type": "boolean",
+            "default": true,
+            "label": "覆盖现有名称",
+            "description": "开启后只要新名称发生变化就会覆盖；关闭后仅在节点名称为空时自动命名。"
+        },
+        "rename_when_country_unknown": {
+            "type": "boolean",
+            "default": false,
+            "label": "国家未知时也改名",
+            "description": "关闭时，无法识别国家的节点会跳过；开启后会使用下方“未知国家”文案。"
+        },
+        "unknown_country_label": {
+            "type": "string",
+            "default": "未知",
+            "label": "未知国家文案",
+            "description": "仅在“国家未知时也改名”开启后生效。"
+        }
+    }
+}
