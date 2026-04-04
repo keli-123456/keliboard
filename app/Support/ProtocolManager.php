@@ -193,7 +193,7 @@ class ProtocolManager
         $pattern = '/' . implode('[^a-z0-9]*', array_map(
             static fn (string $token): string => preg_quote($token, '/'),
             $tokens
-        )) . '[^0-9a-z]*v?(\d+(?:\.\d+){0,2})/i';
+        )) . '[^0-9a-z]*v?(\d+(?:\.\d+)*)/i';
 
         if (preg_match($pattern, $decodedFlag, $matches)) {
             return $matches[1];

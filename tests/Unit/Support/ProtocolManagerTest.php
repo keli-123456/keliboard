@@ -50,10 +50,12 @@ final class ProtocolManagerTest extends TestCase
         ]);
 
         $this->assertSame('1.12.0', $manager->extractClientVersion('singbox 1.12.0', 'sing-box'));
+        $this->assertSame('1.2.8.1103', $manager->extractClientVersion('sing-box/1.2.8.1103', 'sing-box'));
         $this->assertSame('1.3.5', $manager->extractClientVersion('ClashX Meta/1.3.5', 'clashx meta'));
         $this->assertSame('1.7.0', $manager->extractClientVersion('Clash Verge/v1.7.0', 'verge'));
         $this->assertSame('1.0.31', $manager->extractClientVersion('quantumultx/1.0.31', 'quantumult-x'));
         $this->assertSame('1.0.31', $manager->extractClientVersion('Quantumult%20X/1.0.31', 'quantumult%20x'));
+        $this->assertSame('1.2.8.1103', $manager->extractClientVersion('Hiddify/1.2.8.1103', 'hiddify'));
     }
 
     private function makeManager(array $classes): ProtocolManager

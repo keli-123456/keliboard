@@ -73,11 +73,13 @@ class ClientController extends Controller
             allowedTypes: $requestedTypes,
             filterKeywords: $filterKeywords
         );
-        $serversFiltered = app('protocols.capabilities')->filterServersForClient(
-            $serversFiltered,
-            $clientInfo['name'] ?? null,
-            $clientInfo['version'] ?? null
-        );
+        if (!$this->shouldBypassClientCapabilityFilter($clientInfo)) {
+            $serversFiltered = app('protocols.capabilities')->filterServersForClient(
+                $serversFiltered,
+                $clientInfo['name'] ?? null,
+                $clientInfo['version'] ?? null
+            );
+        }
 
         $this->setSubscribeInfoToServers($serversFiltered, $user, count($servers) - count($serversFiltered));
         $serversFiltered = $this->addPrefixToServerName($serversFiltered);
@@ -192,7 +194,7 @@ class ClientController extends Controller
         $clientName = null;
         $clientVersion = null;
 
-        if (preg_match('/([a-zA-Z0-9\-_]+)[\/\s]+(v?[0-9]+(?:\.[0-9]+){0,2})/', $flag, $matches)) {
+        if (preg_match('/([a-zA-Z0-9\-_]+)[\/\s]+(v?[0-9]+(?:\.[0-9]+)*)/', $flag, $matches)) {
             $potentialName = strtolower($matches[1]);
             $clientVersion = preg_replace('/^v/', '', $matches[2]);
             $clientName = $protocolManager->matchClientFlag($potentialName);
@@ -211,6 +213,22 @@ class ClientController extends Controller
             'name' => $clientName,
             'version' => $clientVersion
         ];
+    }
+
+    private function shouldBypassClientCapabilityFilter(array $clientInfo): bool
+    {
+        if (($clientInfo['name'] ?? null) !== 'sing-box') {
+            return false;
+        }
+
+        $version = $clientInfo['version'] ?? null;
+        if (!is_string($version) || $version === '') {
+            return false;
+        }
+
+        // Wrapper clients such as Karing may reuse the sing-box UA while exposing
+        // an app build version like 1.2.8.1103 instead of sing-box core semver.
+        return preg_match('/^\d+(?:\.\d+){3,}$/', $version) === 1;
     }
 
     private function setSubscribeInfoToServers(&$servers, $user, $rejectServerCount = 0)

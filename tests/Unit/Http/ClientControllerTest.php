@@ -28,17 +28,24 @@ final class ClientControllerTest extends TestCase
         $method->setAccessible(true);
 
         $singBox = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'singbox 1.12.0']));
+        $singBoxWrapper = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'sing-box/1.2.8.1103']));
         $clashMeta = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'ClashX Meta/1.3.5']));
         $verge = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'Clash Verge/v1.7.0']));
+        $hiddify = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'Hiddify/1.2.8.1103']));
 
         $this->assertSame('sing-box', $singBox['name']);
         $this->assertSame('1.12.0', $singBox['version']);
+        $this->assertSame('sing-box', $singBoxWrapper['name']);
+        $this->assertSame('1.2.8.1103', $singBoxWrapper['version']);
 
         $this->assertSame('clashx meta', $clashMeta['name']);
         $this->assertSame('1.3.5', $clashMeta['version']);
 
         $this->assertSame('verge', $verge['name']);
         $this->assertSame('1.7.0', $verge['version']);
+
+        $this->assertSame('hiddify', $hiddify['name']);
+        $this->assertSame('1.2.8.1103', $hiddify['version']);
     }
 
     public function test_get_client_info_does_not_extract_unrelated_browser_version(): void
