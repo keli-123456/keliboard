@@ -9,7 +9,7 @@ use App\Models\Server;
 
 class SingBox extends AbstractProtocol
 {
-    public $flags = ['sing-box', 'hiddify', 'hiddifynext', 'sfm'];
+    public $flags = ['sing-box', 'hiddify', 'hiddifynext', 'sfm', 'karing'];
     public $allowedProtocols = [
         Server::TYPE_SHADOWSOCKS,
         Server::TYPE_TROJAN,
@@ -467,8 +467,8 @@ class SingBox extends AbstractProtocol
         
         // 端口跳跃：若节点配置了端口范围，一律下发 server_ports（由客户端自行兼容/忽略）
         if (isset($server['ports'])) {
-            // 使用端口范围替代单一端口；如客户端不支持会自行忽略
-            $baseConfig['server_ports'] = [str_replace('-', ':', $server['ports'])];
+            // sing-box expects hy2 port hopping ranges in "start-end" form.
+            $baseConfig['server_ports'] = [str_replace(':', '-', (string) $server['ports'])];
             unset($baseConfig['server_port']);
             
             // 如果配置了跳跃间隔，一并下发
@@ -484,7 +484,7 @@ class SingBox extends AbstractProtocol
             'up_mbps' => data_get($protocol_settings, 'bandwidth.up'),
             'down_mbps' => data_get($protocol_settings, 'bandwidth.down'),
         ];
-        $versionConfig = match (data_get($protocol_settings, 'version', 1)) {
+        $versionConfig = match ((int) data_get($protocol_settings, 'version', 1)) {
             2 => [
                 'type' => 'hysteria2',
                 'password' => $password,
