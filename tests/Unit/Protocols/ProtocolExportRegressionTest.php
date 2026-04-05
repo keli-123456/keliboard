@@ -732,6 +732,46 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertSame(2, $anytls['min_idle_session']);
     }
 
+    public function test_singbox_build_hysteria2_port_hopping_uses_colon_range_and_keeps_base_port(): void
+    {
+        $protocol = new class([], []) extends SingBox {
+            public function handle()
+            {
+                return [];
+            }
+
+            public function buildHysteriaForTest(string $password, array $server): array
+            {
+                return $this->buildHysteria($password, $server);
+            }
+        };
+
+        $hysteria = $protocol->buildHysteriaForTest('user-uuid', [
+            'name' => 'SingBox HY2 Hop',
+            'host' => 'hy2.example.com',
+            'port' => 34456,
+            'ports' => '34000-35000',
+            'protocol_settings' => [
+                'version' => 2,
+                'hop_interval' => 10,
+                'bandwidth' => [
+                    'up' => 1000,
+                    'down' => 1000,
+                ],
+                'tls' => [
+                    'allow_insecure' => true,
+                    'server_name' => 'sni.example.com',
+                ],
+            ],
+        ]);
+
+        $this->assertSame('hysteria2', $hysteria['type']);
+        $this->assertSame(34456, $hysteria['server_port']);
+        $this->assertSame(['34000:35000'], $hysteria['server_ports']);
+        $this->assertSame('10s', $hysteria['hop_interval']);
+        $this->assertSame('sni.example.com', $hysteria['tls']['server_name']);
+    }
+
     public function test_singbox_build_vless_h2_and_quic_transport_export_expected_fields(): void
     {
         $protocol = new class([], []) extends SingBox {

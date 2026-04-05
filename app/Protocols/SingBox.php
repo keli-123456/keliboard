@@ -465,14 +465,14 @@ class SingBox extends AbstractProtocol
             ]
         ];
         
-        // 端口跳跃：若节点配置了端口范围，一律下发 server_ports（由客户端自行兼容/忽略）
-        if (isset($server['ports'])) {
-            // sing-box expects hy2 port hopping ranges in "start-end" form.
-            $baseConfig['server_ports'] = [str_replace(':', '-', (string) $server['ports'])];
-            unset($baseConfig['server_port']);
-            
+        // sing-box hy2 server_ports expects "start:end" ranges. Keep server_port as
+        // a valid base port for compatibility and as a fallback for clients that
+        // ignore port hopping fields.
+        if (($portRange = $this->normalizeHysteriaPortRange(data_get($server, 'ports'))) !== null) {
+            $baseConfig['server_ports'] = [$portRange];
+
             // 如果配置了跳跃间隔，一并下发
-            if (isset($protocol_settings['hop_interval'])) {
+            if (isset($protocol_settings['hop_interval']) && $protocol_settings['hop_interval'] !== '') {
                 $baseConfig['hop_interval'] = "{$protocol_settings['hop_interval']}s";
             }
         }
@@ -600,6 +600,20 @@ class SingBox extends AbstractProtocol
         }
 
         return (string) $value;
+    }
+
+    protected function normalizeHysteriaPortRange($value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $range = preg_replace('/\s+/', '', (string) $value) ?? '';
+        if ($range === '') {
+            return null;
+        }
+
+        return str_replace('-', ':', $range);
     }
 
     protected function buildSocks($password, $server): array
