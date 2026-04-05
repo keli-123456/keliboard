@@ -99,9 +99,23 @@ class ServerService
             return collect();
         }
 
-        return ServerRoute::select(['id', 'match', 'action', 'action_value'])
+        $routes = ServerRoute::select(['id', 'match', 'action', 'action_value'])
             ->whereIn('id', $routeIds)
             ->get();
+
+        return self::orderByIdSequence($routes, $routeIds);
+    }
+
+    public static function orderByIdSequence(Collection $records, array $ids): Collection
+    {
+        $positions = [];
+        foreach (array_values(array_unique(array_map('intval', $ids))) as $index => $id) {
+            $positions[$id] = $index;
+        }
+
+        return $records
+            ->sortBy(fn ($record) => $positions[(int) data_get($record, 'id')] ?? PHP_INT_MAX)
+            ->values();
     }
 
     /**

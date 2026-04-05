@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\ServerService;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -509,7 +510,15 @@ class Server extends Model
 
     public function routes()
     {
-        return ServerRoute::whereIn('id', $this->route_ids)->get();
+        $routeIds = array_values(array_unique(array_map('intval', (array) ($this->route_ids ?? []))));
+        if (empty($routeIds)) {
+            return collect();
+        }
+
+        return ServerService::orderByIdSequence(
+            ServerRoute::whereIn('id', $routeIds)->get(),
+            $routeIds
+        );
     }
 
     /**
