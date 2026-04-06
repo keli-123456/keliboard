@@ -318,9 +318,7 @@ class ClashMeta extends AbstractProtocol
                 if ($serverName = data_get($protocol_settings, 'tls_settings.server_name')) {
                     $array['servername'] = $serverName;
                 }
-                if (trim((string) data_get($protocol_settings, 'client_fingerprint', '')) !== '') {
-                    $array['client-fingerprint'] = Helper::getClientFingerprint($protocol_settings);
-                }
+                $array['client-fingerprint'] = Helper::getClientFingerprint($protocol_settings);
                 break;
             case 2:
                 $array['tls'] = true;
@@ -497,12 +495,8 @@ class ClashMeta extends AbstractProtocol
             'port' => $server['port'],
             'password' => $password,
             'udp' => true,
+            'client-fingerprint' => Helper::getClientFingerprint($protocol_settings),
         ];
-
-        $clientFingerprint = trim((string) data_get($protocol_settings, 'client_fingerprint', ''));
-        if ($clientFingerprint !== '') {
-            $array['client-fingerprint'] = Helper::getClientFingerprint($protocol_settings);
-        }
 
         if ($alpn = array_values(array_filter((array) data_get($protocol_settings, 'alpn', [])))) {
             $array['alpn'] = $alpn;

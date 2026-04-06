@@ -469,7 +469,7 @@ class Stash extends AbstractProtocol
             'server' => $server['host'],
             'port' => $server['port'],
             'password' => $password,
-            'client-fingerprint' => trim((string) data_get($protocol_settings, 'client_fingerprint', '')) ?: 'chrome',
+            'client-fingerprint' => Helper::getClientFingerprint($protocol_settings),
             'skip-cert-verify' => (bool) data_get($protocol_settings, 'tls.allow_insecure', false),
         ];
 

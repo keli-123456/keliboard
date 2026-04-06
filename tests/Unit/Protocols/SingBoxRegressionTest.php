@@ -22,7 +22,7 @@ final class SingBoxRegressionTest extends TestCase
         $this->assertSame(SingBox::class, $manager->matchProtocolClassName('Karing/1.2.8.1103'));
     }
 
-    public function test_singbox_build_hysteria2_port_hopping_uses_dash_ranges(): void
+    public function test_singbox_build_hysteria2_port_hopping_uses_colon_ranges_and_keeps_base_port(): void
     {
         $protocol = new class([], []) extends SingBox {
             public function handle()
@@ -51,8 +51,8 @@ final class SingBoxRegressionTest extends TestCase
         ]);
 
         $this->assertSame('hysteria2', $config['type']);
-        $this->assertSame(['2080-3000'], $config['server_ports']);
+        $this->assertSame(8443, $config['server_port']);
+        $this->assertSame(['2080:3000'], $config['server_ports']);
         $this->assertSame('30s', $config['hop_interval']);
-        $this->assertArrayNotHasKey('server_port', $config);
     }
 }

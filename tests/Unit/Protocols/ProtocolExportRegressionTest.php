@@ -263,6 +263,24 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertTrue($config['skip-cert-verify']);
     }
 
+    public function test_stash_build_anytls_defaults_client_fingerprint_when_not_configured(): void
+    {
+        $config = Stash::buildAnyTLS('secret', [
+            'name' => 'Stash AnyTLS',
+            'host' => 'stash-anytls.example.com',
+            'port' => 9443,
+            'protocol_settings' => [
+                'tls' => [
+                    'server_name' => 'stash-anytls-sni.example.com',
+                ],
+            ],
+        ]);
+
+        $this->assertSame('anytls', $config['type']);
+        $this->assertSame('firefox', $config['client-fingerprint']);
+        $this->assertSame('stash-anytls-sni.example.com', $config['sni']);
+    }
+
     public function test_surfboard_build_anytls_keeps_reuse_disabled_and_sni(): void
     {
         $uri = Surfboard::buildAnyTLS('user-password', [
@@ -477,6 +495,32 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertStringContainsString('fp=chrome', $uri);
     }
 
+    public function test_shadowrocket_build_vless_tls_defaults_client_fingerprint_when_not_configured(): void
+    {
+        $uri = Shadowrocket::buildVless('user-uuid', [
+            'name' => 'SR TLS Default FP',
+            'host' => 'sr-tls-default.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 1,
+                'network' => 'ws',
+                'tls_settings' => [
+                    'server_name' => 'sr-tls-default-sni.example.com',
+                    'allow_insecure' => false,
+                ],
+                'network_settings' => [
+                    'path' => '/sr-default',
+                    'headers' => [
+                        'Host' => 'cdn.sr-default.example.com',
+                    ],
+                ],
+            ],
+        ]);
+
+        $this->assertStringContainsString('peer=sr-tls-default-sni.example.com', $uri);
+        $this->assertStringContainsString('fp=firefox', $uri);
+    }
+
     public function test_shadowrocket_build_hysteria2_and_anytls_export_current_fields(): void
     {
         $hysteria = Shadowrocket::buildHysteria('secret', [
@@ -584,6 +628,33 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertTrue($config['tls']);
         $this->assertSame('meta-tls-sni.example.com', $config['servername']);
         $this->assertSame('chrome', $config['client-fingerprint']);
+    }
+
+    public function test_clashmeta_build_vless_tls_defaults_client_fingerprint_when_not_configured(): void
+    {
+        $config = ClashMeta::buildVless('user-uuid', [
+            'name' => 'Meta TLS Default FP',
+            'host' => 'meta-tls-default.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 1,
+                'network' => 'ws',
+                'tls_settings' => [
+                    'allow_insecure' => false,
+                    'server_name' => 'meta-tls-default-sni.example.com',
+                ],
+                'network_settings' => [
+                    'path' => '/meta-default',
+                    'headers' => [
+                        'Host' => 'cdn.meta-default.example.com',
+                    ],
+                ],
+            ],
+        ]);
+
+        $this->assertTrue($config['tls']);
+        $this->assertSame('meta-tls-default-sni.example.com', $config['servername']);
+        $this->assertSame('firefox', $config['client-fingerprint']);
     }
 
     public function test_general_build_vless_tls_uses_configured_client_fingerprint(): void
@@ -717,6 +788,24 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertTrue($anytls['skip-cert-verify']);
     }
 
+    public function test_clashmeta_build_anytls_defaults_client_fingerprint_when_not_configured(): void
+    {
+        $config = ClashMeta::buildAnyTLS('secret', [
+            'name' => 'Meta AnyTLS Default FP',
+            'host' => 'meta-anytls-default.example.com',
+            'port' => 9443,
+            'protocol_settings' => [
+                'tls' => [
+                    'server_name' => 'meta-anytls-default-sni.example.com',
+                ],
+            ],
+        ]);
+
+        $this->assertSame('anytls', $config['type']);
+        $this->assertSame('firefox', $config['client-fingerprint']);
+        $this->assertSame('meta-anytls-default-sni.example.com', $config['sni']);
+    }
+
     public function test_clashmeta_filters_out_hysteria2_for_old_clients(): void
     {
         $protocol = new class([], [[
@@ -813,6 +902,37 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertSame('45s', $anytls['idle_session_check_interval']);
         $this->assertSame('60s', $anytls['idle_session_timeout']);
         $this->assertSame(2, $anytls['min_idle_session']);
+    }
+
+    public function test_singbox_build_anytls_defaults_client_fingerprint_when_not_configured(): void
+    {
+        $protocol = new class([], []) extends SingBox {
+            public function handle()
+            {
+                return [];
+            }
+
+            public function buildAnyTlsForTest(string $password, array $server): array
+            {
+                return $this->buildAnyTLS($password, $server);
+            }
+        };
+
+        $config = $protocol->buildAnyTlsForTest('secret', [
+            'name' => 'SingBox AnyTLS Default FP',
+            'host' => 'sb-anytls-default.example.com',
+            'port' => 9443,
+            'protocol_settings' => [
+                'tls' => [
+                    'server_name' => 'sb-anytls-default-sni.example.com',
+                ],
+            ],
+        ]);
+
+        $this->assertSame('anytls', $config['type']);
+        $this->assertSame('sb-anytls-default-sni.example.com', $config['tls']['server_name']);
+        $this->assertTrue($config['tls']['utls']['enabled']);
+        $this->assertSame('firefox', $config['tls']['utls']['fingerprint']);
     }
 
     public function test_singbox_build_hysteria2_port_hopping_uses_colon_range_and_keeps_base_port(): void
