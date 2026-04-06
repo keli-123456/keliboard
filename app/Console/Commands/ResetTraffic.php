@@ -10,6 +10,10 @@ use Illuminate\Support\Facades\Log;
 
 class ResetTraffic extends Command
 {
+  private const CHUNK_SIZE = 1000;
+  private const GC_EVERY_CHUNKS = 5;
+  private const CHUNK_PAUSE_US = 100000;
+
   protected $signature = 'reset:traffic {--fix-null : 修正模式，重新计算next_reset_at为null的用户} {--force : 强制模式，重新计算所有用户的重置时间}';
 
   protected $description = '流量重置 - 处理所有需要重置的用户';
@@ -107,11 +111,14 @@ class ResetTraffic extends Command
   {
     $startTime = microtime(true);
     $totalResetCount = 0;
+    $totalProcessedCount = 0;
     $errors = [];
+    $chunkNumber = 0;
 
-    $users = $this->getResetQuery()->get();
+    $query = $this->getResetQuery();
+    $totalFound = (clone $query)->count();
 
-    if ($users->isEmpty()) {
+    if ($totalFound === 0) {
       $this->info("😴 当前没有需要重置的用户");
       return [
         'total_processed' => 0,
@@ -121,26 +128,34 @@ class ResetTraffic extends Command
       ];
     }
 
-    $this->info("找到 {$users->count()} 个需要重置的用户");
+    $this->info("找到 {$totalFound} 个需要重置的用户");
 
-    foreach ($users as $user) {
-      try {
-        $totalResetCount += (int) $this->trafficResetService->checkAndReset($user, TrafficResetLog::SOURCE_CRON);
-      } catch (\Exception $e) {
-        $errors[] = [
-          'user_id' => $user->id,
-          'email' => $user->email,
-          'error' => $e->getMessage(),
-        ];
-        Log::error('用户流量重置失败', [
-          'user_id' => $user->id,
-          'error' => $e->getMessage(),
-        ]);
+    $query->orderBy('id')->chunkById(self::CHUNK_SIZE, function ($users) use (&$totalResetCount, &$totalProcessedCount, &$errors, &$chunkNumber) {
+      $chunkNumber++;
+
+      foreach ($users as $user) {
+        try {
+          $totalResetCount += (int) $this->trafficResetService->checkAndReset($user, TrafficResetLog::SOURCE_CRON);
+        } catch (\Exception $e) {
+          $errors[] = [
+            'user_id' => $user->id,
+            'email' => $user->email,
+            'error' => $e->getMessage(),
+          ];
+          Log::error('用户流量重置失败', [
+            'user_id' => $user->id,
+            'error' => $e->getMessage(),
+          ]);
+        } finally {
+          $totalProcessedCount++;
+        }
       }
-    }
+
+      $this->afterChunk($chunkNumber);
+    });
 
     return [
-      'total_processed' => $users->count(),
+      'total_processed' => $totalProcessedCount,
       'total_reset' => $totalResetCount,
       'error_count' => count($errors),
       'duration' => round(microtime(true) - $startTime, 2),
@@ -150,9 +165,10 @@ class ResetTraffic extends Command
   private function performFix(): array
   {
     $startTime = microtime(true);
-    $nullUsers = $this->getNullResetTimeUsers();
+    $query = $this->getNullResetTimeUsersQuery();
+    $totalFound = (clone $query)->count();
 
-    if ($nullUsers->isEmpty()) {
+    if ($totalFound === 0) {
       $this->info("✅ 没有发现next_reset_at为null的用户");
       return [
         'total_found' => 0,
@@ -162,34 +178,41 @@ class ResetTraffic extends Command
       ];
     }
 
-    $this->info("🔧 发现 {$nullUsers->count()} 个next_reset_at为null的用户，开始修正...");
+    $this->info("🔧 发现 {$totalFound} 个next_reset_at为null的用户，开始修正...");
 
     $fixedCount = 0;
     $errors = [];
+    $chunkNumber = 0;
 
-    foreach ($nullUsers as $user) {
-      try {
-        $nextResetTime = $this->trafficResetService->calculateNextResetTime($user);
-        if ($nextResetTime) {
-          $user->next_reset_at = $nextResetTime->timestamp;
-          $user->save();
-          $fixedCount++;
+    $query->orderBy('id')->chunkById(self::CHUNK_SIZE, function ($users) use (&$fixedCount, &$errors, &$chunkNumber) {
+      $chunkNumber++;
+
+      foreach ($users as $user) {
+        try {
+          $nextResetTime = $this->trafficResetService->calculateNextResetTime($user);
+          if ($nextResetTime) {
+            $user->next_reset_at = $nextResetTime->timestamp;
+            $user->save();
+            $fixedCount++;
+          }
+        } catch (\Exception $e) {
+          $errors[] = [
+            'user_id' => $user->id,
+            'email' => $user->email,
+            'error' => $e->getMessage(),
+          ];
+          Log::error('修正用户next_reset_at失败', [
+            'user_id' => $user->id,
+            'error' => $e->getMessage(),
+          ]);
         }
-      } catch (\Exception $e) {
-        $errors[] = [
-          'user_id' => $user->id,
-          'email' => $user->email,
-          'error' => $e->getMessage(),
-        ];
-        Log::error('修正用户next_reset_at失败', [
-          'user_id' => $user->id,
-          'error' => $e->getMessage(),
-        ]);
       }
-    }
+
+      $this->afterChunk($chunkNumber);
+    });
 
     return [
-      'total_found' => $nullUsers->count(),
+      'total_found' => $totalFound,
       'total_fixed' => $fixedCount,
       'error_count' => count($errors),
       'duration' => round(microtime(true) - $startTime, 2),
@@ -199,9 +222,10 @@ class ResetTraffic extends Command
   private function performForce(): array
   {
     $startTime = microtime(true);
-    $allUsers = $this->getAllUsers();
+    $query = $this->getAllUsersQuery();
+    $totalFound = (clone $query)->count();
 
-    if ($allUsers->isEmpty()) {
+    if ($totalFound === 0) {
       $this->info("✅ 没有发现需要处理的用户");
       return [
         'total_found' => 0,
@@ -211,34 +235,41 @@ class ResetTraffic extends Command
       ];
     }
 
-    $this->info("⚡ 发现 {$allUsers->count()} 个用户，开始重新计算重置时间...");
+    $this->info("⚡ 发现 {$totalFound} 个用户，开始重新计算重置时间...");
 
     $fixedCount = 0;
     $errors = [];
+    $chunkNumber = 0;
 
-    foreach ($allUsers as $user) {
-      try {
-        $nextResetTime = $this->trafficResetService->calculateNextResetTime($user);
-        if ($nextResetTime) {
-          $user->next_reset_at = $nextResetTime->timestamp;
-          $user->save();
-          $fixedCount++;
+    $query->orderBy('id')->chunkById(self::CHUNK_SIZE, function ($users) use (&$fixedCount, &$errors, &$chunkNumber) {
+      $chunkNumber++;
+
+      foreach ($users as $user) {
+        try {
+          $nextResetTime = $this->trafficResetService->calculateNextResetTime($user);
+          if ($nextResetTime) {
+            $user->next_reset_at = $nextResetTime->timestamp;
+            $user->save();
+            $fixedCount++;
+          }
+        } catch (\Exception $e) {
+          $errors[] = [
+            'user_id' => $user->id,
+            'email' => $user->email,
+            'error' => $e->getMessage(),
+          ];
+          Log::error('强制重新计算用户next_reset_at失败', [
+            'user_id' => $user->id,
+            'error' => $e->getMessage(),
+          ]);
         }
-      } catch (\Exception $e) {
-        $errors[] = [
-          'user_id' => $user->id,
-          'email' => $user->email,
-          'error' => $e->getMessage(),
-        ];
-        Log::error('强制重新计算用户next_reset_at失败', [
-          'user_id' => $user->id,
-          'error' => $e->getMessage(),
-        ]);
       }
-    }
+
+      $this->afterChunk($chunkNumber);
+    });
 
     return [
-      'total_found' => $allUsers->count(),
+      'total_found' => $totalFound,
       'total_fixed' => $fixedCount,
       'error_count' => count($errors),
       'duration' => round(microtime(true) - $startTime, 2),
@@ -256,12 +287,13 @@ class ResetTraffic extends Command
           ->orWhereNull('expired_at');
       })
       ->where('banned', 0)
-      ->whereNotNull('plan_id');
+      ->whereNotNull('plan_id')
+      ->with('plan:id,name,reset_traffic_method');
   }
 
 
 
-  private function getNullResetTimeUsers()
+  private function getNullResetTimeUsersQuery()
   {
     return User::whereNull('next_reset_at')
       ->whereNotNull('plan_id')
@@ -270,11 +302,10 @@ class ResetTraffic extends Command
           ->orWhereNull('expired_at');
       })
       ->where('banned', 0)
-      ->with('plan:id,name,reset_traffic_method')
-      ->get();
+      ->with('plan:id,name,reset_traffic_method');
   }
 
-  private function getAllUsers()
+  private function getAllUsersQuery()
   {
     return User::whereNotNull('plan_id')
       ->where(function ($query) {
@@ -282,8 +313,15 @@ class ResetTraffic extends Command
           ->orWhereNull('expired_at');
       })
       ->where('banned', 0)
-      ->with('plan:id,name,reset_traffic_method')
-      ->get();
+      ->with('plan:id,name,reset_traffic_method');
+  }
+
+  private function afterChunk(int $chunkNumber): void
+  {
+    if ($chunkNumber % self::GC_EVERY_CHUNKS === 0) {
+      gc_collect_cycles();
+      usleep(self::CHUNK_PAUSE_US);
+    }
   }
 
 }
