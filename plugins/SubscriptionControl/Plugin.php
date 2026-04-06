@@ -2,9 +2,12 @@
 
 namespace Plugin\SubscriptionControl;
 
+use App\Jobs\SendEmailJob;
+use App\Jobs\SendTelegramJob;
 use App\Services\Plugin\AbstractPlugin;
 use App\Services\Plugin\HookManager;
 use App\Services\Plugin\InterceptResponseException;
+use App\Services\UserOnlineService;
 use App\Models\User;
 use App\Utils\Helper;
 use Illuminate\Support\Facades\Cache;
@@ -54,27 +57,61 @@ class Plugin extends AbstractPlugin
                 ]);
                 $this->blockAccess('ua_reset', 'UA 可疑，已重置订阅链接', $user->id, [
                     'action' => 'reset_token_uuid',
+                    'client_ip' => $ip,
+                    'user_agent' => $userAgent,
                 ]);
+            }
+
+            // 0.5 在线唯一 IP 数超阈值时，重置 token/uuid 并阻断订阅
+            if ($this->getConfig('enable_online_ip_threshold', false)) {
+                $onlineIpThreshold = max(1, (int) $this->getConfig('online_ip_threshold', 10));
+                $onlineIpCount = app(UserOnlineService::class)->getOnlineCount((int) $user->id);
+                if ($onlineIpCount > $onlineIpThreshold) {
+                    $this->resetUserTokenAndUuid($user);
+                    Log::warning('[SubscriptionControl] 在线唯一IP数超阈值，已重置用户 token/uuid', [
+                        'user_id' => $user->id,
+                        'online_ip_count' => $onlineIpCount,
+                        'threshold' => $onlineIpThreshold,
+                        'ip' => $ip,
+                        'ua' => $userAgent,
+                    ]);
+                    $this->blockAccess('online_ip_threshold', '在线唯一IP数超阈值，已重置订阅链接', $user->id, [
+                        'action' => 'reset_token_uuid',
+                        'online_ip_count' => $onlineIpCount,
+                        'threshold' => $onlineIpThreshold,
+                        'client_ip' => $ip,
+                        'user_agent' => $userAgent,
+                    ]);
+                }
             }
 
             // 1. 检查UA黑名单
             if ($this->getConfig('enable_ua_blacklist', false)) {
                 if ($this->isBlacklistedUA($userAgentLower)) {
-                    $this->blockAccess('ua_blacklist', 'UA 拦截', $user->id);
+                    $this->blockAccess('ua_blacklist', 'UA 拦截', $user->id, [
+                        'client_ip' => $ip,
+                        'user_agent' => $userAgent,
+                    ]);
                 }
             }
 
             // 2. 检查IP限制（时间窗口内不同IP数量）
             if ($this->getConfig('enable_ip_limit', false)) {
                 if (!$this->checkIpLimit($user->id, $ip)) {
-                    $this->blockAccess('ip_limit', 'IP 数量超限', $user->id);
+                    $this->blockAccess('ip_limit', 'IP 数量超限', $user->id, [
+                        'client_ip' => $ip,
+                        'user_agent' => $userAgent,
+                    ]);
                 }
             }
 
             // 3. 检查访问频率限制
             if ($this->getConfig('enable_rate_limit', false)) {
                 if (!$this->checkRateLimit($user->id)) {
-                    $this->blockAccess('rate_limit', '访问频率超限', $user->id);
+                    $this->blockAccess('rate_limit', '访问频率超限', $user->id, [
+                        'client_ip' => $ip,
+                        'user_agent' => $userAgent,
+                    ]);
                 }
             }
 
@@ -83,6 +120,8 @@ class Plugin extends AbstractPlugin
                 if (!$this->checkSubscriptionUsage($user->id, $user->token)) {
                     $this->blockAccess('one_time', '订阅链接使用次数已达上限', $user->id, [
                         'action' => 'reset_token',
+                        'client_ip' => $ip,
+                        'user_agent' => $userAgent,
                     ]);
                 }
             }
@@ -111,6 +150,7 @@ class Plugin extends AbstractPlugin
 
         $notice = [
             'features' => [
+                'online_ip_threshold' => (bool) $this->getConfig('enable_online_ip_threshold', false),
                 'ua_reset_token' => (bool) $this->getConfig('enable_ua_reset_token', false),
                 'ua_blacklist' => (bool) $this->getConfig('enable_ua_blacklist', false),
                 'ip_limit' => (bool) $this->getConfig('enable_ip_limit', false),
@@ -118,6 +158,7 @@ class Plugin extends AbstractPlugin
                 'one_time' => (bool) $this->getConfig('enable_one_time', false),
             ],
             'limits' => [
+                'online_ip_threshold' => (int) $this->getConfig('online_ip_threshold', 10),
                 'ip_limit_count' => (int) $this->getConfig('ip_limit_count', 3),
                 'ip_limit_window' => (int) $this->getConfig('ip_limit_window', 600),
                 'rate_limit_requests' => (int) $this->getConfig('rate_limit_requests', 10),
@@ -415,6 +456,21 @@ class Plugin extends AbstractPlugin
             ], $eventTtl);
         }
 
+        if ($userId) {
+            try {
+                $user = User::query()->select(['id', 'email', 'telegram_id'])->find($userId);
+                if ($user) {
+                    $this->sendRiskNotifications($user, $code, $reason, $meta);
+                }
+            } catch (\Throwable $e) {
+                Log::warning('[SubscriptionControl] 风控通知发送失败', [
+                    'user_id' => $userId,
+                    'code' => $code,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
         // 返回403错误（部分客户端会展示响应体，帮助用户自查/自救）
         $message = $this->buildBlockMessage($code, $reason, $meta);
         $this->intercept(response($message, 403, [
@@ -458,5 +514,125 @@ class Plugin extends AbstractPlugin
 
         $parts = preg_split('/[\r\n，,]+/', $input);
         return array_values(array_filter(array_map('trim', $parts), fn($item) => $item !== ''));
+    }
+
+    private function sendRiskNotifications(User $user, string $code, string $reason, array $meta = []): void
+    {
+        $cooldown = max(60, (int) $this->getConfig('notify_cooldown_seconds', 1800));
+        $cooldownKey = "subscription_control:notify_cooldown:{$user->id}:{$code}";
+
+        if (!Cache::add($cooldownKey, time(), $cooldown)) {
+            return;
+        }
+
+        $subject = $this->buildNotificationSubject();
+        $content = $this->buildNotificationContent($code, $reason, $meta);
+
+        if ($this->getConfig('enable_email_notice', true) && !empty($user->email)) {
+            SendEmailJob::dispatch([
+                'email' => $user->email,
+                'subject' => $subject,
+                'template_name' => 'notify',
+                'template_value' => [
+                    'name' => admin_setting('app_name', 'XBoard'),
+                    'content' => $content,
+                    'url' => admin_setting('app_url'),
+                ],
+            ]);
+            Log::info('[SubscriptionControl] 风控邮件已提交', [
+                'user_id' => $user->id,
+                'code' => $code,
+                'email' => $user->email,
+            ]);
+        }
+
+        if (
+            $this->getConfig('enable_telegram_notice', true)
+            && !empty($user->telegram_id)
+            && trim((string) admin_setting('telegram_bot_token', '')) !== ''
+        ) {
+            SendTelegramJob::dispatch((int) $user->telegram_id, $this->buildTelegramMessage($code, $reason, $meta));
+            Log::info('[SubscriptionControl] 风控 TG 消息已提交', [
+                'user_id' => $user->id,
+                'code' => $code,
+                'telegram_id' => $user->telegram_id,
+            ]);
+        }
+    }
+
+    private function buildNotificationSubject(): string
+    {
+        return '[' . admin_setting('app_name', 'XBoard') . '] 订阅风控提醒';
+    }
+
+    private function buildNotificationContent(string $code, string $reason, array $meta = []): string
+    {
+        $lines = [
+            '检测到您的订阅触发了风控规则。',
+            '时间：' . date('Y-m-d H:i:s'),
+            '类型：' . $reason,
+            '处理：' . $this->buildActionText($meta),
+        ];
+
+        if ($code === 'online_ip_threshold') {
+            $threshold = max(1, (int) ($meta['threshold'] ?? 0));
+            $onlineIpCount = max(0, (int) ($meta['online_ip_count'] ?? 0));
+            if ($onlineIpCount > 0 && $threshold > 0) {
+                $lines[] = "当前在线唯一IP数：{$onlineIpCount}（阈值 {$threshold}）";
+            }
+        }
+
+        if (!empty($meta['client_ip'])) {
+            $lines[] = '来源IP：' . (string) $meta['client_ip'];
+        }
+        if (!empty($meta['user_agent'])) {
+            $lines[] = '客户端UA：' . (string) $meta['user_agent'];
+        }
+
+        $appUrl = trim((string) admin_setting('app_url', ''));
+        if ($appUrl !== '') {
+            $lines[] = '面板地址：' . $appUrl;
+        }
+
+        return implode("\n", $lines);
+    }
+
+    private function buildTelegramMessage(string $code, string $reason, array $meta = []): string
+    {
+        $lines = [
+            '检测到您的订阅触发了风控规则。',
+            '类型：' . $reason,
+            '处理：' . $this->buildActionText($meta),
+        ];
+
+        if ($code === 'online_ip_threshold') {
+            $threshold = max(1, (int) ($meta['threshold'] ?? 0));
+            $onlineIpCount = max(0, (int) ($meta['online_ip_count'] ?? 0));
+            if ($onlineIpCount > 0 && $threshold > 0) {
+                $lines[] = "当前在线唯一IP数：{$onlineIpCount}（阈值 {$threshold}）";
+            }
+        }
+
+        if (!empty($meta['client_ip'])) {
+            $lines[] = '来源IP：' . (string) $meta['client_ip'];
+        }
+
+        $appUrl = trim((string) admin_setting('app_url', ''));
+        if ($appUrl !== '') {
+            $lines[] = '面板地址：' . $appUrl;
+        }
+
+        return implode("\n", $lines);
+    }
+
+    private function buildActionText(array $meta = []): string
+    {
+        $action = (string) ($meta['action'] ?? 'block');
+
+        return match ($action) {
+            'reset_token_uuid' => '系统已重置订阅链接和节点凭据，旧订阅与旧节点配置已失效，请重新获取并导入。',
+            'reset_token' => '系统已重置订阅链接，旧订阅链接已失效，请重新获取并导入。',
+            default => '本次订阅请求已被拦截，请检查客户端或网络环境后重试。',
+        };
     }
 }
