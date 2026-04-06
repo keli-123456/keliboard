@@ -4,21 +4,16 @@ namespace App\Http\Controllers\V2\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\PlanSave;
+use App\Jobs\ApplyPlanToUsersJob;
 use App\Models\Order;
 use App\Models\Plan;
 use App\Models\User;
-use App\Services\UserSyncService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class PlanController extends Controller
 {
-    public function __construct(
-        private UserSyncService $userSyncService,
-    ) {
-    }
-
     public function fetch(Request $request)
     {
         $plans = Plan::orderBy('sort', 'ASC')
@@ -54,8 +49,7 @@ class PlanController extends Controller
                 $plan->update($params);
                 DB::commit();
                 if ($request->boolean('force_update')) {
-                    $result = $this->applyPlanToUsers($plan->fresh() ?? $plan);
-                    return $this->success($result);
+                    return $this->success($this->dispatchPlanApply($plan->fresh() ?? $plan));
                 }
                 return $this->success(true);
             } catch (\Throwable $e) {
@@ -82,7 +76,7 @@ class PlanController extends Controller
         }
 
         try {
-            return $this->success($this->applyPlanToUsers($plan));
+            return $this->success($this->dispatchPlanApply($plan));
         } catch (\Throwable $e) {
             Log::error($e);
             return $this->fail([500, '同步失败']);
@@ -151,52 +145,12 @@ class PlanController extends Controller
         return $this->success(true);
     }
 
-    private function applyPlanToUsers(Plan $plan): array
+    private function dispatchPlanApply(Plan $plan): array
     {
-        $processedUsers = 0;
-        $attributes = $this->planUserAttributes($plan);
-
-        User::query()
-            ->where('plan_id', $plan->id)
-            ->select('id')
-            ->orderBy('id')
-            ->chunkById(500, function ($users) use (&$processedUsers, $attributes) {
-                $userIds = $users->pluck('id')
-                    ->map(fn($id) => (int) $id)
-                    ->filter(fn(int $id) => $id > 0)
-                    ->values()
-                    ->all();
-
-                if (empty($userIds)) {
-                    return;
-                }
-
-                User::query()
-                    ->whereIn('id', $userIds)
-                    ->update($attributes);
-
-                User::query()
-                    ->whereIn('id', $userIds)
-                    ->get()
-                    ->each(function (User $user): void {
-                        $this->userSyncService->syncUser($user, 'plan_apply');
-                    });
-
-                $processedUsers += count($userIds);
-            });
+        ApplyPlanToUsersJob::dispatch((int) $plan->id);
 
         return [
-            'processed_users' => $processedUsers,
-        ];
-    }
-
-    private function planUserAttributes(Plan $plan): array
-    {
-        return [
-            'group_id' => $plan->group_id,
-            'transfer_enable' => (int) $plan->transfer_enable * 1073741824,
-            'speed_limit' => $plan->speed_limit,
-            'device_limit' => $plan->device_limit,
+            'queued_users' => (int) $plan->users()->count(),
         ];
     }
 }
