@@ -214,14 +214,7 @@ class UserController extends Controller
             ->paginate($pageSize, ['*'], 'page', $current);
 
         $userIds = $users->getCollection()->pluck('id')->all();
-        $cachePrefix = 'ALIVE_IP_USER_';
-        $aliveData = cache()->many(array_map(fn(int $id): string => $cachePrefix . $id, $userIds));
-        $onlineCounts = [];
-        foreach ($userIds as $userId) {
-            $key = $cachePrefix . $userId;
-            $cached = $aliveData[$key] ?? null;
-            $onlineCounts[$userId] = is_array($cached) ? (int) ($cached['alive_ip'] ?? 0) : 0;
-        }
+        $onlineCounts = app(UserOnlineService::class)->getOnlineCounts($userIds);
 
         $users->getCollection()->transform(function ($user) use ($onlineCounts): array {
             $data = self::transformUserData($user);

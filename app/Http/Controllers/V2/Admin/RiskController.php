@@ -875,12 +875,10 @@ class RiskController extends Controller
         // Attach online ip count (best-effort, from cache)
         try {
             $userIds = collect($rows)->pluck('user_id')->filter()->values()->all();
-            $cachePrefix = 'ALIVE_IP_USER_';
-            $aliveData = cache()->many(array_map(fn(int $id): string => $cachePrefix . $id, $userIds));
+            $onlineCounts = app(UserOnlineService::class)->getOnlineCounts($userIds);
             foreach ($rows as $row) {
                 $uid = (int) ($row->user_id ?? 0);
-                $cached = $aliveData[$cachePrefix . $uid] ?? null;
-                $row->online_ip_count = is_array($cached) ? (int) ($cached['alive_ip'] ?? 0) : 0;
+                $row->online_ip_count = (int) ($onlineCounts[$uid] ?? 0);
             }
         } catch (\Throwable) {
         }

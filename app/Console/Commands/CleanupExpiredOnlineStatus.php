@@ -58,16 +58,11 @@ class CleanupExpiredOnlineStatus extends Command
 
         $affected = 0;
         foreach (array_chunk($candidateIds, 1000) as $chunk) {
-            $cacheKeys = array_map(
-                fn(int $id): string => UserOnlineService::cacheKey($id),
-                $chunk
-            );
-            $aliveData = cache()->many($cacheKeys);
+            $onlineCounts = app(UserOnlineService::class)->getOnlineCounts($chunk);
 
             $staleIds = [];
             foreach ($chunk as $userId) {
-                $cached = $aliveData[UserOnlineService::cacheKey($userId)] ?? null;
-                if (!is_array($cached) || (int) ($cached['alive_ip'] ?? 0) <= 0) {
+                if ((int) ($onlineCounts[$userId] ?? 0) <= 0) {
                     $staleIds[] = $userId;
                 }
             }
@@ -105,17 +100,11 @@ class CleanupExpiredOnlineStatus extends Command
                 $userIds = $users->pluck('id')
                     ->map(fn($id): int => (int) $id)
                     ->all();
-
-                $cacheKeys = array_map(
-                    fn(int $id): string => UserOnlineService::cacheKey($id),
-                    $userIds
-                );
-                $aliveData = cache()->many($cacheKeys);
+                $onlineCounts = app(UserOnlineService::class)->getOnlineCounts($userIds);
 
                 $staleIds = [];
                 foreach ($userIds as $userId) {
-                    $cached = $aliveData[UserOnlineService::cacheKey($userId)] ?? null;
-                    if (!is_array($cached) || (int) ($cached['alive_ip'] ?? 0) <= 0) {
+                    if ((int) ($onlineCounts[$userId] ?? 0) <= 0) {
                         $staleIds[] = $userId;
                     }
                 }

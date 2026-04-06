@@ -128,4 +128,28 @@ final class UserOnlineServiceTest extends TestCase
 
         $this->assertSame(['1.1.1.1', '2.2.2.2', '3.3.3.3'], $ips);
     }
+
+    public function test_summarize_alive_cache_ignores_stale_node_entries(): void
+    {
+        $method = new \ReflectionMethod(UserOnlineService::class, 'summarizeAliveCache');
+        $method->setAccessible(true);
+
+        $now = time();
+        $summary = $method->invoke(null, [
+            'vless8' => [
+                'aliveips' => ['1.1.1.1', '2.2.2.2'],
+                'lastupdateAt' => $now - 10,
+            ],
+            'tuic9' => [
+                'aliveips' => ['3.3.3.3'],
+                'lastupdateAt' => $now - 200,
+            ],
+            'alive_ip' => 99,
+        ], 1, $now);
+
+        $this->assertSame(2, $summary['alive_ip']);
+        $this->assertSame(['1.1.1.1', '2.2.2.2'], $summary['ips']);
+        $this->assertArrayHasKey('vless8', $summary['nodes']);
+        $this->assertArrayNotHasKey('tuic9', $summary['nodes']);
+    }
 }
