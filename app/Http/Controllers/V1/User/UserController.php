@@ -13,6 +13,7 @@ use App\Models\User;
 use App\Services\Auth\LoginService;
 use App\Services\AuthService;
 use App\Services\Plugin\HookManager;
+use App\Services\UserOnlineService;
 use App\Services\UserService;
 use App\Utils\CacheKey;
 use App\Utils\Helper;
@@ -161,6 +162,16 @@ class UserController extends Controller
         $user['reset_day'] = $userService->getResetDay($user);
         $user = HookManager::filter('user.subscribe.response', $user);
         return $this->success($user);
+    }
+
+    public function getOnlineDevices(Request $request)
+    {
+        $user = User::find($request->user()->id);
+        if (!$user) {
+            return $this->fail([400, __('The user does not exist')]);
+        }
+
+        return $this->success(UserOnlineService::getUserDeviceIps((int) $user->id));
     }
 
     public function resetSecurity(Request $request)

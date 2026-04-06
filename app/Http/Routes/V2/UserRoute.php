@@ -15,6 +15,7 @@ class UserRoute
             // User
             $router->get('/resetSecurity', [UserController::class, 'resetSecurity']);
             $router->get('/info', [UserController::class, 'info']);
+            $router->get('/getOnlineDevices', [UserController::class, 'getOnlineDevices']);
         });
     }
 }
