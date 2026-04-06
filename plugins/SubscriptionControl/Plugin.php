@@ -16,6 +16,9 @@ use Illuminate\Http\Request;
 
 class Plugin extends AbstractPlugin
 {
+    private const RECENT_EVENTS_KEY = 'subscription_control:recent_events';
+    private const RECENT_EVENTS_LIMIT = 100;
+
     /**
      * 插件启动时调用
      */
@@ -446,6 +449,7 @@ class Plugin extends AbstractPlugin
         Cache::increment('subscription_control:blocked_count:' . date('Y-m-d'));
 
         // 记录最近一次拦截事件，便于用户在面板中定位原因
+        $user = null;
         if ($userId) {
             $eventTtl = 60 * 60 * 24 * 3;
             Cache::put("subscription_control:last_event:{$userId}", [
@@ -454,14 +458,26 @@ class Plugin extends AbstractPlugin
                 'reason' => $reason,
                 'at' => time(),
             ], $eventTtl);
-        }
-
-        if ($userId) {
             try {
                 $user = User::query()->select(['id', 'email', 'telegram_id'])->find($userId);
-                if ($user) {
-                    $this->sendRiskNotifications($user, $code, $reason, $meta);
-                }
+            } catch (\Throwable $e) {
+                Log::warning('[SubscriptionControl] 风控用户信息读取失败', [
+                    'user_id' => $userId,
+                    'code' => $code,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        $notificationResult = [
+            'cooldown_hit' => false,
+            'email_sent' => false,
+            'telegram_sent' => false,
+        ];
+
+        if ($user) {
+            try {
+                $notificationResult = $this->sendRiskNotifications($user, $code, $reason, $meta);
             } catch (\Throwable $e) {
                 Log::warning('[SubscriptionControl] 风控通知发送失败', [
                     'user_id' => $userId,
@@ -470,6 +486,8 @@ class Plugin extends AbstractPlugin
                 ]);
             }
         }
+
+        $this->appendRecentEvent($userId, $user?->email, $code, $reason, $meta, $notificationResult);
 
         // 返回403错误（部分客户端会展示响应体，帮助用户自查/自救）
         $message = $this->buildBlockMessage($code, $reason, $meta);
@@ -516,13 +534,20 @@ class Plugin extends AbstractPlugin
         return array_values(array_filter(array_map('trim', $parts), fn($item) => $item !== ''));
     }
 
-    private function sendRiskNotifications(User $user, string $code, string $reason, array $meta = []): void
+    private function sendRiskNotifications(User $user, string $code, string $reason, array $meta = []): array
     {
+        $result = [
+            'cooldown_hit' => false,
+            'email_sent' => false,
+            'telegram_sent' => false,
+        ];
+
         $cooldown = max(60, (int) $this->getConfig('notify_cooldown_seconds', 1800));
         $cooldownKey = "subscription_control:notify_cooldown:{$user->id}:{$code}";
 
         if (!Cache::add($cooldownKey, time(), $cooldown)) {
-            return;
+            $result['cooldown_hit'] = true;
+            return $result;
         }
 
         $subject = $this->buildNotificationSubject();
@@ -544,6 +569,7 @@ class Plugin extends AbstractPlugin
                 'code' => $code,
                 'email' => $user->email,
             ]);
+            $result['email_sent'] = true;
         }
 
         if (
@@ -557,7 +583,10 @@ class Plugin extends AbstractPlugin
                 'code' => $code,
                 'telegram_id' => $user->telegram_id,
             ]);
+            $result['telegram_sent'] = true;
         }
+
+        return $result;
     }
 
     private function buildNotificationSubject(): string
@@ -634,5 +663,36 @@ class Plugin extends AbstractPlugin
             'reset_token' => '系统已重置订阅链接，旧订阅链接已失效，请重新获取并导入。',
             default => '本次订阅请求已被拦截，请检查客户端或网络环境后重试。',
         };
+    }
+
+    private function appendRecentEvent(?int $userId, ?string $email, string $code, string $reason, array $meta = [], array $notificationResult = []): void
+    {
+        $events = Cache::get(self::RECENT_EVENTS_KEY, []);
+        if (!is_array($events)) {
+            $events = [];
+        }
+
+        array_unshift($events, [
+            'id' => uniqid('sc_', true),
+            'user_id' => $userId,
+            'email' => $email,
+            'code' => $code,
+            'reason' => $reason,
+            'action' => (string) ($meta['action'] ?? 'block'),
+            'client_ip' => $meta['client_ip'] ?? null,
+            'user_agent' => $meta['user_agent'] ?? null,
+            'online_ip_count' => isset($meta['online_ip_count']) ? (int) $meta['online_ip_count'] : null,
+            'threshold' => isset($meta['threshold']) ? (int) $meta['threshold'] : null,
+            'cooldown_hit' => (bool) ($notificationResult['cooldown_hit'] ?? false),
+            'email_sent' => (bool) ($notificationResult['email_sent'] ?? false),
+            'telegram_sent' => (bool) ($notificationResult['telegram_sent'] ?? false),
+            'created_at' => time(),
+        ]);
+
+        if (count($events) > self::RECENT_EVENTS_LIMIT) {
+            $events = array_slice($events, 0, self::RECENT_EVENTS_LIMIT);
+        }
+
+        Cache::put(self::RECENT_EVENTS_KEY, $events, 60 * 60 * 24 * 14);
     }
 }

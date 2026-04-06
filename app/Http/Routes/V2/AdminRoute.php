@@ -19,7 +19,7 @@ use App\Http\Controllers\V2\Admin\SystemController;
 use App\Http\Controllers\V2\Admin\ThemeController;
 use App\Http\Controllers\V2\Admin\TrafficResetController;
 use App\Http\Controllers\V2\Admin\StaffSitesController;
-use App\Http\Controllers\V2\Admin\RiskController;
+use App\Http\Controllers\V2\Admin\SubscriptionControlController;
 use Illuminate\Contracts\Routing\Registrar;
 
 class AdminRoute
@@ -240,14 +240,7 @@ class AdminRoute
             $router->group([
                 'prefix' => 'risk'
             ], function ($router) {
-                $router->get('/config', [RiskController::class, 'getConfig']);
-                $router->post('/config', [RiskController::class, 'saveConfig']);
-                $router->post('/login_failed/ip/summary', [RiskController::class, 'loginFailedIpSummary']);
-                $router->post('/login_failed/ip/detail', [RiskController::class, 'loginFailedIpDetail']);
-                $router->post('/login_failed/ua/summary', [RiskController::class, 'loginFailedUaSummary']);
-                $router->post('/login_failed/ua/detail', [RiskController::class, 'loginFailedUaDetail']);
-                $router->post('/user/share/summary', [RiskController::class, 'userShareSummary']);
-                $router->post('/user/detail', [RiskController::class, 'userDetail']);
+                $router->get('/subscription-control/overview', [SubscriptionControlController::class, 'overview']);
             });
 
             // Update
