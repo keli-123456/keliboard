@@ -16,24 +16,29 @@ class UserOnlineService
     /**
      * 获取所有限制设备用户的在线数量
      */
-    public function getAliveList(Collection $deviceLimitUsers): array
+    public function getAliveList(array $userIds): array
     {
-        if ($deviceLimitUsers->isEmpty()) {
+        if (empty($userIds)) {
             return [];
         }
 
-        $cacheKeys = $deviceLimitUsers->pluck('id')
-            ->map(fn(int $id): string => self::CACHE_PREFIX . $id)
-            ->all();
+        $keyToUserId = [];
+        foreach ($userIds as $userId) {
+            $cacheKey = self::CACHE_PREFIX . (int) $userId;
+            $keyToUserId[$cacheKey] = (int) $userId;
+        }
 
-        return collect(cache()->many($cacheKeys))
-            ->filter()
-            ->map(fn(array $data): ?int => $data['alive_ip'] ?? null)
-            ->filter()
-            ->mapWithKeys(fn(int $count, string $key): array => [
-                (int) Str::after($key, self::CACHE_PREFIX) => $count
-            ])
-            ->all();
+        $alive = [];
+        foreach (array_chunk($keyToUserId, 1000, true) as $keyBatch) {
+            foreach (cache()->many(array_keys($keyBatch)) as $cacheKey => $data) {
+                if (!is_array($data) || !isset($data['alive_ip'])) {
+                    continue;
+                }
+                $alive[$keyBatch[$cacheKey]] = (int) $data['alive_ip'];
+            }
+        }
+
+        return $alive;
     }
 
     /**
@@ -126,25 +131,51 @@ class UserOnlineService
     /**
      * 计算在线设备数量
      */
-    public static function calculateDeviceCount(array $ipsArray): int
+    public static function calculateDeviceCount(array $ipsArray, ?int $mode = null): int
     {
-        $mode = (int) admin_setting('device_limit_mode', 0);
+        $mode ??= self::getDeviceLimitMode();
 
         return match ($mode) {
-            1 => collect($ipsArray)
-                ->filter(fn(mixed $data): bool => is_array($data) && isset($data['aliveips']))
-                ->flatMap(
-                    fn(array $data): array => collect($data['aliveips'])
-                        ->map(fn(string $ipNodeId): string => Str::before($ipNodeId, '_'))
-                        ->unique()
-                        ->all()
-                )
-                ->unique()
-                ->count(),
-            0 => collect($ipsArray)
-                ->filter(fn(mixed $data): bool => is_array($data) && isset($data['aliveips']))
-                ->sum(fn(array $data): int => count($data['aliveips'])),
+            1 => self::countUniqueAliveIps($ipsArray),
+            0 => self::countAliveIps($ipsArray),
             default => throw new \InvalidArgumentException("Invalid device limit mode: $mode"),
         };
+    }
+
+    public static function getDeviceLimitMode(): int
+    {
+        return (int) admin_setting('device_limit_mode', 0);
+    }
+
+    private static function countUniqueAliveIps(array $ipsArray): int
+    {
+        $uniqueIps = [];
+
+        foreach ($ipsArray as $data) {
+            if (!is_array($data) || !isset($data['aliveips']) || !is_array($data['aliveips'])) {
+                continue;
+            }
+
+            foreach ($data['aliveips'] as $ipNodeId) {
+                $uniqueIps[Str::before((string) $ipNodeId, '_')] = true;
+            }
+        }
+
+        return count($uniqueIps);
+    }
+
+    private static function countAliveIps(array $ipsArray): int
+    {
+        $count = 0;
+
+        foreach ($ipsArray as $data) {
+            if (!is_array($data) || !isset($data['aliveips']) || !is_array($data['aliveips'])) {
+                continue;
+            }
+
+            $count += count($data['aliveips']);
+        }
+
+        return $count;
     }
 }

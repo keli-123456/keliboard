@@ -7,6 +7,7 @@ use App\Models\ServerRoute;
 use App\Models\User;
 use App\Services\Plugin\HookManager;
 use App\Utils\Helper;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Collection;
 
 class ServerService
@@ -66,21 +67,13 @@ class ServerService
      */
     public static function getAvailableUsers(Server $node, bool $onlyDeviceLimited = false): Collection
     {
-        $query = User::toBase()
-            ->whereIn('group_id', $node->group_ids)
-            ->whereRaw('u + d < transfer_enable')
-            ->where(function ($query) {
-                $query->where('expired_at', '>=', time())
-                    ->orWhere('expired_at', NULL);
-            })
-            ->where('banned', 0)
+        $query = self::availableUsersBaseQuery($node)
             ->select([
                 'id',
                 'uuid',
                 'speed_limit',
                 'device_limit'
-            ])
-            ->orderBy('id', 'asc');
+            ]);
 
         if ($onlyDeviceLimited) {
             $query->where('device_limit', '>', 0);
@@ -89,6 +82,22 @@ class ServerService
         $users = $query->get();
         $users = HookManager::filter('server.users.get', $users, $node);
         return collect($users)->sortBy('id')->values();
+    }
+
+    /**
+     * 获取节点可用用户 ID 列表
+     */
+    public static function getAvailableUserIds(Server $node, bool $onlyDeviceLimited = false): array
+    {
+        $query = self::availableUsersBaseQuery($node)->select(['id']);
+
+        if ($onlyDeviceLimited) {
+            $query->where('device_limit', '>', 0);
+        }
+
+        return $query->pluck('id')
+            ->map(fn($id): int => (int) $id)
+            ->all();
     }
 
     // 获取路由规则
@@ -136,5 +145,18 @@ class ServerService
             })
             ->orderByRaw('CASE WHEN code = ? THEN 0 ELSE 1 END', [$serverId])
             ->first();
+    }
+
+    private static function availableUsersBaseQuery(Server $node): QueryBuilder
+    {
+        return User::toBase()
+            ->whereIn('group_id', $node->group_ids)
+            ->whereRaw('u + d < transfer_enable')
+            ->where(function ($query) {
+                $query->where('expired_at', '>=', time())
+                    ->orWhere('expired_at', NULL);
+            })
+            ->where('banned', 0)
+            ->orderBy('id', 'asc');
     }
 }
