@@ -71,16 +71,7 @@ class UserOnlineService
             return [];
         }
 
-        $cachedCounts = $this->getFreshAliveCountsForUserIds($userIds);
-        if (!self::isRealtimeIndexReady()) {
-            return $cachedCounts;
-        }
-
-        return self::mergeOnlineCounts(
-            $userIds,
-            $cachedCounts,
-            self::getActiveRealtimeCountsForUserIds($userIds),
-        );
+        return $this->getFreshAliveCountsForUserIds($userIds);
     }
 
     public function getAliveSnapshot(array $userIds): array
@@ -189,16 +180,7 @@ class UserOnlineService
             return [];
         }
 
-        $cachedCounts = $this->getFreshAliveCountsForUserIds($userIds);
-        if (!self::isRealtimeIndexReady()) {
-            return self::mergeOnlineCounts($userIds, $cachedCounts);
-        }
-
-        return self::mergeOnlineCounts(
-            $userIds,
-            $cachedCounts,
-            self::getActiveRealtimeCountsForUserIds($userIds),
-        );
+        return $this->getFreshAliveCountsForUserIds($userIds);
     }
 
     /**
@@ -206,13 +188,7 @@ class UserOnlineService
      */
     public function getOnlineCount(int $userId): int
     {
-        $cachedCount = self::summarizeAliveCache(cache()->get(self::cacheKey($userId), []))['alive_ip'];
-        if (!self::isRealtimeIndexReady()) {
-            return $cachedCount;
-        }
-
-        $realtimeCount = self::getRealtimeCount($userId);
-        return max($cachedCount, $realtimeCount ?? 0);
+        return self::summarizeAliveCache(cache()->get(self::cacheKey($userId), []))['alive_ip'];
     }
 
     public static function updateRealtimeIndex(array $userCounts, int $expiresAt): void
@@ -654,16 +630,6 @@ class UserOnlineService
         return $counts;
     }
 
-    private static function getActiveRealtimeCountsForUserIds(array $userIds): array
-    {
-        $activeUserIds = self::filterActiveRealtimeUserIds($userIds, time() + 1);
-        if (empty($activeUserIds)) {
-            return [];
-        }
-
-        return self::getRealtimeCountsForUserIds($activeUserIds);
-    }
-
     private static function filterActiveRealtimeUserIds(array $userIds, int $minExpiresAt): array
     {
         $normalizedIds = self::normalizeRedisUserIds($userIds);
@@ -682,56 +648,4 @@ class UserOnlineService
         ));
     }
 
-    private static function getRealtimeCount(int $userId): ?int
-    {
-        if ($userId <= 0) {
-            return null;
-        }
-
-        $expiresAt = self::redisCommand('zscore', [
-            self::realtimeActiveUsersKey(),
-            (string) $userId,
-        ]);
-        if (!is_numeric($expiresAt) || (float) $expiresAt < (time() + 1)) {
-            return null;
-        }
-
-        $value = self::redisCommand('hget', [
-            self::realtimeActiveCountsKey(),
-            (string) $userId,
-        ]);
-
-        if ($value === null || $value === false) {
-            return null;
-        }
-
-        return max(0, (int) $value);
-    }
-
-    private static function mergeOnlineCounts(array $userIds, array ...$sources): array
-    {
-        $counts = [];
-        foreach ($userIds as $userId) {
-            $normalizedUserId = (int) $userId;
-            if ($normalizedUserId <= 0) {
-                continue;
-            }
-            $counts[$normalizedUserId] = 0;
-        }
-
-        foreach ($sources as $source) {
-            foreach ($source as $userId => $count) {
-                $normalizedUserId = (int) $userId;
-                if ($normalizedUserId <= 0) {
-                    continue;
-                }
-                $counts[$normalizedUserId] = max(
-                    $counts[$normalizedUserId] ?? 0,
-                    max(0, (int) $count)
-                );
-            }
-        }
-
-        return $counts;
-    }
 }
