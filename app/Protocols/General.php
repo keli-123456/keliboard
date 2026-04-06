@@ -133,7 +133,7 @@ class General extends AbstractProtocol
         switch ($server['protocol_settings']['tls']) {
             case 1:
                 $config['security'] = "tls";
-                $config['fp'] = Helper::getRandFingerprint();
+                $config['fp'] = Helper::getClientFingerprint($protocol_settings);
                 if ($serverName = data_get($protocol_settings, 'tls_settings.server_name')) {
                     $config['sni'] = $serverName;
                 }

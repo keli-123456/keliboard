@@ -7,6 +7,7 @@ namespace Tests\Unit\Protocols;
 use App\Models\Server;
 use App\Protocols\Clash;
 use App\Protocols\ClashMeta;
+use App\Protocols\General;
 use App\Protocols\Loon;
 use App\Protocols\QuantumultX;
 use App\Protocols\Shadowrocket;
@@ -449,6 +450,33 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertStringContainsString('obfsParam=cdn.sr.example.com', $uri);
     }
 
+    public function test_shadowrocket_build_vless_tls_exports_client_fingerprint_when_configured(): void
+    {
+        $uri = Shadowrocket::buildVless('user-uuid', [
+            'name' => 'SR TLS',
+            'host' => 'sr-tls.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 1,
+                'network' => 'ws',
+                'tls_settings' => [
+                    'server_name' => 'sr-tls-sni.example.com',
+                    'allow_insecure' => false,
+                ],
+                'network_settings' => [
+                    'path' => '/sr-tls',
+                    'headers' => [
+                        'Host' => 'cdn.sr-tls.example.com',
+                    ],
+                ],
+                'client_fingerprint' => 'chrome',
+            ],
+        ]);
+
+        $this->assertStringContainsString('peer=sr-tls-sni.example.com', $uri);
+        $this->assertStringContainsString('fp=chrome', $uri);
+    }
+
     public function test_shadowrocket_build_hysteria2_and_anytls_export_current_fields(): void
     {
         $hysteria = Shadowrocket::buildHysteria('secret', [
@@ -528,6 +556,61 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertSame('ws', $config['network']);
         $this->assertSame('/meta', $config['ws-opts']['path']);
         $this->assertSame('cdn.meta.example.com', $config['ws-opts']['headers']['Host']);
+    }
+
+    public function test_clashmeta_build_vless_tls_exports_client_fingerprint_when_configured(): void
+    {
+        $config = ClashMeta::buildVless('user-uuid', [
+            'name' => 'Meta TLS',
+            'host' => 'meta-tls.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 1,
+                'network' => 'ws',
+                'tls_settings' => [
+                    'allow_insecure' => false,
+                    'server_name' => 'meta-tls-sni.example.com',
+                ],
+                'client_fingerprint' => 'chrome',
+                'network_settings' => [
+                    'path' => '/meta-tls',
+                    'headers' => [
+                        'Host' => 'cdn.meta-tls.example.com',
+                    ],
+                ],
+            ],
+        ]);
+
+        $this->assertTrue($config['tls']);
+        $this->assertSame('meta-tls-sni.example.com', $config['servername']);
+        $this->assertSame('chrome', $config['client-fingerprint']);
+    }
+
+    public function test_general_build_vless_tls_uses_configured_client_fingerprint(): void
+    {
+        $uri = General::buildVless('user-uuid', [
+            'name' => 'General TLS',
+            'host' => 'general.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 1,
+                'network' => 'ws',
+                'tls_settings' => [
+                    'server_name' => 'general-sni.example.com',
+                ],
+                'network_settings' => [
+                    'path' => '/general',
+                    'headers' => [
+                        'Host' => 'cdn.general.example.com',
+                    ],
+                ],
+                'client_fingerprint' => 'chrome',
+            ],
+        ]);
+
+        $this->assertStringContainsString('security=tls', $uri);
+        $this->assertStringContainsString('fp=chrome', $uri);
+        $this->assertStringContainsString('sni=general-sni.example.com', $uri);
     }
 
     public function test_clashmeta_build_vless_http_and_h2_export_transport_specific_options(): void
