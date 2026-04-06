@@ -5,11 +5,11 @@ namespace Plugin\SubscriptionControl;
 use App\Jobs\SendEmailJob;
 use App\Jobs\SendTelegramJob;
 use App\Services\Plugin\AbstractPlugin;
-use App\Services\Plugin\HookManager;
 use App\Services\Plugin\InterceptResponseException;
 use App\Services\UserOnlineService;
 use App\Models\User;
 use App\Utils\Helper;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Http\Request;
@@ -29,6 +29,22 @@ class Plugin extends AbstractPlugin
 
         // 在用户侧获取订阅信息时，附带风控提示（用于前端展示）
         $this->filter('user.subscribe.response', [$this, 'attachSubscribeNotice'], 5);
+    }
+
+    public function schedule(Schedule $schedule): void
+    {
+        if (!$this->getConfig('enable_online_ip_threshold', false)) {
+            return;
+        }
+
+        $schedule
+            ->call(function (): void {
+                $this->scanOnlineIpThreshold();
+            })
+            ->name('plugin:subscription_control:online_ip_threshold')
+            ->everyMinute()
+            ->onOneServer()
+            ->withoutOverlapping(10);
     }
 
     /**
@@ -70,21 +86,17 @@ class Plugin extends AbstractPlugin
                 $onlineIpThreshold = max(1, (int) $this->getConfig('online_ip_threshold', 10));
                 $onlineIpCount = app(UserOnlineService::class)->getOnlineCount((int) $user->id);
                 if ($onlineIpCount > $onlineIpThreshold) {
-                    $this->resetUserTokenAndUuid($user);
-                    Log::warning('[SubscriptionControl] 在线唯一IP数超阈值，已重置用户 token/uuid', [
-                        'user_id' => $user->id,
-                        'online_ip_count' => $onlineIpCount,
-                        'threshold' => $onlineIpThreshold,
-                        'ip' => $ip,
-                        'ua' => $userAgent,
-                    ]);
-                    $this->blockAccess('online_ip_threshold', '在线唯一IP数超阈值，已重置订阅链接', $user->id, [
-                        'action' => 'reset_token_uuid',
-                        'online_ip_count' => $onlineIpCount,
-                        'threshold' => $onlineIpThreshold,
-                        'client_ip' => $ip,
-                        'user_agent' => $userAgent,
-                    ]);
+                    $this->handleOnlineIpThreshold(
+                        $user,
+                        $onlineIpCount,
+                        $onlineIpThreshold,
+                        [
+                            'client_ip' => $ip,
+                            'user_agent' => $userAgent,
+                            'source' => 'subscribe_request',
+                        ],
+                        true
+                    );
                 }
             }
 
@@ -440,16 +452,107 @@ class Plugin extends AbstractPlugin
         return $request->ip() ?? '0.0.0.0';
     }
 
+    public function scanOnlineIpThreshold(): void
+    {
+        if (!$this->getConfig('enable_online_ip_threshold', false)) {
+            return;
+        }
+
+        $threshold = max(1, (int) $this->getConfig('online_ip_threshold', 10));
+        $exceededUsers = app(UserOnlineService::class)->getUsersExceedingOnlineIpThreshold($threshold, 1000);
+        if (empty($exceededUsers)) {
+            return;
+        }
+
+        $users = User::query()
+            ->select(['id', 'email', 'telegram_id'])
+            ->whereIn('id', array_keys($exceededUsers))
+            ->get()
+            ->keyBy('id');
+
+        foreach ($exceededUsers as $userId => $onlineIpCount) {
+            $user = $users->get((int) $userId);
+            if (!$user) {
+                continue;
+            }
+
+            $this->handleOnlineIpThreshold(
+                $user,
+                (int) $onlineIpCount,
+                $threshold,
+                ['source' => 'scheduled_scan'],
+                false
+            );
+        }
+    }
+
+    private function handleOnlineIpThreshold(User $user, int $onlineIpCount, int $threshold, array $meta = [], bool $intercept = true): void
+    {
+        $reason = '在线唯一IP数超阈值，已重置订阅链接';
+        $cooldownKey = "subscription_control:action_cooldown:{$user->id}:online_ip_threshold";
+        $cooldown = max(60, (int) $this->getConfig('notify_cooldown_seconds', 1800));
+        $baseMeta = array_merge($meta, [
+            'action' => 'reset_token_uuid',
+            'online_ip_count' => $onlineIpCount,
+            'threshold' => $threshold,
+        ]);
+
+        if (!Cache::add($cooldownKey, time(), $cooldown)) {
+            Log::info('[SubscriptionControl] 在线唯一IP数超阈值命中冷却窗口，跳过重复处理', [
+                'user_id' => $user->id,
+                'online_ip_count' => $onlineIpCount,
+                'threshold' => $threshold,
+                'source' => $meta['source'] ?? 'unknown',
+            ]);
+
+            if ($intercept) {
+                $this->intercept(response($this->buildBlockMessage('online_ip_threshold', $reason, $baseMeta), 403, [
+                    'Content-Type' => 'text/plain; charset=UTF-8',
+                ]));
+            }
+
+            return;
+        }
+
+        $this->resetUserTokenAndUuid($user);
+        Log::warning('[SubscriptionControl] 在线唯一IP数超阈值，已重置用户 token/uuid', [
+            'user_id' => $user->id,
+            'online_ip_count' => $onlineIpCount,
+            'threshold' => $threshold,
+            'source' => $meta['source'] ?? 'unknown',
+            'ip' => $meta['client_ip'] ?? null,
+            'ua' => $meta['user_agent'] ?? null,
+        ]);
+
+        $this->recordRiskEvent('online_ip_threshold', $reason, $user->id, $user, $baseMeta);
+
+        if ($intercept) {
+            $this->intercept(response($this->buildBlockMessage('online_ip_threshold', $reason, $baseMeta), 403, [
+                'Content-Type' => 'text/plain; charset=UTF-8',
+            ]));
+        }
+    }
+
     /**
      * 阻止访问
      */
     private function blockAccess(string $code, string $reason, int $userId = null, array $meta = []): never
     {
+        $this->recordRiskEvent($code, $reason, $userId, null, $meta);
+
+        // 返回403错误（部分客户端会展示响应体，帮助用户自查/自救）
+        $message = $this->buildBlockMessage($code, $reason, $meta);
+        $this->intercept(response($message, 403, [
+            'Content-Type' => 'text/plain; charset=UTF-8',
+        ]));
+    }
+
+    private function recordRiskEvent(string $code, string $reason, int $userId = null, ?User $user = null, array $meta = []): void
+    {
         // 增加拦截计数
         Cache::increment('subscription_control:blocked_count:' . date('Y-m-d'));
 
         // 记录最近一次拦截事件，便于用户在面板中定位原因
-        $user = null;
         if ($userId) {
             $eventTtl = 60 * 60 * 24 * 3;
             Cache::put("subscription_control:last_event:{$userId}", [
@@ -457,9 +560,13 @@ class Plugin extends AbstractPlugin
                 'action' => $meta['action'] ?? 'block',
                 'reason' => $reason,
                 'at' => time(),
+                'online_ip_count' => isset($meta['online_ip_count']) ? (int) $meta['online_ip_count'] : null,
+                'threshold' => isset($meta['threshold']) ? (int) $meta['threshold'] : null,
             ], $eventTtl);
             try {
-                $user = User::query()->select(['id', 'email', 'telegram_id'])->find($userId);
+                if (!$user) {
+                    $user = User::query()->select(['id', 'email', 'telegram_id'])->find($userId);
+                }
             } catch (\Throwable $e) {
                 Log::warning('[SubscriptionControl] 风控用户信息读取失败', [
                     'user_id' => $userId,
@@ -488,12 +595,6 @@ class Plugin extends AbstractPlugin
         }
 
         $this->appendRecentEvent($userId, $user?->email, $code, $reason, $meta, $notificationResult);
-
-        // 返回403错误（部分客户端会展示响应体，帮助用户自查/自救）
-        $message = $this->buildBlockMessage($code, $reason, $meta);
-        $this->intercept(response($message, 403, [
-            'Content-Type' => 'text/plain; charset=UTF-8',
-        ]));
     }
 
     private function buildBlockMessage(string $code, string $reason, array $meta = []): string

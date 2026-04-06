@@ -185,6 +185,48 @@ class UserOnlineService
         return self::summarizeAliveDisplayCache(cache()->get(self::cacheKey($userId), []))['alive_ip'];
     }
 
+    /**
+     * 获取当前在线唯一 IP 数超过阈值的用户列表。
+     *
+     * 返回格式: [userId => onlineIpCount]
+     */
+    public function getUsersExceedingOnlineIpThreshold(int $threshold, int $limit = 1000): array
+    {
+        $threshold = max(1, $threshold);
+        $limit = max(1, $limit);
+
+        if (!self::isRealtimeIndexReady()) {
+            return [];
+        }
+
+        $activeUserIds = self::getActiveRealtimeUserIds(time() + 1);
+        if (empty($activeUserIds)) {
+            return [];
+        }
+
+        $counts = $this->getFreshAliveDisplayCountsForUserIds($activeUserIds);
+        if (empty($counts)) {
+            return [];
+        }
+
+        arsort($counts, SORT_NUMERIC);
+
+        $exceeded = [];
+        foreach ($counts as $userId => $count) {
+            $normalizedCount = max(0, (int) $count);
+            if ($normalizedCount <= $threshold) {
+                continue;
+            }
+
+            $exceeded[(int) $userId] = $normalizedCount;
+            if (count($exceeded) >= $limit) {
+                break;
+            }
+        }
+
+        return $exceeded;
+    }
+
     public static function updateRealtimeIndex(array $userCounts, int $expiresAt): void
     {
         if (!self::supportsRealtimeIndex() || empty($userCounts)) {
