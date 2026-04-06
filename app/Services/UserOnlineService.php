@@ -113,7 +113,7 @@ class UserOnlineService
      */
     public static function getUserDevices(int $userId): array
     {
-        $summary = self::summarizeAliveCache(cache()->get(self::cacheKey($userId), []));
+        $summary = self::summarizeAliveDisplayCache(cache()->get(self::cacheKey($userId), []));
         if ($summary['alive_ip'] <= 0) {
             return ['total_count' => 0, 'devices' => []];
         }
@@ -152,26 +152,15 @@ class UserOnlineService
     public static function getUserDeviceIps(int $userId): array
     {
         $mode = (int) admin_setting('device_limit_mode', 0);
-        $summary = self::summarizeAliveCache(cache()->get(self::cacheKey($userId), []), $mode);
+        $summary = self::summarizeAliveDisplayCache(cache()->get(self::cacheKey($userId), []));
         if ($summary['alive_ip'] <= 0) {
             return ['mode' => $mode, 'total_count' => 0, 'ips' => []];
         }
 
-        $ips = $mode === 1
-            ? ($summary['ips'] ?? [])
-            : collect($summary['nodes'])
-                ->filter(fn(mixed $item): bool => is_array($item) && isset($item['aliveips']))
-                ->flatMap(fn(array $nodeData): array => collect($nodeData['aliveips'])
-                    ->map(fn(string $ipNodeId): string => self::normalizeAliveIP($ipNodeId))
-                    ->filter()
-                    ->all())
-                ->values()
-                ->all();
-
         return [
             'mode' => $mode,
             'total_count' => $summary['alive_ip'],
-            'ips' => $ips
+            'ips' => $summary['ips'] ?? [],
         ];
     }
 
@@ -185,7 +174,7 @@ class UserOnlineService
             return [];
         }
 
-        return $this->getFreshAliveCountsForUserIds($userIds);
+        return $this->getFreshAliveDisplayCountsForUserIds($userIds);
     }
 
     /**
@@ -193,7 +182,7 @@ class UserOnlineService
      */
     public function getOnlineCount(int $userId): int
     {
-        return self::summarizeAliveCache(cache()->get(self::cacheKey($userId), []))['alive_ip'];
+        return self::summarizeAliveDisplayCache(cache()->get(self::cacheKey($userId), []))['alive_ip'];
     }
 
     public static function updateRealtimeIndex(array $userCounts, int $expiresAt): void
@@ -398,6 +387,32 @@ class UserOnlineService
         return $counts;
     }
 
+    private function getFreshAliveDisplayCountsForUserIds(array $userIds): array
+    {
+        if (empty($userIds)) {
+            return [];
+        }
+
+        $keyToUserId = [];
+        foreach ($userIds as $userId) {
+            $normalizedUserId = (int) $userId;
+            if ($normalizedUserId <= 0) {
+                continue;
+            }
+            $keyToUserId[self::cacheKey($normalizedUserId)] = $normalizedUserId;
+        }
+
+        $counts = [];
+        foreach (array_chunk($keyToUserId, 1000, true) as $keyBatch) {
+            foreach (cache()->many(array_keys($keyBatch)) as $cacheKey => $data) {
+                $summary = self::summarizeAliveDisplayCache($data);
+                $counts[$keyBatch[$cacheKey]] = (int) ($summary['alive_ip'] ?? 0);
+            }
+        }
+
+        return $counts;
+    }
+
     private function getFreshAliveSummariesForUserIds(array $userIds, ?int $mode = null): array
     {
         if (empty($userIds)) {
@@ -486,6 +501,17 @@ class UserOnlineService
         return [
             'nodes' => $freshNodes,
             'alive_ip' => self::calculateDeviceCount($freshNodes, $mode),
+            'ips' => self::extractAliveIps($freshNodes),
+        ];
+    }
+
+    private static function summarizeAliveDisplayCache(mixed $cachedData, ?int $now = null): array
+    {
+        $freshNodes = self::filterFreshAliveCacheNodes($cachedData, $now);
+
+        return [
+            'nodes' => $freshNodes,
+            'alive_ip' => self::countUniqueAliveIps($freshNodes),
             'ips' => self::extractAliveIps($freshNodes),
         ];
     }

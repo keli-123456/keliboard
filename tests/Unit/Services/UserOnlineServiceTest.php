@@ -189,4 +189,24 @@ final class UserOnlineServiceTest extends TestCase
 
         $this->assertSame(['27.37.83.78'], $ips);
     }
+
+    public function test_display_summary_always_deduplicates_same_ip_across_nodes(): void
+    {
+        $method = new \ReflectionMethod(UserOnlineService::class, 'summarizeAliveDisplayCache');
+        $method->setAccessible(true);
+
+        $summary = $method->invoke(null, [
+            'vless8' => [
+                'aliveips' => ['211.158.12.8', '211.158.12.8', '123.147.236.68'],
+                'lastupdateAt' => time(),
+            ],
+            'tuic9' => [
+                'aliveips' => ['211.158.12.8', '::ffff:211.158.12.8', '211.158.12.8 '],
+                'lastupdateAt' => time(),
+            ],
+        ]);
+
+        $this->assertSame(2, $summary['alive_ip']);
+        $this->assertSame(['123.147.236.68', '211.158.12.8'], $summary['ips']);
+    }
 }
