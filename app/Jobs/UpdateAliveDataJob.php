@@ -17,8 +17,6 @@ class UpdateAliveDataJob implements ShouldQueue
 {
   use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-  private const NODE_DATA_EXPIRY = 100;
-
   public function __construct(
     private readonly array $data,
     private readonly string $nodeType,
@@ -34,6 +32,7 @@ class UpdateAliveDataJob implements ShouldQueue
       $nodeKey = $this->nodeType . $this->nodeId;
       $mode = UserOnlineService::getDeviceLimitMode();
       $ttlSeconds = UserOnlineService::aliveCacheTtlSeconds();
+      $nodeDataExpirySeconds = $this->nodeDataExpirySeconds();
       $ttl = now()->addSeconds($ttlSeconds);
       $lastOnlineAt = now();
       $cacheUpdates = [];
@@ -59,7 +58,7 @@ class UpdateAliveDataJob implements ShouldQueue
           ? (int) $cachedUserData['alive_ip']
           : null;
 
-        $ipsArray = $this->filterFreshNodeData($cachedUserData, $updateAt);
+        $ipsArray = $this->filterFreshNodeData($cachedUserData, $updateAt, $nodeDataExpirySeconds);
         $ipsArray[$nodeKey] = [
           'aliveips' => $onlineIps[$uid] ?? [],
           'lastupdateAt' => $updateAt,
@@ -90,7 +89,7 @@ class UpdateAliveDataJob implements ShouldQueue
     }
   }
 
-  private function filterFreshNodeData(mixed $cachedData, int $updateAt): array
+  private function filterFreshNodeData(mixed $cachedData, int $updateAt, int $expirySeconds): array
   {
     if (!is_array($cachedData)) {
       return [];
@@ -103,7 +102,7 @@ class UpdateAliveDataJob implements ShouldQueue
       }
 
       $lastUpdateAt = (int) ($value['lastupdateAt'] ?? 0);
-      if ($updateAt - $lastUpdateAt > self::NODE_DATA_EXPIRY) {
+      if ($updateAt - $lastUpdateAt > $expirySeconds) {
         continue;
       }
 
@@ -111,6 +110,14 @@ class UpdateAliveDataJob implements ShouldQueue
     }
 
     return $filtered;
+  }
+
+  private function nodeDataExpirySeconds(): int
+  {
+    $pushInterval = max(1, (int) admin_setting('server_push_interval', 60));
+
+    // Keep the default 60s -> 100s behavior while adapting to longer push intervals.
+    return max(100, $pushInterval + 40);
   }
 
   private function loadCachedAliveData(array $cacheKeys): array
