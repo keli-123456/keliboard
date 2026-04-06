@@ -86,6 +86,41 @@ class UserOnlineService
         return $alive;
     }
 
+    public function getAliveSnapshot(array $userIds): array
+    {
+        $mode = self::getDeviceLimitMode();
+        if (empty($userIds)) {
+            return [
+                'alive' => [],
+                'alive_ips' => [],
+                'mode' => $mode,
+            ];
+        }
+
+        $alive = $this->getAliveList($userIds);
+        $aliveIps = [];
+
+        if ($mode === 1) {
+            $activeUserIds = [];
+            foreach ($alive as $userId => $count) {
+                if ((int) $count > 0) {
+                    $activeUserIds[] = (int) $userId;
+                }
+            }
+
+            $aliveIps = $this->getAliveIpsForUsers($activeUserIds);
+            foreach ($aliveIps as $userId => $ips) {
+                $alive[(int) $userId] = count($ips);
+            }
+        }
+
+        return [
+            'alive' => $alive,
+            'alive_ips' => $aliveIps,
+            'mode' => $mode,
+        ];
+    }
+
     /**
      * 获取指定用户的在线设备信息
      */
@@ -343,6 +378,65 @@ class UserOnlineService
         }
 
         return count($uniqueIps);
+    }
+
+    private function getAliveIpsForUsers(array $userIds): array
+    {
+        if (empty($userIds)) {
+            return [];
+        }
+
+        $keyToUserId = [];
+        foreach ($userIds as $userId) {
+            $normalizedUserId = (int) $userId;
+            if ($normalizedUserId <= 0) {
+                continue;
+            }
+            $cacheKey = self::cacheKey($normalizedUserId);
+            $keyToUserId[$cacheKey] = $normalizedUserId;
+        }
+
+        $aliveIps = [];
+        foreach (array_chunk($keyToUserId, 1000, true) as $keyBatch) {
+            foreach (cache()->many(array_keys($keyBatch)) as $cacheKey => $data) {
+                if (!is_array($data)) {
+                    continue;
+                }
+
+                $ips = self::extractAliveIps($data);
+                if (empty($ips)) {
+                    continue;
+                }
+
+                $aliveIps[$keyBatch[$cacheKey]] = $ips;
+            }
+        }
+
+        return $aliveIps;
+    }
+
+    private static function extractAliveIps(array $ipsArray): array
+    {
+        $uniqueIps = [];
+
+        foreach ($ipsArray as $data) {
+            if (!is_array($data) || !isset($data['aliveips']) || !is_array($data['aliveips'])) {
+                continue;
+            }
+
+            foreach ($data['aliveips'] as $ipNodeId) {
+                $ip = trim(Str::before((string) $ipNodeId, '_'));
+                if ($ip === '') {
+                    continue;
+                }
+                $uniqueIps[$ip] = true;
+            }
+        }
+
+        $ips = array_keys($uniqueIps);
+        sort($ips, SORT_STRING);
+
+        return $ips;
     }
 
     private static function countAliveIps(array $ipsArray): int

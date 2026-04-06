@@ -326,8 +326,12 @@ class UniProxyController extends Controller
         $node = $this->getNodeInfo($request);
         $this->touchNodeLastCheckAt($node);
         $deviceLimitUserIds = ServerService::getAvailableUserIds($node, true);
-        $alive = $this->userOnlineService->getAliveList($deviceLimitUserIds);
-        return response()->json(['alive' => (object) $alive]);
+        $aliveSnapshot = $this->userOnlineService->getAliveSnapshot($deviceLimitUserIds);
+        return response()->json([
+            'alive' => (object) ($aliveSnapshot['alive'] ?? []),
+            'alive_ips' => (object) ($aliveSnapshot['alive_ips'] ?? []),
+            'mode' => (int) ($aliveSnapshot['mode'] ?? 0),
+        ]);
     }
 
     // 后端提交在线数据

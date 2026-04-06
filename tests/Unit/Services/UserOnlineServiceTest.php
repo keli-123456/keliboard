@@ -108,4 +108,24 @@ final class UserOnlineServiceTest extends TestCase
             ['104875', '120220'],
         ], $normalized);
     }
+
+    public function test_extract_alive_ips_deduplicates_same_ip_across_nodes(): void
+    {
+        $method = new \ReflectionMethod(UserOnlineService::class, 'extractAliveIps');
+        $method->setAccessible(true);
+
+        $ips = $method->invoke(null, [
+            'vless28' => [
+                'aliveips' => ['1.1.1.1', '2.2.2.2'],
+                'lastupdateAt' => time(),
+            ],
+            'tuic31' => [
+                'aliveips' => ['1.1.1.1', '3.3.3.3'],
+                'lastupdateAt' => time(),
+            ],
+            'alive_ip' => 3,
+        ]);
+
+        $this->assertSame(['1.1.1.1', '2.2.2.2', '3.3.3.3'], $ips);
+    }
 }
