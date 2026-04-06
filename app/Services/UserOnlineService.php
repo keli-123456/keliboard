@@ -388,7 +388,36 @@ class UserOnlineService
 
     private static function redisCommand(string $method, array $parameters): mixed
     {
-        return Redis::connection(self::redisConnectionName())->command($method, $parameters);
+        $normalizedMethod = strtolower($method);
+        if ($normalizedMethod === 'hmset') {
+            $parameters = self::normalizeHmsetParameters($parameters);
+        }
+
+        return Redis::connection(self::redisConnectionName())->command($normalizedMethod, $parameters);
+    }
+
+    private static function normalizeHmsetParameters(array $parameters): array
+    {
+        if (count($parameters) === 2 && is_array($parameters[1])) {
+            return $parameters;
+        }
+
+        $key = array_shift($parameters);
+        if ($key === null) {
+            return $parameters;
+        }
+
+        $hash = [];
+        $parameterCount = count($parameters);
+        for ($index = 0; $index < $parameterCount; $index += 2) {
+            if (!array_key_exists($index + 1, $parameters)) {
+                break;
+            }
+
+            $hash[(string) $parameters[$index]] = (string) $parameters[$index + 1];
+        }
+
+        return [$key, $hash];
     }
 
     private static function normalizeRedisUserIds(mixed $userIds): array

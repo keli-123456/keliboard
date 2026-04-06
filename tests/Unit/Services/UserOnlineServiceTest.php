@@ -41,4 +41,42 @@ final class UserOnlineServiceTest extends TestCase
 
         $this->assertSame(3, $count);
     }
+
+    public function test_normalize_hmset_parameters_converts_flat_arguments_to_hash_map(): void
+    {
+        $method = new \ReflectionMethod(UserOnlineService::class, 'normalizeHmsetParameters');
+        $method->setAccessible(true);
+
+        $normalized = $method->invoke(null, ['ALIVE_IP_ACTIVE_COUNTS', '104875', '2', '120220', '1']);
+
+        $this->assertSame([
+            'ALIVE_IP_ACTIVE_COUNTS',
+            [
+                '104875' => '2',
+                '120220' => '1',
+            ],
+        ], $normalized);
+    }
+
+    public function test_normalize_hmset_parameters_keeps_hash_map_shape_unchanged(): void
+    {
+        $method = new \ReflectionMethod(UserOnlineService::class, 'normalizeHmsetParameters');
+        $method->setAccessible(true);
+
+        $normalized = $method->invoke(null, [
+            'ALIVE_IP_ACTIVE_COUNTS',
+            [
+                '104875' => '2',
+                '120220' => '1',
+            ],
+        ]);
+
+        $this->assertSame([
+            'ALIVE_IP_ACTIVE_COUNTS',
+            [
+                '104875' => '2',
+                '120220' => '1',
+            ],
+        ], $normalized);
+    }
 }
