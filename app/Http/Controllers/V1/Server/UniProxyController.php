@@ -487,6 +487,10 @@ class UniProxyController extends Controller
 
         $tlsSettings = $baseTlsSettings;
         $tlsSettings['server_name'] = $serverName;
+        $alpn = $this->resolveV2NodeAlpn($protocolSettings, $baseTlsSettings);
+        if (!empty($alpn)) {
+            $tlsSettings['alpn'] = $alpn;
+        }
 
         if ($tls === 2) {
             $tlsSettings['dest'] = (string) data_get($tlsSettings, 'dest', '');
@@ -519,6 +523,21 @@ class UniProxyController extends Controller
         }
 
         return (array) data_get($protocolSettings, 'tls_settings', []);
+    }
+
+    private function resolveV2NodeAlpn(array $protocolSettings, array $baseTlsSettings): array
+    {
+        $values = data_get($protocolSettings, 'alpn', data_get($baseTlsSettings, 'alpn', []));
+        $normalized = [];
+        foreach ((array) $values as $value) {
+            $text = trim((string) $value);
+            if ($text === '' || in_array($text, $normalized, true)) {
+                continue;
+            }
+            $normalized[] = $text;
+        }
+
+        return $normalized;
     }
 
 	    private function resolveV2NodeServerName($node, string $nodeType, array $protocolSettings, int $tls, array $baseTlsSettings): string
