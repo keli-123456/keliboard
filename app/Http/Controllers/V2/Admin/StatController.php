@@ -14,6 +14,7 @@ use App\Models\StatUserNodeDay;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Services\StatisticalService;
+use App\Services\UserOnlineService;
 use Illuminate\Http\Request;
 
 class StatController extends Controller
@@ -28,14 +29,8 @@ class StatController extends Controller
     public function getOverride(Request $request)
     {
         // 获取在线节点数
-        $onlineNodes = Server::all()->filter(function ($server) {
-            return !!$server->is_online;
-        })->count();
-        // 获取在线设备数和在线用户数
-        $onlineDevices = User::where('t', '>=', time() - 600)
-            ->sum('online_count');
-        $onlineUsers = User::where('t', '>=', time() - 600)
-            ->count();
+        $onlineNodes = Server::query()->where('is_online', 1)->count();
+        ['online_devices' => $onlineDevices, 'online_users' => $onlineUsers] = $this->getOnlineOverview();
 
         // 获取今日流量统计
         $todayStart = strtotime('today');
@@ -325,15 +320,8 @@ class StatController extends Controller
         $yesterdayStart = strtotime('-1 day', $todayStart);
 
         // 获取在线节点数
-        $onlineNodes = Server::all()->filter(function ($server) {
-            return !!$server->is_online;
-        })->count();
-
-        // 获取在线设备数和在线用户数
-        $onlineDevices = User::where('t', '>=', time() - 600)
-            ->sum('online_count');
-        $onlineUsers = User::where('t', '>=', time() - 600)
-            ->count();
+        $onlineNodes = Server::query()->where('is_online', 1)->count();
+        ['online_devices' => $onlineDevices, 'online_users' => $onlineUsers] = $this->getOnlineOverview();
 
         // 获取今日流量统计
         $todayTraffic = StatServer::where('record_at', '>=', $todayStart)
@@ -631,6 +619,26 @@ class StatController extends Controller
         return [
             'timestamp' => date('c'),
             'data' => $result,
+        ];
+    }
+
+    private function getOnlineOverview(): array
+    {
+        $realtimeSummary = UserOnlineService::getRealtimeSummary();
+        if (is_array($realtimeSummary)) {
+            return [
+                'online_devices' => (int) ($realtimeSummary['online_devices'] ?? 0),
+                'online_users' => (int) ($realtimeSummary['online_users'] ?? 0),
+            ];
+        }
+
+        return [
+            'online_devices' => (int) User::query()
+                ->where('t', '>=', time() - 600)
+                ->sum('online_count'),
+            'online_users' => (int) User::query()
+                ->where('t', '>=', time() - 600)
+                ->count(),
         ];
     }
 }

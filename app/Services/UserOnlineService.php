@@ -4,6 +4,7 @@
 namespace App\Services;
 
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Str;
 
 class UserOnlineService
@@ -12,6 +13,46 @@ class UserOnlineService
      * 缓存相关常量
      */
     private const CACHE_PREFIX = 'ALIVE_IP_USER_';
+    private const CACHE_TTL_SECONDS = 120;
+    private const REALTIME_ACTIVE_USERS_KEY = 'ALIVE_IP_ACTIVE_USERS';
+    private const REALTIME_ACTIVE_COUNTS_KEY = 'ALIVE_IP_ACTIVE_COUNTS';
+    private const REALTIME_SUMMARY_CACHE_KEY = 'ALIVE_IP_SUMMARY';
+    private const REALTIME_READY_KEY = 'ALIVE_IP_READY';
+    private const REALTIME_SUMMARY_CACHE_TTL_SECONDS = 15;
+
+    public static function cacheKey(int $userId): string
+    {
+        return self::CACHE_PREFIX . $userId;
+    }
+
+    public static function aliveCacheTtlSeconds(): int
+    {
+        return self::CACHE_TTL_SECONDS;
+    }
+
+    public static function supportsRealtimeIndex(): bool
+    {
+        $defaultStore = (string) config('cache.default');
+        return data_get(config('cache.stores'), $defaultStore . '.driver') === 'redis';
+    }
+
+    public static function isRealtimeIndexReady(): bool
+    {
+        if (!self::supportsRealtimeIndex()) {
+            return false;
+        }
+
+        return (bool) cache()->get(self::realtimeReadyKey(), false);
+    }
+
+    public static function markRealtimeIndexReady(): void
+    {
+        if (!self::supportsRealtimeIndex()) {
+            return;
+        }
+
+        cache()->forever(self::realtimeReadyKey(), time());
+    }
 
     /**
      * 获取所有限制设备用户的在线数量
@@ -22,9 +63,13 @@ class UserOnlineService
             return [];
         }
 
+        if (self::isRealtimeIndexReady()) {
+            return self::getActiveRealtimeCountsForUserIds($userIds);
+        }
+
         $keyToUserId = [];
         foreach ($userIds as $userId) {
-            $cacheKey = self::CACHE_PREFIX . (int) $userId;
+            $cacheKey = self::cacheKey((int) $userId);
             $keyToUserId[$cacheKey] = (int) $userId;
         }
 
@@ -46,7 +91,7 @@ class UserOnlineService
      */
     public static function getUserDevices(int $userId): array
     {
-        $data = cache()->get(self::CACHE_PREFIX . $userId, []);
+        $data = cache()->get(self::cacheKey($userId), []);
         if (empty($data)) {
             return ['total_count' => 0, 'devices' => []];
         }
@@ -82,7 +127,7 @@ class UserOnlineService
     public static function getUserDeviceIps(int $userId): array
     {
         $mode = (int) admin_setting('device_limit_mode', 0);
-        $data = cache()->get(self::CACHE_PREFIX . $userId, []);
+        $data = cache()->get(self::cacheKey($userId), []);
         if (empty($data)) {
             return ['mode' => $mode, 'total_count' => 0, 'ips' => []];
         }
@@ -109,8 +154,16 @@ class UserOnlineService
      */
     public function getOnlineCounts(array $userIds): array
     {
+        if (empty($userIds)) {
+            return [];
+        }
+
+        if (self::isRealtimeIndexReady()) {
+            return self::getActiveRealtimeCountsForUserIds($userIds);
+        }
+
         $cacheKeys = collect($userIds)
-            ->map(fn(int $id): string => self::CACHE_PREFIX . $id)
+            ->map(fn(int $id): string => self::cacheKey($id))
             ->all();
 
         return collect(cache()->many($cacheKeys))
@@ -124,8 +177,136 @@ class UserOnlineService
      */
     public function getOnlineCount(int $userId): int
     {
-        $data = cache()->get(self::CACHE_PREFIX . $userId, []);
+        if (self::isRealtimeIndexReady()) {
+            $realtimeCount = self::getRealtimeCount($userId);
+            if ($realtimeCount !== null) {
+                return $realtimeCount;
+            }
+        }
+
+        $data = cache()->get(self::cacheKey($userId), []);
         return $data['alive_ip'] ?? 0;
+    }
+
+    public static function updateRealtimeIndex(array $userCounts, int $expiresAt): void
+    {
+        if (!self::supportsRealtimeIndex() || empty($userCounts)) {
+            return;
+        }
+
+        $zaddArgs = [self::realtimeActiveUsersKey()];
+        $hsetArgs = [self::realtimeActiveCountsKey()];
+        $removeIds = [];
+
+        foreach ($userCounts as $userId => $count) {
+            $normalizedUserId = (int) $userId;
+            if ($normalizedUserId <= 0) {
+                continue;
+            }
+
+            $normalizedCount = max(0, (int) $count);
+            if ($normalizedCount > 0) {
+                $zaddArgs[] = (string) $expiresAt;
+                $zaddArgs[] = (string) $normalizedUserId;
+                $hsetArgs[] = (string) $normalizedUserId;
+                $hsetArgs[] = (string) $normalizedCount;
+                continue;
+            }
+
+            $removeIds[] = (string) $normalizedUserId;
+        }
+
+        if (count($zaddArgs) > 1) {
+            self::redisCommand('zadd', $zaddArgs);
+        }
+
+        if (count($hsetArgs) > 1) {
+            self::redisCommand('hmset', $hsetArgs);
+        }
+
+        if (!empty($removeIds)) {
+            self::redisCommand('zrem', array_merge([self::realtimeActiveUsersKey()], $removeIds));
+            self::redisCommand('hdel', array_merge([self::realtimeActiveCountsKey()], $removeIds));
+        }
+
+        self::markRealtimeIndexReady();
+        cache()->forget(self::realtimeSummaryCacheKey());
+    }
+
+    public static function getRealtimeSummary(): ?array
+    {
+        if (!self::isRealtimeIndexReady()) {
+            return null;
+        }
+
+        $cached = cache()->get(self::realtimeSummaryCacheKey());
+        if (is_array($cached) && isset($cached['online_devices'], $cached['online_users'])) {
+            return [
+                'online_devices' => max(0, (int) $cached['online_devices']),
+                'online_users' => max(0, (int) $cached['online_users']),
+            ];
+        }
+
+        $activeUserIds = self::getActiveRealtimeUserIds(time() + 1);
+        $summary = [
+            'online_devices' => 0,
+            'online_users' => count($activeUserIds),
+        ];
+
+        if (!empty($activeUserIds)) {
+            $summary['online_devices'] = array_sum(self::getRealtimeCountsForUserIds($activeUserIds));
+        }
+
+        cache()->put(
+            self::realtimeSummaryCacheKey(),
+            $summary,
+            now()->addSeconds(self::REALTIME_SUMMARY_CACHE_TTL_SECONDS)
+        );
+
+        return $summary;
+    }
+
+    public static function getExpiredRealtimeUserIds(int $now): array
+    {
+        if (!self::isRealtimeIndexReady()) {
+            return [];
+        }
+
+        return self::normalizeRedisUserIds(
+            self::redisCommand('zrangebyscore', [
+                self::realtimeActiveUsersKey(),
+                '-inf',
+                (string) $now,
+            ])
+        );
+    }
+
+    public static function purgeRealtimeUsers(array $userIds): void
+    {
+        if (!self::supportsRealtimeIndex()) {
+            return;
+        }
+
+        $normalizedIds = array_map('strval', self::normalizeRedisUserIds($userIds));
+        if (empty($normalizedIds)) {
+            return;
+        }
+
+        self::redisCommand('zrem', array_merge([self::realtimeActiveUsersKey()], $normalizedIds));
+        self::redisCommand('hdel', array_merge([self::realtimeActiveCountsKey()], $normalizedIds));
+        cache()->forget(self::realtimeSummaryCacheKey());
+    }
+
+    public static function forgetAliveCaches(array $userIds): void
+    {
+        foreach ($userIds as $userId) {
+            $normalizedUserId = (int) $userId;
+            if ($normalizedUserId <= 0) {
+                continue;
+            }
+
+            cache()->forget(self::cacheKey($normalizedUserId));
+        }
     }
 
     /**
@@ -177,5 +358,149 @@ class UserOnlineService
         }
 
         return $count;
+    }
+
+    private static function realtimeReadyKey(): string
+    {
+        return self::REALTIME_READY_KEY;
+    }
+
+    private static function realtimeSummaryCacheKey(): string
+    {
+        return self::REALTIME_SUMMARY_CACHE_KEY;
+    }
+
+    private static function realtimeActiveUsersKey(): string
+    {
+        return self::REALTIME_ACTIVE_USERS_KEY;
+    }
+
+    private static function realtimeActiveCountsKey(): string
+    {
+        return self::REALTIME_ACTIVE_COUNTS_KEY;
+    }
+
+    private static function redisConnectionName(): string
+    {
+        $defaultStore = (string) config('cache.default');
+        return (string) data_get(config('cache.stores'), $defaultStore . '.connection', 'default');
+    }
+
+    private static function redisCommand(string $method, array $parameters): mixed
+    {
+        return Redis::connection(self::redisConnectionName())->command($method, $parameters);
+    }
+
+    private static function normalizeRedisUserIds(mixed $userIds): array
+    {
+        if (!is_array($userIds)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($userIds as $userId) {
+            $value = (int) $userId;
+            if ($value > 0) {
+                $normalized[$value] = $value;
+            }
+        }
+
+        return array_values($normalized);
+    }
+
+    private static function getActiveRealtimeUserIds(int $minExpiresAt): array
+    {
+        return self::normalizeRedisUserIds(
+            self::redisCommand('zrangebyscore', [
+                self::realtimeActiveUsersKey(),
+                (string) $minExpiresAt,
+                '+inf',
+            ])
+        );
+    }
+
+    private static function getRealtimeCountsForUserIds(array $userIds): array
+    {
+        $normalizedIds = self::normalizeRedisUserIds($userIds);
+        if (empty($normalizedIds)) {
+            return [];
+        }
+
+        $counts = [];
+        foreach (array_chunk($normalizedIds, 1000) as $chunk) {
+            $rawCounts = self::redisCommand(
+                'hmget',
+                array_merge([self::realtimeActiveCountsKey()], array_map('strval', $chunk))
+            );
+
+            if (!is_array($rawCounts)) {
+                continue;
+            }
+
+            foreach ($chunk as $index => $userId) {
+                $value = $rawCounts[$index] ?? null;
+                if ($value === null || $value === false) {
+                    continue;
+                }
+
+                $counts[$userId] = max(0, (int) $value);
+            }
+        }
+
+        return $counts;
+    }
+
+    private static function getActiveRealtimeCountsForUserIds(array $userIds): array
+    {
+        $activeUserIds = self::filterActiveRealtimeUserIds($userIds, time() + 1);
+        if (empty($activeUserIds)) {
+            return [];
+        }
+
+        return self::getRealtimeCountsForUserIds($activeUserIds);
+    }
+
+    private static function filterActiveRealtimeUserIds(array $userIds, int $minExpiresAt): array
+    {
+        $normalizedIds = self::normalizeRedisUserIds($userIds);
+        if (empty($normalizedIds)) {
+            return [];
+        }
+
+        $activeLookup = array_fill_keys(self::getActiveRealtimeUserIds($minExpiresAt), true);
+        if (empty($activeLookup)) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            $normalizedIds,
+            fn(int $userId): bool => isset($activeLookup[$userId])
+        ));
+    }
+
+    private static function getRealtimeCount(int $userId): ?int
+    {
+        if ($userId <= 0) {
+            return null;
+        }
+
+        $expiresAt = self::redisCommand('zscore', [
+            self::realtimeActiveUsersKey(),
+            (string) $userId,
+        ]);
+        if (!is_numeric($expiresAt) || (float) $expiresAt < (time() + 1)) {
+            return null;
+        }
+
+        $value = self::redisCommand('hget', [
+            self::realtimeActiveCountsKey(),
+            (string) $userId,
+        ]);
+
+        if ($value === null || $value === false) {
+            return null;
+        }
+
+        return max(0, (int) $value);
     }
 }

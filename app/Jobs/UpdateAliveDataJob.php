@@ -17,8 +17,6 @@ class UpdateAliveDataJob implements ShouldQueue
 {
   use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-  private const CACHE_PREFIX = 'ALIVE_IP_USER_';
-  private const CACHE_TTL = 120;
   private const NODE_DATA_EXPIRY = 100;
 
   public function __construct(
@@ -35,10 +33,12 @@ class UpdateAliveDataJob implements ShouldQueue
       $updateAt = time();
       $nodeKey = $this->nodeType . $this->nodeId;
       $mode = UserOnlineService::getDeviceLimitMode();
-      $ttl = now()->addSeconds(self::CACHE_TTL);
+      $ttlSeconds = UserOnlineService::aliveCacheTtlSeconds();
+      $ttl = now()->addSeconds($ttlSeconds);
       $lastOnlineAt = now();
       $cacheUpdates = [];
-      $onlineUpdates = [];
+      $changedOnlineUpdates = [];
+      $realtimeCounts = [];
       $onlineIps = [];
       $cacheKeys = [];
 
@@ -48,13 +48,18 @@ class UpdateAliveDataJob implements ShouldQueue
           continue;
         }
         $onlineIps[$uid] = array_values((array) $ips);
-        $cacheKeys[$uid] = self::CACHE_PREFIX . $uid;
+        $cacheKeys[$uid] = UserOnlineService::cacheKey($uid);
       }
 
       $cachedAliveData = $this->loadCachedAliveData($cacheKeys);
 
       foreach ($cacheKeys as $uid => $cacheKey) {
-        $ipsArray = $this->filterFreshNodeData($cachedAliveData[$cacheKey] ?? [], $updateAt);
+        $cachedUserData = $cachedAliveData[$cacheKey] ?? [];
+        $previousCount = is_array($cachedUserData) && isset($cachedUserData['alive_ip'])
+          ? (int) $cachedUserData['alive_ip']
+          : null;
+
+        $ipsArray = $this->filterFreshNodeData($cachedUserData, $updateAt);
         $ipsArray[$nodeKey] = [
           'aliveips' => $onlineIps[$uid] ?? [],
           'lastupdateAt' => $updateAt,
@@ -64,15 +69,19 @@ class UpdateAliveDataJob implements ShouldQueue
         $ipsArray['alive_ip'] = $count;
 
         $cacheUpdates[$cacheKey] = $ipsArray;
-        $onlineUpdates[] = [
-          'id' => $uid,
-          'online_count' => $count,
-          'last_online_at' => $lastOnlineAt,
-        ];
+        $realtimeCounts[$uid] = $count;
+        if ($previousCount !== $count) {
+          $changedOnlineUpdates[] = [
+            'id' => $uid,
+            'online_count' => $count,
+            'last_online_at' => $lastOnlineAt,
+          ];
+        }
       }
 
       $this->storeCachedAliveData($cacheUpdates, $ttl);
-      $this->syncOnlineCounts($onlineUpdates);
+      UserOnlineService::updateRealtimeIndex($realtimeCounts, $updateAt + $ttlSeconds);
+      $this->syncOnlineCounts($changedOnlineUpdates);
     } catch (\Throwable $e) {
       Log::error('UpdateAliveDataJob failed', [
         'error' => $e->getMessage(),
