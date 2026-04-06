@@ -123,7 +123,10 @@ class UserOnlineService
             ->flatMap(function (array $nodeData, string $nodeKey): array {
                 return collect($nodeData['aliveips'])
                     ->mapWithKeys(function (string $ipNodeId) use ($nodeData, $nodeKey): array {
-                        $ip = Str::before($ipNodeId, '_');
+                        $ip = self::normalizeAliveIP($ipNodeId);
+                        if ($ip === '') {
+                            return [];
+                        }
                         return [
                             $ip => [
                                 'ip' => $ip,
@@ -154,14 +157,16 @@ class UserOnlineService
             return ['mode' => $mode, 'total_count' => 0, 'ips' => []];
         }
 
-        $ips = collect($summary['nodes'])
-            ->filter(fn(mixed $item): bool => is_array($item) && isset($item['aliveips']))
-            ->flatMap(fn(array $nodeData): array => collect($nodeData['aliveips'])
-                ->map(fn(string $ipNodeId): string => Str::before($ipNodeId, '_'))
-                ->all())
-            ->when($mode === 1, fn(Collection $collection): Collection => $collection->unique())
-            ->values()
-            ->all();
+        $ips = $mode === 1
+            ? ($summary['ips'] ?? [])
+            : collect($summary['nodes'])
+                ->filter(fn(mixed $item): bool => is_array($item) && isset($item['aliveips']))
+                ->flatMap(fn(array $nodeData): array => collect($nodeData['aliveips'])
+                    ->map(fn(string $ipNodeId): string => self::normalizeAliveIP($ipNodeId))
+                    ->filter()
+                    ->all())
+                ->values()
+                ->all();
 
         return [
             'mode' => $mode,
@@ -341,7 +346,11 @@ class UserOnlineService
             }
 
             foreach ($data['aliveips'] as $ipNodeId) {
-                $uniqueIps[Str::before((string) $ipNodeId, '_')] = true;
+                $ip = self::normalizeAliveIP((string) $ipNodeId);
+                if ($ip === '') {
+                    continue;
+                }
+                $uniqueIps[$ip] = true;
             }
         }
 
@@ -428,7 +437,7 @@ class UserOnlineService
             }
 
             foreach ($data['aliveips'] as $ipNodeId) {
-                $ip = trim(Str::before((string) $ipNodeId, '_'));
+                $ip = self::normalizeAliveIP((string) $ipNodeId);
                 if ($ip === '') {
                     continue;
                 }
@@ -440,6 +449,18 @@ class UserOnlineService
         sort($ips, SORT_STRING);
 
         return $ips;
+    }
+
+    private static function normalizeAliveIP(string $ipNodeId): string
+    {
+        $ip = trim(Str::before($ipNodeId, '_'));
+        if ($ip === '') {
+            return '';
+        }
+
+        return Str::startsWith($ip, '::ffff:')
+            ? substr($ip, 7)
+            : $ip;
     }
 
     private static function countAliveIps(array $ipsArray): int

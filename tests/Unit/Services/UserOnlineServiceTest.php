@@ -152,4 +152,41 @@ final class UserOnlineServiceTest extends TestCase
         $this->assertArrayHasKey('vless8', $summary['nodes']);
         $this->assertArrayNotHasKey('tuic9', $summary['nodes']);
     }
+
+    public function test_calculate_device_count_normalizes_same_ip_variants_in_loose_mode(): void
+    {
+        $ipsArray = [
+            'vless8' => [
+                'aliveips' => ['27.37.83.78', '27.37.83.78 ', '::ffff:27.37.83.78'],
+                'lastupdateAt' => time(),
+            ],
+            'tuic9' => [
+                'aliveips' => ['27.37.83.78'],
+                'lastupdateAt' => time(),
+            ],
+        ];
+
+        $count = UserOnlineService::calculateDeviceCount($ipsArray, 1);
+
+        $this->assertSame(1, $count);
+    }
+
+    public function test_extract_alive_ips_normalizes_same_ip_variants(): void
+    {
+        $method = new \ReflectionMethod(UserOnlineService::class, 'extractAliveIps');
+        $method->setAccessible(true);
+
+        $ips = $method->invoke(null, [
+            'vless8' => [
+                'aliveips' => ['27.37.83.78', '27.37.83.78 ', '::ffff:27.37.83.78'],
+                'lastupdateAt' => time(),
+            ],
+            'tuic9' => [
+                'aliveips' => ['27.37.83.78'],
+                'lastupdateAt' => time(),
+            ],
+        ]);
+
+        $this->assertSame(['27.37.83.78'], $ips);
+    }
 }
