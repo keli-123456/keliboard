@@ -71,28 +71,16 @@ class UserOnlineService
             return [];
         }
 
-        if (self::isRealtimeIndexReady()) {
-            return self::getActiveRealtimeCountsForUserIds($userIds);
+        $cachedCounts = $this->getFreshAliveCountsForUserIds($userIds);
+        if (!self::isRealtimeIndexReady()) {
+            return $cachedCounts;
         }
 
-        $keyToUserId = [];
-        foreach ($userIds as $userId) {
-            $cacheKey = self::cacheKey((int) $userId);
-            $keyToUserId[$cacheKey] = (int) $userId;
-        }
-
-        $alive = [];
-        foreach (array_chunk($keyToUserId, 1000, true) as $keyBatch) {
-            foreach (cache()->many(array_keys($keyBatch)) as $cacheKey => $data) {
-                $count = self::summarizeAliveCache($data)['alive_ip'];
-                if ($count <= 0) {
-                    continue;
-                }
-                $alive[$keyBatch[$cacheKey]] = $count;
-            }
-        }
-
-        return $alive;
+        return self::mergeOnlineCounts(
+            $userIds,
+            $cachedCounts,
+            self::getActiveRealtimeCountsForUserIds($userIds),
+        );
     }
 
     public function getAliveSnapshot(array $userIds): array
@@ -106,20 +94,19 @@ class UserOnlineService
             ];
         }
 
-        $alive = $this->getAliveList($userIds);
+        $alive = [];
         $aliveIps = [];
 
-        if ($mode === 1) {
-            $activeUserIds = [];
-            foreach ($alive as $userId => $count) {
-                if ((int) $count > 0) {
-                    $activeUserIds[] = (int) $userId;
-                }
+        foreach ($this->getFreshAliveSummariesForUserIds($userIds, $mode) as $userId => $summary) {
+            $count = (int) ($summary['alive_ip'] ?? 0);
+            if ($count <= 0) {
+                continue;
             }
 
-            $aliveIps = $this->getAliveIpsForUsers($activeUserIds);
-            foreach ($aliveIps as $userId => $ips) {
-                $alive[(int) $userId] = count($ips);
+            $alive[$userId] = $count;
+            if ($mode === 1 && !empty($summary['ips'])) {
+                $aliveIps[$userId] = $summary['ips'];
+                $alive[$userId] = count($summary['ips']);
             }
         }
 
@@ -202,20 +189,16 @@ class UserOnlineService
             return [];
         }
 
-        if (self::isRealtimeIndexReady()) {
-            return self::getActiveRealtimeCountsForUserIds($userIds);
+        $cachedCounts = $this->getFreshAliveCountsForUserIds($userIds);
+        if (!self::isRealtimeIndexReady()) {
+            return self::mergeOnlineCounts($userIds, $cachedCounts);
         }
 
-        $cacheKeys = collect($userIds)
-            ->mapWithKeys(fn(int $id): array => [self::cacheKey($id) => $id])
-            ->all();
-
-        $counts = [];
-        foreach (cache()->many(array_keys($cacheKeys)) as $cacheKey => $data) {
-            $counts[$cacheKeys[$cacheKey]] = self::summarizeAliveCache($data)['alive_ip'];
-        }
-
-        return $counts;
+        return self::mergeOnlineCounts(
+            $userIds,
+            $cachedCounts,
+            self::getActiveRealtimeCountsForUserIds($userIds),
+        );
     }
 
     /**
@@ -223,15 +206,13 @@ class UserOnlineService
      */
     public function getOnlineCount(int $userId): int
     {
-        if (self::isRealtimeIndexReady()) {
-            $realtimeCount = self::getRealtimeCount($userId);
-            if ($realtimeCount !== null) {
-                return $realtimeCount;
-            }
+        $cachedCount = self::summarizeAliveCache(cache()->get(self::cacheKey($userId), []))['alive_ip'];
+        if (!self::isRealtimeIndexReady()) {
+            return $cachedCount;
         }
 
-        $data = cache()->get(self::cacheKey($userId), []);
-        return self::summarizeAliveCache($data)['alive_ip'];
+        $realtimeCount = self::getRealtimeCount($userId);
+        return max($cachedCount, $realtimeCount ?? 0);
     }
 
     public static function updateRealtimeIndex(array $userCounts, int $expiresAt): void
@@ -420,6 +401,45 @@ class UserOnlineService
         }
 
         return $aliveIps;
+    }
+
+    private function getFreshAliveCountsForUserIds(array $userIds): array
+    {
+        $counts = [];
+        foreach ($this->getFreshAliveSummariesForUserIds($userIds) as $userId => $summary) {
+            $counts[$userId] = (int) ($summary['alive_ip'] ?? 0);
+        }
+
+        return $counts;
+    }
+
+    private function getFreshAliveSummariesForUserIds(array $userIds, ?int $mode = null): array
+    {
+        if (empty($userIds)) {
+            return [];
+        }
+
+        $keyToUserId = [];
+        foreach ($userIds as $userId) {
+            $normalizedUserId = (int) $userId;
+            if ($normalizedUserId <= 0) {
+                continue;
+            }
+            $keyToUserId[self::cacheKey($normalizedUserId)] = $normalizedUserId;
+        }
+
+        $summaries = [];
+        foreach (array_chunk($keyToUserId, 1000, true) as $keyBatch) {
+            foreach (cache()->many(array_keys($keyBatch)) as $cacheKey => $data) {
+                $summary = self::summarizeAliveCache($data, $mode);
+                if (($summary['alive_ip'] ?? 0) <= 0 && empty($summary['ips'])) {
+                    continue;
+                }
+                $summaries[$keyBatch[$cacheKey]] = $summary;
+            }
+        }
+
+        return $summaries;
     }
 
     private static function extractAliveIps(array $ipsArray): array
@@ -686,5 +706,32 @@ class UserOnlineService
         }
 
         return max(0, (int) $value);
+    }
+
+    private static function mergeOnlineCounts(array $userIds, array ...$sources): array
+    {
+        $counts = [];
+        foreach ($userIds as $userId) {
+            $normalizedUserId = (int) $userId;
+            if ($normalizedUserId <= 0) {
+                continue;
+            }
+            $counts[$normalizedUserId] = 0;
+        }
+
+        foreach ($sources as $source) {
+            foreach ($source as $userId => $count) {
+                $normalizedUserId = (int) $userId;
+                if ($normalizedUserId <= 0) {
+                    continue;
+                }
+                $counts[$normalizedUserId] = max(
+                    $counts[$normalizedUserId] ?? 0,
+                    max(0, (int) $count)
+                );
+            }
+        }
+
+        return $counts;
     }
 }
