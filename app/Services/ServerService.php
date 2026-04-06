@@ -9,9 +9,12 @@ use App\Services\Plugin\HookManager;
 use App\Utils\Helper;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 
 class ServerService
 {
+    private const AVAILABLE_USER_IDS_CACHE_PREFIX = 'server:available-user-ids:';
+    private const AVAILABLE_USER_IDS_CACHE_TTL = 75;
 
     /**
      * 获取所有服务器列表
@@ -67,7 +70,12 @@ class ServerService
      */
     public static function getAvailableUsers(Server $node, bool $onlyDeviceLimited = false): Collection
     {
-        $query = self::availableUsersBaseQuery($node)
+        $groupIds = self::normalizeGroupIds($node->group_ids ?? []);
+        if (empty($groupIds)) {
+            return collect();
+        }
+
+        $query = self::availableUsersBaseQuery($groupIds)
             ->select([
                 'id',
                 'uuid',
@@ -89,7 +97,25 @@ class ServerService
      */
     public static function getAvailableUserIds(Server $node, bool $onlyDeviceLimited = false): array
     {
-        $query = self::availableUsersBaseQuery($node)->select(['id']);
+        $groupIds = self::normalizeGroupIds($node->group_ids ?? []);
+        if (empty($groupIds)) {
+            return [];
+        }
+
+        if (!$onlyDeviceLimited) {
+            return self::queryAvailableUserIds($groupIds, false);
+        }
+
+        return Cache::remember(
+            self::availableUserIdsCacheKey($groupIds, true),
+            now()->addSeconds(self::AVAILABLE_USER_IDS_CACHE_TTL),
+            fn(): array => self::queryAvailableUserIds($groupIds, true)
+        );
+    }
+
+    private static function queryAvailableUserIds(array $groupIds, bool $onlyDeviceLimited): array
+    {
+        $query = self::availableUsersBaseQuery($groupIds)->select(['id']);
 
         if ($onlyDeviceLimited) {
             $query->where('device_limit', '>', 0);
@@ -147,10 +173,10 @@ class ServerService
             ->first();
     }
 
-    private static function availableUsersBaseQuery(Server $node): QueryBuilder
+    private static function availableUsersBaseQuery(array $groupIds): QueryBuilder
     {
         return User::toBase()
-            ->whereIn('group_id', $node->group_ids)
+            ->whereIn('group_id', $groupIds)
             ->whereRaw('u + d < transfer_enable')
             ->where(function ($query) {
                 $query->where('expired_at', '>=', time())
@@ -158,5 +184,20 @@ class ServerService
             })
             ->where('banned', 0)
             ->orderBy('id', 'asc');
+    }
+
+    private static function availableUserIdsCacheKey(array $groupIds, bool $onlyDeviceLimited): string
+    {
+        return self::AVAILABLE_USER_IDS_CACHE_PREFIX
+            . ($onlyDeviceLimited ? 'device:' : 'all:')
+            . md5(implode(',', $groupIds));
+    }
+
+    private static function normalizeGroupIds(array $groupIds): array
+    {
+        $normalized = array_values(array_unique(array_map('intval', $groupIds)));
+        sort($normalized);
+
+        return $normalized;
     }
 }

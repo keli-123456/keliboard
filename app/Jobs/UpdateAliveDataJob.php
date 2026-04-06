@@ -10,6 +10,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
 use App\Services\UserOnlineService;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class UpdateAliveDataJob implements ShouldQueue
@@ -134,41 +135,49 @@ class UpdateAliveDataJob implements ShouldQueue
       return;
     }
 
-    $existingIds = [];
-    foreach (array_chunk(array_column($onlineUpdates, 'id'), 1000) as $idChunk) {
-      $existingIds = [
-        ...$existingIds,
-        ...User::query()
-          ->whereIn('id', $idChunk)
-          ->pluck('id')
-          ->map(fn($id): int => (int) $id)
-          ->all(),
-      ];
-    }
+    foreach (array_chunk($onlineUpdates, 1000) as $chunk) {
+      $ids = [];
+      foreach ($chunk as $row) {
+        $id = (int) ($row['id'] ?? 0);
+        if ($id <= 0) {
+          continue;
+        }
+        $ids[] = $id;
+      }
 
-    if (empty($existingIds)) {
-      return;
-    }
-
-    $existingIdSet = array_fill_keys($existingIds, true);
-    $rows = [];
-
-    foreach ($onlineUpdates as $update) {
-      $id = (int) ($update['id'] ?? 0);
-      if ($id <= 0 || !isset($existingIdSet[$id])) {
+      if (empty($ids)) {
         continue;
       }
 
-      $rows[] = [
-        'id' => $id,
-        'online_count' => (int) ($update['online_count'] ?? 0),
-        'last_online_at' => $update['last_online_at'],
-      ];
+      User::query()
+        ->whereIn('id', $ids)
+        ->update([
+          'online_count' => DB::raw($this->buildOnlineCountCaseExpression($chunk)),
+          'last_online_at' => $chunk[0]['last_online_at'],
+        ]);
+    }
+  }
+
+  private function buildOnlineCountCaseExpression(array $rows): string
+  {
+    $cases = ['CASE id'];
+
+    foreach ($rows as $row) {
+      $id = (int) ($row['id'] ?? 0);
+      if ($id <= 0) {
+        continue;
+      }
+
+      $cases[] = sprintf(
+        'WHEN %d THEN %d',
+        $id,
+        (int) ($row['online_count'] ?? 0)
+      );
     }
 
-    foreach (array_chunk($rows, 1000) as $chunk) {
-      User::query()->upsert($chunk, ['id'], ['online_count', 'last_online_at']);
-    }
+    $cases[] = 'ELSE online_count END';
+
+    return implode(' ', $cases);
   }
 
 
