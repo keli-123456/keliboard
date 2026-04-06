@@ -79,4 +79,33 @@ final class UserOnlineServiceTest extends TestCase
             ],
         ], $normalized);
     }
+
+    public function test_normalize_hmget_parameters_converts_flat_arguments_to_field_list(): void
+    {
+        $method = new \ReflectionMethod(UserOnlineService::class, 'normalizeHmgetParameters');
+        $method->setAccessible(true);
+
+        $normalized = $method->invoke(null, ['ALIVE_IP_ACTIVE_COUNTS', '104875', '120220']);
+
+        $this->assertSame([
+            'ALIVE_IP_ACTIVE_COUNTS',
+            ['104875', '120220'],
+        ], $normalized);
+    }
+
+    public function test_normalize_hmget_parameters_keeps_field_list_shape_unchanged(): void
+    {
+        $method = new \ReflectionMethod(UserOnlineService::class, 'normalizeHmgetParameters');
+        $method->setAccessible(true);
+
+        $normalized = $method->invoke(null, [
+            'ALIVE_IP_ACTIVE_COUNTS',
+            ['104875', '120220'],
+        ]);
+
+        $this->assertSame([
+            'ALIVE_IP_ACTIVE_COUNTS',
+            ['104875', '120220'],
+        ], $normalized);
+    }
 }

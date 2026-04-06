@@ -391,6 +391,8 @@ class UserOnlineService
         $normalizedMethod = strtolower($method);
         if ($normalizedMethod === 'hmset') {
             $parameters = self::normalizeHmsetParameters($parameters);
+        } elseif ($normalizedMethod === 'hmget') {
+            $parameters = self::normalizeHmgetParameters($parameters);
         }
 
         return Redis::connection(self::redisConnectionName())->command($normalizedMethod, $parameters);
@@ -418,6 +420,20 @@ class UserOnlineService
         }
 
         return [$key, $hash];
+    }
+
+    private static function normalizeHmgetParameters(array $parameters): array
+    {
+        if (count($parameters) === 2 && is_array($parameters[1])) {
+            return $parameters;
+        }
+
+        $key = array_shift($parameters);
+        if ($key === null) {
+            return $parameters;
+        }
+
+        return [$key, array_map('strval', $parameters)];
     }
 
     private static function normalizeRedisUserIds(mixed $userIds): array
