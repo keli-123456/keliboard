@@ -29,7 +29,7 @@ class StatController extends Controller
     public function getOverride(Request $request)
     {
         // 获取在线节点数
-        $onlineNodes = Server::query()->where('is_online', 1)->count();
+        $onlineNodes = $this->getOnlineNodeCount();
         ['online_devices' => $onlineDevices, 'online_users' => $onlineUsers] = $this->getOnlineOverview();
 
         // 获取今日流量统计
@@ -320,7 +320,7 @@ class StatController extends Controller
         $yesterdayStart = strtotime('-1 day', $todayStart);
 
         // 获取在线节点数
-        $onlineNodes = Server::query()->where('is_online', 1)->count();
+        $onlineNodes = $this->getOnlineNodeCount();
         ['online_devices' => $onlineDevices, 'online_users' => $onlineUsers] = $this->getOnlineOverview();
 
         // 获取今日流量统计
@@ -640,5 +640,13 @@ class StatController extends Controller
                 ->where('t', '>=', time() - 600)
                 ->count(),
         ];
+    }
+
+    private function getOnlineNodeCount(): int
+    {
+        return Server::query()
+            ->get()
+            ->filter(fn(Server $server): bool => (bool) $server->is_online)
+            ->count();
     }
 }
