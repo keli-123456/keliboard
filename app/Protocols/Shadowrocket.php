@@ -241,7 +241,7 @@ class Shadowrocket extends AbstractProtocol
         $protocol_settings = $server['protocol_settings'];
         $name = rawurlencode($server['name']);
         $params['allowInsecure'] = data_get($protocol_settings, 'allow_insecure');
-        if ($serverName = data_get($protocol_settings, 'server_name')) {
+        if ($serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'))) {
             $params['peer'] = $serverName;
         }
         switch (data_get($protocol_settings, 'network')) {

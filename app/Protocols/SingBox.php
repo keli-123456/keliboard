@@ -431,7 +431,7 @@ class SingBox extends AbstractProtocol
                 'insecure' => (bool) data_get($protocol_settings, 'allow_insecure', false),
             ]
         ];
-        if ($serverName = data_get($protocol_settings, 'server_name')) {
+        if ($serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'))) {
             $array['tls']['server_name'] = $serverName;
         }
         $transport = match (data_get($protocol_settings, 'network')) {

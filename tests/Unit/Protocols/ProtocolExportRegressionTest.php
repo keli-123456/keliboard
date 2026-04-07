@@ -1219,4 +1219,32 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertTrue($socks['tls']);
         $this->assertTrue($socks['skip-cert-verify']);
     }
+
+    public function test_trojan_dynamic_sni_placeholder_is_replaced_in_subscription_exports(): void
+    {
+        $server = [
+            'name' => 'Dynamic Trojan',
+            'host' => 'trojan.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'server_name' => 'null.baidu.com',
+                'allow_insecure' => false,
+                'network' => 'tcp',
+            ],
+        ];
+
+        $generalUri = General::buildTrojan('secret', $server);
+        $generalQuery = [];
+        parse_str((string) parse_url(trim($generalUri), PHP_URL_QUERY), $generalQuery);
+
+        $clash = Clash::buildTrojan('secret', $server);
+        $singBox = (new SingBox([], []))->buildTrojan('secret', $server);
+
+        $this->assertMatchesRegularExpression('/^[1-9]\.baidu\.com$/', (string) ($generalQuery['sni'] ?? ''));
+        $this->assertMatchesRegularExpression('/^[1-9]\.baidu\.com$/', (string) ($generalQuery['peer'] ?? ''));
+        $this->assertMatchesRegularExpression('/^[1-9]\.baidu\.com$/', (string) ($clash['sni'] ?? ''));
+        $this->assertMatchesRegularExpression('/^[1-9]\.baidu\.com$/', (string) data_get($singBox, 'tls.server_name', ''));
+
+        $this->assertStringNotContainsString('null.baidu.com', $generalUri);
+    }
 }

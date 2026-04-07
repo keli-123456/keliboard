@@ -4,6 +4,7 @@ namespace App\Protocols;
 
 use App\Support\AbstractProtocol;
 use App\Models\Server;
+use App\Utils\Helper;
 
 class Loon extends AbstractProtocol
 {
@@ -158,12 +159,13 @@ class Loon extends AbstractProtocol
     public static function buildTrojan($password, $server)
     {
         $protocol_settings = $server['protocol_settings'];
+        $serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'));
         $config = [
             "{$server['name']}=trojan",
             "{$server['host']}",
             "{$server['port']}",
             "{$password}",
-            data_get($protocol_settings, 'server_name') ? "tls-name={$protocol_settings['server_name']}" : "",
+            $serverName !== '' ? "tls-name={$serverName}" : "",
             'fast-open=false',
             'udp=true'
         ];

@@ -180,12 +180,13 @@ class Surfboard extends AbstractProtocol
     public static function buildTrojan($password, $server)
     {
         $protocol_settings = $server['protocol_settings'];
+        $serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'));
         $config = [
             "{$server['name']}=trojan",
             "{$server['host']}",
             "{$server['port']}",
             "password={$password}",
-            $protocol_settings['server_name'] ? "sni={$protocol_settings['server_name']}" : "",
+            $serverName !== '' ? "sni={$serverName}" : "",
             'tfo=true',
             'udp-relay=true'
         ];

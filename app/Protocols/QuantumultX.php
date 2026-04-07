@@ -4,6 +4,7 @@ namespace App\Protocols;
 
 use App\Support\AbstractProtocol;
 use App\Models\Server;
+use App\Utils\Helper;
 
 class QuantumultX extends AbstractProtocol
 {
@@ -285,7 +286,8 @@ class QuantumultX extends AbstractProtocol
         if (!in_array($network, ['tcp', 'ws'], true)) {
             return '';
         }
-        $serverName = data_get($protocol_settings, 'server_name') ?: data_get($protocol_settings, 'tls_settings.server_name');
+        $serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'))
+            ?: data_get($protocol_settings, 'tls_settings.server_name');
         $allowInsecure = (bool) data_get($protocol_settings, 'allow_insecure', false)
             || (bool) data_get($protocol_settings, 'tls_settings.allow_insecure', false);
         $config = [

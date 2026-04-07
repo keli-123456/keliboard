@@ -187,6 +187,25 @@ class Helper
         return $input;
     }
 
+    public static function resolveDynamicHostname(?string $hostname): string
+    {
+        $hostname = trim((string) $hostname);
+        if ($hostname === '') {
+            return '';
+        }
+
+        $hostname = self::replaceByPattern($hostname);
+        $labels = explode('.', $hostname);
+
+        foreach ($labels as $index => $label) {
+            if (strcasecmp($label, 'null') === 0) {
+                $labels[$index] = (string) random_int(1, 9);
+            }
+        }
+
+        return implode('.', $labels);
+    }
+
     public static function getIpByDomainName($domain) {
         return gethostbynamel($domain) ?: [];
     }

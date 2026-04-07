@@ -384,7 +384,7 @@ class ClashMeta extends AbstractProtocol
             'udp' => true,
             'skip-cert-verify' => (bool) data_get($protocol_settings, 'allow_insecure', false)
         ];
-        if ($serverName = data_get($protocol_settings, 'server_name')) {
+        if ($serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'))) {
             $array['sni'] = $serverName;
         }
 

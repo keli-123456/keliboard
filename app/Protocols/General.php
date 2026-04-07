@@ -193,7 +193,7 @@ class General extends AbstractProtocol
         $name = rawurlencode($server['name']);
         $array = [];
         $array['allowInsecure'] = $protocol_settings['allow_insecure'];
-        if ($serverName = data_get($protocol_settings, 'server_name')) {
+        if ($serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'))) {
             $array['peer'] = $serverName;
             $array['sni'] = $serverName;
         }

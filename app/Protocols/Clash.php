@@ -3,6 +3,7 @@
 namespace App\Protocols;
 
 use App\Models\Server;
+use App\Utils\Helper;
 use Illuminate\Support\Facades\File;
 use Symfony\Component\Yaml\Yaml;
 use App\Support\AbstractProtocol;
@@ -239,7 +240,7 @@ class Clash extends AbstractProtocol
         $array['port'] = $server['port'];
         $array['password'] = $password;
         $array['udp'] = true;
-        if ($serverName = data_get($protocol_settings, 'server_name')) {
+        if ($serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'))) {
             $array['sni'] = $serverName;
         }
         $array['skip-cert-verify'] = (bool) data_get($protocol_settings, 'allow_insecure');

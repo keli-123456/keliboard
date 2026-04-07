@@ -393,7 +393,7 @@ class Stash extends AbstractProtocol
                 }
                 break;
         }
-        if ($serverName = data_get($protocol_settings, 'server_name')) {
+        if ($serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'))) {
             $array['sni'] = $serverName;
         }
         $array['skip-cert-verify'] = data_get($protocol_settings, 'allow_insecure');
