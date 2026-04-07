@@ -1240,10 +1240,10 @@ final class ProtocolExportRegressionTest extends TestCase
         $clash = Clash::buildTrojan('secret', $server);
         $singBox = (new SingBox([], []))->buildTrojan('secret', $server);
 
-        $this->assertMatchesRegularExpression('/^[1-9]\.baidu\.com$/', (string) ($generalQuery['sni'] ?? ''));
-        $this->assertMatchesRegularExpression('/^[1-9]\.baidu\.com$/', (string) ($generalQuery['peer'] ?? ''));
-        $this->assertMatchesRegularExpression('/^[1-9]\.baidu\.com$/', (string) ($clash['sni'] ?? ''));
-        $this->assertMatchesRegularExpression('/^[1-9]\.baidu\.com$/', (string) data_get($singBox, 'tls.server_name', ''));
+        $this->assertMatchesRegularExpression('/^\d{6}\.baidu\.com$/', (string) ($generalQuery['sni'] ?? ''));
+        $this->assertMatchesRegularExpression('/^\d{6}\.baidu\.com$/', (string) ($generalQuery['peer'] ?? ''));
+        $this->assertMatchesRegularExpression('/^\d{6}\.baidu\.com$/', (string) ($clash['sni'] ?? ''));
+        $this->assertMatchesRegularExpression('/^\d{6}\.baidu\.com$/', (string) data_get($singBox, 'tls.server_name', ''));
 
         $this->assertStringNotContainsString('null.baidu.com', $generalUri);
     }

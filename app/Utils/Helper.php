@@ -199,7 +199,7 @@ class Helper
 
         foreach ($labels as $index => $label) {
             if (strcasecmp($label, 'null') === 0) {
-                $labels[$index] = (string) random_int(1, 9);
+                $labels[$index] = (string) random_int(100000, 999999);
             }
         }
 
