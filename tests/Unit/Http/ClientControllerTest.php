@@ -30,6 +30,7 @@ final class ClientControllerTest extends TestCase
         $singBox = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'singbox 1.12.0']));
         $singBoxWrapper = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'sing-box/1.2.8.1103']));
         $clashMeta = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'ClashX Meta/1.3.5']));
+        $mihomo = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'mihomo/1.19.0']));
         $verge = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'Clash Verge/v1.7.0']));
         $hiddify = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'Hiddify/1.2.8.1103']));
 
@@ -40,6 +41,8 @@ final class ClientControllerTest extends TestCase
 
         $this->assertSame('clashx meta', $clashMeta['name']);
         $this->assertSame('1.3.5', $clashMeta['version']);
+        $this->assertSame('mihomo', $mihomo['name']);
+        $this->assertSame('1.19.0', $mihomo['version']);
 
         $this->assertSame('verge', $verge['name']);
         $this->assertSame('1.7.0', $verge['version']);

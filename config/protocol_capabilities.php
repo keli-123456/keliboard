@@ -97,7 +97,7 @@ return [
         ],
 
         'mihomo' => [
-            'aliases' => ['meta', 'verge', 'flclash', 'nekobox', 'nekoray', 'clashmetaforandroid', 'clashx meta', 'clashxmeta'],
+            'aliases' => ['meta', 'mihomo', 'clashmeta', 'clash-meta', 'verge', 'flclash', 'nekobox', 'nekoray', 'clashmetaforandroid', 'clashx meta', 'clashxmeta'],
             'version_kind' => 'semver',
             'unknown_version_policy' => 'conservative',
             'protocols' => ['shadowsocks', 'vmess', 'trojan', 'vless', 'hysteria', 'tuic', 'anytls', 'socks', 'http', 'mieru'],

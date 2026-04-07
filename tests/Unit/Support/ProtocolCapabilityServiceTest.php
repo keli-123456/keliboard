@@ -24,6 +24,8 @@ final class ProtocolCapabilityServiceTest extends TestCase
     {
         $this->assertSame('mihomo', $this->service->resolveClientFamily('nekoray'));
         $this->assertSame('mihomo', $this->service->resolveClientFamily('clashx meta'));
+        $this->assertSame('mihomo', $this->service->resolveClientFamily('mihomo'));
+        $this->assertSame('mihomo', $this->service->resolveClientFamily('clashmeta'));
     }
 
     public function test_sing_box_before_1_12_drops_anytls(): void

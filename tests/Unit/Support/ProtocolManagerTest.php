@@ -23,6 +23,8 @@ final class ProtocolManagerTest extends TestCase
 
         $this->assertSame(SingBox::class, $manager->matchProtocolClassName('singbox/1.12.0'));
         $this->assertSame(ClashMeta::class, $manager->matchProtocolClassName('ClashXMeta/1.3.5'));
+        $this->assertSame(ClashMeta::class, $manager->matchProtocolClassName('mihomo/1.19.0'));
+        $this->assertSame(ClashMeta::class, $manager->matchProtocolClassName('clash-meta/1.18.7'));
         $this->assertSame(QuantumultX::class, $manager->matchProtocolClassName('quantumultx/1.0.31'));
         $this->assertSame(QuantumultX::class, $manager->matchProtocolClassName('Quantumult%20X/1.0.31'));
     }
@@ -36,6 +38,8 @@ final class ProtocolManagerTest extends TestCase
         ]);
 
         $this->assertSame('sing-box', $manager->matchClientFlag('singbox'));
+        $this->assertSame('mihomo', $manager->matchClientFlag('mihomo'));
+        $this->assertSame('clashmeta', $manager->matchClientFlag('clash-meta'));
         $this->assertSame('clashx meta', $manager->matchClientFlag('clashxmeta'));
         $this->assertSame('quantumult-x', $manager->matchClientFlag('quantumultx'));
         $this->assertSame('quantumult%20x', $manager->matchClientFlag('Quantumult%20X'));
@@ -52,6 +56,8 @@ final class ProtocolManagerTest extends TestCase
         $this->assertSame('1.12.0', $manager->extractClientVersion('singbox 1.12.0', 'sing-box'));
         $this->assertSame('1.2.8.1103', $manager->extractClientVersion('sing-box/1.2.8.1103', 'sing-box'));
         $this->assertSame('1.3.5', $manager->extractClientVersion('ClashX Meta/1.3.5', 'clashx meta'));
+        $this->assertSame('1.19.0', $manager->extractClientVersion('mihomo/1.19.0', 'mihomo'));
+        $this->assertSame('1.18.7', $manager->extractClientVersion('clash-meta/1.18.7', 'clash-meta'));
         $this->assertSame('1.7.0', $manager->extractClientVersion('Clash Verge/v1.7.0', 'verge'));
         $this->assertSame('1.0.31', $manager->extractClientVersion('quantumultx/1.0.31', 'quantumult-x'));
         $this->assertSame('1.0.31', $manager->extractClientVersion('Quantumult%20X/1.0.31', 'quantumult%20x'));
