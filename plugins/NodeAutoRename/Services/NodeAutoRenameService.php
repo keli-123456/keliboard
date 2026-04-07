@@ -137,9 +137,15 @@ class NodeAutoRenameService
     private function resolveNamingHostValue(Server $server): mixed
     {
         if ((string) $server->type === Server::TYPE_TROJAN) {
-            $serverName = trim((string) data_get($server->protocol_settings, 'server_name', ''));
-            if ($serverName !== '') {
-                return $serverName;
+            foreach ([
+                'server_name',
+                'tls_settings.server_name',
+                'tls.server_name',
+            ] as $path) {
+                $serverName = trim((string) data_get($server->protocol_settings, $path, ''));
+                if ($serverName !== '') {
+                    return $serverName;
+                }
             }
         }
 

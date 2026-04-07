@@ -44,6 +44,26 @@ final class NodeAutoRenameServiceTest extends TestCase
         $this->assertSame('cdn.example.com', $method->invoke($service, $server));
     }
 
+    public function test_trojan_uses_legacy_tls_settings_server_name_for_naming_host(): void
+    {
+        $service = new NodeAutoRenameService();
+        $server = new Server();
+        $server->forceFill([
+            'type' => Server::TYPE_TROJAN,
+            'host' => 'cdn.example.com',
+            'protocol_settings' => [
+                'tls_settings' => [
+                    'server_name' => 'legacy-origin.example.com',
+                ],
+            ],
+        ]);
+
+        $method = new \ReflectionMethod(NodeAutoRenameService::class, 'resolveNamingHost');
+        $method->setAccessible(true);
+
+        $this->assertSame('legacy-origin.example.com', $method->invoke($service, $server));
+    }
+
     public function test_non_trojan_keeps_original_host_for_naming(): void
     {
         $service = new NodeAutoRenameService();
