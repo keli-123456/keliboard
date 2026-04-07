@@ -106,7 +106,7 @@ class NodeAutoRenameService
 
     private function buildContext(Server $server): ?array
     {
-        $host = $this->normalizeHost($server->host ?? null);
+        $host = $this->resolveNamingHost($server);
         if ($host === null) {
             return null;
         }
@@ -127,6 +127,23 @@ class NodeAutoRenameService
             'country' => $country,
             'ip' => $ip ?? '',
         ];
+    }
+
+    private function resolveNamingHost(Server $server): ?string
+    {
+        return $this->normalizeHost($this->resolveNamingHostValue($server));
+    }
+
+    private function resolveNamingHostValue(Server $server): mixed
+    {
+        if ((string) $server->type === Server::TYPE_TROJAN) {
+            $serverName = trim((string) data_get($server->protocol_settings, 'server_name', ''));
+            if ($serverName !== '') {
+                return $serverName;
+            }
+        }
+
+        return $server->host ?? null;
     }
 
     private function renderTemplate(Server $server, string $host, ?string $ip, string $country): string

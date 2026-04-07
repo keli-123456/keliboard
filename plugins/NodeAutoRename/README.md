@@ -2,6 +2,8 @@
 
 根据节点协议、当前解析 IP 所属国家和节点 ID，定时自动更新 `v2_server.name`。
 
+`trojan` 节点会优先使用 TLS 的 `server_name` 作为命名和国家识别来源；未配置时才回退到节点地址 `host`。
+
 默认命名模板：
 
 ```text
