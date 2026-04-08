@@ -20,9 +20,13 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int|null $balance_amount
  * @property int|null $refund_amount
  * @property int|null $surplus_amount
+ * @property int|null $upgrade_quote_id
+ * @property int|null $upgrade_credit_amount
  * @property int $type
  * @property int $status
  * @property array|null $surplus_order_ids
+ * @property array|null $upgrade_source_order_ids
+ * @property array|null $upgrade_pricing_snapshot
  * @property int|null $coupon_id
  * @property int $created_at
  * @property int $updated_at
@@ -51,8 +55,12 @@ class Order extends Model
         'created_at' => 'timestamp',
         'updated_at' => 'timestamp',
         'surplus_order_ids' => 'array',
+        'upgrade_source_order_ids' => 'array',
+        'upgrade_pricing_snapshot' => 'array',
         'handling_amount' => 'integer',
         'bonus_amount' => 'integer',
+        'upgrade_quote_id' => 'integer',
+        'upgrade_credit_amount' => 'integer',
     ];
 
     const STATUS_PENDING = 0; // 待支付
@@ -74,12 +82,14 @@ class Order extends Model
     const TYPE_UPGRADE = 3; // 升级
     const TYPE_RESET_TRAFFIC = 4; //流量重置包
     const TYPE_RECHARGE = 5; // 余额充值
+    const TYPE_DISCOUNT_UPGRADE = 6; // 折扣升级
     public static $typeMap = [
         self::TYPE_NEW_PURCHASE => '新购',
         self::TYPE_RENEWAL => '续费',
         self::TYPE_UPGRADE => '升级',
         self::TYPE_RESET_TRAFFIC => '流量重置',
         self::TYPE_RECHARGE => '余额充值',
+        self::TYPE_DISCOUNT_UPGRADE => '折扣升级',
     ];
 
     /**

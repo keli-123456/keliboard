@@ -15,6 +15,7 @@ use App\Services\MailService;
 use App\Services\NodeRealtime\NodeRealtimePublisher;
 use App\Services\NodeRealtime\NodeRealtimeSettings;
 use App\Services\NodeRealtime\NodeRealtimeStatusService;
+use App\Services\OrderUpgradeService;
 use App\Services\RechargeBonusService;
 use App\Services\TelegramService;
 use App\Services\ThemeService;
@@ -178,7 +179,21 @@ class ConfigController extends Controller
             'subscribe' => [
                 'plan_change_enable' => (bool) admin_setting('plan_change_enable', 1),
                 'reset_traffic_method' => (int) admin_setting('reset_traffic_method', 0),
-                'surplus_enable' => (bool) admin_setting('surplus_enable', 1),
+                'surplus_enable' => (bool) admin_setting('surplus_enable', 0),
+                'upgrade_v2_enable' => (bool) admin_setting('upgrade_v2_enable', 0),
+                'upgrade_quote_ttl_seconds' => max(60, (int) admin_setting('upgrade_quote_ttl_seconds', 300)),
+                'upgrade_disable_coupon' => (bool) admin_setting('upgrade_disable_coupon', 1),
+                'upgrade_disable_user_discount' => (bool) admin_setting('upgrade_disable_user_discount', 1),
+                'upgrade_allow_onetime' => (bool) admin_setting('upgrade_allow_onetime', 0),
+                'upgrade_min_pay_amount' => max(1, (int) admin_setting('upgrade_min_pay_amount', 1000)),
+                'upgrade_min_pay_ratio' => max(0, min(1, (float) admin_setting('upgrade_min_pay_ratio', 0.30))),
+                'upgrade_max_credit_cap_ratio' => max(0, min(1, (float) admin_setting('upgrade_max_credit_cap_ratio', 0.40))),
+                'upgrade_credit_coeffs' => OrderUpgradeService::normalizeCreditCoefficients(
+                    admin_setting('upgrade_credit_coeffs', OrderUpgradeService::getDefaultCreditCoefficients())
+                ),
+                'upgrade_usage_penalty_rules' => OrderUpgradeService::normalizeUsagePenaltyRules(
+                    admin_setting('upgrade_usage_penalty_rules', OrderUpgradeService::getDefaultUsagePenaltyRules())
+                ),
                 'new_order_event_id' => (int) admin_setting('new_order_event_id', 0),
                 'renew_order_event_id' => (int) admin_setting('renew_order_event_id', 0),
                 'change_order_event_id' => (int) admin_setting('change_order_event_id', 0),
@@ -360,6 +375,12 @@ class ConfigController extends Controller
         }
         if (array_key_exists('recharge_bonus_rules', $data)) {
             $data['recharge_bonus_rules'] = app(RechargeBonusService::class)->normalizeRules($data['recharge_bonus_rules']);
+        }
+        if (array_key_exists('upgrade_credit_coeffs', $data)) {
+            $data['upgrade_credit_coeffs'] = OrderUpgradeService::normalizeCreditCoefficients($data['upgrade_credit_coeffs']);
+        }
+        if (array_key_exists('upgrade_usage_penalty_rules', $data)) {
+            $data['upgrade_usage_penalty_rules'] = OrderUpgradeService::normalizeUsagePenaltyRules($data['upgrade_usage_penalty_rules']);
         }
 
         foreach ($data as $k => $v) {

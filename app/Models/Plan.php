@@ -22,6 +22,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property bool $sell 是否允许购买
  * @property array|null $prices 价格配置
  * @property array|null $tags 标签
+ * @property array|null $upgrade_to_plan_ids 升级白名单
  * @property int $sort 排序
  * @property string|null $content 套餐描述
  * @property int|null $reset_traffic_method 流量重置方式
@@ -87,7 +88,8 @@ class Plan extends Model
         'capacity_limit',
         'sell',
         'device_limit',
-        'tags'
+        'tags',
+        'upgrade_to_plan_ids',
     ];
 
     protected $casts = [
@@ -98,6 +100,7 @@ class Plan extends Model
         'group_id' => 'integer',
         'prices' => 'array',
         'tags' => 'array',
+        'upgrade_to_plan_ids' => 'array',
         'reset_traffic_method' => 'integer',
     ];
 

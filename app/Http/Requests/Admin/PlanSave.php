@@ -35,6 +35,8 @@ class PlanSave extends FormRequest
             'device_limit' => 'integer|nullable|min:0',
             'capacity_limit' => 'integer|nullable|min:0',
             'tags' => 'array|nullable',
+            'upgrade_to_plan_ids' => 'array|nullable',
+            'upgrade_to_plan_ids.*' => 'integer|distinct|exists:App\Models\Plan,id',
         ];
     }
 
@@ -138,6 +140,10 @@ class PlanSave extends FormRequest
             'capacity_limit.integer' => '容量限制必须是整数',
             'capacity_limit.min' => '容量限制不能为负数',
             'tags.array' => '标签格式必须是数组',
+            'upgrade_to_plan_ids.array' => '升级白名单格式必须是数组',
+            'upgrade_to_plan_ids.*.integer' => '升级白名单套餐ID必须是整数',
+            'upgrade_to_plan_ids.*.distinct' => '升级白名单套餐ID不能重复',
+            'upgrade_to_plan_ids.*.exists' => '升级白名单套餐不存在',
         ];
     }
 

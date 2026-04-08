@@ -4,6 +4,8 @@ namespace App\Http\Controllers\V1\User;
 
 use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\User\OrderUpgradeConfirm;
+use App\Http\Requests\User\OrderUpgradePreview;
 use App\Http\Requests\User\OrderSave;
 use App\Http\Resources\OrderResource;
 use App\Models\Order;
@@ -15,6 +17,7 @@ use App\Services\OrderService;
 use App\Services\PaymentService;
 use App\Services\PlanService;
 use App\Services\RechargeBonusService;
+use App\Services\OrderUpgradeService;
 use App\Services\UserService;
 use Illuminate\Http\Request;
 
@@ -51,9 +54,6 @@ class OrderController extends Controller
         $order['try_out_plan_id'] = (int) admin_setting('try_out_plan_id');
         if (!$order->plan && (int) $order->plan_id !== 0) {
             return $this->fail([400, __('Subscription plan does not exist')]);
-        }
-        if ($order->surplus_order_ids) {
-            $order['surplus_orders'] = Order::whereIn('id', $order->surplus_order_ids)->get();
         }
         return $this->success(OrderResource::make($order));
     }
@@ -108,6 +108,32 @@ class OrderController extends Controller
         $bonusAmount = app(RechargeBonusService::class)->calculateBonus($amount);
         $order = OrderService::createRechargeOrder($user, $amount, $bonusAmount);
         return $this->success($order->trade_no);
+    }
+
+    public function previewUpgrade(OrderUpgradePreview $request, OrderUpgradeService $orderUpgradeService)
+    {
+        $user = User::findOrFail($request->user()->id);
+        $targetPlan = Plan::findOrFail((int) $request->input('target_plan_id'));
+
+        return $this->success(
+            $orderUpgradeService->previewUpgrade(
+                $user,
+                $targetPlan,
+                (string) $request->input('period')
+            )
+        );
+    }
+
+    public function confirmUpgrade(OrderUpgradeConfirm $request, OrderUpgradeService $orderUpgradeService)
+    {
+        $user = User::findOrFail($request->user()->id);
+        $order = $orderUpgradeService->confirmUpgrade($user, (string) $request->input('quote_token'));
+
+        return $this->success([
+            'trade_no' => $order->trade_no,
+            'order_type' => 'discount_upgrade',
+            'payable_amount' => (int) $order->total_amount,
+        ]);
     }
 
     protected function applyCoupon(Order $order, string $couponCode): void

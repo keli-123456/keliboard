@@ -40,6 +40,8 @@ class UserRoute
             // Order
             $router->post('/order/save', [OrderController::class, 'save']);
             $router->post('/order/recharge', [OrderController::class, 'recharge']);
+            $router->post('/order/upgrade/preview', [OrderController::class, 'previewUpgrade']);
+            $router->post('/order/upgrade/confirm', [OrderController::class, 'confirmUpgrade']);
             $router->post('/order/checkout', [OrderController::class, 'checkout']);
             $router->get('/order/check', [OrderController::class, 'check']);
             $router->get('/order/detail', [OrderController::class, 'detail']);
