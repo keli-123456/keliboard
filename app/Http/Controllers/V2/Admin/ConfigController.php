@@ -74,9 +74,7 @@ class ConfigController extends Controller
                 'url' => admin_setting('app_url')
             ]
         ]);
-        return response([
-            'data' => $mailLog,
-        ]);
+        return $this->success($mailLog);
     }
     /**
      * 获取规则模板内容

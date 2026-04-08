@@ -247,6 +247,9 @@ class TicketController extends Controller
 
     public function preview(Request $request, int $id)
     {
+        // Public preview URLs intentionally live outside secure_path and rely on
+        // temporarySignedRoute(). Keep this contract in sync with frontend image
+        // tags; token headers are not expected on thumbnail/preview requests.
         if (!$request->hasValidSignature()) {
             throw new ApiException('Forbidden', 403);
         }

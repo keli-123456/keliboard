@@ -6,6 +6,7 @@ use App\Helpers\ApiResponse;
 use App\Services\Plugin\InterceptResponseException;
 use Illuminate\Foundation\Exceptions\Handler as ExceptionHandler;
 use Illuminate\Support\Arr;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\ViewException;
 use Throwable;
 
@@ -67,6 +68,14 @@ class Handler extends ExceptionHandler
             $errors = $exception->errors();
             return $this->fail([$code, $message],null,$errors);
         }
+
+        if ($exception instanceof ValidationException && ($request->expectsJson() || $request->is('api/*'))) {
+            $errors = $exception->errors();
+            $message = collect($errors)->flatten()->first() ?: $exception->getMessage();
+
+            return $this->fail([422, $message], null, $errors);
+        }
+
         return parent::render($request, $exception);
     }
 

@@ -94,8 +94,7 @@ class CouponController extends Controller
     public function generate(CouponGenerate $request)
     {
         if ($request->input('generate_count')) {
-            $this->multiGenerate($request);
-            return;
+            return $this->multiGenerate($request);
         }
 
         $params = $request->validated();
@@ -162,7 +161,13 @@ class CouponController extends Controller
             $limitPlanIds = isset($coupon['limit_plan_ids']) ? implode("/", $coupon['limit_plan_ids']) : '不限制';
             $data .= "{$coupon['name']},{$type},{$value},{$startTime},{$endTime},{$limitUse},{$limitPlanIds},{$coupon['code']},{$createTime}\r\n";
         }
-        echo $data;
+
+        $fileName = 'coupons_' . date('YmdHis') . '.csv';
+        return response($data, 200, [
+            'Content-Type' => 'text/csv; charset=UTF-8',
+            'Content-Disposition' => 'attachment; filename="' . $fileName . '"',
+            'Cache-Control' => 'no-store, no-cache',
+        ]);
     }
 
     public function drop(Request $request)

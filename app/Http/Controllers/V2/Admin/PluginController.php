@@ -6,9 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Models\Plugin;
 use App\Services\Plugin\PluginManager;
 use App\Services\Plugin\PluginConfigService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\File;
-use Illuminate\Support\Str;
 
 class PluginController extends Controller
 {
@@ -24,24 +24,39 @@ class PluginController extends Controller
     }
 
     /**
+     * Plugin endpoints used to return raw {data}/{message}. They now use the
+     * standard API envelope while keeping those top-level fields for clients
+     * during the migration window.
+     */
+    private function pluginSuccess(mixed $data = null, ?string $message = null): JsonResponse
+    {
+        return $message === null
+            ? $this->success($data)
+            : $this->success($data, [200001, $message]);
+    }
+
+    private function pluginFail(string $message, int $httpStatus = 400): JsonResponse
+    {
+        return $this->fail([$httpStatus, $message]);
+    }
+
+    /**
      * 获取所有插件类型
      */
     public function types()
     {
-        return response()->json([
-            'data' => [
-                [
-                    'value' => Plugin::TYPE_FEATURE,
-                    'label' => '功能',
-                    'description' => '提供功能扩展的插件，如Telegram登录、邮件通知等',
-                    'icon' => '🔧'
-                ],
-                [
-                    'value' => Plugin::TYPE_PAYMENT,
-                    'label' => '支付方式',
-                    'description' => '提供支付接口的插件，如支付宝、微信支付等',
-                    'icon' => '💳'
-                ]
+        return $this->pluginSuccess([
+            [
+                'value' => Plugin::TYPE_FEATURE,
+                'label' => '功能',
+                'description' => '提供功能扩展的插件，如Telegram登录、邮件通知等',
+                'icon' => '🔧'
+            ],
+            [
+                'value' => Plugin::TYPE_PAYMENT,
+                'label' => '支付方式',
+                'description' => '提供支付接口的插件，如支付宝、微信支付等',
+                'icon' => '💳'
             ]
         ]);
     }
@@ -111,9 +126,7 @@ class PluginController extends Controller
             }
         }
 
-        return response()->json([
-            'data' => $plugins
-        ]);
+        return $this->pluginSuccess($plugins);
     }
 
     /**
@@ -127,13 +140,9 @@ class PluginController extends Controller
 
         try {
             $this->pluginManager->install($request->input('code'));
-            return response()->json([
-                'message' => '插件安装成功'
-            ]);
+            return $this->pluginSuccess(null, '插件安装成功');
         } catch (\Exception $e) {
-            return response()->json([
-                'message' => '插件安装失败：' . $e->getMessage()
-            ], 400);
+            return $this->pluginFail('插件安装失败：' . $e->getMessage());
         }
     }
 
@@ -149,20 +158,14 @@ class PluginController extends Controller
         $code = $request->input('code');
         $plugin = Plugin::where('code', $code)->first();
         if ($plugin && $plugin->is_enabled) {
-            return response()->json([
-                'message' => '请先禁用插件后再卸载'
-            ], 400);
+            return $this->pluginFail('请先禁用插件后再卸载');
         }
 
         try {
             $this->pluginManager->uninstall($code);
-            return response()->json([
-                'message' => '插件卸载成功'
-            ]);
+            return $this->pluginSuccess(null, '插件卸载成功');
         } catch (\Exception $e) {
-            return response()->json([
-                'message' => '插件卸载失败：' . $e->getMessage()
-            ], 400);
+            return $this->pluginFail('插件卸载失败：' . $e->getMessage());
         }
     }
 
@@ -176,13 +179,9 @@ class PluginController extends Controller
         ]);
         try {
             $this->pluginManager->update($request->input('code'));
-            return response()->json([
-                'message' => '插件升级成功'
-            ]);
+            return $this->pluginSuccess(null, '插件升级成功');
         } catch (\Exception $e) {
-            return response()->json([
-                'message' => '插件升级失败：' . $e->getMessage()
-            ], 400);
+            return $this->pluginFail('插件升级失败：' . $e->getMessage());
         }
     }
 
@@ -197,13 +196,9 @@ class PluginController extends Controller
 
         try {
             $this->pluginManager->enable($request->input('code'));
-            return response()->json([
-                'message' => '插件启用成功'
-            ]);
+            return $this->pluginSuccess(null, '插件启用成功');
         } catch (\Exception $e) {
-            return response()->json([
-                'message' => '插件启用失败：' . $e->getMessage()
-            ], 400);
+            return $this->pluginFail('插件启用失败：' . $e->getMessage());
         }
     }
 
@@ -217,9 +212,7 @@ class PluginController extends Controller
         ]);
 
         $this->pluginManager->disable($request->input('code'));
-        return response()->json([
-            'message' => '插件禁用成功'
-        ]);
+        return $this->pluginSuccess(null, '插件禁用成功');
 
     }
 
@@ -234,13 +227,9 @@ class PluginController extends Controller
 
         try {
             $config = $this->configService->getConfig($request->input('code'));
-            return response()->json([
-                'data' => $config
-            ]);
+            return $this->pluginSuccess($config);
         } catch (\Exception $e) {
-            return response()->json([
-                'message' => '获取配置失败：' . $e->getMessage()
-            ], 400);
+            return $this->pluginFail('获取配置失败：' . $e->getMessage());
         }
     }
 
@@ -260,13 +249,9 @@ class PluginController extends Controller
                 $request->input('config')
             );
 
-            return response()->json([
-                'message' => '配置更新成功'
-            ]);
+            return $this->pluginSuccess(null, '配置更新成功');
         } catch (\Exception $e) {
-            return response()->json([
-                'message' => '配置更新失败：' . $e->getMessage()
-            ], 400);
+            return $this->pluginFail('配置更新失败：' . $e->getMessage());
         }
     }
 
@@ -291,13 +276,9 @@ class PluginController extends Controller
 
         try {
             $this->pluginManager->upload($request->file('file'));
-            return response()->json([
-                'message' => '插件上传成功'
-            ]);
+            return $this->pluginSuccess(null, '插件上传成功');
         } catch (\Exception $e) {
-            return response()->json([
-                'message' => '插件上传失败：' . $e->getMessage()
-            ], 400);
+            return $this->pluginFail('插件上传失败：' . $e->getMessage());
         }
     }
 
@@ -314,20 +295,14 @@ class PluginController extends Controller
 
         // 检查是否为受保护的插件
         if (in_array($code, Plugin::PROTECTED_PLUGINS)) {
-            return response()->json([
-                'message' => '该插件为系统默认插件，不允许删除'
-            ], 403);
+            return $this->pluginFail('该插件为系统默认插件，不允许删除', 403);
         }
 
         try {
             $this->pluginManager->delete($code);
-            return response()->json([
-                'message' => '插件删除成功'
-            ]);
+            return $this->pluginSuccess(null, '插件删除成功');
         } catch (\Exception $e) {
-            return response()->json([
-                'message' => '插件删除失败：' . $e->getMessage()
-            ], 400);
+            return $this->pluginFail('插件删除失败：' . $e->getMessage());
         }
     }
 }

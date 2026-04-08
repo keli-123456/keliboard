@@ -52,6 +52,10 @@ class TicketMessageAttachment extends Model
 
     public function getPreviewUrlAttribute(): string
     {
+        // temporarySignedRoute() emits absolute signed URLs. Production previews
+        // require APP_URL to match the public HTTPS origin and TrustProxies to
+        // trust X-Forwarded-Proto/Host from the reverse proxy; otherwise HTTPS
+        // admin pages can receive mixed-content http:// image URLs.
         $ttlMinutes = max(1, (int) config('tickets.attachments.preview_ttl', 15));
         return URL::temporarySignedRoute(
             'api.v2.ticket.attachment.preview',

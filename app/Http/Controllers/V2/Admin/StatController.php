@@ -15,6 +15,7 @@ use App\Models\Ticket;
 use App\Models\User;
 use App\Services\StatisticalService;
 use App\Services\UserOnlineService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class StatController extends Controller
@@ -26,6 +27,26 @@ class StatController extends Controller
     {
         $this->service = $service;
     }
+
+    /**
+     * Admin stat endpoints historically mixed raw {data}, {data,total},
+     * {timestamp,data}, and {code,message,data}. New responses use the standard
+     * success envelope; selected top-level legacy aliases stay during migration.
+     */
+    private function statSuccess(mixed $data, array $legacyAliases = [], ?string $message = null): JsonResponse
+    {
+        $response = $message === null
+            ? $this->success($data)
+            : $this->success($data, [200001, $message]);
+
+        if (!$legacyAliases) {
+            return $response;
+        }
+
+        $payload = $response->getData(true);
+        return $response->setData(array_merge($payload, $legacyAliases));
+    }
+
     public function getOverride(Request $request)
     {
         // 获取在线节点数
@@ -50,64 +71,82 @@ class StatController extends Controller
         $totalTraffic = StatServer::selectRaw('SUM(u) as upload, SUM(d) as download, SUM(u + d) as total')
             ->first();
 
-        return [
-            'data' => [
-                'month_income' => Order::where('created_at', '>=', strtotime(date('Y-m-1')))
-                    ->where('created_at', '<', time())
-                    ->whereNotIn('status', [0, 2])
-                    ->sum('total_amount'),
-                'month_register_total' => User::where('created_at', '>=', strtotime(date('Y-m-1')))
-                    ->where('created_at', '<', time())
-                    ->count(),
-                'ticket_pending_total' => Ticket::where('status', 0)
-                    ->count(),
-                'commission_pending_total' => Order::where('commission_status', 0)
-                    ->whereNotNull('invite_user_id')
-                    ->whereNotIn('status', [0, 2])
-                    ->where('commission_balance', '>', 0)
-                    ->count(),
-                'day_income' => Order::where('created_at', '>=', strtotime(date('Y-m-d')))
-                    ->where('created_at', '<', time())
-                    ->whereNotIn('status', [0, 2])
-                    ->sum('total_amount'),
-                'last_month_income' => Order::where('created_at', '>=', strtotime('-1 month', strtotime(date('Y-m-1'))))
-                    ->where('created_at', '<', strtotime(date('Y-m-1')))
-                    ->whereNotIn('status', [0, 2])
-                    ->sum('total_amount'),
-                'commission_month_payout' => CommissionLog::where('created_at', '>=', strtotime(date('Y-m-1')))
-                    ->where('created_at', '<', time())
-                    ->sum('get_amount'),
-                'commission_last_month_payout' => CommissionLog::where('created_at', '>=', strtotime('-1 month', strtotime(date('Y-m-1'))))
-                    ->where('created_at', '<', strtotime(date('Y-m-1')))
-                    ->sum('get_amount'),
-                // 新增统计数据
-                'online_nodes' => $onlineNodes,
-                'online_devices' => $onlineDevices,
-                'online_users' => $onlineUsers,
-                'today_traffic' => [
-                    'upload' => $todayTraffic->upload ?? 0,
-                    'download' => $todayTraffic->download ?? 0,
-                    'total' => $todayTraffic->total ?? 0
-                ],
-                'month_traffic' => [
-                    'upload' => $monthTraffic->upload ?? 0,
-                    'download' => $monthTraffic->download ?? 0,
-                    'total' => $monthTraffic->total ?? 0
-                ],
-                'total_traffic' => [
-                    'upload' => $totalTraffic->upload ?? 0,
-                    'download' => $totalTraffic->download ?? 0,
-                    'total' => $totalTraffic->total ?? 0
-                ]
+        $data = [
+            'month_income' => Order::where('created_at', '>=', strtotime(date('Y-m-1')))
+                ->where('created_at', '<', time())
+                ->whereNotIn('status', [0, 2])
+                ->sum('total_amount'),
+            'month_register_total' => User::where('created_at', '>=', strtotime(date('Y-m-1')))
+                ->where('created_at', '<', time())
+                ->count(),
+            'ticket_pending_total' => Ticket::where('status', 0)
+                ->count(),
+            'commission_pending_total' => Order::where('commission_status', 0)
+                ->whereNotNull('invite_user_id')
+                ->whereNotIn('status', [0, 2])
+                ->where('commission_balance', '>', 0)
+                ->count(),
+            'day_income' => Order::where('created_at', '>=', strtotime(date('Y-m-d')))
+                ->where('created_at', '<', time())
+                ->whereNotIn('status', [0, 2])
+                ->sum('total_amount'),
+            'last_month_income' => Order::where('created_at', '>=', strtotime('-1 month', strtotime(date('Y-m-1'))))
+                ->where('created_at', '<', strtotime(date('Y-m-1')))
+                ->whereNotIn('status', [0, 2])
+                ->sum('total_amount'),
+            'commission_month_payout' => CommissionLog::where('created_at', '>=', strtotime(date('Y-m-1')))
+                ->where('created_at', '<', time())
+                ->sum('get_amount'),
+            'commission_last_month_payout' => CommissionLog::where('created_at', '>=', strtotime('-1 month', strtotime(date('Y-m-1'))))
+                ->where('created_at', '<', strtotime(date('Y-m-1')))
+                ->sum('get_amount'),
+            // 新增统计数据
+            'online_nodes' => $onlineNodes,
+            'online_devices' => $onlineDevices,
+            'online_users' => $onlineUsers,
+            'today_traffic' => [
+                'upload' => $todayTraffic->upload ?? 0,
+                'download' => $todayTraffic->download ?? 0,
+                'total' => $todayTraffic->total ?? 0
+            ],
+            'month_traffic' => [
+                'upload' => $monthTraffic->upload ?? 0,
+                'download' => $monthTraffic->download ?? 0,
+                'total' => $monthTraffic->total ?? 0
+            ],
+            'total_traffic' => [
+                'upload' => $totalTraffic->upload ?? 0,
+                'download' => $totalTraffic->download ?? 0,
+                'total' => $totalTraffic->total ?? 0
             ]
         ];
+
+        // Migration path: prefer camelCase fields to match getStats(), keep the
+        // historical snake_case aliases until all admin pages and external clients
+        // have moved off getOverride's legacy contract.
+        return $this->statSuccess(array_merge($data, [
+            'currentMonthIncome' => $data['month_income'],
+            'currentMonthNewUsers' => $data['month_register_total'],
+            'ticketPendingTotal' => $data['ticket_pending_total'],
+            'commissionPendingTotal' => $data['commission_pending_total'],
+            'todayIncome' => $data['day_income'],
+            'lastMonthIncome' => $data['last_month_income'],
+            'currentMonthCommissionPayout' => $data['commission_month_payout'],
+            'lastMonthCommissionPayout' => $data['commission_last_month_payout'],
+            'onlineNodes' => $data['online_nodes'],
+            'onlineDevices' => $data['online_devices'],
+            'onlineUsers' => $data['online_users'],
+            'todayTraffic' => $data['today_traffic'],
+            'monthTraffic' => $data['month_traffic'],
+            'totalTraffic' => $data['total_traffic'],
+        ]));
     }
 
     /**
      * Get order statistics with filtering and pagination
      *
      * @param Request $request
-     * @return array
+     * @return JsonResponse
      */
     public function getOrder(Request $request)
     {
@@ -186,14 +225,10 @@ class StatController extends Controller
             ? round(($summary['commission_total'] / $summary['paid_total']) * 100, 2)
             : 0;
 
-        return [
-            'code' => 0,
-            'message' => 'success',
-            'data' => [
-                'list' => array_reverse($dailyStats),
-                'summary' => $summary,
-            ]
-        ];
+        return $this->statSuccess([
+            'list' => array_reverse($dailyStats),
+            'summary' => $summary,
+        ], ['code' => 0], 'success');
     }
 
     /**
@@ -229,10 +264,12 @@ class StatController extends Controller
     public function getStatUser(Request $request)
     {
         $request->validate([
-            'user_id' => 'required|integer'
+            'user_id' => 'required|integer',
+            'pageSize' => 'nullable|integer|min:1|max:500',
+            'page' => 'nullable|integer|min:1',
         ]);
 
-        $pageSize = $request->input('pageSize', 10);
+        $pageSize = (int) $request->input('pageSize', 10);
         $page = max(1, (int) $request->input('page', 1));
         $startAt = now()->subDays(29)->startOfDay()->timestamp;
         $records = StatUser::query()
@@ -267,10 +304,10 @@ class StatController extends Controller
         $total = $records->count();
         $offset = ($page - 1) * $pageSize;
         $data = $records->slice($offset, $pageSize)->values()->all();
-        return [
-            'data' => $data,
-            'total' => $total,
-        ];
+
+        // New contract: data.items + data.meta. Legacy aliases (data[], total,
+        // meta) are kept by paginateItems() and normalized by xboard-admin.
+        return $this->paginateItems($data, $total, $page, $pageSize);
     }
 
     public function getStatUserNodeLog(Request $request)
@@ -294,16 +331,41 @@ class StatController extends Controller
             ->orderByDesc('total')
             ->get();
 
-        return [
-            'data' => TrafficNodeLogResource::collection($records),
-        ];
+        return $this->statSuccess(TrafficNodeLogResource::collection($records));
     }
 
     public function getStatRecord(Request $request)
     {
-        return [
-            'data' => $this->service->getStatRecord($request->input('type'))
-        ];
+        return $this->statSuccess($this->service->getStatRecord($request->input('type')));
+    }
+
+    public function getRanking(Request $request)
+    {
+        $request->validate([
+            'type' => 'required|in:server_traffic_rank,user_consumption_rank,invite_rank',
+            'limit' => 'nullable|integer|min:1|max:100',
+            'start_time' => 'nullable|integer|min:1000000000|max:9999999999',
+            'end_time' => 'nullable|integer|min:1000000000|max:9999999999',
+        ]);
+
+        $startAt = (int) $request->input('start_time', strtotime('-7 days'));
+        $endAt = (int) $request->input('end_time', time());
+        if ($endAt <= $startAt) {
+            $startAt = strtotime('-7 days');
+            $endAt = time();
+        }
+
+        $this->service->setStartAt($startAt);
+        $this->service->setEndAt($endAt);
+
+        // Legacy route retained for external clients. xboard-admin has migrated
+        // to getTrafficRank/getInviteRank and does not call this endpoint today.
+        return $this->statSuccess(
+            $this->service->getRanking(
+                $request->input('type'),
+                (int) $request->input('limit', 20)
+            ) ?? []
+        );
     }
 
     /**
@@ -418,61 +480,59 @@ class StatController extends Controller
             ->where('commission_balance', '>', 0)
             ->count();
 
-        return [
-            'data' => [
-                // 收入相关
-                'todayIncome' => $todayIncome,
-                'dayIncomeGrowth' => $dayIncomeGrowth,
-                'currentMonthIncome' => $currentMonthIncome,
-                'lastMonthIncome' => $lastMonthIncome,
-                'monthIncomeGrowth' => $monthIncomeGrowth,
-                'lastMonthIncomeGrowth' => $lastMonthIncomeGrowth,
+        return $this->statSuccess([
+            // 收入相关
+            'todayIncome' => $todayIncome,
+            'dayIncomeGrowth' => $dayIncomeGrowth,
+            'currentMonthIncome' => $currentMonthIncome,
+            'lastMonthIncome' => $lastMonthIncome,
+            'monthIncomeGrowth' => $monthIncomeGrowth,
+            'lastMonthIncomeGrowth' => $lastMonthIncomeGrowth,
 
-                // 佣金相关
-                'currentMonthCommissionPayout' => $currentMonthCommissionPayout,
-                'lastMonthCommissionPayout' => $lastMonthCommissionPayout,
-                'commissionGrowth' => $commissionGrowth,
-                'commissionPendingTotal' => $commissionPendingTotal,
+            // 佣金相关
+            'currentMonthCommissionPayout' => $currentMonthCommissionPayout,
+            'lastMonthCommissionPayout' => $lastMonthCommissionPayout,
+            'commissionGrowth' => $commissionGrowth,
+            'commissionPendingTotal' => $commissionPendingTotal,
 
-                // 用户相关
-                'currentMonthNewUsers' => $currentMonthNewUsers,
-                'totalUsers' => $totalUsers,
-                'activeUsers' => $activeUsers,
-                'userGrowth' => $userGrowth,
-                'onlineUsers' => $onlineUsers,
-                'onlineDevices' => $onlineDevices,
+            // 用户相关
+            'currentMonthNewUsers' => $currentMonthNewUsers,
+            'totalUsers' => $totalUsers,
+            'activeUsers' => $activeUsers,
+            'userGrowth' => $userGrowth,
+            'onlineUsers' => $onlineUsers,
+            'onlineDevices' => $onlineDevices,
 
-                // 工单相关
-                'ticketPendingTotal' => $ticketPendingTotal,
+            // 工单相关
+            'ticketPendingTotal' => $ticketPendingTotal,
 
-                // 节点相关
-                'onlineNodes' => $onlineNodes,
+            // 节点相关
+            'onlineNodes' => $onlineNodes,
 
-                // 流量统计
-                'todayTraffic' => [
-                    'upload' => $todayTraffic->upload ?? 0,
-                    'download' => $todayTraffic->download ?? 0,
-                    'total' => $todayTraffic->total ?? 0
-                ],
-                'monthTraffic' => [
-                    'upload' => $monthTraffic->upload ?? 0,
-                    'download' => $monthTraffic->download ?? 0,
-                    'total' => $monthTraffic->total ?? 0
-                ],
-                'totalTraffic' => [
-                    'upload' => $totalTraffic->upload ?? 0,
-                    'download' => $totalTraffic->download ?? 0,
-                    'total' => $totalTraffic->total ?? 0
-                ]
+            // 流量统计
+            'todayTraffic' => [
+                'upload' => $todayTraffic->upload ?? 0,
+                'download' => $todayTraffic->download ?? 0,
+                'total' => $todayTraffic->total ?? 0
+            ],
+            'monthTraffic' => [
+                'upload' => $monthTraffic->upload ?? 0,
+                'download' => $monthTraffic->download ?? 0,
+                'total' => $monthTraffic->total ?? 0
+            ],
+            'totalTraffic' => [
+                'upload' => $totalTraffic->upload ?? 0,
+                'download' => $totalTraffic->download ?? 0,
+                'total' => $totalTraffic->total ?? 0
             ]
-        ];
+        ]);
     }
 
     /**
      * Get traffic ranking data for nodes or users
      * 
      * @param Request $request
-     * @return array
+     * @return JsonResponse
      */
     public function getTrafficRank(Request $request)
     {
@@ -551,10 +611,7 @@ class StatController extends Controller
             ];
         }
 
-        return [
-            'timestamp' => date('c'),
-            'data' => $result
-        ];
+        return $this->statSuccess($result, ['timestamp' => date('c')]);
     }
 
     public function getInviteRank(Request $request)
@@ -616,10 +673,7 @@ class StatController extends Controller
             ];
         }
 
-        return [
-            'timestamp' => date('c'),
-            'data' => $result,
-        ];
+        return $this->statSuccess($result, ['timestamp' => date('c')]);
     }
 
     private function getOnlineOverview(): array

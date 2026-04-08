@@ -32,6 +32,7 @@ class AuthService
             'token' => $this->user->token,
             'auth_data' => $formattedToken,
             'is_admin' => $this->user->is_admin,
+            'is_staff' => $this->user->is_staff,
         ];
     }
 
