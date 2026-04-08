@@ -14,12 +14,22 @@ class SubscriptionControlController extends Controller
     public function overview(Request $request): JsonResponse
     {
         $limit = max(1, min(100, (int) $request->input('limit', 50)));
+        $email = trim((string) $request->input('email', ''));
         $events = Cache::get(self::RECENT_EVENTS_KEY, []);
         if (!is_array($events)) {
             $events = [];
         }
 
         $events = array_values(array_filter($events, fn($item) => is_array($item)));
+        if ($email !== '') {
+            $needle = strtolower($email);
+            $events = array_values(array_filter($events, function (array $event) use ($needle): bool {
+                $eventEmail = strtolower(trim((string) ($event['email'] ?? '')));
+
+                return $eventEmail !== '' && str_contains($eventEmail, $needle);
+            }));
+        }
+
         usort($events, fn(array $a, array $b) => (int) ($b['created_at'] ?? 0) <=> (int) ($a['created_at'] ?? 0));
         $events = array_slice($events, 0, $limit);
 
