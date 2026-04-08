@@ -18,15 +18,20 @@ use App\Helpers\ResponseEnum;
 
 class SystemController extends Controller
 {
-    public function getSystemStatus()
+    private const SNAPSHOT_TTL_SECONDS = 5;
+
+    public function getSystemStatus(Request $request)
     {
-        $data = [
-            'schedule' => $this->getScheduleStatus(),
-            'horizon' => $this->getHorizonStatus(),
-            'schedule_last_runtime' => Cache::get(CacheKey::get('SCHEDULE_LAST_CHECK_AT', null)),
-            'logs' => $this->getLogStatistics()
-        ];
-        return $this->success($data);
+        return $this->cachedSnapshotResponse(
+            $request,
+            CacheKey::get('ADMIN_SYSTEM_STATUS_SNAPSHOT'),
+            fn() => [
+                'schedule' => $this->getScheduleStatus(),
+                'horizon' => $this->getHorizonStatus(),
+                'schedule_last_runtime' => Cache::get(CacheKey::get('SCHEDULE_LAST_CHECK_AT', null)),
+                'logs' => $this->getLogStatistics(),
+            ]
+        );
     }
 
     /**
@@ -80,24 +85,44 @@ class SystemController extends Controller
         }) ? false : true;
     }
 
-    public function getQueueStats()
+    public function getQueueStats(Request $request)
     {
-        $data = [
-            'failedJobs' => app(JobRepository::class)->countRecentlyFailed(),
-            'jobsPerMinute' => app(MetricsRepository::class)->jobsProcessedPerMinute(),
-            'pausedMasters' => $this->totalPausedMasters(),
-            'periods' => [
-                'failedJobs' => config('horizon.trim.recent_failed', config('horizon.trim.failed')),
-                'recentJobs' => config('horizon.trim.recent'),
-            ],
-            'processes' => $this->totalProcessCount(),
-            'queueWithMaxRuntime' => app(MetricsRepository::class)->queueWithMaximumRuntime(),
-            'queueWithMaxThroughput' => app(MetricsRepository::class)->queueWithMaximumThroughput(),
-            'recentJobs' => app(JobRepository::class)->countRecent(),
-            'status' => $this->getHorizonStatus(),
-            'wait' => collect(app(WaitTimeCalculator::class)->calculate())->take(1),
+        return $this->cachedSnapshotResponse(
+            $request,
+            CacheKey::get('ADMIN_QUEUE_STATS_SNAPSHOT'),
+            fn() => [
+                'failedJobs' => app(JobRepository::class)->countRecentlyFailed(),
+                'jobsPerMinute' => app(MetricsRepository::class)->jobsProcessedPerMinute(),
+                'pausedMasters' => $this->totalPausedMasters(),
+                'periods' => [
+                    'failedJobs' => config('horizon.trim.recent_failed', config('horizon.trim.failed')),
+                    'recentJobs' => config('horizon.trim.recent'),
+                ],
+                'processes' => $this->totalProcessCount(),
+                'queueWithMaxRuntime' => app(MetricsRepository::class)->queueWithMaximumRuntime(),
+                'queueWithMaxThroughput' => app(MetricsRepository::class)->queueWithMaximumThroughput(),
+                'recentJobs' => app(JobRepository::class)->countRecent(),
+                'status' => $this->getHorizonStatus(),
+                'wait' => collect(app(WaitTimeCalculator::class)->calculate())->take(1),
+            ]
+        );
+    }
+
+    private function cachedSnapshotResponse(Request $request, string $cacheKey, callable $resolver)
+    {
+        $ttl = self::SNAPSHOT_TTL_SECONDS;
+        $data = Cache::remember($cacheKey, now()->addSeconds($ttl), $resolver);
+        $etag = '"' . sha1(json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '') . '"';
+        $headers = [
+            'Cache-Control' => 'private, max-age=' . $ttl . ', must-revalidate',
+            'ETag' => $etag,
         ];
-        return $this->success($data);
+
+        if (trim((string) $request->headers->get('If-None-Match')) === $etag) {
+            return response()->noContent(304, $headers);
+        }
+
+        return $this->success($data)->withHeaders($headers);
     }
 
     /**
@@ -136,8 +161,15 @@ class SystemController extends Controller
         $pageSize = $request->input('page_size') >= 10 ? $request->input('page_size') : 10;
         $level = $request->input('level');
         $keyword = $request->input('keyword');
+        $payload = $this->getFileSystemLogs($current, $pageSize, $level, $keyword);
 
-        return response($this->getFileSystemLogs($current, $pageSize, $level, $keyword));
+        return $this->paginateItems(
+            $payload['data'] ?? [],
+            (int) ($payload['total'] ?? 0),
+            (int) $current,
+            (int) $pageSize,
+            ['source' => $payload['source'] ?? 'file']
+        );
     }
 
     /**
@@ -547,10 +579,7 @@ class SystemController extends Controller
         $total = $builder->count();
         $res = $builder->forPage($current, $pageSize)->get();
 
-        return response([
-            'data' => $res,
-            'total' => $total,
-        ]);
+        return $this->paginateItems($res->toArray(), $total, $current, $pageSize);
     }
 
     public function getHorizonFailedJobs(Request $request, JobRepository $jobRepository)
@@ -566,12 +595,7 @@ class SystemController extends Controller
 
         $total = $jobRepository->countFailed();
 
-        return response()->json([
-            'data' => $failedJobs,
-            'total' => $total,
-            'current' => $current,
-            'page_size' => $pageSize,
-        ]);
+        return $this->paginateItems($failedJobs->toArray(), $total, $current, $pageSize);
     }
 
     /**

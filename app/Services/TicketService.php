@@ -105,8 +105,10 @@ class TicketService
             return $ticketMessage;
         } catch (\Exception $e) {
             DB::rollback();
+            $attachmentService = new TicketAttachmentService();
             foreach ($stored as $meta) {
                 try {
+                    $attachmentService->deleteDerivedFiles($meta['disk'], $meta['path'], $meta['mime'] ?? null);
                     Storage::disk($meta['disk'])->delete($meta['path']);
                 } catch (\Exception) {
                 }
@@ -168,8 +170,10 @@ class TicketService
             HookManager::call('ticket.reply.admin.after', [$ticket, $ticketMessage]);
         } catch (\Exception $e) {
             DB::rollBack();
+            $attachmentService = new TicketAttachmentService();
             foreach ($stored as $meta) {
                 try {
+                    $attachmentService->deleteDerivedFiles($meta['disk'], $meta['path'], $meta['mime'] ?? null);
                     Storage::disk($meta['disk'])->delete($meta['path']);
                 } catch (\Exception) {
                 }
@@ -246,8 +250,10 @@ class TicketService
             return $ticket;
         } catch (\Exception $e) {
             DB::rollBack();
+            $attachmentService = new TicketAttachmentService();
             foreach ($stored as $meta) {
                 try {
+                    $attachmentService->deleteDerivedFiles($meta['disk'], $meta['path'], $meta['mime'] ?? null);
                     Storage::disk($meta['disk'])->delete($meta['path']);
                 } catch (\Exception) {
                 }

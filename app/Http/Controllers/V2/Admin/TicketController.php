@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\TicketMessageAttachment;
 use App\Models\Ticket;
 use App\Models\TicketMessage;
+use App\Services\TicketAttachmentService;
 use App\Services\TicketService;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
@@ -127,10 +128,7 @@ class TicketController extends Controller
             return $ticketData;
         })->all();
 
-        return response([
-            'data' => $items,
-            'total' => $tickets->total()
-        ]);
+        return $this->paginate($tickets, $items);
     }
 
     public function reply(Request $request)
@@ -244,6 +242,20 @@ class TicketController extends Controller
 
     public function attachment(int $id)
     {
+        return $this->serveAttachmentFile($id, false);
+    }
+
+    public function preview(Request $request, int $id)
+    {
+        if (!$request->hasValidSignature()) {
+            throw new ApiException('Forbidden', 403);
+        }
+
+        return $this->serveAttachmentFile($id, true, (string) $request->query('variant', ''));
+    }
+
+    private function serveAttachmentFile(int $id, bool $publicPreview, string $variant = '')
+    {
         $attachment = TicketMessageAttachment::find($id);
         if (!$attachment) {
             throw new ApiException('Not Found', 404);
@@ -255,12 +267,26 @@ class TicketController extends Controller
             throw new ApiException('Not Found', 404);
         }
 
-        $absolute = Storage::disk($disk)->path($path);
+        $resolvedPath = $path;
+        $resolvedMime = (string) ($attachment->mime ?: 'application/octet-stream');
+        $cacheControl = $publicPreview ? 'public, max-age=600' : 'private, max-age=3600';
+
+        if ($publicPreview && $variant === 'thumb') {
+            $thumbnail = app(TicketAttachmentService::class)->ensureThumbnail($disk, $path, $attachment->mime);
+            if ($thumbnail && !empty($thumbnail['path']) && Storage::disk($disk)->exists($thumbnail['path'])) {
+                $resolvedPath = (string) $thumbnail['path'];
+                $resolvedMime = (string) ($thumbnail['mime'] ?: 'image/webp');
+                $cacheControl = 'public, max-age=86400, stale-while-revalidate=604800';
+            }
+        }
+
+        $absolute = Storage::disk($disk)->path($resolvedPath);
         $headers = [
-            'Cache-Control' => 'private, max-age=3600',
+            'Cache-Control' => $cacheControl,
+            'Content-Disposition' => 'inline',
         ];
-        if ($attachment->mime) {
-            $headers['Content-Type'] = $attachment->mime;
+        if ($resolvedMime) {
+            $headers['Content-Type'] = $resolvedMime;
         }
         return response()->file($absolute, $headers);
     }

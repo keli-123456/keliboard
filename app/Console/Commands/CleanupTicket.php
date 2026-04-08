@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\Ticket;
 use App\Models\TicketMessage;
 use App\Models\TicketMessageAttachment;
+use App\Services\TicketAttachmentService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -44,12 +45,13 @@ class CleanupTicket extends Command
         $deletedMessages = 0;
         $deletedAttachments = 0;
         $deletedFiles = 0;
+        $attachmentService = app(TicketAttachmentService::class);
 
-        $baseQuery->chunkById(100, function ($tickets) use ($dryRun, &$deletedTickets, &$deletedMessages, &$deletedAttachments, &$deletedFiles) {
+        $baseQuery->chunkById(100, function ($tickets) use ($attachmentService, $dryRun, &$deletedTickets, &$deletedMessages, &$deletedAttachments, &$deletedFiles) {
             foreach ($tickets as $ticket) {
                 $ticketId = (int) $ticket->id;
 
-                $attachments = TicketMessageAttachment::where('ticket_id', $ticketId)->get(['id', 'disk', 'path']);
+                $attachments = TicketMessageAttachment::where('ticket_id', $ticketId)->get(['id', 'disk', 'path', 'mime']);
                 $messagesCount = TicketMessage::where('ticket_id', $ticketId)->count();
 
                 if ($dryRun) {
@@ -61,6 +63,7 @@ class CleanupTicket extends Command
                     $disk = $attachment->disk ?: 'local';
                     $path = $attachment->path;
                     if ($path && Storage::disk($disk)->exists($path)) {
+                        $deletedFiles += $attachmentService->deleteDerivedFiles($disk, $path, $attachment->mime ?? null);
                         if (Storage::disk($disk)->delete($path)) {
                             $deletedFiles++;
                         }
@@ -96,4 +99,3 @@ class CleanupTicket extends Command
         return self::SUCCESS;
     }
 }
-

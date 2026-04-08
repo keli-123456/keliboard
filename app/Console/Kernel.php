@@ -53,6 +53,12 @@ class Kernel extends ConsoleKernel
         // }
         $schedule->command('cleanup:expired-online-status')->everyMinute()->onOneServer()->withoutOverlapping(4);
         $schedule->command('cleanup:ticket')->dailyAt('3:20')->onOneServer()->withoutOverlapping();
+        if (config('tickets.attachments.prewarm_schedule', false)) {
+            $schedule->command('ticket:prewarm-thumbnails', [
+                '--chunk' => max(50, (int) config('tickets.attachments.prewarm_schedule_chunk', 200)),
+                '--limit' => max(0, (int) config('tickets.attachments.prewarm_schedule_limit', 500)),
+            ])->dailyAt('3:35')->onOneServer()->withoutOverlapping();
+        }
 
         app(PluginManager::class)->registerPluginSchedules($schedule);
 
