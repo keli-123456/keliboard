@@ -123,10 +123,7 @@ class TicketController extends Controller
             return $ticketData;
         })->all();
 
-        return response([
-            'data' => $items,
-            'total' => $tickets->total()
-        ]);
+        return $this->paginate($tickets, $items);
     }
 
     public function reply(Request $request)
@@ -204,4 +201,3 @@ class TicketController extends Controller
         return response()->file($absolute, $headers);
     }
 }
-

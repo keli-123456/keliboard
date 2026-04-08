@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\URL;
 
 /**
  * App\Models\TicketMessageAttachment
@@ -34,6 +35,10 @@ class TicketMessageAttachment extends Model
         'disk',
         'path',
     ];
+    protected $appends = [
+        'preview_url',
+        'thumbnail_url',
+    ];
 
     public function ticket(): BelongsTo
     {
@@ -44,5 +49,24 @@ class TicketMessageAttachment extends Model
     {
         return $this->belongsTo(TicketMessage::class, 'ticket_message_id', 'id');
     }
-}
 
+    public function getPreviewUrlAttribute(): string
+    {
+        $ttlMinutes = max(1, (int) config('tickets.attachments.preview_ttl', 15));
+        return URL::temporarySignedRoute(
+            'api.v2.ticket.attachment.preview',
+            now()->addMinutes($ttlMinutes),
+            ['id' => $this->id]
+        );
+    }
+
+    public function getThumbnailUrlAttribute(): string
+    {
+        $ttlMinutes = max(1, (int) config('tickets.attachments.preview_ttl', 15));
+        return URL::temporarySignedRoute(
+            'api.v2.ticket.attachment.preview',
+            now()->addMinutes($ttlMinutes),
+            ['id' => $this->id, 'variant' => 'thumb']
+        );
+    }
+}

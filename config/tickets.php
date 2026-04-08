@@ -15,5 +15,12 @@ return [
         'max_kb' => (int) env('TICKET_ATTACHMENTS_MAX_KB', 5120),
         'max_dimension' => (int) env('TICKET_ATTACHMENTS_MAX_DIMENSION', 1920),
         'webp_quality' => (int) env('TICKET_ATTACHMENTS_WEBP_QUALITY', 80),
+        'thumbnail_max_dimension' => (int) env('TICKET_ATTACHMENTS_THUMB_MAX_DIMENSION', 360),
+        'thumbnail_webp_quality' => (int) env('TICKET_ATTACHMENTS_THUMB_WEBP_QUALITY', 72),
+        'prewarm_thumbnails' => (bool) env('TICKET_ATTACHMENTS_PREWARM_THUMBNAILS', true),
+        'prewarm_schedule' => (bool) env('TICKET_ATTACHMENTS_PREWARM_SCHEDULE', false),
+        'prewarm_schedule_chunk' => (int) env('TICKET_ATTACHMENTS_PREWARM_SCHEDULE_CHUNK', 200),
+        'prewarm_schedule_limit' => (int) env('TICKET_ATTACHMENTS_PREWARM_SCHEDULE_LIMIT', 500),
+        'preview_ttl' => (int) env('TICKET_ATTACHMENTS_PREVIEW_TTL', 15),
     ],
 ];

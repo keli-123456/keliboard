@@ -59,10 +59,14 @@ class TicketAttachmentService
             $ext = strtolower((string) ($file->getClientOriginalExtension() ?: $file->guessExtension() ?: 'bin'));
             $fallbackRelativePath = $dir . '/' . $uuid . '.' . $ext;
             Storage::disk($disk)->putFileAs($dir, $file, $uuid . '.' . $ext);
-            return $this->buildMeta($disk, $fallbackRelativePath);
+            $meta = $this->buildMeta($disk, $fallbackRelativePath);
+            $this->prewarmThumbnail($meta['disk'], $meta['path'], $meta['mime']);
+            return $meta;
         }
 
-        return $this->buildMeta($disk, $targetRelativePath);
+        $meta = $this->buildMeta($disk, $targetRelativePath);
+        $this->prewarmThumbnail($meta['disk'], $meta['path'], $meta['mime']);
+        return $meta;
     }
 
     private function buildMeta(string $disk, string $relativePath): array
@@ -96,6 +100,90 @@ class TicketAttachmentService
             'width' => $width,
             'height' => $height,
         ];
+    }
+
+    /**
+     * @return array{disk:string,path:string,mime:string,size:int,width:int|null,height:int|null}|null
+     */
+    public function ensureThumbnail(string $disk, string $relativePath, ?string $mime = null): ?array
+    {
+        $targetRelativePath = $this->resolveThumbnailRelativePath($disk, $relativePath, $mime);
+        if (!$targetRelativePath) {
+            return null;
+        }
+
+        $sourceAbsolutePath = Storage::disk($disk)->path($relativePath);
+        $thumbMaxDimension = max(64, (int) config('tickets.attachments.thumbnail_max_dimension', 360));
+        $thumbQuality = max(0, min(100, (int) config('tickets.attachments.thumbnail_webp_quality', 72)));
+        if (!Storage::disk($disk)->exists($targetRelativePath)) {
+            Storage::disk($disk)->makeDirectory(dirname($targetRelativePath));
+            $targetAbsolutePath = Storage::disk($disk)->path($targetRelativePath);
+            if (!$this->convertToWebp($sourceAbsolutePath, $targetAbsolutePath, $thumbMaxDimension, $thumbQuality)) {
+                return null;
+            }
+        }
+
+        return $this->buildMeta($disk, $targetRelativePath);
+    }
+
+    public function prewarmThumbnail(string $disk, string $relativePath, ?string $mime = null): void
+    {
+        if (!config('tickets.attachments.prewarm_thumbnails', true)) {
+            return;
+        }
+
+        try {
+            $this->ensureThumbnail($disk, $relativePath, $mime);
+        } catch (\Throwable $e) {
+            Log::warning('Ticket attachment thumbnail prewarm failed', [
+                'disk' => $disk,
+                'path' => $relativePath,
+                'message' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    public function deleteDerivedFiles(string $disk, string $relativePath, ?string $mime = null): int
+    {
+        $deleted = 0;
+        $thumbnailRelativePath = $this->resolveThumbnailRelativePath($disk, $relativePath, $mime);
+        if ($thumbnailRelativePath && Storage::disk($disk)->exists($thumbnailRelativePath)) {
+            if (Storage::disk($disk)->delete($thumbnailRelativePath)) {
+                $deleted++;
+            }
+        }
+
+        return $deleted;
+    }
+
+    private function resolveThumbnailRelativePath(string $disk, string $relativePath, ?string $mime = null): ?string
+    {
+        $normalizedMime = strtolower((string) ($mime ?? ''));
+        if ($normalizedMime !== '' && !str_starts_with($normalizedMime, 'image/')) {
+            return null;
+        }
+
+        if (!$relativePath || !Storage::disk($disk)->exists($relativePath)) {
+            return null;
+        }
+
+        $sourceAbsolutePath = Storage::disk($disk)->path($relativePath);
+        if (!$sourceAbsolutePath || !is_file($sourceAbsolutePath)) {
+            return null;
+        }
+
+        $thumbMaxDimension = max(64, (int) config('tickets.attachments.thumbnail_max_dimension', 360));
+        $thumbQuality = max(0, min(100, (int) config('tickets.attachments.thumbnail_webp_quality', 72)));
+        $baseDir = trim((string) config('tickets.attachments.base_dir', 'ticket_attachments'), '/');
+        $fingerprint = sha1(implode('|', [
+            $relativePath,
+            (string) @filemtime($sourceAbsolutePath),
+            (string) @filesize($sourceAbsolutePath),
+            (string) $thumbMaxDimension,
+            (string) $thumbQuality,
+        ]));
+
+        return $baseDir . '/thumbs/' . substr($fingerprint, 0, 2) . '/' . $fingerprint . '.webp';
     }
 
     private function convertToWebp(string $sourcePath, string $targetAbsolutePath, int $maxDimension, int $quality): bool

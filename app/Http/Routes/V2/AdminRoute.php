@@ -26,6 +26,10 @@ class AdminRoute
 {
     public function map(Registrar $router)
     {
+        $router->get('/ticket/attachment/{id}/preview', [TicketController::class, 'preview'])
+            ->whereNumber('id')
+            ->name('api.v2.ticket.attachment.preview');
+
         $router->group([
             'prefix' => admin_setting('secure_path', admin_setting('frontend_admin_path', hash('crc32b', config('app.key')))),
             'middleware' => ['admin', 'log'],
