@@ -427,22 +427,32 @@ class SingBox extends AbstractProtocol
                 'type' => 'grpc',
                 'service_name' => data_get($protocol_settings, 'network_settings.serviceName')
             ],
-            'ws' => $this->buildWebSocketTransport($protocol_settings, true),
+            'ws' => $this->buildWebSocketTransport(
+                $protocol_settings,
+                Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'))
+            ),
             default => null
         };
         $array['transport'] = $transport;
         return $array;
     }
 
-    protected function buildWebSocketTransport(array $protocol_settings, bool $wrapHostValue = false): array
+    protected function buildWebSocketTransport(array $protocol_settings, ?string $fallbackHost = null): array
     {
         $transport = [
             'type' => 'ws',
             'path' => data_get($protocol_settings, 'network_settings.path'),
         ];
 
-        if ($host = data_get($protocol_settings, 'network_settings.headers.Host')) {
-            $transport['headers'] = ['Host' => $wrapHostValue ? [$host] : $host];
+        $host = data_get($protocol_settings, 'network_settings.headers.Host');
+        if (is_array($host)) {
+            $host = collect($host)->first(fn($value) => is_string($value) && trim($value) !== '');
+        }
+        if (!is_string($host) || trim($host) === '') {
+            $host = $fallbackHost;
+        }
+        if (is_string($host) && trim($host) !== '') {
+            $transport['headers'] = ['Host' => trim($host)];
         }
 
         $maxEarlyData = data_get($protocol_settings, 'network_settings.max_early_data');

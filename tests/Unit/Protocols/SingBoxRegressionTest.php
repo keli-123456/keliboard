@@ -66,7 +66,7 @@ final class SingBoxRegressionTest extends TestCase
         $this->assertSame('30s', $config['hop_interval']);
     }
 
-    public function test_singbox_build_trojan_ws_does_not_force_early_data_without_server_support(): void
+    public function test_singbox_build_trojan_ws_uses_server_name_as_host_and_does_not_force_early_data(): void
     {
         $protocol = $this->makeProtocol();
 
@@ -85,6 +85,7 @@ final class SingBoxRegressionTest extends TestCase
 
         $this->assertSame('ws', $config['transport']['type']);
         $this->assertSame('/music', $config['transport']['path']);
+        $this->assertSame('sni.example.com', $config['transport']['headers']['Host']);
         $this->assertArrayNotHasKey('max_early_data', $config['transport']);
         $this->assertArrayNotHasKey('early_data_header_name', $config['transport']);
     }
