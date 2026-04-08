@@ -305,13 +305,7 @@ class SingBox extends AbstractProtocol
                 'path' => Arr::random(data_get($protocol_settings, 'network_settings.header.request.path', ['/'])),
                 'host' => data_get($protocol_settings, 'network_settings.header.request.headers.Host', [])
             ] : null,
-            'ws' => array_filter([
-                'type' => 'ws',
-                'path' => data_get($protocol_settings, 'network_settings.path'),
-                'headers' => ($host = data_get($protocol_settings, 'network_settings.headers.Host')) ? ['Host' => $host] : null,
-                'max_early_data' => 2048,
-                'early_data_header_name' => 'Sec-WebSocket-Protocol'
-            ]),
+            'ws' => $this->buildWebSocketTransport($protocol_settings),
             'grpc' => [
                 'type' => 'grpc',
                 'service_name' => data_get($protocol_settings, 'network_settings.serviceName')
@@ -381,13 +375,7 @@ class SingBox extends AbstractProtocol
                 'type' => 'http',
                 'path' => Arr::random(data_get($protocol_settings, 'network_settings.header.request.path', ['/']))
             ] : null,
-            'ws' => array_filter([
-                'type' => 'ws',
-                'path' => data_get($protocol_settings, 'network_settings.path'),
-                'headers' => ($host = data_get($protocol_settings, 'network_settings.headers.Host')) ? ['Host' => $host] : null,
-                'max_early_data' => 2048,
-                'early_data_header_name' => 'Sec-WebSocket-Protocol'
-            ], fn($value) => !is_null($value)),
+            'ws' => $this->buildWebSocketTransport($protocol_settings),
             'grpc' => [
                 'type' => 'grpc',
                 'service_name' => data_get($protocol_settings, 'network_settings.serviceName')
@@ -439,17 +427,37 @@ class SingBox extends AbstractProtocol
                 'type' => 'grpc',
                 'service_name' => data_get($protocol_settings, 'network_settings.serviceName')
             ],
-            'ws' => array_filter([
-                'type' => 'ws',
-                'path' => data_get($protocol_settings, 'network_settings.path'),
-                'headers' => data_get($protocol_settings, 'network_settings.headers.Host') ? ['Host' => [data_get($protocol_settings, 'network_settings.headers.Host')]] : null,
-                'max_early_data' => 2048,
-                'early_data_header_name' => 'Sec-WebSocket-Protocol'
-            ]),
+            'ws' => $this->buildWebSocketTransport($protocol_settings, true),
             default => null
         };
         $array['transport'] = $transport;
         return $array;
+    }
+
+    protected function buildWebSocketTransport(array $protocol_settings, bool $wrapHostValue = false): array
+    {
+        $transport = [
+            'type' => 'ws',
+            'path' => data_get($protocol_settings, 'network_settings.path'),
+        ];
+
+        if ($host = data_get($protocol_settings, 'network_settings.headers.Host')) {
+            $transport['headers'] = ['Host' => $wrapHostValue ? [$host] : $host];
+        }
+
+        $maxEarlyData = data_get($protocol_settings, 'network_settings.max_early_data');
+        if ($maxEarlyData === null) {
+            $maxEarlyData = data_get($protocol_settings, 'network_settings.maxEarlyData');
+        }
+
+        if ($maxEarlyData !== null && $maxEarlyData !== '' && (int) $maxEarlyData > 0) {
+            $transport['max_early_data'] = (int) $maxEarlyData;
+            $transport['early_data_header_name'] = data_get($protocol_settings, 'network_settings.early_data_header_name')
+                ?? data_get($protocol_settings, 'network_settings.earlyDataHeaderName')
+                ?? 'Sec-WebSocket-Protocol';
+        }
+
+        return array_filter($transport, fn($value) => !is_null($value) && $value !== []);
     }
 
     protected function buildHysteria($password, $server): array
