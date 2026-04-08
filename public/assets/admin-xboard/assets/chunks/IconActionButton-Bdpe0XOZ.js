@@ -1,0 +1,1 @@
+import{r as n,j as c}from"./react-vendor-C4y24wQM.js";import{B as i,c as e}from"../index.js";const m=n.forwardRef(({label:t,className:o,children:s,...a},r)=>c.jsx(i,{ref:r,size:"icon","aria-label":t,title:t,className:e("h-8 w-8",o),...a,children:s}));m.displayName="IconActionButton";export{m as I};
