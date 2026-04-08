@@ -1,0 +1,1 @@
+import{q as a}from"../index.js";const t={fetch:()=>a.get("/plan/fetch"),save:p=>a.post("/plan/save",p),applyUsers:p=>a.post("/plan/applyUsers",{id:p}),drop:p=>a.post("/plan/drop",{id:p}),update:p=>a.post("/plan/update",p),sort:p=>a.post("/plan/sort",{ids:p})};export{t as p};
