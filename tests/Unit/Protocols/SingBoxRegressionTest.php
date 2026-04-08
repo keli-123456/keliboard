@@ -11,6 +11,26 @@ use Tests\TestCase;
 
 final class SingBoxRegressionTest extends TestCase
 {
+    private function makeProtocol(): SingBox
+    {
+        return new class([], []) extends SingBox {
+            public function handle()
+            {
+                return [];
+            }
+
+            public function buildHysteriaForTest(string $password, array $server): array
+            {
+                return $this->buildHysteria($password, $server);
+            }
+
+            public function buildTrojanForTest(string $password, array $server): array
+            {
+                return $this->buildTrojan($password, $server);
+            }
+        };
+    }
+
     public function test_protocol_manager_matches_karing_to_singbox_exporter(): void
     {
         $manager = new ProtocolManager(new Container());
@@ -24,17 +44,7 @@ final class SingBoxRegressionTest extends TestCase
 
     public function test_singbox_build_hysteria2_port_hopping_uses_colon_ranges_and_keeps_base_port(): void
     {
-        $protocol = new class([], []) extends SingBox {
-            public function handle()
-            {
-                return [];
-            }
-
-            public function buildHysteriaForTest(string $password, array $server): array
-            {
-                return $this->buildHysteria($password, $server);
-            }
-        };
+        $protocol = $this->makeProtocol();
 
         $config = $protocol->buildHysteriaForTest('secret', [
             'name' => 'Hy2 Port Hopping',
@@ -54,5 +64,28 @@ final class SingBoxRegressionTest extends TestCase
         $this->assertSame(8443, $config['server_port']);
         $this->assertSame(['2080:3000'], $config['server_ports']);
         $this->assertSame('30s', $config['hop_interval']);
+    }
+
+    public function test_singbox_build_trojan_ws_does_not_force_early_data_without_server_support(): void
+    {
+        $protocol = $this->makeProtocol();
+
+        $config = $protocol->buildTrojanForTest('secret', [
+            'name' => 'Trojan WS',
+            'host' => 'edge.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'server_name' => 'sni.example.com',
+                'network' => 'ws',
+                'network_settings' => [
+                    'path' => '/music',
+                ],
+            ],
+        ]);
+
+        $this->assertSame('ws', $config['transport']['type']);
+        $this->assertSame('/music', $config['transport']['path']);
+        $this->assertArrayNotHasKey('max_early_data', $config['transport']);
+        $this->assertArrayNotHasKey('early_data_header_name', $config['transport']);
     }
 }
