@@ -149,15 +149,6 @@ class OrderService
 
 
         DB::transaction(function () use ($order, $plan, $isRechargeOrder) {
-            if ($order->refund_amount) {
-                $this->user->balance += $order->refund_amount;
-            }
-
-            if ($order->surplus_order_ids) {
-                Order::whereIn('id', $order->surplus_order_ids)
-                    ->update(['status' => Order::STATUS_DISCOUNTED]);
-            }
-
             if ($isRechargeOrder) {
                 $this->user->balance += (int) $order->total_amount + (int) $order->bonus_amount;
             } else {
@@ -185,6 +176,7 @@ class OrderService
             Order::STATUS_PROCESSING => admin_setting('new_order_event_id', 0),
             Order::TYPE_RENEWAL => admin_setting('renew_order_event_id', 0),
             Order::TYPE_UPGRADE => admin_setting('change_order_event_id', 0),
+            Order::TYPE_DISCOUNT_UPGRADE => admin_setting('change_order_event_id', 0),
             default => 0,
         };
 
@@ -210,14 +202,6 @@ class OrderService
             if (!(int) admin_setting('plan_change_enable', 1))
                 throw new ApiException('目前不允许更改订阅，请联系客服或提交工单操作');
             $order->type = Order::TYPE_UPGRADE;
-            if ((int) admin_setting('surplus_enable', 1))
-                $this->getSurplusValue($user, $order);
-            if ($order->surplus_amount >= $order->total_amount) {
-                $order->refund_amount = (int) ($order->surplus_amount - $order->total_amount);
-                $order->total_amount = 0;
-            } else {
-                $order->total_amount = (int) ($order->total_amount - $order->surplus_amount);
-            }
         } else if (($user->expired_at === null || $user->expired_at > time()) && $order->plan_id == $user->plan_id) { // 用户订阅未过期或按流量订阅 且购买订阅与当前订阅相同 === 续费
             $order->type = Order::TYPE_RENEWAL;
         } else { // 新购
@@ -278,71 +262,6 @@ class OrderService
             ->first();
     }
 
-    private function getSurplusValue(User $user, Order $order)
-    {
-        if ($user->expired_at === NULL) {
-            $lastOneTimeOrder = Order::where('user_id', $user->id)
-                ->where('period', Plan::PERIOD_ONETIME)
-                ->where('status', Order::STATUS_COMPLETED)
-                ->orderBy('id', 'DESC')
-                ->first();
-            if (!$lastOneTimeOrder)
-                return;
-            $nowUserTraffic = Helper::transferToGB($user->transfer_enable);
-            if (!$nowUserTraffic)
-                return;
-            $paidTotalAmount = ($lastOneTimeOrder->total_amount + $lastOneTimeOrder->balance_amount);
-            if (!$paidTotalAmount)
-                return;
-            $trafficUnitPrice = $paidTotalAmount / $nowUserTraffic;
-            $notUsedTraffic = $nowUserTraffic - Helper::transferToGB($user->u + $user->d);
-            $result = $trafficUnitPrice * $notUsedTraffic;
-            $order->surplus_amount = (int) ($result > 0 ? $result : 0);
-            $order->surplus_order_ids = Order::where('user_id', $user->id)
-                ->where('period', '!=', Plan::PERIOD_RESET_TRAFFIC)
-                ->where('status', Order::STATUS_COMPLETED)
-                ->pluck('id')
-                ->all();
-        } else {
-            $orders = Order::query()
-                ->where('user_id', $user->id)
-                ->whereNotIn('period', [Plan::PERIOD_RESET_TRAFFIC, Plan::PERIOD_ONETIME])
-                ->where('status', Order::STATUS_COMPLETED)
-                ->get();
-
-            if ($orders->isEmpty()) {
-                $order->surplus_amount = 0;
-                $order->surplus_order_ids = [];
-                return;
-            }
-
-            $orderAmountSum = $orders->sum(fn($item) => $item->total_amount + $item->balance_amount + $item->surplus_amount - $item->refund_amount);
-            $orderMonthSum = $orders->sum(fn($item) => self::STR_TO_TIME[PlanService::getPeriodKey($item->period)] ?? 0);
-            $firstOrderAt = $orders->min('created_at');
-            $expiredAt = Carbon::createFromTimestamp($firstOrderAt)->addMonths($orderMonthSum);
-
-            $now = now();
-            $totalSeconds = $expiredAt->timestamp - $firstOrderAt;
-            $remainSeconds = max(0, $expiredAt->timestamp - $now->timestamp);
-            $cycleRatio = $totalSeconds > 0 ? $remainSeconds / $totalSeconds : 0;
-
-            $plan = Plan::find($user->plan_id);
-            $totalTraffic = $plan?->transfer_enable * $orderMonthSum;
-            $usedTraffic = Helper::transferToGB($user->u + $user->d);
-            $remainTraffic = max(0, $totalTraffic - $usedTraffic);
-            $trafficRatio = $totalTraffic > 0 ? $remainTraffic / $totalTraffic : 0;
-
-            $ratio = $cycleRatio;
-            if (admin_setting('change_order_event_id', 0) == 1) {
-                $ratio = min($cycleRatio, $trafficRatio);
-            }
-
-
-            $order->surplus_amount = (int) max(0, $orderAmountSum * $ratio);
-            $order->surplus_order_ids = $orders->pluck('id')->all();
-        }
-    }
-
     public function paid(string $callbackNo)
     {
         $order = $this->order;
@@ -401,7 +320,7 @@ class OrderService
     private function buyByPeriod(Order $order, Plan $plan)
     {
         // change plan process
-        if ((int) $order->type === Order::TYPE_UPGRADE) {
+        if (in_array((int) $order->type, [Order::TYPE_UPGRADE, Order::TYPE_DISCOUNT_UPGRADE], true)) {
             $this->user->expired_at = time();
         }
         $this->user->transfer_enable = $plan->transfer_enable * 1073741824;
@@ -486,4 +405,5 @@ class OrderService
             $this->order->total_amount = $this->order->total_amount - $user->balance;
         }
     }
+
 }

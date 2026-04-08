@@ -25,9 +25,6 @@ class OrderController extends Controller
         $order = Order::with(['user', 'plan', 'commission_log', 'invite_user'])->find($request->input('id'));
         if (!$order)
             return $this->fail([400202, '订单不存在']);
-        if ($order->surplus_order_ids) {
-            $order['surplus_orders'] = Order::whereIn('id', $order->surplus_order_ids)->get();
-        }
         $order['period'] = PlanService::getLegacyPeriod((string) $order->period);
         return $this->success($order);
     }
