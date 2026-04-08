@@ -21,7 +21,7 @@
       xadmin_base_path: "/{{ $adminPath }}/xadmin",
       staff_base_path: "/{{ $adminPath }}/staff",
       api_v1_base: "{{ $baseUrl }}/api/v1",
-      api_v2_base: "{{ $baseUrl }}/api/v2/{{ $adminPath }}",
+      api_v2_base: "{{ $baseUrl }}/api/v2",
     };
   </script>
   <script type="module" crossorigin src="/assets/admin/assets/index.js"></script>
