@@ -4,12 +4,14 @@ namespace App\Http\Controllers\V1\App;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\NodeResource;
+use App\Http\Resources\PlanResource;
 use App\Models\Plan;
 use App\Models\User;
 use App\Services\Plugin\HookManager;
 use App\Services\ServerService;
 use App\Services\UserService;
 use App\Utils\Helper;
+use Illuminate\Contracts\Support\Arrayable;
 use Illuminate\Http\Request;
 
 class BootstrapController extends Controller
@@ -95,6 +97,9 @@ class BootstrapController extends Controller
         $userService = new UserService();
         $subscribe['reset_day'] = $userService->getResetDay($user);
         $subscribe = HookManager::filter('user.subscribe.response', $subscribe);
+        if (isset($subscribe['plan'])) {
+            $subscribe['plan'] = $this->normalizeSubscribePlan($request, $subscribe['plan']);
+        }
 
         $servers = [];
         if ($userService->isAvailable($user)) {
@@ -113,5 +118,38 @@ class BootstrapController extends Controller
             'servers' => $serverData,
             'subscribe' => $subscribe,
         ]);
+    }
+
+    protected function normalizeSubscribePlan(Request $request, mixed $plan): mixed
+    {
+        if ($plan instanceof Plan) {
+            return array_merge($plan->toArray(), PlanResource::make($plan)->toArray($request));
+        }
+
+        if ($plan instanceof Arrayable) {
+            $raw = $plan->toArray();
+        } elseif (is_array($plan)) {
+            $raw = $plan;
+        } else {
+            return $plan;
+        }
+
+        if (!array_key_exists('id', $raw) || !array_key_exists('name', $raw)) {
+            return $plan;
+        }
+
+        if ($this->isNormalizedSubscribePlan($raw)) {
+            return $raw;
+        }
+
+        return array_merge($raw, PlanResource::make($raw)->toArray($request));
+    }
+
+    protected function isNormalizedSubscribePlan(array $plan): bool
+    {
+        return array_key_exists('available_periods', $plan)
+            || array_key_exists('recurring_periods', $plan)
+            || array_key_exists('has_recurring_price', $plan)
+            || array_key_exists('has_onetime_price', $plan);
     }
 }
