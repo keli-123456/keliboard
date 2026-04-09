@@ -4,13 +4,20 @@
 namespace App\Http\Resources;
 
 use App\Models\Plan;
-use App\Services\PlanService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
 class PlanResource extends JsonResource
 {
     private const PRICE_MULTIPLIER = 100;
+    private const RECURRING_PERIODS = [
+        Plan::PERIOD_MONTHLY,
+        Plan::PERIOD_QUARTERLY,
+        Plan::PERIOD_HALF_YEARLY,
+        Plan::PERIOD_YEARLY,
+        Plan::PERIOD_TWO_YEARLY,
+        Plan::PERIOD_THREE_YEARLY,
+    ];
 
     /**
      * Transform the resource into an array.
@@ -19,43 +26,122 @@ class PlanResource extends JsonResource
      */
     public function toArray(Request $request): array
     {
+        $normalizedPrices = $this->getNormalizedPrices();
+        $legacyPrices = $this->getPeriodPrices($normalizedPrices);
+        $availablePeriods = $this->getAvailablePeriods($normalizedPrices);
+        $recurringPeriods = $this->getRecurringPeriods($availablePeriods);
+
         return [
-            'id' => $this->resource['id'],
-            'group_id' => $this->resource['group_id'],
-            'name' => $this->resource['name'],
-            'tags' => $this->resource['tags'],
+            'id' => $this->getResourceValue('id'),
+            'group_id' => $this->getResourceValue('group_id'),
+            'name' => $this->getResourceValue('name'),
+            'tags' => $this->getResourceValue('tags'),
             'content' => $this->formatContent(),
-            ...$this->getPeriodPrices(),
+            'upgrade_to_plan_ids' => $this->getUpgradeTargetPlanIds(),
+            'prices' => $normalizedPrices,
+            'available_periods' => $availablePeriods,
+            'recurring_periods' => $recurringPeriods,
+            'has_recurring_price' => !empty($recurringPeriods),
+            'has_onetime_price' => array_key_exists(Plan::PERIOD_ONETIME, $normalizedPrices),
+            'has_reset_price' => array_key_exists(Plan::PERIOD_RESET_TRAFFIC, $normalizedPrices),
+            ...$legacyPrices,
             'capacity_limit' => $this->getFormattedCapacityLimit(),
-            'transfer_enable' => $this->resource['transfer_enable'],
-            'speed_limit' => $this->resource['speed_limit'],
-            'device_limit' => $this->resource['device_limit'],
-            'show' => (bool) $this->resource['show'],
-            'sell' => (bool) $this->resource['sell'],
-            'renew' => (bool) $this->resource['renew'],
-            'reset_traffic_method' => $this->resource['reset_traffic_method'],
-            'sort' => $this->resource['sort'],
-            'created_at' => $this->resource['created_at'],
-            'updated_at' => $this->resource['updated_at']
+            'transfer_enable' => $this->getResourceValue('transfer_enable'),
+            'speed_limit' => $this->getResourceValue('speed_limit'),
+            'device_limit' => $this->getResourceValue('device_limit'),
+            'show' => (bool) $this->getResourceValue('show'),
+            'sell' => (bool) $this->getResourceValue('sell'),
+            'renew' => (bool) $this->getResourceValue('renew'),
+            'reset_traffic_method' => $this->getResourceValue('reset_traffic_method'),
+            'sort' => $this->getResourceValue('sort'),
+            'created_at' => $this->getResourceValue('created_at'),
+            'updated_at' => $this->getResourceValue('updated_at')
         ];
     }
 
     /**
-     * Get transformed period prices using Plan mapping
+     * Get normalized prices using modern period keys.
      *
-     * @return array<string, float|null>
+     * @return array<string, int>
      */
-    protected function getPeriodPrices(): array
+    protected function getNormalizedPrices(): array
+    {
+        $rawPrices = $this->getResourceValue('prices', []);
+        if (!is_array($rawPrices)) {
+            return [];
+        }
+
+        return collect(Plan::LEGACY_PERIOD_MAPPING)
+            ->mapWithKeys(function (string $newPeriod) use ($rawPrices): array {
+                $price = $this->normalizePrice($rawPrices[$newPeriod] ?? null);
+                return $price > 0 ? [$newPeriod => $price] : [];
+            })
+            ->all();
+    }
+
+    /**
+     * Get transformed period prices using legacy period keys.
+     *
+     * @param array<string, int> $normalizedPrices
+     * @return array<string, int|null>
+     */
+    protected function getPeriodPrices(array $normalizedPrices): array
     {
         return collect(Plan::LEGACY_PERIOD_MAPPING)
             ->mapWithKeys(function (string $newPeriod, string $legacyPeriod): array {
-                $price = $this->resource['prices'][$newPeriod] ?? null;
                 return [
-                    $legacyPeriod => $price !== null
-                        ? (float) $price * self::PRICE_MULTIPLIER
-                        : null
+                    $legacyPeriod => $normalizedPrices[$newPeriod] ?? null
                 ];
             })
+            ->all();
+    }
+
+    /**
+     * Get active periods in legacy period format.
+     *
+     * @param array<string, int> $normalizedPrices
+     * @return array<int, string>
+     */
+    protected function getAvailablePeriods(array $normalizedPrices): array
+    {
+        return collect(array_keys($normalizedPrices))
+            ->map(fn(string $period): string => array_flip(Plan::LEGACY_PERIOD_MAPPING)[$period] ?? $period)
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Get recurring active periods in legacy period format.
+     *
+     * @param array<int, string> $availablePeriods
+     * @return array<int, string>
+     */
+    protected function getRecurringPeriods(array $availablePeriods): array
+    {
+        $recurringLegacyPeriods = collect(self::RECURRING_PERIODS)
+            ->map(fn(string $period): string => array_flip(Plan::LEGACY_PERIOD_MAPPING)[$period] ?? $period)
+            ->all();
+
+        return array_values(array_intersect($availablePeriods, $recurringLegacyPeriods));
+    }
+
+    /**
+     * Get normalized upgrade target plan ids.
+     *
+     * @return array<int, int>
+     */
+    protected function getUpgradeTargetPlanIds(): array
+    {
+        $raw = $this->getResourceValue('upgrade_to_plan_ids', []);
+        if (!is_array($raw)) {
+            return [];
+        }
+
+        return collect($raw)
+            ->map(fn(mixed $id): int => (int) $id)
+            ->filter(fn(int $id): bool => $id > 0)
+            ->unique()
+            ->values()
             ->all();
     }
 
@@ -66,7 +152,7 @@ class PlanResource extends JsonResource
      */
     protected function getFormattedCapacityLimit(): int|string|null
     {
-        $limit = $this->resource['capacity_limit'];
+        $limit = $this->getResourceValue('capacity_limit');
 
         return match (true) {
             $limit === null => null,
@@ -82,12 +168,12 @@ class PlanResource extends JsonResource
      */
     protected function formatContent(): string
     {
-        $content = $this->resource['content'] ?? '';
+        $content = (string) $this->getResourceValue('content', '');
         
         $replacements = [
-            '{{transfer}}' => $this->resource['transfer_enable'],
-            '{{speed}}' => $this->resource['speed_limit'] === NULL ? __('No Limit') : $this->resource['speed_limit'],
-            '{{devices}}' => $this->resource['device_limit'] === NULL ? __('No Limit') : $this->resource['device_limit'],
+            '{{transfer}}' => $this->getResourceValue('transfer_enable'),
+            '{{speed}}' => $this->getResourceValue('speed_limit') === null ? __('No Limit') : $this->getResourceValue('speed_limit'),
+            '{{devices}}' => $this->getResourceValue('device_limit') === null ? __('No Limit') : $this->getResourceValue('device_limit'),
             '{{reset_method}}' => $this->getResetMethodText(),
         ];
 
@@ -105,7 +191,7 @@ class PlanResource extends JsonResource
      */
     protected function getResetMethodText(): string
     {
-        $method = $this->resource['reset_traffic_method'];
+        $method = $this->getResourceValue('reset_traffic_method');
         
         if ($method === Plan::RESET_TRAFFIC_FOLLOW_SYSTEM) {
             $method = admin_setting('reset_traffic_method', Plan::RESET_TRAFFIC_MONTHLY);
@@ -118,5 +204,19 @@ class PlanResource extends JsonResource
             Plan::RESET_TRAFFIC_YEARLY => __('Yearly'),
             default => __('Monthly')
         };
+    }
+
+    protected function getResourceValue(string $key, mixed $default = null): mixed
+    {
+        return data_get($this->resource, $key, $default);
+    }
+
+    protected function normalizePrice(mixed $price): int
+    {
+        if ($price === null || $price === '') {
+            return 0;
+        }
+
+        return max(0, (int) round(((float) $price) * self::PRICE_MULTIPLIER));
     }
 }

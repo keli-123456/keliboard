@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\User\UserChangePassword;
 use App\Http\Requests\User\UserTransfer;
 use App\Http\Requests\User\UserUpdate;
+use App\Http\Resources\PlanResource;
 use App\Models\Order;
 use App\Models\Plan;
 use App\Models\Ticket;
@@ -17,6 +18,7 @@ use App\Services\UserOnlineService;
 use App\Services\UserService;
 use App\Utils\CacheKey;
 use App\Utils\Helper;
+use Illuminate\Contracts\Support\Arrayable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 
@@ -161,6 +163,9 @@ class UserController extends Controller
         $userService = new UserService();
         $user['reset_day'] = $userService->getResetDay($user);
         $user = HookManager::filter('user.subscribe.response', $user);
+        if (isset($user['plan'])) {
+            $user['plan'] = $this->normalizeSubscribePlan($request, $user['plan']);
+        }
         return $this->success($user);
     }
 
@@ -279,5 +284,38 @@ class UserController extends Controller
 
         $url = $this->loginService->generateQuickLoginUrl($user, $request->input('redirect'));
         return $this->success($url);
+    }
+
+    protected function normalizeSubscribePlan(Request $request, mixed $plan): mixed
+    {
+        if ($plan instanceof Plan) {
+            return array_merge($plan->toArray(), PlanResource::make($plan)->toArray($request));
+        }
+
+        if ($plan instanceof Arrayable) {
+            $raw = $plan->toArray();
+        } elseif (is_array($plan)) {
+            $raw = $plan;
+        } else {
+            return $plan;
+        }
+
+        if (!array_key_exists('id', $raw) || !array_key_exists('name', $raw)) {
+            return $plan;
+        }
+
+        if ($this->isNormalizedSubscribePlan($raw)) {
+            return $raw;
+        }
+
+        return array_merge($raw, PlanResource::make($raw)->toArray($request));
+    }
+
+    protected function isNormalizedSubscribePlan(array $plan): bool
+    {
+        return array_key_exists('available_periods', $plan)
+            || array_key_exists('recurring_periods', $plan)
+            || array_key_exists('has_recurring_price', $plan)
+            || array_key_exists('has_onetime_price', $plan);
     }
 }
