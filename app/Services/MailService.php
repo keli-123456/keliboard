@@ -3,7 +3,9 @@
 namespace App\Services;
 
 use App\Jobs\SendEmailJob;
+use App\Models\MarketingRule;
 use App\Models\MailLog;
+use App\Models\MessageDispatchLog;
 use App\Models\User;
 use App\Utils\CacheKey;
 use Illuminate\Support\Facades\Cache;
@@ -152,6 +154,7 @@ class MailService
             'subject' => __('The traffic usage in :app_name has reached 80%', [
                 'app_name' => admin_setting('app_name', 'XBoard')
             ]),
+            'message_type' => MarketingRule::TYPE_LIFECYCLE,
             'template_name' => 'remindTraffic',
             'template_value' => [
                 'name' => admin_setting('app_name', 'XBoard'),
@@ -171,6 +174,7 @@ class MailService
             'subject' => __('The service in :app_name is about to expire', [
                 'app_name' => admin_setting('app_name', 'XBoard')
             ]),
+            'message_type' => MarketingRule::TYPE_LIFECYCLE,
             'template_name' => 'remindExpire',
             'template_value' => [
                 'name' => admin_setting('app_name', 'XBoard'),
@@ -209,8 +213,10 @@ class MailService
      *   - error: 如果邮件发送失败，包含错误信息；否则为 null
      * @throws \InvalidArgumentException 如果 $params 参数缺少必要的字段，抛出此异常
      */
-    public static function sendEmail(array $params)
+    public static function sendEmail(array $params, array $meta = []): array
     {
+        /** @var MessageDispatchService $dispatchService */
+        $dispatchService = app(MessageDispatchService::class);
         if (admin_setting('email_host')) {
             Config::set('mail.host', admin_setting('email_host', config('mail.host')));
             Config::set('mail.port', admin_setting('email_port', config('mail.port')));
@@ -220,30 +226,88 @@ class MailService
             Config::set('mail.from.address', admin_setting('email_from_address', config('mail.from.address')));
             Config::set('mail.from.name', admin_setting('app_name', 'XBoard'));
         }
-        $email = $params['email'];
-        $subject = $params['subject'];
-        $params['template_name'] = 'mail.' . admin_setting('email_template', 'default') . '.' . $params['template_name'];
-        try {
-            Mail::send(
-                $params['template_name'],
-                $params['template_value'],
-                function ($message) use ($email, $subject) {
-                    $message->to($email)->subject($subject);
-                }
-            );
-            $error = null;
-        } catch (\Exception $e) {
-            Log::error($e);
-            $error = $e->getMessage();
+
+        $email = (string) $params['email'];
+        $subject = (string) $params['subject'];
+        $messageType = (string) ($params['message_type'] ?? $meta['message_type'] ?? MarketingRule::TYPE_TRANSACTIONAL);
+        $templateName = (string) ($params['template_name'] ?? 'notify');
+        if (!str_starts_with($templateName, 'mail.')) {
+            $templateName = 'mail.' . admin_setting('email_template', 'default') . '.' . $templateName;
         }
-        $log = [
-            'email' => $params['email'],
-            'subject' => $params['subject'],
-            'template_name' => $params['template_name'],
+
+        $providerHealth = $dispatchService->getProviderHealth()['status'];
+        $failureClassification = null;
+        $providerResponse = null;
+
+        $suppression = null;
+        if (($meta['respect_suppression'] ?? false) === true) {
+            $suppression = $dispatchService->matchSuppression('email', $email, $messageType, $meta['user_id'] ?? null);
+        }
+
+        if ($suppression) {
+            $error = 'suppressed:' . $suppression->reason_type;
+            $failureClassification = null;
+        } else {
+            $quota = $dispatchService->checkImmediateQuota($messageType, 'email');
+            if (!$quota['allowed']) {
+                $error = 'message quota blocked: ' . $quota['reason'];
+                $failureClassification = MessageDispatchLog::FAILURE_RATE_LIMIT;
+                $providerResponse = $quota['reason'];
+            } else {
+                try {
+                    Mail::send(
+                        $templateName,
+                        $params['template_value'],
+                        function ($message) use ($email, $subject) {
+                            $message->to($email)->subject($subject);
+                        }
+                    );
+                    $error = null;
+                } catch (\Throwable $e) {
+                    Log::error($e);
+                    $error = $e->getMessage();
+                    $failureClassification = $dispatchService->classifyEmailFailure($error);
+                }
+            }
+        }
+
+        $mailLog = MailLog::create([
+            'email' => $email,
+            'subject' => $subject,
+            'template_name' => $templateName,
             'error' => $error,
-            'config' => config('mail')
+        ]);
+
+        $dispatchLog = $dispatchService->logDispatchAttempt([
+            'task_id' => $meta['task_id'] ?? null,
+            'user_id' => $meta['user_id'] ?? null,
+            'rule_id' => $meta['rule_id'] ?? null,
+            'template_id' => $meta['template_id'] ?? null,
+            'mail_log_id' => $mailLog->id,
+            'channel' => 'email',
+            'message_type' => $messageType,
+            'status' => $suppression
+                ? MessageDispatchLog::STATUS_SUPPRESSED
+                : ($error ? MessageDispatchLog::STATUS_FAILED : MessageDispatchLog::STATUS_SUCCESS),
+            'attempt' => max(1, (int) ($meta['attempt'] ?? 1)),
+            'to_address' => $email,
+            'subject' => $subject,
+            'failure_classification' => $failureClassification,
+            'provider_health_status' => $providerHealth,
+            'error_message' => $error,
+            'provider_response' => $providerResponse,
+            'context' => $meta['context'] ?? null,
+        ]);
+
+        return [
+            'email' => $email,
+            'subject' => $subject,
+            'template_name' => $templateName,
+            'error' => $error,
+            'failure_classification' => $failureClassification,
+            'provider_response' => $providerResponse,
+            'mail_log_id' => $mailLog->id,
+            'dispatch_log_id' => $dispatchLog->id,
         ];
-        MailLog::create($log);
-        return $log;
     }
 }

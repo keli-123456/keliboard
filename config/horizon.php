@@ -179,6 +179,7 @@ return [
                     'send_email',
                     'send_email_mass',
                     'send_telegram',
+                    'message_dispatch',
                     'online_sync'
                 ],
                 'balance' => 'auto',
@@ -198,6 +199,7 @@ return [
                     'send_email',
                     'send_email_mass',
                     'send_telegram',
+                    'message_dispatch',
                     'online_sync'
                 ],
                 'balance' => 'auto',

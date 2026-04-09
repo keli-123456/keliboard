@@ -21,6 +21,8 @@ use App\Http\Controllers\V2\Admin\TrafficResetController;
 use App\Http\Controllers\V2\Admin\StaffSitesController;
 use App\Http\Controllers\V2\Admin\OrderUpgradeQuoteController;
 use App\Http\Controllers\V2\Admin\SubscriptionControlController;
+use App\Http\Controllers\V2\Admin\MarketingController;
+use App\Http\Controllers\V2\Admin\SpamRegistrationController;
 use Illuminate\Contracts\Routing\Registrar;
 
 class AdminRoute
@@ -248,6 +250,30 @@ class AdminRoute
                 'prefix' => 'risk'
             ], function ($router) {
                 $router->get('/subscription-control/overview', [SubscriptionControlController::class, 'overview']);
+            });
+
+            $router->group([
+                'prefix' => 'marketing'
+            ], function ($router) {
+                $router->get('/overview', [MarketingController::class, 'overview']);
+                $router->get('/rules', [MarketingController::class, 'rules']);
+                $router->post('/rule/update', [MarketingController::class, 'updateRule']);
+                $router->get('/templates', [MarketingController::class, 'templates']);
+                $router->post('/template/save', [MarketingController::class, 'saveTemplate']);
+                $router->any('/logs', [MarketingController::class, 'logs']);
+                $router->post('/log/note', [MarketingController::class, 'saveLogNote']);
+            });
+
+            $router->group([
+                'prefix' => 'spam-registration'
+            ], function ($router) {
+                $router->any('/candidates', [SpamRegistrationController::class, 'candidates']);
+                $router->post('/detail', [SpamRegistrationController::class, 'detail']);
+                $router->post('/preserve', [SpamRegistrationController::class, 'preserve']);
+                $router->post('/restore', [SpamRegistrationController::class, 'restore']);
+                $router->post('/freeze', [SpamRegistrationController::class, 'freeze']);
+                $router->post('/soft-delete', [SpamRegistrationController::class, 'softDelete']);
+                $router->post('/note', [SpamRegistrationController::class, 'note']);
             });
 
             // Update

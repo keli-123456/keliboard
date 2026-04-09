@@ -7,6 +7,7 @@ use App\Http\Requests\Admin\UserGenerate;
 use App\Http\Requests\Admin\UserSendMail;
 use App\Http\Requests\Admin\UserUpdate;
 use App\Jobs\SendEmailJob;
+use App\Models\MarketingRule;
 use App\Models\Plan;
 use App\Models\User;
 use App\Services\AuthService;
@@ -532,6 +533,7 @@ class UserController extends Controller
                 dispatch(new SendEmailJob([
                     'email' => $user->email,
                     'subject' => $subject,
+                    'message_type' => MarketingRule::TYPE_MARKETING,
                     'template_name' => 'notify',
                     'template_value' => $templateValue
                 ], 'send_email_mass'));

@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\MessageDispatchLog;
 use App\Services\MailService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -34,9 +35,17 @@ class SendEmailJob implements ShouldQueue
      */
     public function handle()
     {
-        $mailLog = MailService::sendEmail($this->params);
-        if ($mailLog['error']) {
-            $this->release(); //发送失败将触发重试
+        $result = MailService::sendEmail($this->params);
+        if (
+            $result['error'] &&
+            in_array($result['failure_classification'] ?? null, [
+                MessageDispatchLog::FAILURE_TEMPORARY,
+                MessageDispatchLog::FAILURE_PROVIDER,
+                MessageDispatchLog::FAILURE_RATE_LIMIT,
+                MessageDispatchLog::FAILURE_TIMEOUT,
+            ], true)
+        ) {
+            $this->release(); // 仅对可恢复错误触发重试
         }
     }
 }
