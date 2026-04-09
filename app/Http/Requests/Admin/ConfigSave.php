@@ -84,6 +84,7 @@ class ConfigSave extends FormRequest
         'server_token' => 'nullable|min:16',
         'server_pull_interval' => 'integer',
         'server_push_interval' => 'integer',
+        'message_ops_enable' => 'boolean',
         'node_realtime_enable' => 'boolean',
         'node_realtime_path' => 'nullable|string|max:100',
         'node_realtime_public_url' => 'nullable|string|max:500',

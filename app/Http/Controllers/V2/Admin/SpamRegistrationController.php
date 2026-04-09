@@ -5,8 +5,10 @@ namespace App\Http\Controllers\V2\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\MessageDispatchLog;
 use App\Models\SpamRegistrationCandidate;
+use App\Services\MessageOpsSettings;
 use App\Services\SpamRegistrationService;
 use Illuminate\Http\Request;
+use Illuminate\Http\JsonResponse;
 
 class SpamRegistrationController extends Controller
 {
@@ -19,6 +21,9 @@ class SpamRegistrationController extends Controller
 
     public function candidates(Request $request)
     {
+        if ($response = $this->ensureMessageOpsEnabled()) {
+            return $response;
+        }
         $current = max(1, (int) $request->input('current', 1));
         $pageSize = max(1, min(100, (int) $request->input('pageSize', 20)));
         $status = trim((string) $request->input('status', ''));
@@ -44,6 +49,9 @@ class SpamRegistrationController extends Controller
 
     public function detail(Request $request)
     {
+        if ($response = $this->ensureMessageOpsEnabled()) {
+            return $response;
+        }
         $data = $request->validate([
             'id' => 'required|integer|exists:v2_spam_registration_candidate,id',
         ]);
@@ -72,6 +80,9 @@ class SpamRegistrationController extends Controller
 
     public function preserve(Request $request)
     {
+        if ($response = $this->ensureMessageOpsEnabled()) {
+            return $response;
+        }
         $data = $request->validate([
             'id' => 'required|integer|exists:v2_spam_registration_candidate,id',
             'note' => 'nullable|string|max:2000',
@@ -83,6 +94,9 @@ class SpamRegistrationController extends Controller
 
     public function restore(Request $request)
     {
+        if ($response = $this->ensureMessageOpsEnabled()) {
+            return $response;
+        }
         $data = $request->validate([
             'id' => 'required|integer|exists:v2_spam_registration_candidate,id',
             'note' => 'nullable|string|max:2000',
@@ -94,6 +108,9 @@ class SpamRegistrationController extends Controller
 
     public function freeze(Request $request)
     {
+        if ($response = $this->ensureMessageOpsEnabled()) {
+            return $response;
+        }
         $data = $request->validate([
             'id' => 'required|integer|exists:v2_spam_registration_candidate,id',
             'note' => 'nullable|string|max:2000',
@@ -105,6 +122,9 @@ class SpamRegistrationController extends Controller
 
     public function softDelete(Request $request)
     {
+        if ($response = $this->ensureMessageOpsEnabled()) {
+            return $response;
+        }
         $data = $request->validate([
             'id' => 'required|integer|exists:v2_spam_registration_candidate,id',
             'note' => 'nullable|string|max:2000',
@@ -116,6 +136,9 @@ class SpamRegistrationController extends Controller
 
     public function note(Request $request)
     {
+        if ($response = $this->ensureMessageOpsEnabled()) {
+            return $response;
+        }
         $data = $request->validate([
             'id' => 'required|integer|exists:v2_spam_registration_candidate,id',
             'note' => 'nullable|string|max:5000',
@@ -123,5 +146,14 @@ class SpamRegistrationController extends Controller
 
         $candidate = SpamRegistrationCandidate::query()->with('user')->findOrFail($data['id']);
         return $this->success($this->spamService->saveCandidateNote($candidate, $data['note'] ?? null, $request->user()?->id));
+    }
+
+    private function ensureMessageOpsEnabled(): ?JsonResponse
+    {
+        if (MessageOpsSettings::enabled()) {
+            return null;
+        }
+
+        return $this->fail([403, '营销运营功能未启用']);
     }
 }

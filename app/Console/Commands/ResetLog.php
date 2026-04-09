@@ -4,6 +4,8 @@ namespace App\Console\Commands;
 
 use App\Models\AdminAuditLog;
 use App\Models\Log;
+use App\Models\MailLog;
+use App\Models\MessageDispatchLog;
 use App\Models\RiskEvent;
 use App\Models\StatServer;
 use App\Models\StatUser;
@@ -13,6 +15,9 @@ use Illuminate\Support\Facades\Schema;
 
 class ResetLog extends Command
 {
+    private const MAIL_LOG_RETENTION_DAYS = 90;
+    private const MESSAGE_DISPATCH_LOG_RETENTION_DAYS = 90;
+
     protected $builder;
     /**
      * The name and signature of the console command.
@@ -58,6 +63,12 @@ class ResetLog extends Command
         }
         if (Schema::hasTable('v2_risk_event')) {
             RiskEvent::where('created_at', '<', strtotime('-30 days', time()))->delete();
+        }
+        if (Schema::hasTable('v2_message_dispatch_log')) {
+            MessageDispatchLog::where('created_at', '<', strtotime('-' . self::MESSAGE_DISPATCH_LOG_RETENTION_DAYS . ' days', time()))->delete();
+        }
+        if (Schema::hasTable('v2_mail_log')) {
+            MailLog::where('created_at', '<', strtotime('-' . self::MAIL_LOG_RETENTION_DAYS . ' days', time()))->delete();
         }
     }
 }
