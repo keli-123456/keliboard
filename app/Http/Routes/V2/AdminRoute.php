@@ -19,6 +19,7 @@ use App\Http\Controllers\V2\Admin\SystemController;
 use App\Http\Controllers\V2\Admin\ThemeController;
 use App\Http\Controllers\V2\Admin\TrafficResetController;
 use App\Http\Controllers\V2\Admin\StaffSitesController;
+use App\Http\Controllers\V2\Admin\OrderUpgradeQuoteController;
 use App\Http\Controllers\V2\Admin\SubscriptionControlController;
 use Illuminate\Contracts\Routing\Registrar;
 
@@ -104,6 +105,8 @@ class AdminRoute
                 $router->post('/paid', [OrderController::class, 'paid']);
                 $router->post('/cancel', [OrderController::class, 'cancel']);
                 $router->post('/detail', [OrderController::class, 'detail']);
+                $router->any('/upgrade-quote/fetch', [OrderUpgradeQuoteController::class, 'fetch']);
+                $router->post('/upgrade-quote/detail', [OrderUpgradeQuoteController::class, 'detail']);
             });
 
             // User
