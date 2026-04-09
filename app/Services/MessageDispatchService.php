@@ -71,6 +71,9 @@ class MessageDispatchService
                 $query->whereNull('scheduled_at')
                     ->orWhere('scheduled_at', '<=', $now);
             })
+            ->when(!MessageOpsSettings::enabled(), function ($query): void {
+                $query->whereNull('rule_id');
+            })
             ->orderBy('priority')
             ->orderBy('id')
             ->limit($limit)
@@ -81,6 +84,7 @@ class MessageDispatchService
             $quota = $this->checkImmediateQuota($task->message_type, $task->channel);
             if (!$quota['allowed']) {
                 $blockedByQuota++;
+                $this->deferTaskForQuota($task, (string) $quota['reason'], $now);
                 continue;
             }
 
@@ -184,6 +188,18 @@ class MessageDispatchService
             return;
         }
 
+        if ($task->rule_id && !MessageOpsSettings::enabled()) {
+            $task->update([
+                'state' => MessageDispatchTask::STATE_PENDING,
+                'reserved_at' => null,
+                'failure_classification' => null,
+                'last_error' => 'message ops disabled',
+                'provider_response' => null,
+                'updated_at' => time(),
+            ]);
+            return;
+        }
+
         $attempt = (int) $task->attempt_count + 1;
         $user = $task->user;
 
@@ -242,7 +258,13 @@ class MessageDispatchService
                 'attempt' => $attempt,
                 'context' => $task->context ?? [],
                 'respect_suppression' => true,
+                'defer_on_quota_block' => true,
             ]);
+
+            if (($result['deferred_by_quota'] ?? false) === true) {
+                $this->deferTaskForQuota($task, (string) ($result['quota_reason'] ?? ''), time());
+                return;
+            }
 
             $this->finishTaskAfterSend($task, $attempt, $result, $user);
             return;
@@ -381,6 +403,24 @@ class MessageDispatchService
         }
 
         return ['allowed' => true, 'reason' => null];
+    }
+
+    private function deferTaskForQuota(MessageDispatchTask $task, string $reason, int $now): void
+    {
+        $task->update([
+            'state' => MessageDispatchTask::STATE_PENDING,
+            'available_at' => $this->nextQuotaRetryAt($now),
+            'reserved_at' => null,
+            'failure_classification' => null,
+            'last_error' => $reason !== '' ? 'quota deferred: ' . $reason : 'quota deferred',
+            'provider_response' => $reason !== '' ? $reason : null,
+            'updated_at' => $now,
+        ]);
+    }
+
+    private function nextQuotaRetryAt(int $now): int
+    {
+        return CarbonImmutable::createFromTimestamp($now)->addHour()->startOfHour()->timestamp;
     }
 
     public function getQuotaOverview(): array

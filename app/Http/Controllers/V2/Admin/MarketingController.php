@@ -9,7 +9,9 @@ use App\Models\MessageDispatchLog;
 use App\Models\MessageDispatchTask;
 use App\Services\MarketingAutomationService;
 use App\Services\MessageDispatchService;
+use App\Services\MessageOpsSettings;
 use Illuminate\Http\Request;
+use Illuminate\Http\JsonResponse;
 
 class MarketingController extends Controller
 {
@@ -24,6 +26,9 @@ class MarketingController extends Controller
 
     public function overview()
     {
+        if ($response = $this->ensureMessageOpsEnabled()) {
+            return $response;
+        }
         $this->marketingService->seedDefaults();
 
         return $this->success([
@@ -41,6 +46,9 @@ class MarketingController extends Controller
 
     public function rules()
     {
+        if ($response = $this->ensureMessageOpsEnabled()) {
+            return $response;
+        }
         $this->marketingService->seedDefaults();
         $rules = MarketingRule::query()
             ->with(['emailTemplate:id,name,code,channel', 'telegramTemplate:id,name,code,channel'])
@@ -52,6 +60,9 @@ class MarketingController extends Controller
 
     public function updateRule(Request $request)
     {
+        if ($response = $this->ensureMessageOpsEnabled()) {
+            return $response;
+        }
         $data = $request->validate([
             'id' => 'required|integer|exists:v2_marketing_rule,id',
             'enabled' => 'required|boolean',
@@ -72,6 +83,9 @@ class MarketingController extends Controller
 
     public function templates(Request $request)
     {
+        if ($response = $this->ensureMessageOpsEnabled()) {
+            return $response;
+        }
         $this->marketingService->seedDefaults();
         $channel = trim((string) $request->input('channel', ''));
 
@@ -85,6 +99,9 @@ class MarketingController extends Controller
 
     public function saveTemplate(Request $request)
     {
+        if ($response = $this->ensureMessageOpsEnabled()) {
+            return $response;
+        }
         $data = $request->validate([
             'id' => 'nullable|integer|exists:v2_marketing_template,id',
             'code' => 'required|string|max:64',
@@ -111,6 +128,9 @@ class MarketingController extends Controller
 
     public function logs(Request $request)
     {
+        if ($response = $this->ensureMessageOpsEnabled()) {
+            return $response;
+        }
         $current = max(1, (int) $request->input('current', 1));
         $pageSize = max(1, min(100, (int) $request->input('pageSize', 20)));
         $email = trim((string) $request->input('email', ''));
@@ -141,6 +161,9 @@ class MarketingController extends Controller
 
     public function saveLogNote(Request $request)
     {
+        if ($response = $this->ensureMessageOpsEnabled()) {
+            return $response;
+        }
         $data = $request->validate([
             'id' => 'required|integer|exists:v2_message_dispatch_log,id',
             'note' => 'nullable|string|max:5000',
@@ -150,5 +173,14 @@ class MarketingController extends Controller
         $saved = $this->dispatchService->saveLogNote($log, $data['note'] ?? null, $request->user()?->id);
 
         return $this->success($saved);
+    }
+
+    private function ensureMessageOpsEnabled(): ?JsonResponse
+    {
+        if (MessageOpsSettings::enabled()) {
+            return null;
+        }
+
+        return $this->fail([403, '营销运营功能未启用']);
     }
 }

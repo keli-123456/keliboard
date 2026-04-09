@@ -12,6 +12,7 @@ use App\Protocols\Stash;
 use App\Protocols\Surfboard;
 use App\Protocols\Surge;
 use App\Services\MailService;
+use App\Services\MessageOpsSettings;
 use App\Services\NodeRealtime\NodeRealtimePublisher;
 use App\Services\NodeRealtime\NodeRealtimeSettings;
 use App\Services\NodeRealtime\NodeRealtimeStatusService;
@@ -217,6 +218,7 @@ class ConfigController extends Controller
                 'server_token' => admin_setting('server_token'),
                 'server_pull_interval' => admin_setting('server_pull_interval', 60),
                 'server_push_interval' => admin_setting('server_push_interval', 60),
+                'message_ops_enable' => MessageOpsSettings::enabled(),
                 'node_realtime_enable' => $nodeRealtime->enabledSetting(),
                 'node_realtime_path' => $nodeRealtime->path(),
                 'node_realtime_public_url' => $nodeRealtime->configuredPublicUrl(),

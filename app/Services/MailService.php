@@ -250,6 +250,20 @@ class MailService
         } else {
             $quota = $dispatchService->checkImmediateQuota($messageType, 'email');
             if (!$quota['allowed']) {
+                if (($meta['defer_on_quota_block'] ?? false) === true) {
+                    return [
+                        'email' => $email,
+                        'subject' => $subject,
+                        'template_name' => $templateName,
+                        'error' => 'message quota blocked: ' . $quota['reason'],
+                        'failure_classification' => MessageDispatchLog::FAILURE_RATE_LIMIT,
+                        'provider_response' => $quota['reason'],
+                        'mail_log_id' => null,
+                        'dispatch_log_id' => null,
+                        'deferred_by_quota' => true,
+                        'quota_reason' => $quota['reason'],
+                    ];
+                }
                 $error = 'message quota blocked: ' . $quota['reason'];
                 $failureClassification = MessageDispatchLog::FAILURE_RATE_LIMIT;
                 $providerResponse = $quota['reason'];
