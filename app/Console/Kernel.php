@@ -36,6 +36,8 @@ class Kernel extends ConsoleKernel
         $schedule->command('check:commission')->everyMinute()->onOneServer();
         $schedule->command('check:ticket')->everyMinute()->onOneServer();
         $schedule->command('renew:auto')->everyMinute()->onOneServer()->withoutOverlapping(5);
+        $schedule->command('message-dispatch:release', ['--limit' => 200])->everyMinute()->onOneServer()->withoutOverlapping(1);
+        $schedule->command('message-dispatch:recover-stuck', ['--limit' => 200])->everyFiveMinutes()->onOneServer()->withoutOverlapping(4);
         // reset
         $schedule->command('reset:traffic')->everyMinute()->onOneServer();
         $schedule->command('reset:log')->daily()->onOneServer();
@@ -43,6 +45,8 @@ class Kernel extends ConsoleKernel
         // user sync (users_revision)
         $schedule->command('usersync:reconcile')->everyMinute()->onOneServer()->withoutOverlapping(2);
         $schedule->command('usersync:cleanup')->dailyAt('3:10')->onOneServer();
+        $schedule->command('marketing:scan')->everyTenMinutes()->onOneServer()->withoutOverlapping(8);
+        $schedule->command('spam-registration:scan')->hourly()->onOneServer()->withoutOverlapping(50);
         // send
         $schedule->command('send:remindMail', ['--force'])->dailyAt('11:30')->onOneServer();
         // horizon metrics
