@@ -28,6 +28,8 @@ class CommController extends Controller
             'commission_distribution_l2' => admin_setting('commission_distribution_l2'),
             'commission_distribution_l3' => admin_setting('commission_distribution_l3'),
             'commission_first_time_enable' => (int)admin_setting('commission_first_time_enable', 1),
+            'plan_change_enable' => (int)admin_setting('plan_change_enable', 1),
+            'upgrade_v2_enable' => (int)admin_setting('upgrade_v2_enable', 0),
         ];
         $data = array_merge($data, app(RechargeBonusService::class)->getConfig());
         return $this->success($data);
