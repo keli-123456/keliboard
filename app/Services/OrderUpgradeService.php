@@ -301,9 +301,6 @@ class OrderUpgradeService
         }
 
         $pricing = $this->calculatePricing($user, $sourcePlan, $sourceOrder, $targetPlan, $periodKey);
-        if ($pricing['upgrade_credit_amount'] <= 0) {
-            return $this->deny(__('No upgrade credit is available for the current subscription'));
-        }
 
         return [
             'allow_upgrade' => true,
@@ -334,7 +331,7 @@ class OrderUpgradeService
         $sourcePaidBasis = max(0, (int) $sourceOrder->total_amount + (int) $sourceOrder->balance_amount);
         $sourceMonths = OrderService::STR_TO_TIME[(string) $sourceOrder->period] ?? 0;
         $targetMonths = OrderService::STR_TO_TIME[$targetPeriod] ?? 0;
-        if ($sourcePaidBasis <= 0 || $sourceMonths <= 0 || $targetMonths <= 0) {
+        if ($sourceMonths <= 0 || $targetMonths <= 0) {
             throw new ApiException(__('Invalid upgrade pricing configuration'));
         }
 
@@ -443,6 +440,13 @@ class OrderUpgradeService
         }
 
         $sourcePaidBasis = max(0, (int) $sourceOrder->total_amount + (int) $sourceOrder->balance_amount);
+        if ($sourcePaidBasis <= 0) {
+            $sourcePlan = Plan::query()->find((int) $sourceOrder->plan_id);
+            if (!$sourcePlan) {
+                return false;
+            }
+            $sourcePaidBasis = OrderService::amountToCents($sourcePlan->prices[(string) $sourceOrder->period] ?? 0);
+        }
         $targetPrice = OrderService::amountToCents($targetPlan->prices[$targetPeriod] ?? 0);
         if ($sourcePaidBasis <= 0 || $targetPrice <= 0) {
             return false;
