@@ -9,6 +9,8 @@ use Illuminate\Support\Facades\Log;
 class NodeAutoRenameService
 {
     private array $config = [];
+    private ?string $maxMindDbPath = null;
+    private bool $maxMindDbPathResolved = false;
 
     public function __construct(array $config = [])
     {
@@ -111,8 +113,7 @@ class NodeAutoRenameService
             return null;
         }
 
-        $ip = $this->resolvePreferredIp($host);
-        $country = $this->resolveCountryLabel($ip);
+        [$ip, $country] = $this->resolveCountryContext($server, $host);
         if ($country === null) {
             return null;
         }
@@ -127,6 +128,42 @@ class NodeAutoRenameService
             'country' => $country,
             'ip' => $ip ?? '',
         ];
+    }
+
+    private function resolveCountryContext(Server $server, string $namingHost): array
+    {
+        foreach ($this->resolveLookupHostCandidates($server, $namingHost) as $lookupHost) {
+            $ip = $this->resolvePreferredIp($lookupHost);
+            if ($ip === null) {
+                continue;
+            }
+
+            $country = $this->resolveCountryLabelByIp($ip);
+            if ($country !== null) {
+                return [$ip, $country];
+            }
+        }
+
+        return [null, $this->resolveCountryLabel(null)];
+    }
+
+    private function resolveLookupHostCandidates(Server $server, string $namingHost): array
+    {
+        $candidates = [];
+        $nodeHost = $this->normalizeHost($server->host ?? null);
+
+        if ((string) $server->type === Server::TYPE_TROJAN && $nodeHost !== null) {
+            $candidates[] = $nodeHost;
+        }
+
+        $candidates[] = $namingHost;
+
+        if ((string) $server->type !== Server::TYPE_TROJAN && $nodeHost !== null) {
+            $candidates[] = $nodeHost;
+        }
+
+        $candidates = array_filter($candidates, static fn($value): bool => is_string($value) && $value !== '');
+        return array_values(array_unique($candidates));
     }
 
     private function resolveNamingHost(Server $server): ?string
@@ -191,18 +228,9 @@ class NodeAutoRenameService
 
     private function resolveCountryLabel(?string $ip): ?string
     {
-        if ($ip !== null && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-            try {
-                $country = $this->extractCountry((string) (new \Ip2Region())->simple($ip));
-                if ($country !== null) {
-                    return $country;
-                }
-            } catch (\Throwable $e) {
-                Log::warning('[NodeAutoRename] country lookup failed', [
-                    'ip' => $ip,
-                    'message' => $e->getMessage(),
-                ]);
-            }
+        $country = $this->resolveCountryLabelByIp($ip);
+        if ($country !== null) {
+            return $country;
         }
 
         if ($this->configBool('rename_when_country_unknown', false)) {
@@ -210,6 +238,347 @@ class NodeAutoRenameService
         }
 
         return null;
+    }
+
+    private function resolveCountryLabelByIp(?string $ip): ?string
+    {
+        if ($ip === null || !filter_var($ip, FILTER_VALIDATE_IP)) {
+            return null;
+        }
+
+        if (!$this->isPublicIp($ip)) {
+            return null;
+        }
+
+        $provider = $this->resolveGeoProvider();
+        if ($provider === 'maxmind') {
+            return $this->resolveCountryByMaxMind($ip);
+        }
+
+        if ($provider === 'ip2region') {
+            return $this->resolveCountryByIp2Region($ip);
+        }
+
+        // auto: prefer MaxMind first, fallback to ip2region.
+        return $this->resolveCountryByMaxMind($ip) ?? $this->resolveCountryByIp2Region($ip);
+    }
+
+    private function resolveGeoProvider(): string
+    {
+        $value = strtolower(trim((string) ($this->config['geo_provider'] ?? 'auto')));
+        return in_array($value, ['auto', 'maxmind', 'ip2region'], true) ? $value : 'auto';
+    }
+
+    private function resolveCountryByIp2Region(string $ip): ?string
+    {
+        try {
+            $reader = new \Ip2Region();
+
+            if (method_exists($reader, 'search')) {
+                $country = $this->extractCountry((string) $reader->search($ip));
+                if ($country !== null) {
+                    return $country;
+                }
+            }
+
+            if (method_exists($reader, 'simple')) {
+                $country = $this->extractCountry((string) $reader->simple($ip));
+                if ($country !== null) {
+                    return $country;
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('[NodeAutoRename] ip2region lookup failed', [
+                'ip' => $ip,
+                'message' => $e->getMessage(),
+            ]);
+        }
+
+        return null;
+    }
+
+    private function resolveCountryByMaxMind(string $ip): ?string
+    {
+        $dbPath = $this->resolveMaxMindDbPath();
+        if ($dbPath === null) {
+            return null;
+        }
+
+        $country = $this->resolveCountryByMaxMindExtension($dbPath, $ip);
+        if ($country !== null) {
+            return $country;
+        }
+
+        $country = $this->resolveCountryByMaxMindDbReader($dbPath, $ip);
+        if ($country !== null) {
+            return $country;
+        }
+
+        return $this->resolveCountryByGeoIp2Reader($dbPath, $ip);
+    }
+
+    private function resolveCountryByMaxMindExtension(string $dbPath, string $ip): ?string
+    {
+        if (!function_exists('maxminddb_open') || !function_exists('maxminddb_get') || !function_exists('maxminddb_close')) {
+            return null;
+        }
+
+        $mode = defined('MAXMINDDB_MODE_MEMORY') ? MAXMINDDB_MODE_MEMORY : (defined('MAXMINDDB_MODE_FILE') ? MAXMINDDB_MODE_FILE : 0);
+        $db = @maxminddb_open($dbPath, $mode);
+        if ($db === false || $db === null) {
+            return null;
+        }
+
+        try {
+            $record = @maxminddb_get($db, $ip);
+        } catch (\Throwable $e) {
+            Log::warning('[NodeAutoRename] maxmind extension lookup failed', [
+                'ip' => $ip,
+                'db_path' => $dbPath,
+                'message' => $e->getMessage(),
+            ]);
+            return null;
+        } finally {
+            @maxminddb_close($db);
+        }
+
+        return is_array($record) ? $this->extractCountryFromMaxMindArray($record) : null;
+    }
+
+    private function resolveCountryByGeoIp2Reader(string $dbPath, string $ip): ?string
+    {
+        if (!class_exists('\\GeoIp2\\Database\\Reader')) {
+            return null;
+        }
+
+        try {
+            $readerClass = '\\GeoIp2\\Database\\Reader';
+            $reader = new $readerClass($dbPath);
+
+            try {
+                $record = $reader->country($ip);
+            } catch (\Throwable) {
+                $record = $reader->city($ip);
+            }
+
+            return is_object($record) ? $this->extractCountryFromGeoIp2Record($record) : null;
+        } catch (\Throwable $e) {
+            Log::warning('[NodeAutoRename] geoip2 reader lookup failed', [
+                'ip' => $ip,
+                'db_path' => $dbPath,
+                'message' => $e->getMessage(),
+            ]);
+            return null;
+        } finally {
+            if (isset($reader) && is_object($reader) && method_exists($reader, 'close')) {
+                $reader->close();
+            }
+        }
+    }
+
+    private function resolveCountryByMaxMindDbReader(string $dbPath, string $ip): ?string
+    {
+        if (!class_exists('\\MaxMind\\Db\\Reader')) {
+            return null;
+        }
+
+        try {
+            $readerClass = '\\MaxMind\\Db\\Reader';
+            $reader = new $readerClass($dbPath);
+            $record = $reader->get($ip);
+            return is_array($record) ? $this->extractCountryFromMaxMindArray($record) : null;
+        } catch (\Throwable $e) {
+            Log::warning('[NodeAutoRename] maxmind db reader lookup failed', [
+                'ip' => $ip,
+                'db_path' => $dbPath,
+                'message' => $e->getMessage(),
+            ]);
+            return null;
+        } finally {
+            if (isset($reader) && is_object($reader) && method_exists($reader, 'close')) {
+                $reader->close();
+            }
+        }
+    }
+
+    private function extractCountryFromMaxMindArray(array $record): ?string
+    {
+        foreach (['country', 'registered_country', 'represented_country'] as $key) {
+            $country = $record[$key] ?? null;
+            if (!is_array($country)) {
+                continue;
+            }
+
+            $label = $this->pickCountryNameFromArray($country);
+            if ($label !== null) {
+                return $label;
+            }
+        }
+
+        return null;
+    }
+
+    private function extractCountryFromGeoIp2Record(object $record): ?string
+    {
+        foreach (['country', 'registeredCountry', 'representedCountry'] as $key) {
+            $country = $record->{$key} ?? null;
+            if (!is_object($country)) {
+                continue;
+            }
+
+            $label = $this->pickCountryNameFromObject($country);
+            if ($label !== null) {
+                return $label;
+            }
+        }
+
+        return null;
+    }
+
+    private function pickCountryNameFromArray(array $country): ?string
+    {
+        $names = $country['names'] ?? null;
+        if (is_array($names)) {
+            foreach ($this->resolveCountryLocales() as $locale) {
+                $name = $names[$locale] ?? null;
+                $normalized = $this->normalizeCountryLabel(is_string($name) ? $name : null);
+                if ($normalized !== null) {
+                    return $normalized;
+                }
+            }
+        }
+
+        return $this->normalizeCountryLabel(
+            is_string($country['iso_code'] ?? null) ? (string) $country['iso_code'] : null
+        );
+    }
+
+    private function pickCountryNameFromObject(object $country): ?string
+    {
+        $names = $country->names ?? null;
+        if (is_array($names)) {
+            foreach ($this->resolveCountryLocales() as $locale) {
+                $name = $names[$locale] ?? null;
+                $normalized = $this->normalizeCountryLabel(is_string($name) ? $name : null);
+                if ($normalized !== null) {
+                    return $normalized;
+                }
+            }
+        }
+
+        return $this->normalizeCountryLabel(
+            is_string($country->isoCode ?? null) ? (string) $country->isoCode : null
+        );
+    }
+
+    private function resolveCountryLocales(): array
+    {
+        $raw = $this->config['country_locales'] ?? 'zh-CN,zh,en';
+        if (is_array($raw)) {
+            $values = $raw;
+        } else {
+            $values = preg_split('/[\s,]+/', trim((string) $raw), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        }
+
+        $locales = [];
+        foreach ($values as $value) {
+            $locale = trim((string) $value);
+            if ($locale !== '') {
+                $locales[] = $locale;
+            }
+        }
+
+        if (!in_array('en', $locales, true)) {
+            $locales[] = 'en';
+        }
+
+        return array_values(array_unique($locales));
+    }
+
+    private function normalizeCountryLabel(?string $label): ?string
+    {
+        if ($label === null) {
+            return null;
+        }
+
+        $label = trim($label);
+        if ($label === '' || $label === '0') {
+            return null;
+        }
+
+        return $label;
+    }
+
+    private function resolveMaxMindDbPath(): ?string
+    {
+        if ($this->maxMindDbPathResolved) {
+            return $this->maxMindDbPath;
+        }
+
+        $this->maxMindDbPathResolved = true;
+
+        $rawPath = trim((string) ($this->config['maxmind_db_path'] ?? ''));
+        if ($rawPath === '') {
+            $this->maxMindDbPath = $this->resolveDefaultMaxMindDbPath();
+            return $this->maxMindDbPath;
+        }
+
+        $path = $this->normalizePath($rawPath);
+        if (!is_file($path) || !is_readable($path)) {
+            Log::warning('[NodeAutoRename] maxmind db file not available', [
+                'configured' => $rawPath,
+                'resolved' => $path,
+            ]);
+            $this->maxMindDbPath = null;
+            return null;
+        }
+
+        $this->maxMindDbPath = $path;
+        return $this->maxMindDbPath;
+    }
+
+    private function resolveDefaultMaxMindDbPath(): ?string
+    {
+        $candidates = [];
+
+        if (function_exists('storage_path')) {
+            $candidates[] = storage_path('app/geoip/GeoLite2-City.mmdb');
+            $candidates[] = storage_path('app/geoip/GeoLite2-Country.mmdb');
+        }
+
+        if (function_exists('base_path')) {
+            $candidates[] = base_path('storage/app/geoip/GeoLite2-City.mmdb');
+            $candidates[] = base_path('storage/app/geoip/GeoLite2-Country.mmdb');
+        } else {
+            $base = getcwd() ?: '';
+            if ($base !== '') {
+                $candidates[] = rtrim($base, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'storage/app/geoip/GeoLite2-City.mmdb';
+                $candidates[] = rtrim($base, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'storage/app/geoip/GeoLite2-Country.mmdb';
+            }
+        }
+
+        foreach (array_values(array_unique($candidates)) as $path) {
+            if (is_string($path) && is_file($path) && is_readable($path)) {
+                return $path;
+            }
+        }
+
+        return null;
+    }
+
+    private function normalizePath(string $path): string
+    {
+        $path = trim($path);
+        if ($path === '') {
+            return $path;
+        }
+
+        if (str_starts_with($path, DIRECTORY_SEPARATOR) || preg_match('/^[A-Za-z]:[\/\\\\]/', $path) === 1) {
+            return $path;
+        }
+
+        $basePath = function_exists('base_path') ? base_path() : getcwd();
+        return rtrim((string) $basePath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . ltrim($path, DIRECTORY_SEPARATOR);
     }
 
     private function extractCountry(string $region): ?string
@@ -259,11 +628,7 @@ class NodeAutoRenameService
 
     private function resolvePreferredIp(string $host): ?string
     {
-        if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-            return $host;
-        }
-
-        if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
             return $host;
         }
 
@@ -272,13 +637,46 @@ class NodeAutoRenameService
             return null;
         }
 
+        return $this->pickPreferredIp($ips);
+    }
+
+    private function pickPreferredIp(array $ips): ?string
+    {
+        $validIps = [];
         foreach ($ips as $ip) {
+            if (is_string($ip) && filter_var($ip, FILTER_VALIDATE_IP)) {
+                $validIps[] = $ip;
+            }
+        }
+
+        if ($validIps === []) {
+            return null;
+        }
+
+        foreach ($validIps as $ip) {
+            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) && $this->isPublicIp($ip)) {
+                return $ip;
+            }
+        }
+
+        foreach ($validIps as $ip) {
+            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) && $this->isPublicIp($ip)) {
+                return $ip;
+            }
+        }
+
+        foreach ($validIps as $ip) {
             if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
                 return $ip;
             }
         }
 
-        return $ips[0] ?? null;
+        return $validIps[0] ?? null;
+    }
+
+    private function isPublicIp(string $ip): bool
+    {
+        return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false;
     }
 
     private function resolveDomainIps(string $domain): array

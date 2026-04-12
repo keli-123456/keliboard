@@ -1,7 +1,7 @@
 {
     "name": "节点自动命名",
     "code": "node_auto_rename",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "定时根据节点协议、当前解析 IP 所属国家和节点 ID 自动更新节点名称。",
     "author": "Codex",
     "type": "feature",
@@ -26,6 +26,24 @@
             "default": "{protocol}-{country}-{node_id}",
             "label": "命名模板",
             "description": "支持占位符 {protocol}、{country}、{node_id}、{id}、{code}、{host}、{ip}、{runtime}。"
+        },
+        "geo_provider": {
+            "type": "string",
+            "default": "auto",
+            "label": "地理库策略",
+            "description": "可选 auto / maxmind / ip2region。auto 会优先使用 MaxMind（若可用），否则回退 ip2region。"
+        },
+        "maxmind_db_path": {
+            "type": "string",
+            "default": "storage/app/geoip/GeoLite2-City.mmdb",
+            "label": "MaxMind 数据库路径",
+            "description": "填写 .mmdb 文件路径（建议 GeoLite2-Country.mmdb 或 GeoLite2-City.mmdb）。留空则不启用 MaxMind。"
+        },
+        "country_locales": {
+            "type": "string",
+            "default": "zh-CN,zh,en",
+            "label": "国家名称语言优先级",
+            "description": "仅 MaxMind 生效，逗号分隔，例如 zh-CN,zh,en。"
         },
         "include_types": {
             "type": "text",
