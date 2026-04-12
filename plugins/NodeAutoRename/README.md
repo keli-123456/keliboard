@@ -2,7 +2,7 @@
 
 根据节点协议、当前解析 IP 所属国家和节点 ID，定时自动更新 `v2_server.name`。
 
-`trojan` 节点会优先使用 TLS 的 `server_name` 作为命名和国家识别来源；未配置时才回退到节点地址 `host`。
+`trojan` 节点会优先使用 TLS 的 `server_name` 作为命名来源；国家识别会优先解析节点地址 `host`，失败后再回退到 `server_name`。
 
 默认命名模板：
 
@@ -32,10 +32,23 @@ vmess,vless,trojan
 ## 工作方式
 
 1. 定时扫描节点表 `v2_server`
-2. 解析节点 `host` 的当前 IP
-3. 使用 `Ip2Region` 识别 IPv4 所属国家
+2. 解析节点 `host` 的当前 IP（`trojan` 失败时回退 `server_name`）
+3. 按地理库策略识别国家（`auto/maxmind/ip2region`）
 4. 名称变化时自动更新节点名
 5. 更新后触发节点配置失效通知
+
+## 地理库建议
+
+- 推荐设置 `地理库策略 = auto`，并配置 `MaxMind 数据库路径`
+- MaxMind 常用库：
+  - `GeoLite2-Country.mmdb`
+  - `GeoLite2-City.mmdb`
+- 项目已支持 `maxmind-db/reader` 读取 `.mmdb`，更新依赖后即可使用：
+  - `composer install` 或 `composer update maxmind-db/reader`
+- 默认会自动探测：
+  - `storage/app/geoip/GeoLite2-City.mmdb`
+  - `storage/app/geoip/GeoLite2-Country.mmdb`
+- 未配置 MaxMind 时会自动回退到 `ip2region`
 
 ## 配置建议
 
