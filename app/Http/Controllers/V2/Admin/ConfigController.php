@@ -186,9 +186,9 @@ class ConfigController extends Controller
                 'upgrade_disable_coupon' => (bool) admin_setting('upgrade_disable_coupon', 1),
                 'upgrade_disable_user_discount' => (bool) admin_setting('upgrade_disable_user_discount', 1),
                 'upgrade_allow_onetime' => (bool) admin_setting('upgrade_allow_onetime', 0),
-                'upgrade_min_pay_amount' => max(1, (int) admin_setting('upgrade_min_pay_amount', 1000)),
-                'upgrade_min_pay_ratio' => max(0, min(1, (float) admin_setting('upgrade_min_pay_ratio', 0.30))),
-                'upgrade_max_credit_cap_ratio' => max(0, min(1, (float) admin_setting('upgrade_max_credit_cap_ratio', 0.40))),
+                'upgrade_min_pay_amount' => max(1, (int) admin_setting('upgrade_min_pay_amount', 300)),
+                'upgrade_min_pay_ratio' => max(0, min(1, (float) admin_setting('upgrade_min_pay_ratio', 0.20))),
+                'upgrade_max_credit_cap_ratio' => max(0, min(1, (float) admin_setting('upgrade_max_credit_cap_ratio', 0.70))),
                 'upgrade_credit_coeffs' => OrderUpgradeService::normalizeCreditCoefficients(
                     admin_setting('upgrade_credit_coeffs', OrderUpgradeService::getDefaultCreditCoefficients())
                 ),
@@ -247,6 +247,13 @@ class ConfigController extends Controller
                 'email_encryption' => admin_setting('email_encryption'),
                 'email_from_address' => admin_setting('email_from_address'),
                 'remind_mail_enable' => (bool) admin_setting('remind_mail_enable', false),
+                'marketing_email_enabled' => (bool) admin_setting('marketing_email_enabled', false),
+                'marketing_email_host' => admin_setting('marketing_email_host'),
+                'marketing_email_port' => admin_setting('marketing_email_port'),
+                'marketing_email_username' => admin_setting('marketing_email_username'),
+                'marketing_email_password' => admin_setting('marketing_email_password'),
+                'marketing_email_encryption' => admin_setting('marketing_email_encryption'),
+                'marketing_email_from_address' => admin_setting('marketing_email_from_address'),
             ],
             'telegram' => [
                 'telegram_bot_enable' => (bool) admin_setting('telegram_bot_enable', 0),

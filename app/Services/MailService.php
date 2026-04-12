@@ -217,19 +217,12 @@ class MailService
     {
         /** @var MessageDispatchService $dispatchService */
         $dispatchService = app(MessageDispatchService::class);
-        if (admin_setting('email_host')) {
-            Config::set('mail.host', admin_setting('email_host', config('mail.host')));
-            Config::set('mail.port', admin_setting('email_port', config('mail.port')));
-            Config::set('mail.encryption', admin_setting('email_encryption', config('mail.encryption')));
-            Config::set('mail.username', admin_setting('email_username', config('mail.username')));
-            Config::set('mail.password', admin_setting('email_password', config('mail.password')));
-            Config::set('mail.from.address', admin_setting('email_from_address', config('mail.from.address')));
-            Config::set('mail.from.name', admin_setting('app_name', 'XBoard'));
-        }
+        $messageType = (string) ($params['message_type'] ?? $meta['message_type'] ?? MarketingRule::TYPE_TRANSACTIONAL);
+        self::applyRuntimeMailerConfig($messageType);
 
+        $mailerProfile = self::resolveMailerProfile($messageType);
         $email = (string) $params['email'];
         $subject = (string) $params['subject'];
-        $messageType = (string) ($params['message_type'] ?? $meta['message_type'] ?? MarketingRule::TYPE_TRANSACTIONAL);
         $templateName = (string) ($params['template_name'] ?? 'notify');
         if (!str_starts_with($templateName, 'mail.')) {
             $templateName = 'mail.' . admin_setting('email_template', 'default') . '.' . $templateName;
@@ -310,7 +303,9 @@ class MailService
             'provider_health_status' => $providerHealth,
             'error_message' => $error,
             'provider_response' => $providerResponse,
-            'context' => $meta['context'] ?? null,
+            'context' => self::mergeDispatchContext($meta['context'] ?? null, [
+                'mailer_profile' => $mailerProfile,
+            ]),
         ]);
 
         return [
@@ -322,6 +317,67 @@ class MailService
             'provider_response' => $providerResponse,
             'mail_log_id' => $mailLog->id,
             'dispatch_log_id' => $dispatchLog->id,
+            'mailer_profile' => $mailerProfile,
         ];
+    }
+
+    private static function resolveMailerProfile(string $messageType): string
+    {
+        return self::shouldUseMarketingMailer($messageType) ? 'marketing' : 'default';
+    }
+
+    private static function applyRuntimeMailerConfig(string $messageType): void
+    {
+        if (self::shouldUseMarketingMailer($messageType)) {
+            self::applyMarketingMailerConfig();
+            return;
+        }
+
+        self::applyDefaultMailerConfig();
+    }
+
+    private static function shouldUseMarketingMailer(string $messageType): bool
+    {
+        if ($messageType !== MarketingRule::TYPE_MARKETING) {
+            return false;
+        }
+
+        if (!(bool) admin_setting('marketing_email_enabled', false)) {
+            return false;
+        }
+
+        return (bool) admin_setting('marketing_email_host');
+    }
+
+    private static function applyDefaultMailerConfig(): void
+    {
+        if (!admin_setting('email_host')) {
+            return;
+        }
+
+        Config::set('mail.host', admin_setting('email_host', config('mail.host')));
+        Config::set('mail.port', admin_setting('email_port', config('mail.port')));
+        Config::set('mail.encryption', admin_setting('email_encryption', config('mail.encryption')));
+        Config::set('mail.username', admin_setting('email_username', config('mail.username')));
+        Config::set('mail.password', admin_setting('email_password', config('mail.password')));
+        Config::set('mail.from.address', admin_setting('email_from_address', config('mail.from.address')));
+        Config::set('mail.from.name', admin_setting('app_name', 'XBoard'));
+    }
+
+    private static function applyMarketingMailerConfig(): void
+    {
+        Config::set('mail.host', admin_setting('marketing_email_host', admin_setting('email_host', config('mail.host'))));
+        Config::set('mail.port', admin_setting('marketing_email_port', admin_setting('email_port', config('mail.port'))));
+        Config::set('mail.encryption', admin_setting('marketing_email_encryption', admin_setting('email_encryption', config('mail.encryption'))));
+        Config::set('mail.username', admin_setting('marketing_email_username', admin_setting('email_username', config('mail.username'))));
+        Config::set('mail.password', admin_setting('marketing_email_password', admin_setting('email_password', config('mail.password'))));
+        Config::set('mail.from.address', admin_setting('marketing_email_from_address', admin_setting('email_from_address', config('mail.from.address'))));
+        Config::set('mail.from.name', admin_setting('app_name', 'XBoard'));
+    }
+
+    private static function mergeDispatchContext(mixed $context, array $extras): array
+    {
+        $base = is_array($context) ? $context : [];
+        return array_merge($base, $extras);
     }
 }

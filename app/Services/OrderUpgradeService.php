@@ -14,23 +14,23 @@ use Illuminate\Support\Facades\DB;
 class OrderUpgradeService
 {
     private const DEFAULT_QUOTE_TTL_SECONDS = 300;
-    private const DEFAULT_MIN_PAY_RATIO = 0.30;
-    private const DEFAULT_MAX_CREDIT_CAP_RATIO = 0.40;
+    private const DEFAULT_MIN_PAY_RATIO = 0.20;
+    private const DEFAULT_MAX_CREDIT_CAP_RATIO = 0.70;
     private const DEFAULT_CREDIT_COEFFICIENTS = [
         Plan::PERIOD_MONTHLY => 0.35,
-        Plan::PERIOD_QUARTERLY => 0.40,
-        Plan::PERIOD_HALF_YEARLY => 0.45,
-        Plan::PERIOD_YEARLY => 0.50,
-        Plan::PERIOD_TWO_YEARLY => 0.50,
-        Plan::PERIOD_THREE_YEARLY => 0.50,
+        Plan::PERIOD_QUARTERLY => 0.45,
+        Plan::PERIOD_HALF_YEARLY => 0.55,
+        Plan::PERIOD_YEARLY => 0.68,
+        Plan::PERIOD_TWO_YEARLY => 0.70,
+        Plan::PERIOD_THREE_YEARLY => 0.70,
     ];
     private const DEFAULT_USAGE_PENALTY_RULES = [
-        ['max_usage_percentage' => 20, 'coefficient' => 1.00],
+        ['max_usage_percentage' => 20, 'coefficient' => 0.95],
         ['max_usage_percentage' => 40, 'coefficient' => 0.85],
-        ['max_usage_percentage' => 60, 'coefficient' => 0.65],
-        ['max_usage_percentage' => 80, 'coefficient' => 0.40],
-        ['max_usage_percentage' => 95, 'coefficient' => 0.20],
-        ['max_usage_percentage' => 100, 'coefficient' => 0.00],
+        ['max_usage_percentage' => 60, 'coefficient' => 0.70],
+        ['max_usage_percentage' => 80, 'coefficient' => 0.50],
+        ['max_usage_percentage' => 95, 'coefficient' => 0.30],
+        ['max_usage_percentage' => 100, 'coefficient' => 0.10],
     ];
 
     public function previewUpgrade(User $user, Plan $targetPlan, string $period): array
@@ -347,9 +347,13 @@ class OrderUpgradeService
 
         $baseCreditCoeff = $this->getBaseCreditCoeff((string) $sourceOrder->period);
         $usagePenaltyCoeff = $this->getUsagePenaltyCoeff($user->getTrafficUsagePercentage());
+        $trafficFactorEnabled = $this->shouldApplyTrafficFactor($sourcePlan, (string) $sourceOrder->period);
+        $timeDominantMode = !$trafficFactorEnabled;
+        $effectiveTrafficRatio = $trafficFactorEnabled ? $trafficRatio : 1.0;
+        $effectiveUsagePenaltyCoeff = $trafficFactorEnabled ? $usagePenaltyCoeff : 1.0;
 
-        $rawCredit = (int) floor($sourcePaidBasis * min($timeRatio, $trafficRatio));
-        $proposedCredit = (int) floor($rawCredit * $baseCreditCoeff * $usagePenaltyCoeff);
+        $rawCredit = (int) floor($sourcePaidBasis * min($timeRatio, $effectiveTrafficRatio));
+        $proposedCredit = (int) floor($rawCredit * $baseCreditCoeff * $effectiveUsagePenaltyCoeff);
 
         $targetPrice = OrderService::amountToCents($targetPlan->prices[$targetPeriod] ?? 0);
         $minPayAmount = $this->getMinPayAmount($targetPrice);
@@ -362,8 +366,12 @@ class OrderUpgradeService
             'source_paid_basis' => $sourcePaidBasis,
             'time_ratio' => round($timeRatio, 4),
             'traffic_ratio' => round($trafficRatio, 4),
+            'traffic_factor_enabled' => $trafficFactorEnabled,
+            'time_dominant_mode' => $timeDominantMode,
+            'effective_traffic_ratio' => round($effectiveTrafficRatio, 4),
             'base_credit_coeff' => round($baseCreditCoeff, 4),
             'usage_penalty_coeff' => round($usagePenaltyCoeff, 4),
+            'effective_usage_penalty_coeff' => round($effectiveUsagePenaltyCoeff, 4),
             'credit_cap_amount' => $creditCapAmount,
             'min_pay_amount' => $minPayAmount,
             'upgrade_credit_amount' => $upgradeCreditAmount,
@@ -458,6 +466,21 @@ class OrderUpgradeService
         return $targetMonthly > $sourceMonthly;
     }
 
+    private function shouldApplyTrafficFactor(Plan $sourcePlan, string $sourcePeriod): bool
+    {
+        $sourceMonths = OrderService::STR_TO_TIME[$sourcePeriod] ?? 0;
+        if ($sourceMonths < 12) {
+            return false;
+        }
+
+        $resetMethod = $sourcePlan->reset_traffic_method;
+        if ($resetMethod === Plan::RESET_TRAFFIC_FOLLOW_SYSTEM) {
+            $resetMethod = (int) admin_setting('reset_traffic_method', Plan::RESET_TRAFFIC_MONTHLY);
+        }
+
+        return $resetMethod === Plan::RESET_TRAFFIC_NEVER;
+    }
+
     private function getBaseCreditCoeff(string $sourcePeriod): float
     {
         $coeffs = self::normalizeCreditCoefficients(
@@ -484,7 +507,7 @@ class OrderUpgradeService
 
     private function getMinPayAmount(int $targetPrice): int
     {
-        $fixedMinPay = max(1, (int) admin_setting('upgrade_min_pay_amount', 1000));
+        $fixedMinPay = max(1, (int) admin_setting('upgrade_min_pay_amount', 300));
         $ratio = max(0, min(1, (float) admin_setting('upgrade_min_pay_ratio', self::DEFAULT_MIN_PAY_RATIO)));
         $ratioMinPay = (int) ceil($targetPrice * $ratio);
 
