@@ -118,6 +118,13 @@ class ConfigSave extends FormRequest
         'email_encryption' => '',
         'email_from_address' => '',
         'remind_mail_enable' => '',
+        'marketing_email_enabled' => 'boolean',
+        'marketing_email_host' => '',
+        'marketing_email_port' => '',
+        'marketing_email_username' => '',
+        'marketing_email_password' => '',
+        'marketing_email_encryption' => '',
+        'marketing_email_from_address' => '',
         // telegram
         'telegram_bot_enable' => '',
         'telegram_bot_token' => '',
