@@ -733,6 +733,7 @@ class UniProxyController extends Controller
         $response['base_config'] = [
             'push_interval' => (int) admin_setting('server_push_interval', 60),
             'pull_interval' => (int) admin_setting('server_pull_interval', 60),
+            'device_limit_fallback' => max(0, min(2147483647, (int) admin_setting('device_limit_fallback', 0))),
             'realtime' => $this->buildRealtimeBaseConfig(),
         ];
 

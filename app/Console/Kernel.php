@@ -47,6 +47,7 @@ class Kernel extends ConsoleKernel
         $schedule->command('usersync:cleanup')->dailyAt('3:10')->onOneServer();
         $schedule->command('marketing:scan')->everyTenMinutes()->onOneServer()->withoutOverlapping(8);
         $schedule->command('spam-registration:scan')->hourly()->onOneServer()->withoutOverlapping(50);
+        $schedule->command('subscription-control:enforce')->everyMinute()->onOneServer()->withoutOverlapping(3);
         // send
         $schedule->command('send:remindMail', ['--force'])->dailyAt('11:30')->onOneServer();
         // horizon metrics
