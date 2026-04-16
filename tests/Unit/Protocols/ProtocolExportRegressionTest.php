@@ -1238,7 +1238,10 @@ final class ProtocolExportRegressionTest extends TestCase
         parse_str((string) parse_url(trim($generalUri), PHP_URL_QUERY), $generalQuery);
 
         $clash = Clash::buildTrojan('secret', $server);
-        $singBox = (new SingBox([], []))->buildTrojan('secret', $server);
+        $singBoxProtocol = new SingBox([], []);
+        $buildTrojan = new \ReflectionMethod(SingBox::class, 'buildTrojan');
+        $buildTrojan->setAccessible(true);
+        $singBox = $buildTrojan->invoke($singBoxProtocol, 'secret', $server);
 
         $this->assertMatchesRegularExpression('/^\d{6}\.baidu\.com$/', (string) ($generalQuery['sni'] ?? ''));
         $this->assertMatchesRegularExpression('/^\d{6}\.baidu\.com$/', (string) ($generalQuery['peer'] ?? ''));
