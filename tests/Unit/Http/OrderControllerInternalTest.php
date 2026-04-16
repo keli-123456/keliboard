@@ -13,12 +13,28 @@ use Tests\TestCase;
 
 final class OrderControllerInternalTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        app()->instance('translator', new class {
+            public function get($key, array $replace = [], $locale = null, $fallback = true)
+            {
+                return (string) $key;
+            }
+
+            public function choice($key, $number, array $replace = [], $locale = null)
+            {
+                return (string) $key;
+            }
+        });
+    }
+
     public function test_handle_user_balance_consumes_order_total_when_balance_is_sufficient(): void
     {
-        $order = new Order([
-            'user_id' => 9,
-            'total_amount' => 500,
-        ]);
+        $order = new Order();
+        $order->user_id = 9;
+        $order->total_amount = 500;
         $order->balance_amount = 0;
 
         $user = new User();
@@ -44,10 +60,9 @@ final class OrderControllerInternalTest extends TestCase
 
     public function test_handle_user_balance_consumes_full_user_balance_when_insufficient(): void
     {
-        $order = new Order([
-            'user_id' => 7,
-            'total_amount' => 1200,
-        ]);
+        $order = new Order();
+        $order->user_id = 7;
+        $order->total_amount = 1200;
         $order->balance_amount = 0;
 
         $user = new User();
@@ -73,10 +88,9 @@ final class OrderControllerInternalTest extends TestCase
 
     public function test_handle_user_balance_throws_when_balance_deduction_fails(): void
     {
-        $order = new Order([
-            'user_id' => 3,
-            'total_amount' => 200,
-        ]);
+        $order = new Order();
+        $order->user_id = 3;
+        $order->total_amount = 200;
 
         $user = new User();
         $user->id = 3;
@@ -103,4 +117,3 @@ final class OrderControllerInternalTest extends TestCase
         $method->invoke($controller, $order, $user, $userService);
     }
 }
-

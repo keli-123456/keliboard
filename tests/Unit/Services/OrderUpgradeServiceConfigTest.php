@@ -25,9 +25,9 @@ final class OrderUpgradeServiceConfigTest extends TestCase
             Plan::PERIOD_QUARTERLY => '0.6',
         ]);
 
-        $this->assertSame(1.0, $normalized[Plan::PERIOD_MONTHLY]);
-        $this->assertSame(0.6, $normalized[Plan::PERIOD_QUARTERLY]);
-        $this->assertSame(0.0, $normalized[Plan::PERIOD_YEARLY]);
+        $this->assertEquals(1.0, $normalized[Plan::PERIOD_MONTHLY]);
+        $this->assertEquals(0.6, $normalized[Plan::PERIOD_QUARTERLY]);
+        $this->assertEquals(0.0, $normalized[Plan::PERIOD_YEARLY]);
         $this->assertArrayHasKey(Plan::PERIOD_TWO_YEARLY, $normalized);
     }
 
@@ -40,14 +40,13 @@ final class OrderUpgradeServiceConfigTest extends TestCase
             ['max_usage_percentage' => null, 'coefficient' => 0.1],
         ]);
 
-        $this->assertSame(
-            [
-                ['max_usage_percentage' => 20.0, 'coefficient' => 0.0],
-                ['max_usage_percentage' => 40.0, 'coefficient' => 0.8],
-                ['max_usage_percentage' => 100.0, 'coefficient' => 1.0],
-            ],
-            $normalized
-        );
+        $this->assertCount(3, $normalized);
+        $this->assertEquals(20.0, $normalized[0]['max_usage_percentage']);
+        $this->assertEquals(0.0, $normalized[0]['coefficient']);
+        $this->assertEquals(40.0, $normalized[1]['max_usage_percentage']);
+        $this->assertEquals(0.8, $normalized[1]['coefficient']);
+        $this->assertEquals(100.0, $normalized[2]['max_usage_percentage']);
+        $this->assertEquals(1.0, $normalized[2]['coefficient']);
     }
 
     public function test_normalize_usage_penalty_rules_falls_back_to_defaults_when_empty(): void
@@ -57,4 +56,3 @@ final class OrderUpgradeServiceConfigTest extends TestCase
         $this->assertSame(OrderUpgradeService::getDefaultUsagePenaltyRules(), $normalized);
     }
 }
-

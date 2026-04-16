@@ -29,10 +29,9 @@ final class OrderPricingHelpersTest extends TestCase
 
     public function test_set_vip_discount_combines_existing_discount_and_user_discount_rate(): void
     {
-        $order = new Order([
-            'total_amount' => 1000,
-            'discount_amount' => 50,
-        ]);
+        $order = new Order();
+        $order->total_amount = 1000;
+        $order->discount_amount = 50;
         $user = new User();
         $user->discount = 10;
 
@@ -45,10 +44,9 @@ final class OrderPricingHelpersTest extends TestCase
 
     public function test_set_vip_discount_caps_discount_at_order_total(): void
     {
-        $order = new Order([
-            'total_amount' => 100,
-            'discount_amount' => 200,
-        ]);
+        $order = new Order();
+        $order->total_amount = 100;
+        $order->discount_amount = 200;
         $user = new User();
         $user->discount = 50;
 
@@ -59,4 +57,3 @@ final class OrderPricingHelpersTest extends TestCase
         $this->assertSame(0, (int) $order->total_amount);
     }
 }
-
