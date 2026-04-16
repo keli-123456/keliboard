@@ -191,21 +191,21 @@ class ClientController extends Controller
         $flag = strtolower($request->input('flag') ?? $request->header('User-Agent', ''));
         $protocolManager = app('protocols.manager');
 
-        $clientName = null;
-        $clientVersion = null;
+        // Prefer matching against the full user-agent/flag string first.
+        // This avoids partial token matches like "Mozilla/5.0" being treated as client versions.
+        $clientName = $protocolManager->matchClientFlag($flag);
+        $clientVersion = $clientName
+            ? $protocolManager->extractClientVersion($flag, $clientName)
+            : null;
 
-        if (preg_match('/([a-zA-Z0-9\-_]+)[\/\s]+(v?[0-9]+(?:\.[0-9]+)*)/', $flag, $matches)) {
+        // Fallback to first-token detection when full-string matching cannot identify the client.
+        if (!$clientName && preg_match('/([a-zA-Z0-9\-_]+)[\/\s]+(v?[0-9]+(?:\.[0-9]+)*)/', $flag, $matches)) {
             $potentialName = strtolower($matches[1]);
-            $clientVersion = preg_replace('/^v/', '', $matches[2]);
-            $clientName = $protocolManager->matchClientFlag($potentialName);
-        }
-
-        if (!$clientName) {
-            $clientName = $protocolManager->matchClientFlag($flag);
-        }
-
-        if ($clientName && !$clientVersion) {
-            $clientVersion = $protocolManager->extractClientVersion($flag, $clientName);
+            $matchedName = $protocolManager->matchClientFlag($potentialName);
+            if ($matchedName) {
+                $clientName = $matchedName;
+                $clientVersion = preg_replace('/^v/', '', $matches[2]) ?: null;
+            }
         }
 
         return [

@@ -39,9 +39,9 @@ final class ProtocolManagerTest extends TestCase
 
         $this->assertSame('sing-box', $manager->matchClientFlag('singbox'));
         $this->assertSame('mihomo', $manager->matchClientFlag('mihomo'));
-        $this->assertSame('clashmeta', $manager->matchClientFlag('clash-meta'));
+        $this->assertSame('clash-meta', $manager->matchClientFlag('clash-meta'));
         $this->assertSame('clashx meta', $manager->matchClientFlag('clashxmeta'));
-        $this->assertSame('quantumult-x', $manager->matchClientFlag('quantumultx'));
+        $this->assertSame('quantumult%20x', $manager->matchClientFlag('quantumultx'));
         $this->assertSame('quantumult%20x', $manager->matchClientFlag('Quantumult%20X'));
     }
 
