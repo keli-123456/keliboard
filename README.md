@@ -99,6 +99,22 @@ docker compose restart
 
 Issues and Pull Requests are welcome to help improve the project.
 
+### Composer Lock Workflow
+
+- Lock file updates must be generated on `PHP 8.2.x`.
+- Do not use `--ignore-platform-reqs` for lock updates.
+- Use the helper script:
+
+```bash
+./scripts/update-composer-lock.sh
+```
+
+- To update specific packages:
+
+```bash
+./scripts/update-composer-lock.sh google/recaptcha symfony/string --with-all-dependencies
+```
+
 ## 📈 Star History
 
 [![Stargazers over time](https://starchart.cc/cedar2025/Xboard.svg)](https://starchart.cc/cedar2025/Xboard)
