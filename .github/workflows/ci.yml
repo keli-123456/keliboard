@@ -5,6 +5,7 @@ on:
     paths:
       - "app/**"
       - "tests/**"
+      - "scripts/**"
       - "composer.json"
       - "composer.lock"
       - "phpunit.xml"
@@ -14,6 +15,7 @@ on:
     paths:
       - "app/**"
       - "tests/**"
+      - "scripts/**"
       - "composer.json"
       - "composer.lock"
       - "phpunit.xml"
@@ -37,8 +39,20 @@ jobs:
           tools: composer:v2
           coverage: none
 
+      - name: Validate composer manifests
+        run: composer validate --strict
+
+      - name: Verify composer platform pin
+        run: php scripts/verify-composer-platform.php
+
+      - name: Verify lock platform compatibility
+        run: composer check-platform-reqs --lock --no-interaction
+
       - name: Install dependencies
         run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Verify installed platform requirements
+        run: composer check-platform-reqs --no-interaction
 
       - name: Run unit tests
         run: vendor/bin/phpunit --testsuite Unit --colors=always
