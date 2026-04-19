@@ -30,7 +30,7 @@ plugins/
     "description": "Plugin functionality description",
     "author": "Author Name",
     "require": {
-        "xboard": ">=1.0.0" // Version not fully implemented yet
+        "xboard": ">=1.0.0"
     },
     "config": {
         "api_key": {

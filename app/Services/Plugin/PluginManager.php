@@ -14,6 +14,9 @@ use Illuminate\Support\Str;
 
 class PluginManager
 {
+    private const MAX_PLUGIN_ARCHIVE_ENTRIES = 2000;
+    private const MAX_PLUGIN_ARCHIVE_UNCOMPRESSED_SIZE = 104857600; // 100 MiB
+
     protected string $pluginPath;
     protected array $loadedPlugins = [];
     protected bool $pluginsInitialized = false;
@@ -21,7 +24,18 @@ class PluginManager
 
     public function __construct()
     {
-        $this->pluginPath = base_path('plugins');
+        $this->pluginPath = $this->resolvePluginPath();
+    }
+
+    private function resolvePluginPath(): string
+    {
+        try {
+            return base_path('plugins');
+        } catch (\Throwable) {
+            // Unit tests bootstrap a bare Container (without Application::basePath()).
+            // Fallback to repository-root-relative plugins directory in this runtime.
+            return dirname(__DIR__, 3) . '/plugins';
+        }
     }
 
     /**
@@ -157,8 +171,9 @@ class PluginManager
         }
 
         // 检查依赖
-        if (!$this->checkDependencies($config['require'] ?? [])) {
-            throw new \Exception('Dependencies not satisfied');
+        $dependencyError = null;
+        if (!$this->checkDependencies($config['require'] ?? [], $dependencyError)) {
+            throw new \Exception($dependencyError ?: 'Dependencies not satisfied');
         }
 
         // 运行数据库迁移
@@ -409,15 +424,403 @@ class PluginManager
     /**
      * 检查依赖关系
      */
-    protected function checkDependencies(array $requires): bool
+    protected function checkDependencies(array $requires, ?string &$failureReason = null): bool
     {
-        foreach ($requires as $package => $version) {
-            if ($package === 'xboard') {
-                // 检查xboard版本
-                // 实现版本比较逻辑
+        $failureReason = null;
+
+        foreach ($requires as $package => $constraint) {
+            $packageName = strtolower(trim((string) $package));
+            $versionConstraint = trim((string) $constraint);
+
+            if ($packageName === '' || $versionConstraint === '' || $versionConstraint === '*') {
+                continue;
+            }
+
+            if ($packageName === 'xboard') {
+                $currentVersion = $this->resolveCurrentXboardVersion();
+                if ($currentVersion === null) {
+                    $failureReason = 'Unable to determine current xboard version';
+                    return false;
+                }
+
+                if (!$this->satisfiesVersionConstraint($currentVersion, $versionConstraint)) {
+                    $failureReason = sprintf(
+                        'xboard version constraint not satisfied: required %s, current %s',
+                        $versionConstraint,
+                        $currentVersion
+                    );
+                    return false;
+                }
+                continue;
+            }
+
+            if ($packageName === 'php') {
+                if (!$this->satisfiesVersionConstraint(PHP_VERSION, $versionConstraint)) {
+                    $failureReason = sprintf(
+                        'php version constraint not satisfied: required %s, current %s',
+                        $versionConstraint,
+                        PHP_VERSION
+                    );
+                    return false;
+                }
+                continue;
+            }
+
+            $pluginCode = null;
+            if (str_starts_with($packageName, 'plugin:')) {
+                $pluginCode = trim(substr($packageName, strlen('plugin:')));
+            } elseif (preg_match('/^[a-z0-9_]+$/', $packageName)) {
+                $pluginCode = $packageName;
+            }
+
+            if ($pluginCode !== null && $pluginCode !== '') {
+                if (!$this->checkPluginDependency($pluginCode, $versionConstraint, $failureReason)) {
+                    return false;
+                }
+                continue;
+            }
+
+            $failureReason = sprintf('Unsupported dependency package: %s', $packageName);
+            return false;
+        }
+
+        return true;
+    }
+
+    private function checkPluginDependency(string $pluginCode, string $constraint, ?string &$failureReason = null): bool
+    {
+        try {
+            $plugin = Plugin::query()->where('code', $pluginCode)->first();
+        } catch (\Throwable $e) {
+            $failureReason = sprintf('Failed to load plugin dependency %s: %s', $pluginCode, $e->getMessage());
+            return false;
+        }
+
+        if (!$plugin) {
+            $failureReason = sprintf('Plugin dependency not installed: %s', $pluginCode);
+            return false;
+        }
+
+        $installedVersion = (string) $plugin->version;
+        if (!$this->satisfiesVersionConstraint($installedVersion, $constraint)) {
+            $failureReason = sprintf(
+                'Plugin dependency version constraint not satisfied: %s requires %s, current %s',
+                $pluginCode,
+                $constraint,
+                $installedVersion
+            );
+            return false;
+        }
+
+        return true;
+    }
+
+    private function resolveCurrentXboardVersion(): ?string
+    {
+        $configuredVersion = trim((string) config('app.version', ''));
+        if ($configuredVersion === '') {
+            return null;
+        }
+
+        if (!$this->isSupportedXboardVersionFormat($configuredVersion)) {
+            return null;
+        }
+
+        return $this->normalizeVersion($configuredVersion);
+    }
+
+    private function isSupportedXboardVersionFormat(string $version): bool
+    {
+        $version = trim($version);
+        if ($version === '') {
+            return false;
+        }
+
+        return preg_match('/^[vV]?\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?$/', $version) === 1;
+    }
+
+    private function satisfiesVersionConstraint(string $currentVersion, string $constraint): bool
+    {
+        $normalizedCurrentVersion = $this->normalizeVersion($currentVersion);
+        if ($normalizedCurrentVersion === null) {
+            return false;
+        }
+
+        $constraint = trim($constraint);
+        if ($constraint === '' || $constraint === '*') {
+            return true;
+        }
+
+        $orGroups = preg_split('/\s*\|\|\s*/', $constraint) ?: [];
+        foreach ($orGroups as $group) {
+            $group = trim($group);
+            if ($group === '') {
+                continue;
+            }
+            if ($this->evaluateConstraintGroup($normalizedCurrentVersion, $group)) {
+                return true;
             }
         }
+
+        return false;
+    }
+
+    private function evaluateConstraintGroup(string $currentVersion, string $group): bool
+    {
+        if (preg_match('/^\s*([^\s]+)\s*-\s*([^\s]+)\s*$/', $group, $matches)) {
+            $lower = $this->normalizeVersion($matches[1]);
+            $upper = $this->normalizeVersion($matches[2]);
+            if ($lower === null || $upper === null) {
+                return false;
+            }
+            return version_compare($currentVersion, $lower, '>=') && version_compare($currentVersion, $upper, '<=');
+        }
+
+        $tokens = preg_split('/\s*,\s*|\s+/', $group) ?: [];
+        foreach ($tokens as $token) {
+            $token = trim($token);
+            if ($token === '' || $token === '*' || strcasecmp($token, 'x') === 0) {
+                continue;
+            }
+
+            $comparators = $this->buildComparatorsFromToken($token);
+            if (empty($comparators)) {
+                return false;
+            }
+
+            foreach ($comparators as $comparator) {
+                if (!$this->compareWithComparator($currentVersion, $comparator[0], $comparator[1])) {
+                    return false;
+                }
+            }
+        }
+
         return true;
+    }
+
+    /**
+     * @return array<int, array{0:string,1:string}>
+     */
+    private function buildComparatorsFromToken(string $token): array
+    {
+        $token = trim($token);
+        if ($token === '') {
+            return [];
+        }
+
+        if ($token[0] === '^') {
+            return $this->buildCaretComparators(substr($token, 1));
+        }
+
+        if ($token[0] === '~') {
+            return $this->buildTildeComparators(substr($token, 1));
+        }
+
+        if (preg_match('/^[vV]?[0-9xX\*]+(?:\.[0-9xX\*]+){0,2}$/', $token) && preg_match('/[xX\*]/', $token)) {
+            return $this->buildWildcardComparators($token);
+        }
+
+        if (!preg_match('/^(>=|<=|>|<|=|==|!=)?\s*(.+)$/', $token, $matches)) {
+            return [];
+        }
+
+        $operator = $matches[1] ?: '=';
+        if ($operator === '==') {
+            $operator = '=';
+        }
+
+        $targetVersion = $this->normalizeVersion($matches[2]);
+        if ($targetVersion === null) {
+            return [];
+        }
+
+        return [[$operator, $targetVersion]];
+    }
+
+    /**
+     * @return array<int, array{0:string,1:string}>
+     */
+    private function buildCaretComparators(string $rawVersion): array
+    {
+        [$parts, $partCount] = $this->parseNumericVersionParts($rawVersion);
+        if ($parts === null) {
+            return [];
+        }
+
+        [$major, $minor, $patch] = $parts;
+        $lower = $this->composeVersion($major, $minor, $patch);
+
+        if ($partCount === 1) {
+            $upper = $major === 0
+                ? $this->composeVersion(1, 0, 0)
+                : $this->composeVersion($major + 1, 0, 0);
+        } elseif ($major > 0) {
+            $upper = $this->composeVersion($major + 1, 0, 0);
+        } elseif ($minor > 0) {
+            $upper = $this->composeVersion(0, $minor + 1, 0);
+        } else {
+            $upper = $this->composeVersion(0, 0, $patch + 1);
+        }
+
+        return [
+            ['>=', $lower],
+            ['<', $upper],
+        ];
+    }
+
+    /**
+     * @return array<int, array{0:string,1:string}>
+     */
+    private function buildTildeComparators(string $rawVersion): array
+    {
+        [$parts, $partCount] = $this->parseNumericVersionParts($rawVersion);
+        if ($parts === null) {
+            return [];
+        }
+
+        [$major, $minor, $patch] = $parts;
+        $lower = $this->composeVersion($major, $minor, $patch);
+
+        if ($partCount <= 1) {
+            $upper = $this->composeVersion($major + 1, 0, 0);
+        } else {
+            $upper = $this->composeVersion($major, $minor + 1, 0);
+        }
+
+        return [
+            ['>=', $lower],
+            ['<', $upper],
+        ];
+    }
+
+    /**
+     * @return array<int, array{0:string,1:string}>
+     */
+    private function buildWildcardComparators(string $rawVersion): array
+    {
+        $normalized = strtolower(ltrim(trim($rawVersion), 'v'));
+        if ($normalized === '' || $normalized === '*' || $normalized === 'x') {
+            return [['*', '*']];
+        }
+
+        $parts = explode('.', $normalized);
+        if (count($parts) > 3) {
+            return [];
+        }
+        while (count($parts) < 3) {
+            $parts[] = 'x';
+        }
+
+        $wildcardIndex = null;
+        foreach ($parts as $index => $part) {
+            if ($part === 'x' || $part === '*') {
+                $wildcardIndex = $index;
+                break;
+            }
+            if (!ctype_digit($part)) {
+                return [];
+            }
+        }
+
+        if ($wildcardIndex === null) {
+            $exact = $this->normalizeVersion(implode('.', $parts));
+            return $exact === null ? [] : [['=', $exact]];
+        }
+
+        if ($wildcardIndex === 0) {
+            return [['*', '*']];
+        }
+
+        $major = (int) $parts[0];
+        $minor = ($parts[1] === 'x' || $parts[1] === '*') ? 0 : (int) $parts[1];
+        $patch = ($parts[2] === 'x' || $parts[2] === '*') ? 0 : (int) $parts[2];
+
+        $lower = $this->composeVersion($major, $minor, $patch);
+        $upper = $wildcardIndex === 1
+            ? $this->composeVersion($major + 1, 0, 0)
+            : $this->composeVersion($major, $minor + 1, 0);
+
+        return [
+            ['>=', $lower],
+            ['<', $upper],
+        ];
+    }
+
+    private function compareWithComparator(string $currentVersion, string $operator, string $targetVersion): bool
+    {
+        if ($operator === '*' || $operator === '') {
+            return true;
+        }
+
+        $normalizedTargetVersion = $this->normalizeVersion($targetVersion);
+        if ($normalizedTargetVersion === null) {
+            return false;
+        }
+
+        return match ($operator) {
+            '>' => version_compare($currentVersion, $normalizedTargetVersion, '>'),
+            '>=' => version_compare($currentVersion, $normalizedTargetVersion, '>='),
+            '<' => version_compare($currentVersion, $normalizedTargetVersion, '<'),
+            '<=' => version_compare($currentVersion, $normalizedTargetVersion, '<='),
+            '=' => version_compare($currentVersion, $normalizedTargetVersion, '=='),
+            '!=' => version_compare($currentVersion, $normalizedTargetVersion, '!='),
+            default => false,
+        };
+    }
+
+    /**
+     * @return array{0: array{0:int,1:int,2:int}|null, 1:int}
+     */
+    private function parseNumericVersionParts(string $rawVersion): array
+    {
+        $rawVersion = trim(ltrim($rawVersion, 'vV'));
+        if ($rawVersion === '') {
+            return [null, 0];
+        }
+
+        $rawVersion = preg_split('/[-+]/', $rawVersion)[0] ?? '';
+        $segments = explode('.', $rawVersion);
+        if (count($segments) > 3) {
+            return [null, 0];
+        }
+
+        $partCount = count($segments);
+        foreach ($segments as $segment) {
+            if ($segment === '' || !ctype_digit($segment)) {
+                return [null, 0];
+            }
+        }
+
+        while (count($segments) < 3) {
+            $segments[] = '0';
+        }
+
+        return [[(int) $segments[0], (int) $segments[1], (int) $segments[2]], $partCount];
+    }
+
+    private function composeVersion(int $major, int $minor, int $patch): string
+    {
+        return sprintf('%d.%d.%d', $major, $minor, $patch);
+    }
+
+    private function normalizeVersion(string $version): ?string
+    {
+        $version = trim(ltrim($version, 'vV'));
+        if ($version === '') {
+            return null;
+        }
+
+        if (!preg_match('/^(\d+(?:\.\d+){0,2})([-+][0-9A-Za-z.-]+)?$/', $version, $matches)) {
+            return null;
+        }
+
+        $core = explode('.', $matches[1]);
+        while (count($core) < 3) {
+            $core[] = '0';
+        }
+
+        $suffix = $matches[2] ?? '';
+        return implode('.', $core) . $suffix;
     }
 
     /**
@@ -490,63 +893,219 @@ class PluginManager
             File::makeDirectory($tmpPath, 0755, true);
         }
 
-        $extractPath = $tmpPath . '/' . uniqid();
+        $extractPath = $tmpPath . '/' . uniqid('plugin_', true);
+        File::makeDirectory($extractPath, 0755, true);
         $zip = new \ZipArchive();
 
         if ($zip->open($file->path()) !== true) {
             throw new \Exception('无法打开插件包文件');
         }
 
-        $zip->extractTo($extractPath);
-        $zip->close();
-
-        $configFile = File::glob($extractPath . '/*/config.json');
-        if (empty($configFile)) {
-            $configFile = File::glob($extractPath . '/config.json');
+        try {
+            $this->assertArchiveIsSafeToExtract($zip);
+            if (!$zip->extractTo($extractPath)) {
+                throw new \Exception('插件包解压失败');
+            }
+        } finally {
+            $zip->close();
         }
 
-        if (empty($configFile)) {
+        try {
+            $configFile = File::glob($extractPath . '/*/config.json');
+            if (empty($configFile)) {
+                $configFile = File::glob($extractPath . '/config.json');
+            }
+
+            if (empty($configFile)) {
+                throw new \Exception('插件包格式错误：缺少配置文件');
+            }
+
+            $pluginPath = dirname(reset($configFile));
+            $pluginRealPath = realpath($pluginPath);
+            $extractRealPath = realpath($extractPath);
+            if (!$pluginRealPath || !$extractRealPath || !$this->isPathInside($pluginRealPath, $extractRealPath)) {
+                throw new \Exception('插件包路径非法');
+            }
+
+            $config = json_decode(File::get($pluginPath . '/config.json'), true);
+            if (!$this->validateConfig($config)) {
+                throw new \Exception('插件配置文件格式错误');
+            }
+
+            $targetPath = $this->pluginPath . '/' . Str::studly($config['code']);
+            if (File::exists($targetPath)) {
+                $installedConfigPath = $targetPath . '/config.json';
+                if (!File::exists($installedConfigPath)) {
+                    throw new \Exception('已安装插件缺少配置文件，无法判断是否可升级');
+                }
+                $installedConfig = json_decode(File::get($installedConfigPath), true);
+
+                $oldVersion = $installedConfig['version'] ?? null;
+                $newVersion = $config['version'] ?? null;
+                if (!$oldVersion || !$newVersion) {
+                    throw new \Exception('插件缺少版本号，无法判断是否可升级');
+                }
+                if (version_compare($newVersion, $oldVersion, '<=')) {
+                    throw new \Exception('上传插件版本不高于已安装版本，无法升级');
+                }
+            }
+
+            $stagedTargetPath = $this->pluginPath . '/.__upload_staging_' . uniqid('', true);
+            if (!File::copyDirectory($pluginPath, $stagedTargetPath)) {
+                throw new \Exception('插件复制到暂存目录失败');
+            }
+
+            $backupPath = null;
+            $committed = false;
+            try {
+                if (File::exists($targetPath)) {
+                    $backupPath = $this->pluginPath . '/.__upload_backup_' . uniqid('', true);
+                    if (!$this->renameDirectory($targetPath, $backupPath)) {
+                        throw new \Exception('插件备份失败');
+                    }
+                }
+
+                if (!$this->renameDirectory($stagedTargetPath, $targetPath)) {
+                    if (!File::copyDirectory($stagedTargetPath, $targetPath)) {
+                        throw new \Exception('插件落盘失败');
+                    }
+                    File::deleteDirectory($stagedTargetPath);
+                }
+
+                if (Plugin::where('code', $config['code'])->exists()) {
+                    $result = $this->update($config['code']);
+                    $committed = true;
+                    return $result;
+                }
+
+                $committed = true;
+                return true;
+            } catch (\Throwable $e) {
+                if ($backupPath && File::exists($backupPath)) {
+                    File::deleteDirectory($targetPath);
+                    if (!$this->renameDirectory($backupPath, $targetPath)) {
+                        Log::error("Failed to rollback plugin directory from backup: {$backupPath} -> {$targetPath}");
+                    }
+                } elseif ($backupPath === null) {
+                    File::deleteDirectory($targetPath);
+                }
+                throw $e;
+            } finally {
+                File::deleteDirectory($stagedTargetPath);
+                if ($committed && $backupPath && File::exists($backupPath)) {
+                    File::deleteDirectory($backupPath);
+                }
+            }
+        } finally {
             File::deleteDirectory($extractPath);
-            throw new \Exception('插件包格式错误：缺少配置文件');
+        }
+    }
+
+    /**
+     * 在解压前校验 ZIP 条目，防止 Zip Slip 等路径穿越写文件。
+     */
+    private function assertArchiveIsSafeToExtract(\ZipArchive $zip): void
+    {
+        $numFiles = $zip->numFiles;
+        if ($numFiles <= 0) {
+            throw new \Exception('插件包为空');
+        }
+        if ($numFiles > self::MAX_PLUGIN_ARCHIVE_ENTRIES) {
+            throw new \Exception('插件包文件数量超过限制');
         }
 
-        $pluginPath = dirname(reset($configFile));
-        $config = json_decode(File::get($pluginPath . '/config.json'), true);
-
-        if (!$this->validateConfig($config)) {
-            File::deleteDirectory($extractPath);
-            throw new \Exception('插件配置文件格式错误');
-        }
-
-        $targetPath = $this->pluginPath . '/' . Str::studly($config['code']);
-        if (File::exists($targetPath)) {
-            $installedConfigPath = $targetPath . '/config.json';
-            if (!File::exists($installedConfigPath)) {
-                throw new \Exception('已安装插件缺少配置文件，无法判断是否可升级');
-            }
-            $installedConfig = json_decode(File::get($installedConfigPath), true);
-
-            $oldVersion = $installedConfig['version'] ?? null;
-            $newVersion = $config['version'] ?? null;
-            if (!$oldVersion || !$newVersion) {
-                throw new \Exception('插件缺少版本号，无法判断是否可升级');
-            }
-            if (version_compare($newVersion, $oldVersion, '<=')) {
-                throw new \Exception('上传插件版本不高于已安装版本，无法升级');
+        $totalSize = 0;
+        for ($index = 0; $index < $numFiles; $index++) {
+            $entryName = (string) $zip->getNameIndex($index);
+            if ($this->normalizeArchiveEntryPath($entryName) === null) {
+                throw new \Exception('插件包包含非法路径条目');
             }
 
-            File::deleteDirectory($targetPath);
+            $stat = $zip->statIndex($index);
+            $entrySize = (is_array($stat) && isset($stat['size']) && is_numeric($stat['size']))
+                ? (int) $stat['size']
+                : 0;
+            if ($entrySize < 0) {
+                throw new \Exception('插件包包含非法文件大小');
+            }
+            $totalSize += $entrySize;
+            if ($totalSize > self::MAX_PLUGIN_ARCHIVE_UNCOMPRESSED_SIZE) {
+                throw new \Exception('插件包解压总大小超过限制');
+            }
+
+            if ($this->isSymlinkEntry($zip, $index)) {
+                throw new \Exception('插件包包含符号链接，已拒绝');
+            }
+        }
+    }
+
+    private function normalizeArchiveEntryPath(string $entryName): ?string
+    {
+        if ($entryName === '' || str_contains($entryName, "\0")) {
+            return null;
         }
 
-        File::copyDirectory($pluginPath, $targetPath);
-        File::deleteDirectory($pluginPath);
-        File::deleteDirectory($extractPath);
+        $path = str_replace('\\', '/', $entryName);
 
-        if (Plugin::where('code', $config['code'])->exists()) {
-            return $this->update($config['code']);
+        if (str_starts_with($path, '/') || preg_match('/^[a-zA-Z]:\//', $path)) {
+            return null;
         }
 
-        return true;
+        $parts = explode('/', $path);
+        $normalized = [];
+        foreach ($parts as $part) {
+            if ($part === '' || $part === '.') {
+                continue;
+            }
+            if ($part === '..') {
+                return null;
+            }
+            $normalized[] = $part;
+        }
+
+        if (empty($normalized)) {
+            return null;
+        }
+
+        return implode('/', $normalized);
+    }
+
+    private function isSymlinkEntry(\ZipArchive $zip, int $index): bool
+    {
+        if (!method_exists($zip, 'getExternalAttributesIndex')) {
+            return false;
+        }
+
+        $opsys = null;
+        $attributes = null;
+        if (!$zip->getExternalAttributesIndex($index, $opsys, $attributes)) {
+            return false;
+        }
+
+        if ($opsys !== \ZipArchive::OPSYS_UNIX || !is_numeric($attributes)) {
+            return false;
+        }
+
+        $mode = ((int) $attributes >> 16) & 0170000;
+        return $mode === 0120000;
+    }
+
+    private function isPathInside(string $candidatePath, string $basePath): bool
+    {
+        $candidate = rtrim(str_replace('\\', '/', $candidatePath), '/');
+        $base = rtrim(str_replace('\\', '/', $basePath), '/');
+
+        return $candidate === $base || str_starts_with($candidate, $base . '/');
+    }
+
+    private function renameDirectory(string $from, string $to): bool
+    {
+        clearstatcache(true, $from);
+        clearstatcache(true, $to);
+        if (!is_dir($from)) {
+            return false;
+        }
+        return @rename($from, $to);
     }
 
     /**
