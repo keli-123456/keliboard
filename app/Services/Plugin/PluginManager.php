@@ -24,7 +24,18 @@ class PluginManager
 
     public function __construct()
     {
-        $this->pluginPath = base_path('plugins');
+        $this->pluginPath = $this->resolvePluginPath();
+    }
+
+    private function resolvePluginPath(): string
+    {
+        try {
+            return base_path('plugins');
+        } catch (\Throwable) {
+            // Unit tests bootstrap a bare Container (without Application::basePath()).
+            // Fallback to repository-root-relative plugins directory in this runtime.
+            return dirname(__DIR__, 3) . '/plugins';
+        }
     }
 
     /**
