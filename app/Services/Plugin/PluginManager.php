@@ -518,14 +518,25 @@ class PluginManager
     private function resolveCurrentXboardVersion(): ?string
     {
         $configuredVersion = trim((string) config('app.version', ''));
-        if ($configuredVersion !== '') {
-            $normalized = $this->normalizeVersion($configuredVersion);
-            if ($normalized !== null) {
-                return $normalized;
-            }
+        if ($configuredVersion === '') {
+            return null;
         }
 
-        return null;
+        if (!$this->isSupportedXboardVersionFormat($configuredVersion)) {
+            return null;
+        }
+
+        return $this->normalizeVersion($configuredVersion);
+    }
+
+    private function isSupportedXboardVersionFormat(string $version): bool
+    {
+        $version = trim($version);
+        if ($version === '') {
+            return false;
+        }
+
+        return preg_match('/^[vV]?\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?$/', $version) === 1;
     }
 
     private function satisfiesVersionConstraint(string $currentVersion, string $constraint): bool
