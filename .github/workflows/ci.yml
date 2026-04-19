@@ -3,9 +3,15 @@ name: CI
 on:
   push:
     paths:
+      - "artisan"
       - "app/**"
-      - "tests/**"
+      - "bootstrap/**"
+      - "config/**"
+      - "database/**"
+      - "resources/**"
+      - "routes/**"
       - "scripts/**"
+      - "tests/**"
       - "composer.json"
       - "composer.lock"
       - "phpunit.xml"
@@ -13,9 +19,15 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
+      - "artisan"
       - "app/**"
-      - "tests/**"
+      - "bootstrap/**"
+      - "config/**"
+      - "database/**"
+      - "resources/**"
+      - "routes/**"
       - "scripts/**"
+      - "tests/**"
       - "composer.json"
       - "composer.lock"
       - "phpunit.xml"
