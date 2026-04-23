@@ -11,13 +11,17 @@ use App\Utils\CacheKey;
 use App\Utils\Helper;
 use App\Models\UserSyncEvent;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use App\Services\UserOnlineService;
 use Illuminate\Http\JsonResponse;
 use Throwable;
 
 class UniProxyController extends Controller
 {
+    private static bool $deltaUnionQueryDisabled = false;
+
     public function __construct(
         private readonly UserOnlineService $userOnlineService
     ) {
@@ -164,15 +168,7 @@ class UniProxyController extends Controller
                     ]);
                 }
 
-                $events = UserSyncEvent::query()
-                    ->where('id', '>', $since)
-                    ->where(function ($q) use ($groupIds) {
-                        $q->whereIn('group_id', $groupIds)
-                            ->orWhereIn('old_group_id', $groupIds);
-                    })
-                    ->orderBy('id', 'asc')
-                    ->limit($limit)
-                    ->get();
+                $events = $this->queryUserDeltaEvents($since, $groupIds, $limit);
 
                 $deleted = [];
                 $upsert = [];
@@ -227,6 +223,68 @@ class UniProxyController extends Controller
                     'upsert' => $upsert,
                 ]);
             }
+
+    /**
+     * Query delta events with an index-friendly UNION strategy and automatic
+     * fallback to the legacy OR predicate when needed.
+     */
+    private function queryUserDeltaEvents(int $since, array $groupIds, int $limit): Collection
+    {
+        if (!$this->shouldUseUnionQueryForDelta()) {
+            return $this->queryUserDeltaEventsLegacy($since, $groupIds, $limit);
+        }
+
+        try {
+            $groupMatches = UserSyncEvent::query()
+                ->select(['id'])
+                ->where('id', '>', $since)
+                ->whereIn('group_id', $groupIds);
+
+            $oldGroupMatches = UserSyncEvent::query()
+                ->select(['id'])
+                ->where('id', '>', $since)
+                ->whereIn('old_group_id', $groupIds);
+
+            $distinctIds = DB::query()
+                ->fromSub($groupMatches->union($oldGroupMatches), 'delta_match_ids')
+                ->select(['id'])
+                ->distinct()
+                ->orderBy('id', 'asc')
+                ->limit($limit);
+
+            return UserSyncEvent::query()
+                ->joinSub($distinctIds, 'delta_ids', function ($join) {
+                    $join->on('user_sync_events.id', '=', 'delta_ids.id');
+                })
+                ->orderBy('user_sync_events.id', 'asc')
+                ->get(['user_sync_events.*']);
+        } catch (Throwable) {
+            self::$deltaUnionQueryDisabled = true;
+            return $this->queryUserDeltaEventsLegacy($since, $groupIds, $limit);
+        }
+    }
+
+    private function queryUserDeltaEventsLegacy(int $since, array $groupIds, int $limit): Collection
+    {
+        return UserSyncEvent::query()
+            ->where('id', '>', $since)
+            ->where(function ($q) use ($groupIds) {
+                $q->whereIn('group_id', $groupIds)
+                    ->orWhereIn('old_group_id', $groupIds);
+            })
+            ->orderBy('id', 'asc')
+            ->limit($limit)
+            ->get();
+    }
+
+    private function shouldUseUnionQueryForDelta(): bool
+    {
+        if (self::$deltaUnionQueryDisabled) {
+            return false;
+        }
+
+        return (bool) config('user_sync.use_union_query_for_delta', true);
+    }
 
     // 后端提交数据
     public function push(Request $request)

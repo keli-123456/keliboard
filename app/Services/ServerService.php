@@ -5,16 +5,20 @@ namespace App\Services;
 use App\Models\Server;
 use App\Models\ServerRoute;
 use App\Models\User;
+use App\Models\UserSyncState;
 use App\Services\Plugin\HookManager;
 use App\Utils\Helper;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Schema;
 
 class ServerService
 {
     private const AVAILABLE_USER_IDS_CACHE_PREFIX = 'server:available-user-ids:';
     private const AVAILABLE_USER_IDS_CACHE_TTL = 75;
+    private static ?bool $hasUserSyncStatesTable = null;
+    private static bool $userSyncStatesReadDisabled = false;
 
     /**
      * 获取所有服务器列表
@@ -75,19 +79,36 @@ class ServerService
             return collect();
         }
 
-        $query = self::availableUsersBaseQuery($groupIds)
-            ->select([
-                'id',
-                'uuid',
-                'speed_limit',
-                'device_limit'
-            ]);
+        $query = self::availableUsersPreferredQuery($groupIds);
 
         if ($onlyDeviceLimited) {
-            $query->where('device_limit', '>', 0);
+            if ($query) {
+                $query->where('device_limit', '>', 0);
+            }
         }
 
-        $users = $query->get();
+        if ($query) {
+            $query->selectRaw('user_id as id, uuid, speed_limit, device_limit');
+            try {
+                $users = $query->get();
+                $users = HookManager::filter('server.users.get', $users, $node);
+                return collect($users)->sortBy('id')->values();
+            } catch (\Throwable) {
+                self::disableUserSyncStatesRead();
+            }
+        }
+
+        $fallbackQuery = self::availableUsersBaseQuery($groupIds)->select([
+            'id',
+            'uuid',
+            'speed_limit',
+            'device_limit'
+        ]);
+        if ($onlyDeviceLimited) {
+            $fallbackQuery->where('device_limit', '>', 0);
+        }
+
+        $users = $fallbackQuery->get();
         $users = HookManager::filter('server.users.get', $users, $node);
         return collect($users)->sortBy('id')->values();
     }
@@ -115,8 +136,23 @@ class ServerService
 
     private static function queryAvailableUserIds(array $groupIds, bool $onlyDeviceLimited): array
     {
-        $query = self::availableUsersBaseQuery($groupIds)->select(['id']);
+        $query = self::availableUsersPreferredQuery($groupIds);
+        if ($query) {
+            $query->selectRaw('user_id as id');
+            if ($onlyDeviceLimited) {
+                $query->where('device_limit', '>', 0);
+            }
 
+            try {
+                return $query->pluck('id')
+                    ->map(fn($id): int => (int) $id)
+                    ->all();
+            } catch (\Throwable) {
+                self::disableUserSyncStatesRead();
+            }
+        }
+
+        $query = self::availableUsersBaseQuery($groupIds)->select(['id']);
         if ($onlyDeviceLimited) {
             $query->where('device_limit', '>', 0);
         }
@@ -184,6 +220,61 @@ class ServerService
             })
             ->where('banned', 0)
             ->orderBy('id', 'asc');
+    }
+
+    private static function availableUsersPreferredQuery(array $groupIds): ?QueryBuilder
+    {
+        if (self::$userSyncStatesReadDisabled) {
+            return null;
+        }
+
+        if (!self::shouldUseUserSyncStatesForServerUsers()) {
+            return null;
+        }
+
+        if (!self::hasUserSyncStatesTable()) {
+            return null;
+        }
+
+        try {
+            return UserSyncState::query()
+                ->toBase()
+                ->whereIn('group_id', $groupIds)
+                ->where('available', 1)
+                ->orderBy('user_id', 'asc');
+        } catch (\Throwable $e) {
+            self::disableUserSyncStatesRead();
+            return null;
+        }
+    }
+
+    private static function shouldUseUserSyncStatesForServerUsers(): bool
+    {
+        return (bool) config('user_sync.use_state_table_for_server_users', true);
+    }
+
+    private static function hasUserSyncStatesTable(): bool
+    {
+        if (self::$hasUserSyncStatesTable !== null) {
+            return self::$hasUserSyncStatesTable;
+        }
+
+        try {
+            self::$hasUserSyncStatesTable = Schema::hasTable('user_sync_states');
+        } catch (\Throwable) {
+            self::$hasUserSyncStatesTable = false;
+        }
+
+        return self::$hasUserSyncStatesTable;
+    }
+
+    private static function disableUserSyncStatesRead(): void
+    {
+        if (self::$userSyncStatesReadDisabled) {
+            return;
+        }
+
+        self::$userSyncStatesReadDisabled = true;
     }
 
     private static function availableUserIdsCacheKey(array $groupIds, bool $onlyDeviceLimited): string
