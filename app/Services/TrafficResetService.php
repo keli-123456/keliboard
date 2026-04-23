@@ -35,22 +35,36 @@ class TrafficResetService
   {
     try {
       return DB::transaction(function () use ($user, $triggerSource, $metadata) {
-        $oldUpload = $user->u ?? 0;
-        $oldDownload = $user->d ?? 0;
+        $lockedUser = User::query()
+          ->with('plan:id,reset_traffic_method')
+          ->lockForUpdate()
+          ->find($user->id);
+
+        if (!$lockedUser) {
+          return false;
+        }
+
+        // For schedule-driven resets, enforce due-check under row lock to avoid duplicate resets.
+        if ($this->shouldRequireDueResetCheck($triggerSource) && !$lockedUser->shouldResetTraffic()) {
+          return false;
+        }
+
+        $oldUpload = $lockedUser->u ?? 0;
+        $oldDownload = $lockedUser->d ?? 0;
         $oldTotal = $oldUpload + $oldDownload;
 
-        $nextResetTime = $this->calculateNextResetTime($user);
+        $nextResetTime = $this->calculateNextResetTime($lockedUser);
 
-        $user->update([
+        $lockedUser->update([
           'u' => 0,
           'd' => 0,
           'last_reset_at' => time(),
-          'reset_count' => $user->reset_count + 1,
+          'reset_count' => ((int) $lockedUser->reset_count) + 1,
           'next_reset_at' => $nextResetTime ? $nextResetTime->timestamp : null,
         ]);
 
-        $this->recordResetLog($user, [
-          'reset_type' => $this->getResetTypeFromPlan($user->plan),
+        $this->recordResetLog($lockedUser, [
+          'reset_type' => $this->getResetTypeFromPlan($lockedUser->plan),
           'trigger_source' => $triggerSource,
           'old_upload' => $oldUpload,
           'old_download' => $oldDownload,
@@ -61,8 +75,8 @@ class TrafficResetService
           'metadata' => $metadata ?: null,
         ]);
 
-        $this->clearUserCache($user);
-        HookManager::call('traffic.reset.after', $user);
+        $this->clearUserCache($lockedUser);
+        HookManager::call('traffic.reset.after', $lockedUser);
         return true;
       });
     } catch (\Exception $e) {
@@ -121,33 +135,35 @@ class TrafficResetService
    * Get the next monthly reset time based on the user's expiration date.
    *
    * Logic:
-   * 1. If the user has no expiration date, reset on the 1st of each month.
-   * 2. If the user has an expiration date, use the day of that date as the monthly reset day.
-   * 3. Prioritize the reset day in the current month if it has not passed yet.
-   * 4. Handle cases where the day does not exist in a month (e.g., 31st in February).
+   * 1. Use expiration date day/time as monthly reset anchor.
+   * 2. Prioritize current month target if it is still in the future.
+   * 3. If anchor day does not exist in a month (e.g. 31st in February), clamp to month-end.
    */
   private function getNextMonthlyReset(User $user, Carbon $from): Carbon
   {
     $expiredAt = Carbon::createFromTimestamp($user->expired_at, config('app.timezone'));
     $resetDay = $expiredAt->day;
     $resetTime = [$expiredAt->hour, $expiredAt->minute, $expiredAt->second];
-    
-    $currentMonthTarget = $from->copy()->day($resetDay)->setTime(...$resetTime);
-    if ($currentMonthTarget->timestamp > $from->timestamp) {
+
+    $currentMonthTarget = $this->createClampedTargetDate(
+      $from->year,
+      $from->month,
+      $resetDay,
+      $resetTime
+    );
+
+    if ($currentMonthTarget->greaterThan($from)) {
       return $currentMonthTarget;
     }
-    
-    $nextMonthTarget = $from->copy()->startOfMonth()->addMonths(1)->day($resetDay)->setTime(...$resetTime);
-    
-    if ($nextMonthTarget->month !== ($from->month % 12) + 1) {
-      $nextMonth = ($from->month % 12) + 1;
-      $nextYear = $from->year + ($from->month === 12 ? 1 : 0);
-      $lastDayOfNextMonth = Carbon::create($nextYear, $nextMonth, 1)->endOfMonth()->day;
-      $targetDay = min($resetDay, $lastDayOfNextMonth);
-      $nextMonthTarget = Carbon::create($nextYear, $nextMonth, $targetDay)->setTime(...$resetTime);
-    }
-    
-    return $nextMonthTarget;
+
+    $nextMonth = $from->copy()->startOfMonth()->addMonth();
+
+    return $this->createClampedTargetDate(
+      $nextMonth->year,
+      $nextMonth->month,
+      $resetDay,
+      $resetTime
+    );
   }
 
   /**
@@ -162,10 +178,10 @@ class TrafficResetService
    * Get the next yearly reset time based on the user's expiration date.
    *
    * Logic:
-   * 1. If the user has no expiration date, reset on January 1st of each year.
-   * 2. If the user has an expiration date, use the month and day of that date as the yearly reset date.
-   * 3. Prioritize the reset date in the current year if it has not passed yet.
-   * 4. Handle the case of February 29th in a leap year.
+   * 1. Use expiration date month/day/time as yearly reset anchor.
+   * 2. Prioritize current year target if it is still in the future.
+   * 3. If anchor day does not exist in a target year/month (e.g. Feb 29 in non-leap year),
+   *    clamp to month-end.
    */
   private function getNextYearlyReset(User $user, Carbon $from): Carbon
   {
@@ -174,21 +190,48 @@ class TrafficResetService
     $resetDay = $expiredAt->day;
     $resetTime = [$expiredAt->hour, $expiredAt->minute, $expiredAt->second];
 
-    $currentYearTarget = $from->copy()->month($resetMonth)->day($resetDay)->setTime(...$resetTime);
-    if ($currentYearTarget->timestamp > $from->timestamp) {
+    $currentYearTarget = $this->createClampedTargetDate(
+      $from->year,
+      $resetMonth,
+      $resetDay,
+      $resetTime
+    );
+    if ($currentYearTarget->greaterThan($from)) {
       return $currentYearTarget;
     }
-    
-    $nextYearTarget = $from->copy()->startOfYear()->addYears(1)->month($resetMonth)->day($resetDay)->setTime(...$resetTime);
-    
-    if ($nextYearTarget->month !== $resetMonth) {
-      $nextYear = $from->year + 1;
-      $lastDayOfMonth = Carbon::create($nextYear, $resetMonth, 1)->endOfMonth()->day;
-      $targetDay = min($resetDay, $lastDayOfMonth);
-      $nextYearTarget = Carbon::create($nextYear, $resetMonth, $targetDay)->setTime(...$resetTime);
-    }
-    
-    return $nextYearTarget;
+
+    return $this->createClampedTargetDate(
+      $from->year + 1,
+      $resetMonth,
+      $resetDay,
+      $resetTime
+    );
+  }
+
+  /**
+   * Create a reset target date while clamping day to month-end.
+   */
+  private function createClampedTargetDate(int $year, int $month, int $day, array $time): Carbon
+  {
+    [$hour, $minute, $second] = $time;
+    $target = Carbon::create($year, $month, 1, $hour, $minute, $second, config('app.timezone'));
+    $targetDay = min($day, $target->daysInMonth);
+    $target->day($targetDay);
+
+    return $target;
+  }
+
+  /**
+   * Whether this reset source must satisfy due-check under transaction lock.
+   */
+  private function shouldRequireDueResetCheck(string $triggerSource): bool
+  {
+    return in_array($triggerSource, [
+      TrafficResetLog::SOURCE_AUTO,
+      TrafficResetLog::SOURCE_API,
+      TrafficResetLog::SOURCE_CRON,
+      TrafficResetLog::SOURCE_USER_ACCESS,
+    ], true);
   }
 
 
@@ -310,7 +353,6 @@ class TrafficResetService
               'batch' => $batchNumber,
               'timestamp' => now()->toDateTimeString(),
             ];
-            $batchErrors[] = $error;
             $errors[] = $error;
 
             Log::error('User traffic reset failed', $error);

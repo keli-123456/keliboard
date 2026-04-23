@@ -51,9 +51,40 @@ class StatUserJob implements ShouldQueue
             ? strtotime(date('Y-m-01'))
             : strtotime(date('Y-m-d'));
 
+        $driver = (string) config('database.default');
+        if ($driver === 'sqlite') {
+            $this->processUserStatsLegacy($recordAt);
+            return;
+        }
+
+        try {
+            $rows = $this->buildRows($recordAt);
+            if (empty($rows)) {
+                return;
+            }
+
+            if ($driver === 'pgsql') {
+                [$sql, $bindings] = $this->buildPostgresBatchUpsertStatement($rows);
+                DB::statement($sql, $bindings);
+                return;
+            }
+
+            [$sql, $bindings] = $this->buildMySqlBatchUpsertStatement($rows);
+            DB::statement($sql, $bindings);
+        } catch (\Throwable $e) {
+            Log::warning('StatUserJob batch upsert failed, fallback to per-user upsert', [
+                'error' => $e->getMessage(),
+                'users' => count($this->data),
+            ]);
+            $this->processUserStatsLegacy($recordAt);
+        }
+    }
+
+    private function processUserStatsLegacy(int $recordAt): void
+    {
         foreach ($this->data as $uid => $v) {
             try {
-                $this->processUserStat($uid, $v, $recordAt);
+                $this->processUserStat((int) $uid, (array) $v, $recordAt);
             } catch (\Exception $e) {
                 Log::error('StatUserJob failed for user ' . $uid . ': ' . $e->getMessage());
                 throw $e;
@@ -154,5 +185,93 @@ class StatUserJob implements ShouldQueue
             $now,
             $now,
         ]);
+    }
+
+    /**
+     * @return array<int, array<string, int|float|string>>
+     */
+    private function buildRows(int $recordAt): array
+    {
+        $rows = [];
+        $now = time();
+        $rate = (float) ($this->server['rate'] ?? 1);
+
+        foreach ($this->data as $uid => $traffic) {
+            $userId = (int) $uid;
+            if ($userId <= 0 || !is_array($traffic) || count($traffic) < 2) {
+                continue;
+            }
+
+            $upload = is_numeric($traffic[0] ?? null) ? (float) $traffic[0] : 0.0;
+            $download = is_numeric($traffic[1] ?? null) ? (float) $traffic[1] : 0.0;
+
+            $rows[] = [
+                'user_id' => $userId,
+                'server_rate' => $rate,
+                'record_at' => $recordAt,
+                'record_type' => $this->recordType,
+                'u' => $upload * $rate,
+                'd' => $download * $rate,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param array<int, array<string, int|float|string>> $rows
+     * @return array{0:string,1:array<int, int|float|string>}
+     */
+    private function buildMySqlBatchUpsertStatement(array $rows): array
+    {
+        $table = (new StatUser())->getTable();
+        $columns = ['user_id', 'server_rate', 'record_at', 'record_type', 'u', 'd', 'created_at', 'updated_at'];
+        $placeholders = [];
+        $bindings = [];
+
+        foreach ($rows as $row) {
+            $placeholders[] = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
+            foreach ($columns as $column) {
+                $bindings[] = $row[$column];
+            }
+        }
+
+        $sql = "INSERT INTO {$table} (" . implode(', ', $columns) . ') VALUES ' . implode(', ', $placeholders) . "
+            ON DUPLICATE KEY UPDATE
+                u = {$table}.u + VALUES(u),
+                d = {$table}.d + VALUES(d),
+                updated_at = VALUES(updated_at)";
+
+        return [$sql, $bindings];
+    }
+
+    /**
+     * @param array<int, array<string, int|float|string>> $rows
+     * @return array{0:string,1:array<int, int|float|string>}
+     */
+    private function buildPostgresBatchUpsertStatement(array $rows): array
+    {
+        $table = (new StatUser())->getTable();
+        $columns = ['user_id', 'server_rate', 'record_at', 'record_type', 'u', 'd', 'created_at', 'updated_at'];
+        $placeholders = [];
+        $bindings = [];
+
+        foreach ($rows as $row) {
+            $placeholders[] = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
+            foreach ($columns as $column) {
+                $bindings[] = $row[$column];
+            }
+        }
+
+        $sql = "INSERT INTO {$table} (" . implode(', ', $columns) . ') VALUES ' . implode(', ', $placeholders) . "
+            ON CONFLICT (user_id, server_rate, record_at)
+            DO UPDATE SET
+                u = {$table}.u + EXCLUDED.u,
+                d = {$table}.d + EXCLUDED.d,
+                updated_at = EXCLUDED.updated_at";
+
+        return [$sql, $bindings];
     }
 }
