@@ -39,7 +39,7 @@ class Kernel extends ConsoleKernel
         $schedule->command('message-dispatch:release', ['--limit' => 200])->everyMinute()->onOneServer()->withoutOverlapping(1);
         $schedule->command('message-dispatch:recover-stuck', ['--limit' => 200])->everyFiveMinutes()->onOneServer()->withoutOverlapping(4);
         // reset
-        $schedule->command('reset:traffic')->everyMinute()->onOneServer();
+        $schedule->command('reset:traffic')->everyMinute()->onOneServer()->withoutOverlapping(5);
         $schedule->command('reset:log')->daily()->onOneServer();
         $schedule->command('check:node-realtime-alert')->everyFiveMinutes()->onOneServer()->withoutOverlapping(4);
         // user sync (users_revision)

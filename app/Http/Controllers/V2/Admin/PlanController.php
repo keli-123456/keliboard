@@ -5,6 +5,7 @@ namespace App\Http\Controllers\V2\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\PlanSave;
 use App\Jobs\ApplyPlanToUsersJob;
+use App\Jobs\RecalculateNextResetAtJob;
 use App\Models\Order;
 use App\Models\Plan;
 use App\Models\User;
@@ -43,11 +44,17 @@ class PlanController extends Controller
             if (!$plan) {
                 return $this->fail([400202, '该订阅不存在']);
             }
+            $oldResetMethod = $plan->reset_traffic_method;
             
             DB::beginTransaction();
             try {
                 $plan->update($params);
+                $resetMethodChanged = array_key_exists('reset_traffic_method', $params)
+                    && $oldResetMethod !== $plan->reset_traffic_method;
                 DB::commit();
+                if ($resetMethodChanged) {
+                    RecalculateNextResetAtJob::dispatch((int) $plan->id);
+                }
                 if ($request->boolean('force_update')) {
                     return $this->success($this->dispatchPlanApply($plan->fresh() ?? $plan));
                 }

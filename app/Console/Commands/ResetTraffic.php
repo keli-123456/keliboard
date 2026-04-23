@@ -190,9 +190,16 @@ class ResetTraffic extends Command
       foreach ($users as $user) {
         try {
           $nextResetTime = $this->trafficResetService->calculateNextResetTime($user);
-          if ($nextResetTime) {
-            $user->next_reset_at = $nextResetTime->timestamp;
-            $user->save();
+          $nextResetTimestamp = $nextResetTime?->timestamp;
+          $currentResetAt = $user->next_reset_at;
+          $currentResetTimestamp = $currentResetAt instanceof \DateTimeInterface
+            ? $currentResetAt->getTimestamp()
+            : ($currentResetAt !== null ? (int) $currentResetAt : null);
+
+          if ($currentResetTimestamp !== $nextResetTimestamp) {
+            User::query()->whereKey($user->id)->update([
+              'next_reset_at' => $nextResetTimestamp,
+            ]);
             $fixedCount++;
           }
         } catch (\Exception $e) {
@@ -247,9 +254,16 @@ class ResetTraffic extends Command
       foreach ($users as $user) {
         try {
           $nextResetTime = $this->trafficResetService->calculateNextResetTime($user);
-          if ($nextResetTime) {
-            $user->next_reset_at = $nextResetTime->timestamp;
-            $user->save();
+          $nextResetTimestamp = $nextResetTime?->timestamp;
+          $currentResetAt = $user->next_reset_at;
+          $currentResetTimestamp = $currentResetAt instanceof \DateTimeInterface
+            ? $currentResetAt->getTimestamp()
+            : ($currentResetAt !== null ? (int) $currentResetAt : null);
+
+          if ($currentResetTimestamp !== $nextResetTimestamp) {
+            User::query()->whereKey($user->id)->update([
+              'next_reset_at' => $nextResetTimestamp,
+            ]);
             $fixedCount++;
           }
         } catch (\Exception $e) {

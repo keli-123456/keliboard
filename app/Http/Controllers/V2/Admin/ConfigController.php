@@ -4,6 +4,8 @@ namespace App\Http\Controllers\V2\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\ConfigSave;
+use App\Jobs\RecalculateNextResetAtJob;
+use App\Models\Plan;
 use App\Models\SubscribeTemplate;
 use App\Protocols\Clash;
 use App\Protocols\ClashMeta;
@@ -373,6 +375,7 @@ class ConfigController extends Controller
     {
         $data = $request->validated();
         $savedKeys = array_keys($data);
+        $oldSystemResetMethod = (int) admin_setting('reset_traffic_method', Plan::RESET_TRAFFIC_MONTHLY);
         $templateKeys = [
             'subscribe_template_singbox' => 'singbox',
             'subscribe_template_clash' => 'clash',
@@ -413,6 +416,14 @@ class ConfigController extends Controller
                 $themeService->switch($v);
             }
             admin_setting([$k => $v]);
+        }
+
+        if (array_key_exists('reset_traffic_method', $data)) {
+            $newSystemResetMethod = (int) $data['reset_traffic_method'];
+            if ($newSystemResetMethod !== $oldSystemResetMethod) {
+                // Recalculate users whose plan follows system reset strategy.
+                RecalculateNextResetAtJob::dispatch(null, true);
+            }
         }
 
         $this->dispatchNodeConfigInvalidation($savedKeys);
