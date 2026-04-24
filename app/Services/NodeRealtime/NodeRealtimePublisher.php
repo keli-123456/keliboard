@@ -10,6 +10,9 @@ use Illuminate\Support\Str;
 
 class NodeRealtimePublisher
 {
+    private const SERVER_RELATION_MAP_CACHE_SECONDS = 300;
+    private const SERVER_RELATION_MAP_COLUMNS = ['group_ids', 'route_ids'];
+
     private NodeRealtimeSettings $settings;
 
     public function __construct(NodeRealtimeSettings $settings)
@@ -130,44 +133,58 @@ class NodeRealtimePublisher
 
     private function resolveServerIdsByRouteIds(array $routeIds): array
     {
-        $routeIds = $this->normalizeIntList($routeIds);
-        if ($routeIds === []) {
-            return [];
-        }
-
-        return Server::query()
-            ->get(['id', 'route_ids'])
-            ->filter(function (Server $server) use ($routeIds): bool {
-                return array_intersect(
-                    $this->normalizeIntList((array) ($server->route_ids ?? [])),
-                    $routeIds
-                ) !== [];
-            })
-            ->pluck('id')
-            ->map(fn ($id) => (int) $id)
-            ->values()
-            ->all();
+        return $this->resolveServerIdsByRelationIds($routeIds, 'route_ids');
     }
 
     private function resolveServerIdsByGroupIds(array $groupIds): array
     {
-        $groupIds = $this->normalizeIntList($groupIds);
-        if ($groupIds === []) {
+        return $this->resolveServerIdsByRelationIds($groupIds, 'group_ids');
+    }
+
+    private function resolveServerIdsByRelationIds(array $relationIds, string $column): array
+    {
+        $relationIds = $this->normalizeIntList($relationIds);
+        if ($relationIds === [] || !in_array($column, self::SERVER_RELATION_MAP_COLUMNS, true)) {
             return [];
         }
 
-        return Server::query()
-            ->get(['id', 'group_ids'])
-            ->filter(function (Server $server) use ($groupIds): bool {
-                return array_intersect(
-                    $this->normalizeIntList((array) ($server->group_ids ?? [])),
-                    $groupIds
-                ) !== [];
-            })
-            ->pluck('id')
-            ->map(fn ($id) => (int) $id)
-            ->values()
-            ->all();
+        $relationMap = $this->getServerRelationMap($column);
+        $serverIds = [];
+        foreach ($relationIds as $relationId) {
+            foreach ($relationMap[$relationId] ?? [] as $serverId) {
+                $serverIds[] = $serverId;
+            }
+        }
+
+        return $this->normalizeIntList($serverIds);
+    }
+
+    private function getServerRelationMap(string $column): array
+    {
+        $version = Server::query()
+            ->selectRaw('COUNT(*) as server_count, COALESCE(MAX(updated_at), 0) as server_updated_at')
+            ->first();
+        $cacheKey = sprintf(
+            'node_realtime:server_relation_map:%s:%s:%s',
+            $column,
+            (int) ($version->server_count ?? 0),
+            (int) ($version->server_updated_at ?? 0)
+        );
+
+        return Cache::remember($cacheKey, now()->addSeconds(self::SERVER_RELATION_MAP_CACHE_SECONDS), function () use ($column): array {
+            $map = [];
+            Server::query()->orderBy('id')->get(['id', $column])->each(function (Server $server) use (&$map, $column): void {
+                foreach ($this->normalizeIntList((array) ($server->{$column} ?? [])) as $relationId) {
+                    $map[$relationId][] = (int) $server->id;
+                }
+            });
+
+            foreach ($map as $relationId => $serverIds) {
+                $map[$relationId] = $this->normalizeIntList($serverIds);
+            }
+
+            return $map;
+        });
     }
 
     private function clearConfigCache(?array $serverIds = null): void

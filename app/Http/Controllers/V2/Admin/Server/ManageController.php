@@ -10,6 +10,7 @@ use App\Services\NodeRealtime\NodeRealtimePublisher;
 use App\Services\ServerService;
 use App\Support\ProtocolCapabilityService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -37,9 +38,32 @@ class ManageController extends Controller
 
     public function getNodes(Request $request)
     {
-        $servers = ServerService::getAllServers()->map(function ($item) {
-            $item['groups'] = ServerGroup::whereIn('id', $item['group_ids'])->get(['name', 'id']);
-            $item['parent'] = $item->parent;
+        $servers = ServerService::getAllServers();
+        $groupIds = $servers
+            ->flatMap(fn (Server $server): array => (array) ($server->group_ids ?? []))
+            ->map(fn ($id): int => (int) $id)
+            ->filter(fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values();
+        $groups = $groupIds->isEmpty()
+            ? collect()
+            : ServerGroup::whereIn('id', $groupIds)->get(['name', 'id'])->keyBy('id');
+        $parentIds = $servers
+            ->pluck('parent_id')
+            ->map(fn ($id): int => (int) $id)
+            ->filter(fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values();
+        $parents = $parentIds->isEmpty()
+            ? collect()
+            : Server::whereIn('id', $parentIds)->get()->keyBy('id');
+
+        $servers = $servers->map(function (Server $item) use ($groups, $parents) {
+            $item['groups'] = collect((array) ($item->group_ids ?? []))
+                ->map(fn ($id) => $groups->get((int) $id))
+                ->filter()
+                ->values();
+            $item['parent'] = $item->parent_id ? $parents->get((int) $item->parent_id) : null;
             return $item;
         });
         return $this->success($servers);
@@ -47,40 +71,53 @@ class ManageController extends Controller
 
     public function getOptions()
     {
-        $options = self::DEFAULT_PROTOCOL_OPTIONS;
-        $vlessEnums = Server::getProtocolEnums(Server::TYPE_VLESS);
-        if (!empty($vlessEnums['network'])) {
-            $options['vless']['networkOptions'] = $vlessEnums['network'];
-        }
-        if (!empty($vlessEnums['flow'])) {
-            $options['vless']['flowOptions'] = $vlessEnums['flow'];
-        }
+        $version = Server::query()
+            ->selectRaw('COUNT(*) as server_count, COALESCE(MAX(updated_at), 0) as server_updated_at')
+            ->first();
+        $cacheKey = sprintf(
+            'admin:server:options:%s:%s',
+            (int) ($version->server_count ?? 0),
+            (int) ($version->server_updated_at ?? 0)
+        );
 
-        Server::query()->get(['type', 'protocol_settings'])->each(function (Server $server) use (&$options) {
-            $settings = is_array($server->protocol_settings) ? $server->protocol_settings : [];
-
-            if ($server->type === Server::TYPE_SHADOWSOCKS) {
-                $this->pushOption($options['shadowsocks']['ciphers'], data_get($settings, 'cipher'));
-
-                $plugin = $this->normalizeShadowsocksPlugin(
-                    data_get($settings, 'plugin'),
-                    data_get($settings, 'obfs')
-                );
-                $this->pushOption($options['shadowsocks']['plugins'], $plugin ?: 'none');
-
-                $pluginOptions = $this->parsePluginOptions(data_get($settings, 'plugin_opts'));
-                if ($plugin === 'obfs' || data_get($settings, 'obfs')) {
-                    $this->pushOption($options['shadowsocks']['obfs_modes'], $pluginOptions['obfs'] ?? data_get($settings, 'obfs'));
-                }
-                if ($plugin === 'v2ray-plugin') {
-                    $this->pushOption($options['shadowsocks']['v2ray_modes'], $pluginOptions['mode'] ?? null);
-                }
+        $options = Cache::remember($cacheKey, now()->addMinutes(10), function (): array {
+            $options = self::DEFAULT_PROTOCOL_OPTIONS;
+            $vlessEnums = Server::getProtocolEnums(Server::TYPE_VLESS);
+            if (!empty($vlessEnums['network'])) {
+                $options['vless']['networkOptions'] = $vlessEnums['network'];
+            }
+            if (!empty($vlessEnums['flow'])) {
+                $options['vless']['flowOptions'] = $vlessEnums['flow'];
             }
 
-            if ($server->type === Server::TYPE_VLESS) {
-                $this->pushOption($options['vless']['networkOptions'], data_get($settings, 'network'));
-                $this->pushOption($options['vless']['flowOptions'], data_get($settings, 'flow'));
-            }
+            Server::query()->get(['type', 'protocol_settings'])->each(function (Server $server) use (&$options) {
+                $settings = is_array($server->protocol_settings) ? $server->protocol_settings : [];
+
+                if ($server->type === Server::TYPE_SHADOWSOCKS) {
+                    $this->pushOption($options['shadowsocks']['ciphers'], data_get($settings, 'cipher'));
+
+                    $plugin = $this->normalizeShadowsocksPlugin(
+                        data_get($settings, 'plugin'),
+                        data_get($settings, 'obfs')
+                    );
+                    $this->pushOption($options['shadowsocks']['plugins'], $plugin ?: 'none');
+
+                    $pluginOptions = $this->parsePluginOptions(data_get($settings, 'plugin_opts'));
+                    if ($plugin === 'obfs' || data_get($settings, 'obfs')) {
+                        $this->pushOption($options['shadowsocks']['obfs_modes'], $pluginOptions['obfs'] ?? data_get($settings, 'obfs'));
+                    }
+                    if ($plugin === 'v2ray-plugin') {
+                        $this->pushOption($options['shadowsocks']['v2ray_modes'], $pluginOptions['mode'] ?? null);
+                    }
+                }
+
+                if ($server->type === Server::TYPE_VLESS) {
+                    $this->pushOption($options['vless']['networkOptions'], data_get($settings, 'network'));
+                    $this->pushOption($options['vless']['flowOptions'], data_get($settings, 'flow'));
+                }
+            });
+
+            return $options;
         });
 
         return $this->success($options);

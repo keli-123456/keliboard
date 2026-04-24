@@ -17,10 +17,13 @@ use App\Services\StatisticalService;
 use App\Services\UserOnlineService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 
 class StatController extends Controller
 {
     private const USER_TRAFFIC_NOISE_FLOOR_BYTES = 10240;
+    private const ADMIN_STATS_CACHE_SECONDS = 15;
+    private const ONLINE_NODE_COUNT_CACHE_SECONDS = 15;
 
     private $service;
     public function __construct(StatisticalService $service)
@@ -49,21 +52,33 @@ class StatController extends Controller
 
     public function getOverride(Request $request)
     {
+        $data = Cache::remember(
+            'admin:stats:getOverride',
+            now()->addSeconds(self::ADMIN_STATS_CACHE_SECONDS),
+            fn (): array => $this->buildOverrideStatsPayload()
+        );
+
+        return $this->statSuccess($data);
+    }
+
+    private function buildOverrideStatsPayload(): array
+    {
         // 获取在线节点数
         $onlineNodes = $this->getOnlineNodeCount();
         ['online_devices' => $onlineDevices, 'online_users' => $onlineUsers] = $this->getOnlineOverview();
+        $now = time();
 
         // 获取今日流量统计
         $todayStart = strtotime('today');
         $todayTraffic = StatServer::where('record_at', '>=', $todayStart)
-            ->where('record_at', '<', time())
+            ->where('record_at', '<', $now)
             ->selectRaw('SUM(u) as upload, SUM(d) as download, SUM(u + d) as total')
             ->first();
 
         // 获取本月流量统计
         $monthStart = strtotime(date('Y-m-1'));
         $monthTraffic = StatServer::where('record_at', '>=', $monthStart)
-            ->where('record_at', '<', time())
+            ->where('record_at', '<', $now)
             ->selectRaw('SUM(u) as upload, SUM(d) as download, SUM(u + d) as total')
             ->first();
 
@@ -73,11 +88,11 @@ class StatController extends Controller
 
         $data = [
             'month_income' => Order::where('created_at', '>=', strtotime(date('Y-m-1')))
-                ->where('created_at', '<', time())
+                ->where('created_at', '<', $now)
                 ->whereNotIn('status', [0, 2])
                 ->sum('total_amount'),
             'month_register_total' => User::where('created_at', '>=', strtotime(date('Y-m-1')))
-                ->where('created_at', '<', time())
+                ->where('created_at', '<', $now)
                 ->count(),
             'ticket_pending_total' => Ticket::where('status', 0)
                 ->count(),
@@ -87,7 +102,7 @@ class StatController extends Controller
                 ->where('commission_balance', '>', 0)
                 ->count(),
             'day_income' => Order::where('created_at', '>=', strtotime(date('Y-m-d')))
-                ->where('created_at', '<', time())
+                ->where('created_at', '<', $now)
                 ->whereNotIn('status', [0, 2])
                 ->sum('total_amount'),
             'last_month_income' => Order::where('created_at', '>=', strtotime('-1 month', strtotime(date('Y-m-1'))))
@@ -95,7 +110,7 @@ class StatController extends Controller
                 ->whereNotIn('status', [0, 2])
                 ->sum('total_amount'),
             'commission_month_payout' => CommissionLog::where('created_at', '>=', strtotime(date('Y-m-1')))
-                ->where('created_at', '<', time())
+                ->where('created_at', '<', $now)
                 ->sum('get_amount'),
             'commission_last_month_payout' => CommissionLog::where('created_at', '>=', strtotime('-1 month', strtotime(date('Y-m-1'))))
                 ->where('created_at', '<', strtotime(date('Y-m-1')))
@@ -124,7 +139,7 @@ class StatController extends Controller
         // Migration path: prefer camelCase fields to match getStats(), keep the
         // historical snake_case aliases until all admin pages and external clients
         // have moved off getOverride's legacy contract.
-        return $this->statSuccess(array_merge($data, [
+        return array_merge($data, [
             'currentMonthIncome' => $data['month_income'],
             'currentMonthNewUsers' => $data['month_register_total'],
             'ticketPendingTotal' => $data['ticket_pending_total'],
@@ -139,7 +154,7 @@ class StatController extends Controller
             'todayTraffic' => $data['today_traffic'],
             'monthTraffic' => $data['month_traffic'],
             'totalTraffic' => $data['total_traffic'],
-        ]));
+        ]);
     }
 
     /**
@@ -373,9 +388,21 @@ class StatController extends Controller
      */
     public function getStats()
     {
+        $data = Cache::remember(
+            'admin:stats:getStats',
+            now()->addSeconds(self::ADMIN_STATS_CACHE_SECONDS),
+            fn (): array => $this->buildStatsPayload()
+        );
+
+        return $this->statSuccess($data);
+    }
+
+    private function buildStatsPayload(): array
+    {
         $currentMonthStart = strtotime(date('Y-m-01'));
         $lastMonthStart = strtotime('-1 month', $currentMonthStart);
         $twoMonthsAgoStart = strtotime('-2 month', $currentMonthStart);
+        $now = time();
 
         // Today's start timestamp
         $todayStart = strtotime('today');
@@ -387,13 +414,13 @@ class StatController extends Controller
 
         // 获取今日流量统计
         $todayTraffic = StatServer::where('record_at', '>=', $todayStart)
-            ->where('record_at', '<', time())
+            ->where('record_at', '<', $now)
             ->selectRaw('SUM(u) as upload, SUM(d) as download, SUM(u + d) as total')
             ->first();
 
         // 获取本月流量统计
         $monthTraffic = StatServer::where('record_at', '>=', $currentMonthStart)
-            ->where('record_at', '<', time())
+            ->where('record_at', '<', $now)
             ->selectRaw('SUM(u) as upload, SUM(d) as download, SUM(u + d) as total')
             ->first();
 
@@ -403,7 +430,7 @@ class StatController extends Controller
 
         // Today's income
         $todayIncome = Order::where('created_at', '>=', $todayStart)
-            ->where('created_at', '<', time())
+            ->where('created_at', '<', $now)
             ->whereNotIn('status', [0, 2])
             ->sum('total_amount');
 
@@ -415,7 +442,7 @@ class StatController extends Controller
 
         // Current month income
         $currentMonthIncome = Order::where('created_at', '>=', $currentMonthStart)
-            ->where('created_at', '<', time())
+            ->where('created_at', '<', $now)
             ->whereNotIn('status', [0, 2])
             ->sum('total_amount');
 
@@ -432,20 +459,20 @@ class StatController extends Controller
 
         // Current month commission payout
         $currentMonthCommissionPayout = CommissionLog::where('created_at', '>=', $currentMonthStart)
-            ->where('created_at', '<', time())
+            ->where('created_at', '<', $now)
             ->sum('get_amount');
 
         // Current month new users
         $currentMonthNewUsers = User::where('created_at', '>=', $currentMonthStart)
-            ->where('created_at', '<', time())
+            ->where('created_at', '<', $now)
             ->count();
 
         // Total users
         $totalUsers = User::count();
 
         // Active users (users with valid subscription)
-        $activeUsers = User::where(function ($query) {
-            $query->where('expired_at', '>=', time())
+        $activeUsers = User::where(function ($query) use ($now) {
+            $query->where('expired_at', '>=', $now)
                 ->orWhere('expired_at', NULL);
         })->count();
 
@@ -480,7 +507,7 @@ class StatController extends Controller
             ->where('commission_balance', '>', 0)
             ->count();
 
-        return $this->statSuccess([
+        return [
             // 收入相关
             'todayIncome' => $todayIncome,
             'dayIncomeGrowth' => $dayIncomeGrowth,
@@ -525,7 +552,7 @@ class StatController extends Controller
                 'download' => $totalTraffic->download ?? 0,
                 'total' => $totalTraffic->total ?? 0
             ]
-        ]);
+        ];
     }
 
     /**
@@ -698,9 +725,13 @@ class StatController extends Controller
 
     private function getOnlineNodeCount(): int
     {
-        return Server::query()
-            ->get()
-            ->filter(fn(Server $server): bool => (bool) $server->is_online)
-            ->count();
+        return Cache::remember(
+            'admin:stats:onlineNodeCount',
+            now()->addSeconds(self::ONLINE_NODE_COUNT_CACHE_SECONDS),
+            fn (): int => Server::query()
+                ->get()
+                ->filter(fn (Server $server): bool => (bool) $server->is_online)
+                ->count()
+        );
     }
 }
