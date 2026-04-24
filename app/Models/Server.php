@@ -379,10 +379,19 @@ class Server extends Model
 
         $config = self::CIPHER_CONFIGURATIONS[$cipher];
         // Use parent's created_at if this is a child node
-        $serverCreatedAt = $this->parent_id ? $this->parent->created_at : $this->created_at;
+        $serverCreatedAt = $this->getServerKeyCreatedAt();
         $serverKey = Helper::getServerKey($serverCreatedAt, $config['serverKeySize']);
         $userKey = Helper::uuidToBase64($user->uuid, $config['userKeySize']);
         return "{$serverKey}:{$userKey}";
+    }
+
+    public function getServerKeyCreatedAt(): int
+    {
+        if (!$this->parent_id) {
+            return (int) $this->created_at;
+        }
+
+        return (int) ($this->parent?->created_at ?? $this->created_at);
     }
 
     public static function normalizeType(?string $type): string | null
@@ -595,7 +604,7 @@ class Server extends Model
         return Attribute::make(
             get: function () {
                 if ($this->type === self::TYPE_SHADOWSOCKS) {
-                    return Helper::getServerKey($this->created_at, 16);
+                    return Helper::getServerKey($this->getServerKeyCreatedAt(), 16);
                 }
                 return null;
             }

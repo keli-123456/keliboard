@@ -669,8 +669,14 @@ class ManageController extends Controller
                 return $this->fail([400202, '服务器不存在']);
             }
             try {
+                $oldGroupIds = $this->normalizeIdList((array) ($server->group_ids ?? []));
                 $server->update($params);
-                app(NodeRealtimePublisher::class)->invalidateConfigForServers([(int) $server->id], 'admin.server.saved');
+                $publisher = app(NodeRealtimePublisher::class);
+                $publisher->invalidateConfigForServers([(int) $server->id], 'admin.server.saved');
+                $newGroupIds = $this->normalizeIdList((array) ($server->group_ids ?? []));
+                if ($oldGroupIds !== $newGroupIds) {
+                    $publisher->invalidateUsersForServers([(int) $server->id], 'admin.server.groups_saved');
+                }
                 return $this->success(true);
             } catch (\Exception $e) {
                 Log::error($e);
@@ -779,5 +785,17 @@ class ManageController extends Controller
             $pairs[$key] = trim($value);
         }
         return $pairs;
+    }
+
+    private function normalizeIdList(array $values): array
+    {
+        $ids = array_map(
+            fn ($value): int => (int) $value,
+            array_filter($values, fn ($value): bool => is_numeric($value))
+        );
+        $ids = array_values(array_unique(array_filter($ids, fn (int $value): bool => $value > 0)));
+        sort($ids);
+
+        return $ids;
     }
 }

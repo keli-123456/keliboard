@@ -52,6 +52,19 @@ class NodeRealtimePublisher
         $this->publish('users', $reason, $payload);
     }
 
+    public function invalidateUsersForServers(array $serverIds, string $reason = 'users.updated', array $payload = []): void
+    {
+        $serverIds = $this->normalizeIntList($serverIds);
+        $this->clearUserCache($serverIds);
+
+        $targets = $this->buildTargets(serverIds: $serverIds);
+        if ($targets === null) {
+            return;
+        }
+
+        $this->publish('users', $reason, $payload, $targets);
+    }
+
     public function invalidateUsersForGroups(array $groupIds, string $reason = 'users.updated', array $payload = []): void
     {
         $groupIds = $this->normalizeIntList($groupIds);
