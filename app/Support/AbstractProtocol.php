@@ -263,6 +263,59 @@ abstract class AbstractProtocol
         }
     }
 
+    protected function buildProxyGroupProxies(array $sources, array $proxies): array
+    {
+        $hasFilter = false;
+        $literalSources = [];
+        $matchedProxies = [];
+
+        foreach ($sources as $source) {
+            if ($proxies !== [] && $this->isProxyGroupRegex($source)) {
+                $hasFilter = true;
+                foreach ($proxies as $proxy) {
+                    if ($this->proxyGroupRegexMatches($source, $proxy)) {
+                        $matchedProxies[] = $proxy;
+                    }
+                }
+                continue;
+            }
+
+            $literalSources[] = $source;
+        }
+
+        if ($hasFilter) {
+            return array_values(array_merge($literalSources, $matchedProxies));
+        }
+
+        return array_values(array_merge($sources, $proxies));
+    }
+
+    private function isProxyGroupRegex(mixed $pattern): bool
+    {
+        if (!is_string($pattern) || $pattern === '') {
+            return false;
+        }
+
+        try {
+            return @preg_match($pattern, '') !== false;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    private function proxyGroupRegexMatches(mixed $pattern, mixed $value): bool
+    {
+        if (!is_string($pattern) || !is_scalar($value)) {
+            return false;
+        }
+
+        try {
+            return @preg_match($pattern, (string) $value) === 1;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
     /**
      * 将平铺的协议需求转换为树形结构
      *

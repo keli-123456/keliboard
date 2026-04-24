@@ -16,6 +16,8 @@ use Illuminate\Support\Str;
 
 class TelegramService
 {
+    private const ADMIN_USER_CHUNK_SIZE = 500;
+
     protected PendingRequest $http;
     protected string $apiUrl;
     protected string $botToken;
@@ -229,41 +231,26 @@ class TelegramService
 
     public function sendMessageWithAdmin(string $message, bool $isStaff = false): void
     {
-        $query = User::where('telegram_id', '!=', null);
-        $query->where(
-            fn($q) => $q->where('is_admin', 1)
-                ->when($isStaff, fn($q) => $q->orWhere('is_staff', 1))
+        $this->eachAdminTelegramUser(
+            fn (int $telegramId): mixed => SendTelegramJob::dispatch($telegramId, $message),
+            $isStaff
         );
-        $users = $query->get();
-        foreach ($users as $user) {
-            SendTelegramJob::dispatch($user->telegram_id, $message);
-        }
     }
 
     public function sendDocumentWithAdmin(string $absoluteFilePath, string $filename, ?string $caption = null, bool $isStaff = false): void
     {
-        $query = User::where('telegram_id', '!=', null);
-        $query->where(
-            fn($q) => $q->where('is_admin', 1)
-                ->when($isStaff, fn($q) => $q->orWhere('is_staff', 1))
+        $this->eachAdminTelegramUser(
+            fn (int $telegramId): mixed => SendTelegramDocumentJob::dispatch($telegramId, $absoluteFilePath, $filename, $caption, 'markdown'),
+            $isStaff
         );
-        $users = $query->get();
-        foreach ($users as $user) {
-            SendTelegramDocumentJob::dispatch($user->telegram_id, $absoluteFilePath, $filename, $caption, 'markdown');
-        }
     }
 
     public function sendPhotoWithAdmin(string $absoluteFilePath, string $filename, ?string $caption = null, bool $isStaff = false): void
     {
-        $query = User::where('telegram_id', '!=', null);
-        $query->where(
-            fn($q) => $q->where('is_admin', 1)
-                ->when($isStaff, fn($q) => $q->orWhere('is_staff', 1))
+        $this->eachAdminTelegramUser(
+            fn (int $telegramId): mixed => SendTelegramPhotoJob::dispatch($telegramId, $absoluteFilePath, $filename, $caption, ''),
+            $isStaff
         );
-        $users = $query->get();
-        foreach ($users as $user) {
-            SendTelegramPhotoJob::dispatch($user->telegram_id, $absoluteFilePath, $filename, $caption, '');
-        }
     }
 
     /**
@@ -379,15 +366,26 @@ class TelegramService
      */
     public function sendMediaGroupPhotosWithAdmin(array $files, ?string $caption = null, bool $isStaff = false, ?int $ticketId = null): void
     {
-        $query = User::where('telegram_id', '!=', null);
-        $query->where(
-            fn($q) => $q->where('is_admin', 1)
-                ->when($isStaff, fn($q) => $q->orWhere('is_staff', 1))
+        $this->eachAdminTelegramUser(
+            fn (int $telegramId): mixed => SendTelegramMediaGroupJob::dispatch($telegramId, $files, $caption, $ticketId),
+            $isStaff
         );
-        $users = $query->get();
-        foreach ($users as $user) {
-            SendTelegramMediaGroupJob::dispatch($user->telegram_id, $files, $caption, $ticketId);
-        }
+    }
+
+    private function eachAdminTelegramUser(callable $callback, bool $isStaff = false): void
+    {
+        User::query()
+            ->whereNotNull('telegram_id')
+            ->where(
+                fn ($query) => $query->where('is_admin', 1)
+                    ->when($isStaff, fn ($query) => $query->orWhere('is_staff', 1))
+            )
+            ->select(['id', 'telegram_id'])
+            ->chunkById(self::ADMIN_USER_CHUNK_SIZE, function ($users) use ($callback): void {
+                foreach ($users as $user) {
+                    $callback((int) $user->telegram_id);
+                }
+            });
     }
 
     public function getFile(string $fileId): object
