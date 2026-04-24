@@ -11,6 +11,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class StatServerJob implements ShouldQueue
 {
@@ -20,6 +21,7 @@ class StatServerJob implements ShouldQueue
     protected array $server;
     protected string $protocol;
     protected string $recordType;
+    protected ?int $recordAt = null;
 
     public $tries = 3;
     public $timeout = 60;
@@ -36,20 +38,19 @@ class StatServerJob implements ShouldQueue
     /**
      * Create a new job instance.
      */
-    public function __construct(array $server, array $data, $protocol, string $recordType = 'd')
+    public function __construct(array $server, array $data, $protocol, string $recordType = 'd', ?int $recordAt = null)
     {
         $this->onQueue('stat');
         $this->data = $data;
         $this->server = $server;
         $this->protocol = $protocol;
         $this->recordType = $recordType;
+        $this->recordAt = $this->normalizeRecordAt($recordAt);
     }
 
     public function handle(): void
     {
-        $recordAt = $this->recordType === 'm'
-            ? strtotime(date('Y-m-01'))
-            : strtotime(date('Y-m-d'));
+        $recordAt = $this->recordAt ?? $this->currentRecordAt();
 
         $u = $d = 0;
         foreach ($this->data as $traffic) {
@@ -139,9 +140,10 @@ class StatServerJob implements ShouldQueue
         $now = time();
 
         // Use parameter binding to avoid SQL injection and keep maintainability
+        $conflictTarget = $this->postgresConflictTarget($table);
         $sql = "INSERT INTO {$table} (record_at, server_id, server_type, record_type, u, d, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (server_id, server_type, record_at)
+                ON CONFLICT {$conflictTarget}
                 DO UPDATE SET
                     u = {$table}.u + EXCLUDED.u,
                     d = {$table}.d + EXCLUDED.d,
@@ -157,5 +159,37 @@ class StatServerJob implements ShouldQueue
             $now,
             $now,
         ]);
+    }
+
+    private function postgresConflictTarget(string $table): string
+    {
+        $newColumns = ['server_id', 'server_type', 'record_at', 'record_type'];
+        try {
+            if (Schema::hasIndex($table, $newColumns, 'unique')) {
+                return '(server_id, server_type, record_at, record_type)';
+            }
+        } catch (\Throwable) {
+        }
+
+        return '(server_id, server_type, record_at)';
+    }
+
+    private function currentRecordAt(): int
+    {
+        return $this->normalizeRecordAt(time()) ?? time();
+    }
+
+    private function normalizeRecordAt(?int $timestamp): ?int
+    {
+        if ($timestamp === null || $timestamp <= 0) {
+            return null;
+        }
+
+        $date = $this->recordType === 'm'
+            ? date('Y-m-01', $timestamp)
+            : date('Y-m-d', $timestamp);
+        $recordAt = strtotime($date);
+
+        return $recordAt === false ? null : $recordAt;
     }
 }

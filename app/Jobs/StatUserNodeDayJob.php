@@ -19,6 +19,7 @@ class StatUserNodeDayJob implements ShouldQueue
     protected array $server;
     protected string $protocol;
     protected string $recordType;
+    protected ?int $recordAt = null;
 
     public $tries = 3;
     public $timeout = 60;
@@ -29,20 +30,19 @@ class StatUserNodeDayJob implements ShouldQueue
         return [1, 5, 10];
     }
 
-    public function __construct(array $server, array $data, string $protocol, string $recordType = 'd')
+    public function __construct(array $server, array $data, string $protocol, string $recordType = 'd', ?int $recordAt = null)
     {
         $this->onQueue('stat');
         $this->data = $data;
         $this->server = $server;
         $this->protocol = $protocol;
         $this->recordType = $recordType;
+        $this->recordAt = $this->normalizeRecordAt($recordAt);
     }
 
     public function handle(): void
     {
-        $recordAt = $this->recordType === 'm'
-            ? strtotime(date('Y-m-01'))
-            : strtotime(date('Y-m-d'));
+        $recordAt = $this->recordAt ?? $this->currentRecordAt();
 
         $rows = [];
         foreach ($this->data as $uid => $traffic) {
@@ -165,5 +165,24 @@ class StatUserNodeDayJob implements ShouldQueue
                 updated_at = EXCLUDED.updated_at";
 
         DB::statement($sql, $bindings);
+    }
+
+    private function currentRecordAt(): int
+    {
+        return $this->normalizeRecordAt(time()) ?? time();
+    }
+
+    private function normalizeRecordAt(?int $timestamp): ?int
+    {
+        if ($timestamp === null || $timestamp <= 0) {
+            return null;
+        }
+
+        $date = $this->recordType === 'm'
+            ? date('Y-m-01', $timestamp)
+            : date('Y-m-d', $timestamp);
+        $recordAt = strtotime($date);
+
+        return $recordAt === false ? null : $recordAt;
     }
 }

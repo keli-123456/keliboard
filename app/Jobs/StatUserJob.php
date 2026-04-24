@@ -11,6 +11,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class StatUserJob implements ShouldQueue
 {
@@ -20,6 +21,7 @@ class StatUserJob implements ShouldQueue
     protected array $server;
     protected string $protocol;
     protected string $recordType;
+    protected ?int $recordAt = null;
 
     public $tries = 3;
     public $timeout = 60;
@@ -36,20 +38,19 @@ class StatUserJob implements ShouldQueue
     /**
      * Create a new job instance.
      */
-    public function __construct(array $server, array $data, string $protocol, string $recordType = 'd')
+    public function __construct(array $server, array $data, string $protocol, string $recordType = 'd', ?int $recordAt = null)
     {
         $this->onQueue('stat');
         $this->data = $data;
         $this->server = $server;
         $this->protocol = $protocol;
         $this->recordType = $recordType;
+        $this->recordAt = $this->normalizeRecordAt($recordAt);
     }
 
     public function handle(): void
     {
-        $recordAt = $this->recordType === 'm'
-            ? strtotime(date('Y-m-01'))
-            : strtotime(date('Y-m-d'));
+        $recordAt = $this->recordAt ?? $this->currentRecordAt();
 
         $driver = (string) config('database.default');
         if ($driver === 'sqlite') {
@@ -167,9 +168,10 @@ class StatUserJob implements ShouldQueue
         $u = ($v[0] * $this->server['rate']);
         $d = ($v[1] * $this->server['rate']);
 
+        $conflictTarget = $this->postgresConflictTarget($table);
         $sql = "INSERT INTO {$table} (user_id, server_rate, record_at, record_type, u, d, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (user_id, server_rate, record_at)
+                ON CONFLICT {$conflictTarget}
                 DO UPDATE SET
                     u = {$table}.u + EXCLUDED.u,
                     d = {$table}.d + EXCLUDED.d,
@@ -265,13 +267,46 @@ class StatUserJob implements ShouldQueue
             }
         }
 
+        $conflictTarget = $this->postgresConflictTarget($table);
         $sql = "INSERT INTO {$table} (" . implode(', ', $columns) . ') VALUES ' . implode(', ', $placeholders) . "
-            ON CONFLICT (user_id, server_rate, record_at)
+            ON CONFLICT {$conflictTarget}
             DO UPDATE SET
                 u = {$table}.u + EXCLUDED.u,
                 d = {$table}.d + EXCLUDED.d,
                 updated_at = EXCLUDED.updated_at";
 
         return [$sql, $bindings];
+    }
+
+    private function postgresConflictTarget(string $table): string
+    {
+        $newColumns = ['user_id', 'server_rate', 'record_at', 'record_type'];
+        try {
+            if (Schema::hasIndex($table, $newColumns, 'unique')) {
+                return '(user_id, server_rate, record_at, record_type)';
+            }
+        } catch (\Throwable) {
+        }
+
+        return '(user_id, server_rate, record_at)';
+    }
+
+    private function currentRecordAt(): int
+    {
+        return $this->normalizeRecordAt(time()) ?? time();
+    }
+
+    private function normalizeRecordAt(?int $timestamp): ?int
+    {
+        if ($timestamp === null || $timestamp <= 0) {
+            return null;
+        }
+
+        $date = $this->recordType === 'm'
+            ? date('Y-m-01', $timestamp)
+            : date('Y-m-d', $timestamp);
+        $recordAt = strtotime($date);
+
+        return $recordAt === false ? null : $recordAt;
     }
 }

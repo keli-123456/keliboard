@@ -124,12 +124,12 @@ class UserService
         // Compatible with legacy hook
         list($server, $protocol, $data) = HookManager::filter('traffic.before_process', [$server, $protocol, $data]);
 
-        $timestamp = strtotime(date('Y-m-d'));
-        collect($data)->chunk(1000)->each(function ($chunk) use ($timestamp, $server, $protocol) {
-            TrafficFetchJob::dispatch($server, $chunk->toArray(), $protocol, $timestamp);
-            StatUserJob::dispatch($server, $chunk->toArray(), $protocol, 'd');
-            StatUserNodeDayJob::dispatch($server, $chunk->toArray(), $protocol, 'd');
-            StatServerJob::dispatch($server, $chunk->toArray(), $protocol, 'd');
+        $recordAt = strtotime(date('Y-m-d'));
+        collect($data)->chunk(1000)->each(function ($chunk) use ($recordAt, $server, $protocol) {
+            TrafficFetchJob::dispatch($server, $chunk->toArray(), $protocol, $recordAt);
+            StatUserJob::dispatch($server, $chunk->toArray(), $protocol, 'd', $recordAt);
+            StatUserNodeDayJob::dispatch($server, $chunk->toArray(), $protocol, 'd', $recordAt);
+            StatServerJob::dispatch($server, $chunk->toArray(), $protocol, 'd', $recordAt);
         });
     }
 
