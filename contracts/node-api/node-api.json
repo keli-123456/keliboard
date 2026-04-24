@@ -1,0 +1,126 @@
+{
+  "version": "2026-04-24",
+  "description": "Stable contract for panel-to-node APIs consumed by v2node.",
+  "headers": {
+    "response_format": "X-Response-Format",
+    "msgpack": "msgpack",
+    "msgpack_content_type": "application/x-msgpack"
+  },
+  "paths": {
+    "v1.uniproxy.config": {
+      "method": "GET",
+      "path": "/api/v1/server/UniProxy/config",
+      "response": "NodeConfig"
+    },
+    "v1.uniproxy.user": {
+      "method": "GET",
+      "path": "/api/v1/server/UniProxy/user",
+      "request_headers": {
+        "If-None-Match": "optional ETag",
+        "X-Response-Format": "optional msgpack"
+      },
+      "response": "UserList"
+    },
+    "v1.uniproxy.user_delta": {
+      "method": "GET",
+      "path": "/api/v1/server/UniProxy/user_delta",
+      "query": {
+        "since": "integer revision",
+        "limit": "optional integer"
+      },
+      "response": "UserDelta"
+    },
+    "v1.uniproxy.push": {
+      "method": "POST",
+      "path": "/api/v1/server/UniProxy/push",
+      "request": "TrafficReport"
+    },
+    "v1.uniproxy.alive": {
+      "method": "POST",
+      "path": "/api/v1/server/UniProxy/alive",
+      "request": "AliveReport"
+    },
+    "v1.uniproxy.alivelist": {
+      "method": "GET",
+      "path": "/api/v1/server/UniProxy/alivelist",
+      "response": "AliveMap"
+    },
+    "v1.uniproxy.status": {
+      "method": "POST",
+      "path": "/api/v1/server/UniProxy/status",
+      "request": "NodeStatus"
+    },
+    "v2.server.config": {
+      "method": "GET",
+      "path": "/api/v2/server/config",
+      "request_headers": {
+        "If-None-Match": "optional ETag"
+      },
+      "response": "NodeConfig"
+    },
+    "v2.server.handshake": {
+      "method": "GET|POST",
+      "path": "/api/v2/server/handshake",
+      "response": "RealtimeHandshake"
+    },
+    "v2.server.report": {
+      "method": "POST",
+      "path": "/api/v2/server/report",
+      "request": "UnifiedNodeReport",
+      "response": "BooleanDataEnvelope"
+    }
+  },
+  "schemas": {
+    "UserInfo": {
+      "required": ["id", "uuid", "speed_limit", "device_limit"],
+      "properties": {
+        "id": "integer",
+        "uuid": "string",
+        "speed_limit": "integer",
+        "device_limit": "integer"
+      }
+    },
+    "UserList": {
+      "required": ["users"],
+      "properties": {
+        "users": "UserInfo[]"
+      }
+    },
+    "UserDelta": {
+      "required": ["full", "revision"],
+      "properties": {
+        "full": "boolean",
+        "revision": "integer",
+        "users": "UserInfo[] when full=true",
+        "deleted": "UserInfo[] when full=false",
+        "upsert": "UserInfo[] when full=false"
+      }
+    },
+    "AliveMap": {
+      "required": ["alive", "alive_ips", "mode"],
+      "properties": {
+        "alive": "map<user_id,count>",
+        "alive_ips": "map<user_id,string[]>",
+        "mode": "integer"
+      }
+    },
+    "RealtimeHandshake": {
+      "required": ["websocket", "settings"],
+      "properties": {
+        "websocket.enabled": "boolean",
+        "websocket.ws_url": "string",
+        "settings.push_interval": "integer",
+        "settings.pull_interval": "integer"
+      }
+    },
+    "UnifiedNodeReport": {
+      "properties": {
+        "traffic": "map<user_id,[upload,download]>",
+        "alive": "map<user_id,string[]>",
+        "online": "map<user_id,count>",
+        "status": "node load status",
+        "metrics": "node runtime metrics"
+      }
+    }
+  }
+}

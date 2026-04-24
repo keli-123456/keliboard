@@ -1,6 +1,7 @@
 <?php
 namespace App\Http\Routes\V1;
 
+use App\Contracts\NodeApiContract;
 use App\Http\Controllers\V1\Server\DeepbworkController;
 use App\Http\Controllers\V1\Server\ShadowsocksTidalabController;
 use App\Http\Controllers\V1\Server\TrojanTidalabController;
@@ -15,16 +16,16 @@ class ServerRoute
             'prefix' => 'server',
         ], function ($router) {
             $router->group([
-                'prefix' => 'UniProxy',
+                'prefix' => NodeApiContract::V1_UNIPROXY_SEGMENT,
                 'middleware' => 'server'
             ], function ($route) {
-                $route->get('config', [UniProxyController::class, 'config']);
-                $route->get('user', [UniProxyController::class, 'user']);
-                $route->get('user_delta', [UniProxyController::class, 'userDelta']);
-                $route->post('push', [UniProxyController::class, 'push']);
-                $route->post('alive', [UniProxyController::class, 'alive']);
-                $route->get('alivelist', [UniProxyController::class, 'alivelist']);
-                $route->post('status', [UniProxyController::class, 'status']);
+                $route->get(NodeApiContract::ENDPOINT_CONFIG, [UniProxyController::class, 'config']);
+                $route->get(NodeApiContract::ENDPOINT_USER, [UniProxyController::class, 'user']);
+                $route->get(NodeApiContract::ENDPOINT_USER_DELTA, [UniProxyController::class, 'userDelta']);
+                $route->post(NodeApiContract::ENDPOINT_PUSH, [UniProxyController::class, 'push']);
+                $route->post(NodeApiContract::ENDPOINT_ALIVE, [UniProxyController::class, 'alive']);
+                $route->get(NodeApiContract::ENDPOINT_ALIVE_LIST, [UniProxyController::class, 'alivelist']);
+                $route->post(NodeApiContract::ENDPOINT_STATUS, [UniProxyController::class, 'status']);
             });
             $router->group([
                 'prefix' => 'ShadowsocksTidalab',
