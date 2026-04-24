@@ -1,6 +1,7 @@
 <?php
 namespace App\Http\Routes\V2;
 
+use App\Contracts\NodeApiContract;
 use App\Http\Controllers\V1\Server\ShadowsocksTidalabController;
 use App\Http\Controllers\V1\Server\TrojanTidalabController;
 use App\Http\Controllers\V1\Server\UniProxyController;
@@ -13,18 +14,18 @@ class ServerRoute
     {
 
         $router->group([
-            'prefix' => 'server',
+            'prefix' => NodeApiContract::V2_SERVER_PREFIX,
             'middleware' => 'server'
         ], function ($route) {
-            $route->match(['GET', 'POST'], 'handshake', [ServerController::class, 'handshake']);
-            $route->post('report', [ServerController::class, 'report']);
-            $route->get('config', [UniProxyController::class, 'config']);
-            $route->get('user', [UniProxyController::class, 'user']);
-            $route->get('user_delta', [UniProxyController::class, 'userDelta']);
-            $route->post('push', [UniProxyController::class, 'push']);
-            $route->post('alive', [UniProxyController::class, 'alive']);
-            $route->get('alivelist', [UniProxyController::class, 'alivelist']);
-            $route->post('status', [UniProxyController::class, 'status']);
+            $route->match(['GET', 'POST'], NodeApiContract::ENDPOINT_HANDSHAKE, [ServerController::class, 'handshake']);
+            $route->post(NodeApiContract::ENDPOINT_REPORT, [ServerController::class, 'report']);
+            $route->get(NodeApiContract::ENDPOINT_CONFIG, [UniProxyController::class, 'config']);
+            $route->get(NodeApiContract::ENDPOINT_USER, [UniProxyController::class, 'user']);
+            $route->get(NodeApiContract::ENDPOINT_USER_DELTA, [UniProxyController::class, 'userDelta']);
+            $route->post(NodeApiContract::ENDPOINT_PUSH, [UniProxyController::class, 'push']);
+            $route->post(NodeApiContract::ENDPOINT_ALIVE, [UniProxyController::class, 'alive']);
+            $route->get(NodeApiContract::ENDPOINT_ALIVE_LIST, [UniProxyController::class, 'alivelist']);
+            $route->post(NodeApiContract::ENDPOINT_STATUS, [UniProxyController::class, 'status']);
         });
     }
 }

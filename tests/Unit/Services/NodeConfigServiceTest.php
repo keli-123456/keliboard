@@ -2,22 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Tests\Unit\Http;
+namespace Tests\Unit\Services;
 
-use App\Http\Controllers\V1\Server\UniProxyController;
-use App\Services\UserOnlineService;
+use App\Services\Node\NodeConfigService;
 use Tests\TestCase;
 
-final class UniProxyControllerTest extends TestCase
+final class NodeConfigServiceTest extends TestCase
 {
     public function test_build_v2node_tls_settings_includes_top_level_tuic_alpn(): void
     {
-        $controller = new UniProxyController(new UserOnlineService());
-        $method = new \ReflectionMethod(UniProxyController::class, 'buildV2NodeTlsSettings');
-        $method->setAccessible(true);
+        $service = new NodeConfigService();
 
-        $settings = $method->invoke(
-            $controller,
+        $settings = $service->buildV2NodeTlsSettings(
             (object) ['host' => 'tuic.example.com'],
             'tuic',
             [
@@ -41,12 +37,9 @@ final class UniProxyControllerTest extends TestCase
 
     public function test_build_v2node_tls_settings_includes_top_level_anytls_alpn(): void
     {
-        $controller = new UniProxyController(new UserOnlineService());
-        $method = new \ReflectionMethod(UniProxyController::class, 'buildV2NodeTlsSettings');
-        $method->setAccessible(true);
+        $service = new NodeConfigService();
 
-        $settings = $method->invoke(
-            $controller,
+        $settings = $service->buildV2NodeTlsSettings(
             (object) ['host' => 'anytls.example.com'],
             'anytls',
             [

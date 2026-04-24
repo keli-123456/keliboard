@@ -4,26 +4,23 @@ namespace App\Http\Controllers\V1\Server;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\UpdateAliveDataJob;
+use App\Services\Node\NodeConfigService;
+use App\Services\Node\NodeUserService;
 use App\Services\ServerService;
-use App\Services\NodeRealtime\NodeRealtimeSettings;
+use App\Services\UserOnlineService;
 use App\Services\UserService;
 use App\Utils\CacheKey;
-use App\Utils\Helper;
-use App\Models\UserSyncEvent;
-use Illuminate\Http\Request;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
-use App\Services\UserOnlineService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Throwable;
 
 class UniProxyController extends Controller
 {
-    private static bool $deltaUnionQueryDisabled = false;
-
     public function __construct(
-        private readonly UserOnlineService $userOnlineService
+        private readonly UserOnlineService $userOnlineService,
+        private readonly NodeConfigService $nodeConfigService,
+        private readonly NodeUserService $nodeUserService
     ) {
     }
 
@@ -64,226 +61,74 @@ class UniProxyController extends Controller
     }
 
     // 后端获取用户
-			    public function user(Request $request)
-			    {
-			        ini_set('memory_limit', -1);
-			        $node = $this->getNodeInfo($request);
-			        $this->touchNodeLastCheckAt($node);
-	        $cacheTtl = (int) admin_setting('server_api_user_cache_ttl', config('server_api_cache.user_ttl', 0));
-	        $lockTtl = (int) admin_setting('server_api_cache_lock_ttl', config('server_api_cache.lock_ttl', 10));
-	        $lockWait = (int) admin_setting('server_api_cache_lock_wait', config('server_api_cache.lock_wait', 3));
-	        if ($cacheTtl < 0) {
-	            $cacheTtl = 0;
-	        }
-	        if ($lockTtl <= 0) {
-	            $lockTtl = (int) config('server_api_cache.lock_ttl', 10);
-	        }
-	        if ($lockWait < 0) {
-	            $lockWait = 0;
-	        }
+    public function user(Request $request)
+    {
+        ini_set('memory_limit', -1);
+        $node = $this->getNodeInfo($request);
+        $this->touchNodeLastCheckAt($node);
 
-		        if ($cacheTtl > 0) {
-		            $cache = $this->getServerApiCache();
-		            $cacheKey = "server_api:user:{$node->id}";
-		            $cached = $cache->get($cacheKey);
-		            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
-		                return $this->respondCacheEntry($request, $cached);
-		            }
+        $cacheTtl = (int) admin_setting('server_api_user_cache_ttl', config('server_api_cache.user_ttl', 0));
+        $lockTtl = (int) admin_setting('server_api_cache_lock_ttl', config('server_api_cache.lock_ttl', 10));
+        $lockWait = (int) admin_setting('server_api_cache_lock_wait', config('server_api_cache.lock_wait', 3));
+        if ($cacheTtl < 0) {
+            $cacheTtl = 0;
+        }
+        if ($lockTtl <= 0) {
+            $lockTtl = (int) config('server_api_cache.lock_ttl', 10);
+        }
+        if ($lockWait < 0) {
+            $lockWait = 0;
+        }
 
-		            try {
-		                $lock = $cache->lock("lock:{$cacheKey}", $lockTtl);
-	                $cached = $lock->block($lockWait, function () use ($cache, $cacheKey, $cacheTtl, $node) {
-	                    $existing = $cache->get($cacheKey);
-	                    if (is_array($existing) && isset($existing['etag'], $existing['body'])) {
-	                        return $existing;
-	                    }
-	                    $entry = $this->buildUserCacheEntry($node);
-	                    $cache->put($cacheKey, $entry, $cacheTtl);
-	                    return $entry;
-	                });
-	            } catch (Throwable) {
-	                $cached = $this->buildUserCacheEntry($node);
-	                try {
-	                    $cache->put($cacheKey, $cached, $cacheTtl);
-	                } catch (Throwable) {
-	                }
-		            }
-
-		            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
-		                return $this->respondCacheEntry($request, $cached);
-	            }
-	        }
-
-		        return $this->respondCacheEntry($request, $this->buildUserCacheEntry($node));
-		    }
-
-            // 后端增量获取用户 (users_revision)
-            public function userDelta(Request $request)
-            {
-                ini_set('memory_limit', -1);
-                $node = $this->getNodeInfo($request);
-                $this->touchNodeLastCheckAt($node);
-
-                $since = (int) $request->query('since', 0);
-                $limitCfg = (int) admin_setting('user_sync_delta_limit', config('user_sync.delta_limit', 5000));
-                if ($limitCfg <= 0) {
-                    $limitCfg = 5000;
-                }
-                $limit = (int) $request->query('limit', $limitCfg);
-                if ($limit <= 0) {
-                    $limit = $limitCfg;
-                }
-                $limit = min($limit, $limitCfg);
-
-                $maxId = (int) (UserSyncEvent::query()->max('id') ?? 0);
-
-                // First sync or no events yet: return full snapshot.
-                if ($since <= 0 || $maxId <= 0) {
-                    $users = ServerService::getAvailableUsers($node);
-                    return response()->json([
-                        'full' => true,
-                        'revision' => $maxId,
-                        'users' => $users,
-                    ]);
-                }
-
-                $oldestId = (int) (UserSyncEvent::query()->orderBy('id', 'asc')->value('id') ?? 0);
-                if ($oldestId > 0 && $since < $oldestId) {
-                    $users = ServerService::getAvailableUsers($node);
-                    return response()->json([
-                        'full' => true,
-                        'revision' => $maxId,
-                        'users' => $users,
-                    ]);
-                }
-
-                $groups = (array) ($node->group_ids ?? []);
-                $groupIds = array_values(array_unique(array_map('intval', $groups)));
-                if (empty($groupIds)) {
-                    return response()->json([
-                        'full' => false,
-                        'revision' => $maxId,
-                        'deleted' => [],
-                        'upsert' => [],
-                    ]);
-                }
-
-                $events = $this->queryUserDeltaEvents($since, $groupIds, $limit);
-
-                $deleted = [];
-                $upsert = [];
-
-                foreach ($events as $event) {
-                    $oldVisible = (bool) $event->old_available
-                        && $event->old_group_id !== null
-                        && in_array((int) $event->old_group_id, $groupIds, true);
-                    $newVisible = (bool) $event->available
-                        && $event->group_id !== null
-                        && in_array((int) $event->group_id, $groupIds, true);
-
-                    if ($oldVisible && !$newVisible) {
-                        $deleted[] = [
-                            'id' => (int) $event->user_id,
-                            'uuid' => (string) ($event->old_uuid ?: $event->uuid),
-                            'speed_limit' => 0,
-                            'device_limit' => 0,
-                        ];
-                        continue;
-                    }
-
-                    if ($oldVisible && $newVisible && $event->old_uuid && $event->old_uuid !== $event->uuid) {
-                        $deleted[] = [
-                            'id' => (int) $event->user_id,
-                            'uuid' => (string) $event->old_uuid,
-                            'speed_limit' => 0,
-                            'device_limit' => 0,
-                        ];
-                    }
-
-                    if ($newVisible) {
-                        $upsert[] = [
-                            'id' => (int) $event->user_id,
-                            'uuid' => (string) $event->uuid,
-                            'speed_limit' => (int) $event->speed_limit,
-                            'device_limit' => (int) $event->device_limit,
-                        ];
-                    }
-                }
-
-                // If no relevant events, allow node to jump to max revision.
-                $nextRevision = $maxId;
-                if ($events->isNotEmpty() && $events->count() >= $limit) {
-                    $nextRevision = (int) $events->last()->id;
-                }
-
-                return response()->json([
-                    'full' => false,
-                    'revision' => $nextRevision,
-                    'deleted' => $deleted,
-                    'upsert' => $upsert,
-                ]);
+        if ($cacheTtl > 0) {
+            $cache = $this->getServerApiCache();
+            $cacheKey = "server_api:user:{$node->id}";
+            $cached = $cache->get($cacheKey);
+            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
+                return $this->respondCacheEntry($request, $cached);
             }
 
-    /**
-     * Query delta events with an index-friendly UNION strategy and automatic
-     * fallback to the legacy OR predicate when needed.
-     */
-    private function queryUserDeltaEvents(int $since, array $groupIds, int $limit): Collection
-    {
-        if (!$this->shouldUseUnionQueryForDelta()) {
-            return $this->queryUserDeltaEventsLegacy($since, $groupIds, $limit);
+            try {
+                $lock = $cache->lock("lock:{$cacheKey}", $lockTtl);
+                $cached = $lock->block($lockWait, function () use ($cache, $cacheKey, $cacheTtl, $node) {
+                    $existing = $cache->get($cacheKey);
+                    if (is_array($existing) && isset($existing['etag'], $existing['body'])) {
+                        return $existing;
+                    }
+                    $entry = $this->nodeUserService->buildUserCacheEntry($node);
+                    $cache->put($cacheKey, $entry, $cacheTtl);
+                    return $entry;
+                });
+            } catch (Throwable) {
+                $cached = $this->nodeUserService->buildUserCacheEntry($node);
+                try {
+                    $cache->put($cacheKey, $cached, $cacheTtl);
+                } catch (Throwable) {
+                }
+            }
+
+            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
+                return $this->respondCacheEntry($request, $cached);
+            }
         }
 
-        try {
-            $groupMatches = UserSyncEvent::query()
-                ->select(['id'])
-                ->where('id', '>', $since)
-                ->whereIn('group_id', $groupIds);
-
-            $oldGroupMatches = UserSyncEvent::query()
-                ->select(['id'])
-                ->where('id', '>', $since)
-                ->whereIn('old_group_id', $groupIds);
-
-            $distinctIds = DB::query()
-                ->fromSub($groupMatches->union($oldGroupMatches), 'delta_match_ids')
-                ->select(['id'])
-                ->distinct()
-                ->orderBy('id', 'asc')
-                ->limit($limit);
-
-            return UserSyncEvent::query()
-                ->joinSub($distinctIds, 'delta_ids', function ($join) {
-                    $join->on('user_sync_events.id', '=', 'delta_ids.id');
-                })
-                ->orderBy('user_sync_events.id', 'asc')
-                ->get(['user_sync_events.*']);
-        } catch (Throwable) {
-            self::$deltaUnionQueryDisabled = true;
-            return $this->queryUserDeltaEventsLegacy($since, $groupIds, $limit);
-        }
+        return $this->respondCacheEntry($request, $this->nodeUserService->buildUserCacheEntry($node));
     }
 
-    private function queryUserDeltaEventsLegacy(int $since, array $groupIds, int $limit): Collection
+    // 后端增量获取用户 (users_revision)
+    public function userDelta(Request $request)
     {
-        return UserSyncEvent::query()
-            ->where('id', '>', $since)
-            ->where(function ($q) use ($groupIds) {
-                $q->whereIn('group_id', $groupIds)
-                    ->orWhereIn('old_group_id', $groupIds);
-            })
-            ->orderBy('id', 'asc')
-            ->limit($limit)
-            ->get();
-    }
+        ini_set('memory_limit', -1);
+        $node = $this->getNodeInfo($request);
+        $this->touchNodeLastCheckAt($node);
 
-    private function shouldUseUnionQueryForDelta(): bool
-    {
-        if (self::$deltaUnionQueryDisabled) {
-            return false;
-        }
-
-        return (bool) config('user_sync.use_union_query_for_delta', true);
+        return response()->json(
+            $this->nodeUserService->buildDeltaResponse(
+                $node,
+                (int) $request->query('since', 0),
+                $request->query('limit')
+            )
+        );
     }
 
     // 后端提交数据
@@ -324,59 +169,60 @@ class UniProxyController extends Controller
     }
 
     // 后端获取配置
-		    public function config(Request $request)
-		    {
-		        $node = $this->getNodeInfo($request);
-		        $this->touchNodeLastCheckAt($node);
-		        $isV2Node = (bool) $request->attributes->get('is_v2node', false);
+    public function config(Request $request)
+    {
+        $node = $this->getNodeInfo($request);
+        $this->touchNodeLastCheckAt($node);
+        $isV2Node = (bool) $request->attributes->get('is_v2node', false);
 
-	        $cacheTtl = (int) admin_setting('server_api_config_cache_ttl', config('server_api_cache.config_ttl', 0));
-		        $lockTtl = (int) admin_setting('server_api_cache_lock_ttl', config('server_api_cache.lock_ttl', 10));
-		        $lockWait = (int) admin_setting('server_api_cache_lock_wait', config('server_api_cache.lock_wait', 3));
-		        if ($cacheTtl < 0) {
-		            $cacheTtl = 0;
-		        }
-		        if ($lockTtl <= 0) {
-		            $lockTtl = (int) config('server_api_cache.lock_ttl', 10);
-		        }
-		        if ($lockWait < 0) {
-		            $lockWait = 0;
-		        }
-		        if ($cacheTtl > 0) {
-		            $cache = $this->getServerApiCache();
-		            $cacheKeySuffix = $isV2Node ? 'v2node' : 'default';
-		            $cacheKey = "server_api:config:{$node->id}:{$cacheKeySuffix}";
-		            $cached = $cache->get($cacheKey);
-		            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
-		                return $this->respondCacheEntry($request, $cached);
-		            }
+        $cacheTtl = (int) admin_setting('server_api_config_cache_ttl', config('server_api_cache.config_ttl', 0));
+        $lockTtl = (int) admin_setting('server_api_cache_lock_ttl', config('server_api_cache.lock_ttl', 10));
+        $lockWait = (int) admin_setting('server_api_cache_lock_wait', config('server_api_cache.lock_wait', 3));
+        if ($cacheTtl < 0) {
+            $cacheTtl = 0;
+        }
+        if ($lockTtl <= 0) {
+            $lockTtl = (int) config('server_api_cache.lock_ttl', 10);
+        }
+        if ($lockWait < 0) {
+            $lockWait = 0;
+        }
 
-		            try {
-		                $lock = $cache->lock("lock:{$cacheKey}", $lockTtl);
-		                $cached = $lock->block($lockWait, function () use ($cache, $cacheKey, $cacheTtl, $node, $isV2Node) {
-		                    $existing = $cache->get($cacheKey);
-		                    if (is_array($existing) && isset($existing['etag'], $existing['body'])) {
-		                        return $existing;
-		                    }
-		                    $entry = $this->buildConfigCacheEntry($node, $isV2Node);
-		                    $cache->put($cacheKey, $entry, $cacheTtl);
-		                    return $entry;
-		                });
-		            } catch (Throwable) {
-		                $cached = $this->buildConfigCacheEntry($node, $isV2Node);
-		                try {
-		                    $cache->put($cacheKey, $cached, $cacheTtl);
-		                } catch (Throwable) {
-		                }
-		            }
+        if ($cacheTtl > 0) {
+            $cache = $this->getServerApiCache();
+            $cacheKeySuffix = $isV2Node ? 'v2node' : 'default';
+            $cacheKey = "server_api:config:{$node->id}:{$cacheKeySuffix}";
+            $cached = $cache->get($cacheKey);
+            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
+                return $this->respondCacheEntry($request, $cached);
+            }
 
-		            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
-		                return $this->respondCacheEntry($request, $cached);
-	            }
-	        }
+            try {
+                $lock = $cache->lock("lock:{$cacheKey}", $lockTtl);
+                $cached = $lock->block($lockWait, function () use ($cache, $cacheKey, $cacheTtl, $node, $isV2Node) {
+                    $existing = $cache->get($cacheKey);
+                    if (is_array($existing) && isset($existing['etag'], $existing['body'])) {
+                        return $existing;
+                    }
+                    $entry = $this->buildConfigCacheEntry($node, $isV2Node);
+                    $cache->put($cacheKey, $entry, $cacheTtl);
+                    return $entry;
+                });
+            } catch (Throwable) {
+                $cached = $this->buildConfigCacheEntry($node, $isV2Node);
+                try {
+                    $cache->put($cacheKey, $cached, $cacheTtl);
+                } catch (Throwable) {
+                }
+            }
 
-	        return $this->respondCacheEntry($request, $this->buildConfigCacheEntry($node, $isV2Node));
-	    }
+            if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
+                return $this->respondCacheEntry($request, $cached);
+            }
+        }
+
+        return $this->respondCacheEntry($request, $this->buildConfigCacheEntry($node, $isV2Node));
+    }
 
     // 获取在线用户数据（wyx2685
     public function alivelist(Request $request): JsonResponse
@@ -452,388 +298,19 @@ class UniProxyController extends Controller
         return response()->json(['data' => true, "code" => 0, "message" => "success"]);
     }
 
-    private function adaptConfigForV2Node(array $response, $node): array
+    private function respondCacheEntry(Request $request, array $entry)
     {
-        $nodeType = (string) $node->type;
-        $protocolSettings = $node->protocol_settings;
-
-        $protocol = $this->mapV2NodeProtocol($nodeType, $protocolSettings);
-        $response['protocol'] = $protocol;
-
-        if (array_key_exists('networkSettings', $response)) {
-            $response['network_settings'] = $response['networkSettings'];
-        } else {
-            $response['network_settings'] = data_get($protocolSettings, 'network_settings') ?: null;
+        $etag = (string) ($entry['etag'] ?? '');
+        if ($etag !== '' && strpos($request->header('If-None-Match', ''), $etag) !== false) {
+            return response(null, 304)->header('ETag', "\"{$etag}\"");
         }
 
-        if ($protocol === 'anytls' && empty($response['network'])) {
-            $response['network'] = 'tcp';
-        }
-
-        $tls = $this->getV2NodeTlsValue($nodeType, $protocolSettings);
-        if ($tls !== null) {
-            $response['tls'] = $tls;
-        }
-
-        $tlsSettings = $this->buildV2NodeTlsSettings($node, $nodeType, $protocolSettings, $tls ?? 0);
-        if (!empty($tlsSettings)) {
-            $response['tls_settings'] = $tlsSettings;
-        }
-
-        if ($protocol === 'hysteria2') {
-            $upMbps = (int) ($response['up_mbps'] ?? 0);
-            $downMbps = (int) ($response['down_mbps'] ?? 0);
-            $response['ignore_client_bandwidth'] = $upMbps === 0 && $downMbps === 0;
-
-            if (array_key_exists('obfs-password', $response) && !array_key_exists('obfs_password', $response)) {
-                $response['obfs_password'] = $response['obfs-password'];
-            }
-            if (array_key_exists('obfs_password', $response) && !array_key_exists('obfs-password', $response)) {
-                $response['obfs-password'] = $response['obfs_password'];
-            }
-        }
-
-        if ($protocol === 'vless') {
-            $encryption = (string) data_get($protocolSettings, 'encryption', '');
-            $response['encryption'] = $encryption;
-            $response['encryption_settings'] = [
-                'mode' => (string) data_get($protocolSettings, 'encryption_settings.mode', ''),
-                'ticket' => (string) data_get($protocolSettings, 'encryption_settings.ticket', ''),
-                'server_padding' => (string) data_get($protocolSettings, 'encryption_settings.server_padding', ''),
-                'private_key' => (string) data_get($protocolSettings, 'encryption_settings.private_key', ''),
-            ];
-        }
-
-        if (isset($response['base_config']) && is_array($response['base_config'])) {
-            $nodeReportMinTraffic = max(0, (int) admin_setting('node_report_min_traffic', 0));
-            $deviceOnlineMinTraffic = max(0, (int) admin_setting('device_online_min_traffic', 0));
-
-            $response['base_config'] += [
-                'node_report_min_traffic' => $nodeReportMinTraffic,
-                'device_online_min_traffic' => $deviceOnlineMinTraffic,
-            ];
-        }
-
-        return $response;
+        return response((string) ($entry['body'] ?? ''), 200, ['Content-Type' => 'application/json; charset=UTF-8'])
+            ->header('ETag', "\"{$etag}\"");
     }
-
-    private function mapV2NodeProtocol(string $nodeType, array $protocolSettings): string
-    {
-        if ($nodeType !== 'hysteria') {
-            return $nodeType;
-        }
-
-        $version = (int) data_get($protocolSettings, 'version', 2);
-        return $version === 2 ? 'hysteria2' : 'hysteria';
-    }
-
-    private function getV2NodeTlsValue(string $nodeType, array $protocolSettings): ?int
-    {
-        return match ($nodeType) {
-            'vmess', 'vless' => (int) data_get($protocolSettings, 'tls', 0),
-            'trojan', 'hysteria', 'tuic' => 1,
-            'anytls' => $this->resolveAnyTlsMode($protocolSettings),
-            'shadowsocks' => 0,
-            default => null,
-        };
-    }
-
-    private function buildV2NodeTlsSettings($node, string $nodeType, array $protocolSettings, int $tls): array
-    {
-        if ($tls <= 0) {
-            return [];
-        }
-
-        $baseTlsSettings = $this->getBaseTlsSettingsForV2Node($nodeType, $protocolSettings, $tls);
-        $serverName = $this->resolveV2NodeServerName($node, $nodeType, $protocolSettings, $tls, $baseTlsSettings);
-
-        $tlsSettings = $baseTlsSettings;
-        $tlsSettings['server_name'] = $serverName;
-        $alpn = $this->resolveV2NodeAlpn($protocolSettings, $baseTlsSettings);
-        if (!empty($alpn)) {
-            $tlsSettings['alpn'] = $alpn;
-        }
-
-        if ($tls === 2) {
-            $tlsSettings['dest'] = (string) data_get($tlsSettings, 'dest', '');
-            $tlsSettings['server_port'] = (string) data_get($tlsSettings, 'server_port', '');
-            $tlsSettings['short_id'] = (string) data_get($tlsSettings, 'short_id', '');
-            $tlsSettings['private_key'] = (string) data_get($tlsSettings, 'private_key', '');
-            $tlsSettings['mldsa65Seed'] = (string) data_get($tlsSettings, 'mldsa65Seed', '');
-            $xver = data_get($tlsSettings, 'xver');
-            if ($xver === null || $xver === '') {
-                $xver = '0';
-            }
-            $tlsSettings['xver'] = (string) $xver;
-            return $tlsSettings;
-        }
-
-        $tlsSettings['cert_mode'] = (string) data_get($tlsSettings, 'cert_mode', 'file');
-        $tlsSettings['cert_file'] = (string) data_get($tlsSettings, 'cert_file', '');
-        $tlsSettings['key_file'] = (string) data_get($tlsSettings, 'key_file', '');
-        $tlsSettings['provider'] = (string) data_get($tlsSettings, 'provider', '');
-        $tlsSettings['dns_env'] = (string) data_get($tlsSettings, 'dns_env', '');
-        $tlsSettings['reject_unknown_sni'] = (string) data_get($tlsSettings, 'reject_unknown_sni', '0');
-
-        return $tlsSettings;
-    }
-
-    private function getBaseTlsSettingsForV2Node(string $nodeType, array $protocolSettings, int $tls): array
-    {
-        if (in_array($nodeType, ['vless', 'anytls'], true) && $tls === 2) {
-            return (array) data_get($protocolSettings, 'reality_settings', []);
-        }
-
-        return (array) data_get($protocolSettings, 'tls_settings', []);
-    }
-
-    private function resolveV2NodeAlpn(array $protocolSettings, array $baseTlsSettings): array
-    {
-        $values = data_get($protocolSettings, 'alpn', data_get($baseTlsSettings, 'alpn', []));
-        $normalized = [];
-        foreach ((array) $values as $value) {
-            $text = trim((string) $value);
-            if ($text === '' || in_array($text, $normalized, true)) {
-                continue;
-            }
-            $normalized[] = $text;
-        }
-
-        return $normalized;
-    }
-
-	    private function resolveV2NodeServerName($node, string $nodeType, array $protocolSettings, int $tls, array $baseTlsSettings): string
-	    {
-        $serverName = match ($nodeType) {
-            'trojan' => (string) data_get($protocolSettings, 'server_name', ''),
-            'hysteria', 'tuic', 'anytls' => (string) data_get($protocolSettings, 'tls.server_name', ''),
-            default => (string) data_get($baseTlsSettings, 'server_name', ''),
-        };
-
-        if (in_array($nodeType, ['vless', 'anytls'], true) && $tls === 2) {
-            $serverName = (string) data_get($protocolSettings, 'reality_settings.server_name', $serverName);
-        }
-
-	        return $serverName ?: (string) $node->host;
-	    }
-
-    private function resolveAnyTlsMode(array $protocolSettings): int
-    {
-        $mode = (int) data_get($protocolSettings, 'tls_mode', 0);
-        if (in_array($mode, [1, 2], true)) {
-            return $mode;
-        }
-
-        $realitySettings = (array) data_get($protocolSettings, 'reality_settings', []);
-        $hasRealityConfig = collect($realitySettings)->contains(function ($value, $key) {
-            if ($key === 'allow_insecure') {
-                return (bool) $value;
-            }
-            return $value !== null && $value !== '';
-        });
-
-        return $hasRealityConfig ? 2 : 1;
-    }
-
-	    private function respondCacheEntry(Request $request, array $entry)
-	    {
-	        $etag = (string) ($entry['etag'] ?? '');
-	        if ($etag !== '' && strpos($request->header('If-None-Match', ''), $etag) !== false) {
-	            return response(null, 304)->header('ETag', "\"{$etag}\"");
-	        }
-
-	        return response((string) ($entry['body'] ?? ''), 200, ['Content-Type' => 'application/json; charset=UTF-8'])
-	            ->header('ETag', "\"{$etag}\"");
-	    }
-
-	    private function buildUserCacheEntry($node): array
-	    {
-	        $users = ServerService::getAvailableUsers($node);
-        $eTagContext = hash_init('sha1');
-        foreach ($users as $index => $user) {
-            $userId = (int) data_get($user, 'id', 0);
-            $uuid = (string) data_get($user, 'uuid', '');
-            $speedLimit = (int) data_get($user, 'speed_limit', 0);
-            $deviceLimit = (int) data_get($user, 'device_limit', 0);
-
-            if (is_object($user)) {
-                $user->id = $userId;
-                $user->uuid = $uuid;
-                $user->speed_limit = $speedLimit;
-                $user->device_limit = $deviceLimit;
-            } elseif (is_array($user)) {
-                $user['id'] = $userId;
-                $user['uuid'] = $uuid;
-                $user['speed_limit'] = $speedLimit;
-                $user['device_limit'] = $deviceLimit;
-                $users[$index] = $user;
-            }
-
-            hash_update($eTagContext, "{$userId}:{$uuid}:{$speedLimit}:{$deviceLimit};");
-        }
-
-        $response = ['users' => $users];
-        $eTag = hash_final($eTagContext);
-        $body = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-
-	        return [
-	            'etag' => $eTag,
-	            'body' => $body === false ? '{"users":[]}' : $body,
-	        ];
-	    }
-
-	    private function buildConfigResponse($node, bool $isV2Node): array
-	    {
-	        $nodeType = $node->type;
-	        $protocolSettings = $node->protocol_settings;
-
-	        $serverPort = $node->server_port;
-	        $host = $node->host;
-
-	        $baseConfig = [
-	            'protocol' => $nodeType,
-	            'listen_ip' => '0.0.0.0',
-	            'server_port' => (int) $serverPort,
-	            'network' => data_get($protocolSettings, 'network'),
-	            'networkSettings' => data_get($protocolSettings, 'network_settings') ?: null,
-	        ];
-
-	        $response = match ($nodeType) {
-	            'shadowsocks' => [
-	                ...$baseConfig,
-	                'cipher' => $protocolSettings['cipher'],
-	                'plugin' => $protocolSettings['plugin'],
-	                'plugin_opts' => $protocolSettings['plugin_opts'],
-	                'server_key' => match ($protocolSettings['cipher']) {
-	                        '2022-blake3-aes-128-gcm' => Helper::getServerKey($node->getServerKeyCreatedAt(), 16),
-	                        '2022-blake3-aes-256-gcm' => Helper::getServerKey($node->getServerKeyCreatedAt(), 32),
-	                        '2022-blake3-chacha20-poly1305' => Helper::getServerKey($node->getServerKeyCreatedAt(), 32),
-	                        default => null
-	                    }
-	            ],
-	            'vmess' => [
-	                ...$baseConfig,
-	                'tls' => (int) $protocolSettings['tls']
-	            ],
-	            'trojan' => [
-	                ...$baseConfig,
-	                'host' => $host,
-	                'server_name' => $protocolSettings['server_name'],
-	            ],
-	            'vless' => [
-	                ...$baseConfig,
-	                'tls' => (int) $protocolSettings['tls'],
-	                'flow' => $protocolSettings['flow'],
-	                'tls_settings' =>
-	                        match ((int) $protocolSettings['tls']) {
-	                            2 => $protocolSettings['reality_settings'],
-	                            default => $protocolSettings['tls_settings']
-	                        }
-	            ],
-	            'hysteria' => [
-	                ...$baseConfig,
-	                'server_port' => (int) $serverPort,
-	                'version' => (int) $protocolSettings['version'],
-	                'host' => $host,
-	                'server_name' => $protocolSettings['tls']['server_name'],
-	                'up_mbps' => (int) $protocolSettings['bandwidth']['up'],
-	                'down_mbps' => (int) $protocolSettings['bandwidth']['down'],
-	                ...match ((int) $protocolSettings['version']) {
-	                        1 => ['obfs' => $protocolSettings['obfs']['password'] ?? null],
-	                        2 => [
-	                            'obfs' => $protocolSettings['obfs']['open'] ? $protocolSettings['obfs']['type'] : null,
-	                            'obfs-password' => $protocolSettings['obfs']['password'] ?? null
-	                        ],
-	                        default => []
-	                    }
-	            ],
-	            'tuic' => [
-	                ...$baseConfig,
-	                'version' => (int) $protocolSettings['version'],
-	                'server_port' => (int) $serverPort,
-	                'server_name' => $protocolSettings['tls']['server_name'],
-	                'congestion_control' => $protocolSettings['congestion_control'],
-	                'auth_timeout' => '3s',
-	                'zero_rtt_handshake' => (bool) data_get($protocolSettings, 'zero_rtt_handshake', false),
-	                'heartbeat' => "3s",
-	            ],
-	            'anytls' => [
-	                ...$baseConfig,
-	                'server_port' => (int) $serverPort,
-	                'server_name' => $this->resolveAnyTlsMode($protocolSettings) === 2
-	                    ? data_get($protocolSettings, 'reality_settings.server_name')
-	                    : data_get($protocolSettings, 'tls.server_name'),
-	                'padding_scheme' => $protocolSettings['padding_scheme'],
-	            ],
-	            'socks' => [
-	                ...$baseConfig,
-	                'server_port' => (int) $serverPort,
-	            ],
-	            'naive' => [
-	                ...$baseConfig,
-	                'server_port' => (int) $serverPort,
-	                'tls' => (int) $protocolSettings['tls'],
-	                'tls_settings' => $protocolSettings['tls_settings']
-	            ],
-	            'http' => [
-	                ...$baseConfig,
-	                'server_port' => (int) $serverPort,
-	                'tls' => (int) $protocolSettings['tls'],
-	                'tls_settings' => $protocolSettings['tls_settings']
-	            ],
-	            'mieru' => [
-	                ...$baseConfig,
-	                'server_port' => (string) $serverPort,
-	                'protocol' => (int) $protocolSettings['protocol'],
-	            ],
-	            default => []
-	        };
-
-        $response['base_config'] = [
-            'push_interval' => (int) admin_setting('server_push_interval', 60),
-            'pull_interval' => (int) admin_setting('server_pull_interval', 60),
-            'device_limit_fallback' => max(0, min(2147483647, (int) admin_setting('device_limit_fallback', 0))),
-            'realtime' => $this->buildRealtimeBaseConfig(),
-        ];
-
-	        if (!empty($node['route_ids'])) {
-	            $response['routes'] = ServerService::getRoutes($node['route_ids']);
-	        }
-
-	        if ($isV2Node) {
-	            $response = $this->adaptConfigForV2Node($response, $node);
-	        }
-
-	        return $response;
-	    }
 
     private function buildConfigCacheEntry($node, bool $isV2Node): array
     {
-        $response = $this->buildConfigResponse($node, $isV2Node);
-        $body = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $eTag = sha1($body === false ? '' : $body);
-
-	        return [
-            'etag' => $eTag,
-            'body' => $body === false ? '{}' : $body,
-        ];
-    }
-
-    private function buildRealtimeBaseConfig(): array
-    {
-        $settings = app(NodeRealtimeSettings::class);
-        $url = $settings->resolvedPublicUrl();
-        $enabled = $settings->enabled() && $url !== '';
-
-        return [
-            'enabled' => $enabled,
-            'url' => $enabled ? $url : '',
-            'ping_interval' => $settings->pingInterval(),
-        ];
-    }
-
-    private function resolveRealtimePublicUrl(): string
-    {
-        return app(NodeRealtimeSettings::class)->resolvedPublicUrl();
+        return $this->nodeConfigService->buildCacheEntry($node, $isV2Node);
     }
 }
