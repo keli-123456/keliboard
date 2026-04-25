@@ -1,0 +1,1 @@
+import{k as a}from"../index.js";const r={fetch:t=>a.post("/ticket/fetch",t),reply:(t,p,o)=>{const e=new FormData;return e.append("id",String(t)),e.append("message",p||""),(o||[]).forEach(s=>e.append("images[]",s)),a.post("/ticket/reply",e)},close:t=>a.post("/ticket/close",{id:t}),autoReplyStats:(t=7)=>a.get("/ticket/autoReplyStats",{params:{days:t}})};export{r as t};
