@@ -89,6 +89,10 @@
         ],
         "post-create-project-cmd": [
             "@php artisan key:generate --ansi"
+        ],
+        "test": [
+            "@php -r \"if (PHP_VERSION_ID < 80200) { fwrite(STDERR, 'PHP 8.2+ is required to run the test suite. Current: ' . PHP_VERSION . PHP_EOL); exit(1); }\"",
+            "@php vendor/bin/phpunit --testsuite Unit"
         ]
     },
     "repositories": [

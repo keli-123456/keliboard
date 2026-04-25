@@ -69,6 +69,7 @@ class PluginConfigService
                 'config' => json_encode($values),
                 'updated_at' => now()
             ]);
+        $this->pluginManager->flushEnabledPluginsCache();
 
         return true;
     }

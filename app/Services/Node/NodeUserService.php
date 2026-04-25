@@ -6,64 +6,119 @@ namespace App\Services\Node;
 
 use App\Models\UserSyncEvent;
 use App\Services\ServerService;
+use Illuminate\Contracts\Support\Arrayable;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
 class NodeUserService
 {
+    private const JSON_FLAGS = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE;
+
     private static bool $deltaUnionQueryDisabled = false;
 
     public function buildUserCacheEntry($node): array
     {
-        $users = ServerService::getAvailableUsers($node);
-        $eTagContext = hash_init('sha1');
-        foreach ($users as $index => $user) {
-            $userId = (int) data_get($user, 'id', 0);
-            $uuid = (string) data_get($user, 'uuid', '');
-            $speedLimit = (int) data_get($user, 'speed_limit', 0);
-            $deviceLimit = (int) data_get($user, 'device_limit', 0);
+        return $this->encodeAvailableUsers($node, '{"users":[', ']}', true);
+    }
 
-            if (is_object($user)) {
-                $user->id = $userId;
-                $user->uuid = $uuid;
-                $user->speed_limit = $speedLimit;
-                $user->device_limit = $deviceLimit;
-            } elseif (is_array($user)) {
-                $user['id'] = $userId;
-                $user['uuid'] = $uuid;
-                $user['speed_limit'] = $speedLimit;
-                $user['device_limit'] = $deviceLimit;
-                $users[$index] = $user;
-            }
-
-            hash_update($eTagContext, "{$userId}:{$uuid}:{$speedLimit}:{$deviceLimit};");
+    public function buildDeltaResponseEntry($node, int $since, $requestedLimit): array
+    {
+        $state = $this->resolveDeltaState($since);
+        if ($state['full']) {
+            return [
+                'raw' => true,
+                'body' => $this->encodeFullDeltaSnapshot($node, $state['revision']),
+            ];
         }
 
-        $response = ['users' => $users];
-        $eTag = hash_final($eTagContext);
-        $body = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        return [
+            'raw' => false,
+            'data' => $this->buildIncrementalDeltaResponse($node, $since, $requestedLimit, $state['revision']),
+        ];
+    }
+
+    private function encodeFullDeltaSnapshot($node, int $revision): string
+    {
+        $entry = $this->encodeAvailableUsers($node, '{"full":true,"revision":' . $revision . ',"users":[', ']}', false);
+
+        return $entry['body'];
+    }
+
+    private function encodeAvailableUsers($node, string $prefix, string $suffix, bool $withEtag): array
+    {
+        $eTagContext = hash_init('sha1');
+        $body = $prefix;
+        $first = true;
+
+        ServerService::eachAvailableUser($node, function ($user) use (&$body, &$first, &$eTagContext, $withEtag): void {
+            $row = $this->normalizeUserSnapshotRow($user);
+
+            if ($withEtag) {
+                hash_update($eTagContext, "{$row['id']}:{$row['uuid']}:{$row['speed_limit']}:{$row['device_limit']};");
+            }
+
+            $encoded = json_encode($row, self::JSON_FLAGS);
+            if ($encoded === false) {
+                $encoded = json_encode($this->coreUserSnapshotRow($row), self::JSON_FLAGS);
+            }
+            if ($encoded === false) {
+                return;
+            }
+
+            if (!$first) {
+                $body .= ',';
+            }
+            $body .= $encoded;
+            $first = false;
+        });
+
+        $body .= $suffix;
 
         return [
-            'etag' => $eTag,
-            'body' => $body === false ? '{"users":[]}' : $body,
+            'etag' => $withEtag ? hash_final($eTagContext) : '',
+            'body' => $body,
         ];
     }
 
     public function buildDeltaResponse($node, int $since, $requestedLimit): array
     {
-        $limit = $this->resolveDeltaLimit($requestedLimit);
+        $state = $this->resolveDeltaState($since);
+        if ($state['full']) {
+            return $this->buildFullDeltaResponse($node, $state['revision']);
+        }
+
+        return $this->buildIncrementalDeltaResponse($node, $since, $requestedLimit, $state['revision']);
+    }
+
+    private function resolveDeltaState(int $since): array
+    {
         $maxId = (int) (UserSyncEvent::query()->max('id') ?? 0);
 
-        // First sync or expired delta window requires a full snapshot.
         if ($since <= 0 || $maxId <= 0) {
-            return $this->buildFullDeltaResponse($node, $maxId);
+            return [
+                'full' => true,
+                'revision' => $maxId,
+            ];
         }
 
         $oldestId = (int) (UserSyncEvent::query()->orderBy('id', 'asc')->value('id') ?? 0);
         if ($oldestId > 0 && $since < $oldestId) {
-            return $this->buildFullDeltaResponse($node, $maxId);
+            return [
+                'full' => true,
+                'revision' => $maxId,
+            ];
         }
+
+        return [
+            'full' => false,
+            'revision' => $maxId,
+        ];
+    }
+
+    private function buildIncrementalDeltaResponse($node, int $since, $requestedLimit, int $maxId): array
+    {
+        $limit = $this->resolveDeltaLimit($requestedLimit);
 
         $groupIds = $this->resolveGroupIds($node);
         if (empty($groupIds)) {
@@ -111,7 +166,49 @@ class NodeUserService
         return [
             'full' => true,
             'revision' => $revision,
-            'users' => ServerService::getAvailableUsers($node),
+            'users' => $this->normalizeUserSnapshotRows(ServerService::getAvailableUsers($node)),
+        ];
+    }
+
+    private function normalizeUserSnapshotRows(Collection $users): array
+    {
+        $items = $users->all();
+        unset($users);
+
+        foreach ($items as $index => $user) {
+            $items[$index] = $this->normalizeUserSnapshotRow($user);
+        }
+
+        return $items;
+    }
+
+    private function normalizeUserSnapshotRow($user): array
+    {
+        if ($user instanceof Arrayable) {
+            $row = $user->toArray();
+        } elseif (is_array($user)) {
+            $row = $user;
+        } elseif (is_object($user)) {
+            $row = get_object_vars($user);
+        } else {
+            $row = [];
+        }
+
+        $row['id'] = (int) ($row['id'] ?? data_get($user, 'id', 0));
+        $row['uuid'] = (string) ($row['uuid'] ?? data_get($user, 'uuid', ''));
+        $row['speed_limit'] = (int) ($row['speed_limit'] ?? data_get($user, 'speed_limit', 0));
+        $row['device_limit'] = (int) ($row['device_limit'] ?? data_get($user, 'device_limit', 0));
+
+        return $row;
+    }
+
+    private function coreUserSnapshotRow(array $row): array
+    {
+        return [
+            'id' => (int) $row['id'],
+            'uuid' => (string) $row['uuid'],
+            'speed_limit' => (int) $row['speed_limit'],
+            'device_limit' => (int) $row['device_limit'],
         ];
     }
 

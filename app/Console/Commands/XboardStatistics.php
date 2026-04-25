@@ -38,14 +38,15 @@ class XboardStatistics extends Command
      *
      * @return mixed
      */
-    public function handle()
+    public function handle(): int
     {
         $startAt = microtime(true);
-        ini_set('memory_limit', -1);
         // $this->statUser();
         // $this->statServer();
         $this->stat();
         info('统计任务执行完毕。耗时:' . (microtime(true) - $startAt) / 1000);
+
+        return self::SUCCESS;
     }
 
 

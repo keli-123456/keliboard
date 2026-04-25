@@ -39,8 +39,6 @@ class CheckTicket extends Command
      */
     public function handle(): int
     {
-        ini_set('memory_limit', -1);
-
         $now = time();
 
         $this->closeWaitingUserTickets($now);

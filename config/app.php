@@ -81,6 +81,7 @@ return [
 
     'proxy_trust_secret' => env('XBOARD_PROXY_SECRET'),
     'proxy_trust_secret_header' => env('XBOARD_PROXY_SECRET_HEADER', 'X-Xboard-Proxy-Secret'),
+    'proxy_trust_client_ip_header' => env('XBOARD_PROXY_CLIENT_IP_HEADER', 'X-Xboard-Client-IP'),
     'proxy_trust_secret_from_server_token' => env('XBOARD_PROXY_SECRET_FROM_SERVER_TOKEN', false),
 
     /*

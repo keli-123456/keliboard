@@ -11,10 +11,12 @@ use App\Models\MarketingRule;
 use App\Models\Plan;
 use App\Models\User;
 use App\Services\AuthService;
+use App\Services\TicketCleanupService;
 use App\Services\UserService;
 use App\Services\UserOnlineService;
 use App\Traits\QueryOperators;
 use App\Utils\Helper;
+use Illuminate\Contracts\Database\Query\Expression;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -25,6 +27,57 @@ use Illuminate\Support\Facades\Log;
 class UserController extends Controller
 {
     use QueryOperators;
+
+    private const USER_FILTER_FIELDS = [
+        'id' => 'id',
+        'email' => 'email',
+        'remarks' => 'remarks',
+        'token' => 'token',
+        'uuid' => 'uuid',
+        'invite_user_id' => 'invite_user_id',
+        'plan_id' => 'plan_id',
+        'group_id' => 'group_id',
+        'group_ids' => 'group_id',
+        'banned' => 'banned',
+        'is_admin' => 'is_admin',
+        'is_staff' => 'is_staff',
+        'expired_at' => 'expired_at',
+        'created_at' => 'created_at',
+        'updated_at' => 'updated_at',
+        'last_login_at' => 'last_login_at',
+        'balance' => 'balance',
+        'commission_balance' => 'commission_balance',
+        'commission_rate' => 'commission_rate',
+        'commission_type' => 'commission_type',
+        'discount' => 'discount',
+        'transfer_enable' => 'transfer_enable',
+        'u' => 'u',
+        'd' => 'd',
+        'total_used' => 'total_used',
+        'speed_limit' => 'speed_limit',
+        'device_limit' => 'device_limit',
+        'online_count' => 'online_count',
+    ];
+
+    private const USER_RELATION_FILTER_FIELDS = [
+        'invite_user.email' => ['invite_user', 'email'],
+        'plan.name' => ['plan', 'name'],
+        'group.name' => ['group', 'name'],
+    ];
+
+    private const USER_SORT_FIELDS = [
+        'id' => 'id',
+        'email' => 'email',
+        'created_at' => 'created_at',
+        'updated_at' => 'updated_at',
+        'expired_at' => 'expired_at',
+        'last_login_at' => 'last_login_at',
+        'transfer_enable' => 'transfer_enable',
+        'balance' => 'balance',
+        'commission_balance' => 'commission_balance',
+        'online_count' => 'online_count',
+        'total_used' => 'total_used',
+    ];
 
     public function resetSecret(Request $request)
     {
@@ -58,13 +111,22 @@ class UserController extends Controller
      */
     private function applyFilters(Request $request, Builder $builder): void
     {
-        if (!$request->has('filter')) {
+        $filters = $request->input('filter');
+        if (!is_array($filters)) {
             return;
         }
 
-        collect($request->input('filter'))->each(function ($filter) use ($builder) {
-            $field = $filter['id'];
-            $value = $filter['value'];
+        collect($filters)->each(function ($filter) use ($builder) {
+            if (!is_array($filter) || !array_key_exists('id', $filter)) {
+                return;
+            }
+
+            $field = trim((string) $filter['id']);
+            if (!$this->isAllowedUserFilterField($field)) {
+                return;
+            }
+
+            $value = $filter['value'] ?? null;
 
             $builder->where(function ($query) use ($field, $value) {
                 $this->buildFilterQuery($query, $field, $value);
@@ -130,8 +192,9 @@ class UserController extends Controller
         }
 
         // 处理关联查询
-        if (str_contains($field, '.')) {
-            [$relation, $relationField] = explode('.', $field);
+        $relationFilter = $this->resolveUserRelationFilterField($field);
+        if ($relationFilter !== null) {
+            [$relation, $relationField] = $relationFilter;
             $query->whereHas($relation, function ($q) use ($relationField, $value) {
                 if (is_array($value)) {
                     $q->whereIn($relationField, $value);
@@ -145,15 +208,20 @@ class UserController extends Controller
             return;
         }
 
+        $queryField = $this->resolveUserFilterField($field);
+        if ($queryField === null) {
+            return;
+        }
+
         // 处理数组值的 'in' 操作
         if (is_array($value)) {
-            $query->whereIn($field === 'group_ids' ? 'group_id' : $field, $value);
+            $query->whereIn($queryField, $value);
             return;
         }
 
         // 处理基于运算符的过滤
         if (!is_string($value) || !str_contains($value, ':')) {
-            $query->where($field, 'like', "%{$value}%");
+            $query->where($queryField, 'like', "%{$value}%");
             return;
         }
 
@@ -167,11 +235,6 @@ class UserController extends Controller
         }
 
         // 处理计算字段
-        $queryField = match ($field) {
-            'total_used' => DB::raw('(u + d)'),
-            default => $field
-        };
-
         $this->applyQueryCondition($query, $queryField, $operator, $filterValue);
     }
 
@@ -184,15 +247,54 @@ class UserController extends Controller
      */
     private function applySorting(Request $request, Builder $builder): void
     {
-        if (!$request->has('sort')) {
+        $sorts = $request->input('sort');
+        if (!is_array($sorts)) {
             return;
         }
 
-        collect($request->input('sort'))->each(function ($sort) use ($builder) {
-            $field = $sort['id'];
-            $direction = $sort['desc'] ? 'DESC' : 'ASC';
+        collect($sorts)->each(function ($sort) use ($builder) {
+            if (!is_array($sort) || !array_key_exists('id', $sort)) {
+                return;
+            }
+
+            $field = $this->resolveUserSortField(trim((string) $sort['id']));
+            if ($field === null) {
+                return;
+            }
+
+            $direction = !empty($sort['desc']) ? 'DESC' : 'ASC';
             $builder->orderBy($field, $direction);
         });
+    }
+
+    private function isAllowedUserFilterField(string $field): bool
+    {
+        return in_array($field, ['keyword', 'q'], true)
+            || isset(self::USER_FILTER_FIELDS[$field])
+            || isset(self::USER_RELATION_FILTER_FIELDS[$field]);
+    }
+
+    private function resolveUserFilterField(string $field): Expression|string|null
+    {
+        if ($field === 'total_used') {
+            return DB::raw('(u + d)');
+        }
+
+        return self::USER_FILTER_FIELDS[$field] ?? null;
+    }
+
+    private function resolveUserRelationFilterField(string $field): ?array
+    {
+        return self::USER_RELATION_FILTER_FIELDS[$field] ?? null;
+    }
+
+    private function resolveUserSortField(string $field): Expression|string|null
+    {
+        if ($field === 'total_used') {
+            return DB::raw('(u + d)');
+        }
+
+        return self::USER_SORT_FIELDS[$field] ?? null;
     }
 
     /**
@@ -335,13 +437,13 @@ class UserController extends Controller
      */
     public function dumpCSV(Request $request)
     {
-        ini_set('memory_limit', '-1');
         gc_enable(); // 启用垃圾回收
 
         // 优化查询：使用with预加载plan关系，避免N+1问题
         $query = User::with('plan:id,name')
             ->orderBy('id', 'asc')
             ->select([
+                'id',
                 'email',
                 'balance',
                 'commission_balance',
@@ -442,31 +544,43 @@ class UserController extends Controller
     private function multiGenerate(Request $request)
     {
         $userService = app(UserService::class);
-        $usersData = [];
-
-        for ($i = 0; $i < $request->input('generate_count'); $i++) {
-            $email = Helper::randomChar(6) . '@' . $request->input('email_suffix');
-            $usersData[] = [
-                'email' => $email,
-                'password' => $request->input('password') ?? $email,
-                'plan_id' => $request->input('plan_id'),
-                'expired_at' => $request->input('expired_at'),
-            ];
-        }
-
-
+        $generatedUsers = [];
+        $generateCount = max(0, (int) $request->input('generate_count'));
+        $emailSuffix = (string) $request->input('email_suffix');
+        $passwordInput = $request->input('password');
+        $planId = $request->input('plan_id');
+        $expiredAt = $request->input('expired_at');
+        $reservedEmails = [];
 
         try {
             DB::beginTransaction();
-            $users = [];
-            foreach ($usersData as $userData) {
-                $user = $userService->createUser($userData);
+
+            for ($i = 0; $i < $generateCount; $i++) {
+                $email = $this->makeGeneratedEmail($emailSuffix, $reservedEmails);
+                $password = $passwordInput ?? $email;
+                $user = $userService->createUser([
+                    'email' => $email,
+                    'password' => $password,
+                    'plan_id' => $planId,
+                    'expired_at' => $expiredAt,
+                ]);
                 $user->save();
-                $users[] = $user;
+                $generatedUsers[] = [
+                    'email' => $user->email,
+                    'password' => $password,
+                    'expired_at' => $user->expired_at === null ? '长期有效' : date('Y-m-d H:i:s', $user->expired_at),
+                    'uuid' => $user->uuid,
+                    'created_at' => date('Y-m-d H:i:s', $user->created_at),
+                    'subscribe_url' => Helper::getSubscribeUrl($user->token),
+                ];
             }
+
             DB::commit();
-        } catch (\Exception $e) {
-            DB::rollBack();
+        } catch (\Throwable $e) {
+            if (DB::transactionLevel() > 0) {
+                DB::rollBack();
+            }
+            Log::error($e);
             return $this->fail([500, '生成失败']);
         }
 
@@ -476,16 +590,18 @@ class UserController extends Controller
                 'Content-Type' => 'text/csv',
                 'Content-Disposition' => 'attachment; filename="users.csv"',
             ];
-            $callback = function () use ($users, $request) {
+            $callback = function () use ($generatedUsers) {
                 $handle = fopen('php://output', 'w');
                 fputcsv($handle, ['账号', '密码', '过期时间', 'UUID', '创建时间', '订阅地址']);
-                foreach ($users as $user) {
-                    $user = $user->refresh();
-                    $expireDate = $user['expired_at'] === NULL ? '长期有效' : date('Y-m-d H:i:s', $user['expired_at']);
-                    $createDate = date('Y-m-d H:i:s', $user['created_at']);
-                    $password = $request->input('password') ?? $user['email'];
-                    $subscribeUrl = Helper::getSubscribeUrl($user['token']);
-                    fputcsv($handle, [$user['email'], $password, $expireDate, $user['uuid'], $createDate, $subscribeUrl]);
+                foreach ($generatedUsers as $user) {
+                    fputcsv($handle, [
+                        $user['email'],
+                        $user['password'],
+                        $user['expired_at'],
+                        $user['uuid'],
+                        $user['created_at'],
+                        $user['subscribe_url'],
+                    ]);
                 }
                 fclose($handle);
             };
@@ -493,28 +609,36 @@ class UserController extends Controller
         }
 
         // 默认返回 JSON
-        $data = collect($users)->map(function ($user) use ($request) {
-            return [
-                'email' => $user['email'],
-                'password' => $request->input('password') ?? $user['email'],
-                'expired_at' => $user['expired_at'] === NULL ? '长期有效' : date('Y-m-d H:i:s', $user['expired_at']),
-                'uuid' => $user['uuid'],
-                'created_at' => date('Y-m-d H:i:s', $user['created_at']),
-                'subscribe_url' => Helper::getSubscribeUrl($user['token']),
-            ];
-        });
         return response()->json([
             'code' => 0,
             'message' => '批量生成成功',
-            'data' => $data,
+            'data' => $generatedUsers,
         ]);
+    }
+
+    private function makeGeneratedEmail(string $emailSuffix, array &$reservedEmails): string
+    {
+        for ($attempt = 0; $attempt < 20; $attempt++) {
+            $email = Helper::randomChar(6) . '@' . $emailSuffix;
+            if (isset($reservedEmails[$email])) {
+                continue;
+            }
+
+            if (User::where('email', $email)->exists()) {
+                continue;
+            }
+
+            $reservedEmails[$email] = true;
+            return $email;
+        }
+
+        throw new \RuntimeException('Unable to generate a unique user email');
     }
 
     public function sendMail(UserSendMail $request)
     {
-        ini_set('memory_limit', '-1');
         $sortType = in_array($request->input('sort_type'), ['ASC', 'DESC']) ? $request->input('sort_type') : 'DESC';
-        $sort = $request->input('sort') ? $request->input('sort') : 'created_at';
+        $sort = $this->resolveUserSortField((string) ($request->input('sort') ?: 'created_at')) ?? 'created_at';
         $builder = User::orderBy($sort, $sortType);
         $this->applyFiltersAndSorts($request, $builder);
 
@@ -526,9 +650,9 @@ class UserController extends Controller
             'content' => $content
         ];
 
-        $chunkSize = 1000;
+        $chunkSize = 500;
 
-        $builder->chunk($chunkSize, function ($users) use ($subject, $templateValue, &$totalProcessed) {
+        $builder->chunk($chunkSize, function ($users) use ($subject, $templateValue) {
             foreach ($users as $user) {
                 dispatch(new SendEmailJob([
                     'email' => $user->email,
@@ -546,7 +670,7 @@ class UserController extends Controller
     public function ban(Request $request)
     {
         $sortType = in_array($request->input('sort_type'), ['ASC', 'DESC']) ? $request->input('sort_type') : 'DESC';
-        $sort = $request->input('sort') ? $request->input('sort') : 'created_at';
+        $sort = $this->resolveUserSortField((string) ($request->input('sort') ?: 'created_at')) ?? 'created_at';
         $builder = User::orderBy($sort, $sortType);
         $this->applyFilters($request, $builder);
         try {
@@ -567,7 +691,7 @@ class UserController extends Controller
      * @param Request $request
      * @return JsonResponse
      */
-    public function destroy(Request $request)
+    public function destroy(Request $request, TicketCleanupService $ticketCleanupService)
     {
         $request->validate([
             'id' => 'required|exists:App\Models\User,id'
@@ -576,17 +700,28 @@ class UserController extends Controller
             'id.exists' => '用户不存在'
         ]);
         $user = User::find($request->input('id'));
+        if (!$user) {
+            return $this->fail([400202, '用户不存在']);
+        }
+
+        $ticketAttachments = collect();
         try {
             DB::beginTransaction();
+
+            $ticketIds = $user->tickets()->pluck('id')->map(fn ($id) => (int) $id)->all();
+            $ticketAttachments = $ticketCleanupService->collectAttachmentsByTicketIds($ticketIds);
             $user->orders()->delete();
             $user->codes()->delete();
             $user->stat()->delete();
-            $user->tickets()->delete();
+            $ticketCleanupService->deleteRowsByTicketIds($ticketIds);
             $user->delete();
             DB::commit();
+            $ticketCleanupService->deleteAttachmentFiles($ticketAttachments);
             return $this->success(true);
-        } catch (\Exception $e) {
-            DB::rollBack();
+        } catch (\Throwable $e) {
+            if (DB::transactionLevel() > 0) {
+                DB::rollBack();
+            }
             Log::error($e);
             return $this->fail([500, '删除失败']);
         }

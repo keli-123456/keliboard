@@ -13,12 +13,49 @@ use Illuminate\Support\Facades\DB;
 
 class CouponController extends Controller
 {
+    private const COUPON_FILTER_FIELDS = [
+        'id' => 'id',
+        'name' => 'name',
+        'code' => 'code',
+        'type' => 'type',
+        'value' => 'value',
+        'show' => 'show',
+        'limit_use' => 'limit_use',
+        'limit_use_with_user' => 'limit_use_with_user',
+        'started_at' => 'started_at',
+        'ended_at' => 'ended_at',
+        'created_at' => 'created_at',
+        'updated_at' => 'updated_at',
+    ];
+
+    private const COUPON_SORT_FIELDS = [
+        'id' => 'id',
+        'name' => 'name',
+        'code' => 'code',
+        'type' => 'type',
+        'value' => 'value',
+        'show' => 'show',
+        'started_at' => 'started_at',
+        'ended_at' => 'ended_at',
+        'created_at' => 'created_at',
+        'updated_at' => 'updated_at',
+    ];
+
     private function applyFiltersAndSorts(Request $request, $builder)
     {
-        if ($request->has('filter')) {
-            collect($request->input('filter'))->each(function ($filter) use ($builder) {
-                $key = $filter['id'];
-                $value = $filter['value'];
+        $filters = $request->input('filter');
+        if (is_array($filters)) {
+            collect($filters)->each(function ($filter) use ($builder) {
+                if (!is_array($filter) || !array_key_exists('id', $filter)) {
+                    return;
+                }
+
+                $key = $this->resolveCouponFilterField(trim((string) $filter['id']));
+                if ($key === null) {
+                    return;
+                }
+
+                $value = $filter['value'] ?? null;
                 $builder->where(function ($query) use ($key, $value) {
                     if (is_array($value)) {
                         $query->whereIn($key, $value);
@@ -29,14 +66,34 @@ class CouponController extends Controller
             });
         }
 
-        if ($request->has('sort')) {
-            collect($request->input('sort'))->each(function ($sort) use ($builder) {
-                $key = $sort['id'];
-                $value = $sort['desc'] ? 'DESC' : 'ASC';
+        $sorts = $request->input('sort');
+        if (is_array($sorts)) {
+            collect($sorts)->each(function ($sort) use ($builder) {
+                if (!is_array($sort) || !array_key_exists('id', $sort)) {
+                    return;
+                }
+
+                $key = $this->resolveCouponSortField(trim((string) $sort['id']));
+                if ($key === null) {
+                    return;
+                }
+
+                $value = !empty($sort['desc']) ? 'DESC' : 'ASC';
                 $builder->orderBy($key, $value);
             });
         }
     }
+
+    private function resolveCouponFilterField(string $field): ?string
+    {
+        return self::COUPON_FILTER_FIELDS[$field] ?? null;
+    }
+
+    private function resolveCouponSortField(string $field): ?string
+    {
+        return self::COUPON_SORT_FIELDS[$field] ?? null;
+    }
+
     public function fetch(Request $request)
     {
         $current = $request->input('current', 1);

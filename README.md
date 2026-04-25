@@ -115,6 +115,15 @@ Issues and Pull Requests are welcome to help improve the project.
 ./scripts/update-composer-lock.sh google/recaptcha symfony/string --with-all-dependencies
 ```
 
+### Local Test Workflow
+
+- Use PHP 8.2.x; this repository pins `8.2.30` in `.php-version`.
+- Run the backend unit suite through Composer so the PHP version guard is checked first:
+
+```bash
+composer test
+```
+
 ## 📈 Star History
 
 [![Stargazers over time](https://starchart.cc/cedar2025/Xboard.svg)](https://starchart.cc/cedar2025/Xboard)

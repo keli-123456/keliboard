@@ -19,6 +19,50 @@ use Illuminate\Support\Facades\Log;
 
 class OrderController extends Controller
 {
+    private const ORDER_FILTER_FIELDS = [
+        'id' => 'id',
+        'trade_no' => 'trade_no',
+        'callback_no' => 'callback_no',
+        'user_id' => 'user_id',
+        'plan_id' => 'plan_id',
+        'payment_id' => 'payment_id',
+        'invite_user_id' => 'invite_user_id',
+        'period' => 'period',
+        'type' => 'type',
+        'status' => 'status',
+        'commission_status' => 'commission_status',
+        'commission_balance' => 'commission_balance',
+        'actual_commission_balance' => 'actual_commission_balance',
+        'total_amount' => 'total_amount',
+        'balance_amount' => 'balance_amount',
+        'discount_amount' => 'discount_amount',
+        'bonus_amount' => 'bonus_amount',
+        'refund_amount' => 'refund_amount',
+        'surplus_amount' => 'surplus_amount',
+        'upgrade_quote_id' => 'upgrade_quote_id',
+        'upgrade_credit_amount' => 'upgrade_credit_amount',
+        'coupon_id' => 'coupon_id',
+        'paid_at' => 'paid_at',
+        'created_at' => 'created_at',
+        'updated_at' => 'updated_at',
+    ];
+
+    private const ORDER_SORT_FIELDS = [
+        'id' => 'id',
+        'trade_no' => 'trade_no',
+        'user_id' => 'user_id',
+        'plan_id' => 'plan_id',
+        'invite_user_id' => 'invite_user_id',
+        'type' => 'type',
+        'status' => 'status',
+        'commission_status' => 'commission_status',
+        'commission_balance' => 'commission_balance',
+        'actual_commission_balance' => 'actual_commission_balance',
+        'total_amount' => 'total_amount',
+        'paid_at' => 'paid_at',
+        'created_at' => 'created_at',
+        'updated_at' => 'updated_at',
+    ];
 
     public function detail(Request $request)
     {
@@ -68,13 +112,22 @@ class OrderController extends Controller
 
     private function applyFilters(Request $request, Builder $builder): void
     {
-        if (!$request->has('filter')) {
+        $filters = $request->input('filter');
+        if (!is_array($filters)) {
             return;
         }
 
-        collect($request->input('filter'))->each(function ($filter) use ($builder) {
-            $field = $filter['id'];
-            $value = $filter['value'];
+        collect($filters)->each(function ($filter) use ($builder) {
+            if (!is_array($filter) || !array_key_exists('id', $filter)) {
+                return;
+            }
+
+            $field = $this->resolveOrderFilterField(trim((string) $filter['id']));
+            if ($field === null) {
+                return;
+            }
+
+            $value = $filter['value'] ?? null;
 
             $builder->where(function ($query) use ($field, $value) {
                 $this->buildFilterQuery($query, $field, $value);
@@ -106,7 +159,17 @@ class OrderController extends Controller
         }
 
         // Apply operator
-        $query->where($field, match (strtolower($operator)) {
+        $operator = strtolower($operator);
+        if ($operator === 'null') {
+            $query->whereNull($field);
+            return;
+        }
+        if ($operator === 'notnull') {
+            $query->whereNotNull($field);
+            return;
+        }
+
+        $query->where($field, match ($operator) {
             'eq' => '=',
             'gt' => '>',
             'gte' => '>=',
@@ -114,27 +177,43 @@ class OrderController extends Controller
             'lte' => '<=',
             'like' => 'like',
             'notlike' => 'not like',
-            'null' => static fn($q) => $q->whereNull($field),
-            'notnull' => static fn($q) => $q->whereNotNull($field),
             default => 'like'
-        }, match (strtolower($operator)) {
+        }, match ($operator) {
             'like', 'notlike' => "%{$filterValue}%",
-            'null', 'notnull' => null,
             default => $filterValue
         });
     }
 
     private function applySorting(Request $request, Builder $builder): void
     {
-        if (!$request->has('sort')) {
+        $sorts = $request->input('sort');
+        if (!is_array($sorts)) {
             return;
         }
 
-        collect($request->input('sort'))->each(function ($sort) use ($builder) {
-            $field = $sort['id'];
-            $direction = $sort['desc'] ? 'DESC' : 'ASC';
+        collect($sorts)->each(function ($sort) use ($builder) {
+            if (!is_array($sort) || !array_key_exists('id', $sort)) {
+                return;
+            }
+
+            $field = $this->resolveOrderSortField(trim((string) $sort['id']));
+            if ($field === null) {
+                return;
+            }
+
+            $direction = !empty($sort['desc']) ? 'DESC' : 'ASC';
             $builder->orderBy($field, $direction);
         });
+    }
+
+    private function resolveOrderFilterField(string $field): ?string
+    {
+        return self::ORDER_FILTER_FIELDS[$field] ?? null;
+    }
+
+    private function resolveOrderSortField(string $field): ?string
+    {
+        return self::ORDER_SORT_FIELDS[$field] ?? null;
     }
 
     public function paid(Request $request)
