@@ -93,10 +93,12 @@ class TrustProxies extends Middleware
             $secret = config('app.proxy_trust_secret');
         }
 
-        $fromServerToken = $this->parseBool(
-            admin_setting('proxy_trust_secret_from_server_token', config('app.proxy_trust_secret_from_server_token', false)),
-            false
-        );
+        try {
+            $fromServerTokenRaw = admin_setting('proxy_trust_secret_from_server_token', config('app.proxy_trust_secret_from_server_token', false));
+        } catch (\Throwable) {
+            $fromServerTokenRaw = config('app.proxy_trust_secret_from_server_token', false);
+        }
+        $fromServerToken = $this->parseBool($fromServerTokenRaw, false);
 
         if ((!is_string($secret) || trim($secret) === '') && $fromServerToken) {
             try {

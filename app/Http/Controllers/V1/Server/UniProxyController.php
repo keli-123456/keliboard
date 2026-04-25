@@ -9,6 +9,7 @@ use App\Services\Node\NodeUserService;
 use App\Services\ServerService;
 use App\Services\UserOnlineService;
 use App\Services\UserService;
+use App\Support\ServerApiRuntime;
 use App\Utils\CacheKey;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -63,7 +64,7 @@ class UniProxyController extends Controller
     // 后端获取用户
     public function user(Request $request)
     {
-        ini_set('memory_limit', -1);
+        ServerApiRuntime::applyMemoryLimit();
         $node = $this->getNodeInfo($request);
         $this->touchNodeLastCheckAt($node);
 
@@ -118,17 +119,21 @@ class UniProxyController extends Controller
     // 后端增量获取用户 (users_revision)
     public function userDelta(Request $request)
     {
-        ini_set('memory_limit', -1);
+        ServerApiRuntime::applyMemoryLimit();
         $node = $this->getNodeInfo($request);
         $this->touchNodeLastCheckAt($node);
 
-        return response()->json(
-            $this->nodeUserService->buildDeltaResponse(
-                $node,
-                (int) $request->query('since', 0),
-                $request->query('limit')
-            )
+        $entry = $this->nodeUserService->buildDeltaResponseEntry(
+            $node,
+            (int) $request->query('since', 0),
+            $request->query('limit')
         );
+
+        if ((bool) ($entry['raw'] ?? false)) {
+            return response((string) ($entry['body'] ?? ''), 200, ['Content-Type' => 'application/json; charset=UTF-8']);
+        }
+
+        return response()->json($entry['data'] ?? []);
     }
 
     // 后端提交数据

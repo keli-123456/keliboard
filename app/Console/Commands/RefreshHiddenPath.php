@@ -2,8 +2,8 @@
 
 namespace App\Console\Commands;
 
+use App\Services\HiddenApiPathService;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Artisan;
 
 class RefreshHiddenPath extends Command
@@ -27,13 +27,14 @@ class RefreshHiddenPath extends Command
      *
      * @return int
      */
-    public function handle()
+    public function handle(HiddenApiPathService $hiddenApiPathService)
     {
         $this->info('🔄 正在刷新隐藏路径...');
         
         // 1. 清除隐藏路径缓存
-        Cache::forget('hidden_api_path_route');
+        $hiddenApiPathService->clearCache();
         $this->line('  ✅ 隐藏路径缓存已清除');
+        $this->line('  ℹ️  当前隐藏路径: ' . $hiddenApiPathService->get());
         
         // 2. 清除路由缓存
         try {
@@ -77,4 +78,3 @@ class RefreshHiddenPath extends Command
         return 0;
     }
 }
-

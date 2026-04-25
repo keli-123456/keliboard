@@ -17,6 +17,7 @@ class ServerService
 {
     private const AVAILABLE_USER_IDS_CACHE_PREFIX = 'server:available-user-ids:';
     private const AVAILABLE_USER_IDS_CACHE_TTL = 75;
+    private const DEFAULT_AVAILABLE_USER_CHUNK_SIZE = 5000;
     private static ?bool $hasUserSyncStatesTable = null;
     private static bool $userSyncStatesReadDisabled = false;
 
@@ -114,6 +115,60 @@ class ServerService
     }
 
     /**
+     * Iterate available node users in bounded chunks.
+     *
+     * If a plugin filters server users, keep the legacy full collection path so
+     * plugins that expect the complete list continue to work as before.
+     */
+    public static function eachAvailableUser(
+        Server $node,
+        callable $callback,
+        bool $onlyDeviceLimited = false,
+        ?int $chunkSize = null
+    ): void {
+        if (HookManager::hasHook('server.users.get')) {
+            foreach (self::getAvailableUsers($node, $onlyDeviceLimited) as $user) {
+                $callback($user);
+            }
+            return;
+        }
+
+        $groupIds = self::normalizeGroupIds($node->group_ids ?? []);
+        if (empty($groupIds)) {
+            return;
+        }
+
+        $chunkSize = self::normalizeAvailableUserChunkSize($chunkSize);
+        $query = self::availableUsersPreferredQuery($groupIds);
+
+        if ($query) {
+            $query->selectRaw('user_id as id, uuid, speed_limit, device_limit');
+            if ($onlyDeviceLimited) {
+                $query->where('device_limit', '>', 0);
+            }
+
+            try {
+                self::eachAvailableUserById($query, 'user_id', $chunkSize, $callback);
+                return;
+            } catch (\Throwable) {
+                self::disableUserSyncStatesRead();
+            }
+        }
+
+        $fallbackQuery = self::availableUsersBaseQuery($groupIds)->select([
+            'id',
+            'uuid',
+            'speed_limit',
+            'device_limit'
+        ]);
+        if ($onlyDeviceLimited) {
+            $fallbackQuery->where('device_limit', '>', 0);
+        }
+
+        self::eachAvailableUserById($fallbackQuery, 'id', $chunkSize, $callback);
+    }
+
+    /**
      * 获取节点可用用户 ID 列表
      */
     public static function getAvailableUserIds(Server $node, bool $onlyDeviceLimited = false): array
@@ -160,6 +215,44 @@ class ServerService
         return $query->pluck('id')
             ->map(fn($id): int => (int) $id)
             ->all();
+    }
+
+    private static function eachAvailableUserById(
+        QueryBuilder $query,
+        string $idColumn,
+        int $chunkSize,
+        callable $callback
+    ): void {
+        $lastId = 0;
+
+        do {
+            $chunk = (clone $query)
+                ->where($idColumn, '>', $lastId)
+                ->limit($chunkSize)
+                ->get();
+
+            $count = $chunk->count();
+            foreach ($chunk as $user) {
+                $rowId = (int) data_get($user, 'id', data_get($user, $idColumn, 0));
+                if ($rowId <= $lastId) {
+                    continue;
+                }
+
+                $lastId = $rowId;
+                $callback($user);
+            }
+
+            unset($chunk);
+        } while ($count === $chunkSize && $lastId > 0);
+    }
+
+    private static function normalizeAvailableUserChunkSize(?int $chunkSize): int
+    {
+        if ($chunkSize === null) {
+            $chunkSize = (int) config('server_api_cache.user_chunk_size', self::DEFAULT_AVAILABLE_USER_CHUNK_SIZE);
+        }
+
+        return max(500, min($chunkSize, 20000));
     }
 
     // 获取路由规则

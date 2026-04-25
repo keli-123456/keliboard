@@ -10,6 +10,12 @@ return [
     // 节点拉取配置的缓存 TTL（秒）；设为 0 关闭缓存
     'config_ttl' => (int) env('SERVER_API_CONFIG_CACHE_TTL', 10),
 
+    // 节点 API 请求的 PHP 内存上限；设为 default 保持 php.ini，设为 -1 可显式恢复无限制
+    'memory_limit' => (string) env('SERVER_API_MEMORY_LIMIT', '1024M'),
+
+    // 节点拉取用户列表时每批读取的用户数
+    'user_chunk_size' => (int) env('SERVER_API_USER_CHUNK_SIZE', 5000),
+
     // 防止缓存击穿的锁设置
     'lock_ttl' => (int) env('SERVER_API_CACHE_LOCK_TTL', 10),
     'lock_wait' => (int) env('SERVER_API_CACHE_LOCK_WAIT', 3),

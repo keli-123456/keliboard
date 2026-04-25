@@ -40,10 +40,12 @@ class CheckCommission extends Command
      *
      * @return mixed
      */
-    public function handle()
+    public function handle(): int
     {
         $this->autoCheck();
         $this->autoPayCommission();
+
+        return self::SUCCESS;
     }
 
     public function autoCheck()
@@ -61,38 +63,37 @@ class CheckCommission extends Command
 
     public function autoPayCommission()
     {
-        $orders = Order::where('commission_status', 1)
+        Order::where('commission_status', 1)
             ->whereNotNull('invite_user_id')
-            ->orderBy('id', 'asc')
-            ->get();
+            ->select(['id', 'trade_no', 'invite_user_id', 'commission_status', 'commission_balance'])
+            ->chunkById(200, function ($orders): void {
+                foreach ($orders as $order) {
+                    try {
+                        DB::transaction(function () use ($order) {
+                            $lockedOrder = Order::whereKey($order->id)->lockForUpdate()->first();
+                            if (!$lockedOrder) return;
+                            if ((int) $lockedOrder->commission_status !== 1) return;
+                            if (empty($lockedOrder->invite_user_id)) return;
 
-        foreach ($orders as $order) {
-            try {
-                DB::transaction(function () use ($order) {
-                    $lockedOrder = Order::whereKey($order->id)->lockForUpdate()->first();
-                    if (!$lockedOrder) return;
-                    if ((int) $lockedOrder->commission_status !== 1) return;
-                    if (empty($lockedOrder->invite_user_id)) return;
+                            if (!$this->payHandle($lockedOrder->invite_user_id, $lockedOrder)) {
+                                throw new \RuntimeException('payHandle returned false');
+                            }
 
-                    if (!$this->payHandle($lockedOrder->invite_user_id, $lockedOrder)) {
-                        throw new \RuntimeException('payHandle returned false');
+                            $lockedOrder->commission_status = 2;
+                            $lockedOrder->saveOrFail();
+                        }, 3);
+                    } catch (\Throwable $e) {
+                        Log::error('Auto pay commission failed', [
+                            'order_id' => $order->id,
+                            'trade_no' => $order->trade_no ?? null,
+                            'invite_user_id' => $order->invite_user_id ?? null,
+                            'commission_status' => $order->commission_status ?? null,
+                            'commission_balance' => $order->commission_balance ?? null,
+                            'error' => $e->getMessage(),
+                        ]);
                     }
-
-                    $lockedOrder->commission_status = 2;
-                    $lockedOrder->saveOrFail();
-                }, 3);
-            } catch (\Throwable $e) {
-                Log::error('Auto pay commission failed', [
-                    'order_id' => $order->id,
-                    'trade_no' => $order->trade_no ?? null,
-                    'invite_user_id' => $order->invite_user_id ?? null,
-                    'commission_status' => $order->commission_status ?? null,
-                    'commission_balance' => $order->commission_balance ?? null,
-                    'error' => $e->getMessage(),
-                ]);
-                continue;
-            }
-        }
+                }
+            });
     }
 
     public function payHandle($inviteUserId, Order $order)

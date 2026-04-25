@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -16,6 +17,7 @@ class PluginManager
 {
     private const MAX_PLUGIN_ARCHIVE_ENTRIES = 2000;
     private const MAX_PLUGIN_ARCHIVE_UNCOMPRESSED_SIZE = 104857600; // 100 MiB
+    private const ENABLED_PLUGINS_CACHE_KEY = 'plugins:enabled:list';
 
     protected string $pluginPath;
     protected array $loadedPlugins = [];
@@ -70,6 +72,7 @@ class PluginManager
             if (!File::exists($pluginFile)) {
                 Log::warning("Plugin class file not found: {$pluginFile}");
                 Plugin::query()->where('code', $pluginCode)->delete();
+                $this->flushEnabledPluginsCache();
                 return null;
             }
             require_once $pluginFile;
@@ -197,6 +200,7 @@ class PluginManager
                 'config' => json_encode($defaultValues),
                 'installed_at' => now(),
             ]);
+            $this->flushEnabledPluginsCache();
 
             // 运行插件安装方法
             if (method_exists($plugin, 'install')) {
@@ -356,6 +360,7 @@ class PluginManager
                 'is_enabled' => true,
                 'updated_at' => now(),
             ]);
+        $this->flushEnabledPluginsCache();
         // 初始化插件
         $plugin->boot();
 
@@ -378,6 +383,7 @@ class PluginManager
                 'is_enabled' => false,
                 'updated_at' => now(),
             ]);
+        $this->flushEnabledPluginsCache();
 
         $plugin->cleanup();
 
@@ -392,6 +398,7 @@ class PluginManager
         $this->disable($pluginCode);
         $this->runMigrationsRollback($pluginCode);
         Plugin::query()->where('code', $pluginCode)->delete();
+        $this->flushEnabledPluginsCache();
 
         return true;
     }
@@ -1119,19 +1126,22 @@ class PluginManager
             return;
         }
 
-        $enabledPlugins = Plugin::where('is_enabled', true)->get();
+        $enabledPlugins = $this->getEnabledPluginRows();
 
         foreach ($enabledPlugins as $dbPlugin) {
             try {
-                $pluginCode = $dbPlugin->code;
+                $pluginCode = (string) ($dbPlugin['code'] ?? '');
+                if ($pluginCode === '') {
+                    continue;
+                }
 
                 $pluginInstance = $this->loadPlugin($pluginCode);
                 if (!$pluginInstance) {
                     continue;
                 }
 
-                if (!empty($dbPlugin->config)) {
-                    $values = json_decode($dbPlugin->config, true) ?: [];
+                if (!empty($dbPlugin['config'])) {
+                    $values = json_decode((string) $dbPlugin['config'], true) ?: [];
                     $values = $this->castConfigValuesByType($pluginCode, $values);
                     $pluginInstance->setConfig($values);
                 }
@@ -1143,8 +1153,8 @@ class PluginManager
 
                 $pluginInstance->boot();
 
-            } catch (\Exception $e) {
-                Log::error("Failed to initialize plugin '{$dbPlugin->code}': " . $e->getMessage());
+            } catch (\Throwable $e) {
+                Log::error("Failed to initialize plugin '" . ($dbPlugin['code'] ?? 'unknown') . "': " . $e->getMessage());
             }
         }
 
@@ -1160,25 +1170,28 @@ class PluginManager
      */
     public function registerPluginSchedules(Schedule $schedule): void
     {
-        Plugin::where('is_enabled', true)
-            ->get()
-            ->each(function ($dbPlugin) use ($schedule) {
-                try {
-                    $pluginInstance = $this->loadPlugin($dbPlugin->code);
-                    if (!$pluginInstance) {
-                        return;
-                    }
-                    if (!empty($dbPlugin->config)) {
-                        $values = json_decode($dbPlugin->config, true) ?: [];
-                        $values = $this->castConfigValuesByType($dbPlugin->code, $values);
-                        $pluginInstance->setConfig($values);
-                    }
-                    $pluginInstance->schedule($schedule);
-
-                } catch (\Exception $e) {
-                    Log::error("Failed to register schedule for plugin '{$dbPlugin->code}': " . $e->getMessage());
+        foreach ($this->getEnabledPluginRows() as $dbPlugin) {
+            try {
+                $pluginCode = (string) ($dbPlugin['code'] ?? '');
+                if ($pluginCode === '') {
+                    continue;
                 }
-            });
+
+                $pluginInstance = $this->loadPlugin($pluginCode);
+                if (!$pluginInstance) {
+                    continue;
+                }
+                if (!empty($dbPlugin['config'])) {
+                    $values = json_decode((string) $dbPlugin['config'], true) ?: [];
+                    $values = $this->castConfigValuesByType($pluginCode, $values);
+                    $pluginInstance->setConfig($values);
+                }
+                $pluginInstance->schedule($schedule);
+
+            } catch (\Throwable $e) {
+                Log::error("Failed to register schedule for plugin '" . ($dbPlugin['code'] ?? 'unknown') . "': " . $e->getMessage());
+            }
+        }
     }
 
     /**
@@ -1193,9 +1206,7 @@ class PluginManager
     {
         $this->initializeEnabledPlugins();
 
-        $enabledPluginCodes = Plugin::where('is_enabled', true)
-            ->pluck('code')
-            ->all();
+        $enabledPluginCodes = array_column($this->getEnabledPluginRows(), 'code');
 
         return array_intersect_key($this->loadedPlugins, array_flip($enabledPluginCodes));
     }
@@ -1207,10 +1218,7 @@ class PluginManager
     {
         $this->initializeEnabledPlugins();
 
-        $enabledPluginCodes = Plugin::where('is_enabled', true)
-            ->byType($type)
-            ->pluck('code')
-            ->all();
+        $enabledPluginCodes = array_column($this->getEnabledPluginRows($type), 'code');
 
         return array_intersect_key($this->loadedPlugins, array_flip($enabledPluginCodes));
     }
@@ -1221,6 +1229,58 @@ class PluginManager
     public function getEnabledPaymentPlugins(): array
     {
         return $this->getEnabledPluginsByType('payment');
+    }
+
+    public function flushEnabledPluginsCache(): void
+    {
+        try {
+            Cache::forget(self::ENABLED_PLUGINS_CACHE_KEY);
+        } catch (\Throwable) {
+        }
+    }
+
+    /**
+     * @return array<int, array{code:string,type:?string,config:?string}>
+     */
+    private function getEnabledPluginRows(?string $type = null): array
+    {
+        try {
+            $plugins = Cache::rememberForever(self::ENABLED_PLUGINS_CACHE_KEY, function (): array {
+                return Plugin::query()
+                    ->where('is_enabled', true)
+                    ->orderBy('id')
+                    ->get(['code', 'type', 'config'])
+                    ->map(fn (Plugin $plugin): array => [
+                        'code' => (string) $plugin->code,
+                        'type' => $plugin->type !== null ? (string) $plugin->type : null,
+                        'config' => $plugin->config !== null ? (string) $plugin->config : null,
+                    ])
+                    ->values()
+                    ->all();
+            });
+        } catch (\Throwable $e) {
+            Log::warning('Failed to read enabled plugin cache: ' . $e->getMessage());
+            $plugins = Plugin::query()
+                ->where('is_enabled', true)
+                ->orderBy('id')
+                ->get(['code', 'type', 'config'])
+                ->map(fn (Plugin $plugin): array => [
+                    'code' => (string) $plugin->code,
+                    'type' => $plugin->type !== null ? (string) $plugin->type : null,
+                    'config' => $plugin->config !== null ? (string) $plugin->config : null,
+                ])
+                ->values()
+                ->all();
+        }
+
+        if ($type === null) {
+            return $plugins;
+        }
+
+        return array_values(array_filter(
+            $plugins,
+            static fn (array $plugin): bool => ($plugin['type'] ?? null) === $type
+        ));
     }
 
     /**

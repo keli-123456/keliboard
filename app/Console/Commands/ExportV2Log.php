@@ -16,38 +16,47 @@ class ExportV2Log extends Command
         parent::__construct();
     }
 
-    public function handle()
+    public function handle(): int
     {
-        $days = $this->argument('days');
+        $days = max(0, (float) $this->argument('days'));
         $date = Carbon::now()->subDays((float) $days)->startOfDay();
-
-        $logs = DB::table('v2_log')
-            ->where('created_at', '>=', $date->timestamp)
-            ->get();
 
         $fileName = "v2_logs_" . Carbon::now()->format('Y_m_d_His') . ".csv";
         $handle = fopen(storage_path("logs/$fileName"), 'w');
+        if ($handle === false) {
+            $this->error('无法创建日志导出文件');
+            return self::FAILURE;
+        }
 
         // 根据您的表结构
         fputcsv($handle, ['Level', 'ID', 'Title', 'Host', 'URI', 'Method', 'Data', 'IP', 'Context', 'Created At', 'Updated At']);
 
-        foreach ($logs as $log) {
-            fputcsv($handle, [
-                $log->level,
-                $log->id,
-                $log->title,
-                $log->host,
-                $log->uri,
-                $log->method,
-                $log->data,
-                $log->ip,
-                $log->context,
-                Carbon::createFromTimestamp($log->created_at)->toDateTimeString(),
-                Carbon::createFromTimestamp($log->updated_at)->toDateTimeString()
-            ]);
+        try {
+            DB::table('v2_log')
+                ->where('created_at', '>=', $date->timestamp)
+                ->chunkById(1000, function ($logs) use ($handle): void {
+                    foreach ($logs as $log) {
+                        fputcsv($handle, [
+                            $log->level,
+                            $log->id,
+                            $log->title,
+                            $log->host,
+                            $log->uri,
+                            $log->method,
+                            $log->data,
+                            $log->ip,
+                            $log->context,
+                            Carbon::createFromTimestamp($log->created_at)->toDateTimeString(),
+                            Carbon::createFromTimestamp($log->updated_at)->toDateTimeString()
+                        ]);
+                    }
+                });
+        } finally {
+            fclose($handle);
         }
 
-        fclose($handle);
         $this->info("日志成功导出到：  " . storage_path("logs/$fileName"));
+
+        return self::SUCCESS;
     }
 }

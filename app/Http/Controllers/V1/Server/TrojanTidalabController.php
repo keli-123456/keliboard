@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\ServerTrojan;
 use App\Services\ServerService;
 use App\Services\UserService;
+use App\Support\ServerApiRuntime;
 use App\Utils\CacheKey;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -22,21 +23,20 @@ class TrojanTidalabController extends Controller
     // 后端获取用户
     public function user(Request $request)
     {
-        ini_set('memory_limit', -1);
+        ServerApiRuntime::applyMemoryLimit();
         $server = $request->attributes->get('node_info');
         if ($server->type !== 'trojan') {
             return $this->fail([400, '节点不存在']);
         }
         Cache::put(CacheKey::get('SERVER_TROJAN_LAST_CHECK_AT', $server->id), time(), 3600);
-        $users = ServerService::getAvailableUsers($server);
         $result = [];
-        foreach ($users as $user) {
+        ServerService::eachAvailableUser($server, function ($user) use (&$result): void {
             $user->trojan_user = [
                 "password" => $user->uuid,
             ];
             unset($user->uuid);
             array_push($result, $user);
-        }
+        });
         $eTag = sha1(json_encode($result));
         if (strpos($request->header('If-None-Match'), $eTag) !== false) {
             return response(null, 304);

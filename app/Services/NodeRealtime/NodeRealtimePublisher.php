@@ -3,6 +3,7 @@
 namespace App\Services\NodeRealtime;
 
 use App\Models\Server;
+use DateTimeInterface;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
@@ -168,7 +169,7 @@ class NodeRealtimePublisher
             'node_realtime:server_relation_map:%s:%s:%s',
             $column,
             (int) ($version->server_count ?? 0),
-            (int) ($version->server_updated_at ?? 0)
+            $this->normalizeServerUpdatedAtVersion($version->server_updated_at ?? null)
         );
 
         return Cache::remember($cacheKey, now()->addSeconds(self::SERVER_RELATION_MAP_CACHE_SECONDS), function () use ($column): array {
@@ -185,6 +186,28 @@ class NodeRealtimePublisher
 
             return $map;
         });
+    }
+
+    private function normalizeServerUpdatedAtVersion(mixed $updatedAt): string
+    {
+        if ($updatedAt instanceof DateTimeInterface) {
+            return sha1($updatedAt->format('Y-m-d H:i:s.u P'));
+        }
+
+        if ($updatedAt === null) {
+            return '0';
+        }
+
+        if (is_int($updatedAt) || is_float($updatedAt)) {
+            return (string) (int) $updatedAt;
+        }
+
+        $value = trim((string) $updatedAt);
+        if ($value === '' || $value === '0') {
+            return '0';
+        }
+
+        return sha1($value);
     }
 
     private function clearConfigCache(?array $serverIds = null): void

@@ -16,12 +16,43 @@ use App\Exceptions\ApiException;
 
 class TicketController extends Controller
 {
+    private const TICKET_FILTER_FIELDS = [
+        'id' => 'id',
+        'user_id' => 'user_id',
+        'subject' => 'subject',
+        'level' => 'level',
+        'status' => 'status',
+        'reply_status' => 'reply_status',
+        'created_at' => 'created_at',
+        'updated_at' => 'updated_at',
+    ];
+
+    private const TICKET_SORT_FIELDS = [
+        'id' => 'id',
+        'user_id' => 'user_id',
+        'subject' => 'subject',
+        'level' => 'level',
+        'status' => 'status',
+        'reply_status' => 'reply_status',
+        'created_at' => 'created_at',
+        'updated_at' => 'updated_at',
+    ];
+
     private function applyFiltersAndSorts(Request $request, $builder)
     {
-        if ($request->has('filter')) {
-            collect($request->input('filter'))->each(function ($filter) use ($builder) {
-                $key = $filter['id'];
-                $value = $filter['value'];
+        $filters = $request->input('filter');
+        if (is_array($filters)) {
+            collect($filters)->each(function ($filter) use ($builder) {
+                if (!is_array($filter) || !array_key_exists('id', $filter)) {
+                    return;
+                }
+
+                $key = trim((string) $filter['id']);
+                if (!$this->isAllowedTicketFilterField($key)) {
+                    return;
+                }
+
+                $value = $filter['value'] ?? null;
                 $builder->where(function ($query) use ($key, $value) {
                     if (in_array($key, ['keyword', 'q'], true)) {
                         $raw = is_string($value) || is_numeric($value) ? trim((string) $value) : '';
@@ -49,23 +80,54 @@ class TicketController extends Controller
                         return;
                     }
 
+                    $column = $this->resolveTicketFilterField($key);
+                    if ($column === null) {
+                        return;
+                    }
+
                     if (is_array($value)) {
-                        $query->whereIn($key, $value);
+                        $query->whereIn($column, $value);
                     } else {
-                        $query->where($key, 'like', "%{$value}%");
+                        $query->where($column, 'like', "%{$value}%");
                     }
                 });
             });
         }
 
-        if ($request->has('sort')) {
-            collect($request->input('sort'))->each(function ($sort) use ($builder) {
-                $key = $sort['id'];
-                $value = $sort['desc'] ? 'DESC' : 'ASC';
+        $sorts = $request->input('sort');
+        if (is_array($sorts)) {
+            collect($sorts)->each(function ($sort) use ($builder) {
+                if (!is_array($sort) || !array_key_exists('id', $sort)) {
+                    return;
+                }
+
+                $key = $this->resolveTicketSortField(trim((string) $sort['id']));
+                if ($key === null) {
+                    return;
+                }
+
+                $value = !empty($sort['desc']) ? 'DESC' : 'ASC';
                 $builder->orderBy($key, $value);
             });
         }
     }
+
+    private function isAllowedTicketFilterField(string $field): bool
+    {
+        return in_array($field, ['keyword', 'q'], true)
+            || isset(self::TICKET_FILTER_FIELDS[$field]);
+    }
+
+    private function resolveTicketFilterField(string $field): ?string
+    {
+        return self::TICKET_FILTER_FIELDS[$field] ?? null;
+    }
+
+    private function resolveTicketSortField(string $field): ?string
+    {
+        return self::TICKET_SORT_FIELDS[$field] ?? null;
+    }
+
     public function fetch(Request $request)
     {
         if ($request->input('id')) {
@@ -102,10 +164,24 @@ class TicketController extends Controller
     {
         $ticketModel = Ticket::with('user')
             ->when($request->has('status'), function ($query) use ($request) {
-                $query->where('status', $request->input('status'));
+                $status = $request->input('status');
+                if (is_scalar($status) && $status !== '') {
+                    $query->where('status', (int) $status);
+                }
             })
             ->when($request->has('reply_status'), function ($query) use ($request) {
-                $query->whereIn('reply_status', $request->input('reply_status'));
+                $replyStatus = $request->input('reply_status');
+                if (is_array($replyStatus)) {
+                    $replyStatus = array_values(array_filter(
+                        array_map(fn ($value) => is_scalar($value) && $value !== '' ? (int) $value : null, $replyStatus),
+                        fn ($value) => $value !== null
+                    ));
+                    if ($replyStatus !== []) {
+                        $query->whereIn('reply_status', $replyStatus);
+                    }
+                } elseif ($replyStatus !== null && $replyStatus !== '') {
+                    $query->where('reply_status', (int) $replyStatus);
+                }
             })
             ->when($request->has('email'), function ($query) use ($request) {
                 $query->whereHas('user', function ($q) use ($request) {

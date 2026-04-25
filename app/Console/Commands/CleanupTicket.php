@@ -4,21 +4,17 @@ namespace App\Console\Commands;
 
 use App\Models\Ticket;
 use App\Models\TicketMessage;
-use App\Models\TicketMessageAttachment;
-use App\Services\TicketAttachmentService;
+use App\Services\TicketCleanupService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Storage;
 
 class CleanupTicket extends Command
 {
     protected $signature = 'cleanup:ticket {--days= : Retention days (default from config)} {--dry-run : Show what would be deleted}';
     protected $description = '删除超过保留期的已关闭工单（含消息与附件）';
 
-    public function handle(): int
+    public function handle(TicketCleanupService $ticketCleanupService): int
     {
-        ini_set('memory_limit', -1);
-
         $days = $this->option('days');
         $days = is_numeric($days) ? (int) $days : (int) config('tickets.retention_days', 90);
         if ($days <= 0) {
@@ -45,13 +41,12 @@ class CleanupTicket extends Command
         $deletedMessages = 0;
         $deletedAttachments = 0;
         $deletedFiles = 0;
-        $attachmentService = app(TicketAttachmentService::class);
 
-        $baseQuery->chunkById(100, function ($tickets) use ($attachmentService, $dryRun, &$deletedTickets, &$deletedMessages, &$deletedAttachments, &$deletedFiles) {
+        $baseQuery->chunkById(100, function ($tickets) use ($ticketCleanupService, $dryRun, &$deletedTickets, &$deletedMessages, &$deletedAttachments, &$deletedFiles) {
             foreach ($tickets as $ticket) {
                 $ticketId = (int) $ticket->id;
 
-                $attachments = TicketMessageAttachment::where('ticket_id', $ticketId)->get(['id', 'disk', 'path', 'mime']);
+                $attachments = $ticketCleanupService->collectAttachmentsByTicketIds([$ticketId]);
                 $messagesCount = TicketMessage::where('ticket_id', $ticketId)->count();
 
                 if ($dryRun) {
@@ -59,25 +54,18 @@ class CleanupTicket extends Command
                     continue;
                 }
 
-                foreach ($attachments as $attachment) {
-                    $disk = $attachment->disk ?: 'local';
-                    $path = $attachment->path;
-                    if ($path && Storage::disk($disk)->exists($path)) {
-                        $deletedFiles += $attachmentService->deleteDerivedFiles($disk, $path, $attachment->mime ?? null);
-                        if (Storage::disk($disk)->delete($path)) {
-                            $deletedFiles++;
-                        }
-                    }
-                }
-
                 DB::beginTransaction();
                 try {
-                    $deletedAttachments += TicketMessageAttachment::where('ticket_id', $ticketId)->delete();
-                    $deletedMessages += TicketMessage::where('ticket_id', $ticketId)->delete();
-                    $deletedTickets += Ticket::where('id', $ticketId)->delete();
+                    $deleted = $ticketCleanupService->deleteRowsByTicketIds([$ticketId]);
+                    $deletedAttachments += $deleted['attachments'];
+                    $deletedMessages += $deleted['messages'];
+                    $deletedTickets += $deleted['tickets'];
                     DB::commit();
-                } catch (\Exception $e) {
-                    DB::rollBack();
+                    $deletedFiles += $ticketCleanupService->deleteAttachmentFiles($attachments);
+                } catch (\Throwable $e) {
+                    if (DB::transactionLevel() > 0) {
+                        DB::rollBack();
+                    }
                     $this->error(sprintf('Failed deleting ticket #%d: %s', $ticketId, $e->getMessage()));
                 }
             }
