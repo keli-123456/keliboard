@@ -75,7 +75,6 @@ class ServerController extends Controller
         if (!empty($traffic)) {
             $userService = new UserService();
             $userService->trafficFetch($node, $nodeType, $traffic);
-            Cache::put(CacheKey::get('SERVER_' . strtoupper($nodeType) . '_ONLINE_USER', $nodeId), count($traffic), 3600);
             Cache::put(CacheKey::get('SERVER_' . strtoupper($nodeType) . '_LAST_PUSH_AT', $nodeId), time(), 3600);
         }
 
@@ -137,4 +136,3 @@ class ServerController extends Controller
         return response()->json(['data' => true]);
     }
 }
-
