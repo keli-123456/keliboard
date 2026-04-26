@@ -238,8 +238,32 @@ class MachineController extends Controller
             'machine_id' => (int) $machine->id,
             'token' => $machine->token,
             'config' => $config,
-            'command' => 'v2node server -c /etc/v2node/config.yml',
+            'command' => $this->buildInstallCommand($baseURL, $machine),
         ]);
+    }
+
+    private function buildInstallCommand(string $baseURL, ServerMachine $machine): string
+    {
+        $scriptURL = 'https://raw.githubusercontent.com/keli-123456/kelinode/main/script/install.sh';
+        return implode(' ', [
+            'curl -fsSL',
+            $this->shellQuote($scriptURL),
+            '-o /tmp/v2node-install.sh',
+            '&& bash /tmp/v2node-install.sh',
+            '--machine-url',
+            $this->shellQuote($baseURL),
+            '--machine-id',
+            (string) ((int) $machine->id),
+            '--machine-token',
+            $this->shellQuote((string) $machine->token),
+            '--machine-name',
+            $this->shellQuote($machine->name ?: ('machine-' . $machine->id)),
+        ]);
+    }
+
+    private function shellQuote(string $value): string
+    {
+        return "'" . str_replace("'", "'\"'\"'", $value) . "'";
     }
 
     private function yamlScalar(string $value): string
