@@ -5,6 +5,7 @@ namespace Plugin\Coinbase;
 use App\Services\Plugin\AbstractPlugin;
 use App\Contracts\PaymentInterface;
 use App\Exceptions\ApiException;
+use App\Services\OrderService;
 
 class Plugin extends AbstractPlugin implements PaymentInterface
 {
@@ -76,7 +77,7 @@ class Plugin extends AbstractPlugin implements PaymentInterface
         ];
     }
 
-    public function notify($params): array
+    public function notify($params): array|bool
     {
         $payload = trim(request()->getContent());
         $json_param = json_decode($payload, true);
@@ -90,12 +91,26 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             throw new ApiException('HMAC signature does not match', 400);
         }
 
-        $out_trade_no = $json_param['event']['data']['metadata']['outTradeNo'];
-        $pay_trade_no = $json_param['event']['id'];
+        $event = $json_param['event'] ?? [];
+        if (!in_array(($event['type'] ?? ''), ['charge:confirmed', 'charge:resolved'], true)) {
+            return false;
+        }
+
+        $data = $event['data'] ?? [];
+        $out_trade_no = $data['metadata']['outTradeNo'] ?? null;
+        $pay_trade_no = $event['id'] ?? null;
+        $paidAmount = $data['pricing']['local']['amount']
+            ?? $data['local_price']['amount']
+            ?? $data['payments'][0]['value']['local']['amount']
+            ?? null;
+        if (!$out_trade_no || !$pay_trade_no || $paidAmount === null) {
+            return false;
+        }
         
         return [
             'trade_no' => $out_trade_no,
-            'callback_no' => $pay_trade_no
+            'callback_no' => $pay_trade_no,
+            'paid_amount' => OrderService::amountToCents($paidAmount),
         ];
     }
 
@@ -135,4 +150,4 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             return !$ret;
         }
     }
-} 
+}

@@ -5,6 +5,7 @@ namespace Plugin\Btcpay;
 use App\Services\Plugin\AbstractPlugin;
 use App\Contracts\PaymentInterface;
 use App\Exceptions\ApiException;
+use App\Services\OrderService;
 
 class Plugin extends AbstractPlugin implements PaymentInterface
 {
@@ -102,12 +103,21 @@ class Plugin extends AbstractPlugin implements PaymentInterface
         $invoiceDetail = file_get_contents($this->getConfig('btcpay_url') . 'api/v1/stores/' . $this->getConfig('btcpay_storeId') . '/invoices/' . $json_param['invoiceId'], false, $context);
         $invoiceDetail = json_decode($invoiceDetail, true);
 
-        $out_trade_no = $invoiceDetail['metadata']["orderId"];
-        $pay_trade_no = $json_param['invoiceId'];
+        if (($invoiceDetail['status'] ?? null) !== 'Settled') {
+            return false;
+        }
+
+        $out_trade_no = $invoiceDetail['metadata']['orderId'] ?? null;
+        $pay_trade_no = $json_param['invoiceId'] ?? null;
+        $paidAmount = $invoiceDetail['amount'] ?? null;
+        if (!$out_trade_no || !$pay_trade_no || $paidAmount === null) {
+            return false;
+        }
         
         return [
             'trade_no' => $out_trade_no,
-            'callback_no' => $pay_trade_no
+            'callback_no' => $pay_trade_no,
+            'paid_amount' => OrderService::amountToCents($paidAmount),
         ];
     }
 
@@ -147,4 +157,4 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             return !$ret;
         }
     }
-} 
+}

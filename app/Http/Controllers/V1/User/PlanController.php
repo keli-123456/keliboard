@@ -21,6 +21,9 @@ class PlanController extends Controller
     public function fetch(Request $request)
     {
         $user = User::find($request->user()->id);
+        if (!$user) {
+            return $this->fail([400, __('The user does not exist')]);
+        }
         if ($request->input('id')) {
             $plan = Plan::where('id', $request->input('id'))->first();
             if (!$plan) {

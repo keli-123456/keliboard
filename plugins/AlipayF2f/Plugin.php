@@ -5,6 +5,7 @@ namespace Plugin\AlipayF2f;
 use App\Services\Plugin\AbstractPlugin;
 use App\Contracts\PaymentInterface;
 use App\Exceptions\ApiException;
+use App\Services\OrderService;
 use Illuminate\Support\Facades\Log;
 use Plugin\AlipayF2f\library\AlipayF2F;
 
@@ -91,9 +92,14 @@ class Plugin extends AbstractPlugin implements PaymentInterface
 
         try {
             if ($gateway->verify($params)) {
+                if (empty($params['out_trade_no']) || empty($params['trade_no']) || !isset($params['total_amount'])) {
+                    return false;
+                }
+
                 return [
                     'trade_no' => $params['out_trade_no'],
-                    'callback_no' => $params['trade_no']
+                    'callback_no' => $params['trade_no'],
+                    'paid_amount' => OrderService::amountToCents($params['total_amount']),
                 ];
             } else {
                 return false;

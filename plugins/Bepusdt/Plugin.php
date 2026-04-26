@@ -4,6 +4,7 @@ namespace Plugin\Bepusdt;
 
 use App\Contracts\PaymentInterface;
 use App\Exceptions\ApiException;
+use App\Services\OrderService;
 use App\Services\Plugin\AbstractPlugin;
 use Curl\Curl;
 
@@ -150,13 +151,14 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             return false;
         }
 
-        if (empty($params['order_id']) || empty($params['trade_id'])) {
+        if (empty($params['order_id']) || empty($params['trade_id']) || !isset($params['amount'])) {
             return false;
         }
 
         return [
             'trade_no' => $params['order_id'],
             'callback_no' => $params['trade_id'],
+            'paid_amount' => OrderService::amountToCents($params['amount']),
             'custom_result' => 'ok',
         ];
     }

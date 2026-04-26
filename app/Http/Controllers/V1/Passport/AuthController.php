@@ -8,6 +8,7 @@ use App\Http\Requests\Passport\AuthForget;
 use App\Http\Requests\Passport\AuthLogin;
 use App\Http\Requests\Passport\AuthRegister;
 use App\Services\Auth\LoginService;
+use App\Services\Auth\LoginRedirectService;
 use App\Services\Auth\MailLinkService;
 use App\Services\Auth\RegisterService;
 use App\Services\AuthService;
@@ -16,15 +17,18 @@ use Illuminate\Http\Request;
 class AuthController extends Controller
 {
     protected MailLinkService $mailLinkService;
+    protected LoginRedirectService $loginRedirectService;
     protected RegisterService $registerService;
     protected LoginService $loginService;
 
     public function __construct(
         MailLinkService $mailLinkService,
+        LoginRedirectService $loginRedirectService,
         RegisterService $registerService,
         LoginService $loginService
     ) {
         $this->mailLinkService = $mailLinkService;
+        $this->loginRedirectService = $loginRedirectService;
         $this->registerService = $registerService;
         $this->loginService = $loginService;
     }
@@ -91,7 +95,10 @@ class AuthController extends Controller
     {
         // 处理直接通过token重定向
         if ($token = $request->input('token')) {
-            $redirect = '/#/login?verify=' . $token . '&redirect=' . ($request->input('redirect', 'dashboard'));
+            $redirect = $this->loginRedirectService->buildLoginFragment(
+                (string) $token,
+                $request->input('redirect')
+            );
 
             return redirect()->to(
                 admin_setting('app_url')

@@ -5,6 +5,7 @@ namespace Plugin\CoinPayments;
 use App\Services\Plugin\AbstractPlugin;
 use App\Contracts\PaymentInterface;
 use App\Exceptions\ApiException;
+use App\Services\OrderService;
 
 class Plugin extends AbstractPlugin implements PaymentInterface
 {
@@ -98,9 +99,15 @@ class Plugin extends AbstractPlugin implements PaymentInterface
 
         $status = $params['status'];
         if ($status >= 100 || $status == 2) {
+            $paidAmount = $params['amount1'] ?? $params['amount'] ?? null;
+            if (empty($params['item_number']) || empty($params['txn_id']) || $paidAmount === null) {
+                throw new ApiException('Invalid IPN payload');
+            }
+
             return [
                 'trade_no' => $params['item_number'],
                 'callback_no' => $params['txn_id'],
+                'paid_amount' => OrderService::amountToCents($paidAmount),
                 'custom_result' => 'IPN OK'
             ];
         } else if ($status < 0) {
@@ -109,4 +116,4 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             return 'IPN OK: pending';
         }
     }
-} 
+}

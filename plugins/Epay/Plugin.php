@@ -4,6 +4,7 @@ namespace Plugin\Epay;
 
 use App\Services\Plugin\AbstractPlugin;
 use App\Contracts\PaymentInterface;
+use App\Services\OrderService;
 
 class Plugin extends AbstractPlugin implements PaymentInterface
 {
@@ -79,7 +80,7 @@ class Plugin extends AbstractPlugin implements PaymentInterface
 
     public function notify($params): array|bool
     {
-        $sign = $params['sign'];
+        $sign = $params['sign'] ?? '';
         unset($params['sign'], $params['sign_type']);
         ksort($params);
         $str = stripslashes(urldecode(http_build_query($params))) . $this->getConfig('key');
@@ -87,10 +88,17 @@ class Plugin extends AbstractPlugin implements PaymentInterface
         if ($sign !== md5($str)) {
             return false;
         }
+        if (($params['trade_status'] ?? null) !== 'TRADE_SUCCESS') {
+            return false;
+        }
+        if (empty($params['out_trade_no']) || empty($params['trade_no']) || !isset($params['money'])) {
+            return false;
+        }
 
         return [
             'trade_no' => $params['out_trade_no'],
-            'callback_no' => $params['trade_no']
+            'callback_no' => $params['trade_no'],
+            'paid_amount' => OrderService::amountToCents($params['money']),
         ];
     }
 }
