@@ -11,13 +11,13 @@
 
 ## 📖 Introduction
 
-Xboard is a modern panel system built on Laravel 11, focusing on providing a clean and efficient user experience.
+Xboard is a modern panel system built on Laravel 12, focusing on providing a clean and efficient user experience.
 
 ## ✨ Features
 
 - 🚀 Built with Laravel 12 + Octane for significant performance gains
 - 🎨 Redesigned admin interface (React + Shadcn UI)
-- 📱 Modern user frontend (Vue3 + TypeScript)
+- 📱 Modern user frontend (React + TypeScript + TailwindCSS)
 - 🐳 Ready-to-use Docker deployment solution
 - 🎯 Optimized system architecture for better maintainability
 
@@ -62,9 +62,9 @@ docker compose up -d
 
 ## 🛠️ Tech Stack
 
-- Backend: Laravel 11 + Octane
+- Backend: Laravel 12 + Octane
 - Admin Panel: React + Shadcn UI + TailwindCSS
-- User Frontend: Vue3 + TypeScript + NaiveUI
+- User Frontend: React + TypeScript + TailwindCSS
 - Deployment: Docker + Docker Compose
 - Caching: Redis + Octane Cache
 
@@ -122,6 +122,18 @@ Issues and Pull Requests are welcome to help improve the project.
 
 ```bash
 composer test
+```
+
+- If the host PHP version is not 8.2, run the same suite in Docker:
+
+```bash
+./scripts/test-php82-docker.sh
+```
+
+- To run a focused PHPUnit command in the PHP 8.2 container:
+
+```bash
+./scripts/test-php82-docker.sh php vendor/bin/phpunit --filter PaymentOrderRegressionTest
 ```
 
 ## 📈 Star History

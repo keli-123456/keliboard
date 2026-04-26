@@ -59,8 +59,12 @@ class InviteController extends Controller
     public function fetch(Request $request)
     {
         $commission_rate = admin_setting('invite_commission', 10);
-        $user = User::find($request->user()->id)
-                ->load(['codes' => fn($query) => $query->where('status', 0)]);
+        $user = User::find($request->user()->id);
+        if (!$user) {
+            return $this->fail([400, __('The user does not exist')]);
+        }
+
+        $user->load(['codes' => fn($query) => $query->where('status', 0)]);
         if ($user->commission_rate) {
             $commission_rate = $user->commission_rate;
         }

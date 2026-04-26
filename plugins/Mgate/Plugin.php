@@ -106,7 +106,7 @@ class Plugin extends AbstractPlugin implements PaymentInterface
 
     public function notify($params): array|bool
     {
-        $sign = $params['sign'];
+        $sign = $params['sign'] ?? '';
         unset($params['sign']);
         ksort($params);
         reset($params);
@@ -115,10 +115,29 @@ class Plugin extends AbstractPlugin implements PaymentInterface
         if ($sign !== md5($str)) {
             return false;
         }
+        if (isset($params['status']) && !$this->isPaidStatus($params['status'])) {
+            return false;
+        }
+        if (empty($params['out_trade_no']) || empty($params['trade_no']) || !isset($params['total_amount'])) {
+            return false;
+        }
 
         return [
             'trade_no' => $params['out_trade_no'],
-            'callback_no' => $params['trade_no']
+            'callback_no' => $params['trade_no'],
+            'paid_amount' => (int) $params['total_amount'],
         ];
+    }
+
+    private function isPaidStatus(mixed $status): bool
+    {
+        return in_array(strtolower((string) $status), [
+            '1',
+            '2',
+            'paid',
+            'success',
+            'completed',
+            'trade_success',
+        ], true);
     }
 }

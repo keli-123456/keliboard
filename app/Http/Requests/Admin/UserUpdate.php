@@ -30,6 +30,7 @@ class UserUpdate extends FormRequest
             'balance' => 'numeric',
             'commission_type' => 'integer',
             'commission_balance' => 'numeric',
+            'invite_user_email' => 'nullable|email:strict',
             'remarks' => 'nullable',
             'speed_limit' => 'nullable|integer',
             'device_limit' => 'nullable|integer'
@@ -61,6 +62,7 @@ class UserUpdate extends FormRequest
             'd.integer' => '下行流量格式不正确',
             'balance.integer' => '余额格式不正确',
             'commission_balance.integer' => '佣金格式不正确',
+            'invite_user_email.email' => '邀请用户邮箱格式不正确',
             'password.min' => '密码长度最小8位',
             'speed_limit.integer' => '限速格式不正确',
             'device_limit.integer' => '设备数量格式不正确'

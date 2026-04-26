@@ -25,10 +25,18 @@ class PaymentService
         }
 
         if ($id) {
-            $payment = Payment::find($id)->toArray();
+            $paymentModel = Payment::find($id);
+            if (!$paymentModel) {
+                throw new ApiException('payment method is not found');
+            }
+            $payment = $paymentModel->toArray();
         }
         if ($uuid) {
-            $payment = Payment::where('uuid', $uuid)->first()->toArray();
+            $paymentModel = Payment::where('uuid', $uuid)->first();
+            if (!$paymentModel) {
+                throw new ApiException('payment method is not found');
+            }
+            $payment = $paymentModel->toArray();
         }
 
         $this->config = [];
@@ -53,7 +61,7 @@ class PaymentService
             }
         }
 
-        $this->payment = new $this->class($this->config);
+        throw new ApiException('payment method is not supported');
     }
 
     public function notify($params)
@@ -61,6 +69,11 @@ class PaymentService
         if (!$this->config['enable'])
             throw new ApiException('gate is not enable');
         return $this->payment->notify($params);
+    }
+
+    public function getPaymentId(): ?int
+    {
+        return isset($this->config['id']) ? (int) $this->config['id'] : null;
     }
 
     public function pay($order)

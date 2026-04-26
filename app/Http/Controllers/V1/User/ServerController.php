@@ -16,6 +16,9 @@ class ServerController extends Controller
     public function fetch(Request $request, UserClientCompatibilityService $compatibilityService)
     {
         $user = User::find($request->user()->id);
+        if (!$user) {
+            return $this->fail([400, __('The user does not exist')]);
+        }
         $servers = [];
         $userService = new UserService();
         if ($userService->isAvailable($user)) {

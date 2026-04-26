@@ -23,6 +23,7 @@ use Illuminate\Http\JsonResponse;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Laravel\Sanctum\PersonalAccessToken;
 
 class UserController extends Controller
 {
@@ -350,7 +351,12 @@ class UserController extends Controller
         ], [
             'id.required' => '用户ID不能为空'
         ]);
-        $user = User::find($request->input('id'))->load('invite_user');
+        $user = User::find($request->input('id'));
+        if (!$user) {
+            return $this->fail([400202, '用户不存在']);
+        }
+
+        $user->load('invite_user');
         return $this->success($user);
     }
 
@@ -402,11 +408,21 @@ class UserController extends Controller
                 $params['group_id'] = $plan->group_id;
             }
         }
-        // 处理邀请用户
-        if ($request->input('invite_user_email') && $inviteUser = User::where('email', $request->input('invite_user_email'))->first()) {
-            $params['invite_user_id'] = $inviteUser->id;
-        } else {
-            $params['invite_user_id'] = null;
+        // 处理邀请用户：只有显式提交该字段时才变更邀请关系，避免局部更新误清空
+        if (array_key_exists('invite_user_email', $request->all())) {
+            $inviteUserEmail = $request->input('invite_user_email');
+            if ($inviteUserEmail) {
+                $inviteUser = User::where('email', $inviteUserEmail)->first();
+                if (!$inviteUser) {
+                    return $this->fail([400202, '邀请用户不存在']);
+                }
+                if ((int) $inviteUser->id === (int) $user->id) {
+                    return $this->fail([400, '不能将自己设置为邀请人']);
+                }
+                $params['invite_user_id'] = $inviteUser->id;
+            } else {
+                $params['invite_user_id'] = null;
+            }
         }
 
         if (isset($params['banned']) && (int) $params['banned'] === 1) {
@@ -669,20 +685,50 @@ class UserController extends Controller
 
     public function ban(Request $request)
     {
-        $sortType = in_array($request->input('sort_type'), ['ASC', 'DESC']) ? $request->input('sort_type') : 'DESC';
-        $sort = $this->resolveUserSortField((string) ($request->input('sort') ?: 'created_at')) ?? 'created_at';
-        $builder = User::orderBy($sort, $sortType);
-        $this->applyFilters($request, $builder);
+        $ids = $request->input('ids');
+        $hasIds = is_array($ids) && count($ids) > 0;
+        $filters = $request->input('filter');
+        $hasFilters = is_array($filters) && count($filters) > 0;
+
+        if (!$hasIds && !$hasFilters && !$request->boolean('confirm_all')) {
+            return $this->fail([400, '批量封禁全部用户需要确认']);
+        }
+        if (!$hasIds && $hasFilters && !$request->boolean('confirm_filter')) {
+            return $this->fail([400, '批量封禁筛选结果需要确认']);
+        }
+
+        $builder = User::query()->where('is_admin', 0);
+        if ($hasIds) {
+            $builder->whereIn('id', array_values(array_unique(array_map('intval', $ids))));
+        } else {
+            $sortType = in_array($request->input('sort_type'), ['ASC', 'DESC']) ? $request->input('sort_type') : 'DESC';
+            $sort = $this->resolveUserSortField((string) ($request->input('sort') ?: 'created_at')) ?? 'created_at';
+            $builder->orderBy($sort, $sortType);
+            $this->applyFilters($request, $builder);
+        }
+
+        if ($request->user()) {
+            $builder->where('id', '<>', $request->user()->id);
+        }
+
         try {
+            $userIds = (clone $builder)->pluck('id');
             $builder->update([
                 'banned' => 1
             ]);
+            if ($userIds->isNotEmpty()) {
+                PersonalAccessToken::where('tokenable_type', User::class)
+                    ->whereIn('tokenable_id', $userIds)
+                    ->delete();
+            }
         } catch (\Exception $e) {
             Log::error($e);
             return $this->fail([500, '处理失败']);
         }
 
-        return $this->success(true);
+        return $this->success([
+            'affected_count' => $userIds->count(),
+        ]);
     }
 
     /**

@@ -1,0 +1,253 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Support;
+
+use Illuminate\Contracts\Bus\Dispatcher;
+use Illuminate\Contracts\Routing\ResponseFactory;
+use Illuminate\Database\Capsule\Manager as Capsule;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Response;
+
+trait InteractsWithInMemoryDatabase
+{
+    private Capsule $database;
+
+    protected function setUpInMemoryDatabase(): void
+    {
+        $this->database = new Capsule(app());
+        $this->database->addConnection([
+            'driver' => 'sqlite',
+            'database' => ':memory:',
+            'prefix' => '',
+        ]);
+        $this->database->setAsGlobal();
+        $this->database->bootEloquent();
+
+        app()->instance('db', $this->database->getDatabaseManager());
+        app()->instance('db.connection', $this->database->getConnection());
+
+        Model::setConnectionResolver($this->database->getDatabaseManager());
+        Model::unsetEventDispatcher();
+
+        app()->instance('log', new class {
+            public function warning(...$arguments): void {}
+            public function error(...$arguments): void {}
+        });
+    }
+
+    protected function bindSynchronousBusDispatcher(): void
+    {
+        app()->instance(Dispatcher::class, new class implements Dispatcher {
+            public function dispatch($command)
+            {
+                return $this->dispatchSync($command);
+            }
+
+            public function dispatchSync($command, $handler = null)
+            {
+                return $command->handle();
+            }
+
+            public function dispatchNow($command, $handler = null)
+            {
+                return $this->dispatchSync($command, $handler);
+            }
+
+            public function hasCommandHandler($command)
+            {
+                return false;
+            }
+
+            public function getCommandHandler($command)
+            {
+                return null;
+            }
+
+            public function pipeThrough(array $pipes)
+            {
+                return $this;
+            }
+
+            public function map(array $map)
+            {
+                return $this;
+            }
+        });
+    }
+
+    protected function bindJsonResponseFactory(): void
+    {
+        app()->instance(ResponseFactory::class, new class implements ResponseFactory {
+            public function make($content = '', $status = 200, array $headers = [])
+            {
+                return new Response($content, $status, $headers);
+            }
+
+            public function noContent($status = 204, array $headers = [])
+            {
+                return $this->make('', $status, $headers);
+            }
+
+            public function view($view, $data = [], $status = 200, array $headers = [])
+            {
+                return $this->make('', $status, $headers);
+            }
+
+            public function json($data = [], $status = 200, array $headers = [], $options = 0)
+            {
+                return new JsonResponse($data, $status, $headers, $options);
+            }
+
+            public function jsonp($callback, $data = [], $status = 200, array $headers = [], $options = 0)
+            {
+                return (new JsonResponse($data, $status, $headers, $options))->setCallback($callback);
+            }
+
+            public function stream($callback, $status = 200, array $headers = [])
+            {
+                return new \Symfony\Component\HttpFoundation\StreamedResponse($callback, $status, $headers);
+            }
+
+            public function streamJson($data, $status = 200, $headers = [], $encodingOptions = 15)
+            {
+                return new \Symfony\Component\HttpFoundation\StreamedJsonResponse($data, $status, $headers, $encodingOptions);
+            }
+
+            public function streamDownload($callback, $name = null, array $headers = [], $disposition = 'attachment')
+            {
+                return $this->stream($callback, 200, $headers);
+            }
+
+            public function download($file, $name = null, array $headers = [], $disposition = 'attachment')
+            {
+                return new \Symfony\Component\HttpFoundation\BinaryFileResponse($file, 200, $headers);
+            }
+
+            public function file($file, array $headers = [])
+            {
+                return new \Symfony\Component\HttpFoundation\BinaryFileResponse($file, 200, $headers);
+            }
+
+            public function redirectTo($path, $status = 302, $headers = [], $secure = null)
+            {
+                throw new \BadMethodCallException('Redirect responses are not available in unit tests.');
+            }
+
+            public function redirectToRoute($route, $parameters = [], $status = 302, $headers = [])
+            {
+                throw new \BadMethodCallException('Redirect responses are not available in unit tests.');
+            }
+
+            public function redirectToAction($action, $parameters = [], $status = 302, $headers = [])
+            {
+                throw new \BadMethodCallException('Redirect responses are not available in unit tests.');
+            }
+
+            public function redirectGuest($path, $status = 302, $headers = [], $secure = null)
+            {
+                throw new \BadMethodCallException('Redirect responses are not available in unit tests.');
+            }
+
+            public function redirectToIntended($default = '/', $status = 302, $headers = [], $secure = null)
+            {
+                throw new \BadMethodCallException('Redirect responses are not available in unit tests.');
+            }
+        });
+    }
+
+    protected function createUserTable(): void
+    {
+        $this->database->schema()->create('v2_user', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->string('email')->nullable();
+            $table->string('password')->nullable();
+            $table->string('token')->nullable();
+            $table->string('uuid')->nullable();
+            $table->integer('invite_user_id')->nullable();
+            $table->integer('plan_id')->nullable();
+            $table->integer('group_id')->nullable();
+            $table->bigInteger('transfer_enable')->nullable();
+            $table->integer('speed_limit')->nullable();
+            $table->integer('device_limit')->nullable();
+            $table->bigInteger('u')->default(0);
+            $table->bigInteger('d')->default(0);
+            $table->boolean('banned')->default(false);
+            $table->boolean('is_admin')->default(false);
+            $table->boolean('is_staff')->default(false);
+            $table->integer('balance')->default(0);
+            $table->integer('commission_balance')->default(0);
+            $table->integer('commission_rate')->default(0);
+            $table->integer('commission_type')->default(0);
+            $table->integer('discount')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+    }
+
+    protected function createPersonalAccessTokenTable(): void
+    {
+        $this->database->schema()->create('personal_access_tokens', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->string('tokenable_type');
+            $table->integer('tokenable_id');
+            $table->string('name');
+            $table->string('token', 64)->unique();
+            $table->text('abilities')->nullable();
+            $table->timestamp('last_used_at')->nullable();
+            $table->timestamp('expires_at')->nullable();
+            $table->timestamp('created_at')->nullable();
+            $table->timestamp('updated_at')->nullable();
+        });
+    }
+
+    protected function createOrderTable(): void
+    {
+        $this->database->schema()->create('v2_order', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('invite_user_id')->nullable();
+            $table->integer('user_id');
+            $table->integer('plan_id')->default(0);
+            $table->integer('payment_id')->nullable();
+            $table->integer('type')->default(1);
+            $table->string('period');
+            $table->string('trade_no', 64)->unique();
+            $table->string('callback_no')->nullable();
+            $table->integer('total_amount')->default(0);
+            $table->integer('handling_amount')->nullable();
+            $table->integer('discount_amount')->nullable();
+            $table->integer('balance_amount')->nullable();
+            $table->integer('bonus_amount')->default(0);
+            $table->integer('status')->default(0);
+            $table->integer('commission_balance')->default(0);
+            $table->integer('paid_at')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+    }
+
+    protected function createTicketTables(): void
+    {
+        $this->database->schema()->create('v2_ticket', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('user_id');
+            $table->string('subject')->nullable();
+            $table->integer('level')->default(0);
+            $table->integer('status')->default(0);
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+
+        $this->database->schema()->create('v2_ticket_message', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('ticket_id');
+            $table->integer('user_id')->nullable();
+            $table->text('message')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+    }
+}
