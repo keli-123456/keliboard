@@ -24,6 +24,8 @@ final class NodeApiContractTest extends TestCase
         $this->assertSame('/api/v2/' . NodeApiContract::v2ServerPath(NodeApiContract::ENDPOINT_CONFIG), $contract['paths']['v2.server.config']['path']);
         $this->assertSame('/api/v2/' . NodeApiContract::v2ServerPath(NodeApiContract::ENDPOINT_HANDSHAKE), $contract['paths']['v2.server.handshake']['path']);
         $this->assertSame('/api/v2/' . NodeApiContract::v2ServerPath(NodeApiContract::ENDPOINT_REPORT), $contract['paths']['v2.server.report']['path']);
+        $this->assertSame('/api/v2/' . NodeApiContract::v2ServerMachinePath(NodeApiContract::ENDPOINT_MACHINE_NODES), $contract['paths']['v2.server.machine.nodes']['path']);
+        $this->assertSame('/api/v2/' . NodeApiContract::v2ServerMachinePath(NodeApiContract::ENDPOINT_MACHINE_STATUS), $contract['paths']['v2.server.machine.status']['path']);
 
         $this->assertSame(NodeApiContract::HEADER_RESPONSE_FORMAT, $contract['headers']['response_format']);
         $this->assertSame(NodeApiContract::RESPONSE_FORMAT_MSGPACK, $contract['headers']['msgpack']);

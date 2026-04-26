@@ -1,5 +1,5 @@
 {
-  "version": "2026-04-24",
+  "version": "2026-04-26",
   "description": "Stable contract for panel-to-node APIs consumed by v2node.",
   "headers": {
     "response_format": "X-Response-Format",
@@ -68,6 +68,18 @@
       "path": "/api/v2/server/report",
       "request": "UnifiedNodeReport",
       "response": "BooleanDataEnvelope"
+    },
+    "v2.server.machine.nodes": {
+      "method": "POST",
+      "path": "/api/v2/server/machine/nodes",
+      "request": "MachineAuth",
+      "response": "MachineNodeList"
+    },
+    "v2.server.machine.status": {
+      "method": "POST",
+      "path": "/api/v2/server/machine/status",
+      "request": "MachineStatus",
+      "response": "BooleanDataEnvelope"
     }
   },
   "schemas": {
@@ -120,6 +132,28 @@
         "online": "map<user_id,count>",
         "status": "node load status",
         "metrics": "node runtime metrics"
+      }
+    },
+    "MachineNodeList": {
+      "required": ["nodes"],
+      "properties": {
+        "nodes": "array<{id,type,name,code,updated_at}>",
+        "base_config": "shared machine runtime settings"
+      }
+    },
+    "MachineAuth": {
+      "required": ["machine_id", "token"],
+      "properties": {
+        "machine_id": "integer",
+        "token": "machine token"
+      }
+    },
+    "MachineStatus": {
+      "required": ["machine_id", "token"],
+      "properties": {
+        "machine_id": "integer",
+        "token": "machine token",
+        "status": "machine load status"
       }
     }
   }

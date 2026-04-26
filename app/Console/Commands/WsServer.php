@@ -184,6 +184,7 @@ class WsServer extends Command
                         'token' => $payload['token'] ?? null,
                         'node_id' => $payload['node_id'] ?? null,
                         'node_type' => $payload['node_type'] ?? null,
+                        'machine_id' => $payload['machine_id'] ?? null,
                     ]);
                 } catch (\Throwable $e) {
                     Log::warning('Node realtime authentication failed with exception', [
@@ -191,6 +192,7 @@ class WsServer extends Command
                         'remote_ip' => $this->resolveRemoteIp($connection),
                         'node_id' => $payload['node_id'] ?? null,
                         'node_type' => $payload['node_type'] ?? null,
+                        'machine_id' => $payload['machine_id'] ?? null,
                     ]);
                     $connection->close();
                     return;
@@ -201,6 +203,7 @@ class WsServer extends Command
                         'remote_ip' => $this->resolveRemoteIp($connection),
                         'node_id' => $payload['node_id'] ?? null,
                         'node_type' => $payload['node_type'] ?? null,
+                        'machine_id' => $payload['machine_id'] ?? null,
                     ]);
                     $connection->send(json_encode([
                         'type' => 'error',
@@ -216,6 +219,7 @@ class WsServer extends Command
                 $connection->xboard_connection_key = $auth['connection_key'];
                 $connection->xboard_input_node_id = (string) $auth['input_node_id'];
                 $connection->xboard_server_id = (int) $auth['server']->id;
+                $connection->xboard_machine_id = isset($auth['machine']) ? (int) $auth['machine']->id : null;
                 $connection->xboard_node_type = $auth['is_v2node'] ? 'v2node' : ($auth['normalized_node_type'] ?? null);
                 $connection->xboard_is_v2node = (bool) $auth['is_v2node'];
                 $connection->xboard_group_ids = $this->normalizeIntList((array) ($auth['server']->group_ids ?? []));
@@ -226,6 +230,7 @@ class WsServer extends Command
                     'remote_ip' => $this->resolveRemoteIp($connection),
                     'node_id' => (string) $auth['input_node_id'],
                     'server_id' => (int) $auth['server']->id,
+                    'machine_id' => $connection->xboard_machine_id,
                     'node_type' => $connection->xboard_node_type,
                     'group_ids' => $connection->xboard_group_ids,
                 ]);
@@ -234,6 +239,7 @@ class WsServer extends Command
                     'type' => 'hello_ack',
                     'node_id' => (string) $auth['input_node_id'],
                     'server_id' => (int) $auth['server']->id,
+                    'machine_id' => $connection->xboard_machine_id,
                     'node_type' => $connection->xboard_node_type,
                     'ts' => time(),
                 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
@@ -267,6 +273,7 @@ class WsServer extends Command
                     'remote_ip' => $this->resolveRemoteIp($connection),
                     'node_id' => (string) ($connection->xboard_input_node_id ?? ''),
                     'server_id' => (int) ($connection->xboard_server_id ?? 0),
+                    'machine_id' => $connection->xboard_machine_id ?? null,
                     'node_type' => $connection->xboard_node_type ?? null,
                 ]);
             }
@@ -330,6 +337,7 @@ class WsServer extends Command
                 'remote_ip' => $this->resolveRemoteIp($connection),
                 'node_id' => (string) ($connection->xboard_input_node_id ?? ''),
                 'server_id' => (int) ($connection->xboard_server_id ?? 0),
+                'machine_id' => $connection->xboard_machine_id ?? null,
                 'node_type' => $connection->xboard_node_type ?? null,
                 'group_ids' => $this->normalizeIntList((array) ($connection->xboard_group_ids ?? [])),
                 'authenticated_at' => $this->formatTimestamp((int) ($connection->xboard_authenticated_at ?? 0)),

@@ -5,6 +5,7 @@ use App\Contracts\NodeApiContract;
 use App\Http\Controllers\V1\Server\ShadowsocksTidalabController;
 use App\Http\Controllers\V1\Server\TrojanTidalabController;
 use App\Http\Controllers\V1\Server\UniProxyController;
+use App\Http\Controllers\V2\Server\MachineController;
 use App\Http\Controllers\V2\Server\ServerController;
 use Illuminate\Contracts\Routing\Registrar;
 
@@ -26,6 +27,13 @@ class ServerRoute
             $route->post(NodeApiContract::ENDPOINT_ALIVE, [UniProxyController::class, 'alive']);
             $route->get(NodeApiContract::ENDPOINT_ALIVE_LIST, [UniProxyController::class, 'alivelist']);
             $route->post(NodeApiContract::ENDPOINT_STATUS, [UniProxyController::class, 'status']);
+        });
+
+        $router->group([
+            'prefix' => NodeApiContract::V2_SERVER_MACHINE_PREFIX,
+        ], function ($route) {
+            $route->post(NodeApiContract::ENDPOINT_MACHINE_NODES, [MachineController::class, 'nodes']);
+            $route->post(NodeApiContract::ENDPOINT_MACHINE_STATUS, [MachineController::class, 'status']);
         });
     }
 }

@@ -4,6 +4,7 @@ namespace App\Http\Routes\V2;
 use App\Http\Controllers\V2\Admin\ConfigController;
 use App\Http\Controllers\V2\Admin\PlanController;
 use App\Http\Controllers\V2\Admin\Server\GroupController;
+use App\Http\Controllers\V2\Admin\Server\MachineController;
 use App\Http\Controllers\V2\Admin\Server\RouteController;
 use App\Http\Controllers\V2\Admin\Server\ManageController;
 use App\Http\Controllers\V2\Admin\OrderController;
@@ -76,6 +77,19 @@ class AdminRoute
                 $router->get('/fetch', [RouteController::class, 'fetch']);
                 $router->post('/save', [RouteController::class, 'save']);
                 $router->post('/drop', [RouteController::class, 'drop']);
+            });
+            $router->group([
+                'prefix' => 'server/machine'
+            ], function ($router) {
+                $router->get('/fetch', [MachineController::class, 'fetch']);
+                $router->post('/save', [MachineController::class, 'save']);
+                $router->post('/drop', [MachineController::class, 'drop']);
+                $router->post('/resetToken', [MachineController::class, 'resetToken']);
+                $router->get('/getToken', [MachineController::class, 'getToken']);
+                $router->get('/nodes', [MachineController::class, 'nodes']);
+                $router->post('/bindNodes', [MachineController::class, 'bindNodes']);
+                $router->get('/history', [MachineController::class, 'history']);
+                $router->get('/installCommand', [MachineController::class, 'installCommand']);
             });
             $router->group([
                 'prefix' => 'server/manage'

@@ -26,9 +26,11 @@ use Illuminate\Database\Eloquent\Casts\Attribute;
  * @property array|null $route_ids 路由IDs
  * @property array|null $tags 标签
  * @property boolean $show 是否显示
+ * @property boolean $enabled 是否启用
  * @property string|null $allow_insecure 是否允许不安全
  * @property string|null $network 网络类型
  * @property int|null $parent_id 父节点ID
+ * @property int|null $machine_id 机器ID
  * @property float|null $rate 倍率
  * @property boolean $rate_time_enable 是否启用时间范围功能
  * @property array|null $rate_time_ranges 倍率时间范围
@@ -38,6 +40,7 @@ use Illuminate\Database\Eloquent\Casts\Attribute;
  * @property int $updated_at
  * 
  * @property-read Server|null $parent 父节点
+ * @property-read ServerMachine|null $machine 绑定机器
  * @property-read \Illuminate\Database\Eloquent\Collection<int, StatServer> $stats 节点统计
  * 
  * @property-read int|null $last_check_at 最后检查时间（Unix时间戳）
@@ -127,6 +130,8 @@ class Server extends Model
         'last_check_at' => 'integer',
         'last_push_at' => 'integer',
         'show' => 'boolean',
+        'enabled' => 'boolean',
+        'machine_id' => 'integer',
         'created_at' => 'timestamp',
         'updated_at' => 'timestamp',
         'rate_time_ranges' => 'array',
@@ -505,6 +510,11 @@ class Server extends Model
     public function parent(): BelongsTo
     {
         return $this->belongsTo(self::class, 'parent_id', 'id');
+    }
+
+    public function machine(): BelongsTo
+    {
+        return $this->belongsTo(ServerMachine::class, 'machine_id', 'id');
     }
 
     public function stats(): HasMany

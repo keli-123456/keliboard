@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Server;
+use App\Models\ServerMachine;
 use App\Models\ServerRoute;
 use App\Models\User;
 use App\Models\UserSyncState;
@@ -19,6 +20,7 @@ class ServerService
     private const AVAILABLE_USER_IDS_CACHE_TTL = 75;
     private const DEFAULT_AVAILABLE_USER_CHUNK_SIZE = 5000;
     private static ?bool $hasUserSyncStatesTable = null;
+    private static ?bool $hasServerEnabledColumn = null;
     private static bool $userSyncStatesReadDisabled = false;
 
     /**
@@ -49,6 +51,9 @@ class ServerService
     {
         $servers = Server::whereJsonContains('group_ids', (string) $user->group_id)
             ->where('show', true)
+            ->when(self::hasServerEnabledColumn(), function ($query) {
+                $query->where('enabled', true);
+            })
             ->orderBy('sort', 'ASC')
             ->get()
             ->append(['last_check_at', 'last_push_at', 'online', 'is_online', 'available_status', 'cache_key', 'server_key']);
@@ -294,12 +299,27 @@ class ServerService
             ->when($serverType, function ($query) use ($serverType) {
                 $query->where('type', Server::normalizeType($serverType));
             })
+            ->when(self::hasServerEnabledColumn(), function ($query) {
+                $query->where('enabled', true);
+            })
             ->where(function ($query) use ($serverId) {
                 $query->where('code', $serverId)
                     ->orWhere('id', $serverId);
             })
             ->orderByRaw('CASE WHEN code = ? THEN 0 ELSE 1 END', [$serverId])
             ->first();
+    }
+
+    public static function getMachineNodes(ServerMachine $machine): Collection
+    {
+        return Server::query()
+            ->where('machine_id', (int) $machine->id)
+            ->when(self::hasServerEnabledColumn(), function ($query) {
+                $query->where('enabled', true);
+            })
+            ->orderBy('sort', 'ASC')
+            ->orderBy('id', 'ASC')
+            ->get();
     }
 
     private static function availableUsersBaseQuery(array $groupIds): QueryBuilder
@@ -359,6 +379,22 @@ class ServerService
         }
 
         return self::$hasUserSyncStatesTable;
+    }
+
+    private static function hasServerEnabledColumn(): bool
+    {
+        if (self::$hasServerEnabledColumn !== null) {
+            return self::$hasServerEnabledColumn;
+        }
+
+        try {
+            self::$hasServerEnabledColumn = Schema::hasTable('v2_server')
+                && Schema::hasColumn('v2_server', 'enabled');
+        } catch (\Throwable) {
+            self::$hasServerEnabledColumn = false;
+        }
+
+        return self::$hasServerEnabledColumn;
     }
 
     private static function disableUserSyncStatesRead(): void

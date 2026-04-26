@@ -737,11 +737,20 @@ class ManageController extends Controller
         $request->validate([
             'id' => 'required|integer',
             'show' => 'integer',
+            'enabled' => 'nullable|integer',
         ]);
 
-        if (!Server::where('id', $request->id)->update(['show' => $request->show])) {
+        $updates = [];
+        if ($request->has('show')) {
+            $updates['show'] = (int) $request->show;
+        }
+        if ($request->has('enabled')) {
+            $updates['enabled'] = (int) $request->enabled ? 1 : 0;
+        }
+        if (empty($updates) || !Server::where('id', $request->id)->update($updates)) {
             return $this->fail([500, '保存失败']);
         }
+        app(NodeRealtimePublisher::class)->invalidateConfigForServers([(int) $request->id], 'admin.server.updated');
         return $this->success(true);
     }
 

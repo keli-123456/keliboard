@@ -20,12 +20,14 @@ class Server
             'token' => 'required|string',
             'node_id' => 'required',
             'node_type' => 'nullable',
+            'machine_id' => 'nullable|integer',
         ]);
 
         $auth = app(NodeRealtimeAuthenticator::class)->authenticate([
             'token' => $request->input('token'),
             'node_id' => $request->input('node_id'),
             'node_type' => $request->input('node_type'),
+            'machine_id' => $request->input('machine_id'),
         ]);
         if (!$auth) {
             throw new ApiException('Invalid server credentials');
