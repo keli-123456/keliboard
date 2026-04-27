@@ -28,8 +28,13 @@ class ZeroSslCertificateService
             return;
         }
 
+        $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
         $configuredDomain = trim((string) ($machine->subproxy_cert_domain ?? ''));
         $reportedDomain = trim((string) data_get($proxy, 'certificate_domain', ''));
+        $hasConfiguredDomain = $configuredDomain !== '' && !$this->shouldIgnoreConfiguredCertificateDomain($configuredDomain, $state);
+        if (!$hasConfiguredDomain) {
+            $configuredDomain = '';
+        }
         $domain = $configuredDomain !== '' ? $configuredDomain : $reportedDomain;
         $csr = trim((string) data_get($proxy, 'csr_pem', ''));
         if ($domain === '' || $csr === '') {
@@ -37,25 +42,18 @@ class ZeroSslCertificateService
         }
 
         try {
-            $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
             $previousState = $state;
             if ($this->shouldDeferToCertificateOwner($proxy, $currentSiteId)) {
                 $ownerSiteId = $this->certificateOwnerSiteId($proxy);
                 $state = $this->delegatedCertificateState($state, $domain, $ownerSiteId);
-                $machine->forceFill([
-                    'subproxy_cert_domain' => $domain,
-                    'subproxy_cert_state' => $this->withUpdatedAt($state),
-                ])->save();
+                $this->saveCertificateState($machine, $state, $domain, $hasConfiguredDomain);
                 return;
             }
 
             if ($reportedDomain !== '' && $reportedDomain !== $domain) {
                 $state['status'] = 'waiting_agent_reload';
                 $state['last_error'] = sprintf('Agent certificate domain %s does not match configured domain %s; waiting for agent reload.', $reportedDomain, $domain);
-                $machine->forceFill([
-                    'subproxy_cert_domain' => $domain,
-                    'subproxy_cert_state' => $this->withUpdatedAt($state),
-                ])->save();
+                $this->saveCertificateState($machine, $state, $domain, $hasConfiguredDomain);
                 $this->notifyAgentConfigChanged($machine, $state);
                 return;
             }
@@ -88,10 +86,7 @@ class ZeroSslCertificateService
                 $agentConfigSignatureChanged = true;
             }
 
-            $machine->forceFill([
-                'subproxy_cert_domain' => $domain,
-                'subproxy_cert_state' => $this->withUpdatedAt($state),
-            ])->save();
+            $this->saveCertificateState($machine, $state, $domain, $hasConfiguredDomain);
             if ($this->stableStateSignature($previousState) !== $this->stableStateSignature($state) || $agentConfigSignatureChanged) {
                 $this->notifyAgentConfigChanged($machine, $state);
             }
@@ -100,12 +95,8 @@ class ZeroSslCertificateService
                 'machine_id' => (int) $machine->id,
                 'error' => $e->getMessage(),
             ]);
-            $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
             $state['last_error'] = $e->getMessage();
-            $machine->forceFill([
-                'subproxy_cert_domain' => $domain,
-                'subproxy_cert_state' => $this->withUpdatedAt($state),
-            ])->save();
+            $this->saveCertificateState($machine, $state, $domain, $hasConfiguredDomain);
         }
     }
 
@@ -135,6 +126,25 @@ class ZeroSslCertificateService
             $siteId = $this->currentSiteId();
         }
         return $siteId !== '' && !hash_equals($siteId, $ownerSiteId);
+    }
+
+    private function shouldIgnoreConfiguredCertificateDomain(string $configured, array $state): bool
+    {
+        $source = trim((string) ($state['domain_source'] ?? ''));
+        if ($source === 'auto') {
+            return true;
+        }
+        if ($source !== '') {
+            return false;
+        }
+
+        $stateDomain = trim((string) ($state['domain'] ?? ''));
+        if ($stateDomain === '' || $stateDomain !== $configured) {
+            return false;
+        }
+
+        return filter_var($configured, FILTER_VALIDATE_IP) !== false
+            && ((string) ($state['provider'] ?? '') === 'zerossl' || trim((string) ($state['certificate_id'] ?? '')) !== '');
     }
 
     private function certificateOwnerSiteId(array $proxy): string
@@ -191,6 +201,16 @@ class ZeroSslCertificateService
         $state['certificate_owner_site_id'] = $ownerSiteId;
         $state['last_error'] = null;
         return $state;
+    }
+
+    private function saveCertificateState(ServerMachine $machine, array $state, string $domain, bool $hasConfiguredDomain): void
+    {
+        $state['domain_source'] = $hasConfiguredDomain ? 'manual' : 'auto';
+        $payload = [
+            'subproxy_cert_domain' => $hasConfiguredDomain ? $domain : null,
+            'subproxy_cert_state' => $this->withUpdatedAt($state),
+        ];
+        $machine->forceFill($payload)->save();
     }
 
     private function shouldRenew(array $state, int $renewDays): bool

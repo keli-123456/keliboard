@@ -116,6 +116,54 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame(['enabled' => false], $payload['agent']['subscription_proxy']);
     }
 
+    public function test_nodes_response_uses_current_request_ip_for_legacy_auto_certificate_domain(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscribe_path' => 's',
+            'subscription_proxy_enable' => true,
+            'subscription_proxy_site_id' => 'panel-a',
+            'subscription_proxy_https_port' => 443,
+            'subscription_proxy_http_port' => 80,
+            'subscription_proxy_cert_file' => '/etc/v2node/subproxy/cert.pem',
+            'subscription_proxy_key_file' => '/etc/v2node/subproxy/key.pem',
+            'subscription_proxy_challenge_dir' => '/etc/v2node/subproxy/challenges',
+            'subscription_proxy_allow_http_fallback' => false,
+            'subscription_proxy_max_response_bytes' => 10485760,
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $machine->forceFill([
+            'subproxy_enabled' => true,
+            'subproxy_cert_domain' => '172.104.189.93',
+            'subproxy_cert_state' => [
+                'provider' => 'zerossl',
+                'certificate_id' => 'cert-old',
+                'domain' => '172.104.189.93',
+                'status' => 'draft',
+            ],
+        ])->save();
+        $machine = $machine->fresh();
+
+        $response = (new MachineController())->nodes(Request::create(
+            'https://panel.example.test/api/v2/server/machine/nodes',
+            'POST',
+            ['machine_id' => $machine->id, 'token' => 'machine-token'],
+            [],
+            [],
+            ['REMOTE_ADDR' => '198.51.100.20']
+        ));
+        $payload = $response->getData(true);
+
+        $proxy = $payload['agent']['subscription_proxy'];
+        $this->assertTrue($proxy['enabled']);
+        $this->assertSame('198.51.100.20', $proxy['certificate_domain']);
+    }
+
     public function test_status_persists_machine_ip_and_network_metrics(): void
     {
         $this->bindSettings([

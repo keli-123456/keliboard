@@ -233,6 +233,62 @@ final class ZeroSslCertificateServiceTest extends TestCase
         $this->assertArrayNotHasKey('certificate_id', $state);
     }
 
+    public function test_handle_machine_status_replaces_legacy_auto_certificate_ip(): void
+    {
+        Http::fake(function ($request) {
+            $url = $request->url();
+            if ($request->method() === 'POST' && str_contains($url, '/certificates?')) {
+                return Http::response([
+                    'id' => 'cert-new',
+                    'status' => 'draft',
+                    'expires' => '2026-07-01',
+                    'validation' => [
+                        'other_methods' => [
+                            '198.51.100.20' => [
+                                'file_validation_url_http' => 'http://198.51.100.20/.well-known/pki-validation/new.txt',
+                                'file_validation_content' => ['new-a', 'new-b'],
+                            ],
+                        ],
+                    ],
+                ]);
+            }
+
+            return Http::response([
+                'id' => 'cert-new',
+                'status' => 'draft',
+                'expires' => '2026-07-01',
+            ]);
+        });
+
+        $machine = $this->createMachine([
+            'subproxy_cert_domain' => '172.104.189.93',
+            'subproxy_cert_state' => [
+                'provider' => 'zerossl',
+                'certificate_id' => 'cert-old',
+                'domain' => '172.104.189.93',
+                'status' => 'draft',
+            ],
+        ]);
+
+        app(ZeroSslCertificateService::class)->handleMachineStatus($machine, [
+            'agent' => [
+                'subscription_proxy' => [
+                    'certificate_domain' => '198.51.100.20',
+                    'csr_pem' => '-----BEGIN CERTIFICATE REQUEST-----new-----END CERTIFICATE REQUEST-----',
+                    'validation_ready' => false,
+                ],
+            ],
+        ]);
+
+        $fresh = ServerMachine::find($machine->id);
+        $state = $fresh?->subproxy_cert_state;
+        $this->assertNull($fresh?->subproxy_cert_domain);
+        $this->assertSame('cert-new', $state['certificate_id']);
+        $this->assertSame('198.51.100.20', $state['domain']);
+        $this->assertSame('auto', $state['domain_source']);
+        $this->assertSame('/.well-known/pki-validation/new.txt', $state['validation_path']);
+    }
+
     public function test_handle_machine_status_keeps_configured_domain_when_agent_reports_stale_domain(): void
     {
         Http::fake();

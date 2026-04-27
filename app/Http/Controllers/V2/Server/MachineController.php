@@ -249,18 +249,45 @@ class MachineController extends Controller
 
     private function resolveCertificateDomain(Request $request, ServerMachine $machine): string
     {
+        $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
+        $requestIP = trim((string) $request->ip());
         $configured = trim((string) ($machine->subproxy_cert_domain ?? ''));
         if ($configured !== '') {
+            if ($requestIP !== '' && $this->shouldIgnoreConfiguredCertificateDomain($configured, $state)) {
+                return $requestIP;
+            }
             return $configured;
         }
 
-        $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
+        if ($requestIP !== '') {
+            return $requestIP;
+        }
+
         $domain = trim((string) ($state['domain'] ?? ''));
         if ($domain !== '') {
             return $domain;
         }
 
-        return (string) $request->ip();
+        return '';
+    }
+
+    private function shouldIgnoreConfiguredCertificateDomain(string $configured, array $state): bool
+    {
+        $source = trim((string) ($state['domain_source'] ?? ''));
+        if ($source === 'auto') {
+            return true;
+        }
+        if ($source !== '') {
+            return false;
+        }
+
+        $stateDomain = trim((string) ($state['domain'] ?? ''));
+        if ($stateDomain === '' || $stateDomain !== $configured) {
+            return false;
+        }
+
+        return filter_var($configured, FILTER_VALIDATE_IP) !== false
+            && ((string) ($state['provider'] ?? '') === 'zerossl' || trim((string) ($state['certificate_id'] ?? '')) !== '');
     }
 
     private function buildZeroSslAgentConfig(ServerMachine $machine): array
