@@ -67,6 +67,18 @@ class ZeroSslCertificateService
 
             $validationReady = (bool) data_get($proxy, 'validation_ready', false);
             if ($validationReady && !empty($state['certificate_id']) && in_array(($state['status'] ?? ''), ['draft', 'pending_validation'], true)) {
+                if (!$this->agentHasCurrentValidation($proxy, $state)) {
+                    $agentCertificateId = $this->agentCertificateId($proxy);
+                    $state['status'] = 'waiting_agent_reload';
+                    $state['last_error'] = sprintf(
+                        'Agent validation file is for certificate %s, waiting for certificate %s; waiting for agent reload.',
+                        $agentCertificateId !== '' ? $agentCertificateId : 'none',
+                        (string) $state['certificate_id']
+                    );
+                    $this->saveCertificateState($machine, $state, $domain, $hasConfiguredDomain);
+                    $this->notifyAgentConfigChanged($machine, $state);
+                    return;
+                }
                 $state = $this->maybeRequestValidation($accessKey, $state);
             }
 
@@ -145,6 +157,22 @@ class ZeroSslCertificateService
 
         return filter_var($configured, FILTER_VALIDATE_IP) !== false
             && ((string) ($state['provider'] ?? '') === 'zerossl' || trim((string) ($state['certificate_id'] ?? '')) !== '');
+    }
+
+    private function agentHasCurrentValidation(array $proxy, array $state): bool
+    {
+        $certificateId = trim((string) ($state['certificate_id'] ?? ''));
+        if ($certificateId === '') {
+            return false;
+        }
+
+        $agentCertificateId = $this->agentCertificateId($proxy);
+        return $agentCertificateId !== '' && hash_equals($certificateId, $agentCertificateId);
+    }
+
+    private function agentCertificateId(array $proxy): string
+    {
+        return trim((string) data_get($proxy, 'certificate_id', ''));
     }
 
     private function certificateOwnerSiteId(array $proxy): string

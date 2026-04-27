@@ -112,6 +112,32 @@ final class ZeroSslCertificateServiceTest extends TestCase
         $this->assertArrayHasKey('validation_requested_at', $state);
     }
 
+    public function test_handle_machine_status_waits_when_agent_validation_certificate_is_stale(): void
+    {
+        Http::fake();
+
+        $machine = $this->createMachine([
+            'subproxy_cert_state' => [
+                'provider' => 'zerossl',
+                'certificate_id' => 'cert-new',
+                'domain' => '203.0.113.10',
+                'csr_hash' => hash('sha256', '-----BEGIN CERTIFICATE REQUEST-----test-----END CERTIFICATE REQUEST-----'),
+                'status' => 'draft',
+                'validation_path' => '/.well-known/pki-validation/new.txt',
+                'validation_content' => ['new-a', 'new-b'],
+            ],
+        ]);
+
+        app(ZeroSslCertificateService::class)->handleMachineStatus($machine, $this->statusPayload(true, 'cert-old'));
+
+        Http::assertNothingSent();
+
+        $state = ServerMachine::find($machine->id)?->subproxy_cert_state;
+        $this->assertSame('waiting_agent_reload', $state['status']);
+        $this->assertStringContainsString('cert-old', $state['last_error']);
+        $this->assertStringContainsString('cert-new', $state['last_error']);
+    }
+
     public function test_handle_machine_status_renews_certificate_before_expiry(): void
     {
         $machine = $this->createMachine([
@@ -352,12 +378,13 @@ final class ZeroSslCertificateServiceTest extends TestCase
         return $machine->fresh();
     }
 
-    private function statusPayload(bool $validationReady): array
+    private function statusPayload(bool $validationReady, string $certificateId = ''): array
     {
         return [
             'agent' => [
                 'subscription_proxy' => [
                     'certificate_domain' => '203.0.113.10',
+                    'certificate_id' => $certificateId !== '' ? $certificateId : ($validationReady ? 'cert-1' : ''),
                     'csr_pem' => '-----BEGIN CERTIFICATE REQUEST-----test-----END CERTIFICATE REQUEST-----',
                     'validation_ready' => $validationReady,
                 ],
