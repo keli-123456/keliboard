@@ -71,6 +71,7 @@ class NodeConfigService
             ],
             'hysteria' => [
                 ...$baseConfig,
+                'port' => (string) $node->port,
                 'server_port' => (int) $serverPort,
                 'version' => (int) $protocolSettings['version'],
                 'host' => $host,
