@@ -31,6 +31,10 @@ class MachineController extends Controller
             'name' => 'required|string|max:128',
             'description' => 'nullable|string|max:255',
             'is_active' => 'nullable|boolean',
+            'subproxy_enabled' => 'nullable|boolean',
+            'subproxy_https_port' => 'nullable|integer|min:1|max:65535',
+            'subproxy_http_port' => 'nullable|integer|min:1|max:65535',
+            'subproxy_cert_domain' => 'nullable|string|max:255',
             'sort' => 'nullable|integer',
         ], [
             'name.required' => '机器名称不能为空',
@@ -48,12 +52,27 @@ class MachineController extends Controller
                 'name' => $params['name'],
                 'description' => array_key_exists('description', $params) ? $params['description'] : $machine->description,
                 'is_active' => array_key_exists('is_active', $params) ? (bool) $params['is_active'] : (bool) ($machine->is_active ?? true),
+                'subproxy_enabled' => array_key_exists('subproxy_enabled', $params)
+                    ? (bool) $params['subproxy_enabled']
+                    : (bool) ($machine->subproxy_enabled ?? false),
+                'subproxy_https_port' => array_key_exists('subproxy_https_port', $params)
+                    ? $this->normalizeNullablePort($params['subproxy_https_port'])
+                    : $this->normalizeNullablePort($machine->subproxy_https_port ?? null),
+                'subproxy_http_port' => array_key_exists('subproxy_http_port', $params)
+                    ? $this->normalizeNullablePort($params['subproxy_http_port'])
+                    : $this->normalizeNullablePort($machine->subproxy_http_port ?? null),
+                'subproxy_cert_domain' => array_key_exists('subproxy_cert_domain', $params)
+                    ? $this->normalizeCertificateDomain($params['subproxy_cert_domain'])
+                    : $this->normalizeCertificateDomain($machine->subproxy_cert_domain ?? null),
                 'sort' => array_key_exists('sort', $params) ? (int) $params['sort'] : (int) ($machine->sort ?? 0),
             ]);
             if (!$machine->exists) {
                 $machine->token = ServerMachine::generateToken();
             }
             $machine->save();
+            app(NodeRealtimePublisher::class)->invalidateConfig('admin.server_machine.saved', [
+                'machine_id' => (int) $machine->id,
+            ]);
 
             return $this->success($machine->fresh());
         } catch (\Throwable $e) {
@@ -264,6 +283,21 @@ class MachineController extends Controller
     private function shellQuote(string $value): string
     {
         return "'" . str_replace("'", "'\"'\"'", $value) . "'";
+    }
+
+    private function normalizeNullablePort(mixed $value): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+        $port = (int) $value;
+        return $port >= 1 && $port <= 65535 ? $port : null;
+    }
+
+    private function normalizeCertificateDomain(mixed $value): ?string
+    {
+        $value = trim((string) ($value ?? ''));
+        return $value === '' ? null : $value;
     }
 
     private function yamlScalar(string $value): string

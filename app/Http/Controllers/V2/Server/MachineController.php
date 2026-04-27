@@ -7,6 +7,7 @@ use App\Models\ServerMachine;
 use App\Models\ServerMachineLoadHistory;
 use App\Services\NodeRealtime\NodeRealtimeSettings;
 use App\Services\ServerService;
+use App\Services\SubscriptionProxy\ZeroSslCertificateService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
@@ -48,6 +49,9 @@ class MachineController extends Controller
                     'url' => $realtimeEnabled ? $wsURL : '',
                     'ping_interval' => (int) admin_setting('server_realtime_ping_interval', 30),
                 ],
+            ],
+            'agent' => [
+                'subscription_proxy' => $this->buildSubscriptionProxyConfig($request, $machine),
             ],
         ]);
     }
@@ -94,8 +98,10 @@ class MachineController extends Controller
             'net' => data_get($payload, 'net'),
             'uptime' => data_get($payload, 'uptime'),
             'version' => data_get($payload, 'version'),
+            'agent' => is_array(data_get($payload, 'agent')) ? data_get($payload, 'agent') : null,
             'updated_at' => now()->timestamp,
         ];
+        app(ZeroSslCertificateService::class)->handleMachineStatus($machine, $status);
 
         $machine->forceFill([
             'last_seen_at' => now()->timestamp,
@@ -143,5 +149,123 @@ class MachineController extends Controller
     private function touchMachine(ServerMachine $machine): void
     {
         $machine->forceFill(['last_seen_at' => now()->timestamp])->save();
+    }
+
+    private function buildSubscriptionProxyConfig(Request $request, ServerMachine $machine): array
+    {
+        $globalEnabled = (bool) admin_setting('subscription_proxy_enable', false);
+        $machineEnabled = (bool) $machine->getAttribute('subproxy_enabled');
+        if (!$globalEnabled || !$machineEnabled) {
+            return ['enabled' => false];
+        }
+
+        $upstreamBaseURL = $this->resolvePanelBaseURL($request);
+        $subscribePath = trim((string) admin_setting('subscribe_path', 's'), '/');
+        if ($subscribePath === '') {
+            $subscribePath = 's';
+        }
+
+        return [
+            'enabled' => true,
+            'site_id' => $this->resolveSubscriptionProxySiteId($upstreamBaseURL),
+            'upstream_base_url' => $upstreamBaseURL,
+            'subscribe_path' => $subscribePath,
+            'https_listen' => $this->listenAddress(
+                (int) ($machine->subproxy_https_port ?: admin_setting('subscription_proxy_https_port', 443)),
+                443
+            ),
+            'http_listen' => $this->listenAddress(
+                (int) ($machine->subproxy_http_port ?: admin_setting('subscription_proxy_http_port', 80)),
+                80
+            ),
+            'certificate_domain' => $this->resolveCertificateDomain($request, $machine),
+            'challenge_dir' => (string) admin_setting('subscription_proxy_challenge_dir', '/etc/v2node/subproxy/challenges'),
+            'cert_file' => (string) admin_setting('subscription_proxy_cert_file', '/etc/v2node/subproxy/cert.pem'),
+            'key_file' => (string) admin_setting('subscription_proxy_key_file', '/etc/v2node/subproxy/key.pem'),
+            'zerossl' => $this->buildZeroSslAgentConfig($machine),
+            'allow_http_fallback' => (bool) admin_setting('subscription_proxy_allow_http_fallback', false),
+            'max_response_bytes' => max(1024 * 1024, (int) admin_setting('subscription_proxy_max_response_bytes', 10485760)),
+        ];
+    }
+
+    private function resolvePanelBaseURL(Request $request): string
+    {
+        $baseURL = rtrim((string) admin_setting('app_url', ''), '/');
+        if ($baseURL !== '') {
+            return $baseURL;
+        }
+
+        return rtrim($request->getSchemeAndHttpHost(), '/');
+    }
+
+    private function resolveSubscriptionProxySiteId(string $baseURL): string
+    {
+        $configured = trim((string) admin_setting('subscription_proxy_site_id', ''));
+        if ($configured !== '') {
+            $siteId = $this->sanitizeSiteId($configured);
+            if ($siteId !== '') {
+                return $siteId;
+            }
+        }
+
+        $host = (string) parse_url($baseURL, PHP_URL_HOST);
+        $siteId = $this->sanitizeSiteId($host);
+        if ($siteId !== '') {
+            return $siteId;
+        }
+
+        return substr(sha1($baseURL), 0, 12);
+    }
+
+    private function sanitizeSiteId(string $value): string
+    {
+        $value = strtolower(trim($value));
+        $value = preg_replace('/[^a-z0-9._-]+/', '-', $value) ?: '';
+        return trim($value, '.-_');
+    }
+
+    private function listenAddress(int $port, int $fallback): string
+    {
+        $port = $port >= 1 && $port <= 65535 ? $port : $fallback;
+        return '0.0.0.0:' . $port;
+    }
+
+    private function resolveCertificateDomain(Request $request, ServerMachine $machine): string
+    {
+        $configured = trim((string) ($machine->subproxy_cert_domain ?? ''));
+        if ($configured !== '') {
+            return $configured;
+        }
+
+        $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
+        $domain = trim((string) ($state['domain'] ?? ''));
+        if ($domain !== '') {
+            return $domain;
+        }
+
+        return (string) $request->ip();
+    }
+
+    private function buildZeroSslAgentConfig(ServerMachine $machine): array
+    {
+        $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
+        if (empty($state)) {
+            return ['status' => 'idle'];
+        }
+
+        $config = [
+            'status' => (string) ($state['status'] ?? 'idle'),
+            'certificate_id' => (string) ($state['certificate_id'] ?? ''),
+            'validation_path' => (string) ($state['validation_path'] ?? ''),
+            'validation_content' => $state['validation_content'] ?? null,
+            'expires_at' => (string) ($state['expires_at'] ?? ''),
+        ];
+
+        if (($state['status'] ?? '') === 'issued') {
+            $config['certificate_pem'] = (string) ($state['certificate_pem'] ?? '');
+            $config['ca_bundle_pem'] = (string) ($state['ca_bundle_pem'] ?? '');
+        }
+
+        return $config;
     }
 }

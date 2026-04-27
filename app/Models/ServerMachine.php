@@ -13,6 +13,10 @@ class ServerMachine extends Model
 
     protected $casts = [
         'is_active' => 'boolean',
+        'subproxy_enabled' => 'boolean',
+        'subproxy_https_port' => 'integer',
+        'subproxy_http_port' => 'integer',
+        'subproxy_cert_state' => 'array',
         'last_seen_at' => 'integer',
         'load_status' => 'array',
         'created_at' => 'timestamp',

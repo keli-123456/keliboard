@@ -113,6 +113,17 @@ class ConfigSave extends FormRequest
         'subscription_control_max_per_run' => 'integer|min:1|max:10000',
         'subscription_control_whitelist_user_ids' => 'nullable|string|max:20000',
         'subscription_control_recent_event_limit' => 'integer|min:10|max:5000',
+        'subscription_proxy_enable' => 'boolean',
+        'subscription_proxy_site_id' => 'nullable|string|max:100|regex:/^[A-Za-z0-9._-]*$/',
+        'subscription_proxy_https_port' => 'integer|min:1|max:65535',
+        'subscription_proxy_http_port' => 'integer|min:1|max:65535',
+        'subscription_proxy_cert_file' => 'nullable|string|max:500',
+        'subscription_proxy_key_file' => 'nullable|string|max:500',
+        'subscription_proxy_challenge_dir' => 'nullable|string|max:500',
+        'subscription_proxy_allow_http_fallback' => 'boolean',
+        'subscription_proxy_max_response_bytes' => 'integer|min:1048576|max:104857600',
+        'zerossl_access_key' => 'nullable|string|max:255',
+        'subscription_proxy_renew_days' => 'integer|min:1|max:60',
         // frontend
         'frontend_theme' => '',
         'frontend_theme_sidebar' => 'nullable|in:dark,light',
@@ -217,7 +228,8 @@ class ConfigSave extends FormRequest
             'recharge_bonus_rules.*.amount.numeric' => '充值门槛必须为数字',
             'recharge_bonus_rules.*.amount.min' => '充值门槛必须大于 0',
             'recharge_bonus_rules.*.bonus.numeric' => '赠送金额必须为数字',
-            'recharge_bonus_rules.*.bonus.min' => '赠送金额必须大于 0'
+            'recharge_bonus_rules.*.bonus.min' => '赠送金额必须大于 0',
+            'subscription_proxy_site_id.regex' => '订阅反代站点标识只能包含字母、数字、点、下划线和短横线'
         ];
     }
 }
