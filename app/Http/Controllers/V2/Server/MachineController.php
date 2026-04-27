@@ -103,7 +103,7 @@ class MachineController extends Controller
             'agent' => is_array(data_get($payload, 'agent')) ? data_get($payload, 'agent') : null,
             'updated_at' => now()->timestamp,
         ];
-        app(ZeroSslCertificateService::class)->handleMachineStatus(
+        $reload = app(ZeroSslCertificateService::class)->handleMachineStatus(
             $machine,
             $status,
             $this->resolveSubscriptionProxySiteId($this->resolvePanelBaseURL($request))
@@ -130,7 +130,10 @@ class MachineController extends Controller
             ->where('created_at', '<', now()->subDays(7))
             ->delete();
 
-        return response()->json(['data' => true]);
+        return response()->json([
+            'data' => true,
+            'reload' => $reload,
+        ]);
     }
 
     private function buildIPStatus(Request $request, array $payload): array

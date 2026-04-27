@@ -12,20 +12,20 @@ class ZeroSslCertificateService
     private const API_BASE = 'https://api.zerossl.com';
     private const VALIDATION_METHOD = 'HTTP_CSR_HASH';
 
-    public function handleMachineStatus(ServerMachine $machine, array $status, string $currentSiteId = ''): void
+    public function handleMachineStatus(ServerMachine $machine, array $status, string $currentSiteId = ''): bool
     {
         if (!(bool) admin_setting('subscription_proxy_enable', false) || !(bool) $machine->getAttribute('subproxy_enabled')) {
-            return;
+            return false;
         }
 
         $accessKey = trim((string) admin_setting('zerossl_access_key', ''));
         if ($accessKey === '') {
-            return;
+            return false;
         }
 
         $proxy = data_get($status, 'agent.subscription_proxy');
         if (!is_array($proxy)) {
-            return;
+            return false;
         }
 
         $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
@@ -38,7 +38,7 @@ class ZeroSslCertificateService
         $domain = $configuredDomain !== '' ? $configuredDomain : $reportedDomain;
         $csr = trim((string) data_get($proxy, 'csr_pem', ''));
         if ($domain === '' || $csr === '') {
-            return;
+            return false;
         }
 
         try {
@@ -47,7 +47,11 @@ class ZeroSslCertificateService
                 $ownerSiteId = $this->certificateOwnerSiteId($proxy);
                 $state = $this->delegatedCertificateState($state, $domain, $ownerSiteId);
                 $this->saveCertificateState($machine, $state, $domain, $hasConfiguredDomain);
-                return;
+                $shouldReload = $this->stableStateSignature($previousState) !== $this->stableStateSignature($state);
+                if ($shouldReload) {
+                    $this->notifyAgentConfigChanged($machine, $state);
+                }
+                return $shouldReload;
             }
 
             if ($reportedDomain !== '' && $reportedDomain !== $domain) {
@@ -55,7 +59,7 @@ class ZeroSslCertificateService
                 $state['last_error'] = sprintf('Agent certificate domain %s does not match configured domain %s; waiting for agent reload.', $reportedDomain, $domain);
                 $this->saveCertificateState($machine, $state, $domain, $hasConfiguredDomain);
                 $this->notifyAgentConfigChanged($machine, $state);
-                return;
+                return true;
             }
 
             $csrHash = hash('sha256', $csr);
@@ -77,7 +81,7 @@ class ZeroSslCertificateService
                     );
                     $this->saveCertificateState($machine, $state, $domain, $hasConfiguredDomain);
                     $this->notifyAgentConfigChanged($machine, $state);
-                    return;
+                    return true;
                 }
                 $state = $this->maybeRequestValidation($accessKey, $state);
             }
@@ -99,9 +103,11 @@ class ZeroSslCertificateService
             }
 
             $this->saveCertificateState($machine, $state, $domain, $hasConfiguredDomain);
-            if ($this->stableStateSignature($previousState) !== $this->stableStateSignature($state) || $agentConfigSignatureChanged) {
+            $shouldReload = $this->stableStateSignature($previousState) !== $this->stableStateSignature($state) || $agentConfigSignatureChanged;
+            if ($shouldReload) {
                 $this->notifyAgentConfigChanged($machine, $state);
             }
+            return $shouldReload;
         } catch (\Throwable $e) {
             Log::warning('Subscription proxy ZeroSSL automation failed', [
                 'machine_id' => (int) $machine->id,
@@ -109,6 +115,7 @@ class ZeroSslCertificateService
             ]);
             $state['last_error'] = $e->getMessage();
             $this->saveCertificateState($machine, $state, $domain, $hasConfiguredDomain);
+            return false;
         }
     }
 

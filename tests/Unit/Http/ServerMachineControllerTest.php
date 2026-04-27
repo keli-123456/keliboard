@@ -12,6 +12,7 @@ use App\Services\ServerService;
 use App\Support\Setting;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Translation\ArrayLoader;
 use Illuminate\Translation\Translator;
@@ -224,6 +225,88 @@ final class ServerMachineControllerTest extends TestCase
         $history = ServerMachineLoadHistory::query()->where('machine_id', $machine->id)->first();
         $this->assertSame('172.104.189.93', $history?->load_status['ip']['public_ipv4'] ?? null);
         $this->assertSame(45.6, $history?->load_status['net']['tx_rate'] ?? null);
+    }
+
+    public function test_status_response_requests_reload_when_subscription_proxy_cert_config_changes(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscribe_path' => 's',
+            'subscription_proxy_enable' => true,
+            'subscription_proxy_site_id' => 'panel-a',
+            'subscription_proxy_https_port' => 443,
+            'subscription_proxy_http_port' => 80,
+            'subscription_proxy_cert_file' => '/etc/v2node/subproxy/cert.pem',
+            'subscription_proxy_key_file' => '/etc/v2node/subproxy/key.pem',
+            'subscription_proxy_challenge_dir' => '/etc/v2node/subproxy/challenges',
+            'subscription_proxy_allow_http_fallback' => true,
+            'subscription_proxy_max_response_bytes' => 10485760,
+            'zerossl_access_key' => 'test-key',
+            'subscription_proxy_renew_days' => 20,
+        ]);
+
+        Http::fake(function ($request) {
+            $url = $request->url();
+            if ($request->method() === 'POST' && str_contains($url, '/certificates?')) {
+                return Http::response([
+                    'id' => 'cert-1',
+                    'status' => 'draft',
+                    'expires' => '2026-07-01',
+                    'validation' => [
+                        'other_methods' => [
+                            '198.51.100.20' => [
+                                'file_validation_url_http' => 'http://198.51.100.20/.well-known/pki-validation/token.txt',
+                                'file_validation_content' => ['line-a', 'line-b'],
+                            ],
+                        ],
+                    ],
+                ]);
+            }
+
+            return Http::response([
+                'id' => 'cert-1',
+                'status' => 'draft',
+                'expires' => '2026-07-01',
+            ]);
+        });
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $machine->forceFill([
+            'subproxy_enabled' => true,
+        ])->save();
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'agent' => [
+                        'subscription_proxy' => [
+                            'certificate_domain' => '198.51.100.20',
+                            'csr_pem' => '-----BEGIN CERTIFICATE REQUEST-----test-----END CERTIFICATE REQUEST-----',
+                            'need_certificate' => true,
+                            'validation_ready' => false,
+                        ],
+                    ],
+                ],
+            ],
+            [],
+            [],
+            ['REMOTE_ADDR' => '198.51.100.20']
+        ));
+        $payload = $response->getData(true);
+
+        $this->assertTrue($payload['data']);
+        $this->assertTrue($payload['reload']);
+        $state = ServerMachine::find($machine->id)?->subproxy_cert_state;
+        $this->assertSame('cert-1', $state['certificate_id'] ?? null);
+        $this->assertSame('/.well-known/pki-validation/token.txt', $state['validation_path'] ?? null);
     }
 
     private function createTables(): void
