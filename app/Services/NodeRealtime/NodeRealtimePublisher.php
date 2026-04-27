@@ -40,6 +40,19 @@ class NodeRealtimePublisher
         $this->publish('config', $reason, $payload, $targets);
     }
 
+    public function invalidateConfigForMachines(array $machineIds, string $reason = 'config.updated', array $payload = []): void
+    {
+        $machineIds = $this->normalizeIntList($machineIds);
+        $this->clearConfigCache();
+
+        $targets = $this->buildTargets(machineIds: $machineIds);
+        if ($targets === null) {
+            return;
+        }
+
+        $this->publish('config', $reason, $payload, $targets);
+    }
+
     public function invalidateConfigForRoutes(array $routeIds, string $reason = 'config.updated', array $payload = []): void
     {
         $serverIds = $this->resolveServerIdsByRouteIds($routeIds);
@@ -122,11 +135,12 @@ class NodeRealtimePublisher
         }
     }
 
-    private function buildTargets(array $serverIds = [], array $groupIds = []): ?array
+    private function buildTargets(array $serverIds = [], array $groupIds = [], array $machineIds = []): ?array
     {
         $targets = array_filter([
             'server_ids' => $this->normalizeIntList($serverIds),
             'group_ids' => $this->normalizeIntList($groupIds),
+            'machine_ids' => $this->normalizeIntList($machineIds),
         ]);
 
         return $targets === [] ? null : $targets;

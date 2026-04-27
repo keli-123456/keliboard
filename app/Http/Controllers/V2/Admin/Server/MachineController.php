@@ -192,9 +192,9 @@ class MachineController extends Controller
             DB::commit();
 
             $affected = array_values(array_unique(array_merge($oldIds, $nodeIds)));
-            if (!empty($affected)) {
-                app(NodeRealtimePublisher::class)->invalidateConfigForServers($affected, 'admin.server_machine.bound');
-            }
+            app(NodeRealtimePublisher::class)->invalidateConfigForMachines([(int) $machine->id], 'admin.server_machine.bound', [
+                'server_ids' => $affected,
+            ]);
 
             return $this->success(true);
         } catch (\Throwable $e) {

@@ -307,12 +307,18 @@ class WsServer extends Command
 
         $serverIds = $this->normalizeIntList((array) ($targets['server_ids'] ?? []));
         $groupIds = $this->normalizeIntList((array) ($targets['group_ids'] ?? []));
-        if ($serverIds === [] && $groupIds === []) {
+        $machineIds = $this->normalizeIntList((array) ($targets['machine_ids'] ?? []));
+        if ($serverIds === [] && $groupIds === [] && $machineIds === []) {
             return true;
         }
 
         $serverId = (int) ($connection->xboard_server_id ?? 0);
         if ($serverIds !== [] && in_array($serverId, $serverIds, true)) {
+            return true;
+        }
+
+        $machineId = (int) ($connection->xboard_machine_id ?? 0);
+        if ($machineIds !== [] && in_array($machineId, $machineIds, true)) {
             return true;
         }
 
