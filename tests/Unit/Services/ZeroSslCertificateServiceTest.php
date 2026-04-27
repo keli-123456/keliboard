@@ -138,6 +138,40 @@ final class ZeroSslCertificateServiceTest extends TestCase
         $this->assertStringContainsString('cert-new', $state['last_error']);
     }
 
+    public function test_handle_machine_status_does_not_request_validation_again_when_pending(): void
+    {
+        $machine = $this->createMachine([
+            'subproxy_cert_state' => [
+                'provider' => 'zerossl',
+                'certificate_id' => 'cert-1',
+                'domain' => '203.0.113.10',
+                'csr_hash' => hash('sha256', '-----BEGIN CERTIFICATE REQUEST-----test-----END CERTIFICATE REQUEST-----'),
+                'status' => 'pending_validation',
+                'validation_path' => '/.well-known/pki-validation/token.txt',
+                'validation_content' => ['line-a', 'line-b'],
+                'validation_requested_at' => now()->subMinutes(5)->toIso8601String(),
+            ],
+        ]);
+
+        Http::fake([
+            'https://api.zerossl.com/certificates/cert-1?*' => Http::response([
+                'id' => 'cert-1',
+                'status' => 'pending_validation',
+                'expires' => '2026-07-01',
+            ]),
+        ]);
+
+        app(ZeroSslCertificateService::class)->handleMachineStatus($machine, $this->statusPayload(true, 'cert-1'));
+
+        Http::assertNotSent(function ($request): bool {
+            return $request->method() === 'POST' && str_contains($request->url(), '/certificates/cert-1/challenges?');
+        });
+
+        $state = ServerMachine::find($machine->id)?->subproxy_cert_state;
+        $this->assertSame('pending_validation', $state['status']);
+        $this->assertArrayHasKey('validation_requested_at', $state);
+    }
+
     public function test_handle_machine_status_renews_certificate_before_expiry(): void
     {
         $machine = $this->createMachine([

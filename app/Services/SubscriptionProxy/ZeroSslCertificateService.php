@@ -66,7 +66,7 @@ class ZeroSslCertificateService
             }
 
             $validationReady = (bool) data_get($proxy, 'validation_ready', false);
-            if ($validationReady && !empty($state['certificate_id']) && in_array(($state['status'] ?? ''), ['draft', 'pending_validation'], true)) {
+            if ($validationReady && !empty($state['certificate_id']) && ($state['status'] ?? '') === 'draft') {
                 if (!$this->agentHasCurrentValidation($proxy, $state)) {
                     $agentCertificateId = $this->agentCertificateId($proxy);
                     $state['status'] = 'waiting_agent_reload';
