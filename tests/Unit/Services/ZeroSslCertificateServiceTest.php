@@ -160,6 +160,35 @@ final class ZeroSslCertificateServiceTest extends TestCase
         $this->assertArrayNotHasKey('certificate_pem', $state);
     }
 
+    public function test_handle_machine_status_keeps_configured_domain_when_agent_reports_stale_domain(): void
+    {
+        Http::fake();
+
+        $machine = $this->createMachine([
+            'subproxy_cert_domain' => '152.53.135.140',
+            'subproxy_cert_state' => [
+                'last_error' => 'old error',
+            ],
+        ]);
+
+        app(ZeroSslCertificateService::class)->handleMachineStatus($machine, [
+            'agent' => [
+                'subscription_proxy' => [
+                    'certificate_domain' => '2400:8901::2000:49ff:fe93:6d50',
+                    'csr_pem' => '-----BEGIN CERTIFICATE REQUEST-----ipv6-----END CERTIFICATE REQUEST-----',
+                    'validation_ready' => false,
+                ],
+            ],
+        ]);
+
+        Http::assertNothingSent();
+
+        $fresh = ServerMachine::find($machine->id);
+        $this->assertSame('152.53.135.140', $fresh?->subproxy_cert_domain);
+        $this->assertSame('waiting_agent_reload', $fresh?->subproxy_cert_state['status'] ?? null);
+        $this->assertStringContainsString('2400:8901::2000:49ff:fe93:6d50', $fresh?->subproxy_cert_state['last_error'] ?? '');
+    }
+
     private function createTables(): void
     {
         Schema::create('v2_server_machine', function (Blueprint $table): void {

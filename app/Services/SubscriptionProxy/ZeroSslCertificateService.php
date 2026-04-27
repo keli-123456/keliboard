@@ -28,7 +28,9 @@ class ZeroSslCertificateService
             return;
         }
 
-        $domain = trim((string) data_get($proxy, 'certificate_domain', $machine->subproxy_cert_domain ?? ''));
+        $configuredDomain = trim((string) ($machine->subproxy_cert_domain ?? ''));
+        $reportedDomain = trim((string) data_get($proxy, 'certificate_domain', ''));
+        $domain = $configuredDomain !== '' ? $configuredDomain : $reportedDomain;
         $csr = trim((string) data_get($proxy, 'csr_pem', ''));
         if ($domain === '' || $csr === '') {
             return;
@@ -37,6 +39,17 @@ class ZeroSslCertificateService
         try {
             $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
             $previousState = $state;
+            if ($reportedDomain !== '' && $reportedDomain !== $domain) {
+                $state['status'] = 'waiting_agent_reload';
+                $state['last_error'] = sprintf('Agent certificate domain %s does not match configured domain %s; waiting for agent reload.', $reportedDomain, $domain);
+                $machine->forceFill([
+                    'subproxy_cert_domain' => $domain,
+                    'subproxy_cert_state' => $this->withUpdatedAt($state),
+                ])->save();
+                $this->notifyAgentConfigChanged($machine, $state);
+                return;
+            }
+
             $csrHash = hash('sha256', $csr);
             $renewDays = max(1, min(60, (int) admin_setting('subscription_proxy_renew_days', 20)));
 
