@@ -39,6 +39,16 @@ class ZeroSslCertificateService
         try {
             $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
             $previousState = $state;
+            if ($this->shouldDeferToCertificateOwner($proxy)) {
+                $ownerSiteId = $this->certificateOwnerSiteId($proxy);
+                $state = $this->delegatedCertificateState($state, $domain, $ownerSiteId);
+                $machine->forceFill([
+                    'subproxy_cert_domain' => $domain,
+                    'subproxy_cert_state' => $this->withUpdatedAt($state),
+                ])->save();
+                return;
+            }
+
             if ($reportedDomain !== '' && $reportedDomain !== $domain) {
                 $state['status'] = 'waiting_agent_reload';
                 $state['last_error'] = sprintf('Agent certificate domain %s does not match configured domain %s; waiting for agent reload.', $reportedDomain, $domain);
@@ -111,6 +121,73 @@ class ZeroSslCertificateService
             return true;
         }
         return $this->shouldRenew($state, $renewDays);
+    }
+
+    private function shouldDeferToCertificateOwner(array $proxy): bool
+    {
+        $ownerSiteId = $this->certificateOwnerSiteId($proxy);
+        if ($ownerSiteId === '') {
+            return false;
+        }
+
+        $siteId = $this->currentSiteId();
+        return $siteId !== '' && !hash_equals($siteId, $ownerSiteId);
+    }
+
+    private function certificateOwnerSiteId(array $proxy): string
+    {
+        return $this->sanitizeSiteId((string) data_get($proxy, 'certificate_owner_site_id', ''));
+    }
+
+    private function currentSiteId(): string
+    {
+        $configured = trim((string) admin_setting('subscription_proxy_site_id', ''));
+        if ($configured !== '') {
+            return $this->sanitizeSiteId($configured);
+        }
+
+        $baseURL = rtrim((string) admin_setting('app_url', ''), '/');
+        if ($baseURL === '') {
+            return '';
+        }
+
+        $host = (string) parse_url($baseURL, PHP_URL_HOST);
+        $siteId = $this->sanitizeSiteId($host);
+        return $siteId !== '' ? $siteId : substr(sha1($baseURL), 0, 12);
+    }
+
+    private function sanitizeSiteId(string $value): string
+    {
+        $value = strtolower(trim($value));
+        $value = preg_replace('/[^a-z0-9._-]+/', '-', $value) ?: '';
+        return trim($value, '.-_');
+    }
+
+    private function delegatedCertificateState(array $state, string $domain, string $ownerSiteId): array
+    {
+        foreach ([
+            'agent_config_signature',
+            'ca_bundle_pem',
+            'certificate_id',
+            'certificate_pem',
+            'created_at',
+            'csr_hash',
+            'downloaded_at',
+            'expires_at',
+            'validation_content',
+            'validation_path',
+            'validation_requested_at',
+            'validation_url_http',
+        ] as $key) {
+            unset($state[$key]);
+        }
+
+        $state['provider'] = 'zerossl';
+        $state['status'] = 'delegated';
+        $state['domain'] = $domain;
+        $state['certificate_owner_site_id'] = $ownerSiteId;
+        $state['last_error'] = null;
+        return $state;
     }
 
     private function shouldRenew(array $state, int $renewDays): bool

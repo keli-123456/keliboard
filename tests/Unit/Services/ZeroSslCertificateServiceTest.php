@@ -160,6 +160,48 @@ final class ZeroSslCertificateServiceTest extends TestCase
         $this->assertArrayNotHasKey('certificate_pem', $state);
     }
 
+    public function test_handle_machine_status_skips_zerossl_when_another_site_owns_certificate(): void
+    {
+        $this->bindSettings([
+            'subscription_proxy_enable' => true,
+            'subscription_proxy_site_id' => 'site-b',
+            'zerossl_access_key' => 'test-key',
+            'subscription_proxy_renew_days' => 20,
+        ]);
+        Http::fake();
+
+        $machine = $this->createMachine([
+            'subproxy_cert_state' => [
+                'provider' => 'zerossl',
+                'certificate_id' => 'stale-cert',
+                'status' => 'draft',
+                'validation_path' => '/.well-known/pki-validation/stale.txt',
+                'validation_content' => ['stale'],
+            ],
+        ]);
+
+        app(ZeroSslCertificateService::class)->handleMachineStatus($machine, [
+            'agent' => [
+                'subscription_proxy' => [
+                    'certificate_domain' => '203.0.113.10',
+                    'certificate_owner_site_id' => 'site-a',
+                    'csr_pem' => '-----BEGIN CERTIFICATE REQUEST-----test-----END CERTIFICATE REQUEST-----',
+                    'validation_ready' => false,
+                ],
+            ],
+        ]);
+
+        Http::assertNothingSent();
+
+        $state = ServerMachine::find($machine->id)?->subproxy_cert_state;
+        $this->assertSame('delegated', $state['status']);
+        $this->assertSame('site-a', $state['certificate_owner_site_id']);
+        $this->assertSame('203.0.113.10', $state['domain']);
+        $this->assertNull($state['last_error']);
+        $this->assertArrayNotHasKey('certificate_id', $state);
+        $this->assertArrayNotHasKey('validation_path', $state);
+    }
+
     public function test_handle_machine_status_keeps_configured_domain_when_agent_reports_stale_domain(): void
     {
         Http::fake();

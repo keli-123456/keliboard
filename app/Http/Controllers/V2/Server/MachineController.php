@@ -265,6 +265,9 @@ class MachineController extends Controller
         if (empty($state)) {
             return ['status' => 'idle'];
         }
+        if (($state['status'] ?? '') === 'delegated') {
+            return ['status' => 'delegated'];
+        }
 
         $config = [
             'status' => (string) ($state['status'] ?? 'idle'),
