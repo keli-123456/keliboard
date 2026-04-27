@@ -95,7 +95,9 @@ class MachineController extends Controller
                 'total' => (int) data_get($payload, 'disk.total', 0),
                 'used' => (int) data_get($payload, 'disk.used', 0),
             ],
-            'net' => data_get($payload, 'net'),
+            'net' => is_array(data_get($payload, 'net')) ? data_get($payload, 'net') : null,
+            'ip' => $this->buildIPStatus($request, $payload),
+            'system' => is_array(data_get($payload, 'system')) ? data_get($payload, 'system') : null,
             'uptime' => data_get($payload, 'uptime'),
             'version' => data_get($payload, 'version'),
             'agent' => is_array(data_get($payload, 'agent')) ? data_get($payload, 'agent') : null,
@@ -125,6 +127,17 @@ class MachineController extends Controller
             ->delete();
 
         return response()->json(['data' => true]);
+    }
+
+    private function buildIPStatus(Request $request, array $payload): array
+    {
+        $ip = is_array(data_get($payload, 'ip')) ? data_get($payload, 'ip') : [];
+        $panelSeen = trim((string) $request->ip());
+        if ($panelSeen !== '') {
+            $ip['panel_seen'] = $panelSeen;
+        }
+
+        return $ip;
     }
 
     private function authenticateMachine(Request $request): ?ServerMachine

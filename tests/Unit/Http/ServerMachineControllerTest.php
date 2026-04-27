@@ -7,11 +7,15 @@ namespace Tests\Unit\Http;
 use App\Http\Controllers\V2\Server\MachineController;
 use App\Models\Server;
 use App\Models\ServerMachine;
+use App\Models\ServerMachineLoadHistory;
 use App\Services\ServerService;
 use App\Support\Setting;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Translation\ArrayLoader;
+use Illuminate\Translation\Translator;
+use Illuminate\Validation\Factory as ValidatorFactory;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
 
@@ -26,6 +30,7 @@ final class ServerMachineControllerTest extends TestCase
         $this->setUpInMemoryDatabase();
         app()->instance('db.schema', $this->database->getConnection()->getSchemaBuilder());
         $this->bindJsonResponseFactory();
+        $this->bindValidatorFactory();
         $this->createTables();
         $this->resetServerServiceSchemaCache();
     }
@@ -111,6 +116,68 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame(['enabled' => false], $payload['agent']['subscription_proxy']);
     }
 
+    public function test_status_persists_machine_ip_and_network_metrics(): void
+    {
+        $this->bindSettings([
+            'subscription_proxy_enable' => false,
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'cpu' => 12.5,
+                    'mem' => ['total' => 1024, 'used' => 512],
+                    'swap' => ['total' => 2048, 'used' => 256],
+                    'disk' => ['total' => 4096, 'used' => 1024],
+                    'net' => [
+                        'rx_bytes' => 1000,
+                        'tx_bytes' => 2000,
+                        'rx_rate' => 12.3,
+                        'tx_rate' => 45.6,
+                    ],
+                    'ip' => [
+                        'public_ipv4' => '172.104.189.93',
+                        'local' => ['172.104.189.93'],
+                    ],
+                    'system' => [
+                        'hostname' => 'edge-a',
+                        'os' => 'linux',
+                        'arch' => 'amd64',
+                    ],
+                    'version' => 'v0.3.8',
+                    'uptime' => 12345,
+                ],
+            ],
+            [],
+            [],
+            ['REMOTE_ADDR' => '198.51.100.20']
+        ));
+        $payload = $response->getData(true);
+
+        $this->assertTrue($payload['data']);
+
+        $fresh = ServerMachine::find($machine->id);
+        $status = $fresh?->load_status ?? [];
+        $this->assertSame('172.104.189.93', $status['ip']['public_ipv4'] ?? null);
+        $this->assertSame('198.51.100.20', $status['ip']['panel_seen'] ?? null);
+        $this->assertSame(12.3, $status['net']['rx_rate'] ?? null);
+        $this->assertSame('edge-a', $status['system']['hostname'] ?? null);
+
+        $history = ServerMachineLoadHistory::query()->where('machine_id', $machine->id)->first();
+        $this->assertSame('172.104.189.93', $history?->load_status['ip']['public_ipv4'] ?? null);
+        $this->assertSame(45.6, $history?->load_status['net']['tx_rate'] ?? null);
+    }
+
     private function createTables(): void
     {
         Schema::create('v2_server_machine', function (Blueprint $table): void {
@@ -125,6 +192,20 @@ final class ServerMachineControllerTest extends TestCase
             $table->json('subproxy_cert_state')->nullable();
             $table->integer('sort')->default(0);
             $table->unsignedInteger('last_seen_at')->nullable();
+            $table->json('load_status')->nullable();
+            $table->timestamps();
+        });
+
+        Schema::create('v2_server_machine_load_history', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('machine_id')->index();
+            $table->float('cpu')->nullable();
+            $table->unsignedBigInteger('mem_total')->default(0);
+            $table->unsignedBigInteger('mem_used')->default(0);
+            $table->unsignedBigInteger('swap_total')->default(0);
+            $table->unsignedBigInteger('swap_used')->default(0);
+            $table->unsignedBigInteger('disk_total')->default(0);
+            $table->unsignedBigInteger('disk_used')->default(0);
             $table->json('load_status')->nullable();
             $table->timestamps();
         });
@@ -189,6 +270,11 @@ final class ServerMachineControllerTest extends TestCase
                 return $this->values[strtolower($key)] ?? $default;
             }
         });
+    }
+
+    private function bindValidatorFactory(): void
+    {
+        app()->instance('validator', new ValidatorFactory(new Translator(new ArrayLoader(), 'en'), app()));
     }
 
     private function resetServerServiceSchemaCache(): void
