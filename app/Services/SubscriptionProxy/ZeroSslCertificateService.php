@@ -12,7 +12,7 @@ class ZeroSslCertificateService
     private const API_BASE = 'https://api.zerossl.com';
     private const VALIDATION_METHOD = 'HTTP_CSR_HASH';
 
-    public function handleMachineStatus(ServerMachine $machine, array $status): void
+    public function handleMachineStatus(ServerMachine $machine, array $status, string $currentSiteId = ''): void
     {
         if (!(bool) admin_setting('subscription_proxy_enable', false) || !(bool) $machine->getAttribute('subproxy_enabled')) {
             return;
@@ -39,7 +39,7 @@ class ZeroSslCertificateService
         try {
             $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
             $previousState = $state;
-            if ($this->shouldDeferToCertificateOwner($proxy)) {
+            if ($this->shouldDeferToCertificateOwner($proxy, $currentSiteId)) {
                 $ownerSiteId = $this->certificateOwnerSiteId($proxy);
                 $state = $this->delegatedCertificateState($state, $domain, $ownerSiteId);
                 $machine->forceFill([
@@ -123,14 +123,17 @@ class ZeroSslCertificateService
         return $this->shouldRenew($state, $renewDays);
     }
 
-    private function shouldDeferToCertificateOwner(array $proxy): bool
+    private function shouldDeferToCertificateOwner(array $proxy, string $currentSiteId = ''): bool
     {
         $ownerSiteId = $this->certificateOwnerSiteId($proxy);
         if ($ownerSiteId === '') {
             return false;
         }
 
-        $siteId = $this->currentSiteId();
+        $siteId = $this->sanitizeSiteId($currentSiteId);
+        if ($siteId === '') {
+            $siteId = $this->currentSiteId();
+        }
         return $siteId !== '' && !hash_equals($siteId, $ownerSiteId);
     }
 

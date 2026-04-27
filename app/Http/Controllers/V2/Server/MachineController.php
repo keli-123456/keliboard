@@ -103,7 +103,11 @@ class MachineController extends Controller
             'agent' => is_array(data_get($payload, 'agent')) ? data_get($payload, 'agent') : null,
             'updated_at' => now()->timestamp,
         ];
-        app(ZeroSslCertificateService::class)->handleMachineStatus($machine, $status);
+        app(ZeroSslCertificateService::class)->handleMachineStatus(
+            $machine,
+            $status,
+            $this->resolveSubscriptionProxySiteId($this->resolvePanelBaseURL($request))
+        );
 
         $machine->forceFill([
             'last_seen_at' => now()->timestamp,
