@@ -14,6 +14,7 @@ use App\Models\User;
 use App\Services\Auth\LoginService;
 use App\Services\AuthService;
 use App\Services\Plugin\HookManager;
+use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use App\Services\UserOnlineService;
 use App\Services\UserService;
 use App\Utils\CacheKey;
@@ -160,6 +161,11 @@ class UserController extends Controller
             }
         }
         $user['subscribe_url'] = Helper::getSubscribeUrl($user['token']);
+        $subscriptionProxy = app(SubscriptionProxyProbeService::class)->userPayload((string) $user['token']);
+        $user['subscription_proxy'] = $subscriptionProxy;
+        if (!empty($subscriptionProxy['subscribe_url'])) {
+            $user['accelerated_subscribe_url'] = $subscriptionProxy['subscribe_url'];
+        }
         $userService = new UserService();
         $user['reset_day'] = $userService->getResetDay($user);
         $user = HookManager::filter('user.subscribe.response', $user);

@@ -5,6 +5,7 @@ namespace App\Http\Middleware;
 use App\Exceptions\ApiException;
 use Closure;
 use App\Models\User;
+use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use Illuminate\Support\Facades\Auth;
 
 class Client
@@ -21,6 +22,9 @@ class Client
         $token = $request->input('token', $request->route('token'));
         if (empty($token)) {
             throw new ApiException('token is null',403);
+        }
+        if (app(SubscriptionProxyProbeService::class)->isHealthToken((string) $token)) {
+            return $next($request);
         }
         $user = User::where('token', $token)->first();
         if (!$user) {

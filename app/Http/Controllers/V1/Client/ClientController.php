@@ -8,6 +8,7 @@ use App\Protocols\General;
 use App\Services\Plugin\HookManager;
 use App\Services\RiskEventService;
 use App\Services\ServerService;
+use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use App\Services\UserService;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
@@ -34,6 +35,11 @@ class ClientController extends Controller
 
     public function subscribe(Request $request)
     {
+        $probeService = app(SubscriptionProxyProbeService::class);
+        if ($probeService->isHealthToken((string) $request->route('token'))) {
+            return response($probeService->healthResponseBody(), 200, ['Content-Type' => 'text/plain; charset=UTF-8']);
+        }
+
         HookManager::call('client.subscribe.before');
         $request->validate([
             'types' => ['nullable', 'string'],

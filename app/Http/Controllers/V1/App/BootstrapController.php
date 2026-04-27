@@ -9,6 +9,7 @@ use App\Models\Plan;
 use App\Models\User;
 use App\Services\Plugin\HookManager;
 use App\Services\ServerService;
+use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use App\Services\UserService;
 use App\Utils\Helper;
 use Illuminate\Contracts\Support\Arrayable;
@@ -94,6 +95,11 @@ class BootstrapController extends Controller
         }
 
         $subscribe['subscribe_url'] = Helper::getSubscribeUrl($user->token);
+        $subscriptionProxy = app(SubscriptionProxyProbeService::class)->userPayload((string) $user->token);
+        $subscribe['subscription_proxy'] = $subscriptionProxy;
+        if (!empty($subscriptionProxy['subscribe_url'])) {
+            $subscribe['accelerated_subscribe_url'] = $subscriptionProxy['subscribe_url'];
+        }
         $userService = new UserService();
         $subscribe['reset_day'] = $userService->getResetDay($user);
         $subscribe = HookManager::filter('user.subscribe.response', $subscribe);
