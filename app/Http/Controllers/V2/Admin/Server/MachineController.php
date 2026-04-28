@@ -236,10 +236,7 @@ class MachineController extends Controller
             return $this->fail([400202, '机器不存在']);
         }
 
-        $baseURL = rtrim((string) admin_setting('app_url', ''), '/');
-        if ($baseURL === '') {
-            $baseURL = rtrim($request->getSchemeAndHttpHost(), '/');
-        }
+        $baseURL = $this->resolveMachineApiBaseURL($request);
 
         $config = implode(PHP_EOL, [
             'machine:',
@@ -278,6 +275,21 @@ class MachineController extends Controller
             '--machine-name',
             $this->shellQuote($machine->name ?: ('machine-' . $machine->id)),
         ]);
+    }
+
+    private function resolveMachineApiBaseURL(Request $request): string
+    {
+        $nodeApiBaseURL = rtrim(trim((string) admin_setting('node_api_base_url', '')), '/');
+        if ($nodeApiBaseURL !== '') {
+            return $nodeApiBaseURL;
+        }
+
+        $baseURL = rtrim((string) admin_setting('app_url', ''), '/');
+        if ($baseURL !== '') {
+            return $baseURL;
+        }
+
+        return rtrim($request->getSchemeAndHttpHost(), '/');
     }
 
     private function shellQuote(string $value): string

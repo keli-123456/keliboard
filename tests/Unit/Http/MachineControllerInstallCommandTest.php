@@ -6,6 +6,7 @@ namespace Tests\Unit\Http;
 
 use App\Http\Controllers\V2\Admin\Server\MachineController;
 use App\Models\ServerMachine;
+use App\Support\Setting;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
@@ -16,6 +17,8 @@ final class MachineControllerInstallCommandTest extends TestCase
 {
     use InteractsWithInMemoryDatabase;
 
+    private object $settings;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -23,6 +26,7 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->setUpInMemoryDatabase();
         app()->instance('db.schema', $this->database->getConnection()->getSchemaBuilder());
         $this->bindJsonResponseFactory();
+        $this->bindSettings();
         $this->createTables();
     }
 
@@ -51,6 +55,44 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertStringContainsString('--machine-id ' . $machine->id, $command);
         $this->assertStringContainsString("--machine-token 'tok'\"'\"'en'", $command);
         $this->assertStringContainsString("--machine-name 'edge '\"'\"'hk'", $command);
+    }
+
+    public function test_install_command_uses_configured_node_api_base_url(): void
+    {
+        $this->settings->values['node_api_base_url'] = 'https://node-api.example.test/';
+        $machine = ServerMachine::create([
+            'name' => 'edge-vn',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+
+        $request = $this->installRequest('https://panel.example.test/admin/server/machine/install', [
+            'id' => $machine->id,
+        ]);
+
+        $response = (new MachineController())->installCommand($request);
+        $payload = $response->getData(true);
+        $command = $payload['data']['command'];
+        $config = $payload['data']['config'];
+
+        $this->assertStringContainsString("--machine-url 'https://node-api.example.test'", $command);
+        $this->assertStringNotContainsString("--machine-url 'https://panel.example.test'", $command);
+        $this->assertStringContainsString('      url: "https://node-api.example.test"', $config);
+    }
+
+    private function bindSettings(): void
+    {
+        $this->settings = new class {
+            /** @var array<string, mixed> */
+            public array $values = [];
+
+            public function get(string $key, mixed $default = null): mixed
+            {
+                return $this->values[$key] ?? $default;
+            }
+        };
+
+        app()->instance(Setting::class, $this->settings);
     }
 
     /**

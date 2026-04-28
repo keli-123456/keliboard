@@ -82,6 +82,7 @@ class ConfigSave extends FormRequest
         'subscribe_path' => '',
         // server
         'server_token' => 'nullable|min:16',
+        'node_api_base_url' => 'nullable|url|max:500',
         'server_pull_interval' => 'integer',
         'server_push_interval' => 'integer',
         'message_ops_enable' => 'boolean',
@@ -212,6 +213,7 @@ class ConfigSave extends FormRequest
         // illiteracy prompt
         return [
             'app_url.url' => '站点URL格式不正确，必须携带http(s)://',
+            'node_api_base_url.url' => '节点 API 地址格式不正确，必须携带 http(s)://',
             'subscribe_url.url' => '订阅URL格式不正确，必须携带http(s)://',
             'server_token.min' => '通讯密钥长度必须大于16位',
             'tos_url.url' => '服务条款URL格式不正确，必须携带http(s)://',
