@@ -47,7 +47,7 @@ final class ServerMachineControllerTest extends TestCase
             'subscription_proxy_site_id' => 'panel-a',
             'subscription_proxy_https_port' => 443,
             'subscription_proxy_http_port' => 80,
-            'subscription_proxy_cert_file' => '/etc/v2node/subproxy/cert.pem',
+            'subscription_proxy_cert_file' => '/etc/v2node/subproxy/fullchain.pem',
             'subscription_proxy_key_file' => '/etc/v2node/subproxy/key.pem',
             'subscription_proxy_challenge_dir' => '/etc/v2node/subproxy/challenges',
             'subscription_proxy_allow_http_fallback' => false,
@@ -87,7 +87,7 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame('0.0.0.0:8080', $proxy['http_listen']);
         $this->assertSame('203.0.113.10', $proxy['certificate_domain']);
         $this->assertSame('/etc/v2node/subproxy/challenges', $proxy['challenge_dir']);
-        $this->assertSame('/etc/v2node/subproxy/cert.pem', $proxy['cert_file']);
+        $this->assertSame('/etc/v2node/subproxy/fullchain.pem', $proxy['cert_file']);
         $this->assertSame('/etc/v2node/subproxy/key.pem', $proxy['key_file']);
     }
 
@@ -126,7 +126,7 @@ final class ServerMachineControllerTest extends TestCase
             'subscription_proxy_site_id' => 'panel-a',
             'subscription_proxy_https_port' => 443,
             'subscription_proxy_http_port' => 80,
-            'subscription_proxy_cert_file' => '/etc/v2node/subproxy/cert.pem',
+            'subscription_proxy_cert_file' => '/etc/v2node/subproxy/fullchain.pem',
             'subscription_proxy_key_file' => '/etc/v2node/subproxy/key.pem',
             'subscription_proxy_challenge_dir' => '/etc/v2node/subproxy/challenges',
             'subscription_proxy_allow_http_fallback' => false,
@@ -248,7 +248,7 @@ final class ServerMachineControllerTest extends TestCase
             'subscription_proxy_site_id' => 'panel-a',
             'subscription_proxy_https_port' => 443,
             'subscription_proxy_http_port' => 80,
-            'subscription_proxy_cert_file' => '/etc/v2node/subproxy/cert.pem',
+            'subscription_proxy_cert_file' => '/etc/v2node/subproxy/fullchain.pem',
             'subscription_proxy_key_file' => '/etc/v2node/subproxy/key.pem',
             'subscription_proxy_challenge_dir' => '/etc/v2node/subproxy/challenges',
             'subscription_proxy_allow_http_fallback' => true,

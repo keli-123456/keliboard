@@ -253,7 +253,7 @@ class MachineController extends Controller
             ),
             'certificate_domain' => $this->resolveCertificateDomain($request, $machine),
             'challenge_dir' => (string) admin_setting('subscription_proxy_challenge_dir', '/etc/v2node/subproxy/challenges'),
-            'cert_file' => (string) admin_setting('subscription_proxy_cert_file', '/etc/v2node/subproxy/cert.pem'),
+            'cert_file' => (string) admin_setting('subscription_proxy_cert_file', '/etc/v2node/subproxy/fullchain.pem'),
             'key_file' => (string) admin_setting('subscription_proxy_key_file', '/etc/v2node/subproxy/key.pem'),
             'zerossl' => $this->buildZeroSslAgentConfig($machine),
             'allow_http_fallback' => (bool) admin_setting('subscription_proxy_allow_http_fallback', false),

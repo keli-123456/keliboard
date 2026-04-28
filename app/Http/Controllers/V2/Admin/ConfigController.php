@@ -266,7 +266,7 @@ class ConfigController extends Controller
                 'subscription_proxy_site_id' => (string) admin_setting('subscription_proxy_site_id', ''),
                 'subscription_proxy_https_port' => (int) admin_setting('subscription_proxy_https_port', 443),
                 'subscription_proxy_http_port' => (int) admin_setting('subscription_proxy_http_port', 80),
-                'subscription_proxy_cert_file' => (string) admin_setting('subscription_proxy_cert_file', '/etc/v2node/subproxy/cert.pem'),
+                'subscription_proxy_cert_file' => (string) admin_setting('subscription_proxy_cert_file', '/etc/v2node/subproxy/fullchain.pem'),
                 'subscription_proxy_key_file' => (string) admin_setting('subscription_proxy_key_file', '/etc/v2node/subproxy/key.pem'),
                 'subscription_proxy_challenge_dir' => (string) admin_setting('subscription_proxy_challenge_dir', '/etc/v2node/subproxy/challenges'),
                 'subscription_proxy_allow_http_fallback' => (bool) admin_setting('subscription_proxy_allow_http_fallback', false),
