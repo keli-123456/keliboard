@@ -101,6 +101,7 @@ class MachineController extends Controller
             'uptime' => data_get($payload, 'uptime'),
             'version' => data_get($payload, 'version'),
             'agent' => is_array(data_get($payload, 'agent')) ? data_get($payload, 'agent') : null,
+            'node_failures' => $this->normalizeNodeFailures(data_get($payload, 'node_failures')),
             'updated_at' => now()->timestamp,
         ];
         $reload = app(ZeroSslCertificateService::class)->handleMachineStatus(
@@ -145,6 +146,58 @@ class MachineController extends Controller
         }
 
         return $ip;
+    }
+
+    private function normalizeNodeFailures(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $out = [];
+        foreach (array_values($value) as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $error = $this->statusString(data_get($item, 'error'), 1000);
+            if ($error === '') {
+                continue;
+            }
+            $out[] = [
+                'api_host' => $this->statusString(data_get($item, 'api_host'), 255),
+                'node_id' => $this->statusInt(data_get($item, 'node_id')),
+                'machine_id' => $this->statusInt(data_get($item, 'machine_id')),
+                'node_type' => $this->statusString(data_get($item, 'node_type'), 64),
+                'error' => $error,
+            ];
+            if (count($out) >= 50) {
+                break;
+            }
+        }
+
+        return $out;
+    }
+
+    private function statusInt(mixed $value): ?int
+    {
+        if (!is_scalar($value) || !is_numeric($value)) {
+            return null;
+        }
+        $int = (int) $value;
+        return $int > 0 ? $int : null;
+    }
+
+    private function statusString(mixed $value, int $limit): string
+    {
+        if (!is_scalar($value)) {
+            return '';
+        }
+        $value = trim((string) $value);
+        if ($value === '') {
+            return '';
+        }
+
+        return substr($value, 0, max(1, $limit));
     }
 
     private function authenticateMachine(Request $request): ?ServerMachine

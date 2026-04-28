@@ -205,6 +205,15 @@ final class ServerMachineControllerTest extends TestCase
                     ],
                     'version' => 'v0.3.8',
                     'uptime' => 12345,
+                    'node_failures' => [
+                        [
+                            'api_host' => 'https://panel.example.test',
+                            'node_id' => 51,
+                            'machine_id' => $machine->id,
+                            'node_type' => 'v2node',
+                            'error' => 'user_delta request failed: 403 Forbidden',
+                        ],
+                    ],
                 ],
             ],
             [],
@@ -221,10 +230,13 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame('198.51.100.20', $status['ip']['panel_seen'] ?? null);
         $this->assertSame(12.3, $status['net']['rx_rate'] ?? null);
         $this->assertSame('edge-a', $status['system']['hostname'] ?? null);
+        $this->assertSame(51, $status['node_failures'][0]['node_id'] ?? null);
+        $this->assertSame('user_delta request failed: 403 Forbidden', $status['node_failures'][0]['error'] ?? null);
 
         $history = ServerMachineLoadHistory::query()->where('machine_id', $machine->id)->first();
         $this->assertSame('172.104.189.93', $history?->load_status['ip']['public_ipv4'] ?? null);
         $this->assertSame(45.6, $history?->load_status['net']['tx_rate'] ?? null);
+        $this->assertSame(51, $history?->load_status['node_failures'][0]['node_id'] ?? null);
     }
 
     public function test_status_response_requests_reload_when_subscription_proxy_cert_config_changes(): void
