@@ -216,20 +216,21 @@ class WsServer extends Command
 
                 $connection->xboard_authenticated = true;
                 $connection->xboard_authenticated_at = time();
+                $serverInfo = $auth['server'] ?? null;
                 $connection->xboard_connection_key = $auth['connection_key'];
                 $connection->xboard_input_node_id = (string) $auth['input_node_id'];
-                $connection->xboard_server_id = (int) $auth['server']->id;
+                $connection->xboard_server_id = $serverInfo ? (int) $serverInfo->id : 0;
                 $connection->xboard_machine_id = isset($auth['machine']) ? (int) $auth['machine']->id : null;
                 $connection->xboard_node_type = $auth['is_v2node'] ? 'v2node' : ($auth['normalized_node_type'] ?? null);
                 $connection->xboard_is_v2node = (bool) $auth['is_v2node'];
-                $connection->xboard_group_ids = $this->normalizeIntList((array) ($auth['server']->group_ids ?? []));
+                $connection->xboard_group_ids = $this->normalizeIntList((array) ($serverInfo->group_ids ?? []));
                 $connections[$connection->id] = $connection;
 
                 Log::info('Node realtime authenticated', [
                     'connection_id' => $connection->id,
                     'remote_ip' => $this->resolveRemoteIp($connection),
                     'node_id' => (string) $auth['input_node_id'],
-                    'server_id' => (int) $auth['server']->id,
+                    'server_id' => $connection->xboard_server_id,
                     'machine_id' => $connection->xboard_machine_id,
                     'node_type' => $connection->xboard_node_type,
                     'group_ids' => $connection->xboard_group_ids,
@@ -238,7 +239,7 @@ class WsServer extends Command
                 $connection->send(json_encode([
                     'type' => 'hello_ack',
                     'node_id' => (string) $auth['input_node_id'],
-                    'server_id' => (int) $auth['server']->id,
+                    'server_id' => $connection->xboard_server_id,
                     'machine_id' => $connection->xboard_machine_id,
                     'node_type' => $connection->xboard_node_type,
                     'ts' => time(),

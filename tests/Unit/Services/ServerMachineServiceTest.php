@@ -83,6 +83,28 @@ final class ServerMachineServiceTest extends TestCase
         ]));
     }
 
+    public function test_machine_authenticator_allows_v2node_machine_connection_without_node(): void
+    {
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+
+        $auth = (new NodeRealtimeAuthenticator())->authenticate([
+            'machine_id' => $machine->id,
+            'token' => 'machine-token',
+            'node_id' => 0,
+            'node_type' => 'v2node',
+        ]);
+
+        $this->assertNotNull($auth);
+        $this->assertNull($auth['server']);
+        $this->assertSame($machine->id, $auth['machine']->id);
+        $this->assertSame('0', $auth['input_node_id']);
+        $this->assertSame('v2node:machine:' . $machine->id, $auth['connection_key']);
+    }
+
     private function createTables(): void
     {
         Schema::create('v2_server_machine', function (Blueprint $table): void {

@@ -18,7 +18,7 @@ class NodeRealtimeAuthenticator
         $isV2Node = $rawNodeType === 'v2node';
         $nodeType = $isV2Node ? null : $rawNodeType;
 
-        if ($token === '' || !is_scalar($nodeId)) {
+        if ($token === '') {
             return null;
         }
 
@@ -28,6 +28,14 @@ class NodeRealtimeAuthenticator
         }
 
         $normalizedNodeType = ServerModel::normalizeType($nodeType);
+        if ($this->isMachineOnlyV2Node($machineId, $nodeId, $isV2Node)) {
+            return $this->authenticateMachineOnly((int) $machineId, $token);
+        }
+
+        if (!is_scalar($nodeId)) {
+            return null;
+        }
+
         if ($this->hasMachineId($machineId)) {
             return $this->authenticateMachine(
                 (int) $machineId,
@@ -49,6 +57,30 @@ class NodeRealtimeAuthenticator
         }
 
         return $this->buildAuthResult($serverInfo, (string) $nodeId, $normalizedNodeType, $isV2Node);
+    }
+
+    private function authenticateMachineOnly(int $machineId, string $token): ?array
+    {
+        $machine = ServerMachine::query()
+            ->whereKey($machineId)
+            ->where('is_active', true)
+            ->first();
+        if (!$machine || !hash_equals((string) $machine->token, $token)) {
+            return null;
+        }
+
+        return [
+            'server' => null,
+            'machine' => $machine,
+            'input_node_id' => '0',
+            'normalized_node_type' => null,
+            'is_v2node' => true,
+            'connection_key' => implode(':', [
+                'v2node',
+                'machine',
+                (string) $machine->id,
+            ]),
+        ];
     }
 
     private function authenticateMachine(int $machineId, string $token, string $nodeId, ?string $nodeType, bool $isV2Node): ?array
@@ -114,6 +146,18 @@ class NodeRealtimeAuthenticator
     private function hasMachineId($machineId): bool
     {
         return is_scalar($machineId) && (int) $machineId > 0;
+    }
+
+    private function isMachineOnlyV2Node($machineId, $nodeId, bool $isV2Node): bool
+    {
+        if (!$isV2Node || !$this->hasMachineId($machineId)) {
+            return false;
+        }
+        if (!is_scalar($nodeId)) {
+            return true;
+        }
+        $value = trim((string) $nodeId);
+        return $value === '' || $value === '0' || strtolower($value) === 'machine';
     }
 
     private function serverEnabledColumnExists(): bool
