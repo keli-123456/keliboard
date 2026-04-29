@@ -11,6 +11,8 @@ use Illuminate\Http\Request;
 
 class ConfigController extends Controller
 {
+    private const DEFAULT_SING_BOX_CORE_VERSION = '1.13.11';
+
     public function config(Request $request)
     {
         $validated = $request->validate([
@@ -38,7 +40,7 @@ class ConfigController extends Controller
             return $this->fail([404, '节点不存在或不可用']);
         }
 
-        $clientVersion = $validated['core_version'] ?? null;
+        $clientVersion = $validated['core_version'] ?? self::DEFAULT_SING_BOX_CORE_VERSION;
         $platform = $validated['platform'] ?? null;
 
         /** @var SingBox $protocol */
@@ -54,6 +56,24 @@ class ConfigController extends Controller
             platform: $platform
         );
 
+        if (!$this->hasOutboundTag($config, (string) $selectedServer['name'])) {
+            return $this->fail([
+                500001,
+                '生成 sing-box 配置失败：节点出站未生成，请检查 core_version 和协议兼容配置'
+            ]);
+        }
+
         return $this->success($config);
+    }
+
+    private function hasOutboundTag(array $config, string $tag): bool
+    {
+        foreach (($config['outbounds'] ?? []) as $outbound) {
+            if (is_array($outbound) && ($outbound['tag'] ?? null) === $tag) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
