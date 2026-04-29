@@ -515,6 +515,7 @@ class WsServer extends Command
                 (string) ($row['remote_ip'] ?? ''),
                 (string) ($row['node_id'] ?? ''),
                 (string) ($row['server_id'] ?? ''),
+                (string) ($row['machine_id'] ?? ''),
                 (string) ($row['node_type'] ?? ''),
                 implode(',', (array) ($row['group_ids'] ?? [])),
                 (string) ($row['authenticated_at'] ?? ''),
@@ -537,7 +538,7 @@ class WsServer extends Command
         }
 
         $this->table(
-            ['connection_id', 'remote_ip', 'node_id', 'server_id', 'node_type', 'group_ids', 'authenticated_at', 'health'],
+            ['connection_id', 'remote_ip', 'node_id', 'server_id', 'machine_id', 'node_type', 'group_ids', 'authenticated_at', 'health'],
             $rows
         );
 
