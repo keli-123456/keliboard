@@ -87,6 +87,7 @@ class Kernel extends ConsoleKernel
 
         $schedule->command('backup:database', [
             ($settings['upload'] ?? false) ? 'true' : 'false',
+            '--disk' => (string) ($settings['remote_disk'] ?? 'google_cloud'),
             '--keep' => (int) ($settings['keep'] ?? 7),
             '--trigger' => 'schedule',
         ])

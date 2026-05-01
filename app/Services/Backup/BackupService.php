@@ -20,6 +20,12 @@ class BackupService
     private const BACKUP_LOCK_KEY = 'backup:database:running';
     private const DEFAULT_AUTO_TIME = '03:30';
     private const DEFAULT_AUTO_KEEP = 7;
+    private const DISK_GOOGLE_CLOUD = 'google_cloud';
+    private const DISK_FTP = 'ftp';
+    private const REMOTE_DISKS = [
+        self::DISK_GOOGLE_CLOUD,
+        self::DISK_FTP,
+    ];
 
     public function createDatabaseBackup(bool $upload = false, array $options = []): array
     {
@@ -32,6 +38,7 @@ class BackupService
         $compressedBackupPath = null;
 
         try {
+            $remoteDisk = $this->normalizeRemoteDisk((string) ($options['remote_disk'] ?? self::DISK_GOOGLE_CLOUD));
             $backupRoot = $this->ensureBackupDirectory();
             $database = $this->databaseNameForFilename();
             $filename = now()->format('Y-m-d_H-i-s') . '_' . $database . '_database_backup.sql';
@@ -48,6 +55,7 @@ class BackupService
                     'database_connection' => config('database.default'),
                     'upload' => $upload,
                     ...$options,
+                    'remote_disk' => $upload ? $remoteDisk : null,
                 ],
                 'started_at' => time(),
             ]);
@@ -63,10 +71,10 @@ class BackupService
             $disk = 'local';
 
             if ($upload) {
-                $remotePath = $this->uploadToGoogleCloud($compressedBackupPath);
+                $remotePath = $this->uploadToRemoteDisk($compressedBackupPath, $remoteDisk);
                 File::delete($compressedBackupPath);
                 $status = BackupRecord::STATUS_UPLOADED;
-                $disk = 'google_cloud';
+                $disk = $remoteDisk;
             }
 
             $record = $this->updateRecord($record, [
@@ -132,6 +140,8 @@ class BackupService
             'metadata_ready' => $hasTable,
             'gzip_ready' => function_exists('gzopen'),
             'google_cloud_ready' => $this->googleCloudReady(),
+            'ftp_ready' => $this->ftpReady(),
+            'remote_disks' => $this->remoteDisks(),
             'running' => $hasTable ? (clone $query)->where('status', BackupRecord::STATUS_RUNNING)->count() : 0,
             'total' => $hasTable ? (clone $query)->count() : 0,
             'local_total_size' => $localSucceeded ? (int) $localSucceeded->sum('size') : 0,
@@ -146,8 +156,9 @@ class BackupService
         $enabled = (bool) admin_setting('backup_auto_enable', false);
         $time = $this->normalizeTime((string) admin_setting('backup_auto_time', self::DEFAULT_AUTO_TIME));
         $keep = $this->normalizeKeep(admin_setting('backup_auto_keep', self::DEFAULT_AUTO_KEEP));
+        $remoteDisk = $this->normalizeRemoteDisk((string) admin_setting('backup_auto_remote_disk', self::DISK_GOOGLE_CLOUD));
         $upload = (bool) admin_setting('backup_auto_upload', false);
-        if ($upload && !$this->googleCloudReady()) {
+        if ($upload && !$this->remoteDiskReady($remoteDisk)) {
             $upload = false;
         }
 
@@ -155,6 +166,8 @@ class BackupService
             'enabled' => $enabled,
             'time' => $time,
             'keep' => $keep,
+            'remote_disk' => $remoteDisk,
+            'remote_disks' => $this->remoteDisks(),
             'upload' => $upload,
             'timezone' => (string) config('app.timezone'),
             'next_run_at' => $enabled ? $this->nextRunAt($time) : null,
@@ -165,15 +178,17 @@ class BackupService
     {
         $time = $this->normalizeTime((string) ($settings['time'] ?? self::DEFAULT_AUTO_TIME));
         $keep = $this->normalizeKeep($settings['keep'] ?? self::DEFAULT_AUTO_KEEP);
+        $remoteDisk = $this->normalizeRemoteDisk((string) ($settings['remote_disk'] ?? admin_setting('backup_auto_remote_disk', self::DISK_GOOGLE_CLOUD)));
         $upload = (bool) ($settings['upload'] ?? false);
-        if ($upload && !$this->googleCloudReady()) {
-            throw new RuntimeException('Google Cloud Storage backup config is incomplete');
+        if ($upload && !$this->remoteDiskReady($remoteDisk)) {
+            throw new RuntimeException($this->remoteDiskLabel($remoteDisk) . ' backup config is incomplete');
         }
 
         admin_setting([
             'backup_auto_enable' => (int) (bool) ($settings['enabled'] ?? false),
             'backup_auto_time' => $time,
             'backup_auto_keep' => $keep,
+            'backup_auto_remote_disk' => $remoteDisk,
             'backup_auto_upload' => (int) $upload,
         ]);
 
@@ -317,6 +332,43 @@ class BackupService
         return filled(config('cloud_storage.google_cloud.key_file')) && filled(config('cloud_storage.google_cloud.storage_bucket'));
     }
 
+    private function ftpReady(): bool
+    {
+        return function_exists('ftp_connect')
+            && filled(config('cloud_storage.ftp.host'))
+            && filled(config('cloud_storage.ftp.username'))
+            && (int) config('cloud_storage.ftp.port', 21) > 0;
+    }
+
+    private function remoteDiskReady(string $disk): bool
+    {
+        return match ($this->normalizeRemoteDisk($disk)) {
+            self::DISK_FTP => $this->ftpReady(),
+            default => $this->googleCloudReady(),
+        };
+    }
+
+    private function remoteDisks(): array
+    {
+        return array_map(fn(string $disk) => [
+            'disk' => $disk,
+            'ready' => $this->remoteDiskReady($disk),
+        ], self::REMOTE_DISKS);
+    }
+
+    private function normalizeRemoteDisk(string $disk): string
+    {
+        return in_array($disk, self::REMOTE_DISKS, true) ? $disk : self::DISK_GOOGLE_CLOUD;
+    }
+
+    private function remoteDiskLabel(string $disk): string
+    {
+        return match ($this->normalizeRemoteDisk($disk)) {
+            self::DISK_FTP => 'FTP',
+            default => 'Google Cloud Storage',
+        };
+    }
+
     private function nextRunAt(string $time): int
     {
         [$hour, $minute] = array_map('intval', explode(':', $time));
@@ -446,6 +498,86 @@ class BackupService
         $bucket->upload(fopen($path, 'r'), ['name' => $objectName]);
 
         return $objectName;
+    }
+
+    private function uploadToRemoteDisk(string $path, string $disk): string
+    {
+        return match ($this->normalizeRemoteDisk($disk)) {
+            self::DISK_FTP => $this->uploadToFtp($path),
+            default => $this->uploadToGoogleCloud($path),
+        };
+    }
+
+    private function uploadToFtp(string $path): string
+    {
+        if (!function_exists('ftp_connect')) {
+            throw new RuntimeException('PHP FTP extension is not available');
+        }
+
+        $host = trim((string) config('cloud_storage.ftp.host'));
+        $port = max(1, (int) config('cloud_storage.ftp.port', 21));
+        $username = trim((string) config('cloud_storage.ftp.username'));
+        $password = (string) config('cloud_storage.ftp.password', '');
+        $timeout = max(1, (int) config('cloud_storage.ftp.timeout', 30));
+        $ssl = (bool) config('cloud_storage.ftp.ssl', false);
+        $passive = (bool) config('cloud_storage.ftp.passive', true);
+
+        if ($host === '' || $username === '') {
+            throw new RuntimeException('FTP backup config is incomplete');
+        }
+        if ($ssl && !function_exists('ftp_ssl_connect')) {
+            throw new RuntimeException('PHP FTP SSL support is not available');
+        }
+
+        $connection = $ssl ? @ftp_ssl_connect($host, $port, $timeout) : @ftp_connect($host, $port, $timeout);
+        if (!$connection) {
+            throw new RuntimeException('Failed to connect to FTP backup server');
+        }
+
+        try {
+            if (!@ftp_login($connection, $username, $password)) {
+                throw new RuntimeException('Failed to login to FTP backup server');
+            }
+            @ftp_pasv($connection, $passive);
+
+            $remoteRoot = $this->normalizeRemotePath((string) config('cloud_storage.ftp.root', 'backup'));
+            $this->ensureFtpDirectory($connection, $remoteRoot);
+            $remotePath = ($remoteRoot !== '' ? rtrim($remoteRoot, '/') . '/' : '') . basename($path);
+
+            if (!@ftp_put($connection, $remotePath, $path, FTP_BINARY)) {
+                throw new RuntimeException('Failed to upload backup to FTP server');
+            }
+
+            return $remotePath;
+        } finally {
+            @ftp_close($connection);
+        }
+    }
+
+    private function ensureFtpDirectory($connection, string $path): void
+    {
+        if ($path === '') {
+            return;
+        }
+
+        $current = str_starts_with($path, '/') ? '/' : '';
+        foreach (explode('/', trim($path, '/')) as $segment) {
+            $segment = trim($segment);
+            if ($segment === '') {
+                continue;
+            }
+            $current = $current === '' || $current === '/' ? $current . $segment : $current . '/' . $segment;
+            @ftp_mkdir($connection, $current);
+        }
+    }
+
+    private function normalizeRemotePath(string $path): string
+    {
+        $absolute = str_starts_with(trim($path), '/');
+        $path = str_replace('\\', '/', trim($path));
+        $path = preg_replace('#/+#', '/', $path) ?: '';
+        $path = trim($path, '/');
+        return $path === '' ? '' : ($absolute ? '/' : '') . $path;
     }
 
     private function relativeStoragePath(string $path): string

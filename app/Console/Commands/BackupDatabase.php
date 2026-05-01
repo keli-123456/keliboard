@@ -7,7 +7,7 @@ use Illuminate\Console\Command;
 
 class BackupDatabase extends Command
 {
-    protected $signature = 'backup:database {upload? : Whether to upload to Google Cloud Storage} {--keep=0 : Keep the latest N local database backups after success} {--trigger=manual : Backup trigger source}';
+    protected $signature = 'backup:database {upload? : Whether to upload to remote storage} {--disk=google_cloud : Remote backup disk, google_cloud or ftp} {--keep=0 : Keep the latest N local database backups after success} {--trigger=manual : Backup trigger source}';
     protected $description = '备份数据库并记录备份元数据';
 
     public function handle(BackupService $backups)
@@ -18,7 +18,10 @@ class BackupDatabase extends Command
 
         try {
             $this->info('开始备份数据库');
-            $record = $backups->createDatabaseBackup($upload, ['trigger' => $trigger]);
+            $record = $backups->createDatabaseBackup($upload, [
+                'trigger' => $trigger,
+                'remote_disk' => (string) $this->option('disk'),
+            ]);
             $this->info('数据库备份完成：' . ($record['remote_path'] ?? $record['path'] ?? $record['filename'] ?? '-'));
 
             if ($keep > 0) {

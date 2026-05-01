@@ -34,10 +34,14 @@ class BackupController extends Controller
     {
         $request->validate([
             'upload' => 'nullable|boolean',
+            'remote_disk' => 'nullable|string|in:google_cloud,ftp',
         ]);
 
         try {
-            return $this->success($backups->createDatabaseBackup((bool) $request->boolean('upload'), ['trigger' => 'manual']));
+            return $this->success($backups->createDatabaseBackup((bool) $request->boolean('upload'), [
+                'trigger' => 'manual',
+                'remote_disk' => $request->input('remote_disk'),
+            ]));
         } catch (Throwable $e) {
             return $this->fail([500001, $e->getMessage()]);
         }
@@ -55,6 +59,7 @@ class BackupController extends Controller
             'time' => 'required|string|regex:/^([01]\d|2[0-3]):([0-5]\d)$/',
             'keep' => 'required|integer|min:1|max:365',
             'upload' => 'nullable|boolean',
+            'remote_disk' => 'nullable|string|in:google_cloud,ftp',
         ]);
 
         try {
