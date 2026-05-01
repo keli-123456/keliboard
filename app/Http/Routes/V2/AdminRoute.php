@@ -261,6 +261,8 @@ class AdminRoute
                 $router->post('/clearSystemLog', [SystemController::class, 'clearSystemLog']);
                 $router->get('/getLogClearStats', [SystemController::class, 'getLogClearStats']);
                 $router->get('/backup/overview', [BackupController::class, 'overview']);
+                $router->get('/backup/settings', [BackupController::class, 'settings']);
+                $router->post('/backup/settings', [BackupController::class, 'updateSettings']);
                 $router->any('/backup/fetch', [BackupController::class, 'fetch']);
                 $router->post('/backup/create', [BackupController::class, 'create']);
                 $router->get('/backup/download/{id}', [BackupController::class, 'download'])->whereNumber('id');

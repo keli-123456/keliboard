@@ -37,7 +37,28 @@ class BackupController extends Controller
         ]);
 
         try {
-            return $this->success($backups->createDatabaseBackup((bool) $request->boolean('upload')));
+            return $this->success($backups->createDatabaseBackup((bool) $request->boolean('upload'), ['trigger' => 'manual']));
+        } catch (Throwable $e) {
+            return $this->fail([500001, $e->getMessage()]);
+        }
+    }
+
+    public function settings(BackupService $backups)
+    {
+        return $this->success($backups->settings());
+    }
+
+    public function updateSettings(Request $request, BackupService $backups)
+    {
+        $data = $request->validate([
+            'enabled' => 'nullable|boolean',
+            'time' => 'required|string|regex:/^([01]\d|2[0-3]):([0-5]\d)$/',
+            'keep' => 'required|integer|min:1|max:365',
+            'upload' => 'nullable|boolean',
+        ]);
+
+        try {
+            return $this->success($backups->updateSettings($data));
         } catch (Throwable $e) {
             return $this->fail([500001, $e->getMessage()]);
         }

@@ -18,6 +18,8 @@ class BackupService
 {
     private const BACKUP_DIR = 'backup';
     private const BACKUP_LOCK_KEY = 'backup:database:running';
+    private const DEFAULT_AUTO_TIME = '03:30';
+    private const DEFAULT_AUTO_KEEP = 7;
 
     public function createDatabaseBackup(bool $upload = false, array $options = []): array
     {
@@ -129,12 +131,53 @@ class BackupService
             'backup_path_writable' => File::exists($backupRoot) ? is_writable($backupRoot) : is_writable(storage_path()),
             'metadata_ready' => $hasTable,
             'gzip_ready' => function_exists('gzopen'),
-            'google_cloud_ready' => filled(config('cloud_storage.google_cloud.key_file')) && filled(config('cloud_storage.google_cloud.storage_bucket')),
+            'google_cloud_ready' => $this->googleCloudReady(),
             'running' => $hasTable ? (clone $query)->where('status', BackupRecord::STATUS_RUNNING)->count() : 0,
             'total' => $hasTable ? (clone $query)->count() : 0,
             'local_total_size' => $localSucceeded ? (int) $localSucceeded->sum('size') : 0,
             'latest' => $hasTable ? $this->formatRecord((clone $query)->latest('id')->first()) : null,
+            'latest_auto' => $this->formatRecord($this->latestAutomaticRecord()),
+            'settings' => $this->settings(),
         ];
+    }
+
+    public function settings(): array
+    {
+        $enabled = (bool) admin_setting('backup_auto_enable', false);
+        $time = $this->normalizeTime((string) admin_setting('backup_auto_time', self::DEFAULT_AUTO_TIME));
+        $keep = $this->normalizeKeep(admin_setting('backup_auto_keep', self::DEFAULT_AUTO_KEEP));
+        $upload = (bool) admin_setting('backup_auto_upload', false);
+        if ($upload && !$this->googleCloudReady()) {
+            $upload = false;
+        }
+
+        return [
+            'enabled' => $enabled,
+            'time' => $time,
+            'keep' => $keep,
+            'upload' => $upload,
+            'timezone' => (string) config('app.timezone'),
+            'next_run_at' => $enabled ? $this->nextRunAt($time) : null,
+        ];
+    }
+
+    public function updateSettings(array $settings): array
+    {
+        $time = $this->normalizeTime((string) ($settings['time'] ?? self::DEFAULT_AUTO_TIME));
+        $keep = $this->normalizeKeep($settings['keep'] ?? self::DEFAULT_AUTO_KEEP);
+        $upload = (bool) ($settings['upload'] ?? false);
+        if ($upload && !$this->googleCloudReady()) {
+            throw new RuntimeException('Google Cloud Storage backup config is incomplete');
+        }
+
+        admin_setting([
+            'backup_auto_enable' => (bool) ($settings['enabled'] ?? false),
+            'backup_auto_time' => $time,
+            'backup_auto_keep' => $keep,
+            'backup_auto_upload' => $upload,
+        ]);
+
+        return $this->settings();
     }
 
     public function paginate(array $filters = []): LengthAwarePaginator
@@ -238,6 +281,51 @@ class BackupService
         }
 
         return ['deleted' => $deleted, 'freed' => $freed, 'keep' => $keep];
+    }
+
+    private function latestAutomaticRecord(): ?BackupRecord
+    {
+        if (!$this->recordingAvailable()) {
+            return null;
+        }
+
+        return BackupRecord::query()
+            ->where('type', BackupRecord::TYPE_DATABASE)
+            ->latest('id')
+            ->limit(200)
+            ->get()
+            ->first(fn(BackupRecord $record) => data_get($record->options, 'trigger') === 'schedule');
+    }
+
+    private function normalizeTime(string $time): string
+    {
+        $time = trim($time);
+        if (!preg_match('/^([01]\d|2[0-3]):([0-5]\d)$/', $time)) {
+            return self::DEFAULT_AUTO_TIME;
+        }
+
+        return $time;
+    }
+
+    private function normalizeKeep(mixed $keep): int
+    {
+        return max(1, min(365, (int) $keep));
+    }
+
+    private function googleCloudReady(): bool
+    {
+        return filled(config('cloud_storage.google_cloud.key_file')) && filled(config('cloud_storage.google_cloud.storage_bucket'));
+    }
+
+    private function nextRunAt(string $time): int
+    {
+        [$hour, $minute] = array_map('intval', explode(':', $time));
+        $next = now()->setTime($hour, $minute);
+        if ($next->lessThanOrEqualTo(now())) {
+            $next->addDay();
+        }
+
+        return $next->timestamp;
     }
 
     private function createRecord(array $attributes): ?BackupRecord

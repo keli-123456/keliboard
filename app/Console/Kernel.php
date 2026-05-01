@@ -2,12 +2,15 @@
 
 namespace App\Console;
 
+use App\Services\Backup\BackupService;
 use App\Services\Plugin\PluginManager;
 use App\Utils\CacheKey;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use App\Services\UserOnlineService;
+use Throwable;
 
 class Kernel extends ConsoleKernel
 {
@@ -53,10 +56,7 @@ class Kernel extends ConsoleKernel
         $schedule->command('send:remindMail', ['--force'])->dailyAt('11:30')->onOneServer();
         // horizon metrics
         $schedule->command('horizon:snapshot')->everyFiveMinutes()->onOneServer();
-        // backup Timing
-        // if (env('ENABLE_AUTO_BACKUP_AND_UPDATE', false)) {
-        //     $schedule->command('backup:database', ['true'])->daily()->onOneServer();
-        // }
+        $this->scheduleDatabaseBackup($schedule);
         $schedule->command('cleanup:expired-online-status')->everyMinute()->onOneServer()->withoutOverlapping(4);
         $schedule->command('cleanup:ticket')->dailyAt('3:20')->onOneServer()->withoutOverlapping();
         if (config('tickets.attachments.prewarm_schedule', false)) {
@@ -68,6 +68,31 @@ class Kernel extends ConsoleKernel
 
         app(PluginManager::class)->registerPluginSchedules($schedule);
 
+    }
+
+    private function scheduleDatabaseBackup(Schedule $schedule): void
+    {
+        try {
+            $settings = app(BackupService::class)->settings();
+        } catch (Throwable $e) {
+            Log::channel('backup')->warning('Failed to load automatic backup schedule settings', [
+                'error' => $e->getMessage(),
+            ]);
+            return;
+        }
+
+        if (!($settings['enabled'] ?? false)) {
+            return;
+        }
+
+        $schedule->command('backup:database', [
+            ($settings['upload'] ?? false) ? 'true' : 'false',
+            '--keep' => (int) ($settings['keep'] ?? 7),
+            '--trigger' => 'schedule',
+        ])
+            ->dailyAt((string) ($settings['time'] ?? '03:30'))
+            ->onOneServer()
+            ->withoutOverlapping(120);
     }
 
     /**
