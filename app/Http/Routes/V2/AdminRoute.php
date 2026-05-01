@@ -16,6 +16,7 @@ use App\Http\Controllers\V2\Admin\CouponController;
 use App\Http\Controllers\V2\Admin\GiftCardController;
 use App\Http\Controllers\V2\Admin\KnowledgeController;
 use App\Http\Controllers\V2\Admin\PaymentController;
+use App\Http\Controllers\V2\Admin\BackupController;
 use App\Http\Controllers\V2\Admin\SystemController;
 use App\Http\Controllers\V2\Admin\ThemeController;
 use App\Http\Controllers\V2\Admin\TrafficResetController;
@@ -259,6 +260,12 @@ class AdminRoute
                 $router->get('/getHorizonFailedJobs', [SystemController::class, 'getHorizonFailedJobs']);
                 $router->post('/clearSystemLog', [SystemController::class, 'clearSystemLog']);
                 $router->get('/getLogClearStats', [SystemController::class, 'getLogClearStats']);
+                $router->get('/backup/overview', [BackupController::class, 'overview']);
+                $router->any('/backup/fetch', [BackupController::class, 'fetch']);
+                $router->post('/backup/create', [BackupController::class, 'create']);
+                $router->get('/backup/download/{id}', [BackupController::class, 'download'])->whereNumber('id');
+                $router->post('/backup/drop', [BackupController::class, 'drop']);
+                $router->post('/backup/cleanup', [BackupController::class, 'cleanup']);
             });
 
             // Risk Center (admin-only)
