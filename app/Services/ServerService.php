@@ -183,14 +183,10 @@ class ServerService
             return [];
         }
 
-        if (!$onlyDeviceLimited) {
-            return self::queryAvailableUserIds($groupIds, false);
-        }
-
         return Cache::remember(
-            self::availableUserIdsCacheKey($groupIds, true),
+            self::availableUserIdsCacheKey($groupIds, $onlyDeviceLimited),
             now()->addSeconds(self::AVAILABLE_USER_IDS_CACHE_TTL),
-            fn(): array => self::queryAvailableUserIds($groupIds, true)
+            fn(): array => self::queryAvailableUserIds($groupIds, $onlyDeviceLimited)
         );
     }
 

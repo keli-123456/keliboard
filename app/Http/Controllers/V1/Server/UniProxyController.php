@@ -234,7 +234,8 @@ class UniProxyController extends Controller
     {
         $node = $this->getNodeInfo($request);
         $this->touchNodeLastCheckAt($node);
-        $deviceLimitUserIds = ServerService::getAvailableUserIds($node, true);
+        $onlyExplicitDeviceLimited = max(0, (int) admin_setting('device_limit_fallback', 0)) <= 0;
+        $deviceLimitUserIds = ServerService::getAvailableUserIds($node, $onlyExplicitDeviceLimited);
         $aliveSnapshot = $this->userOnlineService->getAliveSnapshot($deviceLimitUserIds);
         return response()->json([
             'alive' => (object) ($aliveSnapshot['alive'] ?? []),
