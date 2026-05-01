@@ -171,10 +171,10 @@ class BackupService
         }
 
         admin_setting([
-            'backup_auto_enable' => (bool) ($settings['enabled'] ?? false),
+            'backup_auto_enable' => (int) (bool) ($settings['enabled'] ?? false),
             'backup_auto_time' => $time,
             'backup_auto_keep' => $keep,
-            'backup_auto_upload' => $upload,
+            'backup_auto_upload' => (int) $upload,
         ]);
 
         return $this->settings();

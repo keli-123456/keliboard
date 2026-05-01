@@ -336,6 +336,7 @@ final class ServerMachineControllerTest extends TestCase
             $table->integer('sort')->default(0);
             $table->unsignedInteger('last_seen_at')->nullable();
             $table->json('load_status')->nullable();
+            $table->json('upgrade_state')->nullable();
             $table->timestamps();
         });
 

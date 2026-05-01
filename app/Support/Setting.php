@@ -106,27 +106,16 @@ class Setting
         }
 
         try {
-            $settings = $this->cache->rememberForever(self::CACHE_KEY, function (): array {
-                return array_change_key_case(
-                    SettingModel::pluck('value', 'name')->toArray(),
-                    CASE_LOWER
-                );
-            });
-            
-            // 处理JSON格式的值
-            foreach ($settings as $key => $value) {
-                if (is_string($value)) {
-                    $decoded = json_decode($value, true);
-                    if (json_last_error() === JSON_ERROR_NONE) {
-                        $settings[$key] = $decoded;
-                    }
-                }
-            }
-            
-            $this->loadedSettings = $settings;
+            $settings = $this->cache->rememberForever(self::CACHE_KEY, fn(): array => $this->loadFromDatabase());
         } catch (\Throwable) {
-            $this->loadedSettings = [];
+            try {
+                $settings = $this->loadFromDatabase();
+            } catch (\Throwable) {
+                $settings = [];
+            }
         }
+
+        $this->loadedSettings = $this->decodeSettings($settings);
     }
 
     /**
@@ -134,7 +123,38 @@ class Setting
      */
     private function flush(): void
     {
-        $this->cache->forget(self::CACHE_KEY);
+        try {
+            $this->cache->forget(self::CACHE_KEY);
+        } catch (\Throwable) {
+            try {
+                Cache::forget(self::CACHE_KEY);
+            } catch (\Throwable) {
+            }
+        }
         $this->loadedSettings = null;
+    }
+
+    private function loadFromDatabase(): array
+    {
+        return array_change_key_case(
+            SettingModel::pluck('value', 'name')->toArray(),
+            CASE_LOWER
+        );
+    }
+
+    private function decodeSettings(array $settings): array
+    {
+        foreach ($settings as $key => $value) {
+            if (!is_string($value)) {
+                continue;
+            }
+
+            $decoded = json_decode($value, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $settings[$key] = $decoded;
+            }
+        }
+
+        return $settings;
     }
 }
