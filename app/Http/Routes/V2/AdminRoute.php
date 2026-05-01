@@ -90,6 +90,8 @@ class AdminRoute
                 $router->post('/bindNodes', [MachineController::class, 'bindNodes']);
                 $router->get('/history', [MachineController::class, 'history']);
                 $router->get('/installCommand', [MachineController::class, 'installCommand']);
+                $router->get('/versionInfo', [MachineController::class, 'versionInfo']);
+                $router->post('/upgrade', [MachineController::class, 'upgrade']);
             });
             $router->group([
                 'prefix' => 'server/manage'

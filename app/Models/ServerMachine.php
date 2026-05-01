@@ -19,6 +19,7 @@ class ServerMachine extends Model
         'subproxy_cert_state' => 'array',
         'last_seen_at' => 'integer',
         'load_status' => 'array',
+        'upgrade_state' => 'array',
         'created_at' => 'timestamp',
         'updated_at' => 'timestamp',
     ];

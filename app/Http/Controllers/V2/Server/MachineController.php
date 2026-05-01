@@ -104,6 +104,7 @@ class MachineController extends Controller
             'node_failures' => $this->normalizeNodeFailures(data_get($payload, 'node_failures')),
             'updated_at' => now()->timestamp,
         ];
+        $upgradeState = $this->resolveUpgradeState($machine, $status, data_get($payload, 'upgrade'));
         $reload = app(ZeroSslCertificateService::class)->handleMachineStatus(
             $machine,
             $status,
@@ -113,7 +114,9 @@ class MachineController extends Controller
         $machine->forceFill([
             'last_seen_at' => now()->timestamp,
             'load_status' => $status,
+            'upgrade_state' => $upgradeState,
         ])->save();
+        $upgradeCommand = $this->buildUpgradeCommand($machine);
 
         ServerMachineLoadHistory::create([
             'machine_id' => (int) $machine->id,
@@ -134,6 +137,7 @@ class MachineController extends Controller
         return response()->json([
             'data' => true,
             'reload' => $reload,
+            'upgrade' => $upgradeCommand,
         ]);
     }
 
@@ -176,6 +180,90 @@ class MachineController extends Controller
         }
 
         return $out;
+    }
+
+    private function resolveUpgradeState(ServerMachine $machine, array $status, mixed $reported): ?array
+    {
+        $state = is_array($machine->upgrade_state) ? $machine->upgrade_state : null;
+        if (empty($state)) {
+            return null;
+        }
+
+        $now = now()->timestamp;
+        $targetVersion = trim((string) ($state['target_version'] ?? ''));
+        $currentVersion = trim((string) ($status['version'] ?? ''));
+        if ($targetVersion !== '' && $currentVersion !== '' && $this->versionsMatch($currentVersion, $targetVersion)) {
+            $state['status'] = 'succeeded';
+            $state['current_version'] = $currentVersion;
+            $state['finished_at'] = $state['finished_at'] ?? $now;
+            $state['updated_at'] = $now;
+            unset($state['error']);
+            return $state;
+        }
+
+        if (is_array($reported) && (string) ($reported['id'] ?? '') === (string) ($state['id'] ?? '')) {
+            $reportedStatus = trim((string) ($reported['status'] ?? ''));
+            if (in_array($reportedStatus, ['running', 'failed'], true)) {
+                $state['status'] = $reportedStatus;
+                $state['updated_at'] = $now;
+                if ($reportedStatus === 'running') {
+                    $state['started_at'] = $state['started_at'] ?? $now;
+                    unset($state['error']);
+                } else {
+                    $state['finished_at'] = $state['finished_at'] ?? $now;
+                    $state['error'] = $this->statusString(data_get($reported, 'error'), 1000);
+                }
+            }
+        }
+
+        $statusValue = (string) ($state['status'] ?? '');
+        $requestedAt = (int) ($state['requested_at'] ?? 0);
+        if (in_array($statusValue, ['queued', 'dispatched', 'running'], true) && $requestedAt > 0 && $requestedAt < $now - 1200) {
+            $state['status'] = 'failed';
+            $state['finished_at'] = $now;
+            $state['updated_at'] = $now;
+            $state['error'] = 'upgrade_timeout';
+        }
+
+        return $state;
+    }
+
+    private function buildUpgradeCommand(ServerMachine $machine): ?array
+    {
+        $state = is_array($machine->upgrade_state) ? $machine->upgrade_state : null;
+        if (($state['status'] ?? '') !== 'queued') {
+            return null;
+        }
+
+        $targetVersion = trim((string) ($state['target_version'] ?? ''));
+        if (!$this->isValidKelinodeVersion($targetVersion)) {
+            $state['status'] = 'failed';
+            $state['error'] = 'invalid_target_version';
+            $state['finished_at'] = now()->timestamp;
+            $state['updated_at'] = now()->timestamp;
+            $machine->forceFill(['upgrade_state' => $state])->save();
+            return null;
+        }
+
+        $state['status'] = 'dispatched';
+        $state['dispatched_at'] = now()->timestamp;
+        $state['updated_at'] = now()->timestamp;
+        $machine->forceFill(['upgrade_state' => $state])->save();
+
+        return [
+            'id' => (string) ($state['id'] ?? ''),
+            'target_version' => $targetVersion,
+        ];
+    }
+
+    private function versionsMatch(string $current, string $target): bool
+    {
+        return ltrim(trim($current), 'vV') === ltrim(trim($target), 'vV');
+    }
+
+    private function isValidKelinodeVersion(string $version): bool
+    {
+        return (bool) preg_match('/^v?[0-9A-Za-z][0-9A-Za-z._-]{0,63}$/', trim($version));
     }
 
     private function statusInt(mixed $value): ?int

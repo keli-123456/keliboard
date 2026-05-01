@@ -8,8 +8,11 @@ use App\Models\ServerMachine;
 use App\Models\ServerMachineLoadHistory;
 use App\Services\NodeRealtime\NodeRealtimePublisher;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class MachineController extends Controller
 {
@@ -258,6 +261,50 @@ class MachineController extends Controller
         ]);
     }
 
+    public function versionInfo(Request $request)
+    {
+        $force = (bool) $request->boolean('force', false);
+
+        return $this->success($this->resolveLatestKelinodeVersion($force));
+    }
+
+    public function upgrade(Request $request)
+    {
+        $params = $request->validate([
+            'id' => 'required|integer',
+            'target_version' => 'nullable|string|max:64',
+        ]);
+
+        $machine = ServerMachine::find((int) $params['id']);
+        if (!$machine) {
+            return $this->fail([400202, '机器不存在']);
+        }
+        if (!$machine->is_active) {
+            return $this->fail([422, '机器已停用，不能下发升级任务']);
+        }
+
+        $targetVersion = trim((string) ($params['target_version'] ?? ''));
+        if ($targetVersion === '') {
+            $latest = $this->resolveLatestKelinodeVersion();
+            $targetVersion = (string) ($latest['latest_version'] ?? '');
+        }
+        if (!$this->isValidKelinodeVersion($targetVersion)) {
+            return $this->fail([422, '无法获取有效的目标版本']);
+        }
+
+        $machine->forceFill([
+            'upgrade_state' => [
+                'id' => (string) Str::uuid(),
+                'status' => 'queued',
+                'target_version' => $targetVersion,
+                'requested_at' => now()->timestamp,
+                'updated_at' => now()->timestamp,
+            ],
+        ])->save();
+
+        return $this->success($machine->fresh());
+    }
+
     private function buildInstallCommand(string $baseURL, ServerMachine $machine): string
     {
         $scriptURL = 'https://raw.githubusercontent.com/keli-123456/kelinode/main/script/install.sh';
@@ -290,6 +337,52 @@ class MachineController extends Controller
         }
 
         return rtrim($request->getSchemeAndHttpHost(), '/');
+    }
+
+    private function resolveLatestKelinodeVersion(bool $force = false): array
+    {
+        $cacheKey = 'server_machine:kelinode_latest_release';
+        if ($force) {
+            Cache::forget($cacheKey);
+        }
+
+        return Cache::remember($cacheKey, now()->addMinutes(10), function (): array {
+            $checkedAt = now()->timestamp;
+            try {
+                $response = Http::timeout(5)
+                    ->acceptJson()
+                    ->get('https://api.github.com/repos/keli-123456/kelinode/releases/latest');
+                if (!$response->ok()) {
+                    return [
+                        'latest_version' => null,
+                        'checked_at' => $checkedAt,
+                        'source' => 'github',
+                        'error' => 'github_status_' . $response->status(),
+                    ];
+                }
+
+                $version = trim((string) data_get($response->json(), 'tag_name', ''));
+                return [
+                    'latest_version' => $this->isValidKelinodeVersion($version) ? $version : null,
+                    'checked_at' => $checkedAt,
+                    'source' => 'github',
+                    'error' => null,
+                ];
+            } catch (\Throwable $e) {
+                Log::warning('Fetch kelinode latest release failed', ['error' => $e->getMessage()]);
+                return [
+                    'latest_version' => null,
+                    'checked_at' => $checkedAt,
+                    'source' => 'github',
+                    'error' => 'request_failed',
+                ];
+            }
+        });
+    }
+
+    private function isValidKelinodeVersion(string $version): bool
+    {
+        return (bool) preg_match('/^v?[0-9A-Za-z][0-9A-Za-z._-]{0,63}$/', trim($version));
     }
 
     private function shellQuote(string $value): string
