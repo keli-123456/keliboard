@@ -15,6 +15,7 @@ on:
       - "composer.json"
       - "composer.lock"
       - "phpunit.xml"
+      - "public/assets/admin-xboard/**"
       - ".github/workflows/ci.yml"
   pull_request:
     types: [opened, synchronize, reopened]
@@ -31,6 +32,7 @@ on:
       - "composer.json"
       - "composer.lock"
       - "phpunit.xml"
+      - "public/assets/admin-xboard/**"
       - ".github/workflows/ci.yml"
 
 permissions:
@@ -56,6 +58,9 @@ jobs:
 
       - name: Verify composer platform pin
         run: php scripts/verify-composer-platform.php
+
+      - name: Verify admin asset versions
+        run: php scripts/verify-admin-xboard-assets.php
 
       - name: Verify lock platform compatibility
         run: composer check-platform-reqs --lock --no-interaction
