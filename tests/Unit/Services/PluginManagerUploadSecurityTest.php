@@ -5,10 +5,18 @@ declare(strict_types=1);
 namespace Tests\Unit\Services;
 
 use App\Services\Plugin\PluginManager;
+use Illuminate\Filesystem\Filesystem;
 use Tests\TestCase;
 
 final class PluginManagerUploadSecurityTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        app()->instance('files', new Filesystem());
+    }
+
     public function test_archive_guard_rejects_path_traversal_entries(): void
     {
         $archivePath = $this->createArchive([
@@ -83,6 +91,26 @@ final class PluginManagerUploadSecurityTest extends TestCase
         }
     }
 
+    public function test_upload_config_discovery_rejects_multiple_config_files(): void
+    {
+        $extractPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'plugin_extract_' . uniqid('', true);
+        mkdir($extractPath . DIRECTORY_SEPARATOR . 'PluginA', 0777, true);
+        mkdir($extractPath . DIRECTORY_SEPARATOR . 'PluginB', 0777, true);
+        file_put_contents($extractPath . DIRECTORY_SEPARATOR . 'PluginA' . DIRECTORY_SEPARATOR . 'config.json', '{}');
+        file_put_contents($extractPath . DIRECTORY_SEPARATOR . 'PluginB' . DIRECTORY_SEPARATOR . 'config.json', '{}');
+
+        try {
+            $method = new \ReflectionMethod(PluginManager::class, 'findUploadedPluginConfig');
+            $method->setAccessible(true);
+
+            $this->expectException(\Exception::class);
+            $this->expectExceptionMessage('包含多个配置文件');
+            $method->invoke(new PluginManager(), $extractPath);
+        } finally {
+            $this->deleteDirectory($extractPath);
+        }
+    }
+
     private function assertArchiveGuardFails(string $archivePath, string $expectedMessage): void
     {
         $zip = $this->openArchive($archivePath);
@@ -147,5 +175,23 @@ final class PluginManagerUploadSecurityTest extends TestCase
             $this->fail('Failed to open zip archive for reading.');
         }
         return $zip;
+    }
+
+    private function deleteDirectory(string $path): void
+    {
+        if (!is_dir($path)) {
+            return;
+        }
+
+        $items = array_diff(scandir($path) ?: [], ['.', '..']);
+        foreach ($items as $item) {
+            $itemPath = $path . DIRECTORY_SEPARATOR . $item;
+            if (is_dir($itemPath)) {
+                $this->deleteDirectory($itemPath);
+            } else {
+                @unlink($itemPath);
+            }
+        }
+        @rmdir($path);
     }
 }

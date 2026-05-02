@@ -94,6 +94,25 @@ curl -X POST "$APP_URL/api/v2/$ADMIN_PATH/system/backup/verify" \
 
 远程备份需要先从 Google Cloud Storage 或 FTP 下载回服务器，再按本地文件流程校验和恢复。
 
+服务器命令行也可以直接做灾难恢复检查。该命令支持备份记录 ID，也支持只传一个 `.sql.gz` 文件路径，适合新机器还没有恢复数据库时使用：
+
+```bash
+php artisan backup:restore-plan storage/backup/<backup>.sql.gz
+php artisan backup:restore-plan --id=1
+php artisan backup:restore-plan storage/backup/<backup>.sql.gz --extract-env=.env
+php artisan backup:restore-plan storage/backup/<backup>.sql.gz --expected-sha256=<sha256> --json
+```
+
+命令会输出：
+
+- 压缩包大小和 SHA256。
+- gzip 是否可读、内容是否像 SQL dump。
+- 备份内记录的数据库连接类型。
+- 是否包含内嵌 `.env`。
+- 推荐恢复命令。
+
+如果目标 `.env` 已存在，命令默认不会覆盖；确认要覆盖时再加 `--force`。
+
 ## 恢复前检查
 
 恢复前必须确认：

@@ -918,16 +918,8 @@ class PluginManager
         }
 
         try {
-            $configFile = File::glob($extractPath . '/*/config.json');
-            if (empty($configFile)) {
-                $configFile = File::glob($extractPath . '/config.json');
-            }
-
-            if (empty($configFile)) {
-                throw new \Exception('插件包格式错误：缺少配置文件');
-            }
-
-            $pluginPath = dirname(reset($configFile));
+            $configFile = $this->findUploadedPluginConfig($extractPath);
+            $pluginPath = dirname($configFile);
             $pluginRealPath = realpath($pluginPath);
             $extractRealPath = realpath($extractPath);
             if (!$pluginRealPath || !$extractRealPath || !$this->isPathInside($pluginRealPath, $extractRealPath)) {
@@ -1044,6 +1036,24 @@ class PluginManager
                 throw new \Exception('插件包包含符号链接，已拒绝');
             }
         }
+    }
+
+    private function findUploadedPluginConfig(string $extractPath): string
+    {
+        $configFiles = array_values(array_unique(array_merge(
+            File::glob($extractPath . '/config.json') ?: [],
+            File::glob($extractPath . '/*/config.json') ?: []
+        )));
+
+        if (empty($configFiles)) {
+            throw new \Exception('插件包格式错误：缺少配置文件');
+        }
+
+        if (count($configFiles) > 1) {
+            throw new \Exception('插件包格式错误：包含多个配置文件');
+        }
+
+        return $configFiles[0];
     }
 
     private function normalizeArchiveEntryPath(string $entryName): ?string

@@ -6,6 +6,7 @@ use App\Helpers\ResponseEnum;
 use App\Http\Controllers\Controller;
 use App\Services\Backup\BackupService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 class BackupController extends Controller
@@ -109,14 +110,26 @@ class BackupController extends Controller
         }
     }
 
-    public function download(int $id, BackupService $backups)
+    public function download(Request $request, int $id, BackupService $backups)
     {
         try {
             $record = $backups->findDownloadable($id);
+            Log::channel('backup')->info('Backup downloaded by admin', [
+                'id' => (int) $record->id,
+                'filename' => (string) $record->filename,
+                'admin_id' => optional($request->user())->id,
+                'ip' => $request->ip(),
+            ]);
+
             return response()->download(
                 $backups->localPath($record),
                 $record->filename,
-                ['Content-Type' => 'application/gzip']
+                [
+                    'Content-Type' => 'application/gzip',
+                    'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+                    'Pragma' => 'no-cache',
+                    'X-Content-Type-Options' => 'nosniff',
+                ]
             );
         } catch (Throwable $e) {
             return $this->fail(ResponseEnum::CLIENT_NOT_FOUND_ERROR, null, $e->getMessage());

@@ -80,6 +80,31 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertStringContainsString('      url: "https://node-api.example.test"', $config);
     }
 
+    public function test_upgrade_rejects_existing_in_progress_task_without_force(): void
+    {
+        $machine = ServerMachine::create([
+            'name' => 'edge-upgrade',
+            'token' => 'machine-token',
+            'is_active' => true,
+            'upgrade_state' => [
+                'status' => 'running',
+                'target_version' => 'v0.3.24',
+            ],
+        ]);
+
+        $request = $this->installRequest('https://panel.example.test/admin/server/machine/upgrade', [
+            'id' => $machine->id,
+            'target_version' => 'v0.3.25',
+        ]);
+
+        $response = (new MachineController())->upgrade($request);
+        $payload = $response->getData(true);
+
+        $this->assertSame(409, $response->getStatusCode());
+        $this->assertSame('fail', $payload['status']);
+        $this->assertSame('该机器已有进行中的升级任务', $payload['message']);
+    }
+
     private function bindSettings(): void
     {
         $this->settings = new class {
@@ -104,7 +129,7 @@ final class MachineControllerInstallCommandTest extends TestCase
         $request = new class extends Request {
             public function validate(array $rules, ...$params): array
             {
-                return [];
+                return $this->request->all();
             }
         };
 
@@ -132,6 +157,7 @@ final class MachineControllerInstallCommandTest extends TestCase
             $table->integer('sort')->default(0);
             $table->unsignedInteger('last_seen_at')->nullable();
             $table->json('load_status')->nullable();
+            $table->json('upgrade_state')->nullable();
             $table->timestamps();
         });
     }

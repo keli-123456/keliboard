@@ -273,6 +273,7 @@ class MachineController extends Controller
         $params = $request->validate([
             'id' => 'required|integer',
             'target_version' => 'nullable|string|max:64',
+            'force' => 'nullable|boolean',
         ]);
 
         $machine = ServerMachine::find((int) $params['id']);
@@ -281,6 +282,13 @@ class MachineController extends Controller
         }
         if (!$machine->is_active) {
             return $this->fail([422, '机器已停用，不能下发升级任务']);
+        }
+        $currentUpgrade = is_array($machine->upgrade_state) ? $machine->upgrade_state : [];
+        if (
+            !(bool) ($params['force'] ?? false)
+            && in_array((string) ($currentUpgrade['status'] ?? ''), ['queued', 'dispatched', 'running'], true)
+        ) {
+            return $this->fail([409, '该机器已有进行中的升级任务']);
         }
 
         $targetVersion = trim((string) ($params['target_version'] ?? ''));
