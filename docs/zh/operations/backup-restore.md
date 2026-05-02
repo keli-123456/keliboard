@@ -81,6 +81,32 @@ curl -X POST "$APP_URL/api/v2/$ADMIN_PATH/system/backup/restore-preflight" \
 - “运行中备份”和“数据库类型不一致”属于阻断项。
 - “未进入维护模式”属于风险提示，因为进入维护模式后管理端 API 可能不可用；实际恢复前仍应停止 Web 流量、队列、定时任务和 Octane。
 
+## 恢复演练记录
+
+校验备份或恢复预检后，管理端可以记录一次恢复演练结果。记录只保存演练摘要，不会执行真实恢复，也不会修改数据库数据。
+
+记录内容包括：
+
+- 演练状态：`passed`、`failed`、`incomplete`。
+- 演练环境：`local`、`staging`、`production_rehearsal`。
+- 备注和操作人。
+- 记录时间、备份 ID 和备份文件名。
+
+接口示例：
+
+```bash
+curl -X POST "$APP_URL/api/v2/$ADMIN_PATH/system/backup/restore-drill" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"id": 1, "status": "passed", "environment": "staging", "note": "测试库恢复、迁移和登录检查通过"}'
+```
+
+说明：
+
+- 演练记录保存在 `v2_backup_record.options.restore_drills`，单个备份最多保留最近 20 条。
+- 备份中心首页会展示最近一次恢复演练，备份列表会展示每个备份最近一次演练结果。
+- 该功能用于审计“备份是否真的能恢复”，不能替代实际恢复前的人工确认。
+
 ## MySQL 恢复
 
 示例：

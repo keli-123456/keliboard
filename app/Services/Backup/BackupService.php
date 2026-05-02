@@ -26,6 +26,8 @@ class BackupService
         self::DISK_GOOGLE_CLOUD,
         self::DISK_FTP,
     ];
+    private const RESTORE_DRILL_STATUSES = ['passed', 'failed', 'incomplete'];
+    private const RESTORE_DRILL_ENVIRONMENTS = ['local', 'staging', 'production_rehearsal'];
 
     public function createDatabaseBackup(bool $upload = false, array $options = []): array
     {
@@ -147,6 +149,7 @@ class BackupService
             'local_total_size' => $localSucceeded ? (int) $localSucceeded->sum('size') : 0,
             'latest' => $hasTable ? $this->formatRecord((clone $query)->latest('id')->first()) : null,
             'latest_auto' => $this->formatRecord($this->latestAutomaticRecord()),
+            'latest_restore_drill' => $this->latestRestoreDrill(),
             'settings' => $this->settings(),
         ];
     }
@@ -223,7 +226,7 @@ class BackupService
         }
 
         $path = trim((string) $record->path);
-        $localPath = $path !== '' ? storage_path($path) : '';
+        $localPath = $path !== '' ? $this->storagePath($path) : '';
         $exists = $localPath !== '' && File::exists($localPath);
 
         return [
@@ -237,6 +240,7 @@ class BackupService
             'size' => (int) $record->size,
             'checksum' => $record->checksum,
             'options' => $record->options ?: [],
+            'latest_restore_drill' => $this->latestDrillForRecord($record),
             'error' => $record->error,
             'exists' => $exists,
             'downloadable' => $exists && $record->disk === 'local' && $record->status === BackupRecord::STATUS_SUCCEEDED,
@@ -244,6 +248,43 @@ class BackupService
             'finished_at' => $record->finished_at,
             'created_at' => $record->created_at,
             'updated_at' => $record->updated_at,
+        ];
+    }
+
+    public function recordRestoreDrill(int $id, array $payload): array
+    {
+        $record = BackupRecord::query()->findOrFail($id);
+        if ($record->type !== BackupRecord::TYPE_DATABASE) {
+            throw new RuntimeException('Only database backups can record restore drills');
+        }
+        if (in_array($record->status, [BackupRecord::STATUS_RUNNING, BackupRecord::STATUS_FAILED], true)) {
+            throw new RuntimeException('Only completed backups can record restore drills');
+        }
+
+        $status = $this->normalizeRestoreDrillStatus((string) ($payload['status'] ?? 'incomplete'));
+        $environment = $this->normalizeRestoreDrillEnvironment((string) ($payload['environment'] ?? 'staging'));
+        $now = time();
+        $drill = [
+            'id' => $now . '-' . substr(sha1($record->id . '|' . $now . '|' . random_int(1, PHP_INT_MAX)), 0, 8),
+            'backup_id' => (int) $record->id,
+            'backup_filename' => (string) $record->filename,
+            'status' => $status,
+            'environment' => $environment,
+            'note' => $this->truncateText((string) ($payload['note'] ?? ''), 1000),
+            'operator' => $this->truncateText((string) ($payload['operator'] ?? ''), 120),
+            'recorded_at' => $now,
+        ];
+
+        $options = $record->options ?: [];
+        $drills = is_array($options['restore_drills'] ?? null) ? $options['restore_drills'] : [];
+        array_unshift($drills, $drill);
+        $options['restore_drills'] = array_slice($drills, 0, 20);
+
+        $record->forceFill(['options' => $options])->save();
+
+        return [
+            'record' => $this->formatRecord($record->refresh()),
+            'drill' => $drill,
         ];
     }
 
@@ -434,6 +475,61 @@ class BackupService
             ->limit(200)
             ->get()
             ->first(fn(BackupRecord $record) => data_get($record->options, 'trigger') === 'schedule');
+    }
+
+    private function latestRestoreDrill(): ?array
+    {
+        if (!$this->recordingAvailable()) {
+            return null;
+        }
+
+        return BackupRecord::query()
+            ->where('type', BackupRecord::TYPE_DATABASE)
+            ->latest('updated_at')
+            ->limit(200)
+            ->get()
+            ->map(fn(BackupRecord $record) => $this->latestDrillForRecord($record))
+            ->filter()
+            ->sortByDesc(fn(array $drill) => (int) ($drill['recorded_at'] ?? 0))
+            ->first() ?: null;
+    }
+
+    private function latestDrillForRecord(BackupRecord $record): ?array
+    {
+        $drills = data_get($record->options ?: [], 'restore_drills', []);
+        if (!is_array($drills) || $drills === []) {
+            return null;
+        }
+
+        $latest = collect($drills)
+            ->filter(fn($drill) => is_array($drill))
+            ->sortByDesc(fn(array $drill) => (int) ($drill['recorded_at'] ?? 0))
+            ->first();
+
+        if (!is_array($latest)) {
+            return null;
+        }
+
+        return [
+            'id' => (string) ($latest['id'] ?? ''),
+            'backup_id' => (int) ($latest['backup_id'] ?? $record->id),
+            'backup_filename' => (string) ($latest['backup_filename'] ?? $record->filename),
+            'status' => $this->normalizeRestoreDrillStatus((string) ($latest['status'] ?? 'incomplete')),
+            'environment' => $this->normalizeRestoreDrillEnvironment((string) ($latest['environment'] ?? 'staging')),
+            'note' => (string) ($latest['note'] ?? ''),
+            'operator' => (string) ($latest['operator'] ?? ''),
+            'recorded_at' => (int) ($latest['recorded_at'] ?? 0),
+        ];
+    }
+
+    private function normalizeRestoreDrillStatus(string $status): string
+    {
+        return in_array($status, self::RESTORE_DRILL_STATUSES, true) ? $status : 'incomplete';
+    }
+
+    private function normalizeRestoreDrillEnvironment(string $environment): string
+    {
+        return in_array($environment, self::RESTORE_DRILL_ENVIRONMENTS, true) ? $environment : 'staging';
     }
 
     private function normalizeTime(string $time): string
@@ -877,5 +973,21 @@ class BackupService
     {
         $error = trim($error);
         return strlen($error) > 2000 ? substr($error, 0, 2000) : $error;
+    }
+
+    private function truncateText(string $value, int $limit): string
+    {
+        $value = trim($value);
+        return strlen($value) > $limit ? substr($value, 0, $limit) : $value;
+    }
+
+    private function storagePath(string $path = ''): string
+    {
+        if (method_exists(app(), 'storagePath')) {
+            return storage_path($path);
+        }
+
+        $base = getcwd() . DIRECTORY_SEPARATOR . 'storage';
+        return $path === '' ? $base : $base . DIRECTORY_SEPARATOR . ltrim($path, '/\\');
     }
 }

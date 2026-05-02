@@ -109,6 +109,23 @@ class BackupController extends Controller
         }
     }
 
+    public function restoreDrill(Request $request, BackupService $backups)
+    {
+        $data = $request->validate([
+            'id' => 'required|integer|min:1',
+            'status' => 'required|string|in:passed,failed,incomplete',
+            'environment' => 'required|string|in:local,staging,production_rehearsal',
+            'note' => 'nullable|string|max:1000',
+            'operator' => 'nullable|string|max:120',
+        ]);
+
+        try {
+            return $this->success($backups->recordRestoreDrill((int) $data['id'], $data));
+        } catch (Throwable $e) {
+            return $this->fail([500001, $e->getMessage()]);
+        }
+    }
+
     public function drop(Request $request, BackupService $backups)
     {
         $request->validate([
