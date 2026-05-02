@@ -117,7 +117,7 @@ class TicketService
         }
     }
 
-    public function replyByAdmin($ticketId, $message, $userId, array $images = []): void
+    public function replyByAdmin($ticketId, $message, $userId, array $images = [], array $options = []): void
     {
         $stored = [];
         try {
@@ -162,6 +162,21 @@ class TicketService
                 $ticket->reply_status = Ticket::REPLY_STATUS_WAITING_USER;
             } else {
                 $ticket->reply_status = Ticket::REPLY_STATUS_WAITING_ADMIN;
+            }
+            try {
+                app(TicketAiAssistantService::class)->markSent(
+                    isset($options['ai_suggestion_id']) ? (int) $options['ai_suggestion_id'] : null,
+                    (int) $ticket->id,
+                    (int) $userId,
+                    $ticketMessage,
+                    (string) $message
+                );
+            } catch (\Throwable $e) {
+                Log::warning('ticket AI suggestion mark-sent failed', [
+                    'ticket_id' => (int) $ticket->id,
+                    'ai_suggestion_id' => $options['ai_suggestion_id'] ?? null,
+                    'message' => $e->getMessage(),
+                ]);
             }
             if (!$ticketMessage || !$ticket->save()) {
                 throw new ApiException('工单回复失败');

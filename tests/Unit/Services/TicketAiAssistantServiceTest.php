@@ -7,6 +7,7 @@ namespace Tests\Unit\Services;
 use App\Models\Knowledge;
 use App\Models\Setting as SettingModel;
 use App\Models\Ticket;
+use App\Models\TicketAiSuggestion;
 use App\Models\TicketMessage;
 use App\Models\User;
 use App\Services\TicketAiAssistantService;
@@ -32,6 +33,7 @@ final class TicketAiAssistantServiceTest extends TestCase
 
         $this->createUserTable();
         $this->createTicketTablesForAi();
+        $this->createTicketAiSuggestionTable();
         $this->createKnowledgeTable();
         $this->createSettingsTable();
     }
@@ -118,12 +120,20 @@ final class TicketAiAssistantServiceTest extends TestCase
             ]),
         ]);
 
-        $result = (new TicketAiAssistantService())->suggest($ticket);
+        $result = (new TicketAiAssistantService())->suggest($ticket, null, 99);
 
+        $this->assertIsInt($result['suggestion_id']);
         $this->assertSame('客户端连接', $result['category']);
         $this->assertSame('您好，请先确认客户端核心已启动，再刷新订阅并重新测试节点。', $result['draft']);
         $this->assertFalse($result['needs_human']);
         $this->assertSame('Windows 客户端连接排查', $result['matched_knowledge'][0]['title']);
+        $this->assertContains('客户端连接', $result['category_options']);
+
+        $suggestion = TicketAiSuggestion::find($result['suggestion_id']);
+        $this->assertNotNull($suggestion);
+        $this->assertSame(99, (int) $suggestion->admin_id);
+        $this->assertSame('generated', $suggestion->status);
+        $this->assertSame('客户端连接', $suggestion->category);
 
         Http::assertSent(function ($request) {
             $payload = $request->data();
@@ -134,6 +144,73 @@ final class TicketAiAssistantServiceTest extends TestCase
                 && str_contains($content, 'Windows 客户端无法连接')
                 && str_contains($content, 'Windows 客户端连接排查');
         });
+    }
+
+    public function test_feedback_and_sent_state_track_ai_draft_adoption(): void
+    {
+        $user = User::create([
+            'email' => 'user@example.test',
+            'password' => 'secret',
+            'token' => 'token',
+            'uuid' => 'uuid',
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $ticket = Ticket::create([
+            'user_id' => $user->id,
+            'subject' => '支付不到账',
+            'level' => 2,
+            'status' => Ticket::STATUS_OPENING,
+            'reply_status' => Ticket::REPLY_STATUS_WAITING_ADMIN,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $suggestion = TicketAiSuggestion::create([
+            'ticket_id' => $ticket->id,
+            'admin_id' => 42,
+            'model' => 'test-model',
+            'category' => '支付退款',
+            'risk' => 'high',
+            'needs_human' => true,
+            'confidence' => 0.8,
+            'summary' => '用户支付后未到账',
+            'draft' => '您好，我们会先核查支付记录。',
+            'draft_hash' => hash('sha256', '您好，我们会先核查支付记录。'),
+            'status' => TicketAiSuggestion::STATUS_GENERATED,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $service = new TicketAiAssistantService();
+        $feedback = $service->recordFeedback((int) $suggestion->id, (int) $ticket->id, 42, 'inserted');
+        $this->assertSame('inserted', $feedback['status']);
+
+        $message = TicketMessage::create([
+            'ticket_id' => $ticket->id,
+            'user_id' => 42,
+            'message' => '您好，我们会先核查支付记录，请同时提供订单号。',
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $service->markSent(
+            (int) $suggestion->id,
+            (int) $ticket->id,
+            42,
+            $message,
+            '您好，我们会先核查支付记录，请同时提供订单号。'
+        );
+
+        $suggestion->refresh();
+        $this->assertSame(TicketAiSuggestion::STATUS_SENT, $suggestion->status);
+        $this->assertSame((int) $message->id, (int) $suggestion->reply_message_id);
+        $this->assertTrue((bool) $suggestion->edited);
+
+        $stats = $service->stats(7);
+        $this->assertSame(1, $stats['generated']);
+        $this->assertSame(1, $stats['inserted']);
+        $this->assertSame(1, $stats['sent']);
+        $this->assertSame(1, $stats['needs_human']);
+        $this->assertSame('支付退款', $stats['top_categories'][0]['category']);
     }
 
     /**
@@ -192,6 +269,36 @@ final class TicketAiAssistantServiceTest extends TestCase
             $table->text('message')->nullable();
             $table->boolean('is_auto_reply')->default(false);
             $table->string('auto_reply_rule')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+    }
+
+    private function createTicketAiSuggestionTable(): void
+    {
+        Schema::create('v2_ticket_ai_suggestion', function (Blueprint $table): void {
+            $table->id();
+            $table->integer('ticket_id');
+            $table->integer('admin_id')->nullable();
+            $table->string('model')->nullable();
+            $table->string('category')->nullable();
+            $table->string('sentiment')->nullable();
+            $table->string('risk')->nullable();
+            $table->boolean('needs_human')->default(false);
+            $table->decimal('confidence', 5, 4)->default(0);
+            $table->text('summary')->nullable();
+            $table->mediumText('draft')->nullable();
+            $table->string('draft_hash', 64)->nullable();
+            $table->text('instruction')->nullable();
+            $table->json('knowledge_refs')->nullable();
+            $table->json('matched_knowledge')->nullable();
+            $table->string('status')->default('generated');
+            $table->integer('inserted_at')->nullable();
+            $table->integer('discarded_at')->nullable();
+            $table->integer('sent_at')->nullable();
+            $table->integer('reply_message_id')->nullable();
+            $table->string('final_message_hash', 64)->nullable();
+            $table->boolean('edited')->default(false);
             $table->integer('created_at')->nullable();
             $table->integer('updated_at')->nullable();
         });

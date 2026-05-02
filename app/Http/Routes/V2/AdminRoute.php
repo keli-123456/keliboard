@@ -182,6 +182,8 @@ class AdminRoute
                 $router->post('/reply', [TicketController::class, 'reply']);
                 $router->post('/close', [TicketController::class, 'close']);
                 $router->post('/aiSuggest', [TicketController::class, 'aiSuggest']);
+                $router->post('/aiSuggestionFeedback', [TicketController::class, 'aiSuggestionFeedback']);
+                $router->get('/aiStats', [TicketController::class, 'aiStats']);
                 $router->get('/autoReplyStats', [TicketController::class, 'autoReplyStats']);
                 $router->get('/attachment/{id}', [TicketController::class, 'attachment']);
             });

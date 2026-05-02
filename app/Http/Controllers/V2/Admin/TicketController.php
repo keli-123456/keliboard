@@ -5,6 +5,7 @@ namespace App\Http\Controllers\V2\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\TicketMessageAttachment;
 use App\Models\Ticket;
+use App\Models\TicketAiSuggestion;
 use App\Models\TicketMessage;
 use App\Services\TicketAttachmentService;
 use App\Services\TicketAiAssistantService;
@@ -188,6 +189,23 @@ class TicketController extends Controller
                 $query->whereHas('user', function ($q) use ($request) {
                     $q->where('email', $request->input('email'));
                 });
+            })
+            ->when($request->filled('ai_category') && $request->input('ai_category') !== 'all', function ($query) use ($request) {
+                $category = trim((string) $request->input('ai_category'));
+                $query->whereExists(function ($sub) use ($category) {
+                    $sub->selectRaw('1')
+                        ->from('v2_ticket_ai_suggestion')
+                        ->whereColumn('v2_ticket_ai_suggestion.ticket_id', 'v2_ticket.id')
+                        ->where('v2_ticket_ai_suggestion.category', $category);
+                });
+            })
+            ->when($request->boolean('ai_needs_human'), function ($query) {
+                $query->whereExists(function ($sub) {
+                    $sub->selectRaw('1')
+                        ->from('v2_ticket_ai_suggestion')
+                        ->whereColumn('v2_ticket_ai_suggestion.ticket_id', 'v2_ticket.id')
+                        ->where('v2_ticket_ai_suggestion.needs_human', 1);
+                });
             });
 
         $this->applyFiltersAndSorts($request, $ticketModel);
@@ -198,10 +216,24 @@ class TicketController extends Controller
                 page: $request->integer('current', 1)
             );
 
+        $ticketIds = collect($tickets->items())->pluck('id')->map(fn ($id) => (int) $id)->all();
+        $latestAiByTicket = TicketAiSuggestion::query()
+            ->whereIn('ticket_id', $ticketIds)
+            ->orderByDesc('id')
+            ->get()
+            ->unique('ticket_id')
+            ->keyBy('ticket_id');
+
         // 获取items然后映射转换
-        $items = collect($tickets->items())->map(function ($ticket) {
+        $items = collect($tickets->items())->map(function ($ticket) use ($latestAiByTicket) {
             $ticketData = $ticket->toArray();
             $ticketData['user'] = UserController::transformUserData($ticket->user);
+            $latestAi = $latestAiByTicket->get((int) $ticket->id);
+            if ($latestAi) {
+                $ticketData['ai_category'] = $latestAi->category;
+                $ticketData['ai_risk'] = $latestAi->risk;
+                $ticketData['ai_needs_human'] = (bool) $latestAi->needs_human;
+            }
             return $ticketData;
         })->all();
 
@@ -215,6 +247,7 @@ class TicketController extends Controller
         $request->validate([
             'id' => 'required|numeric',
             'message' => 'required_without:images|string',
+            'ai_suggestion_id' => 'nullable|integer',
             'images' => 'nullable|array|max:' . $maxImages,
             'images.*' => 'file|image|mimes:jpg,jpeg,png,webp|max:' . $maxKb
         ], [
@@ -228,7 +261,12 @@ class TicketController extends Controller
             $request->input('id'),
             (string) $request->input('message', ''),
             $request->user()->id,
-            $images
+            $images,
+            [
+                'ai_suggestion_id' => $request->filled('ai_suggestion_id')
+                    ? (int) $request->input('ai_suggestion_id')
+                    : null,
+            ]
         );
         return $this->success(true);
     }
@@ -332,10 +370,35 @@ class TicketController extends Controller
         }
 
         try {
-            return $this->success($assistant->suggest($ticket, $params['instruction'] ?? null));
+            return $this->success($assistant->suggest($ticket, $params['instruction'] ?? null, $request->user()?->id));
         } catch (\RuntimeException $e) {
             return $this->fail([422, $e->getMessage()]);
         }
+    }
+
+    public function aiSuggestionFeedback(Request $request, TicketAiAssistantService $assistant)
+    {
+        $params = $request->validate([
+            'id' => 'required|integer',
+            'ticket_id' => 'required|integer',
+            'status' => 'required|in:inserted,discarded',
+        ]);
+
+        try {
+            return $this->success($assistant->recordFeedback(
+                (int) $params['id'],
+                (int) $params['ticket_id'],
+                $request->user()?->id,
+                (string) $params['status']
+            ));
+        } catch (\RuntimeException $e) {
+            return $this->fail([422, $e->getMessage()]);
+        }
+    }
+
+    public function aiStats(Request $request, TicketAiAssistantService $assistant)
+    {
+        return $this->success($assistant->stats((int) $request->input('days', 7)));
     }
 
     public function attachment(int $id)

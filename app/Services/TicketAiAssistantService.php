@@ -4,7 +4,10 @@ namespace App\Services;
 
 use App\Models\Knowledge;
 use App\Models\Ticket;
+use App\Models\TicketAiSuggestion;
+use App\Models\TicketMessage;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
@@ -12,6 +15,17 @@ class TicketAiAssistantService
 {
     private const API_KEY_SETTING = 'ticket_ai_api_key';
     private const API_KEY_MASK = '********';
+    private const CATEGORY_OPTIONS = [
+        '客户端连接',
+        '订阅与节点',
+        '套餐订单',
+        '支付退款',
+        '账号安全',
+        '流量异常',
+        '服务器故障',
+        '其他',
+    ];
+    private const HUMAN_REVIEW_CATEGORIES = ['支付退款', '账号安全', '服务器故障'];
 
     public function publicSettings(): array
     {
@@ -46,7 +60,7 @@ class TicketAiAssistantService
         return $data;
     }
 
-    public function suggest(Ticket $ticket, ?string $instruction = null): array
+    public function suggest(Ticket $ticket, ?string $instruction = null, ?int $adminId = null): array
     {
         $settings = $this->settings();
         if (!$settings['enabled']) {
@@ -83,7 +97,126 @@ class TicketAiAssistantService
             throw new RuntimeException('AI 服务未返回可用内容');
         }
 
-        return $this->normalizeAiResult($content, $knowledge);
+        $result = $this->normalizeAiResult($content, $knowledge);
+        $suggestion = TicketAiSuggestion::create([
+            'ticket_id' => (int) $ticket->id,
+            'admin_id' => $adminId,
+            'model' => $settings['model'],
+            'category' => $result['category'],
+            'sentiment' => $result['sentiment'],
+            'risk' => $result['risk'],
+            'needs_human' => $result['needs_human'],
+            'confidence' => $result['confidence'],
+            'summary' => $result['summary'],
+            'draft' => $result['draft'],
+            'draft_hash' => $this->messageHash($result['draft']),
+            'instruction' => trim((string) $instruction),
+            'knowledge_refs' => $result['knowledge_refs'],
+            'matched_knowledge' => $result['matched_knowledge'],
+            'status' => TicketAiSuggestion::STATUS_GENERATED,
+        ]);
+
+        $result['suggestion_id'] = (int) $suggestion->id;
+        $result['category_options'] = self::CATEGORY_OPTIONS;
+
+        return $result;
+    }
+
+    public function recordFeedback(int $suggestionId, int $ticketId, ?int $adminId, string $status): array
+    {
+        if (!in_array($status, [TicketAiSuggestion::STATUS_INSERTED, TicketAiSuggestion::STATUS_DISCARDED], true)) {
+            throw new RuntimeException('AI 建议状态不正确');
+        }
+
+        $suggestion = TicketAiSuggestion::query()
+            ->where('id', $suggestionId)
+            ->where('ticket_id', $ticketId)
+            ->first();
+
+        if (!$suggestion) {
+            throw new RuntimeException('AI 建议不存在');
+        }
+
+        if ($suggestion->admin_id !== null && $adminId !== null && (int) $suggestion->admin_id !== (int) $adminId) {
+            throw new RuntimeException('AI 建议不属于当前管理员');
+        }
+
+        $now = time();
+        $suggestion->status = $status;
+        if ($adminId !== null && $suggestion->admin_id === null) {
+            $suggestion->admin_id = $adminId;
+        }
+        if ($status === TicketAiSuggestion::STATUS_INSERTED) {
+            $suggestion->inserted_at = $suggestion->inserted_at ?: $now;
+        } else {
+            $suggestion->discarded_at = $suggestion->discarded_at ?: $now;
+        }
+        $suggestion->save();
+
+        return [
+            'id' => (int) $suggestion->id,
+            'status' => (string) $suggestion->status,
+        ];
+    }
+
+    public function markSent(?int $suggestionId, int $ticketId, int $adminId, TicketMessage $message, string $finalMessage): void
+    {
+        if (!$suggestionId) {
+            return;
+        }
+
+        $suggestion = TicketAiSuggestion::query()
+            ->where('id', $suggestionId)
+            ->where('ticket_id', $ticketId)
+            ->first();
+
+        if (!$suggestion) {
+            return;
+        }
+        if ($suggestion->admin_id !== null && (int) $suggestion->admin_id !== $adminId) {
+            return;
+        }
+
+        $finalHash = $this->messageHash($finalMessage);
+        $draftHash = (string) ($suggestion->draft_hash ?: $this->messageHash((string) $suggestion->draft));
+        $suggestion->admin_id = $suggestion->admin_id ?: $adminId;
+        $suggestion->status = TicketAiSuggestion::STATUS_SENT;
+        $suggestion->inserted_at = $suggestion->inserted_at ?: time();
+        $suggestion->sent_at = time();
+        $suggestion->reply_message_id = (int) $message->id;
+        $suggestion->final_message_hash = $finalHash;
+        $suggestion->edited = $draftHash !== $finalHash;
+        $suggestion->save();
+    }
+
+    public function stats(int $days = 7): array
+    {
+        $days = max(1, min(90, $days));
+        $since = time() - ($days * 86400);
+        $baseQuery = TicketAiSuggestion::query()->where('created_at', '>=', $since);
+
+        $generated = (clone $baseQuery)->count();
+        $inserted = (clone $baseQuery)->whereNotNull('inserted_at')->count();
+        $discarded = (clone $baseQuery)->whereNotNull('discarded_at')->count();
+        $sent = (clone $baseQuery)->whereNotNull('sent_at')->count();
+        $edited = (clone $baseQuery)->where('edited', 1)->count();
+        $needsHuman = (clone $baseQuery)->where('needs_human', 1)->count();
+
+        return [
+            'days' => $days,
+            'since' => $since,
+            'generated' => (int) $generated,
+            'inserted' => (int) $inserted,
+            'discarded' => (int) $discarded,
+            'sent' => (int) $sent,
+            'edited' => (int) $edited,
+            'needs_human' => (int) $needsHuman,
+            'adoption_rate' => $generated > 0 ? round($sent / $generated, 4) : 0.0,
+            'edit_rate' => $sent > 0 ? round($edited / $sent, 4) : 0.0,
+            'category_options' => self::CATEGORY_OPTIONS,
+            'top_categories' => $this->groupSuggestionCounts($baseQuery, 'category'),
+            'top_risks' => $this->groupSuggestionCounts($baseQuery, 'risk'),
+        ];
     }
 
     private function settings(): array
@@ -115,7 +248,7 @@ class TicketAiAssistantService
 
     private function defaultSystemPrompt(): string
     {
-        return '你是 Keli 面板的客服工单助手。你只生成给管理员审核的回复草稿，不直接代表平台承诺退款、补偿、封号、解封或支付处理结果。遇到支付、退款、账号安全、封禁、隐私、法律或大面积故障，必须建议人工核查。回答要简洁、礼貌、可执行。请只输出 JSON：summary, category, sentiment, risk, needs_human, confidence, draft, knowledge_refs。';
+        return '你是 Keli 面板的客服工单助手。你只生成给管理员审核的回复草稿，不直接代表平台承诺退款、补偿、封号、解封或支付处理结果。遇到支付、退款、账号安全、封禁、隐私、法律或大面积故障，必须建议人工核查。category 必须从固定分类中选择，risk 只能是 low、medium、high。回答要简洁、礼貌、可执行。请只输出 JSON：summary, category, sentiment, risk, needs_human, confidence, draft, knowledge_refs。';
     }
 
     /**
@@ -205,8 +338,9 @@ class TicketAiAssistantService
         $prompt = "工单上下文：\n" . json_encode($context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
             . "\n\n最近对话：\n" . ($conversation !== '' ? $conversation : '暂无对话')
             . "\n\n相关知识库：\n" . ($knowledgeText !== '' ? $knowledgeText : '无匹配知识库')
+            . "\n\n固定分类：\n" . implode('、', self::CATEGORY_OPTIONS)
             . "\n\n管理员补充要求：\n" . (trim((string) $instruction) !== '' ? trim((string) $instruction) : '无')
-            . "\n\n输出 JSON 字段要求：summary/category/sentiment/risk/needs_human/confidence/draft/knowledge_refs。draft 是可以直接发给用户的中文回复草稿。";
+            . "\n\n输出 JSON 字段要求：summary/category/sentiment/risk/needs_human/confidence/draft/knowledge_refs。category 必须使用固定分类，risk 只能是 low、medium、high，draft 是可以直接发给用户的中文回复草稿。";
 
         return [
             ['role' => 'system', 'content' => $settings['system_prompt'] ?: $this->defaultSystemPrompt()],
@@ -224,12 +358,18 @@ class TicketAiAssistantService
             $decoded = ['draft' => $content];
         }
 
+        $category = $this->normalizeCategory((string) ($decoded['category'] ?? ''));
+        $risk = $this->normalizeRisk((string) ($decoded['risk'] ?? ''));
+        $needsHuman = (bool) ($decoded['needs_human'] ?? false)
+            || $risk === 'high'
+            || in_array($category, self::HUMAN_REVIEW_CATEGORIES, true);
+
         return [
             'summary' => trim((string) ($decoded['summary'] ?? '')),
-            'category' => trim((string) ($decoded['category'] ?? '')),
+            'category' => $category,
             'sentiment' => trim((string) ($decoded['sentiment'] ?? '')),
-            'risk' => trim((string) ($decoded['risk'] ?? '')),
-            'needs_human' => (bool) ($decoded['needs_human'] ?? false),
+            'risk' => $risk,
+            'needs_human' => $needsHuman,
             'confidence' => max(0, min(1, (float) ($decoded['confidence'] ?? 0))),
             'draft' => trim((string) ($decoded['draft'] ?? $content)),
             'knowledge_refs' => is_array($decoded['knowledge_refs'] ?? null) ? array_values($decoded['knowledge_refs']) : [],
@@ -239,5 +379,60 @@ class TicketAiAssistantService
                 'category' => $item['category'],
             ], $knowledge),
         ];
+    }
+
+    private function normalizeCategory(string $category): string
+    {
+        $value = trim($category);
+        if ($value === '') {
+            return '其他';
+        }
+        if (in_array($value, self::CATEGORY_OPTIONS, true)) {
+            return $value;
+        }
+        foreach (self::CATEGORY_OPTIONS as $option) {
+            if ($option !== '其他' && (str_contains($value, $option) || str_contains($option, $value))) {
+                return $option;
+            }
+        }
+
+        return '其他';
+    }
+
+    private function normalizeRisk(string $risk): string
+    {
+        $value = mb_strtolower(trim($risk));
+        if (in_array($value, ['high', '高', '高风险'], true)) {
+            return 'high';
+        }
+        if (in_array($value, ['medium', 'med', '中', '中风险'], true)) {
+            return 'medium';
+        }
+        return 'low';
+    }
+
+    private function messageHash(string $message): string
+    {
+        $normalized = trim(str_replace(["\r\n", "\r"], "\n", $message));
+
+        return hash('sha256', $normalized);
+    }
+
+    private function groupSuggestionCounts($baseQuery, string $column): array
+    {
+        return (clone $baseQuery)
+            ->select($column, DB::raw('COUNT(*) as total'))
+            ->whereNotNull($column)
+            ->where($column, '!=', '')
+            ->groupBy($column)
+            ->orderByDesc('total')
+            ->limit(10)
+            ->get()
+            ->map(fn ($item) => [
+                $column => (string) ($item->{$column} ?? ''),
+                'total' => (int) ($item->total ?? 0),
+            ])
+            ->values()
+            ->all();
     }
 }
