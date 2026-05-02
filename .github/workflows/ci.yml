@@ -62,6 +62,15 @@ jobs:
       - name: Verify admin asset versions
         run: php scripts/verify-admin-xboard-assets.php
 
+      - name: Run release preflight guards
+        shell: pwsh
+        run: |
+          ./scripts/release-preflight.ps1 `
+            -ReleaseVersion v0.0.0-preflight `
+            -SkipTagCheck `
+            -SkipAdminRepo `
+            -SkipKelinodeRepo
+
       - name: Verify lock platform compatibility
         run: composer check-platform-reqs --lock --no-interaction
 

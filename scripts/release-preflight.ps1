@@ -10,6 +10,8 @@ param(
 
     [switch]$AllowDirty,
 
+    [switch]$SkipTagCheck,
+
     [switch]$SkipAdminRepo,
 
     [switch]$SkipKelinodeRepo
@@ -150,7 +152,9 @@ $keliAdmin = if ($SkipAdminRepo) { $null } else { Resolve-Repo 'keli-admin' }
 $kelinode = if ($SkipKelinodeRepo) { $null } else { Resolve-Repo 'kelinode' }
 
 Assert-CleanRepo 'keliboard' $keliboard
-Assert-TagMissing 'keliboard' $keliboard $ReleaseVersion
+if (-not $SkipTagCheck) {
+    Assert-TagMissing 'keliboard' $keliboard $ReleaseVersion
+}
 
 $adminIndexPath = Join-Path $keliboard 'public/assets/admin-xboard/index.html'
 $adminJsPath = Join-Path $keliboard 'public/assets/admin-xboard/assets/index.js'
@@ -193,7 +197,7 @@ if ($null -ne $keliAdmin) {
 $nodeApiContractVersion = $null
 if ($null -ne $kelinode) {
     Assert-CleanRepo 'kelinode' $kelinode
-    if ($KelinodeVersion -ne '') {
+    if ($KelinodeVersion -ne '' -and -not $SkipTagCheck) {
         Assert-TagMissing 'kelinode' $kelinode $KelinodeVersion
     }
     $repos.kelinode = Get-RepoInfo 'kelinode' $kelinode
