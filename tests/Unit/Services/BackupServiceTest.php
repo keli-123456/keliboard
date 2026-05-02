@@ -72,6 +72,49 @@ final class BackupServiceTest extends TestCase
         ]);
     }
 
+    public function test_database_dump_recovery_metadata_contains_full_env_file(): void
+    {
+        $filesystem = new Filesystem();
+        $storagePath = getcwd() . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'framework';
+        $environmentDir = $storagePath . DIRECTORY_SEPARATOR . 'testing-backup-env';
+        $environmentPath = $environmentDir . DIRECTORY_SEPARATOR . '.env';
+        $dumpPath = $storagePath . DIRECTORY_SEPARATOR . 'testing-backup-env-dump.sql';
+        $envContents = implode("\n", [
+            'APP_KEY=base64:test-key',
+            'DB_PASSWORD="secret=value"',
+            'PAYMENT_SECRET=pay_secret',
+            '',
+        ]);
+
+        config([
+            'backup.recovery_environment_file' => $environmentPath,
+            'database.default' => 'mysql',
+        ]);
+
+        $filesystem->ensureDirectoryExists($environmentDir);
+        $filesystem->put($environmentPath, $envContents);
+        $filesystem->put($dumpPath, "CREATE TABLE test (id int);\n");
+
+        try {
+            $method = new \ReflectionMethod(BackupService::class, 'prependRecoveryMetadata');
+            $method->setAccessible(true);
+            $method->invoke(new BackupService(), $dumpPath);
+
+            $contents = $filesystem->get($dumpPath);
+            $encodedEnv = $this->extractRecoveryEnvBase64($contents);
+
+            $this->assertStringStartsWith("-- KELI_RECOVERY_START\n", $contents);
+            $this->assertStringContainsString("-- KELI_RECOVERY_FORMAT=env-base64-v1\n", $contents);
+            $this->assertStringContainsString("-- KELI_RECOVERY_DATABASE_CONNECTION=mysql\n", $contents);
+            $this->assertSame($envContents, base64_decode($encodedEnv, true));
+            $this->assertStringContainsString("CREATE TABLE test (id int);\n", $contents);
+        } finally {
+            $filesystem->delete($dumpPath);
+            $filesystem->delete($dumpPath . '.recovery');
+            $filesystem->deleteDirectory($environmentDir);
+        }
+    }
+
     public function test_remote_storage_settings_prefer_panel_config_and_hide_secrets(): void
     {
         config([
@@ -174,6 +217,29 @@ final class BackupServiceTest extends TestCase
         $this->assertNotNull(BackupRecord::find($latestLocal->id));
         $this->assertNull(BackupRecord::find($olderRemote->id));
         $this->assertNotNull(BackupRecord::find($latestRemote->id));
+    }
+
+    private function extractRecoveryEnvBase64(string $dump): string
+    {
+        $encoded = '';
+        $collecting = false;
+
+        foreach (explode("\n", $dump) as $line) {
+            if ($line === '-- KELI_RECOVERY_ENV_BASE64_BEGIN') {
+                $collecting = true;
+                continue;
+            }
+
+            if ($line === '-- KELI_RECOVERY_ENV_BASE64_END') {
+                return $encoded;
+            }
+
+            if ($collecting && str_starts_with($line, '-- ')) {
+                $encoded .= substr($line, 3);
+            }
+        }
+
+        return $encoded;
     }
 
     private function createBackupRecord(array $overrides = []): BackupRecord

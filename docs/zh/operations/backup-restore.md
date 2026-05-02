@@ -27,6 +27,20 @@ YYYY-mm-dd_HH-ii-ss_<database>_database_backup.sql.gz
 | `path` | 本地相对路径 |
 | `remote_path` | 远程对象路径 |
 
+新版本备份会在 SQL dump 开头写入恢复元数据，其中包含整份 `.env` 文件的 base64 内容。SQL 导入会忽略这些注释，不影响数据库恢复；新机器恢复时可以先从备份包提取 `.env`：
+
+```bash
+gzip -dc storage/backup/<backup>.sql.gz \
+  | sed -n '/^-- KELI_RECOVERY_ENV_BASE64_BEGIN$/,/^-- KELI_RECOVERY_ENV_BASE64_END$/p' \
+  | sed '1d;$d;s/^-- //' \
+  | tr -d '\n' \
+  | base64 -d > .env
+```
+
+安全说明：备份压缩包现在包含 `.env`，也就包含 `APP_KEY`、数据库密码、支付密钥和远程存储密钥。请按最高敏感级别保管本地和远程备份文件。
+
+如果运行环境没有实际的 `.env` 文件，而是完全通过 Docker 环境变量注入，备份会记录 `.env` 缺失，无法凭空导出这些环境变量；文件映射部署会正常备份 `.env`。
+
 ## 远程存储配置
 
 管理端“备份中心”可以配置远程存储：
@@ -86,6 +100,7 @@ curl -X POST "$APP_URL/api/v2/$ADMIN_PATH/system/backup/verify" \
 
 - 已经额外创建一份当前生产数据库备份。
 - 已在测试环境做过一次恢复演练。
+- 新机器恢复时，已经从备份包提取 `.env` 并检查数据库连接、域名、队列和缓存配置。
 - 队列、定时任务、Octane 或 Web 进程已经停止。
 - 当前代码版本与备份时间点的数据库结构兼容。
 - 备份校验通过。

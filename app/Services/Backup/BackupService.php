@@ -77,6 +77,7 @@ class BackupService
             ]);
 
             $this->dumpDatabase($databaseBackupPath);
+            $this->prependRecoveryMetadata($databaseBackupPath);
             $this->compressGzip($databaseBackupPath, $compressedBackupPath);
             File::delete($databaseBackupPath);
 
@@ -870,6 +871,80 @@ class BackupService
 
         gzclose($output);
         fclose($input);
+    }
+
+    private function prependRecoveryMetadata(string $path): void
+    {
+        $metadata = $this->recoveryMetadataSql();
+        $input = fopen($path, 'rb');
+        if (!$input) {
+            throw new RuntimeException('Failed to open database dump for recovery metadata');
+        }
+
+        $tempPath = $path . '.recovery';
+        $output = fopen($tempPath, 'wb');
+        if (!$output) {
+            fclose($input);
+            throw new RuntimeException('Failed to write database dump recovery metadata');
+        }
+
+        try {
+            if (fwrite($output, $metadata) === false || stream_copy_to_stream($input, $output) === false) {
+                throw new RuntimeException('Failed to prepend database dump recovery metadata');
+            }
+        } catch (Throwable $throwable) {
+            File::delete($tempPath);
+            throw $throwable;
+        } finally {
+            fclose($output);
+            fclose($input);
+        }
+
+        File::move($tempPath, $path);
+    }
+
+    private function recoveryMetadataSql(): string
+    {
+        $lines = [
+            '-- KELI_RECOVERY_START',
+            '-- KELI_RECOVERY_FORMAT=env-base64-v1',
+            '-- KELI_RECOVERY_DATABASE_CONNECTION=' . str_replace(["\r", "\n"], '', (string) config('database.default', '')),
+            '-- KELI_RECOVERY_GENERATED_AT=' . gmdate('c'),
+        ];
+
+        $environmentPath = $this->recoveryEnvironmentFilePath();
+        if (File::isFile($environmentPath)) {
+            $lines[] = '-- KELI_RECOVERY_ENV_FILE=.env';
+            $lines[] = '-- KELI_RECOVERY_ENV_BASE64_BEGIN';
+
+            foreach (str_split(base64_encode(File::get($environmentPath)), 76) as $chunk) {
+                $lines[] = '-- ' . $chunk;
+            }
+
+            $lines[] = '-- KELI_RECOVERY_ENV_BASE64_END';
+        } else {
+            $lines[] = '-- KELI_RECOVERY_ENV_FILE=missing';
+        }
+
+        $lines[] = '-- KELI_RECOVERY_END';
+        $lines[] = '';
+
+        return implode("\n", $lines);
+    }
+
+    private function recoveryEnvironmentFilePath(): string
+    {
+        $configuredPath = config('backup.recovery_environment_file');
+        if (is_string($configuredPath) && $configuredPath !== '') {
+            return $configuredPath;
+        }
+
+        $app = app();
+        if (method_exists($app, 'environmentFilePath')) {
+            return $app->environmentFilePath();
+        }
+
+        return getcwd() . DIRECTORY_SEPARATOR . '.env';
     }
 
     private function uploadToGoogleCloud(string $path): string
