@@ -266,6 +266,7 @@ class AdminRoute
                 $router->any('/backup/fetch', [BackupController::class, 'fetch']);
                 $router->post('/backup/create', [BackupController::class, 'create']);
                 $router->get('/backup/download/{id}', [BackupController::class, 'download'])->whereNumber('id');
+                $router->post('/backup/verify', [BackupController::class, 'verify']);
                 $router->post('/backup/drop', [BackupController::class, 'drop']);
                 $router->post('/backup/cleanup', [BackupController::class, 'cleanup']);
             });

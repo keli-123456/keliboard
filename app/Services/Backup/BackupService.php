@@ -262,6 +262,62 @@ class BackupService
         return $this->resolveLocalPath($record);
     }
 
+    public function verifyBackup(int $id): array
+    {
+        $record = BackupRecord::query()->findOrFail($id);
+        if ($record->disk !== 'local' || $record->status !== BackupRecord::STATUS_SUCCEEDED) {
+            throw new RuntimeException('Only successful local backups can be verified');
+        }
+
+        $checks = [];
+        $path = null;
+
+        try {
+            $path = $this->resolveLocalPath($record);
+            $checks[] = $this->verificationCheck('path', true, 'Backup file path is safe and readable');
+        } catch (Throwable $e) {
+            $checks[] = $this->verificationCheck('path', false, $e->getMessage());
+
+            return $this->formatVerificationResult($record, $checks, null);
+        }
+
+        $actualSize = File::size($path);
+        $expectedSize = (int) $record->size;
+        $checks[] = $this->verificationCheck(
+            'size',
+            $expectedSize > 0 && $actualSize === $expectedSize,
+            'Backup file size matches metadata',
+            $expectedSize,
+            $actualSize
+        );
+
+        $expectedChecksum = strtolower(trim((string) $record->checksum));
+        $actualChecksum = strtolower((string) hash_file('sha256', $path));
+        $checks[] = $this->verificationCheck(
+            'checksum',
+            $expectedChecksum !== '' && hash_equals($expectedChecksum, $actualChecksum),
+            'Backup SHA256 checksum matches metadata',
+            $expectedChecksum,
+            $actualChecksum
+        );
+
+        [$gzipOk, $preview, $gzipError] = $this->readGzipPreview($path);
+        $checks[] = $this->verificationCheck(
+            'gzip',
+            $gzipOk,
+            $gzipOk ? 'Compressed backup can be read' : $gzipError
+        );
+
+        $looksLikeSql = $preview !== '' && $this->looksLikeSqlDump($preview);
+        $checks[] = $this->verificationCheck(
+            'sql_dump',
+            $looksLikeSql,
+            $looksLikeSql ? 'Compressed content looks like a SQL dump' : 'Compressed content does not look like a SQL dump'
+        );
+
+        return $this->formatVerificationResult($record, $checks, $path);
+    }
+
     public function deleteBackup(int $id): void
     {
         $record = BackupRecord::query()->findOrFail($id);
@@ -608,6 +664,111 @@ class BackupService
         }
 
         return $candidate;
+    }
+
+    private function verificationCheck(
+        string $key,
+        bool $ok,
+        string $message,
+        int|string|null $expected = null,
+        int|string|null $actual = null
+    ): array {
+        return [
+            'key' => $key,
+            'ok' => $ok,
+            'message' => $message,
+            'expected' => $expected,
+            'actual' => $actual,
+        ];
+    }
+
+    private function formatVerificationResult(BackupRecord $record, array $checks, ?string $path): array
+    {
+        $ok = collect($checks)->every(fn(array $check) => (bool) ($check['ok'] ?? false));
+
+        return [
+            'id' => (int) $record->id,
+            'filename' => (string) $record->filename,
+            'disk' => (string) $record->disk,
+            'status' => (string) $record->status,
+            'ok' => $ok,
+            'checked_at' => time(),
+            'checks' => $checks,
+            'restore' => [
+                'local_path' => $path,
+                'database_connection' => data_get($record->options ?: [], 'database_connection', config('database.default')),
+                'commands' => $path ? $this->restoreCommands($record, $path) : [],
+                'notes' => [
+                    'Stop queue workers and Octane before restoring.',
+                    'Create a fresh backup before restoring over production data.',
+                    'Run the restore on a staging copy first when possible.',
+                ],
+            ],
+        ];
+    }
+
+    private function readGzipPreview(string $path): array
+    {
+        if (!function_exists('gzopen')) {
+            return [false, '', 'PHP gzip extension is not available'];
+        }
+
+        $handle = @gzopen($path, 'rb');
+        if (!$handle) {
+            return [false, '', 'Failed to open compressed backup'];
+        }
+
+        $preview = '';
+        try {
+            while (!gzeof($handle) && strlen($preview) < 262144) {
+                $chunk = gzread($handle, 65536);
+                if ($chunk === false) {
+                    return [false, $preview, 'Failed to read compressed backup'];
+                }
+                $preview .= $chunk;
+            }
+        } finally {
+            gzclose($handle);
+        }
+
+        return [$preview !== '', $preview, $preview !== '' ? null : 'Compressed backup is empty'];
+    }
+
+    private function looksLikeSqlDump(string $preview): bool
+    {
+        return (bool) preg_match(
+            '/\b(CREATE|INSERT|DROP|ALTER|PRAGMA|BEGIN TRANSACTION|SET SQL_MODE|LOCK TABLES)\b/i',
+            $preview
+        );
+    }
+
+    private function restoreCommands(BackupRecord $record, string $path): array
+    {
+        $connection = (string) data_get($record->options ?: [], 'database_connection', config('database.default'));
+        $quotedPath = $this->shellQuote(str_replace('\\', '/', $path));
+
+        if ($connection === 'sqlite') {
+            return [
+                'php artisan down',
+                "gzip -dc {$quotedPath} | sqlite3 \"database/database.sqlite\"",
+                'php artisan migrate --force',
+                'php artisan optimize:clear',
+                'php artisan up',
+            ];
+        }
+
+        return [
+            'php artisan down',
+            "gzip -dc {$quotedPath} | mysql -h \"\$DB_HOST\" -P \"\${DB_PORT:-3306}\" -u \"\$DB_USERNAME\" -p \"\$DB_DATABASE\"",
+            'php artisan migrate --force',
+            'php artisan optimize:clear',
+            'php artisan up',
+        ];
+    }
+
+    private function shellQuote(string $value): string
+    {
+        return "'" . str_replace("'", "'\"'\"'", $value) . "'";
     }
 
     private function truncateError(string $error): string

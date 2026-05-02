@@ -54,6 +54,7 @@ docker compose up -d
 - [宝塔 + Docker 快速部署（中文）](./docs/zh/installation/aapanel-docker-quickstart.md)
 - [宝塔 + Docker 运维手册（中文）](./docs/zh/operations/runbook.md)
 - [Keli 发布流程（中文）](./docs/zh/operations/release.md)
+- [备份恢复手册（中文）](./docs/zh/operations/backup-restore.md)
 
 ### Migration Guides
 - [Migrate from v2board dev](./docs/en/migration/v2board-dev.md)

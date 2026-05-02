@@ -83,6 +83,19 @@ class BackupController extends Controller
         }
     }
 
+    public function verify(Request $request, BackupService $backups)
+    {
+        $request->validate([
+            'id' => 'required|integer|min:1',
+        ]);
+
+        try {
+            return $this->success($backups->verifyBackup((int) $request->input('id')));
+        } catch (Throwable $e) {
+            return $this->fail([500001, $e->getMessage()]);
+        }
+    }
+
     public function drop(Request $request, BackupService $backups)
     {
         $request->validate([
