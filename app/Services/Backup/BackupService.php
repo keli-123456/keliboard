@@ -562,6 +562,8 @@ class BackupService
             } catch (Throwable) {
                 // Missing files should not block metadata cleanup.
             }
+        } elseif (in_array($record->disk, self::REMOTE_DISKS, true) && filled($record->remote_path)) {
+            $this->deleteRemoteBackup($record);
         }
         $record->delete();
     }
@@ -569,24 +571,52 @@ class BackupService
     public function pruneLocalBackups(int $keep): array
     {
         $keep = max(1, $keep);
-        $records = BackupRecord::query()
-            ->where('type', BackupRecord::TYPE_DATABASE)
-            ->where('disk', 'local')
-            ->where('status', BackupRecord::STATUS_SUCCEEDED)
-            ->orderByDesc('id')
-            ->skip($keep)
-            ->take(500)
-            ->get();
-
         $deleted = 0;
         $freed = 0;
-        foreach ($records as $record) {
-            $freed += (int) $record->size;
-            $this->deleteBackup((int) $record->id);
-            $deleted++;
+        $failed = 0;
+        $localDeleted = 0;
+        $remoteDeleted = 0;
+
+        foreach (['local', ...self::REMOTE_DISKS] as $disk) {
+            $records = BackupRecord::query()
+                ->where('type', BackupRecord::TYPE_DATABASE)
+                ->where('disk', $disk)
+                ->where('status', $disk === 'local' ? BackupRecord::STATUS_SUCCEEDED : BackupRecord::STATUS_UPLOADED)
+                ->orderByDesc('id')
+                ->skip($keep)
+                ->take(500)
+                ->get();
+
+            foreach ($records as $record) {
+                try {
+                    $this->deleteBackup((int) $record->id);
+                    $deleted++;
+                    $freed += (int) $record->size;
+                    if ($disk === 'local') {
+                        $localDeleted++;
+                    } else {
+                        $remoteDeleted++;
+                    }
+                } catch (Throwable $e) {
+                    $failed++;
+                    Log::channel('backup')->warning('Failed to prune old backup', [
+                        'id' => $record->id,
+                        'disk' => $record->disk,
+                        'remote_path' => $record->remote_path,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
         }
 
-        return ['deleted' => $deleted, 'freed' => $freed, 'keep' => $keep];
+        return [
+            'deleted' => $deleted,
+            'freed' => $freed,
+            'keep' => $keep,
+            'local_deleted' => $localDeleted,
+            'remote_deleted' => $remoteDeleted,
+            'failed' => $failed,
+        ];
     }
 
     private function latestAutomaticRecord(): ?BackupRecord
@@ -881,6 +911,41 @@ class BackupService
             return $remotePath;
         } finally {
             @ftp_close($connection);
+        }
+    }
+
+    private function deleteRemoteBackup(BackupRecord $record): void
+    {
+        $remotePath = $this->normalizeRemotePath((string) $record->remote_path);
+        if ($remotePath === '') {
+            return;
+        }
+
+        if ($record->disk === self::DISK_GOOGLE_CLOUD) {
+            $config = $this->googleCloudConfig();
+            if (blank($config['bucket']) || !$config['credentials_configured']) {
+                throw new RuntimeException('Google Cloud Storage backup config is incomplete');
+            }
+
+            $object = $this->googleStorageClient($config)->bucket($config['bucket'])->object($remotePath);
+            if ($object->exists()) {
+                $object->delete();
+            }
+            return;
+        }
+
+        if ($record->disk === self::DISK_FTP) {
+            $connection = $this->connectFtp($this->ftpConfig());
+            try {
+                if (!@ftp_delete($connection, $remotePath)) {
+                    $size = @ftp_size($connection, $remotePath);
+                    if ($size !== -1) {
+                        throw new RuntimeException('Failed to delete backup from FTP server');
+                    }
+                }
+            } finally {
+                @ftp_close($connection);
+            }
         }
     }
 

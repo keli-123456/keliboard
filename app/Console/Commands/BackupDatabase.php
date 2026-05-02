@@ -26,7 +26,10 @@ class BackupDatabase extends Command
 
             if ($keep > 0) {
                 $result = $backups->pruneLocalBackups($keep);
-                $this->info("已清理 {$result['deleted']} 个旧备份，保留最近 {$result['keep']} 个本地备份");
+                $this->info("已清理 {$result['deleted']} 个旧备份，保留最近 {$result['keep']} 个本地/远程备份");
+                if (($result['failed'] ?? 0) > 0) {
+                    $this->warn("有 {$result['failed']} 个旧备份清理失败，请检查 backup 日志");
+                }
             }
 
             return self::SUCCESS;

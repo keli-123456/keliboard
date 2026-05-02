@@ -143,6 +143,39 @@ final class BackupServiceTest extends TestCase
         ]);
     }
 
+    public function test_prune_backups_uses_same_retention_for_local_and_remote_records(): void
+    {
+        $olderLocal = $this->createBackupRecord(['finished_at' => time() - 40, 'created_at' => time() - 40]);
+        $latestLocal = $this->createBackupRecord(['finished_at' => time() - 30, 'created_at' => time() - 30]);
+        $olderRemote = $this->createBackupRecord([
+            'status' => BackupRecord::STATUS_UPLOADED,
+            'disk' => 'google_cloud',
+            'path' => null,
+            'remote_path' => null,
+            'finished_at' => time() - 20,
+            'created_at' => time() - 20,
+        ]);
+        $latestRemote = $this->createBackupRecord([
+            'status' => BackupRecord::STATUS_UPLOADED,
+            'disk' => 'google_cloud',
+            'path' => null,
+            'remote_path' => null,
+            'finished_at' => time() - 10,
+            'created_at' => time() - 10,
+        ]);
+
+        $result = (new BackupService())->pruneLocalBackups(1);
+
+        $this->assertSame(2, $result['deleted']);
+        $this->assertSame(1, $result['local_deleted']);
+        $this->assertSame(1, $result['remote_deleted']);
+        $this->assertSame(0, $result['failed']);
+        $this->assertNull(BackupRecord::find($olderLocal->id));
+        $this->assertNotNull(BackupRecord::find($latestLocal->id));
+        $this->assertNull(BackupRecord::find($olderRemote->id));
+        $this->assertNotNull(BackupRecord::find($latestRemote->id));
+    }
+
     private function createBackupRecord(array $overrides = []): BackupRecord
     {
         $now = time();
