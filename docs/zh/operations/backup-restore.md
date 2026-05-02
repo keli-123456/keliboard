@@ -1,6 +1,6 @@
 # 备份恢复手册
 
-本文档用于验证和恢复 `backup:database` 生成的数据库备份。当前系统支持本地备份、Google Cloud Storage 和 FTP 上传；恢复动作仍建议由管理员在服务器上手动执行，避免误操作覆盖生产数据库。
+本文档用于验证和恢复 `backup:database` 生成的数据库备份。当前系统支持本地备份、Google Cloud Storage 和 FTP 上传；远程存储可以在管理端配置，也兼容旧的 `.env` 配置。恢复动作仍建议由管理员在服务器上手动执行，避免误操作覆盖生产数据库。
 
 ## 备份文件
 
@@ -26,6 +26,35 @@ YYYY-mm-dd_HH-ii-ss_<database>_database_backup.sql.gz
 | `checksum` | 压缩文件 SHA256 |
 | `path` | 本地相对路径 |
 | `remote_path` | 远程对象路径 |
+
+## 远程存储配置
+
+管理端“备份中心”可以配置远程存储：
+
+- Google Cloud Storage：Bucket、目录前缀、Service Account JSON。
+- FTP：主机、端口、用户名、密码、根目录、SSL、被动模式、超时秒数。
+
+安全和兼容性说明：
+
+- 管理端配置优先于 `.env`；未在管理端填写的字段继续兼容 `.env`。
+- Service Account JSON 和 FTP 密码会加密存入 `v2_settings`，接口不会回显明文。
+- 密钥输入框留空表示不修改已保存密钥。
+- “清除面板密钥”会删除面板保存的密钥；如果 `.env` 仍有配置，会继续使用 `.env` fallback。
+- “测试连接”会验证 Google Cloud Bucket 可访问，或 FTP 可连接、登录并确认根目录。
+
+对应接口：
+
+```bash
+curl -X POST "$APP_URL/api/v2/$ADMIN_PATH/system/backup/remote-storage" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"ftp":{"host":"ftp.example.com","port":21,"username":"backup","password":"secret","root":"backup","passive":true,"ssl":false,"timeout":30}}'
+
+curl -X POST "$APP_URL/api/v2/$ADMIN_PATH/system/backup/remote-storage/test" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"disk":"ftp"}'
+```
 
 ## 校验备份
 

@@ -263,6 +263,8 @@ class AdminRoute
                 $router->get('/backup/overview', [BackupController::class, 'overview']);
                 $router->get('/backup/settings', [BackupController::class, 'settings']);
                 $router->post('/backup/settings', [BackupController::class, 'updateSettings']);
+                $router->post('/backup/remote-storage', [BackupController::class, 'updateRemoteStorage']);
+                $router->post('/backup/remote-storage/test', [BackupController::class, 'testRemoteStorage']);
                 $router->any('/backup/fetch', [BackupController::class, 'fetch']);
                 $router->post('/backup/create', [BackupController::class, 'create']);
                 $router->get('/backup/download/{id}', [BackupController::class, 'download'])->whereNumber('id');

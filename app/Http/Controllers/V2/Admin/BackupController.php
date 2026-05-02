@@ -69,6 +69,46 @@ class BackupController extends Controller
         }
     }
 
+    public function updateRemoteStorage(Request $request, BackupService $backups)
+    {
+        $data = $request->validate([
+            'google_cloud' => 'nullable|array',
+            'google_cloud.bucket' => 'nullable|string|max:255',
+            'google_cloud.prefix' => 'nullable|string|max:255',
+            'google_cloud.credentials_json' => 'nullable|string|max:60000',
+            'google_cloud.clear_credentials' => 'nullable|boolean',
+            'ftp' => 'nullable|array',
+            'ftp.host' => 'nullable|string|max:255',
+            'ftp.port' => 'nullable|integer|min:1|max:65535',
+            'ftp.username' => 'nullable|string|max:255',
+            'ftp.password' => 'nullable|string|max:1024',
+            'ftp.root' => 'nullable|string|max:255',
+            'ftp.ssl' => 'nullable|boolean',
+            'ftp.passive' => 'nullable|boolean',
+            'ftp.timeout' => 'nullable|integer|min:1|max:300',
+            'ftp.clear_password' => 'nullable|boolean',
+        ]);
+
+        try {
+            return $this->success($backups->updateRemoteStorageSettings($data));
+        } catch (Throwable $e) {
+            return $this->fail([500001, $e->getMessage()]);
+        }
+    }
+
+    public function testRemoteStorage(Request $request, BackupService $backups)
+    {
+        $data = $request->validate([
+            'disk' => 'required|string|in:google_cloud,ftp',
+        ]);
+
+        try {
+            return $this->success($backups->testRemoteStorage((string) $data['disk']));
+        } catch (Throwable $e) {
+            return $this->fail([500001, $e->getMessage()]);
+        }
+    }
+
     public function download(int $id, BackupService $backups)
     {
         try {

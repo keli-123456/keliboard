@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Tests\Unit\Services;
 
 use App\Models\BackupRecord;
+use App\Models\Setting as SettingModel;
 use App\Services\Backup\BackupService;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Encryption\Encrypter;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Schema;
 use RuntimeException;
@@ -23,8 +25,10 @@ final class BackupServiceTest extends TestCase
 
         $this->setUpInMemoryDatabase();
         app()->instance('db.schema', $this->database->getConnection()->getSchemaBuilder());
+        app()->instance('encrypter', new Encrypter(str_repeat('a', 32), 'AES-256-CBC'));
         app()->instance('files', new Filesystem());
         $this->createBackupRecordTable();
+        $this->createSettingsTable();
     }
 
     public function test_record_restore_drill_stores_latest_summary_without_losing_options(): void
@@ -68,6 +72,77 @@ final class BackupServiceTest extends TestCase
         ]);
     }
 
+    public function test_remote_storage_settings_prefer_panel_config_and_hide_secrets(): void
+    {
+        config([
+            'cloud_storage.google_cloud.key_file' => '/env/key.json',
+            'cloud_storage.google_cloud.storage_bucket' => 'env-bucket',
+            'cloud_storage.ftp.host' => 'env-ftp.example.test',
+            'cloud_storage.ftp.username' => 'env-user',
+            'cloud_storage.ftp.password' => 'env-secret',
+        ]);
+
+        $credentials = json_encode([
+            'project_id' => 'panel-project',
+            'client_email' => 'backup@example.test',
+            'private_key' => "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n",
+        ]);
+
+        $result = (new BackupService())->updateRemoteStorageSettings([
+            'google_cloud' => [
+                'bucket' => 'panel-bucket',
+                'prefix' => 'panel-backup',
+                'credentials_json' => $credentials,
+            ],
+            'ftp' => [
+                'host' => 'ftp.example.test',
+                'port' => 2121,
+                'username' => 'backup',
+                'password' => 'panel-secret',
+                'root' => '/snapshots',
+                'ssl' => true,
+                'passive' => false,
+                'timeout' => 45,
+            ],
+        ]);
+
+        $google = $result['remote_storage']['google_cloud'];
+        $ftp = $result['remote_storage']['ftp'];
+
+        $this->assertSame('panel-bucket', $google['bucket']);
+        $this->assertSame('panel-backup', $google['prefix']);
+        $this->assertTrue($google['credentials_configured']);
+        $this->assertSame('mixed', $google['source']);
+        $this->assertArrayNotHasKey('credentials_json', $google);
+
+        $this->assertSame('ftp.example.test', $ftp['host']);
+        $this->assertSame(2121, $ftp['port']);
+        $this->assertSame('backup', $ftp['username']);
+        $this->assertSame('/snapshots', $ftp['root']);
+        $this->assertTrue($ftp['password_configured']);
+        $this->assertSame('mixed', $ftp['source']);
+        $this->assertArrayNotHasKey('password', $ftp);
+
+        $this->assertNotSame($credentials, SettingModel::where('name', 'backup_remote_google_cloud_credentials')->value('value'));
+        $this->assertNotSame('panel-secret', SettingModel::where('name', 'backup_remote_ftp_password')->value('value'));
+    }
+
+    public function test_remote_storage_settings_validate_google_credentials_json(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Google Cloud credentials JSON is missing private_key');
+
+        (new BackupService())->updateRemoteStorageSettings([
+            'google_cloud' => [
+                'bucket' => 'panel-bucket',
+                'credentials_json' => json_encode([
+                    'project_id' => 'panel-project',
+                    'client_email' => 'backup@example.test',
+                ]),
+            ],
+        ]);
+    }
+
     private function createBackupRecord(array $overrides = []): BackupRecord
     {
         $now = time();
@@ -108,6 +183,18 @@ final class BackupServiceTest extends TestCase
             $table->integer('finished_at')->nullable()->index();
             $table->integer('created_at');
             $table->integer('updated_at');
+        });
+    }
+
+    private function createSettingsTable(): void
+    {
+        Schema::create('v2_settings', function (Blueprint $table): void {
+            $table->id();
+            $table->string('group')->nullable();
+            $table->string('type')->nullable();
+            $table->string('name')->unique();
+            $table->text('value')->nullable();
+            $table->timestamps();
         });
     }
 }

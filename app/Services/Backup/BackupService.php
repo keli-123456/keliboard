@@ -3,9 +3,11 @@
 namespace App\Services\Backup;
 
 use App\Models\BackupRecord;
+use App\Models\Setting as SettingModel;
 use Google\Cloud\Storage\StorageClient;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
@@ -22,10 +24,22 @@ class BackupService
     private const DEFAULT_AUTO_KEEP = 7;
     private const DISK_GOOGLE_CLOUD = 'google_cloud';
     private const DISK_FTP = 'ftp';
+    private const DEFAULT_REMOTE_PREFIX = 'backup';
     private const REMOTE_DISKS = [
         self::DISK_GOOGLE_CLOUD,
         self::DISK_FTP,
     ];
+    private const GOOGLE_CLOUD_BUCKET_KEY = 'backup_remote_google_cloud_bucket';
+    private const GOOGLE_CLOUD_CREDENTIALS_KEY = 'backup_remote_google_cloud_credentials';
+    private const GOOGLE_CLOUD_PREFIX_KEY = 'backup_remote_google_cloud_prefix';
+    private const FTP_HOST_KEY = 'backup_remote_ftp_host';
+    private const FTP_PORT_KEY = 'backup_remote_ftp_port';
+    private const FTP_USERNAME_KEY = 'backup_remote_ftp_username';
+    private const FTP_PASSWORD_KEY = 'backup_remote_ftp_password';
+    private const FTP_ROOT_KEY = 'backup_remote_ftp_root';
+    private const FTP_SSL_KEY = 'backup_remote_ftp_ssl';
+    private const FTP_PASSIVE_KEY = 'backup_remote_ftp_passive';
+    private const FTP_TIMEOUT_KEY = 'backup_remote_ftp_timeout';
     private const RESTORE_DRILL_STATUSES = ['passed', 'failed', 'incomplete'];
     private const RESTORE_DRILL_ENVIRONMENTS = ['local', 'staging', 'production_rehearsal'];
 
@@ -174,6 +188,7 @@ class BackupService
             'upload' => $upload,
             'timezone' => (string) config('app.timezone'),
             'next_run_at' => $enabled ? $this->nextRunAt($time) : null,
+            'remote_storage' => $this->remoteStorageSettings(),
         ];
     }
 
@@ -196,6 +211,117 @@ class BackupService
         ]);
 
         return $this->settings();
+    }
+
+    public function remoteStorageSettings(): array
+    {
+        $google = $this->googleCloudConfig();
+        $ftp = $this->ftpConfig();
+
+        return [
+            self::DISK_GOOGLE_CLOUD => [
+                'bucket' => $google['bucket'],
+                'prefix' => $google['prefix'],
+                'credentials_configured' => $google['credentials_configured'],
+                'panel_configured' => $google['panel_configured'],
+                'env_configured' => $google['env_configured'],
+                'source' => $google['source'],
+                'key_file' => $google['key_file'],
+            ],
+            self::DISK_FTP => [
+                'host' => $ftp['host'],
+                'port' => $ftp['port'],
+                'username' => $ftp['username'],
+                'root' => $ftp['root'],
+                'ssl' => $ftp['ssl'],
+                'passive' => $ftp['passive'],
+                'timeout' => $ftp['timeout'],
+                'password_configured' => $ftp['password_configured'],
+                'panel_configured' => $ftp['panel_configured'],
+                'env_configured' => $ftp['env_configured'],
+                'source' => $ftp['source'],
+            ],
+        ];
+    }
+
+    public function updateRemoteStorageSettings(array $payload): array
+    {
+        $settings = [];
+        if (array_key_exists(self::DISK_GOOGLE_CLOUD, $payload) && is_array($payload[self::DISK_GOOGLE_CLOUD])) {
+            $google = $payload[self::DISK_GOOGLE_CLOUD];
+            $settings[self::GOOGLE_CLOUD_BUCKET_KEY] = trim((string) ($google['bucket'] ?? ''));
+            $settings[self::GOOGLE_CLOUD_PREFIX_KEY] = $this->normalizeRemotePath((string) ($google['prefix'] ?? self::DEFAULT_REMOTE_PREFIX)) ?: self::DEFAULT_REMOTE_PREFIX;
+
+            $credentials = trim((string) ($google['credentials_json'] ?? ''));
+            if ((bool) ($google['clear_credentials'] ?? false)) {
+                $settings[self::GOOGLE_CLOUD_CREDENTIALS_KEY] = '';
+            } elseif ($credentials !== '') {
+                $this->decodeGoogleCredentials($credentials);
+                $settings[self::GOOGLE_CLOUD_CREDENTIALS_KEY] = $this->encryptSecret($credentials);
+            }
+        }
+
+        if (array_key_exists(self::DISK_FTP, $payload) && is_array($payload[self::DISK_FTP])) {
+            $ftp = $payload[self::DISK_FTP];
+            $settings[self::FTP_HOST_KEY] = trim((string) ($ftp['host'] ?? ''));
+            $settings[self::FTP_PORT_KEY] = max(1, (int) ($ftp['port'] ?? 21));
+            $settings[self::FTP_USERNAME_KEY] = trim((string) ($ftp['username'] ?? ''));
+            $settings[self::FTP_ROOT_KEY] = $this->normalizeRemotePath((string) ($ftp['root'] ?? self::DEFAULT_REMOTE_PREFIX)) ?: self::DEFAULT_REMOTE_PREFIX;
+            $settings[self::FTP_SSL_KEY] = (int) (bool) ($ftp['ssl'] ?? false);
+            $settings[self::FTP_PASSIVE_KEY] = (int) (bool) ($ftp['passive'] ?? true);
+            $settings[self::FTP_TIMEOUT_KEY] = max(1, min(300, (int) ($ftp['timeout'] ?? 30)));
+
+            $password = (string) ($ftp['password'] ?? '');
+            if ((bool) ($ftp['clear_password'] ?? false)) {
+                $settings[self::FTP_PASSWORD_KEY] = '';
+            } elseif ($password !== '') {
+                $settings[self::FTP_PASSWORD_KEY] = $this->encryptSecret($password);
+            }
+        }
+
+        if ($settings !== []) {
+            admin_setting($settings);
+        }
+
+        return $this->remoteStoragePayload();
+    }
+
+    public function testRemoteStorage(string $disk): array
+    {
+        $disk = $this->normalizeRemoteDisk($disk);
+        if ($disk === self::DISK_GOOGLE_CLOUD) {
+            $google = $this->googleCloudConfig();
+            if (blank($google['bucket']) || !$google['credentials_configured']) {
+                throw new RuntimeException('Google Cloud Storage backup config is incomplete');
+            }
+
+            $bucket = $this->googleStorageClient($google)->bucket($google['bucket']);
+            if (!$bucket->exists()) {
+                throw new RuntimeException('Google Cloud Storage bucket is not accessible');
+            }
+
+            return [
+                'disk' => self::DISK_GOOGLE_CLOUD,
+                'ok' => true,
+                'message' => 'Google Cloud Storage connection OK',
+                'checked_at' => time(),
+            ];
+        }
+
+        $ftp = $this->ftpConfig();
+        $connection = $this->connectFtp($ftp);
+        try {
+            $this->ensureFtpDirectory($connection, $ftp['root']);
+        } finally {
+            @ftp_close($connection);
+        }
+
+        return [
+            'disk' => self::DISK_FTP,
+            'ok' => true,
+            'message' => 'FTP connection OK',
+            'checked_at' => time(),
+        ];
     }
 
     public function paginate(array $filters = []): LengthAwarePaginator
@@ -549,15 +675,17 @@ class BackupService
 
     private function googleCloudReady(): bool
     {
-        return filled(config('cloud_storage.google_cloud.key_file')) && filled(config('cloud_storage.google_cloud.storage_bucket'));
+        $config = $this->googleCloudConfig();
+        return filled($config['bucket']) && $config['credentials_configured'];
     }
 
     private function ftpReady(): bool
     {
+        $config = $this->ftpConfig();
         return function_exists('ftp_connect')
-            && filled(config('cloud_storage.ftp.host'))
-            && filled(config('cloud_storage.ftp.username'))
-            && (int) config('cloud_storage.ftp.port', 21) > 0;
+            && filled($config['host'])
+            && filled($config['username'])
+            && (int) $config['port'] > 0;
     }
 
     private function remoteDiskReady(string $disk): bool
@@ -574,6 +702,16 @@ class BackupService
             'disk' => $disk,
             'ready' => $this->remoteDiskReady($disk),
         ], self::REMOTE_DISKS);
+    }
+
+    private function remoteStoragePayload(): array
+    {
+        return [
+            'remote_storage' => $this->remoteStorageSettings(),
+            'remote_disks' => $this->remoteDisks(),
+            'google_cloud_ready' => $this->googleCloudReady(),
+            'ftp_ready' => $this->ftpReady(),
+        ];
     }
 
     private function normalizeRemoteDisk(string $disk): string
@@ -706,15 +844,13 @@ class BackupService
 
     private function uploadToGoogleCloud(string $path): string
     {
-        $keyFile = config('cloud_storage.google_cloud.key_file');
-        $bucketName = config('cloud_storage.google_cloud.storage_bucket');
-        if (blank($keyFile) || blank($bucketName)) {
+        $config = $this->googleCloudConfig();
+        if (blank($config['bucket']) || !$config['credentials_configured']) {
             throw new RuntimeException('Google Cloud Storage backup config is incomplete');
         }
 
-        $storage = new StorageClient(['keyFilePath' => $keyFile]);
-        $bucket = $storage->bucket($bucketName);
-        $objectName = 'backup/' . basename($path);
+        $bucket = $this->googleStorageClient($config)->bucket($config['bucket']);
+        $objectName = ($config['prefix'] !== '' ? rtrim($config['prefix'], '/') . '/' : '') . basename($path);
         $bucket->upload(fopen($path, 'r'), ['name' => $objectName]);
 
         return $objectName;
@@ -730,37 +866,11 @@ class BackupService
 
     private function uploadToFtp(string $path): string
     {
-        if (!function_exists('ftp_connect')) {
-            throw new RuntimeException('PHP FTP extension is not available');
-        }
-
-        $host = trim((string) config('cloud_storage.ftp.host'));
-        $port = max(1, (int) config('cloud_storage.ftp.port', 21));
-        $username = trim((string) config('cloud_storage.ftp.username'));
-        $password = (string) config('cloud_storage.ftp.password', '');
-        $timeout = max(1, (int) config('cloud_storage.ftp.timeout', 30));
-        $ssl = (bool) config('cloud_storage.ftp.ssl', false);
-        $passive = (bool) config('cloud_storage.ftp.passive', true);
-
-        if ($host === '' || $username === '') {
-            throw new RuntimeException('FTP backup config is incomplete');
-        }
-        if ($ssl && !function_exists('ftp_ssl_connect')) {
-            throw new RuntimeException('PHP FTP SSL support is not available');
-        }
-
-        $connection = $ssl ? @ftp_ssl_connect($host, $port, $timeout) : @ftp_connect($host, $port, $timeout);
-        if (!$connection) {
-            throw new RuntimeException('Failed to connect to FTP backup server');
-        }
+        $config = $this->ftpConfig();
+        $connection = $this->connectFtp($config);
 
         try {
-            if (!@ftp_login($connection, $username, $password)) {
-                throw new RuntimeException('Failed to login to FTP backup server');
-            }
-            @ftp_pasv($connection, $passive);
-
-            $remoteRoot = $this->normalizeRemotePath((string) config('cloud_storage.ftp.root', 'backup'));
+            $remoteRoot = $config['root'];
             $this->ensureFtpDirectory($connection, $remoteRoot);
             $remotePath = ($remoteRoot !== '' ? rtrim($remoteRoot, '/') . '/' : '') . basename($path);
 
@@ -771,6 +881,113 @@ class BackupService
             return $remotePath;
         } finally {
             @ftp_close($connection);
+        }
+    }
+
+    private function googleCloudConfig(): array
+    {
+        $credentials = $this->decryptSecret((string) $this->settingValue(self::GOOGLE_CLOUD_CREDENTIALS_KEY, ''));
+        $bucket = trim((string) $this->settingValue(self::GOOGLE_CLOUD_BUCKET_KEY, ''));
+        $prefix = $this->normalizeRemotePath((string) $this->settingValue(self::GOOGLE_CLOUD_PREFIX_KEY, self::DEFAULT_REMOTE_PREFIX));
+
+        $envKeyFile = (string) config('cloud_storage.google_cloud.key_file', '');
+        $envBucket = (string) config('cloud_storage.google_cloud.storage_bucket', '');
+
+        $keyFile = $credentials !== '' ? null : ($envKeyFile !== '' ? $envKeyFile : null);
+        $key = $credentials !== '' ? $this->decodeGoogleCredentials($credentials) : null;
+        $panelConfigured = $this->settingExists(self::GOOGLE_CLOUD_BUCKET_KEY)
+            || $this->settingExists(self::GOOGLE_CLOUD_CREDENTIALS_KEY)
+            || $this->settingExists(self::GOOGLE_CLOUD_PREFIX_KEY);
+        $envConfigured = filled($envKeyFile) && filled($envBucket);
+
+        return [
+            'bucket' => $bucket !== '' ? $bucket : $envBucket,
+            'prefix' => $prefix !== '' ? $prefix : self::DEFAULT_REMOTE_PREFIX,
+            'key_file' => $keyFile,
+            'key' => $key,
+            'credentials_configured' => $credentials !== '' || filled($envKeyFile),
+            'panel_configured' => $panelConfigured,
+            'env_configured' => $envConfigured,
+            'source' => $this->configSource($panelConfigured, $envConfigured),
+        ];
+    }
+
+    private function googleStorageClient(array $config): StorageClient
+    {
+        if (is_array($config['key'] ?? null)) {
+            return new StorageClient(['keyFile' => $config['key']]);
+        }
+
+        return new StorageClient(['keyFilePath' => $config['key_file']]);
+    }
+
+    private function ftpConfig(): array
+    {
+        $host = trim((string) $this->settingValue(self::FTP_HOST_KEY, ''));
+        $port = (int) $this->settingValue(self::FTP_PORT_KEY, 0);
+        $username = trim((string) $this->settingValue(self::FTP_USERNAME_KEY, ''));
+        $password = $this->decryptSecret((string) $this->settingValue(self::FTP_PASSWORD_KEY, ''));
+        $root = $this->normalizeRemotePath((string) $this->settingValue(self::FTP_ROOT_KEY, ''));
+        $ssl = $this->settingValue(self::FTP_SSL_KEY);
+        $passive = $this->settingValue(self::FTP_PASSIVE_KEY);
+        $timeout = (int) $this->settingValue(self::FTP_TIMEOUT_KEY, 0);
+
+        $panelConfigured = $this->settingExists(self::FTP_HOST_KEY)
+            || $this->settingExists(self::FTP_PORT_KEY)
+            || $this->settingExists(self::FTP_USERNAME_KEY)
+            || $this->settingExists(self::FTP_PASSWORD_KEY)
+            || $this->settingExists(self::FTP_ROOT_KEY)
+            || $this->settingExists(self::FTP_SSL_KEY)
+            || $this->settingExists(self::FTP_PASSIVE_KEY)
+            || $this->settingExists(self::FTP_TIMEOUT_KEY);
+        $envConfigured = filled(config('cloud_storage.ftp.host'))
+            && filled(config('cloud_storage.ftp.username'))
+            && (int) config('cloud_storage.ftp.port', 21) > 0;
+
+        return [
+            'host' => $host !== '' ? $host : trim((string) config('cloud_storage.ftp.host', '')),
+            'port' => $port > 0 ? $port : max(1, (int) config('cloud_storage.ftp.port', 21)),
+            'username' => $username !== '' ? $username : trim((string) config('cloud_storage.ftp.username', '')),
+            'password' => $password !== '' ? $password : (string) config('cloud_storage.ftp.password', ''),
+            'root' => $root !== '' ? $root : $this->normalizeRemotePath((string) config('cloud_storage.ftp.root', self::DEFAULT_REMOTE_PREFIX)),
+            'ssl' => $ssl === null ? (bool) config('cloud_storage.ftp.ssl', false) : (bool) $ssl,
+            'passive' => $passive === null ? (bool) config('cloud_storage.ftp.passive', true) : (bool) $passive,
+            'timeout' => $timeout > 0 ? max(1, min(300, $timeout)) : max(1, (int) config('cloud_storage.ftp.timeout', 30)),
+            'password_configured' => $password !== '' || filled(config('cloud_storage.ftp.password', '')),
+            'panel_configured' => $panelConfigured,
+            'env_configured' => $envConfigured,
+            'source' => $this->configSource($panelConfigured, $envConfigured),
+        ];
+    }
+
+    private function connectFtp(array $config)
+    {
+        if (!function_exists('ftp_connect')) {
+            throw new RuntimeException('PHP FTP extension is not available');
+        }
+        if ($config['host'] === '' || $config['username'] === '') {
+            throw new RuntimeException('FTP backup config is incomplete');
+        }
+        if ($config['ssl'] && !function_exists('ftp_ssl_connect')) {
+            throw new RuntimeException('PHP FTP SSL support is not available');
+        }
+
+        $connection = $config['ssl']
+            ? @ftp_ssl_connect($config['host'], $config['port'], $config['timeout'])
+            : @ftp_connect($config['host'], $config['port'], $config['timeout']);
+        if (!$connection) {
+            throw new RuntimeException('Failed to connect to FTP backup server');
+        }
+
+        try {
+            if (!@ftp_login($connection, $config['username'], $config['password'])) {
+                throw new RuntimeException('Failed to login to FTP backup server');
+            }
+            @ftp_pasv($connection, $config['passive']);
+            return $connection;
+        } catch (Throwable $e) {
+            @ftp_close($connection);
+            throw $e;
         }
     }
 
@@ -798,6 +1015,82 @@ class BackupService
         $path = preg_replace('#/+#', '/', $path) ?: '';
         $path = trim($path, '/');
         return $path === '' ? '' : ($absolute ? '/' : '') . $path;
+    }
+
+    private function settingValue(string $key, mixed $default = null): mixed
+    {
+        try {
+            $value = SettingModel::query()->where('name', strtolower($key))->value('value');
+        } catch (Throwable) {
+            return $default;
+        }
+
+        if ($value === null) {
+            return $default;
+        }
+        if (!is_string($value)) {
+            return $value;
+        }
+
+        $decoded = json_decode($value, true);
+        return json_last_error() === JSON_ERROR_NONE ? $decoded : $value;
+    }
+
+    private function settingExists(string $key): bool
+    {
+        try {
+            return SettingModel::query()->where('name', strtolower($key))->exists();
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    private function encryptSecret(string $value): string
+    {
+        return Crypt::encryptString($value);
+    }
+
+    private function decryptSecret(string $value): string
+    {
+        if ($value === '') {
+            return '';
+        }
+
+        try {
+            return Crypt::decryptString($value);
+        } catch (Throwable) {
+            return '';
+        }
+    }
+
+    private function decodeGoogleCredentials(string $json): array
+    {
+        $decoded = json_decode($json, true);
+        if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded)) {
+            throw new RuntimeException('Google Cloud credentials JSON is invalid');
+        }
+        foreach (['project_id', 'client_email', 'private_key'] as $key) {
+            if (blank($decoded[$key] ?? null)) {
+                throw new RuntimeException("Google Cloud credentials JSON is missing {$key}");
+            }
+        }
+
+        return $decoded;
+    }
+
+    private function configSource(bool $panelConfigured, bool $envConfigured): string
+    {
+        if ($panelConfigured && $envConfigured) {
+            return 'mixed';
+        }
+        if ($panelConfigured) {
+            return 'panel';
+        }
+        if ($envConfigured) {
+            return 'env';
+        }
+
+        return 'none';
     }
 
     private function relativeStoragePath(string $path): string
