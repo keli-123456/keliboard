@@ -22,6 +22,7 @@ use App\Services\OrderUpgradeService;
 use App\Services\RechargeBonusService;
 use App\Services\TelegramService;
 use App\Services\ThemeService;
+use App\Services\TicketAiAssistantService;
 use App\Utils\Dict;
 use Illuminate\Console\Command;
 use Illuminate\Http\Request;
@@ -174,6 +175,7 @@ class ConfigController extends Controller
                 'ticket_auto_reply_rules' => $this->normalizeTicketAutoReplyRules(
                     admin_setting('ticket_auto_reply_rules', [])
                 ),
+                ...app(TicketAiAssistantService::class)->publicSettings(),
             ],
             'site' => [
                 'logo' => admin_setting('logo'),
@@ -396,7 +398,7 @@ class ConfigController extends Controller
 
     public function save(ConfigSave $request)
     {
-        $data = $request->validated();
+        $data = app(TicketAiAssistantService::class)->prepareSettingsForSave($request->validated());
         $savedKeys = array_keys($data);
         $oldSystemResetMethod = (int) admin_setting('reset_traffic_method', Plan::RESET_TRAFFIC_MONTHLY);
         $templateKeys = [

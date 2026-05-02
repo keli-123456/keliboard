@@ -38,6 +38,14 @@ class ConfigSave extends FormRequest
         'ticket_auto_reply_rules.*.match_mode' => 'nullable|in:contains,exact,regex',
         'ticket_auto_reply_rules.*.priority' => 'nullable|integer|min:0|max:9999',
         'ticket_auto_reply_rules.*.reply' => 'nullable|string|max:5000',
+        'ticket_ai_enable' => 'boolean',
+        'ticket_ai_base_url' => 'nullable|url|max:500',
+        'ticket_ai_model' => 'nullable|string|max:100',
+        'ticket_ai_api_key' => 'nullable|string|max:5000',
+        'ticket_ai_temperature' => 'nullable|numeric|min:0|max:1',
+        'ticket_ai_max_messages' => 'nullable|integer|min:3|max:30',
+        'ticket_ai_knowledge_enable' => 'boolean',
+        'ticket_ai_system_prompt' => 'nullable|string|max:5000',
         // site
         'logo' => 'nullable|url',
         'force_https' => '',
@@ -231,7 +239,8 @@ class ConfigSave extends FormRequest
             'recharge_bonus_rules.*.amount.min' => '充值门槛必须大于 0',
             'recharge_bonus_rules.*.bonus.numeric' => '赠送金额必须为数字',
             'recharge_bonus_rules.*.bonus.min' => '赠送金额必须大于 0',
-            'subscription_proxy_site_id.regex' => '订阅反代站点标识只能包含字母、数字、点、下划线和短横线'
+            'subscription_proxy_site_id.regex' => '订阅反代站点标识只能包含字母、数字、点、下划线和短横线',
+            'ticket_ai_base_url.url' => 'AI 接口地址格式不正确，必须携带 http(s)://'
         ];
     }
 }

@@ -7,6 +7,7 @@ use App\Models\TicketMessageAttachment;
 use App\Models\Ticket;
 use App\Models\TicketMessage;
 use App\Services\TicketAttachmentService;
+use App\Services\TicketAiAssistantService;
 use App\Services\TicketService;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
@@ -314,6 +315,27 @@ class TicketController extends Controller
             'waiting_admin' => (int) $waitingAdmin,
             'top_rules' => $topRules,
         ]);
+    }
+
+    public function aiSuggest(Request $request, TicketAiAssistantService $assistant)
+    {
+        $params = $request->validate([
+            'id' => 'required|integer',
+            'instruction' => 'nullable|string|max:1000',
+        ], [
+            'id.required' => '工单ID不能为空',
+        ]);
+
+        $ticket = Ticket::with(['messages', 'user'])->find((int) $params['id']);
+        if (!$ticket) {
+            return $this->fail([400202, '工单不存在']);
+        }
+
+        try {
+            return $this->success($assistant->suggest($ticket, $params['instruction'] ?? null));
+        } catch (\RuntimeException $e) {
+            return $this->fail([422, $e->getMessage()]);
+        }
     }
 
     public function attachment(int $id)
