@@ -318,6 +318,74 @@ class BackupService
         return $this->formatVerificationResult($record, $checks, $path);
     }
 
+    public function restorePreflight(int $id): array
+    {
+        $record = BackupRecord::query()->findOrFail($id);
+        $blockers = [];
+        $warnings = [];
+        $verification = null;
+        $currentConnection = (string) config('database.default');
+        $backupConnection = (string) data_get($record->options ?: [], 'database_connection', '');
+        $runningBackup = $this->backupRunning();
+        $maintenanceMode = $this->maintenanceModeEnabled();
+
+        if ($record->disk !== 'local') {
+            $blockers[] = $this->preflightIssue(
+                'remote_backup',
+                'Remote backups must be downloaded to local storage before restore preflight'
+            );
+        }
+        if ($record->status !== BackupRecord::STATUS_SUCCEEDED) {
+            $blockers[] = $this->preflightIssue('backup_status', 'Only successful local backups can be restored');
+        }
+
+        if ($runningBackup) {
+            $blockers[] = $this->preflightIssue('running_backup', 'A backup task is running; wait for it to finish before restoring');
+        }
+
+        if ($backupConnection === '') {
+            $warnings[] = $this->preflightIssue('backup_connection_unknown', 'Backup database connection is not recorded');
+        } elseif ($backupConnection !== $currentConnection) {
+            $blockers[] = $this->preflightIssue(
+                'database_connection_mismatch',
+                "Backup connection {$backupConnection} does not match current connection {$currentConnection}"
+            );
+        }
+
+        if (!$maintenanceMode) {
+            $warnings[] = $this->preflightIssue(
+                'maintenance_mode_disabled',
+                'Application is not in maintenance mode; stop traffic and workers before restoring'
+            );
+        }
+
+        try {
+            $verification = $this->verifyBackup($id);
+            if (!(bool) ($verification['ok'] ?? false)) {
+                $blockers[] = $this->preflightIssue('backup_verification_failed', 'Backup file verification did not pass');
+            }
+        } catch (Throwable $e) {
+            $blockers[] = $this->preflightIssue('backup_verification_error', $e->getMessage());
+        }
+
+        return [
+            'id' => (int) $record->id,
+            'filename' => (string) $record->filename,
+            'ok' => count($blockers) === 0,
+            'checked_at' => time(),
+            'database' => [
+                'current_connection' => $currentConnection,
+                'backup_connection' => $backupConnection !== '' ? $backupConnection : null,
+            ],
+            'maintenance_mode' => $maintenanceMode,
+            'running_backup' => $runningBackup,
+            'blockers' => $blockers,
+            'warnings' => $warnings,
+            'verification' => $verification,
+            'restore' => $verification['restore'] ?? null,
+        ];
+    }
+
     public function deleteBackup(int $id): void
     {
         $record = BackupRecord::query()->findOrFail($id);
@@ -664,6 +732,40 @@ class BackupService
         }
 
         return $candidate;
+    }
+
+    private function backupRunning(): bool
+    {
+        try {
+            if (Cache::has(self::BACKUP_LOCK_KEY)) {
+                return true;
+            }
+        } catch (Throwable) {
+            // Fall back to metadata when cache is unavailable.
+        }
+
+        if (!$this->recordingAvailable()) {
+            return false;
+        }
+
+        return BackupRecord::query()->where('status', BackupRecord::STATUS_RUNNING)->exists();
+    }
+
+    private function maintenanceModeEnabled(): bool
+    {
+        try {
+            return method_exists(app(), 'isDownForMaintenance') && app()->isDownForMaintenance();
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    private function preflightIssue(string $key, string $message): array
+    {
+        return [
+            'key' => $key,
+            'message' => $message,
+        ];
     }
 
     private function verificationCheck(

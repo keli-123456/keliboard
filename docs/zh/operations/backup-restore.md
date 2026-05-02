@@ -59,6 +59,28 @@ curl -X POST "$APP_URL/api/v2/$ADMIN_PATH/system/backup/verify" \
 - 当前代码版本与备份时间点的数据库结构兼容。
 - 备份校验通过。
 
+管理端“备份中心”在校验本地备份后，可以继续执行“恢复预检”。恢复预检不会修改数据库，只会检查：
+
+- 备份文件校验是否通过。
+- 当前数据库连接类型是否与备份记录一致。
+- 当前是否有备份任务正在运行。
+- 当前是否处于维护模式。
+- 是否存在必须先处理的阻断项。
+
+也可以直接调用接口：
+
+```bash
+curl -X POST "$APP_URL/api/v2/$ADMIN_PATH/system/backup/restore-preflight" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"id": 1}'
+```
+
+说明：
+
+- “运行中备份”和“数据库类型不一致”属于阻断项。
+- “未进入维护模式”属于风险提示，因为进入维护模式后管理端 API 可能不可用；实际恢复前仍应停止 Web 流量、队列、定时任务和 Octane。
+
 ## MySQL 恢复
 
 示例：
