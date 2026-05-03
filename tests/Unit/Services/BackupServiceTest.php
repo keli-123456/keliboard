@@ -6,6 +6,7 @@ namespace Tests\Unit\Services;
 
 use App\Models\BackupRecord;
 use App\Models\Setting as SettingModel;
+use App\Services\Backup\BackupRecoveryService;
 use App\Services\Backup\BackupService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Encryption\Encrypter;
@@ -70,6 +71,55 @@ final class BackupServiceTest extends TestCase
             'status' => 'incomplete',
             'environment' => 'local',
         ]);
+    }
+
+    public function test_restore_drill_check_can_record_automated_result(): void
+    {
+        $filesystem = new Filesystem();
+        $backupDir = getcwd() . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'backup';
+        $backupPath = $backupDir . DIRECTORY_SEPARATOR . 'restore-drill-check.sql.gz';
+        $env = "APP_KEY=base64:test-key\nDB_PASSWORD=secret\n";
+        $sql = implode("\n", [
+            '-- KELI_RECOVERY_START',
+            '-- KELI_RECOVERY_FORMAT=env-base64-v1',
+            '-- KELI_RECOVERY_DATABASE_CONNECTION=mysql',
+            '-- KELI_RECOVERY_ENV_FILE=.env',
+            '-- KELI_RECOVERY_ENV_BASE64_BEGIN',
+            '-- ' . base64_encode($env),
+            '-- KELI_RECOVERY_ENV_BASE64_END',
+            '-- KELI_RECOVERY_FILES=0',
+            '-- KELI_RECOVERY_END',
+            'CREATE TABLE users (id int);',
+            '',
+        ]);
+
+        $filesystem->ensureDirectoryExists($backupDir);
+        $this->writeGzip($backupPath, $sql);
+
+        try {
+            $record = $this->createBackupRecord([
+                'filename' => basename($backupPath),
+                'path' => 'backup/' . basename($backupPath),
+                'size' => filesize($backupPath),
+                'checksum' => hash_file('sha256', $backupPath),
+                'options' => ['database_connection' => 'mysql'],
+            ]);
+
+            $result = (new BackupService())->restoreDrillCheck($record->id, [
+                'record' => true,
+                'environment' => 'staging',
+                'operator' => 'phpunit',
+            ], new BackupRecoveryService());
+
+            $this->assertTrue($result['ok']);
+            $this->assertSame($record->id, $result['id']);
+            $this->assertSame('passed', $result['drill']['status']);
+            $this->assertSame('phpunit', $result['drill']['operator']);
+            $this->assertSame($record->id, $result['record']['id']);
+            $this->assertSame('passed', $result['record']['latest_restore_drill']['status']);
+        } finally {
+            $filesystem->delete($backupPath);
+        }
     }
 
     public function test_database_dump_recovery_metadata_contains_full_env_file(): void
@@ -279,6 +329,17 @@ final class BackupServiceTest extends TestCase
         }
 
         return $encoded;
+    }
+
+    private function writeGzip(string $path, string $contents): void
+    {
+        $handle = gzopen($path, 'wb9');
+        if (!$handle) {
+            $this->fail('Failed to create gzip fixture');
+        }
+
+        gzwrite($handle, $contents);
+        gzclose($handle);
     }
 
     private function createBackupRecord(array $overrides = []): BackupRecord

@@ -415,6 +415,37 @@ class BackupService
         ];
     }
 
+    public function restoreDrillCheck(int $id, array $payload, BackupRecoveryService $recovery): array
+    {
+        $record = BackupRecord::query()->findOrFail($id);
+        if ($record->type !== BackupRecord::TYPE_DATABASE) {
+            throw new RuntimeException('Only database backups can run restore drills');
+        }
+        if ($record->disk !== 'local' || $record->status !== BackupRecord::STATUS_SUCCEEDED) {
+            throw new RuntimeException('Only successful local backups can run restore drills');
+        }
+
+        $result = $recovery->drill($this->localPath($record), [
+            'expected_sha256' => (string) $record->checksum,
+            'connection' => (string) data_get($record->options ?: [], 'database_connection', ''),
+        ]);
+        $result['id'] = (int) $record->id;
+        $result['filename'] = (string) $record->filename;
+
+        if ((bool) ($payload['record'] ?? false)) {
+            $recorded = $this->recordRestoreDrill($record->id, [
+                'status' => $result['ok'] ? 'passed' : 'failed',
+                'environment' => $payload['environment'] ?? 'staging',
+                'operator' => $payload['operator'] ?? '',
+                'note' => $payload['note'] ?? $this->restoreDrillSummary($result),
+            ]);
+            $result['record'] = $recorded['record'] ?? null;
+            $result['drill'] = $recorded['drill'] ?? null;
+        }
+
+        return $result;
+    }
+
     public function findDownloadable(int $id): BackupRecord
     {
         $record = BackupRecord::query()->findOrFail($id);
@@ -1320,7 +1351,7 @@ class BackupService
 
     private function relativeStoragePath(string $path): string
     {
-        $storagePath = rtrim(storage_path(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+        $storagePath = rtrim($this->storagePath(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
         return str_replace('\\', '/', str_starts_with($path, $storagePath) ? substr($path, strlen($storagePath)) : $path);
     }
 
@@ -1331,8 +1362,8 @@ class BackupService
             throw new RuntimeException('Backup file path is empty');
         }
 
-        $backupRoot = realpath(storage_path(self::BACKUP_DIR)) ?: storage_path(self::BACKUP_DIR);
-        $fullPath = storage_path($path);
+        $backupRoot = realpath($this->storagePath(self::BACKUP_DIR)) ?: $this->storagePath(self::BACKUP_DIR);
+        $fullPath = $this->storagePath($path);
         $realPath = realpath($fullPath);
         if ($mustExist && (!$realPath || !File::exists($realPath))) {
             throw new RuntimeException('Backup file does not exist');
@@ -1497,6 +1528,22 @@ class BackupService
     {
         $value = trim($value);
         return strlen($value) > $limit ? substr($value, 0, $limit) : $value;
+    }
+
+    private function restoreDrillSummary(array $result): string
+    {
+        $failed = array_values(array_filter(
+            $result['checks'] ?? [],
+            fn(array $check) => !(bool) ($check['ok'] ?? false) && !(bool) ($check['warning'] ?? false)
+        ));
+        if ($failed === []) {
+            return 'Automated restore drill passed.';
+        }
+
+        return $this->truncateText('Automated restore drill failed: ' . implode('; ', array_map(
+            fn(array $check) => (string) ($check['key'] ?? 'unknown') . ' - ' . (string) ($check['message'] ?? ''),
+            $failed
+        )), 1000);
     }
 
     private function storagePath(string $path = ''): string

@@ -96,6 +96,8 @@ curl -X POST "$APP_URL/api/v2/$ADMIN_PATH/system/backup/verify" \
 
 远程备份需要先从 Google Cloud Storage 或 FTP 下载回服务器，再按本地文件流程校验和恢复。
 
+管理端也可以对本地成功备份执行“自动演练”。自动演练不会导入数据库，只会读取备份包并检查 SHA256、gzip、SQL 内容、内嵌 `.env`、`APP_KEY` 和恢复辅助文件；检查结果可以一键记录为该备份的恢复演练记录。
+
 服务器命令行也可以直接做灾难恢复检查。该命令支持备份记录 ID，也支持只传一个 `.sql.gz` 文件路径，适合新机器还没有恢复数据库时使用：
 
 ```bash
@@ -186,6 +188,11 @@ curl -X POST "$APP_URL/api/v2/$ADMIN_PATH/system/backup/restore-drill" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"id": 1, "status": "passed", "environment": "staging", "note": "测试库恢复、迁移和登录检查通过"}'
+
+curl -X POST "$APP_URL/api/v2/$ADMIN_PATH/system/backup/restore-drill/check" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"id": 1, "record": true, "environment": "staging"}'
 ```
 
 说明：

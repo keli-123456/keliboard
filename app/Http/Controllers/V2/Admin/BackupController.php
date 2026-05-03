@@ -4,6 +4,7 @@ namespace App\Http\Controllers\V2\Admin;
 
 use App\Helpers\ResponseEnum;
 use App\Http\Controllers\Controller;
+use App\Services\Backup\BackupRecoveryService;
 use App\Services\Backup\BackupService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -157,6 +158,23 @@ class BackupController extends Controller
 
         try {
             return $this->success($backups->restorePreflight((int) $request->input('id')));
+        } catch (Throwable $e) {
+            return $this->fail([500001, $e->getMessage()]);
+        }
+    }
+
+    public function restoreDrillCheck(Request $request, BackupService $backups, BackupRecoveryService $recovery)
+    {
+        $data = $request->validate([
+            'id' => 'required|integer|min:1',
+            'record' => 'nullable|boolean',
+            'environment' => 'nullable|string|in:local,staging,production_rehearsal',
+            'note' => 'nullable|string|max:1000',
+            'operator' => 'nullable|string|max:120',
+        ]);
+
+        try {
+            return $this->success($backups->restoreDrillCheck((int) $data['id'], $data, $recovery));
         } catch (Throwable $e) {
             return $this->fail([500001, $e->getMessage()]);
         }
