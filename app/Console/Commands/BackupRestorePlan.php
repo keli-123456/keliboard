@@ -16,7 +16,8 @@ class BackupRestorePlan extends Command
         {--expected-sha256= : Expected compressed backup SHA256}
         {--connection= : Override database connection, for example mysql or sqlite}
         {--extract-env= : Write embedded .env to this target path}
-        {--force : Overwrite extracted .env target}
+        {--extract-files= : Write embedded recovery support files to this directory}
+        {--force : Overwrite extracted targets}
         {--json : Output machine-readable JSON}';
 
     protected $description = '校验数据库备份、提取 .env 并输出恢复步骤';
@@ -40,7 +41,20 @@ class BackupRestorePlan extends Command
                 $result['env']['extracted_to'] = $extractTarget;
             }
 
+            $extractFilesTarget = trim((string) $this->option('extract-files'));
+            if ($extractFilesTarget !== '') {
+                $result['files_extracted_to'] = $recovery->writeEmbeddedFiles(
+                    is_array($result['files'] ?? null) ? $result['files'] : [],
+                    $extractFilesTarget,
+                    (bool) $this->option('force')
+                );
+            }
+
             unset($result['env']['contents']);
+            foreach ($result['files'] as &$file) {
+                unset($file['contents']);
+            }
+            unset($file);
             if ((bool) $this->option('json')) {
                 $this->line(json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
                 return self::SUCCESS;
@@ -112,8 +126,14 @@ class BackupRestorePlan extends Command
         $this->line('SQL: ' . ($result['sql_dump'] ? '看起来是 SQL dump' : '未识别'));
         $this->line('数据库连接: ' . $result['database_connection']);
         $this->line('.env: ' . ($result['env']['present'] ? ('已内嵌，' . $result['env']['bytes'] . ' bytes') : '未内嵌'));
+        $this->line('恢复文件: ' . count($result['files'] ?? []) . ' 个');
         if (!empty($result['env']['extracted_to'])) {
             $this->line('.env 已写入: ' . $result['env']['extracted_to']);
+        }
+        if (!empty($result['files_extracted_to'])) {
+            foreach ($result['files_extracted_to'] as $file) {
+                $this->line('恢复文件已写入: ' . $file['path']);
+            }
         }
 
         if (!empty($result['warnings'])) {

@@ -27,7 +27,7 @@ YYYY-mm-dd_HH-ii-ss_<database>_database_backup.sql.gz
 | `path` | 本地相对路径 |
 | `remote_path` | 远程对象路径 |
 
-新版本备份会在 SQL dump 开头写入恢复元数据，其中包含整份 `.env` 文件的 base64 内容。SQL 导入会忽略这些注释，不影响数据库恢复；新机器恢复时可以先从备份包提取 `.env`：
+新版本备份会在 SQL dump 开头写入恢复元数据，其中包含整份 `.env` 文件的 base64 内容，也会尽量内嵌项目根目录下的 `docker-compose.yml`、`docker-compose.yaml`、`compose.yml`、`compose.yaml`。SQL 导入会忽略这些注释，不影响数据库恢复；新机器恢复时可以先从备份包提取 `.env`：
 
 ```bash
 gzip -dc storage/backup/<backup>.sql.gz \
@@ -40,6 +40,8 @@ gzip -dc storage/backup/<backup>.sql.gz \
 安全说明：备份压缩包现在包含 `.env`，也就包含 `APP_KEY`、数据库密码、支付密钥和远程存储密钥。请按最高敏感级别保管本地和远程备份文件。
 
 如果运行环境没有实际的 `.env` 文件，而是完全通过 Docker 环境变量注入，备份会记录 `.env` 缺失，无法凭空导出这些环境变量；文件映射部署会正常备份 `.env`。
+
+恢复辅助文件默认单文件上限为 512 KiB，可以在 `config/backup.php` 调整。它只适合保存 compose 这类小配置文件，不应该用来替代完整宿主机目录或对象存储备份。
 
 ## 远程存储配置
 
@@ -100,6 +102,7 @@ curl -X POST "$APP_URL/api/v2/$ADMIN_PATH/system/backup/verify" \
 php artisan backup:restore-plan storage/backup/<backup>.sql.gz
 php artisan backup:restore-plan --id=1
 php artisan backup:restore-plan storage/backup/<backup>.sql.gz --extract-env=.env
+php artisan backup:restore-plan storage/backup/<backup>.sql.gz --extract-files=./recovery-files
 php artisan backup:restore-plan storage/backup/<backup>.sql.gz --expected-sha256=<sha256> --json
 ```
 
@@ -109,9 +112,10 @@ php artisan backup:restore-plan storage/backup/<backup>.sql.gz --expected-sha256
 - gzip 是否可读、内容是否像 SQL dump。
 - 备份内记录的数据库连接类型。
 - 是否包含内嵌 `.env`。
+- 是否包含内嵌恢复辅助文件。
 - 推荐恢复命令。
 
-如果目标 `.env` 已存在，命令默认不会覆盖；确认要覆盖时再加 `--force`。
+如果目标 `.env` 或恢复辅助文件已存在，命令默认不会覆盖；确认要覆盖时再加 `--force`。
 
 ## 恢复前检查
 
@@ -148,7 +152,25 @@ curl -X POST "$APP_URL/api/v2/$ADMIN_PATH/system/backup/restore-preflight" \
 
 ## 恢复演练记录
 
-校验备份或恢复预检后，管理端可以记录一次恢复演练结果。记录只保存演练摘要，不会执行真实恢复，也不会修改数据库数据。
+校验备份或恢复预检后，管理端可以记录一次恢复演练结果。记录只保存演练摘要，不会执行真实恢复，也不会修改数据库数据。命令行也可以直接做自动演练检查：
+
+```bash
+php artisan backup:restore-drill --id=1 --record
+php artisan backup:restore-drill storage/backup/<backup>.sql.gz --expected-sha256=<sha256>
+php artisan backup:restore-drill storage/backup/<backup>.sql.gz --extract-env=.env --extract-files=./recovery-files
+php artisan backup:restore-drill storage/backup/<backup>.sql.gz --json
+```
+
+自动演练会检查：
+
+- 压缩包 SHA256 是否匹配。
+- gzip 是否可读。
+- 内容是否像 SQL dump。
+- 是否内嵌 `.env`。
+- `.env` 是否包含 `APP_KEY`。
+- 内嵌恢复辅助文件的校验和是否正确。
+
+没有内嵌 compose 文件只会提示风险，不会直接判定失败；缺少 `.env` 或 `APP_KEY` 会判定失败，因为新机器恢复后无法解密原有加密配置。
 
 记录内容包括：
 

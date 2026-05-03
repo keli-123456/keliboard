@@ -78,6 +78,7 @@ final class BackupServiceTest extends TestCase
         $storagePath = getcwd() . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'framework';
         $environmentDir = $storagePath . DIRECTORY_SEPARATOR . 'testing-backup-env';
         $environmentPath = $environmentDir . DIRECTORY_SEPARATOR . '.env';
+        $composePath = $environmentDir . DIRECTORY_SEPARATOR . 'docker-compose.yml';
         $dumpPath = $storagePath . DIRECTORY_SEPARATOR . 'testing-backup-env-dump.sql';
         $envContents = implode("\n", [
             'APP_KEY=base64:test-key',
@@ -85,14 +86,19 @@ final class BackupServiceTest extends TestCase
             'PAYMENT_SECRET=pay_secret',
             '',
         ]);
+        $composeContents = "services:\n  web:\n    image: ghcr.io/keli/keliboard:latest\n";
 
         config([
             'backup.recovery_environment_file' => $environmentPath,
+            'backup.recovery_files' => [
+                'docker-compose.yml' => $composePath,
+            ],
             'database.default' => 'mysql',
         ]);
 
         $filesystem->ensureDirectoryExists($environmentDir);
         $filesystem->put($environmentPath, $envContents);
+        $filesystem->put($composePath, $composeContents);
         $filesystem->put($dumpPath, "CREATE TABLE test (id int);\n");
 
         try {
@@ -107,6 +113,10 @@ final class BackupServiceTest extends TestCase
             $this->assertStringContainsString("-- KELI_RECOVERY_FORMAT=env-base64-v1\n", $contents);
             $this->assertStringContainsString("-- KELI_RECOVERY_DATABASE_CONNECTION=mysql\n", $contents);
             $this->assertSame($envContents, base64_decode($encodedEnv, true));
+            $this->assertStringContainsString("-- KELI_RECOVERY_FILES=1\n", $contents);
+            $this->assertStringContainsString("-- KELI_RECOVERY_FILE_BEGIN=docker-compose.yml\n", $contents);
+            $this->assertStringContainsString("-- KELI_RECOVERY_FILE_SHA256=" . hash('sha256', $composeContents) . "\n", $contents);
+            $this->assertSame($composeContents, base64_decode($this->extractRecoveryFileBase64($contents, 'docker-compose.yml'), true));
             $this->assertStringContainsString("CREATE TABLE test (id int);\n", $contents);
         } finally {
             $filesystem->delete($dumpPath);
@@ -231,6 +241,35 @@ final class BackupServiceTest extends TestCase
             }
 
             if ($line === '-- KELI_RECOVERY_ENV_BASE64_END') {
+                return $encoded;
+            }
+
+            if ($collecting && str_starts_with($line, '-- ')) {
+                $encoded .= substr($line, 3);
+            }
+        }
+
+        return $encoded;
+    }
+
+    private function extractRecoveryFileBase64(string $dump, string $name): string
+    {
+        $encoded = '';
+        $insideFile = false;
+        $collecting = false;
+
+        foreach (explode("\n", $dump) as $line) {
+            if ($line === '-- KELI_RECOVERY_FILE_BEGIN=' . $name) {
+                $insideFile = true;
+                continue;
+            }
+
+            if ($insideFile && $line === '-- KELI_RECOVERY_FILE_BASE64_BEGIN') {
+                $collecting = true;
+                continue;
+            }
+
+            if ($insideFile && $line === '-- KELI_RECOVERY_FILE_BASE64_END') {
                 return $encoded;
             }
 

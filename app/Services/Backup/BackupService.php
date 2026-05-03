@@ -926,10 +926,95 @@ class BackupService
             $lines[] = '-- KELI_RECOVERY_ENV_FILE=missing';
         }
 
+        $files = $this->recoveryFiles();
+        $lines[] = '-- KELI_RECOVERY_FILES=' . count($files);
+        foreach ($files as $file) {
+            $contents = File::get($file['path']);
+            $lines[] = '-- KELI_RECOVERY_FILE_BEGIN=' . $file['name'];
+            $lines[] = '-- KELI_RECOVERY_FILE_BYTES=' . strlen($contents);
+            $lines[] = '-- KELI_RECOVERY_FILE_SHA256=' . hash('sha256', $contents);
+            $lines[] = '-- KELI_RECOVERY_FILE_BASE64_BEGIN';
+            foreach (str_split(base64_encode($contents), 76) as $chunk) {
+                $lines[] = '-- ' . $chunk;
+            }
+            $lines[] = '-- KELI_RECOVERY_FILE_BASE64_END';
+            $lines[] = '-- KELI_RECOVERY_FILE_END';
+        }
+
         $lines[] = '-- KELI_RECOVERY_END';
         $lines[] = '';
 
         return implode("\n", $lines);
+    }
+
+    /**
+     * @return array<int, array{name: string, path: string}>
+     */
+    private function recoveryFiles(): array
+    {
+        $configured = config('backup.recovery_files', []);
+        if (!is_array($configured)) {
+            return [];
+        }
+
+        $maxBytes = max(1024, (int) config('backup.recovery_file_max_bytes', 524288));
+        $files = [];
+        foreach ($configured as $name => $path) {
+            if (!is_string($path) || trim($path) === '') {
+                continue;
+            }
+
+            $displayName = is_string($name) ? $name : basename(str_replace('\\', '/', $path));
+            $displayName = $this->normalizeRecoveryFileName($displayName);
+            if ($displayName === '') {
+                continue;
+            }
+
+            $candidate = $this->resolveRecoveryFilePath($path);
+            if (!File::isFile($candidate)) {
+                continue;
+            }
+            if (File::size($candidate) > $maxBytes) {
+                Log::channel('backup')->warning('Skipping recovery metadata file because it is too large', [
+                    'name' => $displayName,
+                    'path' => $candidate,
+                    'max_bytes' => $maxBytes,
+                ]);
+                continue;
+            }
+
+            $files[$displayName] = [
+                'name' => $displayName,
+                'path' => $candidate,
+            ];
+        }
+
+        return array_values($files);
+    }
+
+    private function resolveRecoveryFilePath(string $path): string
+    {
+        $path = trim($path);
+        if ($path === '') {
+            return '';
+        }
+        if (preg_match('/^[A-Za-z]:[\/\\\\]/', $path) || str_starts_with($path, '/') || str_starts_with($path, '\\')) {
+            return $path;
+        }
+
+        return base_path($path);
+    }
+
+    private function normalizeRecoveryFileName(string $name): string
+    {
+        $name = trim(str_replace('\\', '/', $name));
+        $name = preg_replace('#/+#', '/', $name) ?: '';
+        $name = trim($name, '/');
+        if ($name === '' || str_contains($name, '..')) {
+            return '';
+        }
+
+        return $name;
     }
 
     private function recoveryEnvironmentFilePath(): string

@@ -38,6 +38,7 @@ class BackupRecoveryService
                 ];
             }
         }
+        $files = $this->formatRecoveryFiles(is_array($metadata['files'] ?? null) ? $metadata['files'] : []);
 
         return [
             'path' => $path,
@@ -54,6 +55,7 @@ class BackupRecoveryService
                 'format' => $metadata['format'] ?? null,
                 'generated_at' => $metadata['generated_at'] ?? null,
                 'env_file' => $metadata['env_file'] ?? null,
+                'files_count' => isset($metadata['files_count']) ? (int) $metadata['files_count'] : count($files),
             ],
             'env' => $env ?: [
                 'present' => false,
@@ -61,8 +63,99 @@ class BackupRecoveryService
                 'sha256' => null,
                 'contents' => null,
             ],
+            'files' => $files,
             'restore_commands' => $this->restoreCommands($path, $connection, $env !== null),
-            'warnings' => $this->warnings($expectedChecksum, $gzipOk, $preview, $metadata, $env),
+            'warnings' => $this->warnings($expectedChecksum, $gzipOk, $preview, $metadata, $env, $files),
+        ];
+    }
+
+    public function drill(string $path, array $options = []): array
+    {
+        $inspection = $this->inspect($path, $options);
+        $env = is_array($inspection['env'] ?? null) ? $inspection['env'] : [];
+        $files = is_array($inspection['files'] ?? null) ? $inspection['files'] : [];
+        $requiredEnvKeys = $options['required_env_keys'] ?? ['APP_KEY'];
+        if (!is_array($requiredEnvKeys)) {
+            $requiredEnvKeys = ['APP_KEY'];
+        }
+
+        $parsedEnv = $this->parseEnvironmentContents((string) ($env['contents'] ?? ''));
+        $missingEnvKeys = [];
+        foreach ($requiredEnvKeys as $key) {
+            $key = trim((string) $key);
+            if ($key !== '' && trim((string) ($parsedEnv[$key] ?? '')) === '') {
+                $missingEnvKeys[] = $key;
+            }
+        }
+
+        $checks = [
+            $this->drillCheck(
+                'checksum',
+                $inspection['checksum_ok'] !== false,
+                match ($inspection['checksum_ok']) {
+                    true => 'Backup SHA256 matches expected checksum',
+                    false => 'Backup SHA256 does not match expected checksum',
+                    default => 'Backup SHA256 was calculated but no expected checksum was provided',
+                }
+            ),
+            $this->drillCheck(
+                'gzip',
+                (bool) ($inspection['gzip_ok'] ?? false),
+                (bool) ($inspection['gzip_ok'] ?? false) ? 'Backup gzip stream is readable' : (string) ($inspection['gzip_error'] ?? 'Backup gzip stream is not readable')
+            ),
+            $this->drillCheck(
+                'sql_dump',
+                (bool) ($inspection['sql_dump'] ?? false),
+                (bool) ($inspection['sql_dump'] ?? false) ? 'Compressed content looks like a SQL dump' : 'Compressed content does not look like a SQL dump'
+            ),
+            $this->drillCheck(
+                'env_present',
+                (bool) ($env['present'] ?? false),
+                (bool) ($env['present'] ?? false) ? 'Embedded .env is present' : 'Embedded .env is missing'
+            ),
+            $this->drillCheck(
+                'env_required_keys',
+                $missingEnvKeys === [],
+                $missingEnvKeys === [] ? 'Required .env keys are present' : 'Missing required .env keys: ' . implode(', ', $missingEnvKeys)
+            ),
+            $this->drillCheck(
+                'recovery_files',
+                true,
+                count($files) > 0 ? 'Embedded recovery support files are present' : 'No compose or recovery support files are embedded',
+                count($files) === 0
+            ),
+        ];
+
+        foreach ($files as $file) {
+            $checks[] = $this->drillCheck(
+                'recovery_file:' . (string) ($file['name'] ?? ''),
+                ($file['checksum_ok'] ?? null) !== false,
+                ($file['checksum_ok'] ?? null) === false
+                    ? 'Embedded recovery file checksum does not match metadata'
+                    : 'Embedded recovery file checksum is valid'
+            );
+        }
+
+        $ok = collect($checks)->every(fn(array $check) => (bool) ($check['ok'] ?? false) || (bool) ($check['warning'] ?? false));
+        $resultInspection = $inspection;
+        unset($resultInspection['env']['contents']);
+        foreach ($resultInspection['files'] as &$file) {
+            unset($file['contents']);
+        }
+        unset($file);
+
+        return [
+            'ok' => $ok,
+            'checked_at' => time(),
+            'checks' => $checks,
+            'warnings' => array_values(array_unique([
+                ...$inspection['warnings'],
+                ...array_map(
+                    fn(array $check) => (string) $check['message'],
+                    array_filter($checks, fn(array $check) => (bool) ($check['warning'] ?? false))
+                ),
+            ])),
+            'inspection' => $resultInspection,
         ];
     }
 
@@ -77,6 +170,46 @@ class BackupRecoveryService
         if (File::put($targetPath, $contents) === false) {
             throw new RuntimeException('Failed to write extracted .env file');
         }
+    }
+
+    public function writeEmbeddedFiles(array $files, string $targetDir, bool $force = false): array
+    {
+        $targetDir = rtrim($this->normalizePath($targetDir), DIRECTORY_SEPARATOR);
+        if ($targetDir === '') {
+            throw new RuntimeException('Target recovery file directory is empty');
+        }
+
+        $written = [];
+        foreach ($files as $file) {
+            if (!is_array($file)) {
+                continue;
+            }
+
+            $name = $this->normalizeRecoveryFileName((string) ($file['name'] ?? ''));
+            $contents = $file['contents'] ?? null;
+            if ($name === '' || !is_string($contents)) {
+                continue;
+            }
+
+            $targetPath = $targetDir . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $name);
+            if (File::exists($targetPath) && !$force) {
+                throw new RuntimeException("Target recovery file {$name} already exists; pass --force to overwrite");
+            }
+
+            File::ensureDirectoryExists(dirname($targetPath));
+            if (File::put($targetPath, $contents) === false) {
+                throw new RuntimeException("Failed to write extracted recovery file {$name}");
+            }
+
+            $written[] = [
+                'name' => $name,
+                'path' => $targetPath,
+                'bytes' => strlen($contents),
+                'sha256' => hash('sha256', $contents),
+            ];
+        }
+
+        return $written;
     }
 
     private function readGzipPreview(string $path): array
@@ -108,9 +241,14 @@ class BackupRecoveryService
 
     private function parseRecoveryMetadata(string $preview): array
     {
-        $metadata = [];
+        $metadata = [
+            'files' => [],
+        ];
         $collectingEnv = false;
+        $collectingFile = false;
         $envBase64 = '';
+        $fileBase64 = '';
+        $currentFile = null;
 
         foreach (preg_split('/\r\n|\r|\n/', $preview) ?: [] as $line) {
             if ($line === '-- KELI_RECOVERY_END') {
@@ -128,8 +266,33 @@ class BackupRecoveryService
                 continue;
             }
 
+            if ($line === '-- KELI_RECOVERY_FILE_BASE64_BEGIN' && $currentFile !== null) {
+                $collectingFile = true;
+                $fileBase64 = '';
+                continue;
+            }
+
+            if ($line === '-- KELI_RECOVERY_FILE_BASE64_END' && $currentFile !== null) {
+                $collectingFile = false;
+                $currentFile['base64'] = $fileBase64;
+                continue;
+            }
+
+            if ($line === '-- KELI_RECOVERY_FILE_END' && $currentFile !== null) {
+                $metadata['files'][] = $currentFile;
+                $currentFile = null;
+                $collectingFile = false;
+                $fileBase64 = '';
+                continue;
+            }
+
             if ($collectingEnv && str_starts_with($line, '-- ')) {
                 $envBase64 .= substr($line, 3);
+                continue;
+            }
+
+            if ($collectingFile && str_starts_with($line, '-- ')) {
+                $fileBase64 .= substr($line, 3);
                 continue;
             }
 
@@ -141,10 +304,53 @@ class BackupRecoveryService
                 $metadata['generated_at'] = substr($line, strlen('-- KELI_RECOVERY_GENERATED_AT='));
             } elseif (str_starts_with($line, '-- KELI_RECOVERY_ENV_FILE=')) {
                 $metadata['env_file'] = substr($line, strlen('-- KELI_RECOVERY_ENV_FILE='));
+            } elseif (str_starts_with($line, '-- KELI_RECOVERY_FILES=')) {
+                $metadata['files_count'] = (int) substr($line, strlen('-- KELI_RECOVERY_FILES='));
+            } elseif (str_starts_with($line, '-- KELI_RECOVERY_FILE_BEGIN=')) {
+                $currentFile = [
+                    'name' => substr($line, strlen('-- KELI_RECOVERY_FILE_BEGIN=')),
+                ];
+            } elseif (str_starts_with($line, '-- KELI_RECOVERY_FILE_BYTES=') && $currentFile !== null) {
+                $currentFile['expected_bytes'] = (int) substr($line, strlen('-- KELI_RECOVERY_FILE_BYTES='));
+            } elseif (str_starts_with($line, '-- KELI_RECOVERY_FILE_SHA256=') && $currentFile !== null) {
+                $currentFile['expected_sha256'] = strtolower(substr($line, strlen('-- KELI_RECOVERY_FILE_SHA256=')));
             }
         }
 
         return $metadata;
+    }
+
+    private function formatRecoveryFiles(array $files): array
+    {
+        $result = [];
+        foreach ($files as $file) {
+            if (!is_array($file)) {
+                continue;
+            }
+
+            $name = $this->normalizeRecoveryFileName((string) ($file['name'] ?? ''));
+            if ($name === '') {
+                continue;
+            }
+
+            $decoded = base64_decode((string) ($file['base64'] ?? ''), true);
+            $contents = is_string($decoded) ? $decoded : '';
+            $sha256 = is_string($decoded) ? hash('sha256', $contents) : null;
+            $expectedSha256 = strtolower(trim((string) ($file['expected_sha256'] ?? '')));
+            $expectedBytes = (int) ($file['expected_bytes'] ?? 0);
+
+            $result[] = [
+                'name' => $name,
+                'bytes' => strlen($contents),
+                'expected_bytes' => $expectedBytes > 0 ? $expectedBytes : null,
+                'sha256' => $sha256,
+                'expected_sha256' => $expectedSha256 !== '' ? $expectedSha256 : null,
+                'checksum_ok' => $expectedSha256 !== '' && $sha256 !== null ? hash_equals($expectedSha256, $sha256) : null,
+                'contents' => $contents,
+            ];
+        }
+
+        return $result;
     }
 
     private function looksLikeSqlDump(string $preview): bool
@@ -177,7 +383,7 @@ class BackupRecoveryService
         return $commands;
     }
 
-    private function warnings(string $expectedChecksum, bool $gzipOk, string $preview, array $metadata, ?array $env): array
+    private function warnings(string $expectedChecksum, bool $gzipOk, string $preview, array $metadata, ?array $env, array $files): array
     {
         $warnings = [];
         if ($expectedChecksum === '') {
@@ -194,8 +400,72 @@ class BackupRecoveryService
         if ($env === null) {
             $warnings[] = 'Backup does not contain an embedded .env file.';
         }
+        $expectedFiles = (int) ($metadata['files_count'] ?? count($files));
+        if ($expectedFiles > count($files)) {
+            $warnings[] = 'Some embedded recovery support files could not be decoded.';
+        }
+        foreach ($files as $file) {
+            if (($file['checksum_ok'] ?? null) === false) {
+                $warnings[] = 'Embedded recovery file checksum failed: ' . (string) ($file['name'] ?? '');
+            }
+        }
 
         return $warnings;
+    }
+
+    private function drillCheck(string $key, bool $ok, string $message, bool $warning = false): array
+    {
+        return [
+            'key' => $key,
+            'ok' => $ok,
+            'warning' => $warning,
+            'message' => $message,
+        ];
+    }
+
+    private function parseEnvironmentContents(string $contents): array
+    {
+        $values = [];
+        foreach (preg_split('/\r\n|\r|\n/', $contents) ?: [] as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#') || !str_contains($line, '=')) {
+                continue;
+            }
+
+            [$key, $value] = explode('=', $line, 2);
+            $key = trim($key);
+            if ($key === '') {
+                continue;
+            }
+
+            $value = trim($value);
+            if (
+                strlen($value) >= 2
+                && (($value[0] === '"' && substr($value, -1) === '"') || ($value[0] === "'" && substr($value, -1) === "'"))
+            ) {
+                $value = substr($value, 1, -1);
+            }
+
+            $values[$key] = $value;
+        }
+
+        return $values;
+    }
+
+    private function normalizeRecoveryFileName(string $name): string
+    {
+        $name = trim(str_replace('\\', '/', $name));
+        $name = preg_replace('#/+#', '/', $name) ?: '';
+        $name = trim($name, '/');
+        if (
+            $name === ''
+            || str_contains($name, '..')
+            || preg_match('/^[A-Za-z]:/', $name)
+        ) {
+            return '';
+        }
+
+        return $name;
     }
 
     private function normalizePath(string $path): string
