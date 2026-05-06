@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Protocols;
 
+use App\Models\Server;
 use App\Protocols\SingBox;
 use App\Support\ProtocolManager;
 use Illuminate\Container\Container;
@@ -88,5 +89,73 @@ final class SingBoxRegressionTest extends TestCase
         $this->assertSame('sni.example.com', $config['transport']['headers']['Host']);
         $this->assertArrayNotHasKey('max_early_data', $config['transport']);
         $this->assertArrayNotHasKey('early_data_header_name', $config['transport']);
+    }
+
+    public function test_singbox_full_app_config_keeps_auto_select_default(): void
+    {
+        $servers = [
+            [
+                'name' => 'edge-a',
+                'type' => Server::TYPE_SHADOWSOCKS,
+                'host' => 'edge-a.example.com',
+                'port' => 8388,
+                'password' => 'password-a',
+                'protocol_settings' => [
+                    'cipher' => 'aes-128-gcm',
+                ],
+            ],
+            [
+                'name' => 'edge-b',
+                'type' => Server::TYPE_SHADOWSOCKS,
+                'host' => 'edge-b.example.com',
+                'port' => 8389,
+                'password' => 'password-b',
+                'protocol_settings' => [
+                    'cipher' => 'aes-128-gcm',
+                ],
+            ],
+        ];
+        $protocol = new class(['uuid' => 'user-uuid'], $servers, 'sing-box', '1.13.11') extends SingBox {
+            public function handle()
+            {
+                return [];
+            }
+        };
+
+        $config = $protocol->generateConfig();
+
+        $selector = collect($config['outbounds'])->firstWhere('tag', '节点选择');
+        $auto = collect($config['outbounds'])->firstWhere('tag', '自动选择');
+        $this->assertSame('自动选择', $selector['default']);
+        $this->assertContains('edge-a', $auto['outbounds']);
+        $this->assertContains('edge-b', $auto['outbounds']);
+    }
+
+    public function test_singbox_single_app_config_can_pin_default_node(): void
+    {
+        $servers = [
+            [
+                'name' => 'edge-b',
+                'type' => Server::TYPE_SHADOWSOCKS,
+                'host' => 'edge-b.example.com',
+                'port' => 8389,
+                'password' => 'password-b',
+                'protocol_settings' => [
+                    'cipher' => 'aes-128-gcm',
+                ],
+            ],
+        ];
+        $protocol = new class(['uuid' => 'user-uuid'], $servers, 'sing-box', '1.13.11') extends SingBox {
+            public function handle()
+            {
+                return [];
+            }
+        };
+
+        $config = $protocol->generateConfig(defaultOutboundTag: 'edge-b');
+
+        $selector = collect($config['outbounds'])->firstWhere('tag', '节点选择');
+        $this->assertSame('edge-b', $selector['default']);
+        $this->assertContains('edge-b', $selector['outbounds']);
     }
 }

@@ -44,7 +44,9 @@ class ConfigController extends Controller
 
         $clientVersion = $validated['core_version'] ?? self::DEFAULT_SING_BOX_CORE_VERSION;
         $platform = $validated['platform'] ?? null;
-        $defaultOutboundTag = (string) ($targetServers->first()['name'] ?? '');
+        $defaultOutboundTag = $serverId === null
+            ? null
+            : (string) ($targetServers->first()['name'] ?? '');
 
         /** @var SingBox $protocol */
         $protocol = app()->make(SingBox::class, [
@@ -55,7 +57,7 @@ class ConfigController extends Controller
         ]);
 
         $config = $protocol->generateConfig(
-            defaultOutboundTag: $defaultOutboundTag,
+            defaultOutboundTag: $defaultOutboundTag ?: null,
             platform: $platform
         );
 

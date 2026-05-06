@@ -3,6 +3,7 @@
 use App\Services\ThemeService;
 use App\Services\HiddenApiPathService;
 use App\Services\UpdateService;
+use App\Http\Controllers\WellKnown\KeliClientDiscoveryController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Log;
@@ -18,6 +19,8 @@ use Illuminate\Support\Facades\File;
 | contains the "web" middleware group. Now create something great!
 |
 */
+
+Route::get('/.well-known/keli-client.json', [KeliClientDiscoveryController::class, 'show']);
 
 // Theme locale fallback (for themes missing `assets/locales/*.json`)
 Route::get('/theme/{theme}/assets/locales/{locale}.json', function (string $theme, string $locale) {
