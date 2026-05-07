@@ -139,6 +139,8 @@ class ManageController extends Controller
             Server::TYPE_ANYTLS,
             Server::TYPE_HYSTERIA,
             Server::TYPE_TUIC,
+            Server::TYPE_SOCKS,
+            Server::TYPE_HTTP,
         ];
 
         $clientLabels = [

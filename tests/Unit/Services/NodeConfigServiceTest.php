@@ -97,4 +97,33 @@ final class NodeConfigServiceTest extends TestCase
         $this->assertSame('30000-30100', $response['port']);
         $this->assertSame(443, $response['server_port']);
     }
+
+    public function test_socks_and_http_v2node_responses_include_tls_settings(): void
+    {
+        $service = new NodeConfigService();
+
+        foreach (['socks', 'http'] as $type) {
+            $response = $service->buildResponse((object) [
+                'type' => $type,
+                'port' => 443,
+                'server_port' => 1443,
+                'host' => "{$type}.example.com",
+                'route_ids' => [],
+                'protocol_settings' => [
+                    'tls' => 1,
+                    'tls_settings' => [
+                        'cert_mode' => 'file',
+                        'cert_file' => "/tmp/{$type}.crt",
+                        'key_file' => "/tmp/{$type}.key",
+                    ],
+                ],
+            ], true);
+
+            $this->assertSame($type, $response['protocol']);
+            $this->assertSame(1443, $response['server_port']);
+            $this->assertSame(1, $response['tls']);
+            $this->assertSame("{$type}.example.com", $response['tls_settings']['server_name']);
+            $this->assertSame("/tmp/{$type}.crt", $response['tls_settings']['cert_file']);
+        }
+    }
 }

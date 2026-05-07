@@ -761,13 +761,26 @@ final class ProtocolCapabilityServiceTest extends TestCase
 
     public function test_runtime_drops_protocols_not_supported_by_v2node(): void
     {
-        $server = $this->makeServer('http', [
+        $server = $this->makeServer('naive', [
             'tls' => 1,
         ]);
 
         $result = $this->service->supportsRuntime('v2node', $server);
 
         $this->assertFalse($result->supported);
+    }
+
+    public function test_runtime_keeps_socks_and_http_when_v2node_supports_them(): void
+    {
+        foreach (['socks', 'http'] as $type) {
+            $server = $this->makeServer($type, [
+                'tls' => 0,
+            ]);
+
+            $result = $this->service->supportsRuntime('v2node', $server);
+
+            $this->assertTrue($result->supported, "{$type} should be supported by v2node");
+        }
     }
 
     public function test_runtime_keeps_vmess_xhttp_when_v2node_supports_it(): void

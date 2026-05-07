@@ -30,6 +30,8 @@ return [
                     'versions' => [5],
                     'features' => ['alpn', 'congestion_control', 'zero_rtt_handshake'],
                 ],
+                'socks' => [],
+                'http' => [],
             ],
         ],
     ],

@@ -17,6 +17,8 @@ class ServerSave extends FormRequest
         Server::TYPE_HYSTERIA,
         Server::TYPE_TUIC,
         Server::TYPE_ANYTLS,
+        Server::TYPE_SOCKS,
+        Server::TYPE_HTTP,
     ];
 
     private const V2NODE_REALITY_UNSUPPORTED_NETWORKS = [
@@ -86,6 +88,8 @@ class ServerSave extends FormRequest
             'reality_settings.short_id' => 'nullable|string',
         ],
         'socks' => [
+            'tls' => 'nullable|integer',
+            'tls_settings' => 'nullable|array',
         ],
         'naive' => [
             'tls' => 'required|integer',
