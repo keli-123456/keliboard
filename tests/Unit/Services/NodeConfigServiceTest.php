@@ -98,11 +98,11 @@ final class NodeConfigServiceTest extends TestCase
         $this->assertSame(443, $response['server_port']);
     }
 
-    public function test_socks_and_http_v2node_responses_include_tls_settings(): void
+    public function test_socks_naive_and_http_v2node_responses_include_tls_settings(): void
     {
         $service = new NodeConfigService();
 
-        foreach (['socks', 'http'] as $type) {
+        foreach (['socks', 'naive', 'http'] as $type) {
             $response = $service->buildResponse((object) [
                 'type' => $type,
                 'port' => 443,

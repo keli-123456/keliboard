@@ -18,6 +18,7 @@ class ServerSave extends FormRequest
         Server::TYPE_TUIC,
         Server::TYPE_ANYTLS,
         Server::TYPE_SOCKS,
+        Server::TYPE_NAIVE,
         Server::TYPE_HTTP,
         Server::TYPE_MIERU,
     ];

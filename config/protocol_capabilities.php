@@ -31,6 +31,7 @@ return [
                     'features' => ['alpn', 'congestion_control', 'zero_rtt_handshake'],
                 ],
                 'socks' => [],
+                'naive' => [],
                 'http' => [],
                 'mieru' => [],
             ],

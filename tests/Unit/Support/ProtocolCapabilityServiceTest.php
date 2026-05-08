@@ -759,7 +759,7 @@ final class ProtocolCapabilityServiceTest extends TestCase
         $this->assertFalse($result->supported);
     }
 
-    public function test_runtime_drops_protocols_not_supported_by_v2node(): void
+    public function test_runtime_keeps_naive_when_v2node_sidecar_supports_it(): void
     {
         $server = $this->makeServer('naive', [
             'tls' => 1,
@@ -767,7 +767,7 @@ final class ProtocolCapabilityServiceTest extends TestCase
 
         $result = $this->service->supportsRuntime('v2node', $server);
 
-        $this->assertFalse($result->supported);
+        $this->assertTrue($result->supported);
     }
 
     public function test_runtime_keeps_socks_and_http_when_v2node_supports_them(): void

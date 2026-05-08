@@ -114,8 +114,8 @@ class NodeConfigService
             'naive' => [
                 ...$baseConfig,
                 'server_port' => (int) $serverPort,
-                'tls' => (int) $protocolSettings['tls'],
-                'tls_settings' => $protocolSettings['tls_settings']
+                'tls' => (int) data_get($protocolSettings, 'tls', 0),
+                'tls_settings' => data_get($protocolSettings, 'tls_settings') ?: [],
             ],
             'http' => [
                 ...$baseConfig,
@@ -266,7 +266,7 @@ class NodeConfigService
     private function getV2NodeTlsValue(string $nodeType, array $protocolSettings): ?int
     {
         return match ($nodeType) {
-            'vmess', 'vless', 'socks', 'http' => (int) data_get($protocolSettings, 'tls', 0),
+            'vmess', 'vless', 'socks', 'naive', 'http' => (int) data_get($protocolSettings, 'tls', 0),
             'trojan', 'hysteria', 'tuic' => 1,
             'anytls' => $this->resolveAnyTlsMode($protocolSettings),
             'shadowsocks' => 0,
