@@ -783,6 +783,18 @@ final class ProtocolCapabilityServiceTest extends TestCase
         }
     }
 
+    public function test_runtime_keeps_mieru_when_v2node_sidecar_supports_it(): void
+    {
+        $server = $this->makeServer('mieru', [
+            'transport' => 'tcp',
+            'multiplexing' => 'MULTIPLEXING_LOW',
+        ]);
+
+        $result = $this->service->supportsRuntime('v2node', $server);
+
+        $this->assertTrue($result->supported);
+    }
+
     public function test_runtime_keeps_vmess_xhttp_when_v2node_supports_it(): void
     {
         $server = $this->makeServer('vmess', [

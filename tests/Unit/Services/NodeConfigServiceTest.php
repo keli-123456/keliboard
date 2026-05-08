@@ -126,4 +126,29 @@ final class NodeConfigServiceTest extends TestCase
             $this->assertSame("/tmp/{$type}.crt", $response['tls_settings']['cert_file']);
         }
     }
+
+    public function test_mieru_v2node_response_includes_sidecar_fields(): void
+    {
+        $service = new NodeConfigService();
+
+        $response = $service->buildResponse((object) [
+            'type' => 'mieru',
+            'port' => '21000-22000',
+            'ports' => '21000-22000',
+            'server_port' => 2999,
+            'host' => 'mieru.example.com',
+            'route_ids' => [],
+            'protocol_settings' => [
+                'transport' => 'udp',
+                'multiplexing' => 'MULTIPLEXING_HIGH',
+            ],
+        ], true);
+
+        $this->assertSame('mieru', $response['protocol']);
+        $this->assertSame('21000-22000', $response['port']);
+        $this->assertSame('21000-22000', $response['ports']);
+        $this->assertSame(2999, $response['server_port']);
+        $this->assertSame('UDP', $response['transport']);
+        $this->assertSame('MULTIPLEXING_HIGH', $response['multiplexing']);
+    }
 }

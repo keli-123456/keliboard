@@ -19,6 +19,7 @@ class ServerSave extends FormRequest
         Server::TYPE_ANYTLS,
         Server::TYPE_SOCKS,
         Server::TYPE_HTTP,
+        Server::TYPE_MIERU,
     ];
 
     private const V2NODE_REALITY_UNSUPPORTED_NETWORKS = [

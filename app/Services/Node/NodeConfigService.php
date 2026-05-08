@@ -125,8 +125,11 @@ class NodeConfigService
             ],
             'mieru' => [
                 ...$baseConfig,
-                'server_port' => (string) $serverPort,
-                'protocol' => (int) $protocolSettings['protocol'],
+                'port' => (string) $node->port,
+                'ports' => (string) data_get($node, 'ports', ''),
+                'server_port' => (int) $serverPort,
+                'transport' => strtoupper(trim((string) data_get($protocolSettings, 'transport', 'tcp'))) ?: 'TCP',
+                'multiplexing' => trim((string) data_get($protocolSettings, 'multiplexing', 'MULTIPLEXING_LOW')) ?: 'MULTIPLEXING_LOW',
             ],
             default => []
         };
