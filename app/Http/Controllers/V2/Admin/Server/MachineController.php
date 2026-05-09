@@ -372,7 +372,7 @@ class MachineController extends Controller
             try {
                 $response = Http::timeout(5)
                     ->acceptJson()
-                    ->get('https://api.github.com/repos/keli-123456/' . $repository . '/releases/latest');
+                    ->get('https://api.github.com/repos/keli-123456/' . $repository . '/releases?per_page=20');
                 if (!$response->ok()) {
                     return [
                         'latest_version' => null,
@@ -384,7 +384,15 @@ class MachineController extends Controller
                     ];
                 }
 
-                $version = trim((string) data_get($response->json(), 'tag_name', ''));
+                $release = collect($response->json())
+                    ->first(function ($release): bool {
+                        if ((bool) data_get($release, 'draft', false)) {
+                            return false;
+                        }
+
+                        return $this->isValidKelinodeVersion((string) data_get($release, 'tag_name', ''));
+                    });
+                $version = trim((string) data_get($release, 'tag_name', ''));
                 return [
                     'latest_version' => $this->isValidKelinodeVersion($version) ? $version : null,
                     'checked_at' => $checkedAt,

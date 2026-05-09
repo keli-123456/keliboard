@@ -109,8 +109,12 @@ final class MachineControllerInstallCommandTest extends TestCase
     public function test_version_info_uses_component_release_repository(): void
     {
         Http::fake([
-            'https://api.github.com/repos/keli-123456/kelinode-rs/releases/latest' => Http::response([
-                'tag_name' => 'v0.1.4',
+            'https://api.github.com/repos/keli-123456/kelinode-rs/releases?per_page=20' => Http::response([
+                [
+                    'tag_name' => 'v0.1.4',
+                    'prerelease' => true,
+                    'draft' => false,
+                ],
             ]),
         ]);
 
@@ -131,8 +135,12 @@ final class MachineControllerInstallCommandTest extends TestCase
     public function test_upgrade_queues_component_specific_target_version(): void
     {
         Http::fake([
-            'https://api.github.com/repos/keli-123456/keli-core-rs/releases/latest' => Http::response([
-                'tag_name' => 'v0.1.1',
+            'https://api.github.com/repos/keli-123456/keli-core-rs/releases?per_page=20' => Http::response([
+                [
+                    'tag_name' => 'v0.1.1',
+                    'prerelease' => true,
+                    'draft' => false,
+                ],
             ]),
         ]);
 
