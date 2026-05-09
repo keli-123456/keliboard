@@ -41,7 +41,7 @@ class ProtocolCapabilityService
         $facts = $this->extractFacts($server);
         $runtimeConfig = data_get($this->config, "runtimes.{$runtime}.protocols.{$facts['protocol']}");
 
-        if (!$runtimeConfig) {
+        if ($runtimeConfig === null) {
             return SupportResult::drop("runtime {$runtime} does not support protocol {$facts['protocol']}");
         }
 

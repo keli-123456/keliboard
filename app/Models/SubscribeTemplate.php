@@ -24,7 +24,11 @@ class SubscribeTemplate extends Model
             return self::$tableExists;
         }
 
-        return self::$tableExists = Schema::hasTable((new static())->getTable());
+        try {
+            return self::$tableExists = Schema::hasTable((new static())->getTable());
+        } catch (\Throwable) {
+            return self::$tableExists = false;
+        }
     }
 
     public static function getContent(string $name): ?string

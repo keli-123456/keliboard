@@ -3,7 +3,6 @@ namespace App\Protocols;
 
 use App\Utils\Helper;
 use Illuminate\Support\Arr;
-use Illuminate\Support\Facades\File;
 use App\Support\AbstractProtocol;
 use App\Models\Server;
 
@@ -179,11 +178,19 @@ class SingBox extends AbstractProtocol
 
     protected function loadConfig()
     {
-        $jsonData = subscribe_template('singbox', File::exists(base_path(self::CUSTOM_TEMPLATE_FILE))
-            ? File::get(base_path(self::CUSTOM_TEMPLATE_FILE))
-            : File::get(base_path(self::DEFAULT_TEMPLATE_FILE)));
+        $customTemplate = $this->templatePath(self::CUSTOM_TEMPLATE_FILE);
+        $defaultTemplate = $this->templatePath(self::DEFAULT_TEMPLATE_FILE);
+        $jsonData = subscribe_template('singbox', file_exists($customTemplate)
+            ? file_get_contents($customTemplate)
+            : file_get_contents($defaultTemplate));
 
         return is_array($jsonData) ? $jsonData : json_decode($jsonData, true);
+    }
+
+    private function templatePath(string $path): string
+    {
+        $base = method_exists(app(), 'basePath') ? app()->basePath() : dirname(__DIR__, 2);
+        return rtrim($base, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $path);
     }
 
     protected function buildOutbounds()

@@ -264,8 +264,12 @@ class MachineController extends Controller
     public function versionInfo(Request $request)
     {
         $force = (bool) $request->boolean('force', false);
+        $component = $this->normalizeUpgradeComponent($request->input('component', 'node'));
+        if ($component === null) {
+            return $this->fail([422, '无效的升级组件']);
+        }
 
-        return $this->success($this->resolveLatestKelinodeVersion($force));
+        return $this->success($this->resolveLatestKelinodeVersion($force, $component));
     }
 
     public function upgrade(Request $request)
@@ -273,6 +277,7 @@ class MachineController extends Controller
         $params = $request->validate([
             'id' => 'required|integer',
             'target_version' => 'nullable|string|max:64',
+            'component' => 'nullable|string|max:64',
             'force' => 'nullable|boolean',
         ]);
 
@@ -283,6 +288,11 @@ class MachineController extends Controller
         if (!$machine->is_active) {
             return $this->fail([422, '机器已停用，不能下发升级任务']);
         }
+        $component = $this->normalizeUpgradeComponent($params['component'] ?? 'node');
+        if ($component === null) {
+            return $this->fail([422, '无效的升级组件']);
+        }
+
         $currentUpgrade = is_array($machine->upgrade_state) ? $machine->upgrade_state : [];
         if (
             !(bool) ($params['force'] ?? false)
@@ -293,7 +303,7 @@ class MachineController extends Controller
 
         $targetVersion = trim((string) ($params['target_version'] ?? ''));
         if ($targetVersion === '') {
-            $latest = $this->resolveLatestKelinodeVersion();
+            $latest = $this->resolveLatestKelinodeVersion(false, $component);
             $targetVersion = (string) ($latest['latest_version'] ?? '');
         }
         if (!$this->isValidKelinodeVersion($targetVersion)) {
@@ -304,6 +314,7 @@ class MachineController extends Controller
             'upgrade_state' => [
                 'id' => (string) Str::uuid(),
                 'status' => 'queued',
+                'component' => $component,
                 'target_version' => $targetVersion,
                 'requested_at' => now()->timestamp,
                 'updated_at' => now()->timestamp,
@@ -347,23 +358,27 @@ class MachineController extends Controller
         return rtrim($request->getSchemeAndHttpHost(), '/');
     }
 
-    private function resolveLatestKelinodeVersion(bool $force = false): array
+    private function resolveLatestKelinodeVersion(bool $force = false, string $component = 'node'): array
     {
-        $cacheKey = 'server_machine:kelinode_latest_release';
+        $component = $this->normalizeUpgradeComponent($component) ?? 'node';
+        $repository = $this->upgradeComponentRepository($component);
+        $cacheKey = 'server_machine:latest_release:' . $component;
         if ($force) {
             Cache::forget($cacheKey);
         }
 
-        return Cache::remember($cacheKey, now()->addMinutes(10), function (): array {
+        return Cache::remember($cacheKey, now()->addMinutes(10), function () use ($component, $repository): array {
             $checkedAt = now()->timestamp;
             try {
                 $response = Http::timeout(5)
                     ->acceptJson()
-                    ->get('https://api.github.com/repos/keli-123456/kelinode/releases/latest');
+                    ->get('https://api.github.com/repos/keli-123456/' . $repository . '/releases/latest');
                 if (!$response->ok()) {
                     return [
                         'latest_version' => null,
                         'checked_at' => $checkedAt,
+                        'component' => $component,
+                        'repository' => $repository,
                         'source' => 'github',
                         'error' => 'github_status_' . $response->status(),
                     ];
@@ -373,19 +388,52 @@ class MachineController extends Controller
                 return [
                     'latest_version' => $this->isValidKelinodeVersion($version) ? $version : null,
                     'checked_at' => $checkedAt,
+                    'component' => $component,
+                    'repository' => $repository,
                     'source' => 'github',
                     'error' => null,
                 ];
             } catch (\Throwable $e) {
-                Log::warning('Fetch kelinode latest release failed', ['error' => $e->getMessage()]);
+                Log::warning('Fetch machine component latest release failed', [
+                    'component' => $component,
+                    'repository' => $repository,
+                    'error' => $e->getMessage(),
+                ]);
                 return [
                     'latest_version' => null,
                     'checked_at' => $checkedAt,
+                    'component' => $component,
+                    'repository' => $repository,
                     'source' => 'github',
                     'error' => 'request_failed',
                 ];
             }
         });
+    }
+
+    private function normalizeUpgradeComponent(mixed $value): ?string
+    {
+        $value = strtolower(trim((string) ($value ?? '')));
+        if ($value === '' || in_array($value, ['node', 'v2node', 'kelinode', 'agent'], true)) {
+            return 'node';
+        }
+        if (in_array($value, ['kelinode-rs', 'native-node', 'native_node'], true)) {
+            return 'kelinode-rs';
+        }
+        if (in_array($value, ['core', 'keli-core', 'keli-core-rs'], true)) {
+            return 'core';
+        }
+
+        return null;
+    }
+
+    private function upgradeComponentRepository(string $component): string
+    {
+        return match ($component) {
+            'kelinode-rs' => 'kelinode-rs',
+            'core' => 'keli-core-rs',
+            default => 'kelinode',
+        };
     }
 
     private function isValidKelinodeVersion(string $version): bool

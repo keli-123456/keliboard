@@ -100,6 +100,9 @@ class MachineController extends Controller
             'system' => is_array(data_get($payload, 'system')) ? data_get($payload, 'system') : null,
             'uptime' => data_get($payload, 'uptime'),
             'version' => data_get($payload, 'version'),
+            'runtime' => is_array(data_get($payload, 'runtime')) ? data_get($payload, 'runtime') : null,
+            'core' => is_array(data_get($payload, 'core')) ? data_get($payload, 'core') : null,
+            'hy2_port_forward' => is_array(data_get($payload, 'hy2_port_forward')) ? data_get($payload, 'hy2_port_forward') : null,
             'agent' => is_array(data_get($payload, 'agent')) ? data_get($payload, 'agent') : null,
             'node_failures' => $this->normalizeNodeFailures(data_get($payload, 'node_failures')),
             'updated_at' => now()->timestamp,
@@ -191,7 +194,9 @@ class MachineController extends Controller
 
         $now = now()->timestamp;
         $targetVersion = trim((string) ($state['target_version'] ?? ''));
-        $currentVersion = trim((string) ($status['version'] ?? ''));
+        $component = $this->normalizeUpgradeComponent($state['component'] ?? 'node');
+        $state['component'] = $component;
+        $currentVersion = $this->currentVersionForUpgradeComponent($status, $component);
         if ($targetVersion !== '' && $currentVersion !== '' && $this->versionsMatch($currentVersion, $targetVersion)) {
             $state['status'] = 'succeeded';
             $state['current_version'] = $currentVersion;
@@ -203,15 +208,24 @@ class MachineController extends Controller
 
         if (is_array($reported) && (string) ($reported['id'] ?? '') === (string) ($state['id'] ?? '')) {
             $reportedStatus = trim((string) ($reported['status'] ?? ''));
-            if (in_array($reportedStatus, ['running', 'failed'], true)) {
+            $reportedComponent = $this->normalizeUpgradeComponent($reported['component'] ?? $component);
+            if ($reportedComponent !== $component) {
+                $state['component'] = $reportedComponent;
+                $component = $reportedComponent;
+            }
+            if (in_array($reportedStatus, ['running', 'failed', 'succeeded'], true)) {
                 $state['status'] = $reportedStatus;
                 $state['updated_at'] = $now;
                 if ($reportedStatus === 'running') {
                     $state['started_at'] = $state['started_at'] ?? $now;
                     unset($state['error']);
-                } else {
+                } elseif ($reportedStatus === 'failed') {
                     $state['finished_at'] = $state['finished_at'] ?? $now;
                     $state['error'] = $this->statusString(data_get($reported, 'error'), 1000);
+                } else {
+                    $state['finished_at'] = $state['finished_at'] ?? $now;
+                    $state['current_version'] = $currentVersion !== '' ? $currentVersion : $targetVersion;
+                    unset($state['error']);
                 }
             }
         }
@@ -252,6 +266,7 @@ class MachineController extends Controller
 
         return [
             'id' => (string) ($state['id'] ?? ''),
+            'component' => $this->normalizeUpgradeComponent($state['component'] ?? 'node'),
             'target_version' => $targetVersion,
         ];
     }
@@ -264,6 +279,34 @@ class MachineController extends Controller
     private function isValidKelinodeVersion(string $version): bool
     {
         return (bool) preg_match('/^v?[0-9A-Za-z][0-9A-Za-z._-]{0,63}$/', trim($version));
+    }
+
+    private function normalizeUpgradeComponent(mixed $value): string
+    {
+        $value = strtolower(trim((string) ($value ?? '')));
+        if (in_array($value, ['core', 'keli-core', 'keli-core-rs'], true)) {
+            return 'core';
+        }
+        if (in_array($value, ['kelinode-rs', 'native-node', 'native_node'], true)) {
+            return 'kelinode-rs';
+        }
+
+        return 'node';
+    }
+
+    private function currentVersionForUpgradeComponent(array $status, string $component): string
+    {
+        if ($component === 'core') {
+            return trim((string) (
+                data_get($status, 'core.version')
+                ?: data_get($status, 'core.versions.keli-core-rs')
+                ?: data_get($status, 'core.versions.core')
+                ?: data_get($status, 'core.keli_core_rs_version')
+                ?: ''
+            ));
+        }
+
+        return trim((string) ($status['version'] ?? ''));
     }
 
     private function statusInt(mixed $value): ?int

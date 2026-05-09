@@ -9,6 +9,7 @@ use App\Models\ServerMachine;
 use App\Support\Setting;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
@@ -103,6 +104,57 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertSame(409, $response->getStatusCode());
         $this->assertSame('fail', $payload['status']);
         $this->assertSame('该机器已有进行中的升级任务', $payload['message']);
+    }
+
+    public function test_version_info_uses_component_release_repository(): void
+    {
+        Http::fake([
+            'https://api.github.com/repos/keli-123456/kelinode-rs/releases/latest' => Http::response([
+                'tag_name' => 'v0.1.4',
+            ]),
+        ]);
+
+        $request = $this->installRequest('https://panel.example.test/admin/server/machine/versionInfo', [
+            'component' => 'kelinode-rs',
+            'force' => true,
+        ]);
+
+        $response = (new MachineController())->versionInfo($request);
+        $payload = $response->getData(true);
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('v0.1.4', $payload['data']['latest_version']);
+        $this->assertSame('kelinode-rs', $payload['data']['component']);
+        $this->assertSame('kelinode-rs', $payload['data']['repository']);
+    }
+
+    public function test_upgrade_queues_component_specific_target_version(): void
+    {
+        Http::fake([
+            'https://api.github.com/repos/keli-123456/keli-core-rs/releases/latest' => Http::response([
+                'tag_name' => 'v0.1.1',
+            ]),
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-core',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+
+        $request = $this->installRequest('https://panel.example.test/admin/server/machine/upgrade', [
+            'id' => $machine->id,
+            'component' => 'core',
+        ]);
+
+        $response = (new MachineController())->upgrade($request);
+        $payload = $response->getData(true);
+        $state = $payload['data']['upgrade_state'];
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('queued', $state['status']);
+        $this->assertSame('core', $state['component']);
+        $this->assertSame('v0.1.1', $state['target_version']);
     }
 
     private function bindSettings(): void
