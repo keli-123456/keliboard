@@ -292,6 +292,9 @@ class MachineController extends Controller
         if ($component === null) {
             return $this->fail([422, '无效的升级组件']);
         }
+        if (!$this->machineSupportsUpgradeComponent($machine, $component)) {
+            return $this->fail([422, '该机器当前节点端不支持该组件升级，请先安装 kelinode-rs']);
+        }
 
         $currentUpgrade = is_array($machine->upgrade_state) ? $machine->upgrade_state : [];
         if (
@@ -442,6 +445,22 @@ class MachineController extends Controller
             'core' => 'keli-core-rs',
             default => 'kelinode',
         };
+    }
+
+    private function machineSupportsUpgradeComponent(ServerMachine $machine, string $component): bool
+    {
+        if ($component === 'node') {
+            return true;
+        }
+
+        $status = is_array($machine->load_status) ? $machine->load_status : [];
+        $agent = strtolower(trim((string) data_get($status, 'runtime.agent', '')));
+        if (in_array($agent, ['kelinode-rs', 'native-node'], true)) {
+            return true;
+        }
+
+        $version = strtolower(trim((string) data_get($status, 'version', '')));
+        return (bool) preg_match('/^v?0\.1\./', $version);
     }
 
     private function isValidKelinodeVersion(string $version): bool
