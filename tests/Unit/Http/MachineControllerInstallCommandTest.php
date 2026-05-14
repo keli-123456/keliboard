@@ -47,6 +47,7 @@ final class MachineControllerInstallCommandTest extends TestCase
         $payload = $response->getData(true);
         $command = $payload['data']['command'];
         $nativeCommand = $payload['data']['native_command'];
+        $nativeUninstallCommand = $payload['data']['native_uninstall_command'];
         $nativeConfig = $payload['data']['native_config'];
 
         $this->assertSame(200, $response->getStatusCode());
@@ -59,16 +60,21 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertStringContainsString("--machine-token 'tok'\"'\"'en'", $command);
         $this->assertStringContainsString("--machine-name 'edge '\"'\"'hk'", $command);
 
-        $this->assertSame('v0.1.26', $payload['data']['native_version']);
+        $this->assertSame('v0.1.27', $payload['data']['native_version']);
         $this->assertStringStartsWith(
             "curl -fsSL 'https://raw.githubusercontent.com/keli-123456/kelinode-rs/main/script/install.sh' -o /tmp/keli-native-node-install.sh && bash /tmp/keli-native-node-install.sh",
             $nativeCommand
         );
-        $this->assertStringContainsString("--version 'v0.1.26'", $nativeCommand);
+        $this->assertStringContainsString("--version 'v0.1.27'", $nativeCommand);
         $this->assertStringContainsString("--machine-url 'https://panel.example.test'", $nativeCommand);
         $this->assertStringContainsString('--machine-id ' . $machine->id, $nativeCommand);
         $this->assertStringContainsString("--machine-token 'tok'\"'\"'en'", $nativeCommand);
         $this->assertStringContainsString("--machine-name 'edge '\"'\"'hk'", $nativeCommand);
+        $this->assertStringStartsWith(
+            "curl -fsSL 'https://raw.githubusercontent.com/keli-123456/kelinode-rs/main/script/install.sh' -o /tmp/keli-native-node-install.sh && bash /tmp/keli-native-node-install.sh uninstall",
+            $nativeUninstallCommand
+        );
+        $this->assertStringNotContainsString((string) $machine->token, $nativeUninstallCommand);
         $this->assertStringContainsString('kernel:', $nativeConfig);
         $this->assertStringContainsString('  type: keli-core-rs', $nativeConfig);
         $this->assertStringContainsString('  config_dir: "/etc/v2node"', $nativeConfig);

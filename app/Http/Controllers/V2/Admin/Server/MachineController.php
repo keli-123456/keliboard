@@ -16,7 +16,7 @@ use Illuminate\Support\Str;
 
 class MachineController extends Controller
 {
-    private const NATIVE_NODE_INSTALL_VERSION = 'v0.1.26';
+    private const NATIVE_NODE_INSTALL_VERSION = 'v0.1.27';
 
     public function fetch(Request $request)
     {
@@ -253,6 +253,7 @@ class MachineController extends Controller
             'native_config' => $nativeConfig,
             'command' => $this->buildInstallCommand($baseURL, $machine),
             'native_command' => $this->buildNativeInstallCommand($baseURL, $machine),
+            'native_uninstall_command' => $this->buildNativeUninstallCommand(),
             'native_version' => self::NATIVE_NODE_INSTALL_VERSION,
         ]);
     }
@@ -395,6 +396,17 @@ class MachineController extends Controller
             $this->shellQuote((string) $machine->token),
             '--machine-name',
             $this->shellQuote($machine->name ?: ('machine-' . $machine->id)),
+        ]);
+    }
+
+    private function buildNativeUninstallCommand(): string
+    {
+        $scriptURL = 'https://raw.githubusercontent.com/keli-123456/kelinode-rs/main/script/install.sh';
+        return implode(' ', [
+            'curl -fsSL',
+            $this->shellQuote($scriptURL),
+            '-o /tmp/keli-native-node-install.sh',
+            '&& bash /tmp/keli-native-node-install.sh uninstall',
         ]);
     }
 

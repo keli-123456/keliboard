@@ -3,6 +3,7 @@
 namespace App\Services\NodeRealtime;
 
 use App\Models\Server;
+use App\Models\ServerMachine;
 use Illuminate\Support\Facades\File;
 
 class NodeRealtimeStatusService
@@ -25,14 +26,20 @@ class NodeRealtimeStatusService
         $realtimeEnabled = $this->settings->enabledSetting();
         $activityWindowSeconds = $this->resolveActivityWindowSeconds();
         $recentActiveNodes = $realtimeEnabled ? $this->resolveRecentActiveNodes($activityWindowSeconds) : [];
+        $machineRuntimeNodes = $realtimeEnabled ? $this->resolveRecentMachineRuntimeNodes($activityWindowSeconds) : [];
         $serverMeta = $this->loadServerMeta(array_values(array_unique(array_map(
             fn (array $row) => (int) ($row['server_id'] ?? 0),
             array_merge($connections, $receiptRows)
         ))));
         $connectedCacheServerIds = $this->resolveConnectedCacheServerIds($connections, $serverMeta);
+        $machineRuntimeCacheServerIds = array_values(array_unique(array_filter(array_map(
+            fn (array $row) => (int) ($row['cache_server_id'] ?? 0),
+            $machineRuntimeNodes
+        ), fn (int $id) => $id > 0)));
+        $effectiveConnectedCacheServerIds = array_values(array_unique(array_merge($connectedCacheServerIds, $machineRuntimeCacheServerIds)));
         $receiptMap = $this->resolveReceiptMap($receiptRows, $serverMeta);
-        $missingNodes = $realtimeEnabled ? $this->resolveMissingNodes($recentActiveNodes, $connectedCacheServerIds) : [];
-        $nodeStatuses = $realtimeEnabled ? $this->resolveNodeStatuses($recentActiveNodes, $connections, $serverMeta, $receiptMap) : [];
+        $missingNodes = $realtimeEnabled ? $this->resolveMissingNodes($recentActiveNodes, $effectiveConnectedCacheServerIds) : [];
+        $nodeStatuses = $realtimeEnabled ? $this->resolveNodeStatuses($recentActiveNodes, $connections, $serverMeta, $receiptMap, $machineRuntimeNodes) : [];
 
         return [
             'enabled' => $realtimeEnabled,
@@ -196,6 +203,89 @@ class NodeRealtimeStatusService
             ->all();
     }
 
+    private function resolveRecentMachineRuntimeNodes(int $activityWindowSeconds): array
+    {
+        $cutoff = time() - max(60, $activityWindowSeconds);
+        $runtimeRows = [];
+        $serverIds = [];
+
+        foreach (ServerMachine::query()
+            ->where('is_active', true)
+            ->where('last_seen_at', '>=', $cutoff)
+            ->get(['id', 'last_seen_at', 'load_status']) as $machine) {
+            $status = is_array($machine->load_status) ? $machine->load_status : [];
+            $agent = strtolower(trim((string) data_get($status, 'runtime.agent', '')));
+            if (!in_array($agent, ['kelinode-rs', 'native-node'], true)) {
+                continue;
+            }
+
+            $nodes = data_get($status, 'runtime.node_statuses');
+            if (!is_array($nodes)) {
+                continue;
+            }
+
+            foreach ($nodes as $node) {
+                if (!is_array($node)) {
+                    continue;
+                }
+                $serverId = (int) ($node['node_id'] ?? 0);
+                if ($serverId <= 0) {
+                    continue;
+                }
+                $serverIds[] = $serverId;
+                $runtimeRows[] = [
+                    'server_id' => $serverId,
+                    'machine_id' => (int) $machine->id,
+                    'machine_last_seen_at' => $this->formatTimestamp((int) $machine->last_seen_at),
+                    'runtime' => $node,
+                ];
+            }
+        }
+
+        if ($runtimeRows === []) {
+            return [];
+        }
+
+        $serverMeta = Server::query()
+            ->whereIn('id', array_values(array_unique($serverIds)))
+            ->get(['id', 'code', 'name', 'type', 'parent_id', 'machine_id'])
+            ->mapWithKeys(fn (Server $server) => [
+                (int) $server->id => [
+                    'server_id' => (int) $server->id,
+                    'cache_server_id' => (int) ($server->parent_id ?: $server->id),
+                    'node_id' => $this->resolveNodeId($server),
+                    'name' => (string) ($server->name ?? ''),
+                    'node_type' => (string) ($server->type ?? ''),
+                    'machine_id' => (int) ($server->machine_id ?? 0),
+                ],
+            ])
+            ->all();
+
+        $rows = [];
+        foreach ($runtimeRows as $row) {
+            $serverId = (int) ($row['server_id'] ?? 0);
+            $meta = $serverMeta[$serverId] ?? null;
+            if (!$meta || (int) ($meta['machine_id'] ?? 0) !== (int) ($row['machine_id'] ?? 0)) {
+                continue;
+            }
+
+            $runtime = is_array($row['runtime'] ?? null) ? $row['runtime'] : [];
+            $rows[] = [
+                'cache_server_id' => (int) ($meta['cache_server_id'] ?? $serverId),
+                'server_id' => $serverId,
+                'node_id' => (string) ($meta['node_id'] ?? $serverId),
+                'name' => (string) ($meta['name'] ?? ''),
+                'node_type' => (string) ($meta['node_type'] ?? ''),
+                'machine_id' => (int) ($row['machine_id'] ?? 0),
+                'machine_last_seen_at' => $row['machine_last_seen_at'] ?? null,
+                'runtime_protocol' => (string) ($runtime['protocol'] ?? ''),
+                'runtime_status' => (string) ($runtime['status'] ?? 'configured'),
+            ];
+        }
+
+        return $rows;
+    }
+
     private function resolveConnectedCacheServerIds(array $connections, array $serverMeta): array
     {
         $connectedCacheServerIds = [];
@@ -250,10 +340,18 @@ class NodeRealtimeStatusService
         return $receiptMap;
     }
 
-    private function resolveNodeStatuses(array $recentActiveNodes, array $connections, array $serverMeta, array $receiptMap): array
+    private function resolveNodeStatuses(array $recentActiveNodes, array $connections, array $serverMeta, array $receiptMap, array $machineRuntimeNodes): array
     {
         $statuses = [];
         $connectionMap = [];
+        $machineRuntimeMap = [];
+
+        foreach ($machineRuntimeNodes as $row) {
+            $cacheServerId = (int) ($row['cache_server_id'] ?? 0);
+            if ($cacheServerId > 0) {
+                $machineRuntimeMap[$cacheServerId] = $row;
+            }
+        }
 
         foreach ($connections as $connection) {
             $serverId = (int) ($connection['server_id'] ?? 0);
@@ -296,6 +394,8 @@ class NodeRealtimeStatusService
         foreach ($recentActiveNodes as $row) {
             $cacheServerId = (int) ($row['cache_server_id'] ?? 0);
             $matchedConnection = $connectionMap[$cacheServerId] ?? null;
+            $matchedMachineRuntime = $matchedConnection === null ? ($machineRuntimeMap[$cacheServerId] ?? null) : null;
+            $status = $matchedConnection !== null ? 'healthy' : ($matchedMachineRuntime !== null ? 'machine' : 'missing');
 
             $statuses[] = [
                 'cache_server_id' => $cacheServerId,
@@ -305,18 +405,24 @@ class NodeRealtimeStatusService
                 'node_type' => (string) ($row['node_type'] ?? ''),
                 'recent_active' => true,
                 'authenticated' => $matchedConnection !== null,
-                'status' => $matchedConnection !== null ? 'healthy' : 'missing',
+                'status' => $status,
                 'last_check_at' => $row['last_check_at'] ?? null,
                 'authenticated_at' => $matchedConnection['authenticated_at'] ?? null,
                 'remote_ip' => $matchedConnection['remote_ip'] ?? null,
                 'group_ids' => array_values(array_map('intval', (array) ($matchedConnection['group_ids'] ?? []))),
                 'connection_count' => (int) ($matchedConnection['connection_count'] ?? 0),
                 'health' => $matchedConnection['health'] ?? null,
+                'machine_id' => $matchedMachineRuntime['machine_id'] ?? null,
+                'machine_last_seen_at' => $matchedMachineRuntime['machine_last_seen_at'] ?? null,
+                'runtime_protocol' => $matchedMachineRuntime['runtime_protocol'] ?? null,
+                'runtime_status' => $matchedMachineRuntime['runtime_status'] ?? null,
+                'source' => $matchedConnection !== null ? 'realtime' : ($matchedMachineRuntime !== null ? 'machine_status' : null),
                 'last_config_receipt' => $receiptMap[$cacheServerId]['config'] ?? null,
                 'last_users_receipt' => $receiptMap[$cacheServerId]['users'] ?? null,
             ];
 
             unset($connectionMap[$cacheServerId]);
+            unset($machineRuntimeMap[$cacheServerId]);
         }
 
         foreach ($connectionMap as $cacheServerId => $connection) {
@@ -341,7 +447,7 @@ class NodeRealtimeStatusService
         }
 
         usort($statuses, function (array $left, array $right): int {
-            $priority = ['missing' => 0, 'healthy' => 1, 'idle' => 2];
+            $priority = ['missing' => 0, 'healthy' => 1, 'machine' => 2, 'idle' => 3];
             $leftPriority = $priority[$left['status'] ?? 'idle'] ?? 9;
             $rightPriority = $priority[$right['status'] ?? 'idle'] ?? 9;
 
