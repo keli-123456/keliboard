@@ -252,7 +252,7 @@ class MachineController extends Controller
             'config' => $config,
             'native_config' => $nativeConfig,
             'command' => $this->buildInstallCommand($baseURL, $machine),
-            'native_command' => $this->buildNativeInstallCommand($nativeConfig),
+            'native_command' => $this->buildNativeInstallCommand($baseURL, $machine),
             'native_version' => self::NATIVE_NODE_INSTALL_VERSION,
         ]);
     }
@@ -377,24 +377,24 @@ class MachineController extends Controller
         ]);
     }
 
-    private function buildNativeInstallCommand(string $nativeConfig): string
+    private function buildNativeInstallCommand(string $baseURL, ServerMachine $machine): string
     {
-        $version = self::NATIVE_NODE_INSTALL_VERSION;
-        $asset = 'keli-native-node-' . $version . '-linux-x86_64';
-        $archiveURL = 'https://github.com/keli-123456/kelinode-rs/releases/download/' . $version . '/' . $asset . '.tar.gz';
-
-        return implode(PHP_EOL, [
-            'set -e',
-            'tmp_dir="$(mktemp -d)"',
-            'archive="$tmp_dir/keli-native-node.tar.gz"',
-            'curl -fsSL ' . $this->shellQuote($archiveURL) . ' -o "$archive"',
-            'tar -xzf "$archive" -C "$tmp_dir" --strip-components=1',
-            '(cd "$tmp_dir" && sh ./install.sh)',
-            'mkdir -p /etc/v2node',
-            "cat >/etc/v2node/config.yml <<'YAML'",
-            $nativeConfig,
-            'YAML',
-            'v2node server --config /etc/v2node/config.yml',
+        $scriptURL = 'https://raw.githubusercontent.com/keli-123456/kelinode-rs/main/script/install.sh';
+        return implode(' ', [
+            'curl -fsSL',
+            $this->shellQuote($scriptURL),
+            '-o /tmp/keli-native-node-install.sh',
+            '&& bash /tmp/keli-native-node-install.sh',
+            '--version',
+            $this->shellQuote(self::NATIVE_NODE_INSTALL_VERSION),
+            '--machine-url',
+            $this->shellQuote($baseURL),
+            '--machine-id',
+            (string) ((int) $machine->id),
+            '--machine-token',
+            $this->shellQuote((string) $machine->token),
+            '--machine-name',
+            $this->shellQuote($machine->name ?: ('machine-' . $machine->id)),
         ]);
     }
 

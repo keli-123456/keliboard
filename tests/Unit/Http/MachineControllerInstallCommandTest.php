@@ -60,9 +60,15 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertStringContainsString("--machine-name 'edge '\"'\"'hk'", $command);
 
         $this->assertSame('v0.1.25', $payload['data']['native_version']);
-        $this->assertStringContainsString('keli-native-node-v0.1.25-linux-x86_64.tar.gz', $nativeCommand);
-        $this->assertStringContainsString("cat >/etc/v2node/config.yml <<'YAML'", $nativeCommand);
-        $this->assertStringContainsString('v2node server --config /etc/v2node/config.yml', $nativeCommand);
+        $this->assertStringStartsWith(
+            "curl -fsSL 'https://raw.githubusercontent.com/keli-123456/kelinode-rs/main/script/install.sh' -o /tmp/keli-native-node-install.sh && bash /tmp/keli-native-node-install.sh",
+            $nativeCommand
+        );
+        $this->assertStringContainsString("--version 'v0.1.25'", $nativeCommand);
+        $this->assertStringContainsString("--machine-url 'https://panel.example.test'", $nativeCommand);
+        $this->assertStringContainsString('--machine-id ' . $machine->id, $nativeCommand);
+        $this->assertStringContainsString("--machine-token 'tok'\"'\"'en'", $nativeCommand);
+        $this->assertStringContainsString("--machine-name 'edge '\"'\"'hk'", $nativeCommand);
         $this->assertStringContainsString('kernel:', $nativeConfig);
         $this->assertStringContainsString('  type: keli-core-rs', $nativeConfig);
         $this->assertStringContainsString('  config_dir: "/etc/v2node"', $nativeConfig);
