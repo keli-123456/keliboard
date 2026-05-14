@@ -46,6 +46,8 @@ final class MachineControllerInstallCommandTest extends TestCase
         $response = (new MachineController())->installCommand($request);
         $payload = $response->getData(true);
         $command = $payload['data']['command'];
+        $nativeCommand = $payload['data']['native_command'];
+        $nativeConfig = $payload['data']['native_config'];
 
         $this->assertSame(200, $response->getStatusCode());
         $this->assertStringStartsWith(
@@ -56,6 +58,16 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertStringContainsString('--machine-id ' . $machine->id, $command);
         $this->assertStringContainsString("--machine-token 'tok'\"'\"'en'", $command);
         $this->assertStringContainsString("--machine-name 'edge '\"'\"'hk'", $command);
+
+        $this->assertSame('v0.1.25', $payload['data']['native_version']);
+        $this->assertStringContainsString('keli-native-node-v0.1.25-linux-x86_64.tar.gz', $nativeCommand);
+        $this->assertStringContainsString("cat >/etc/v2node/config.yml <<'YAML'", $nativeCommand);
+        $this->assertStringContainsString('v2node server --config /etc/v2node/config.yml', $nativeCommand);
+        $this->assertStringContainsString('kernel:', $nativeConfig);
+        $this->assertStringContainsString('  type: keli-core-rs', $nativeConfig);
+        $this->assertStringContainsString('  config_dir: "/etc/v2node"', $nativeConfig);
+        $this->assertStringContainsString('      config_dir: "/etc/v2node"', $nativeConfig);
+        $this->assertStringContainsString('      token: "tok\'en"', $nativeConfig);
     }
 
     public function test_install_command_uses_configured_node_api_base_url(): void
@@ -75,10 +87,12 @@ final class MachineControllerInstallCommandTest extends TestCase
         $payload = $response->getData(true);
         $command = $payload['data']['command'];
         $config = $payload['data']['config'];
+        $nativeConfig = $payload['data']['native_config'];
 
         $this->assertStringContainsString("--machine-url 'https://node-api.example.test'", $command);
         $this->assertStringNotContainsString("--machine-url 'https://panel.example.test'", $command);
         $this->assertStringContainsString('      url: "https://node-api.example.test"', $config);
+        $this->assertStringContainsString('      url: "https://node-api.example.test"', $nativeConfig);
     }
 
     public function test_upgrade_rejects_existing_in_progress_task_without_force(): void
