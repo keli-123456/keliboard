@@ -16,7 +16,7 @@ use Illuminate\Support\Str;
 
 class MachineController extends Controller
 {
-    private const NATIVE_NODE_INSTALL_VERSION = 'v0.1.25';
+    private const NATIVE_NODE_INSTALL_VERSION = 'v0.1.26';
 
     public function fetch(Request $request)
     {
