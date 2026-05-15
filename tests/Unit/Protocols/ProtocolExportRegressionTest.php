@@ -137,6 +137,56 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertStringContainsString('sni=secure.example.com', $uri);
     }
 
+    public function test_anytls_exporters_use_tls_settings_fallback_for_native_generated_cert(): void
+    {
+        $server = [
+            'name' => 'AnyTLS Native',
+            'host' => 'anytls-native.example.com',
+            'port' => 19029,
+            'protocol_settings' => [
+                'tls_mode' => 1,
+                'tls_settings' => [
+                    'server_name' => '127.0.0.1',
+                    'cert_mode' => 'file',
+                    'cert_file' => '',
+                    'key_file' => '',
+                ],
+            ],
+        ];
+
+        $singBox = new class([], []) extends SingBox {
+            public function handle()
+            {
+                return [];
+            }
+
+            public function buildAnyTlsForTest(string $password, array $server): array
+            {
+                return $this->buildAnyTLS($password, $server);
+            }
+        };
+
+        $singBoxConfig = $singBox->buildAnyTlsForTest('secret', $server);
+        $stashConfig = Stash::buildAnyTLS('secret', $server);
+        $clashMetaConfig = ClashMeta::buildAnyTLS('secret', $server);
+        $shadowrocketUri = Shadowrocket::buildAnyTLS('secret', $server);
+        $surgeUri = Surge::buildAnyTLS('secret', $server);
+        $surfboardUri = Surfboard::buildAnyTLS('secret', $server);
+
+        $this->assertSame('127.0.0.1', $singBoxConfig['tls']['server_name']);
+        $this->assertTrue($singBoxConfig['tls']['insecure']);
+        $this->assertSame('127.0.0.1', $stashConfig['sni']);
+        $this->assertTrue($stashConfig['skip-cert-verify']);
+        $this->assertSame('127.0.0.1', $clashMetaConfig['sni']);
+        $this->assertTrue($clashMetaConfig['skip-cert-verify']);
+        $this->assertStringContainsString('sni=127.0.0.1', $shadowrocketUri);
+        $this->assertStringContainsString('insecure=1', $shadowrocketUri);
+        $this->assertStringContainsString('sni=127.0.0.1', $surgeUri);
+        $this->assertStringContainsString('skip-cert-verify=true', $surgeUri);
+        $this->assertStringContainsString('sni=127.0.0.1', $surfboardUri);
+        $this->assertStringContainsString('skip-cert-verify=true', $surfboardUri);
+    }
+
     public function test_surge_build_hysteria2_exports_version_two_nodes_only(): void
     {
         $v2 = Surge::buildHysteria('secret', [

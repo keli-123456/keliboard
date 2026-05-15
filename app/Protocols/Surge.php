@@ -229,11 +229,12 @@ class Surge extends AbstractProtocol
         if ($sni === $sentinel) $sni = data_get($protocol_settings, 'server_name', $sentinel);
         if ($sni === $sentinel) $sni = data_get($protocol_settings, 'tls.server_name', $sentinel);
         if ($sni === $sentinel) $sni = data_get($protocol_settings, 'tls_settings.server_name', $sentinel);
-        if ($sni !== $sentinel) {
-            $sni = trim((string) $sni);
-            if ($sni !== '') {
-                $config[] = "sni={$sni}";
-            }
+        if ($sni === $sentinel) {
+            $sni = Helper::resolveAnyTlsServerName($protocol_settings);
+        }
+        $sni = trim((string) $sni);
+        if ($sni !== '') {
+            $config[] = "sni={$sni}";
         }
 
         $allowInsecure = data_get($server, 'insecure', $sentinel);
@@ -243,9 +244,11 @@ class Surge extends AbstractProtocol
         if ($allowInsecure === $sentinel) $allowInsecure = data_get($protocol_settings, 'allow_insecure', $sentinel);
         if ($allowInsecure === $sentinel) $allowInsecure = data_get($protocol_settings, 'tls.allow_insecure', $sentinel);
         if ($allowInsecure === $sentinel) $allowInsecure = data_get($protocol_settings, 'tls_settings.allow_insecure', $sentinel);
-        if ($allowInsecure !== $sentinel) {
-            $config[4] = 'skip-cert-verify=' . ((bool) $allowInsecure ? 'true' : 'false');
+        if ($allowInsecure === $sentinel) {
+            $allowInsecure = false;
         }
+        $allowInsecure = (bool) $allowInsecure || Helper::resolveAnyTlsAllowInsecure($protocol_settings);
+        $config[4] = 'skip-cert-verify=' . ((bool) $allowInsecure ? 'true' : 'false');
 
         $config = array_filter($config);
         $uri = implode(',', $config);

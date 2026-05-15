@@ -578,7 +578,7 @@ class SingBox extends AbstractProtocol
             'server_port' => $server['port'],
             'tls' => [
                 'enabled' => true,
-                'insecure' => (bool) data_get($protocol_settings, 'tls.allow_insecure', false),
+                'insecure' => Helper::resolveAnyTlsAllowInsecure($protocol_settings),
                 'utls' => [
                     'enabled' => true,
                     'fingerprint' => Helper::getClientFingerprint($protocol_settings),
@@ -586,7 +586,7 @@ class SingBox extends AbstractProtocol
             ]
         ];
 
-        if ($serverName = data_get($protocol_settings, 'tls.server_name')) {
+        if ($serverName = Helper::resolveAnyTlsServerName($protocol_settings)) {
             $array['tls']['server_name'] = $serverName;
         }
 

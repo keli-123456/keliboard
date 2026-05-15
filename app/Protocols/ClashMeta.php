@@ -501,11 +501,11 @@ class ClashMeta extends AbstractProtocol
             $array['min-idle-session'] = (int) $minIdleSession;
         }
 
-        if ($serverName = data_get($protocol_settings, 'tls.server_name')) {
+        if ($serverName = Helper::resolveAnyTlsServerName($protocol_settings)) {
             $array['sni'] = $serverName;
         }
-        if ($allowInsecure = data_get($protocol_settings, 'tls.allow_insecure')) {
-            $array['skip-cert-verify'] = (bool) $allowInsecure;
+        if (Helper::resolveAnyTlsAllowInsecure($protocol_settings)) {
+            $array['skip-cert-verify'] = true;
         }
 
         return $array;

@@ -347,8 +347,8 @@ class Shadowrocket extends AbstractProtocol
         $protocol_settings = $server['protocol_settings'];
         $name = rawurlencode($server['name']);
         $params = [
-            'sni' => data_get($protocol_settings, 'tls.server_name'),
-            'insecure' => data_get($protocol_settings, 'tls.allow_insecure')
+            'sni' => Helper::resolveAnyTlsServerName($protocol_settings),
+            'insecure' => Helper::resolveAnyTlsAllowInsecure($protocol_settings) ? 1 : 0,
         ];
         $query = http_build_query($params);
         $uri = "anytls://{$password}@{$server['host']}:{$server['port']}?{$query}#{$name}";

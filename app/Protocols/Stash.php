@@ -457,10 +457,10 @@ class Stash extends AbstractProtocol
             'port' => $server['port'],
             'password' => $password,
             'client-fingerprint' => Helper::getClientFingerprint($protocol_settings),
-            'skip-cert-verify' => (bool) data_get($protocol_settings, 'tls.allow_insecure', false),
+            'skip-cert-verify' => Helper::resolveAnyTlsAllowInsecure($protocol_settings),
         ];
 
-        if ($serverName = data_get($protocol_settings, 'tls.server_name')) {
+        if ($serverName = Helper::resolveAnyTlsServerName($protocol_settings)) {
             $array['sni'] = $serverName;
         }
 

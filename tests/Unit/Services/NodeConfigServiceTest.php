@@ -61,6 +61,35 @@ final class NodeConfigServiceTest extends TestCase
         $this->assertSame('cloudflare', $settings['provider']);
     }
 
+    public function test_anytls_v2node_response_uses_tls_settings_fallback_and_marks_generated_cert_insecure(): void
+    {
+        $service = new NodeConfigService();
+
+        $response = $service->buildResponse((object) [
+            'type' => 'anytls',
+            'port' => 19029,
+            'server_port' => 19029,
+            'host' => '2.56.116.39',
+            'route_ids' => [],
+            'protocol_settings' => [
+                'tls_mode' => 1,
+                'tls_settings' => [
+                    'server_name' => '127.0.0.1',
+                    'cert_mode' => 'file',
+                    'cert_file' => '',
+                    'key_file' => '',
+                ],
+                'padding_scheme' => ['stop=8'],
+            ],
+        ], true);
+
+        $this->assertSame('anytls', $response['protocol']);
+        $this->assertSame(1, $response['tls']);
+        $this->assertSame('127.0.0.1', $response['server_name']);
+        $this->assertSame('127.0.0.1', $response['tls_settings']['server_name']);
+        $this->assertTrue($response['tls_settings']['allow_insecure']);
+    }
+
     public function test_hysteria_v2node_response_includes_external_port_range(): void
     {
         $service = new NodeConfigService();

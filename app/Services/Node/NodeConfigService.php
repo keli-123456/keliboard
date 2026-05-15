@@ -100,10 +100,8 @@ class NodeConfigService
             'anytls' => [
                 ...$baseConfig,
                 'server_port' => (int) $serverPort,
-                'server_name' => $this->resolveAnyTlsMode($protocolSettings) === 2
-                    ? data_get($protocolSettings, 'reality_settings.server_name')
-                    : data_get($protocolSettings, 'tls.server_name'),
-                'padding_scheme' => $protocolSettings['padding_scheme'],
+                'server_name' => $this->resolveAnyTlsServerName($node, $protocolSettings),
+                'padding_scheme' => (array) data_get($protocolSettings, 'padding_scheme', []),
             ],
             'socks' => [
                 ...$baseConfig,
@@ -229,6 +227,9 @@ class NodeConfigService
         if (!empty($alpn)) {
             $tlsSettings['alpn'] = $alpn;
         }
+        if ($nodeType === 'anytls') {
+            $tlsSettings['allow_insecure'] = Helper::resolveAnyTlsAllowInsecure($protocolSettings);
+        }
 
         if ($tls === 2) {
             $tlsSettings['dest'] = (string) data_get($tlsSettings, 'dest', '');
@@ -302,7 +303,8 @@ class NodeConfigService
     {
         $serverName = match ($nodeType) {
             'trojan' => (string) data_get($protocolSettings, 'server_name', ''),
-            'hysteria', 'tuic', 'anytls' => (string) data_get($protocolSettings, 'tls.server_name', ''),
+            'hysteria', 'tuic' => (string) data_get($protocolSettings, 'tls.server_name', ''),
+            'anytls' => Helper::resolveAnyTlsServerName($protocolSettings),
             default => (string) data_get($baseTlsSettings, 'server_name', ''),
         };
 
@@ -311,6 +313,11 @@ class NodeConfigService
         }
 
         return $serverName ?: (string) $node->host;
+    }
+
+    private function resolveAnyTlsServerName($node, array $protocolSettings): string
+    {
+        return Helper::resolveAnyTlsServerName($protocolSettings) ?: (string) $node->host;
     }
 
     private function resolveAnyTlsMode(array $protocolSettings): int

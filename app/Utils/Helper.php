@@ -228,6 +228,97 @@ class Helper
         return self::getRandFingerprint();
     }
 
+    public static function resolveAnyTlsServerName(?array $protocolSettings = null): string
+    {
+        $protocolSettings ??= [];
+        $tlsMode = self::resolveAnyTlsMode($protocolSettings);
+        $keys = $tlsMode === 2
+            ? ['reality_settings.server_name', 'tls.server_name', 'tls_settings.server_name', 'server_name']
+            : ['tls.server_name', 'tls_settings.server_name', 'server_name'];
+
+        foreach ($keys as $key) {
+            $value = self::resolveDynamicHostname(data_get($protocolSettings, $key));
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return '';
+    }
+
+    public static function resolveAnyTlsAllowInsecure(?array $protocolSettings = null): bool
+    {
+        $protocolSettings ??= [];
+        $tlsMode = self::resolveAnyTlsMode($protocolSettings);
+        $keys = $tlsMode === 2
+            ? ['reality_settings.allow_insecure', 'tls.allow_insecure', 'tls_settings.allow_insecure', 'allow_insecure']
+            : ['tls.allow_insecure', 'tls_settings.allow_insecure', 'allow_insecure'];
+
+        foreach ($keys as $key) {
+            $value = data_get($protocolSettings, $key);
+            if (self::boolish($value)) {
+                return true;
+            }
+        }
+
+        return $tlsMode !== 2 && self::anyTlsNeedsInsecureForGeneratedCertificate($protocolSettings);
+    }
+
+    private static function anyTlsNeedsInsecureForGeneratedCertificate(array $protocolSettings): bool
+    {
+        $certMode = strtolower(trim((string) data_get($protocolSettings, 'tls_settings.cert_mode', '')));
+        if ($certMode === 'self') {
+            return true;
+        }
+
+        if ($certMode !== 'file') {
+            return false;
+        }
+
+        return trim((string) data_get($protocolSettings, 'tls_settings.cert_file', '')) === ''
+            || trim((string) data_get($protocolSettings, 'tls_settings.key_file', '')) === '';
+    }
+
+    private static function resolveAnyTlsMode(array $protocolSettings): int
+    {
+        $mode = (int) data_get($protocolSettings, 'tls_mode', 0);
+        if (in_array($mode, [1, 2], true)) {
+            return $mode;
+        }
+
+        foreach ((array) data_get($protocolSettings, 'reality_settings', []) as $key => $value) {
+            if ($key === 'allow_insecure') {
+                if (self::boolish($value)) {
+                    return 2;
+                }
+                continue;
+            }
+            if ($value !== null && $value !== '') {
+                return 2;
+            }
+        }
+
+        return 1;
+    }
+
+    private static function boolish(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_int($value) || is_float($value)) {
+            return $value != 0;
+        }
+
+        if (is_string($value)) {
+            $value = strtolower(trim($value));
+            return in_array($value, ['1', 'true', 'yes', 'on'], true);
+        }
+
+        return false;
+    }
+
     public static function encodeURIComponent($str) {
         $revert = array('%21'=>'!', '%2A'=>'*', '%27'=>"'", '%28'=>'(', '%29'=>')');
         return strtr(rawurlencode($str), $revert);
