@@ -107,6 +107,39 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertStringContainsString('      url: "https://node-api.example.test"', $nativeConfig);
     }
 
+    public function test_fetch_includes_agent_online_status(): void
+    {
+        ServerMachine::create([
+            'name' => 'edge-online',
+            'token' => 'token-a',
+            'is_active' => true,
+            'last_seen_at' => time() - 60,
+        ]);
+        ServerMachine::create([
+            'name' => 'edge-offline',
+            'token' => 'token-b',
+            'is_active' => true,
+            'last_seen_at' => time() - 600,
+        ]);
+        ServerMachine::create([
+            'name' => 'edge-never',
+            'token' => 'token-c',
+            'is_active' => true,
+            'last_seen_at' => null,
+        ]);
+
+        $response = (new MachineController())->fetch(Request::create('/admin/server/machine/fetch', 'GET'));
+        $rows = collect($response->getData(true)['data'])->keyBy('name');
+
+        $this->assertTrue($rows['edge-online']['is_online']);
+        $this->assertSame('online', $rows['edge-online']['online_status']);
+        $this->assertFalse($rows['edge-offline']['is_online']);
+        $this->assertSame('offline', $rows['edge-offline']['online_status']);
+        $this->assertFalse($rows['edge-never']['is_online']);
+        $this->assertSame('never', $rows['edge-never']['online_status']);
+        $this->assertSame(300, $rows['edge-online']['online_threshold_seconds']);
+    }
+
     public function test_upgrade_rejects_existing_in_progress_task_without_force(): void
     {
         $machine = ServerMachine::create([

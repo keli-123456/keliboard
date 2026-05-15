@@ -17,6 +17,7 @@ use Illuminate\Support\Str;
 class MachineController extends Controller
 {
     private const NATIVE_NODE_INSTALL_VERSION = 'v0.1.31';
+    private const MACHINE_ONLINE_WINDOW_SECONDS = 300;
 
     public function fetch(Request $request)
     {
@@ -25,6 +26,8 @@ class MachineController extends Controller
             ->orderBy('sort', 'ASC')
             ->orderByDesc('id')
             ->get();
+
+        $this->appendOnlineStatus($machines);
 
         return $this->success($machines);
     }
@@ -79,7 +82,7 @@ class MachineController extends Controller
                 'machine_id' => (int) $machine->id,
             ]);
 
-            return $this->success($machine->fresh());
+            return $this->success($this->withOnlineStatus($machine->fresh() ?: $machine));
         } catch (\Throwable $e) {
             Log::error($e);
             return $this->fail([500, '保存失败']);
@@ -126,7 +129,7 @@ class MachineController extends Controller
                 ]
             );
 
-            return $this->success($machine->fresh());
+            return $this->success($this->withOnlineStatus($machine->fresh() ?: $machine));
         } catch (\Throwable $e) {
             Log::error($e);
             return $this->fail([500, '保存失败']);
@@ -388,7 +391,7 @@ class MachineController extends Controller
             ],
         ])->save();
 
-        return $this->success($machine->fresh());
+        return $this->success($this->withOnlineStatus($machine->fresh() ?: $machine));
     }
 
     private function buildInstallCommand(string $baseURL, ServerMachine $machine): string
@@ -562,6 +565,29 @@ class MachineController extends Controller
     private function isValidKelinodeVersion(string $version): bool
     {
         return (bool) preg_match('/^v?[0-9A-Za-z][0-9A-Za-z._-]{0,63}$/', trim($version));
+    }
+
+    private function appendOnlineStatus($machines): void
+    {
+        foreach ($machines as $machine) {
+            if ($machine instanceof ServerMachine) {
+                $this->withOnlineStatus($machine);
+            }
+        }
+    }
+
+    private function withOnlineStatus(ServerMachine $machine): ServerMachine
+    {
+        $lastSeenAt = (int) ($machine->last_seen_at ?? 0);
+        $ageSeconds = $lastSeenAt > 0 ? max(0, time() - $lastSeenAt) : null;
+        $isOnline = $ageSeconds !== null && $ageSeconds <= self::MACHINE_ONLINE_WINDOW_SECONDS;
+
+        $machine->setAttribute('is_online', $isOnline);
+        $machine->setAttribute('online_status', $lastSeenAt <= 0 ? 'never' : ($isOnline ? 'online' : 'offline'));
+        $machine->setAttribute('last_seen_age_seconds', $ageSeconds);
+        $machine->setAttribute('online_threshold_seconds', self::MACHINE_ONLINE_WINDOW_SECONDS);
+
+        return $machine;
     }
 
     private function shellQuote(string $value): string
