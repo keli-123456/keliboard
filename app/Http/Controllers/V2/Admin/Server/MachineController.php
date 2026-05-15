@@ -16,7 +16,7 @@ use Illuminate\Support\Str;
 
 class MachineController extends Controller
 {
-    private const NATIVE_NODE_INSTALL_VERSION = 'v0.1.32';
+    private const NATIVE_NODE_INSTALL_VERSION = 'latest';
     private const MACHINE_ONLINE_WINDOW_SECONDS = 300;
 
     public function fetch(Request $request)
@@ -421,8 +421,6 @@ class MachineController extends Controller
             $this->shellQuote($scriptURL),
             '-o /tmp/keli-native-node-install.sh',
             '&& bash /tmp/keli-native-node-install.sh',
-            '--version',
-            $this->shellQuote(self::NATIVE_NODE_INSTALL_VERSION),
             '--machine-url',
             $this->shellQuote($baseURL),
             '--machine-id',
