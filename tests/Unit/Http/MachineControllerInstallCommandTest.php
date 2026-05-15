@@ -60,12 +60,12 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertStringContainsString("--machine-token 'tok'\"'\"'en'", $command);
         $this->assertStringContainsString("--machine-name 'edge '\"'\"'hk'", $command);
 
-        $this->assertSame('v0.1.29', $payload['data']['native_version']);
+        $this->assertSame('v0.1.30', $payload['data']['native_version']);
         $this->assertStringStartsWith(
             "curl -fsSL 'https://raw.githubusercontent.com/keli-123456/kelinode-rs/main/script/install.sh' -o /tmp/keli-native-node-install.sh && bash /tmp/keli-native-node-install.sh",
             $nativeCommand
         );
-        $this->assertStringContainsString("--version 'v0.1.29'", $nativeCommand);
+        $this->assertStringContainsString("--version 'v0.1.30'", $nativeCommand);
         $this->assertStringContainsString("--machine-url 'https://panel.example.test'", $nativeCommand);
         $this->assertStringContainsString('--machine-id ' . $machine->id, $nativeCommand);
         $this->assertStringContainsString("--machine-token 'tok'\"'\"'en'", $nativeCommand);

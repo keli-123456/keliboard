@@ -117,6 +117,34 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame(['enabled' => false], $payload['agent']['subscription_proxy']);
     }
 
+    public function test_nodes_response_for_inactive_machine_returns_empty_shutdown_config(): void
+    {
+        $this->bindSettings([
+            'server_pull_interval' => 60,
+            'server_push_interval' => 60,
+            'subscription_proxy_enable' => true,
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-offline',
+            'token' => 'machine-token',
+            'is_active' => false,
+        ]);
+        $this->createServer(['machine_id' => $machine->id]);
+
+        $response = (new MachineController())->nodes(Request::create(
+            'https://panel.example.test/api/v2/server/machine/nodes',
+            'POST',
+            ['machine_id' => $machine->id, 'token' => 'machine-token']
+        ));
+        $payload = $response->getData(true);
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame([], $payload['nodes']);
+        $this->assertSame(['enabled' => false], $payload['agent']['subscription_proxy']);
+        $this->assertFalse($payload['machine']['is_active']);
+    }
+
     public function test_nodes_response_uses_current_request_ip_for_legacy_auto_certificate_domain(): void
     {
         $this->bindSettings([
@@ -237,6 +265,108 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame('172.104.189.93', $history?->load_status['ip']['public_ipv4'] ?? null);
         $this->assertSame(45.6, $history?->load_status['net']['tx_rate'] ?? null);
         $this->assertSame(51, $history?->load_status['node_failures'][0]['node_id'] ?? null);
+    }
+
+    public function test_status_for_reactivated_machine_requests_reload_when_runtime_has_no_nodes(): void
+    {
+        $this->bindSettings([
+            'subscription_proxy_enable' => false,
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-reactivated',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $this->createServer(['machine_id' => $machine->id]);
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'runtime' => [
+                        'mode' => 'machine_binding',
+                        'nodes' => 0,
+                    ],
+                ],
+            ]
+        ));
+        $payload = $response->getData(true);
+
+        $this->assertTrue($payload['data']);
+        $this->assertTrue($payload['reload']);
+    }
+
+    public function test_status_requests_reload_when_runtime_still_has_unbound_node(): void
+    {
+        $this->bindSettings([
+            'subscription_proxy_enable' => false,
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-unbound',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'runtime' => [
+                        'nodes' => 1,
+                        'node_statuses' => [
+                            ['node_id' => 51, 'status' => 'configured'],
+                        ],
+                    ],
+                ],
+            ]
+        ));
+        $payload = $response->getData(true);
+
+        $this->assertTrue($payload['data']);
+        $this->assertTrue($payload['reload']);
+    }
+
+    public function test_status_for_inactive_machine_is_accepted_without_upgrade_dispatch(): void
+    {
+        $machine = ServerMachine::create([
+            'name' => 'edge-offline',
+            'token' => 'machine-token',
+            'is_active' => false,
+            'upgrade_state' => [
+                'id' => 'upgrade-node',
+                'status' => 'queued',
+                'target_version' => 'v0.1.30',
+                'requested_at' => now()->timestamp,
+            ],
+        ]);
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'runtime' => [
+                        'nodes' => 0,
+                    ],
+                ],
+            ]
+        ));
+        $payload = $response->getData(true);
+
+        $this->assertTrue($payload['data']);
+        $this->assertFalse($payload['reload']);
+        $this->assertNull($payload['upgrade']);
+        $this->assertSame('queued', ServerMachine::find($machine->id)?->upgrade_state['status'] ?? null);
     }
 
     public function test_status_response_requests_reload_when_subscription_proxy_cert_config_changes(): void

@@ -16,7 +16,7 @@ use Illuminate\Support\Str;
 
 class MachineController extends Controller
 {
-    private const NATIVE_NODE_INSTALL_VERSION = 'v0.1.29';
+    private const NATIVE_NODE_INSTALL_VERSION = 'v0.1.30';
 
     public function fetch(Request $request)
     {
@@ -99,6 +99,38 @@ class MachineController extends Controller
         }
 
         return $this->success($machine->delete());
+    }
+
+    public function toggleActive(Request $request)
+    {
+        $params = $request->validate([
+            'id' => 'required|integer',
+            'is_active' => 'required|boolean',
+        ]);
+        $machine = ServerMachine::find((int) $params['id']);
+        if (!$machine) {
+            return $this->fail([400202, '机器不存在']);
+        }
+
+        try {
+            $machine->forceFill([
+                'is_active' => (bool) $params['is_active'],
+            ])->save();
+
+            app(NodeRealtimePublisher::class)->invalidateConfigForMachines(
+                [(int) $machine->id],
+                'admin.server_machine.active_changed',
+                [
+                    'machine_id' => (int) $machine->id,
+                    'is_active' => (bool) $machine->is_active,
+                ]
+            );
+
+            return $this->success($machine->fresh());
+        } catch (\Throwable $e) {
+            Log::error($e);
+            return $this->fail([500, '保存失败']);
+        }
     }
 
     public function resetToken(Request $request)

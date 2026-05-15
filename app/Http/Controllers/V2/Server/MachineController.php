@@ -16,9 +16,22 @@ class MachineController extends Controller
 {
     public function nodes(Request $request): JsonResponse
     {
-        $machine = $this->authenticateMachine($request);
+        $machine = $this->authenticateMachine($request, true);
         if (!$machine) {
             return response()->json(['message' => 'Invalid machine credentials'], 401);
+        }
+
+        if (!$machine->is_active) {
+            return response()->json([
+                'nodes' => [],
+                'base_config' => $this->buildBaseConfig(),
+                'agent' => [
+                    'subscription_proxy' => ['enabled' => false],
+                ],
+                'machine' => [
+                    'is_active' => false,
+                ],
+            ]);
         }
 
         $this->touchMachine($machine);
@@ -35,21 +48,9 @@ class MachineController extends Controller
             })
             ->values();
 
-        $settings = app(NodeRealtimeSettings::class);
-        $wsURL = $settings->resolvedPublicUrl();
-        $realtimeEnabled = $settings->enabled() && $wsURL !== '';
-
         return response()->json([
             'nodes' => $nodes,
-            'base_config' => [
-                'push_interval' => (int) admin_setting('server_push_interval', 60),
-                'pull_interval' => (int) admin_setting('server_pull_interval', 60),
-                'realtime' => [
-                    'enabled' => $realtimeEnabled,
-                    'url' => $realtimeEnabled ? $wsURL : '',
-                    'ping_interval' => (int) admin_setting('server_realtime_ping_interval', 30),
-                ],
-            ],
+            'base_config' => $this->buildBaseConfig(),
             'agent' => [
                 'subscription_proxy' => $this->buildSubscriptionProxyConfig($request, $machine),
             ],
@@ -58,7 +59,7 @@ class MachineController extends Controller
 
     public function status(Request $request): JsonResponse
     {
-        $machine = $this->authenticateMachine($request);
+        $machine = $this->authenticateMachine($request, true);
         if (!$machine) {
             return response()->json(['message' => 'Invalid machine credentials'], 401);
         }
@@ -107,12 +108,30 @@ class MachineController extends Controller
             'node_failures' => $this->normalizeNodeFailures(data_get($payload, 'node_failures')),
             'updated_at' => now()->timestamp,
         ];
+
+        if (!$machine->is_active) {
+            $status['machine'] = ['is_active' => false];
+            $machine->forceFill([
+                'last_seen_at' => now()->timestamp,
+                'load_status' => $status,
+            ])->save();
+
+            return response()->json([
+                'data' => true,
+                'reload' => false,
+                'upgrade' => null,
+            ]);
+        }
+
         $upgradeState = $this->resolveUpgradeState($machine, $status, data_get($payload, 'upgrade'));
         $reload = app(ZeroSslCertificateService::class)->handleMachineStatus(
             $machine,
             $status,
             $this->resolveSubscriptionProxySiteId($this->resolvePanelBaseURL($request))
         );
+        if (!$reload && $this->shouldRequestReloadForMachineConfigDrift($machine, $status)) {
+            $reload = true;
+        }
 
         $machine->forceFill([
             'last_seen_at' => now()->timestamp,
@@ -331,7 +350,52 @@ class MachineController extends Controller
         return substr($value, 0, max(1, $limit));
     }
 
-    private function authenticateMachine(Request $request): ?ServerMachine
+    private function buildBaseConfig(): array
+    {
+        $settings = app(NodeRealtimeSettings::class);
+        $wsURL = $settings->resolvedPublicUrl();
+        $realtimeEnabled = $settings->enabled() && $wsURL !== '';
+
+        return [
+            'push_interval' => (int) admin_setting('server_push_interval', 60),
+            'pull_interval' => (int) admin_setting('server_pull_interval', 60),
+            'realtime' => [
+                'enabled' => $realtimeEnabled,
+                'url' => $realtimeEnabled ? $wsURL : '',
+                'ping_interval' => (int) admin_setting('server_realtime_ping_interval', 30),
+            ],
+        ];
+    }
+
+    private function shouldRequestReloadForMachineConfigDrift(ServerMachine $machine, array $status): bool
+    {
+        $boundNodeIds = ServerService::getMachineNodes($machine)
+            ->pluck('id')
+            ->map(fn ($id): int => (int) $id)
+            ->sort()
+            ->values()
+            ->all();
+
+        $runtimeNodeIds = collect(data_get($status, 'runtime.node_statuses', []))
+            ->filter(fn ($row): bool => is_array($row) && is_numeric($row['node_id'] ?? null))
+            ->map(fn ($row): int => (int) $row['node_id'])
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
+        if ($runtimeNodeIds !== []) {
+            return $runtimeNodeIds !== $boundNodeIds;
+        }
+
+        $runtimeNodes = data_get($status, 'runtime.nodes');
+        if (!is_numeric($runtimeNodes)) {
+            return false;
+        }
+
+        return (int) $runtimeNodes !== count($boundNodeIds);
+    }
+
+    private function authenticateMachine(Request $request, bool $allowInactive = false): ?ServerMachine
     {
         $machineId = $request->input('machine_id');
         $token = trim((string) $request->input('token', ''));
@@ -341,7 +405,9 @@ class MachineController extends Controller
 
         $machine = ServerMachine::query()
             ->whereKey((int) $machineId)
-            ->where('is_active', true)
+            ->when(!$allowInactive, function ($query): void {
+                $query->where('is_active', true);
+            })
             ->first();
         if (!$machine || !hash_equals((string) $machine->token, $token)) {
             return null;

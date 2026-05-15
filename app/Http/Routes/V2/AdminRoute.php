@@ -84,6 +84,7 @@ class AdminRoute
             ], function ($router) {
                 $router->get('/fetch', [MachineController::class, 'fetch']);
                 $router->post('/save', [MachineController::class, 'save']);
+                $router->post('/toggleActive', [MachineController::class, 'toggleActive']);
                 $router->post('/drop', [MachineController::class, 'drop']);
                 $router->post('/resetToken', [MachineController::class, 'resetToken']);
                 $router->get('/getToken', [MachineController::class, 'getToken']);
