@@ -343,7 +343,7 @@ final class ServerMachineControllerTest extends TestCase
             'upgrade_state' => [
                 'id' => 'upgrade-node',
                 'status' => 'queued',
-                'target_version' => 'v0.1.30',
+                'target_version' => 'v0.1.31',
                 'requested_at' => now()->timestamp,
             ],
         ]);
