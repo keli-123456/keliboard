@@ -48,6 +48,7 @@ final class MachineControllerInstallCommandTest extends TestCase
         $command = $payload['data']['command'];
         $nativeCommand = $payload['data']['native_command'];
         $nativeUninstallCommand = $payload['data']['native_uninstall_command'];
+        $nativeLogCommand = $payload['data']['native_log_command'];
         $nativeConfig = $payload['data']['native_config'];
 
         $this->assertSame(200, $response->getStatusCode());
@@ -75,6 +76,7 @@ final class MachineControllerInstallCommandTest extends TestCase
             $nativeUninstallCommand
         );
         $this->assertStringNotContainsString((string) $machine->token, $nativeUninstallCommand);
+        $this->assertSame('v2node log', $nativeLogCommand);
         $this->assertStringContainsString('kernel:', $nativeConfig);
         $this->assertStringContainsString('  type: keli-core-rs', $nativeConfig);
         $this->assertStringContainsString('  config_dir: "/etc/v2node"', $nativeConfig);

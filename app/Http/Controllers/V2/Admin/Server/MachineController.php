@@ -289,6 +289,7 @@ class MachineController extends Controller
             'command' => $this->buildInstallCommand($baseURL, $machine),
             'native_command' => $this->buildNativeInstallCommand($baseURL, $machine),
             'native_uninstall_command' => $this->buildNativeUninstallCommand(),
+            'native_log_command' => $this->buildNativeLogCommand(),
             'native_version' => self::NATIVE_NODE_INSTALL_VERSION,
         ]);
     }
@@ -441,6 +442,11 @@ class MachineController extends Controller
             '-o /tmp/keli-native-node-install.sh',
             '&& bash /tmp/keli-native-node-install.sh uninstall',
         ]);
+    }
+
+    private function buildNativeLogCommand(): string
+    {
+        return 'v2node log';
     }
 
     private function resolveMachineApiBaseURL(Request $request): string
