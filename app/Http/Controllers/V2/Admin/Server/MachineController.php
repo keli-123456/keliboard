@@ -314,7 +314,7 @@ class MachineController extends Controller
         return implode(PHP_EOL, [
             'kernel:',
             '  type: keli-core-rs',
-            '  config_dir: "/etc/v2node"',
+            '  config_dir: "/etc/kelinode"',
             '',
             'machine:',
             '  enabled: true',
@@ -324,7 +324,7 @@ class MachineController extends Controller
             '      url: ' . $this->yamlScalar($baseURL),
             '      token: ' . $this->yamlScalar((string) $machine->token),
             '      machine_id: ' . (int) $machine->id,
-            '      config_dir: "/etc/v2node"',
+            '      config_dir: "/etc/kelinode"',
             '',
         ]);
     }
@@ -446,7 +446,7 @@ class MachineController extends Controller
 
     private function buildNativeLogCommand(): string
     {
-        return 'v2node log';
+        return 'kelinode log';
     }
 
     private function resolveMachineApiBaseURL(Request $request): string

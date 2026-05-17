@@ -76,11 +76,11 @@ final class MachineControllerInstallCommandTest extends TestCase
             $nativeUninstallCommand
         );
         $this->assertStringNotContainsString((string) $machine->token, $nativeUninstallCommand);
-        $this->assertSame('v2node log', $nativeLogCommand);
+        $this->assertSame('kelinode log', $nativeLogCommand);
         $this->assertStringContainsString('kernel:', $nativeConfig);
         $this->assertStringContainsString('  type: keli-core-rs', $nativeConfig);
-        $this->assertStringContainsString('  config_dir: "/etc/v2node"', $nativeConfig);
-        $this->assertStringContainsString('      config_dir: "/etc/v2node"', $nativeConfig);
+        $this->assertStringContainsString('  config_dir: "/etc/kelinode"', $nativeConfig);
+        $this->assertStringContainsString('      config_dir: "/etc/kelinode"', $nativeConfig);
         $this->assertStringContainsString('      token: "tok\'en"', $nativeConfig);
     }
 
