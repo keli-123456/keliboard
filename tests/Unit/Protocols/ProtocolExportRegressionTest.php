@@ -954,6 +954,68 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertSame(2, $anytls['min_idle_session']);
     }
 
+    public function test_singbox_build_vless_reality_tcp_omits_xudp_packet_encoding(): void
+    {
+        $protocol = new class([], []) extends SingBox {
+            public function handle()
+            {
+                return [];
+            }
+
+            public function buildVlessForTest(string $password, array $server): array
+            {
+                return $this->buildVless($password, $server);
+            }
+        };
+
+        $vless = $protocol->buildVlessForTest('user-uuid', [
+            'name' => 'SingBox Reality TCP',
+            'host' => 'sb.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 2,
+                'network' => 'tcp',
+                'flow' => 'xtls-rprx-vision',
+                'client_fingerprint' => 'firefox',
+                'reality_settings' => [
+                    'server_name' => 'sb-sni.example.com',
+                    'public_key' => 'sb-public-key',
+                    'short_id' => 'sb-short-id',
+                ],
+            ],
+        ]);
+
+        $this->assertArrayNotHasKey('packet_encoding', $vless);
+    }
+
+    public function test_singbox_build_plain_vless_keeps_xudp_packet_encoding(): void
+    {
+        $protocol = new class([], []) extends SingBox {
+            public function handle()
+            {
+                return [];
+            }
+
+            public function buildVlessForTest(string $password, array $server): array
+            {
+                return $this->buildVless($password, $server);
+            }
+        };
+
+        $vless = $protocol->buildVlessForTest('user-uuid', [
+            'name' => 'SingBox Plain VLESS',
+            'host' => 'plain.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 0,
+                'network' => 'tcp',
+                'flow' => '',
+            ],
+        ]);
+
+        $this->assertSame('xudp', $vless['packet_encoding']);
+    }
+
     public function test_singbox_build_anytls_defaults_client_fingerprint_when_not_configured(): void
     {
         $protocol = new class([], []) extends SingBox {

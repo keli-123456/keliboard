@@ -337,9 +337,12 @@ class SingBox extends AbstractProtocol
             "server" => $server['host'],
             "server_port" => $server['port'],
             "uuid" => $password,
-            "packet_encoding" => "xudp",
             'flow' => data_get($protocol_settings, 'flow', ''),
         ];
+
+        if ($this->shouldExportVlessPacketEncoding($protocol_settings)) {
+            $array['packet_encoding'] = 'xudp';
+        }
 
         if ($protocol_settings['tls']) {
             $tlsConfig = [
@@ -411,6 +414,22 @@ class SingBox extends AbstractProtocol
         }
 
         return $array;
+    }
+
+    private function shouldExportVlessPacketEncoding(array $protocolSettings): bool
+    {
+        $network = data_get($protocolSettings, 'network') ?: 'tcp';
+        $flow = trim((string) data_get($protocolSettings, 'flow', ''));
+        $tls = (int) data_get($protocolSettings, 'tls', 0);
+
+        // For sing-box, VLESS Reality/Vision TCP latency checks are measurably
+        // slower with xudp enabled, while TCP relay does not need UDP packet
+        // encoding. Keep xudp for other VLESS shapes to preserve UDP behavior.
+        if ($network === 'tcp' && ($tls === 2 || $flow !== '')) {
+            return false;
+        }
+
+        return true;
     }
 
     protected function buildTrojan($password, $server)
