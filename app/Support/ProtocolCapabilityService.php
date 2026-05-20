@@ -4,6 +4,8 @@ namespace App\Support;
 
 class ProtocolCapabilityService
 {
+    public const DEFAULT_CLIENT_SCOPE = 'subscription';
+
     public function __construct(
         protected array $config = []
     ) {

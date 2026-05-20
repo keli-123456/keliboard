@@ -450,6 +450,13 @@ class Server extends Model
                 'congestion_control' => ['cubic', 'bbr', 'new_reno'],
                 'udp_relay_mode' => ['native', 'quic'],
             ],
+            self::TYPE_NAIVE => [
+                'tls' => [0, 1],
+            ],
+            self::TYPE_MIERU => [
+                'transport' => ['tcp', 'udp'],
+                'multiplexing' => ['MULTIPLEXING_OFF', 'MULTIPLEXING_LOW', 'MULTIPLEXING_MIDDLE', 'MULTIPLEXING_HIGH'],
+            ],
             default => [],
         };
     }
