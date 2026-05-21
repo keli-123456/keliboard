@@ -7,7 +7,9 @@ namespace Tests\Unit\Http;
 use App\Http\Controllers\V1\Client\ClientController;
 use App\Protocols\ClashMeta;
 use App\Protocols\QuantumultX;
+use App\Protocols\Shadowrocket;
 use App\Protocols\SingBox;
+use App\Support\ProtocolCapabilityService;
 use App\Support\ProtocolManager;
 use Illuminate\Container\Container;
 use Illuminate\Http\Request;
@@ -69,6 +71,66 @@ final class ClientControllerTest extends TestCase
 
         $this->assertNull($info['name']);
         $this->assertNull($info['version']);
+    }
+
+    public function test_get_client_info_maps_common_clients_from_user_agent_without_flag(): void
+    {
+        $this->bindProtocolManager([
+            QuantumultX::class,
+            ClashMeta::class,
+            Shadowrocket::class,
+            SingBox::class,
+        ]);
+
+        $controller = new ClientController();
+        $method = new \ReflectionMethod(ClientController::class, 'getClientInfo');
+        $method->setAccessible(true);
+
+        $cases = [
+            ['sing-box/1.13.11', 'sing-box', '1.13.11'],
+            ['Karing/1.2.8.1103', 'karing', '1.2.8.1103'],
+            ['Hiddify/1.2.8.1103', 'hiddify', '1.2.8.1103'],
+            ['mihomo/1.19.0', 'mihomo', '1.19.0'],
+            ['Clash Verge/v1.7.0', 'verge', '1.7.0'],
+            ['Shadowrocket/2698 CFNetwork/1496.0.7 Darwin/23.5.0', 'shadowrocket', '2698'],
+        ];
+
+        foreach ($cases as [$userAgent, $expectedName, $expectedVersion]) {
+            $info = $method->invoke($controller, Request::create('/', 'GET', [], [], [], [
+                'HTTP_USER_AGENT' => $userAgent,
+            ]));
+
+            $this->assertSame($expectedName, $info['name'], $userAgent);
+            $this->assertSame($expectedVersion, $info['version'], $userAgent);
+        }
+    }
+
+    public function test_sing_box_wrapper_app_build_versions_bypass_core_semver_filter(): void
+    {
+        app()->instance('protocols.capabilities', new ProtocolCapabilityService(
+            require dirname(__DIR__, 3) . '/config/protocol_capabilities.php'
+        ));
+
+        $controller = new ClientController();
+        $method = new \ReflectionMethod(ClientController::class, 'shouldBypassClientCapabilityFilter');
+        $method->setAccessible(true);
+
+        $this->assertTrue($method->invoke($controller, [
+            'name' => 'sing-box',
+            'version' => '1.2.8.1103',
+        ]));
+        $this->assertTrue($method->invoke($controller, [
+            'name' => 'karing',
+            'version' => '1.2.8.1103',
+        ]));
+        $this->assertTrue($method->invoke($controller, [
+            'name' => 'hiddify',
+            'version' => '1.2.8.1103',
+        ]));
+        $this->assertFalse($method->invoke($controller, [
+            'name' => 'sing-box',
+            'version' => '1.13.11',
+        ]));
     }
 
     private function bindProtocolManager(array $classes): void

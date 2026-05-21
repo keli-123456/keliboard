@@ -225,7 +225,8 @@ class ClientController extends Controller
 
     private function shouldBypassClientCapabilityFilter(array $clientInfo): bool
     {
-        if (($clientInfo['name'] ?? null) !== 'sing-box') {
+        $clientName = $clientInfo['name'] ?? null;
+        if (!is_string($clientName) || $clientName === '') {
             return false;
         }
 
@@ -234,9 +235,14 @@ class ClientController extends Controller
             return false;
         }
 
-        // Wrapper clients such as Karing may reuse the sing-box UA while exposing
-        // an app build version like 1.2.8.1103 instead of sing-box core semver.
-        return preg_match('/^\d+(?:\.\d+){3,}$/', $version) === 1;
+        if (preg_match('/^\d+(?:\.\d+){3,}$/', $version) !== 1) {
+            return false;
+        }
+
+        // Wrapper clients such as Karing/Hiddify expose app build versions like
+        // 1.2.8.1103 instead of sing-box core semver.
+        $family = app('protocols.capabilities')->resolveClientFamily($clientName);
+        return $clientName === 'sing-box' || $family === 'sing-box';
     }
 
     private function setSubscribeInfoToServers(&$servers, $user, $rejectServerCount = 0)
