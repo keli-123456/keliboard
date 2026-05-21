@@ -294,9 +294,11 @@ class ProtocolCapabilityService
 
         return [
             'protocol' => $type,
-            'network' => $type === 'mieru'
-                ? strtolower(trim((string) data_get($settings, 'transport', 'tcp')))
-                : data_get($settings, 'network'),
+            'network' => match ($type) {
+                'mieru' => strtolower(trim((string) data_get($settings, 'transport', 'tcp'))),
+                'naive' => data_get($settings, 'network') ?: 'tcp',
+                default => data_get($settings, 'network'),
+            },
             'cipher' => data_get($settings, 'cipher'),
             'congestion_control' => data_get($settings, 'congestion_control'),
             'encryption' => data_get($settings, 'encryption'),

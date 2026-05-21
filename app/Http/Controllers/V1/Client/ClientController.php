@@ -29,7 +29,9 @@ class ClientController extends Controller
         'trojan' => '[trojan]',
         'tuic' => '[tuic]',
         'socks' => '[socks]',
-        'anytls' => '[anytls]'
+        'anytls' => '[anytls]',
+        'naive' => '[naive]',
+        'mieru' => '[mieru]',
     ];
 
 

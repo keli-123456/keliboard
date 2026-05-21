@@ -28,6 +28,11 @@ final class ProtocolCapabilityServiceTest extends TestCase
         $this->assertSame('mihomo', $this->service->resolveClientFamily('clashmeta'));
     }
 
+    public function test_resolve_client_family_maps_karing_to_sing_box(): void
+    {
+        $this->assertSame('sing-box', $this->service->resolveClientFamily('karing'));
+    }
+
     public function test_sing_box_before_1_12_drops_anytls(): void
     {
         $server = $this->makeServer('anytls', [
@@ -737,7 +742,7 @@ final class ProtocolCapabilityServiceTest extends TestCase
         $this->assertTrue($result->supported);
     }
 
-    public function test_sing_box_drops_protocols_not_emitted_by_its_exporter(): void
+    public function test_sing_box_before_1_13_drops_naive(): void
     {
         $server = $this->makeServer('naive', [
             'tls' => 1,
@@ -746,6 +751,30 @@ final class ProtocolCapabilityServiceTest extends TestCase
         $result = $this->service->supportsClient('sing-box', '1.12.0', $server);
 
         $this->assertFalse($result->supported);
+    }
+
+    public function test_sing_box_1_13_keeps_naive_tcp(): void
+    {
+        $server = $this->makeServer('naive', [
+            'network' => 'tcp',
+            'tls' => 1,
+        ]);
+
+        $result = $this->service->supportsClient('sing-box', '1.13.0', $server);
+
+        $this->assertTrue($result->supported);
+    }
+
+    public function test_sing_box_1_13_keeps_naive_quic(): void
+    {
+        $server = $this->makeServer('naive', [
+            'network' => 'quic',
+            'tls' => 1,
+        ]);
+
+        $result = $this->service->supportsClient('sing-box', '1.13.0', $server);
+
+        $this->assertTrue($result->supported);
     }
 
     public function test_mihomo_drops_protocols_not_emitted_by_its_exporter(): void

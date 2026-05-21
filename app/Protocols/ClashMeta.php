@@ -518,16 +518,17 @@ class ClashMeta extends AbstractProtocol
             'name' => $server['name'],
             'type' => 'mieru',
             'server' => $server['host'],
-            'port' => $server['port'],
             'username' => $password,
             'password' => $password,
             'transport' => strtoupper(data_get($protocol_settings, 'transport', 'TCP')),
             'multiplexing' => data_get($protocol_settings, 'multiplexing', 'MULTIPLEXING_LOW')
         ];
 
-        // 如果配置了端口范围
-        if (isset($server['ports'])) {
-            $array['port-range'] = $server['ports'];
+        $portRange = trim((string) data_get($server, 'ports', ''));
+        if ($portRange !== '') {
+            $array['port-range'] = $portRange;
+        } else {
+            $array['port'] = $server['port'];
         }
 
         return $array;

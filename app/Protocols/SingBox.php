@@ -18,6 +18,7 @@ class SingBox extends AbstractProtocol
         Server::TYPE_TUIC,
         Server::TYPE_ANYTLS,
         Server::TYPE_SOCKS,
+        Server::TYPE_NAIVE,
         Server::TYPE_HTTP,
     ];
     private $config;
@@ -61,6 +62,9 @@ class SingBox extends AbstractProtocol
             ],
             'anytls' => [
                 'base_version' => '1.12.0'
+            ],
+            'naive' => [
+                'base_version' => '1.13.0'
             ]
         ]
     ];
@@ -234,6 +238,10 @@ class SingBox extends AbstractProtocol
             if ($type === Server::TYPE_SOCKS) {
                 $socksConfig = $this->buildSocks($this->user['uuid'], $item);
                 $proxies[] = $socksConfig;
+            }
+            if ($type === Server::TYPE_NAIVE) {
+                $naiveConfig = $this->buildNaive($this->user['uuid'], $item);
+                $proxies[] = $naiveConfig;
             }
             if ($type === Server::TYPE_HTTP) {
                 $httpConfig = $this->buildHttp($this->user['uuid'], $item);
@@ -672,6 +680,30 @@ class SingBox extends AbstractProtocol
 
         if (data_get($protocol_settings, 'udp_over_tcp')) {
             $array['udp_over_tcp'] = true;
+        }
+
+        return $array;
+    }
+
+    protected function buildNaive($password, $server): array
+    {
+        $protocol_settings = data_get($server, 'protocol_settings', []);
+        $array = [
+            'type' => 'naive',
+            'tag' => $server['name'],
+            'server' => $server['host'],
+            'server_port' => $server['port'],
+            'username' => $password,
+            'password' => $password,
+            'tls' => new \stdClass(),
+        ];
+
+        if ($serverName = data_get($protocol_settings, 'tls_settings.server_name')) {
+            $array['tls'] = ['server_name' => $serverName];
+        }
+
+        if (strtolower((string) data_get($protocol_settings, 'network', 'tcp')) === 'quic') {
+            $array['quic'] = true;
         }
 
         return $array;

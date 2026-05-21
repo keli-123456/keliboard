@@ -44,10 +44,10 @@ return [
 
     'clients' => [
         'sing-box' => [
-            'aliases' => ['sing-box', 'hiddify', 'hiddifynext', 'sfm'],
+            'aliases' => ['sing-box', 'hiddify', 'hiddifynext', 'sfm', 'karing'],
             'version_kind' => 'semver',
             'unknown_version_policy' => 'conservative',
-            'protocols' => ['shadowsocks', 'trojan', 'vmess', 'vless', 'hysteria', 'tuic', 'anytls', 'socks', 'http'],
+            'protocols' => ['shadowsocks', 'trojan', 'vmess', 'vless', 'hysteria', 'tuic', 'anytls', 'socks', 'naive', 'http'],
             'variants' => [
                 'hiddify' => [
                     'supports' => [
@@ -100,6 +100,9 @@ return [
                     ['when' => ['version' => 4], 'min_version' => '1.5.0', 'support' => 'yes'],
                     ['when' => ['version' => 5], 'min_version' => '1.5.0', 'support' => 'yes'],
                     ['when' => ['feature' => 'zero_rtt_handshake'], 'support' => 'yes'],
+                ],
+                'naive' => [
+                    ['when' => ['network' => ['tcp', 'quic']], 'min_version' => '1.13.0', 'support' => 'yes'],
                 ],
             ],
         ],

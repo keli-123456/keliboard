@@ -29,6 +29,11 @@ final class SingBoxRegressionTest extends TestCase
             {
                 return $this->buildTrojan($password, $server);
             }
+
+            public function buildNaiveForTest(string $password, array $server): array
+            {
+                return $this->buildNaive($password, $server);
+            }
         };
     }
 
@@ -157,5 +162,91 @@ final class SingBoxRegressionTest extends TestCase
         $selector = collect($config['outbounds'])->firstWhere('tag', '节点选择');
         $this->assertSame('edge-b', $selector['default']);
         $this->assertContains('edge-b', $selector['outbounds']);
+    }
+
+    public function test_singbox_build_naive_tcp_exports_official_outbound_fields(): void
+    {
+        $protocol = $this->makeProtocol();
+
+        $config = $protocol->buildNaiveForTest('user-uuid', [
+            'name' => 'Naive TCP',
+            'host' => 'naive.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'network' => 'tcp',
+                'tls' => 1,
+                'tls_settings' => [
+                    'server_name' => 'sni.example.com',
+                    'allow_insecure' => true,
+                    'alpn' => ['h2', 'http/1.1'],
+                ],
+            ],
+        ]);
+
+        $this->assertSame('naive', $config['type']);
+        $this->assertSame('Naive TCP', $config['tag']);
+        $this->assertSame('naive.example.com', $config['server']);
+        $this->assertSame(443, $config['server_port']);
+        $this->assertSame('user-uuid', $config['username']);
+        $this->assertSame('user-uuid', $config['password']);
+        $this->assertArrayNotHasKey('quic', $config);
+        $this->assertSame([
+            'server_name' => 'sni.example.com',
+        ], $config['tls']);
+    }
+
+    public function test_singbox_build_naive_quic_sets_quic_flag(): void
+    {
+        $protocol = $this->makeProtocol();
+
+        $config = $protocol->buildNaiveForTest('user-uuid', [
+            'name' => 'Naive QUIC',
+            'host' => 'naive.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'network' => 'quic',
+                'tls' => 1,
+                'tls_settings' => [
+                    'server_name' => 'sni.example.com',
+                ],
+            ],
+        ]);
+
+        $this->assertSame('naive', $config['type']);
+        $this->assertTrue($config['quic']);
+        $this->assertSame('sni.example.com', $config['tls']['server_name']);
+    }
+
+    public function test_singbox_full_app_config_includes_naive_outbound(): void
+    {
+        $servers = [
+            [
+                'name' => 'Naive TCP',
+                'type' => Server::TYPE_NAIVE,
+                'host' => 'naive.example.com',
+                'port' => 443,
+                'protocol_settings' => [
+                    'network' => 'tcp',
+                    'tls' => 1,
+                    'tls_settings' => [
+                        'server_name' => 'sni.example.com',
+                    ],
+                ],
+            ],
+        ];
+        $protocol = new class(['uuid' => 'user-uuid'], $servers, 'sing-box', '1.13.11') extends SingBox {
+            public function handle()
+            {
+                return [];
+            }
+        };
+
+        $config = $protocol->generateConfig(defaultOutboundTag: 'Naive TCP');
+
+        $outbound = collect($config['outbounds'])->firstWhere('tag', 'Naive TCP');
+        $selector = collect($config['outbounds'])->firstWhere('tag', '节点选择');
+        $this->assertSame('naive', $outbound['type']);
+        $this->assertSame('Naive TCP', $selector['default']);
+        $this->assertContains('Naive TCP', $selector['outbounds']);
     }
 }

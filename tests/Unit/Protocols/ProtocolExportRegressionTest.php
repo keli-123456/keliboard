@@ -187,6 +187,43 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertStringContainsString('skip-cert-verify=true', $surfboardUri);
     }
 
+    public function test_clashmeta_build_mieru_uses_port_range_without_port(): void
+    {
+        $config = ClashMeta::buildMieru('user-password', [
+            'name' => 'Mieru Range',
+            'host' => 'mieru.example.com',
+            'port' => 11115,
+            'ports' => '11115-11120',
+            'protocol_settings' => [
+                'transport' => 'tcp',
+                'multiplexing' => 'MULTIPLEXING_LOW',
+            ],
+        ]);
+
+        $this->assertSame('mieru', $config['type']);
+        $this->assertSame('mieru.example.com', $config['server']);
+        $this->assertSame('11115-11120', $config['port-range']);
+        $this->assertArrayNotHasKey('port', $config);
+        $this->assertSame('TCP', $config['transport']);
+        $this->assertSame('MULTIPLEXING_LOW', $config['multiplexing']);
+    }
+
+    public function test_clashmeta_build_mieru_uses_single_port_without_range(): void
+    {
+        $config = ClashMeta::buildMieru('user-password', [
+            'name' => 'Mieru Single',
+            'host' => 'mieru.example.com',
+            'port' => 11115,
+            'protocol_settings' => [
+                'transport' => 'tcp',
+                'multiplexing' => 'MULTIPLEXING_LOW',
+            ],
+        ]);
+
+        $this->assertSame(11115, $config['port']);
+        $this->assertArrayNotHasKey('port-range', $config);
+    }
+
     public function test_surge_build_hysteria2_exports_version_two_nodes_only(): void
     {
         $v2 = Surge::buildHysteria('secret', [
