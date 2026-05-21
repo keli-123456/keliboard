@@ -21,12 +21,16 @@ final class ServerSchemaTest extends TestCase
     {
         $vmessNetworks = Server::getProtocolEnums(Server::TYPE_VMESS)['network'] ?? [];
         $trojanNetworks = Server::getProtocolEnums(Server::TYPE_TROJAN)['network'] ?? [];
+        $anytlsNetworks = Server::getProtocolEnums(Server::TYPE_ANYTLS)['network'] ?? [];
+        $naiveNetworks = Server::getProtocolEnums(Server::TYPE_NAIVE)['network'] ?? [];
         $tuicAlpn = Server::getProtocolEnums(Server::TYPE_TUIC)['alpn'] ?? [];
 
         $this->assertContains('xhttp', $vmessNetworks);
         $this->assertContains('splithttp', $vmessNetworks);
         $this->assertNotContains('kcp', $vmessNetworks);
         $this->assertSame(['tcp', 'ws', 'grpc'], $trojanNetworks);
+        $this->assertSame(['tcp'], $anytlsNetworks);
+        $this->assertSame(['tcp', 'quic'], $naiveNetworks);
         $this->assertSame(['http/1.1', 'h2', 'h3'], $tuicAlpn);
     }
 }

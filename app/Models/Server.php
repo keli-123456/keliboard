@@ -448,7 +448,7 @@ class Server extends Model
             ],
             self::TYPE_ANYTLS => [
                 'tls_mode' => [1, 2],
-                'network' => ['tcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'splithttp'],
+                'network' => ['tcp'],
                 'client_fingerprint' => ['firefox', 'chrome', 'safari', 'ios', 'android', 'edge'],
                 'alpn' => ['h2', 'http/1.1'],
             ],
@@ -463,6 +463,7 @@ class Server extends Model
                 'udp_relay_mode' => ['native', 'quic'],
             ],
             self::TYPE_NAIVE => [
+                'network' => ['tcp', 'quic'],
                 'tls' => [0, 1],
             ],
             self::TYPE_MIERU => [

@@ -20,6 +20,7 @@ final class ServerManageCapabilitiesTest extends TestCase
         parent::setUp();
 
         $this->bindJsonResponseFactory();
+        config(['protocol_presets' => require dirname(__DIR__, 3) . '/config/protocol_presets.php']);
     }
 
     public function test_default_capabilities_include_sidecar_protocol_types(): void
@@ -38,8 +39,10 @@ final class ServerManageCapabilitiesTest extends TestCase
         $this->assertContains(Server::TYPE_NAIVE, $types);
         $this->assertContains(Server::TYPE_MIERU, $types);
         $this->assertSame([0, 1], $payload['data']['types'][Server::TYPE_NAIVE]['enums']['tls'] ?? null);
+        $this->assertSame(['tcp', 'quic'], $payload['data']['types'][Server::TYPE_NAIVE]['enums']['network'] ?? null);
         $this->assertSame(1, $payload['data']['types'][Server::TYPE_NAIVE]['defaults']['tls'] ?? null);
         $this->assertSame('tcp', $payload['data']['types'][Server::TYPE_NAIVE]['defaults']['network'] ?? null);
+        $this->assertSame(['tcp'], $payload['data']['types'][Server::TYPE_ANYTLS]['enums']['network'] ?? null);
         $this->assertSame(['tcp', 'udp'], $payload['data']['types'][Server::TYPE_MIERU]['enums']['transport'] ?? null);
         $this->assertSame(
             ['MULTIPLEXING_OFF', 'MULTIPLEXING_LOW', 'MULTIPLEXING_MIDDLE', 'MULTIPLEXING_HIGH'],
@@ -78,5 +81,8 @@ final class ServerManageCapabilitiesTest extends TestCase
         $mieruPresets = collect($types[Server::TYPE_MIERU]['presets'] ?? [])->keyBy('id');
         $this->assertTrue((bool) data_get($mieruPresets->get('mieru_tcp_low'), 'runtime_support.v2node.supported'));
         $this->assertFalse((bool) data_get($mieruPresets->get('mieru_udp_low'), 'runtime_support.v2node.supported'));
+
+        $naivePresets = collect($types[Server::TYPE_NAIVE]['presets'] ?? [])->keyBy('id');
+        $this->assertTrue((bool) data_get($naivePresets->get('naive_quic'), 'runtime_support.v2node.supported'));
     }
 }

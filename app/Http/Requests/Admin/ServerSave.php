@@ -224,6 +224,10 @@ class ServerSave extends FormRequest
             }
 
             $network = strtolower(trim((string) data_get($settings, 'network', '')));
+            if ($type === Server::TYPE_ANYTLS && $network !== '' && $network !== 'tcp') {
+                $validator->errors()->add('protocol_settings.network', 'v2node 当前仅支持 AnyTLS TCP');
+            }
+
             $isReality = ($type === Server::TYPE_VLESS && (int) data_get($settings, 'tls', 0) === 2)
                 || ($type === Server::TYPE_ANYTLS && (int) data_get($settings, 'tls_mode', 1) === 2);
 

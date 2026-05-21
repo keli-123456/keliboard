@@ -15,7 +15,7 @@ return [
                     'tls_modes' => [0, 1, 2],
                 ],
                 'anytls' => [
-                    'networks' => ['tcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'splithttp'],
+                    'networks' => ['tcp'],
                     'tls_modes' => [1, 2],
                     'features' => ['padding_scheme', 'reality', 'alpn'],
                 ],
@@ -31,7 +31,9 @@ return [
                     'features' => ['alpn', 'congestion_control', 'zero_rtt_handshake'],
                 ],
                 'socks' => [],
-                'naive' => [],
+                'naive' => [
+                    'networks' => ['tcp', 'quic'],
+                ],
                 'http' => [],
                 'mieru' => [
                     'networks' => ['tcp'],

@@ -770,6 +770,31 @@ final class ProtocolCapabilityServiceTest extends TestCase
         $this->assertTrue($result->supported);
     }
 
+    public function test_runtime_keeps_naive_quic_when_v2node_sidecar_supports_it(): void
+    {
+        $server = $this->makeServer('naive', [
+            'network' => 'quic',
+            'tls' => 1,
+        ]);
+
+        $result = $this->service->supportsRuntime('v2node', $server);
+
+        $this->assertTrue($result->supported);
+    }
+
+    public function test_runtime_drops_anytls_custom_transport_until_native_core_supports_it(): void
+    {
+        $server = $this->makeServer('anytls', [
+            'tls_mode' => 1,
+            'network' => 'ws',
+            'tls' => ['server_name' => 'anytls.example.com'],
+        ]);
+
+        $result = $this->service->supportsRuntime('v2node', $server);
+
+        $this->assertFalse($result->supported);
+    }
+
     public function test_runtime_keeps_socks_and_http_when_v2node_supports_them(): void
     {
         foreach (['socks', 'http'] as $type) {
