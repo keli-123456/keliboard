@@ -33,7 +33,9 @@ return [
                 'socks' => [],
                 'naive' => [],
                 'http' => [],
-                'mieru' => [],
+                'mieru' => [
+                    'networks' => ['tcp'],
+                ],
             ],
         ],
     ],

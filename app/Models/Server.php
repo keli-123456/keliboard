@@ -298,22 +298,34 @@ class Server extends Model
         self::TYPE_SOCKS => [
             'tls' => ['type' => 'integer', 'default' => 0],
             'tls_settings' => [
-                'type' => 'object',
-                'fields' => [
-                    'allow_insecure' => ['type' => 'boolean', 'default' => false]
+                'type' => 'array',
+                'default' => [
+                    'server_name' => null,
+                    'alpn' => [],
+                    'allow_insecure' => false,
                 ]
             ]
         ],
         self::TYPE_NAIVE => [
-            'tls' => ['type' => 'integer', 'default' => 0],
-            'tls_settings' => ['type' => 'array', 'default' => null]
+            'network' => ['type' => 'string', 'default' => 'tcp'],
+            'tls' => ['type' => 'integer', 'default' => 1],
+            'tls_settings' => [
+                'type' => 'array',
+                'default' => [
+                    'server_name' => null,
+                    'alpn' => [],
+                    'allow_insecure' => false,
+                ]
+            ]
         ],
         self::TYPE_HTTP => [
             'tls' => ['type' => 'integer', 'default' => 0],
             'tls_settings' => [
-                'type' => 'object',
-                'fields' => [
-                    'allow_insecure' => ['type' => 'boolean', 'default' => false]
+                'type' => 'array',
+                'default' => [
+                    'server_name' => null,
+                    'alpn' => [],
+                    'allow_insecure' => false,
                 ]
             ]
         ],

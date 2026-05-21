@@ -795,6 +795,18 @@ final class ProtocolCapabilityServiceTest extends TestCase
         $this->assertTrue($result->supported);
     }
 
+    public function test_runtime_drops_mieru_udp_until_native_core_supports_it(): void
+    {
+        $server = $this->makeServer('mieru', [
+            'transport' => 'udp',
+            'multiplexing' => 'MULTIPLEXING_LOW',
+        ]);
+
+        $result = $this->service->supportsRuntime('v2node', $server);
+
+        $this->assertFalse($result->supported);
+    }
+
     public function test_runtime_keeps_vmess_xhttp_when_v2node_supports_it(): void
     {
         $server = $this->makeServer('vmess', [

@@ -3,6 +3,10 @@
 $transportDoc = 'https://xtls.github.io/en/config/transport.html';
 $xhttpDiscussion = 'https://github.com/XTLS/Xray-core/discussions/4113';
 $examplesRepo = 'https://github.com/XTLS/Xray-examples';
+$naiveProxyReadme = 'https://github.com/klzgrad/naiveproxy/blob/master/README.md';
+$naiveProxyUsage = 'https://github.com/klzgrad/naiveproxy/blob/master/USAGE.txt';
+$mieruServerInstall = 'https://github.com/enfein/mieru/blob/main/docs/server-install.md';
+$mieruProtocol = 'https://github.com/enfein/mieru/blob/main/docs/protocol.md';
 $tcpNetworkSettings = ['header' => ['type' => 'none']];
 $anytlsDefaultPaddingScheme = [
     'stop=8',
@@ -468,6 +472,138 @@ return [
             ],
             'references' => [
                 ['label' => 'Transport', 'url' => $transportDoc],
+            ],
+        ],
+    ],
+    'socks' => [
+        [
+            'id' => 'socks_plain',
+            'label' => 'SOCKS5 Plain',
+            'tone' => 'compatibility',
+            'summary_key' => 'server.protocol_presets.summaries.socks_plain',
+            'fill_fields' => [],
+            'protocol_settings' => [
+                'tls' => 0,
+                'tls_settings' => [
+                    'allow_insecure' => false,
+                ],
+            ],
+        ],
+        [
+            'id' => 'socks_tls',
+            'label' => 'SOCKS5 + TLS',
+            'tone' => 'recommended',
+            'summary_key' => 'server.protocol_presets.summaries.socks_tls',
+            'fill_fields' => ['tls_settings.server_name'],
+            'protocol_settings' => [
+                'tls' => 1,
+                'tls_settings' => [
+                    'server_name' => '',
+                    'allow_insecure' => false,
+                ],
+            ],
+        ],
+    ],
+    'http' => [
+        [
+            'id' => 'http_plain',
+            'label' => 'HTTP Proxy Plain',
+            'tone' => 'compatibility',
+            'summary_key' => 'server.protocol_presets.summaries.http_plain',
+            'fill_fields' => [],
+            'protocol_settings' => [
+                'tls' => 0,
+                'tls_settings' => [
+                    'allow_insecure' => false,
+                ],
+            ],
+        ],
+        [
+            'id' => 'http_tls',
+            'label' => 'HTTP Proxy + TLS',
+            'tone' => 'recommended',
+            'summary_key' => 'server.protocol_presets.summaries.http_tls',
+            'fill_fields' => ['tls_settings.server_name'],
+            'protocol_settings' => [
+                'tls' => 1,
+                'tls_settings' => [
+                    'server_name' => '',
+                    'allow_insecure' => false,
+                ],
+            ],
+        ],
+    ],
+    'naive' => [
+        [
+            'id' => 'naive_https',
+            'label' => 'NaiveProxy HTTPS',
+            'tone' => 'recommended',
+            'summary_key' => 'server.protocol_presets.summaries.naive_https',
+            'fill_fields' => ['tls_settings.server_name'],
+            'protocol_settings' => [
+                'network' => 'tcp',
+                'tls' => 1,
+                'tls_settings' => [
+                    'server_name' => '',
+                    'allow_insecure' => false,
+                    'alpn' => ['h2', 'http/1.1'],
+                ],
+            ],
+            'references' => [
+                ['label' => 'NaiveProxy', 'url' => $naiveProxyReadme],
+                ['label' => 'Usage', 'url' => $naiveProxyUsage],
+            ],
+        ],
+        [
+            'id' => 'naive_quic',
+            'label' => 'NaiveProxy QUIC',
+            'tone' => 'advanced',
+            'summary_key' => 'server.protocol_presets.summaries.naive_quic',
+            'fill_fields' => ['tls_settings.server_name'],
+            'protocol_settings' => [
+                'network' => 'quic',
+                'tls' => 1,
+                'tls_settings' => [
+                    'server_name' => '',
+                    'allow_insecure' => false,
+                    'alpn' => ['h3'],
+                ],
+            ],
+            'references' => [
+                ['label' => 'NaiveProxy', 'url' => $naiveProxyReadme],
+                ['label' => 'Usage', 'url' => $naiveProxyUsage],
+            ],
+        ],
+    ],
+    'mieru' => [
+        [
+            'id' => 'mieru_tcp_low',
+            'label' => 'Mieru TCP + Low Multiplexing',
+            'tone' => 'recommended',
+            'summary_key' => 'server.protocol_presets.summaries.mieru_tcp_low',
+            'fill_fields' => [],
+            'protocol_settings' => [
+                'transport' => 'tcp',
+                'multiplexing' => 'MULTIPLEXING_LOW',
+            ],
+            'references' => [
+                ['label' => 'Server', 'url' => $mieruServerInstall],
+                ['label' => 'Protocol', 'url' => $mieruProtocol],
+            ],
+        ],
+        [
+            'id' => 'mieru_udp_low',
+            'label' => 'Mieru UDP + Low Multiplexing',
+            'tone' => 'advanced',
+            'summary_key' => 'server.protocol_presets.summaries.mieru_udp_low',
+            'fill_fields' => [],
+            'protocol_settings' => [
+                'transport' => 'udp',
+                'multiplexing' => 'MULTIPLEXING_LOW',
+            ],
+            'references' => [
+                ['label' => 'Server', 'url' => $mieruServerInstall],
+                ['label' => 'Protocol', 'url' => $mieruProtocol],
             ],
         ],
     ],

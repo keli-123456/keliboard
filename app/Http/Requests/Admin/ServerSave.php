@@ -90,16 +90,26 @@ class ServerSave extends FormRequest
             'reality_settings.short_id' => 'nullable|string',
         ],
         'socks' => [
-            'tls' => 'nullable|integer',
-            'tls_settings' => 'nullable|array',
+            'tls' => 'nullable|integer|in:0,1',
+            'tls_settings.server_name' => 'nullable|string',
+            'tls_settings.allow_insecure' => 'nullable|boolean',
+            'tls_settings.alpn' => 'nullable|array',
+            ...self::TLS_CERT_RULES,
         ],
         'naive' => [
-            'tls' => 'required|integer',
-            'tls_settings' => 'nullable|array',
+            'network' => 'nullable|string|in:tcp,quic',
+            'tls' => 'required|integer|in:0,1',
+            'tls_settings.server_name' => 'nullable|string',
+            'tls_settings.allow_insecure' => 'nullable|boolean',
+            'tls_settings.alpn' => 'nullable|array',
+            ...self::TLS_CERT_RULES,
         ],
         'http' => [
-            'tls' => 'required|integer',
-            'tls_settings' => 'nullable|array',
+            'tls' => 'required|integer|in:0,1',
+            'tls_settings.server_name' => 'nullable|string',
+            'tls_settings.allow_insecure' => 'nullable|boolean',
+            'tls_settings.alpn' => 'nullable|array',
+            ...self::TLS_CERT_RULES,
         ],
         'mieru' => [
             'transport' => 'required|string',
@@ -200,6 +210,17 @@ class ServerSave extends FormRequest
 
             if ($type === Server::TYPE_HYSTERIA && (int) data_get($settings, 'version', 2) !== 2) {
                 $validator->errors()->add('protocol_settings.version', 'v2node 仅支持 Hysteria2');
+            }
+
+            if ($type === Server::TYPE_NAIVE && (int) data_get($settings, 'tls', 1) !== 1) {
+                $validator->errors()->add('protocol_settings.tls', 'v2node 的 Naive 需要启用 TLS');
+            }
+
+            if ($type === Server::TYPE_MIERU) {
+                $transport = strtolower(trim((string) data_get($settings, 'transport', 'tcp')));
+                if ($transport !== 'tcp') {
+                    $validator->errors()->add('protocol_settings.transport', 'v2node 当前仅支持 Mieru TCP');
+                }
             }
 
             $network = strtolower(trim((string) data_get($settings, 'network', '')));
