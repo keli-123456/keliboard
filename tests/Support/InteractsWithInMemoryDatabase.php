@@ -173,6 +173,7 @@ trait InteractsWithInMemoryDatabase
             $table->bigInteger('transfer_enable')->nullable();
             $table->integer('speed_limit')->nullable();
             $table->integer('device_limit')->nullable();
+            $table->bigInteger('expired_at')->nullable();
             $table->bigInteger('u')->default(0);
             $table->bigInteger('d')->default(0);
             $table->boolean('banned')->default(false);

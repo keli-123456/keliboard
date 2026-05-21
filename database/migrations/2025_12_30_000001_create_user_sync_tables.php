@@ -58,6 +58,9 @@ return new class extends Migration
                             COALESCE(u.device_limit, 0),
                             CASE
                                 WHEN u.group_id IS NULL THEN 0
+                                WHEN u.plan_id IS NULL THEN 0
+                                WHEN COALESCE(u.is_admin, 0) = 1 THEN 0
+                                WHEN COALESCE(u.is_staff, 0) = 1 THEN 0
                                 WHEN u.banned = 1 THEN 0
                                 WHEN u.expired_at IS NOT NULL AND u.expired_at > 0 AND u.expired_at < UNIX_TIMESTAMP() THEN 0
                                 WHEN u.transfer_enable IS NULL THEN 0

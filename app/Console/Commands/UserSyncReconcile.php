@@ -35,14 +35,20 @@ class UserSyncReconcile extends Command
             ->join('user_sync_states as s', 's.user_id', '=', 'u.id')
             ->where('s.available', 1)
             ->where(function ($q) use ($now) {
-                $q->where(function ($q) use ($now) {
-                    $q->whereNotNull('u.expired_at')
-                        ->where('u.expired_at', '>', 0)
-                        ->where('u.expired_at', '<', $now);
-                })->orWhere(function ($q) {
-                    $q->whereNotNull('u.transfer_enable')
-                        ->whereRaw('(COALESCE(u.u, 0) + COALESCE(u.d, 0)) >= u.transfer_enable');
-                });
+                $q->whereNull('u.group_id')
+                    ->orWhereNull('u.plan_id')
+                    ->orWhere('u.is_admin', 1)
+                    ->orWhere('u.is_staff', 1)
+                    ->orWhere('u.banned', 1)
+                    ->orWhereNull('u.transfer_enable')
+                    ->orWhere(function ($q) use ($now) {
+                        $q->whereNotNull('u.expired_at')
+                            ->where('u.expired_at', '>', 0)
+                            ->where('u.expired_at', '<', $now);
+                    })->orWhere(function ($q) {
+                        $q->whereNotNull('u.transfer_enable')
+                            ->whereRaw('(COALESCE(u.u, 0) + COALESCE(u.d, 0)) >= u.transfer_enable');
+                    });
             })
             ->orderBy('u.id')
             ->limit($limit)
