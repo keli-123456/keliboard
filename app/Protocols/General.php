@@ -193,7 +193,8 @@ class General extends AbstractProtocol
         $name = rawurlencode($server['name']);
         $array = [];
         $array['allowInsecure'] = $protocol_settings['allow_insecure'];
-        if ($serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'))) {
+        $serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'));
+        if ($serverName) {
             $array['peer'] = $serverName;
             $array['sni'] = $serverName;
         }
@@ -202,7 +203,7 @@ class General extends AbstractProtocol
                 $array['type'] = 'ws';
                 if ($path = data_get($protocol_settings, 'network_settings.path'))
                     $array['path'] = $path;
-                if ($host = data_get($protocol_settings, 'network_settings.headers.Host'))
+                if ($host = data_get($protocol_settings, 'network_settings.headers.Host') ?: $serverName)
                     $array['host'] = $host;
                 break;
             case 'grpc':

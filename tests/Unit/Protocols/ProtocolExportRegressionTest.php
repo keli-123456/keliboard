@@ -1369,6 +1369,37 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertTrue($socks['skip-cert-verify']);
     }
 
+    public function test_trojan_ws_exports_use_sni_as_host_when_ws_host_is_empty(): void
+    {
+        $server = [
+            'name' => 'Trojan CF',
+            'host' => '996cloud.huhu.icu',
+            'port' => 443,
+            'protocol_settings' => [
+                'server_name' => 'null.123903.xyz',
+                'allow_insecure' => false,
+                'network' => 'ws',
+                'network_settings' => [
+                    'path' => '/answer',
+                ],
+            ],
+        ];
+
+        $clash = Clash::buildTrojan('secret', $server);
+        $clashMeta = ClashMeta::buildTrojan('secret', $server);
+        $stash = Stash::buildTrojan('secret', $server);
+        $generalUri = General::buildTrojan('secret', $server);
+        $generalQuery = [];
+        parse_str((string) parse_url(trim($generalUri), PHP_URL_QUERY), $generalQuery);
+        $shadowrocketUri = Shadowrocket::buildTrojan('secret', $server);
+
+        $this->assertSame('null.123903.xyz', $clash['ws-opts']['headers']['Host']);
+        $this->assertSame('null.123903.xyz', $clashMeta['ws-opts']['headers']['Host']);
+        $this->assertSame('null.123903.xyz', $stash['ws-opts']['headers']['Host']);
+        $this->assertSame('null.123903.xyz', $generalQuery['host']);
+        $this->assertStringContainsString('obfs-host=null.123903.xyz', $shadowrocketUri);
+    }
+
     public function test_trojan_dynamic_sni_placeholder_is_replaced_in_subscription_exports(): void
     {
         $server = [

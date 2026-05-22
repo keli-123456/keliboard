@@ -364,6 +364,7 @@ class Stash extends AbstractProtocol
         $array['port'] = $server['port'];
         $array['password'] = $password;
         $array['udp'] = true;
+        $serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'));
         switch (data_get($protocol_settings, 'network')) {
             case 'tcp':
                 $headerType = data_get($protocol_settings, 'network_settings.header.type', 'tcp');
@@ -375,12 +376,12 @@ class Stash extends AbstractProtocol
             case 'ws':
                 $array['network'] = 'ws';
                 $array['ws-opts']['path'] = data_get($protocol_settings, 'network_settings.path');
-                if ($host = data_get($protocol_settings, 'network_settings.headers.Host')) {
+                if ($host = data_get($protocol_settings, 'network_settings.headers.Host') ?: $serverName) {
                     $array['ws-opts']['headers'] = ['Host' => $host];
                 }
                 break;
         }
-        if ($serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'))) {
+        if ($serverName) {
             $array['sni'] = $serverName;
         }
         $array['skip-cert-verify'] = data_get($protocol_settings, 'allow_insecure');

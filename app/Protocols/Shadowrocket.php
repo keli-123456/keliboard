@@ -241,7 +241,8 @@ class Shadowrocket extends AbstractProtocol
         $protocol_settings = $server['protocol_settings'];
         $name = rawurlencode($server['name']);
         $params['allowInsecure'] = data_get($protocol_settings, 'allow_insecure');
-        if ($serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'))) {
+        $serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'));
+        if ($serverName) {
             $params['peer'] = $serverName;
         }
         switch (data_get($protocol_settings, 'network')) {
@@ -250,7 +251,7 @@ class Shadowrocket extends AbstractProtocol
                 $params['path'] = data_get($protocol_settings, 'network_settings.serviceName');
                 break;
             case 'ws':
-                $host = data_get($protocol_settings, 'network_settings.headers.Host');
+                $host = data_get($protocol_settings, 'network_settings.headers.Host') ?: $serverName;
                 $path = data_get($protocol_settings, 'network_settings.path');
                 $params['plugin'] = "obfs-local;obfs=websocket;obfs-host={$host};obfs-uri={$path}";
                 break;

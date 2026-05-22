@@ -227,7 +227,8 @@ class Clash extends AbstractProtocol
         $array['port'] = $server['port'];
         $array['password'] = $password;
         $array['udp'] = true;
-        if ($serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'))) {
+        $serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'));
+        if ($serverName) {
             $array['sni'] = $serverName;
         }
         $array['skip-cert-verify'] = (bool) data_get($protocol_settings, 'allow_insecure');
@@ -240,7 +241,7 @@ class Clash extends AbstractProtocol
                 $array['network'] = 'ws';
                 if ($path = data_get($protocol_settings, 'network_settings.path'))
                     $array['ws-opts']['path'] = $path;
-                if ($host = data_get($protocol_settings, 'network_settings.headers.Host'))
+                if ($host = data_get($protocol_settings, 'network_settings.headers.Host') ?: $serverName)
                     $array['ws-opts']['headers'] = ['Host' => $host];
                 break;
             case 'grpc':
