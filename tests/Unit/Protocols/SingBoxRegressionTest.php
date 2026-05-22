@@ -34,6 +34,11 @@ final class SingBoxRegressionTest extends TestCase
             {
                 return $this->buildNaive($password, $server);
             }
+
+            public function buildAnyTlsForTest(string $password, array $server): array
+            {
+                return $this->buildAnyTLS($password, $server);
+            }
         };
     }
 
@@ -248,5 +253,34 @@ final class SingBoxRegressionTest extends TestCase
         $this->assertSame('naive', $outbound['type']);
         $this->assertSame('Naive TCP', $selector['default']);
         $this->assertContains('Naive TCP', $selector['outbounds']);
+    }
+
+    public function test_singbox_build_anytls_reality_exports_shared_tls_reality_fields(): void
+    {
+        $protocol = $this->makeProtocol();
+
+        $config = $protocol->buildAnyTlsForTest('user-password', [
+            'name' => 'AnyTLS Reality',
+            'host' => 'anytls.example.com',
+            'port' => 8443,
+            'protocol_settings' => [
+                'tls_mode' => 2,
+                'reality_settings' => [
+                    'server_name' => 'addons.mozilla.org',
+                    'public_key' => 'pubkey123',
+                    'short_id' => 'a1b2c3d4',
+                ],
+                'client_fingerprint' => 'chrome',
+            ],
+        ]);
+
+        $this->assertSame('anytls', $config['type']);
+        $this->assertSame('addons.mozilla.org', $config['tls']['server_name']);
+        $this->assertSame([
+            'enabled' => true,
+            'public_key' => 'pubkey123',
+            'short_id' => 'a1b2c3d4',
+        ], $config['tls']['reality']);
+        $this->assertSame('chrome', $config['tls']['utls']['fingerprint']);
     }
 }

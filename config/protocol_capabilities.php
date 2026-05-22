@@ -44,7 +44,7 @@ return [
 
     'clients' => [
         'sing-box' => [
-            'aliases' => ['sing-box', 'hiddify', 'hiddifynext', 'sfm', 'karing'],
+            'aliases' => ['sing-box', 'hiddify', 'hiddifynext', 'sfm', 'karing', 'sparkle'],
             'version_kind' => 'semver',
             'unknown_version_policy' => 'conservative',
             'protocols' => ['shadowsocks', 'trojan', 'vmess', 'vless', 'hysteria', 'tuic', 'anytls', 'socks', 'naive', 'http'],
@@ -88,7 +88,7 @@ return [
                     ['when' => ['feature' => 'alpn'], 'min_version' => '1.12.0', 'support' => 'yes'],
                     ['when' => ['feature' => 'client_fingerprint'], 'min_version' => '1.12.0', 'support' => 'yes'],
                     ['when' => ['feature' => 'idle_session'], 'min_version' => '1.12.0', 'support' => 'yes'],
-                    ['when' => ['tls_mode' => 2], 'support' => 'unknown'],
+                    ['when' => ['tls_mode' => 2], 'min_version' => '1.12.0', 'support' => 'yes'],
                 ],
                 'hysteria' => [
                     ['when' => ['version' => 1], 'min_version' => '1.5.0', 'support' => 'yes'],

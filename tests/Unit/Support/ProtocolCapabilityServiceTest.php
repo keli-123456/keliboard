@@ -31,6 +31,7 @@ final class ProtocolCapabilityServiceTest extends TestCase
     public function test_resolve_client_family_maps_karing_to_sing_box(): void
     {
         $this->assertSame('sing-box', $this->service->resolveClientFamily('karing'));
+        $this->assertSame('sing-box', $this->service->resolveClientFamily('sparkle'));
     }
 
     public function test_sing_box_before_1_12_drops_anytls(): void
@@ -120,6 +121,22 @@ final class ProtocolCapabilityServiceTest extends TestCase
 
         $this->assertFalse($result->supported);
         $this->assertSame('drop', $result->action);
+    }
+
+    public function test_sing_box_keeps_anytls_reality(): void
+    {
+        $server = $this->makeServer('anytls', [
+            'tls_mode' => 2,
+            'reality_settings' => [
+                'server_name' => 'example.com',
+                'public_key' => 'pk',
+                'short_id' => 'aa',
+            ],
+        ]);
+
+        $result = $this->service->supportsClient('sing-box', '1.12.0', $server);
+
+        $this->assertTrue($result->supported);
     }
 
     public function test_sing_box_drops_anytls_custom_transport(): void

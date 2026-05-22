@@ -8,7 +8,7 @@ use App\Models\Server;
 
 class SingBox extends AbstractProtocol
 {
-    public $flags = ['sing-box', 'hiddify', 'hiddifynext', 'sfm', 'karing'];
+    public $flags = ['sing-box', 'hiddify', 'hiddifynext', 'sfm', 'karing', 'sparkle'];
     public $allowedProtocols = [
         Server::TYPE_SHADOWSOCKS,
         Server::TYPE_TROJAN,
@@ -615,6 +615,14 @@ class SingBox extends AbstractProtocol
 
         if ($serverName = Helper::resolveAnyTlsServerName($protocol_settings)) {
             $array['tls']['server_name'] = $serverName;
+        }
+
+        if ((int) data_get($protocol_settings, 'tls_mode', 1) === 2) {
+            $array['tls']['reality'] = array_filter([
+                'enabled' => true,
+                'public_key' => data_get($protocol_settings, 'reality_settings.public_key'),
+                'short_id' => data_get($protocol_settings, 'reality_settings.short_id'),
+            ], fn ($value) => !is_null($value) && $value !== '');
         }
 
         if ($alpn = data_get($protocol_settings, 'alpn')) {

@@ -26,6 +26,7 @@ final class ProtocolManagerTest extends TestCase
         $this->assertSame(SingBox::class, $manager->matchProtocolClassName('singbox/1.12.0'));
         $this->assertSame(SingBox::class, $manager->matchProtocolClassName('Karing/1.2.8.1103'));
         $this->assertSame(SingBox::class, $manager->matchProtocolClassName('Hiddify/1.2.8.1103'));
+        $this->assertSame(SingBox::class, $manager->matchProtocolClassName('Sparkle/1.2.8.1103'));
         $this->assertSame(ClashMeta::class, $manager->matchProtocolClassName('ClashXMeta/1.3.5'));
         $this->assertSame(ClashMeta::class, $manager->matchProtocolClassName('mihomo/1.19.0'));
         $this->assertSame(ClashMeta::class, $manager->matchProtocolClassName('clash-meta/1.18.7'));
@@ -46,6 +47,7 @@ final class ProtocolManagerTest extends TestCase
         $this->assertSame('sing-box', $manager->matchClientFlag('singbox'));
         $this->assertSame('karing', $manager->matchClientFlag('Karing/1.2.8.1103'));
         $this->assertSame('hiddify', $manager->matchClientFlag('Hiddify/1.2.8.1103'));
+        $this->assertSame('sparkle', $manager->matchClientFlag('Sparkle/1.2.8.1103'));
         $this->assertSame('mihomo', $manager->matchClientFlag('mihomo'));
         $this->assertSame('clash-meta', $manager->matchClientFlag('clash-meta'));
         $this->assertSame('clashx meta', $manager->matchClientFlag('clashxmeta'));
@@ -66,6 +68,7 @@ final class ProtocolManagerTest extends TestCase
         $this->assertSame('1.12.0', $manager->extractClientVersion('singbox 1.12.0', 'sing-box'));
         $this->assertSame('1.2.8.1103', $manager->extractClientVersion('sing-box/1.2.8.1103', 'sing-box'));
         $this->assertSame('1.2.8.1103', $manager->extractClientVersion('Karing/1.2.8.1103', 'karing'));
+        $this->assertSame('1.2.8.1103', $manager->extractClientVersion('Sparkle/1.2.8.1103', 'sparkle'));
         $this->assertSame('1.3.5', $manager->extractClientVersion('ClashX Meta/1.3.5', 'clashx meta'));
         $this->assertSame('1.19.0', $manager->extractClientVersion('mihomo/1.19.0', 'mihomo'));
         $this->assertSame('1.18.7', $manager->extractClientVersion('clash-meta/1.18.7', 'clash-meta'));
