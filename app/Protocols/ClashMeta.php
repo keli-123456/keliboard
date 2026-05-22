@@ -369,6 +369,7 @@ class ClashMeta extends AbstractProtocol
             'port' => $server['port'],
             'password' => $password,
             'udp' => true,
+            'ip-version' => 'ipv4-prefer',
             'skip-cert-verify' => (bool) data_get($protocol_settings, 'allow_insecure', false)
         ];
         $serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'));

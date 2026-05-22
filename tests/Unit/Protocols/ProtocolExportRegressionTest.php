@@ -1395,6 +1395,7 @@ final class ProtocolExportRegressionTest extends TestCase
 
         $this->assertSame('null.123903.xyz', $clash['ws-opts']['headers']['Host']);
         $this->assertSame('null.123903.xyz', $clashMeta['ws-opts']['headers']['Host']);
+        $this->assertSame('ipv4-prefer', $clashMeta['ip-version']);
         $this->assertSame('null.123903.xyz', $stash['ws-opts']['headers']['Host']);
         $this->assertSame('null.123903.xyz', $generalQuery['host']);
         $this->assertStringContainsString('obfs-host=null.123903.xyz', $shadowrocketUri);
