@@ -101,6 +101,27 @@ final class SingBoxRegressionTest extends TestCase
         $this->assertArrayNotHasKey('early_data_header_name', $config['transport']);
     }
 
+    public function test_singbox_build_trojan_ws_reuses_dynamic_sni_as_host(): void
+    {
+        $protocol = $this->makeProtocol();
+
+        $config = $protocol->buildTrojanForTest('secret', [
+            'name' => 'Trojan Dynamic WS',
+            'host' => 'edge.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'server_name' => 'null.example.com',
+                'network' => 'ws',
+                'network_settings' => [
+                    'path' => '/music',
+                ],
+            ],
+        ]);
+
+        $this->assertMatchesRegularExpression('/^\d{6}\.example\.com$/', $config['tls']['server_name']);
+        $this->assertSame($config['tls']['server_name'], $config['transport']['headers']['Host']);
+    }
+
     public function test_singbox_full_app_config_keeps_auto_select_default(): void
     {
         $servers = [

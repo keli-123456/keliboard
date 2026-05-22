@@ -443,6 +443,7 @@ class SingBox extends AbstractProtocol
     protected function buildTrojan($password, $server)
     {
         $protocol_settings = $server['protocol_settings'];
+        $serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'));
         $array = [
             'tag' => $server['name'],
             'type' => 'trojan',
@@ -454,7 +455,7 @@ class SingBox extends AbstractProtocol
                 'insecure' => (bool) data_get($protocol_settings, 'allow_insecure', false),
             ]
         ];
-        if ($serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'))) {
+        if ($serverName) {
             $array['tls']['server_name'] = $serverName;
         }
         $transport = match (data_get($protocol_settings, 'network')) {
@@ -464,7 +465,7 @@ class SingBox extends AbstractProtocol
             ],
             'ws' => $this->buildWebSocketTransport(
                 $protocol_settings,
-                Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'))
+                $serverName
             ),
             default => null
         };
