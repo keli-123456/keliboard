@@ -131,7 +131,7 @@ final class ClientControllerTest extends TestCase
             'name' => 'hiddify',
             'version' => '1.2.8.1103',
         ]));
-        $this->assertTrue($method->invoke($controller, [
+        $this->assertFalse($method->invoke($controller, [
             'name' => 'sparkle',
             'version' => '1.2.8.1103',
         ]));

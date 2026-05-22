@@ -44,7 +44,7 @@ return [
 
     'clients' => [
         'sing-box' => [
-            'aliases' => ['sing-box', 'hiddify', 'hiddifynext', 'sfm', 'karing', 'sparkle'],
+            'aliases' => ['sing-box', 'hiddify', 'hiddifynext', 'sfm', 'karing'],
             'version_kind' => 'semver',
             'unknown_version_policy' => 'conservative',
             'protocols' => ['shadowsocks', 'trojan', 'vmess', 'vless', 'hysteria', 'tuic', 'anytls', 'socks', 'naive', 'http'],
@@ -108,7 +108,7 @@ return [
         ],
 
         'mihomo' => [
-            'aliases' => ['meta', 'mihomo', 'clashmeta', 'clash-meta', 'verge', 'flclash', 'nekobox', 'nekoray', 'clashmetaforandroid', 'clashx meta', 'clashxmeta'],
+            'aliases' => ['meta', 'mihomo', 'clashmeta', 'clash-meta', 'verge', 'flclash', 'nekobox', 'nekoray', 'sparkle', 'clashmetaforandroid', 'clashx meta', 'clashxmeta'],
             'version_kind' => 'semver',
             'unknown_version_policy' => 'conservative',
             'protocols' => ['shadowsocks', 'vmess', 'trojan', 'vless', 'hysteria', 'tuic', 'anytls', 'socks', 'http', 'mieru'],

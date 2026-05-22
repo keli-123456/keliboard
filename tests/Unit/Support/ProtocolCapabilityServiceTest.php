@@ -26,12 +26,12 @@ final class ProtocolCapabilityServiceTest extends TestCase
         $this->assertSame('mihomo', $this->service->resolveClientFamily('clashx meta'));
         $this->assertSame('mihomo', $this->service->resolveClientFamily('mihomo'));
         $this->assertSame('mihomo', $this->service->resolveClientFamily('clashmeta'));
+        $this->assertSame('mihomo', $this->service->resolveClientFamily('sparkle'));
     }
 
     public function test_resolve_client_family_maps_karing_to_sing_box(): void
     {
         $this->assertSame('sing-box', $this->service->resolveClientFamily('karing'));
-        $this->assertSame('sing-box', $this->service->resolveClientFamily('sparkle'));
     }
 
     public function test_sing_box_before_1_12_drops_anytls(): void
@@ -117,7 +117,7 @@ final class ProtocolCapabilityServiceTest extends TestCase
             ],
         ]);
 
-        $result = $this->service->supportsClient('meta', '1.20.0', $server);
+        $result = $this->service->supportsClient('sparkle', '1.2.8.1103', $server);
 
         $this->assertFalse($result->supported);
         $this->assertSame('drop', $result->action);

@@ -26,7 +26,7 @@ final class ProtocolManagerTest extends TestCase
         $this->assertSame(SingBox::class, $manager->matchProtocolClassName('singbox/1.12.0'));
         $this->assertSame(SingBox::class, $manager->matchProtocolClassName('Karing/1.2.8.1103'));
         $this->assertSame(SingBox::class, $manager->matchProtocolClassName('Hiddify/1.2.8.1103'));
-        $this->assertSame(SingBox::class, $manager->matchProtocolClassName('Sparkle/1.2.8.1103'));
+        $this->assertSame(ClashMeta::class, $manager->matchProtocolClassName('Sparkle/1.2.8.1103'));
         $this->assertSame(ClashMeta::class, $manager->matchProtocolClassName('ClashXMeta/1.3.5'));
         $this->assertSame(ClashMeta::class, $manager->matchProtocolClassName('mihomo/1.19.0'));
         $this->assertSame(ClashMeta::class, $manager->matchProtocolClassName('clash-meta/1.18.7'));
