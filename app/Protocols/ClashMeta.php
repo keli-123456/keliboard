@@ -369,7 +369,6 @@ class ClashMeta extends AbstractProtocol
             'port' => $server['port'],
             'password' => $password,
             'udp' => true,
-            'ip-version' => 'ipv4-prefer',
             'skip-cert-verify' => (bool) data_get($protocol_settings, 'allow_insecure', false)
         ];
         $serverName = Helper::resolveDynamicHostname(data_get($protocol_settings, 'server_name'));
@@ -385,7 +384,7 @@ class ClashMeta extends AbstractProtocol
                 $array['network'] = 'ws';
                 if ($path = data_get($protocol_settings, 'network_settings.path'))
                     $array['ws-opts']['path'] = $path;
-                if ($host = data_get($protocol_settings, 'network_settings.headers.Host') ?: $serverName)
+                if ($host = data_get($protocol_settings, 'network_settings.headers.Host'))
                     $array['ws-opts']['headers'] = ['Host' => $host];
                 break;
             case 'grpc':

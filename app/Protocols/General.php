@@ -203,7 +203,7 @@ class General extends AbstractProtocol
                 $array['type'] = 'ws';
                 if ($path = data_get($protocol_settings, 'network_settings.path'))
                     $array['path'] = $path;
-                if ($host = data_get($protocol_settings, 'network_settings.headers.Host') ?: $serverName)
+                if ($host = data_get($protocol_settings, 'network_settings.headers.Host'))
                     $array['host'] = $host;
                 break;
             case 'grpc':

@@ -463,10 +463,7 @@ class SingBox extends AbstractProtocol
                 'type' => 'grpc',
                 'service_name' => data_get($protocol_settings, 'network_settings.serviceName')
             ],
-            'ws' => $this->buildWebSocketTransport(
-                $protocol_settings,
-                $serverName
-            ),
+            'ws' => $this->buildWebSocketTransport($protocol_settings),
             default => null
         };
         $array['transport'] = $transport;
