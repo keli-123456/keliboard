@@ -115,6 +115,60 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertSame('', QuantumultX::buildTrojan('secret', $trojan));
     }
 
+    public function test_quantumultx_build_anytls_exports_official_shape(): void
+    {
+        $server = [
+            'name' => 'QX AnyTLS',
+            'host' => 'anytls.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls_mode' => 1,
+                'network' => 'tcp',
+                'tls' => [
+                    'server_name' => 'anytls-sni.example.com',
+                    'allow_insecure' => true,
+                ],
+            ],
+        ];
+
+        $uri = QuantumultX::buildAnyTLS('secret', $server);
+
+        $this->assertStringContainsString('anytls=anytls.example.com:443', $uri);
+        $this->assertStringContainsString('password=secret', $uri);
+        $this->assertStringContainsString('over-tls=true', $uri);
+        $this->assertStringContainsString('tls-host=anytls-sni.example.com', $uri);
+        $this->assertStringContainsString('tls-verification=false', $uri);
+        $this->assertStringContainsString('udp-relay=true', $uri);
+        $this->assertStringContainsString('tag=QX AnyTLS', $uri);
+    }
+
+    public function test_quantumultx_build_anytls_reality_exports_reality_fields(): void
+    {
+        $server = [
+            'name' => 'QX AnyTLS Reality',
+            'host' => 'anytls-reality.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls_mode' => 2,
+                'network' => 'tcp',
+                'reality_settings' => [
+                    'allow_insecure' => true,
+                    'server_name' => 'reality.example.com',
+                    'public_key' => 'pubkey123',
+                    'short_id' => 'a1b2c3d4',
+                ],
+            ],
+        ];
+
+        $uri = QuantumultX::buildAnyTLS('secret', $server);
+
+        $this->assertStringContainsString('anytls=anytls-reality.example.com:443', $uri);
+        $this->assertStringContainsString('tls-host=reality.example.com', $uri);
+        $this->assertStringContainsString('reality-base64-pubkey=pubkey123', $uri);
+        $this->assertStringContainsString('reality-hex-shortid=a1b2c3d4', $uri);
+        $this->assertStringContainsString('tls-verification=false', $uri);
+    }
+
     public function test_surge_build_anytls_reads_nested_tls_fields(): void
     {
         $server = [

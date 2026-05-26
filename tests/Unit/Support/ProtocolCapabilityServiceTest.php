@@ -575,6 +575,53 @@ final class ProtocolCapabilityServiceTest extends TestCase
         $this->assertFalse($result->supported);
     }
 
+    public function test_quantumult_x_keeps_anytls_tcp_transport(): void
+    {
+        $server = $this->makeServer('anytls', [
+            'tls_mode' => 1,
+            'network' => 'tcp',
+            'tls' => [
+                'server_name' => 'anytls.example.com',
+            ],
+        ]);
+
+        $result = $this->service->supportsClient('quantumult-x', '1.0.31', $server);
+
+        $this->assertTrue($result->supported);
+    }
+
+    public function test_quantumult_x_keeps_anytls_reality_transport(): void
+    {
+        $server = $this->makeServer('anytls', [
+            'tls_mode' => 2,
+            'network' => 'tcp',
+            'reality_settings' => [
+                'server_name' => 'reality.example.com',
+                'public_key' => 'pubkey123',
+                'short_id' => 'a1b2c3d4',
+            ],
+        ]);
+
+        $result = $this->service->supportsClient('quantumult-x', '1.0.31', $server);
+
+        $this->assertTrue($result->supported);
+    }
+
+    public function test_quantumult_x_drops_anytls_custom_transport(): void
+    {
+        $server = $this->makeServer('anytls', [
+            'tls_mode' => 1,
+            'network' => 'ws',
+            'tls' => [
+                'server_name' => 'anytls.example.com',
+            ],
+        ]);
+
+        $result = $this->service->supportsClient('quantumult-x', '1.0.31', $server);
+
+        $this->assertFalse($result->supported);
+    }
+
     public function test_surge_before_required_build_drops_hysteria2(): void
     {
         $server = $this->makeServer('hysteria', [

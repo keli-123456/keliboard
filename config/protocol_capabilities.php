@@ -284,7 +284,7 @@ return [
             'aliases' => ['quantumult%20x', 'quantumult-x'],
             'version_kind' => 'semver',
             'unknown_version_policy' => 'conservative',
-            'protocols' => ['shadowsocks', 'vmess', 'vless', 'trojan'],
+            'protocols' => ['shadowsocks', 'vmess', 'vless', 'trojan', 'anytls'],
             'supports' => [
                 'vmess' => [
                     ['when' => ['network' => ['tcp', 'ws', null]], 'support' => 'yes'],
@@ -298,6 +298,11 @@ return [
                 'trojan' => [
                     ['when' => ['network' => ['tcp', 'ws', null]], 'support' => 'yes'],
                     ['when' => ['network' => ['grpc', 'http', 'h2', 'httpupgrade', 'quic', 'xhttp', 'splithttp', 'kcp']], 'support' => 'no', 'reason' => 'Quantumult X only exports trojan tcp/ws'],
+                ],
+                'anytls' => [
+                    ['when' => ['network' => ['ws', 'grpc', 'httpupgrade', 'xhttp', 'splithttp']], 'support' => 'no', 'reason' => 'Quantumult X only exports anytls tcp'],
+                    ['when' => ['network' => ['tcp', null]], 'support' => 'yes'],
+                    ['when' => ['tls_mode' => 2], 'support' => 'yes'],
                 ],
             ],
         ],

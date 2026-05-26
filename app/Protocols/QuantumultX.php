@@ -14,6 +14,7 @@ class QuantumultX extends AbstractProtocol
         Server::TYPE_VMESS,
         Server::TYPE_VLESS,
         Server::TYPE_TROJAN,
+        Server::TYPE_ANYTLS,
     ];
 
     public function handle()
@@ -51,6 +52,9 @@ class QuantumultX extends AbstractProtocol
                     break;
                 case Server::TYPE_TROJAN:
                     $uri .= self::buildTrojan($item['password'], $item);
+                    break;
+                case Server::TYPE_ANYTLS:
+                    $uri .= self::buildAnyTLS($item['password'], $item);
                     break;
             }
         }
@@ -271,6 +275,53 @@ class QuantumultX extends AbstractProtocol
         }
         if ($path) {
             $config[] = "obfs-uri={$path}";
+        }
+
+        $config = array_filter($config);
+        $uri = implode(',', $config);
+        $uri .= "\r\n";
+        return $uri;
+    }
+
+    public static function buildAnyTLS($password, $server)
+    {
+        $protocol_settings = data_get($server, 'protocol_settings', []);
+        $network = strtolower(trim((string) data_get($protocol_settings, 'network', 'tcp')));
+        if ($network !== '' && $network !== 'tcp') {
+            return '';
+        }
+
+        $tlsMode = (int) data_get($protocol_settings, 'tls_mode', 1);
+        if (!in_array($tlsMode, [1, 2], true)) {
+            return '';
+        }
+
+        $host = Helper::wrapIPv6($server['host']);
+        $config = [
+            "anytls={$host}:{$server['port']}",
+            "password={$password}",
+            'over-tls=true',
+            'tls-verification=true',
+            'udp-relay=true',
+            "tag={$server['name']}",
+        ];
+
+        $serverName = Helper::resolveAnyTlsServerName($protocol_settings);
+        if ($serverName !== '') {
+            $config[] = "tls-host={$serverName}";
+        }
+
+        if (Helper::resolveAnyTlsAllowInsecure($protocol_settings)) {
+            $config[3] = 'tls-verification=false';
+        }
+
+        if ($tlsMode === 2) {
+            if ($publicKey = data_get($protocol_settings, 'reality_settings.public_key')) {
+                $config[] = "reality-base64-pubkey={$publicKey}";
+            }
+            if ($shortId = data_get($protocol_settings, 'reality_settings.short_id')) {
+                $config[] = "reality-hex-shortid={$shortId}";
+            }
         }
 
         $config = array_filter($config);

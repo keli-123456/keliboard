@@ -229,6 +229,7 @@ class ManageController extends Controller
                         'stash' => 'block',
                         'sing-box' => 'partial',
                         'shadowrocket' => 'partial',
+                        'quantumult-x' => 'partial',
                     ],
                     'message' => 'Mihomo 不支持 AnyTLS + Reality',
                 ],
@@ -389,6 +390,7 @@ class ManageController extends Controller
                         'stash' => 'block',
                         'sing-box' => 'block',
                         'shadowrocket' => 'block',
+                        'quantumult-x' => 'block',
                     ],
                     'message' => 'AnyTLS 自定义传输当前无法导出到主流客户端',
                 ],
@@ -533,7 +535,7 @@ class ManageController extends Controller
                     'message' => 'General / v2rayNG / v2rayN 当前不导出 AnyTLS',
                 ],
                 [
-                    'id' => 'anytls_quantumultx_loon_block',
+                    'id' => 'anytls_loon_block',
                     'type' => 'block',
                     'when' => [
                         'server_type' => Server::TYPE_ANYTLS,
@@ -542,10 +544,9 @@ class ManageController extends Controller
                         'v2node' => 'allow',
                     ],
                     'clients' => [
-                        'quantumult-x' => 'block',
                         'loon' => 'block',
                     ],
-                    'message' => 'Quantumult X / Loon 当前不导出 AnyTLS',
+                    'message' => 'Loon 当前不导出 AnyTLS',
                 ],
                 [
                     'id' => 'anytls_legacy_feature_warn',
@@ -557,11 +558,12 @@ class ManageController extends Controller
                         'v2node' => 'allow',
                     ],
                     'clients' => [
+                        'quantumult-x' => 'partial',
                         'shadowrocket' => 'partial',
                         'surge' => 'partial',
                         'surfboard' => 'partial',
                     ],
-                    'message' => 'AnyTLS 的 Reality / ALPN / uTLS 指纹 / idle-session 仅对部分客户端可导出，Shadowrocket / Surge / Surfboard 仅适合基础 TLS 形态',
+                    'message' => 'AnyTLS 的 Reality / ALPN / uTLS 指纹 / idle-session 仅对部分客户端可导出，Quantumult X / Shadowrocket / Surge / Surfboard 适合基础 TLS 或有限 Reality 形态',
                 ],
                 [
                     'id' => 'tuic_general_family_block',
