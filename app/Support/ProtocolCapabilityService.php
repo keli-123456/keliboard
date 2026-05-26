@@ -280,6 +280,9 @@ class ProtocolCapabilityService
         if (!empty($settings['alpn'])) {
             $features[] = 'alpn';
         }
+        if ((bool) data_get($settings, 'tls_settings.allow_insecure', false)) {
+            $features[] = 'allow_insecure';
+        }
         if (is_string(data_get($settings, 'client_fingerprint')) && trim((string) data_get($settings, 'client_fingerprint')) !== '') {
             $features[] = 'client_fingerprint';
         }
@@ -308,6 +311,7 @@ class ProtocolCapabilityService
             'tls_mode' => match ($type) {
                 'vless' => data_get($settings, 'tls'),
                 'anytls' => data_get($settings, 'tls_mode', 1),
+                'naive' => data_get($settings, 'tls', 1),
                 default => null,
             },
             'udp_relay_mode' => data_get($settings, 'udp_relay_mode'),

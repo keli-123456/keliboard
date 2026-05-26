@@ -798,6 +798,76 @@ final class ProtocolCapabilityServiceTest extends TestCase
         $this->assertTrue($result->supported);
     }
 
+    public function test_shadowrocket_keeps_naive_https_transport(): void
+    {
+        $server = $this->makeServer('naive', [
+            'network' => 'tcp',
+            'tls' => 1,
+            'tls_settings' => [
+                'server_name' => 'naive.example.com',
+                'allow_insecure' => false,
+            ],
+        ]);
+
+        $result = $this->service->supportsClient('shadowrocket', '2698', $server);
+
+        $this->assertTrue($result->supported);
+    }
+
+    public function test_shadowrocket_drops_naive_quic_transport(): void
+    {
+        $server = $this->makeServer('naive', [
+            'network' => 'quic',
+            'tls' => 1,
+        ]);
+
+        $result = $this->service->supportsClient('shadowrocket', '2698', $server);
+
+        $this->assertFalse($result->supported);
+    }
+
+    public function test_shadowrocket_drops_naive_without_public_tls(): void
+    {
+        $plain = $this->makeServer('naive', [
+            'network' => 'tcp',
+            'tls' => 0,
+        ]);
+        $insecure = $this->makeServer('naive', [
+            'network' => 'tcp',
+            'tls' => 1,
+            'tls_settings' => [
+                'allow_insecure' => true,
+            ],
+        ]);
+
+        $this->assertFalse($this->service->supportsClient('shadowrocket', '2698', $plain)->supported);
+        $this->assertFalse($this->service->supportsClient('shadowrocket', '2698', $insecure)->supported);
+    }
+
+    public function test_shadowrocket_keeps_mieru_after_required_build(): void
+    {
+        $server = $this->makeServer('mieru', [
+            'transport' => 'tcp',
+            'multiplexing' => 'MULTIPLEXING_LOW',
+        ]);
+
+        $result = $this->service->supportsClient('shadowrocket', '2698', $server);
+
+        $this->assertTrue($result->supported);
+    }
+
+    public function test_shadowrocket_before_required_build_drops_mieru(): void
+    {
+        $server = $this->makeServer('mieru', [
+            'transport' => 'tcp',
+            'multiplexing' => 'MULTIPLEXING_LOW',
+        ]);
+
+        $result = $this->service->supportsClient('shadowrocket', '2697', $server);
+
+        $this->assertFalse($result->supported);
+    }
+
     public function test_shadowrocket_drops_vless_splithttp_transport(): void
     {
         $server = $this->makeServer('vless', [

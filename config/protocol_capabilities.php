@@ -228,7 +228,7 @@ return [
             'aliases' => ['shadowrocket'],
             'version_kind' => 'build',
             'unknown_version_policy' => 'conservative',
-            'protocols' => ['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria', 'tuic', 'anytls', 'socks'],
+            'protocols' => ['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria', 'tuic', 'anytls', 'socks', 'naive', 'mieru'],
             'supports' => [
                 'vless' => [
                     ['when' => ['network' => ['tcp', 'ws', 'grpc', 'kcp', 'httpupgrade', 'xhttp']], 'support' => 'yes'],
@@ -254,6 +254,15 @@ return [
                     ['when' => ['feature' => 'zero_rtt_handshake'], 'support' => 'no', 'reason' => 'TUIC zero-RTT is not exported for shadowrocket'],
                     ['when' => ['udp_relay_mode' => 'quic'], 'support' => 'no', 'reason' => 'TUIC udp relay mode is not exported for shadowrocket'],
                     ['when' => ['congestion_control' => ['bbr', 'new_reno']], 'support' => 'no', 'reason' => 'TUIC congestion control is not exported for shadowrocket'],
+                ],
+                'naive' => [
+                    ['when' => ['tls_mode' => 0], 'support' => 'no', 'reason' => 'Shadowrocket naive subscription requires public TLS'],
+                    ['when' => ['feature' => 'allow_insecure'], 'support' => 'no', 'reason' => 'Shadowrocket naive subscription cannot express insecure TLS'],
+                    ['when' => ['network' => ['tcp', null]], 'support' => 'yes'],
+                    ['when' => ['network' => 'quic'], 'support' => 'no', 'reason' => 'Naive QUIC is not exported for shadowrocket subscriptions'],
+                ],
+                'mieru' => [
+                    ['when' => ['network' => ['tcp', 'udp']], 'min_version' => '2698', 'support' => 'yes'],
                 ],
             ],
         ],

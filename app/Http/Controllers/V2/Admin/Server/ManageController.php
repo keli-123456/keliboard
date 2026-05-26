@@ -613,6 +613,65 @@ class ManageController extends Controller
                     ],
                     'message' => 'TUIC 的 zero-RTT 以及部分高级项并非所有客户端都能完整导出；Stash 不导出 zero-RTT，Shadowrocket 不导出 zero-RTT / 非默认 congestion_control / udp_relay_mode',
                 ],
+                [
+                    'id' => 'naive_quic_shadowrocket_block',
+                    'type' => 'block',
+                    'when' => [
+                        'server_type' => Server::TYPE_NAIVE,
+                        'protocol_settings.network' => 'quic',
+                    ],
+                    'runtime' => [
+                        'v2node' => 'allow',
+                    ],
+                    'clients' => [
+                        'shadowrocket' => 'block',
+                    ],
+                    'message' => 'Shadowrocket 订阅当前仅导出 Naive HTTPS，不导出 Naive QUIC',
+                ],
+                [
+                    'id' => 'naive_shadowrocket_public_tls_block',
+                    'type' => 'block',
+                    'when' => [
+                        'server_type' => Server::TYPE_NAIVE,
+                        'protocol_settings.tls' => 0,
+                    ],
+                    'runtime' => [
+                        'v2node' => 'allow',
+                    ],
+                    'clients' => [
+                        'shadowrocket' => 'block',
+                    ],
+                    'message' => 'Shadowrocket 的 Naive 订阅导出要求公开 TLS',
+                ],
+                [
+                    'id' => 'naive_shadowrocket_insecure_tls_block',
+                    'type' => 'block',
+                    'when' => [
+                        'server_type' => Server::TYPE_NAIVE,
+                        'protocol_settings.tls_settings.allow_insecure' => true,
+                    ],
+                    'runtime' => [
+                        'v2node' => 'allow',
+                    ],
+                    'clients' => [
+                        'shadowrocket' => 'block',
+                    ],
+                    'message' => 'Shadowrocket 的 Naive 订阅导出不表达跳过证书校验',
+                ],
+                [
+                    'id' => 'mieru_shadowrocket_version_warn',
+                    'type' => 'warn',
+                    'when' => [
+                        'server_type' => Server::TYPE_MIERU,
+                    ],
+                    'runtime' => [
+                        'v2node' => 'allow',
+                    ],
+                    'clients' => [
+                        'shadowrocket' => 'partial',
+                    ],
+                    'message' => 'Shadowrocket 的 Mieru 订阅导入按较新版本处理，旧版客户端不会下发',
+                ],
             ],
         ]);
     }

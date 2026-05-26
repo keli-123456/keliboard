@@ -18,11 +18,14 @@ class Shadowrocket extends AbstractProtocol
         Server::TYPE_TUIC,
         Server::TYPE_ANYTLS,
         Server::TYPE_SOCKS,
+        Server::TYPE_NAIVE,
+        Server::TYPE_MIERU,
     ];
 
     protected $protocolRequirements = [
         'shadowrocket.hysteria.protocol_settings.version' => [2 => '1993'],
         'shadowrocket.anytls.base_version' => '2592',
+        'shadowrocket.mieru.base_version' => '2698',
     ];
 
     public function handle()
@@ -61,6 +64,12 @@ class Shadowrocket extends AbstractProtocol
             }
             if ($item['type'] === Server::TYPE_SOCKS) {
                 $uri .= self::buildSocks($item['password'], $item);
+            }
+            if ($item['type'] === Server::TYPE_NAIVE) {
+                $uri .= self::buildNaive($item['password'], $item);
+            }
+            if ($item['type'] === Server::TYPE_MIERU) {
+                $uri .= self::buildMieru($item['password'], $item);
             }
         }
         return response(base64_encode($uri))
@@ -355,6 +364,54 @@ class Shadowrocket extends AbstractProtocol
         $uri = "anytls://{$password}@{$server['host']}:{$server['port']}?{$query}#{$name}";
         $uri .= "\r\n";
         return $uri;
+    }
+
+    public static function buildNaive($password, $server)
+    {
+        $protocol_settings = data_get($server, 'protocol_settings', []);
+        $network = strtolower(trim((string) data_get($protocol_settings, 'network', 'tcp')));
+        if ($network !== '' && $network !== 'tcp') {
+            return '';
+        }
+
+        if ((int) data_get($protocol_settings, 'tls', 1) !== 1) {
+            return '';
+        }
+
+        if ((bool) data_get($protocol_settings, 'tls_settings.allow_insecure', false)) {
+            return '';
+        }
+
+        $host = Helper::wrapIPv6($server['host']);
+        $userinfo = rawurlencode((string) $password) . ':' . rawurlencode((string) $password);
+        $name = rawurlencode($server['name']);
+
+        return "naive+https://{$userinfo}@{$host}:{$server['port']}?padding=false#{$name}\r\n";
+    }
+
+    public static function buildMieru($password, $server)
+    {
+        $protocol_settings = data_get($server, 'protocol_settings', []);
+        $transport = strtoupper(trim((string) data_get($protocol_settings, 'transport', 'TCP')));
+        if (!in_array($transport, ['TCP', 'UDP'], true)) {
+            return '';
+        }
+
+        $host = Helper::wrapIPv6($server['host']);
+        $port = trim((string) data_get($server, 'ports', ''));
+        if ($port === '') {
+            $port = (string) $server['port'];
+        }
+
+        $query = http_build_query([
+            'profile' => $server['name'],
+            'multiplexing' => data_get($protocol_settings, 'multiplexing', 'MULTIPLEXING_LOW'),
+            'port' => $port,
+            'protocol' => $transport,
+        ], '', '&', PHP_QUERY_RFC3986);
+        $userinfo = rawurlencode((string) $password) . ':' . rawurlencode((string) $password);
+
+        return "mierus://{$userinfo}@{$host}?{$query}\r\n";
     }
 
     public static function buildSocks($password, $server)

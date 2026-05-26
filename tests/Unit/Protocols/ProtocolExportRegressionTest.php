@@ -787,6 +787,88 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertStringContainsString('insecure=1', $anytls);
     }
 
+    public function test_shadowrocket_build_naive_exports_https_uri(): void
+    {
+        $uri = Shadowrocket::buildNaive('user-uuid', [
+            'name' => 'SR Naive',
+            'host' => 'naive.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'network' => 'tcp',
+                'tls' => 1,
+                'tls_settings' => [
+                    'server_name' => 'naive.example.com',
+                    'allow_insecure' => false,
+                ],
+            ],
+        ]);
+
+        $this->assertSame("naive+https://user-uuid:user-uuid@naive.example.com:443?padding=false#SR%20Naive\r\n", $uri);
+    }
+
+    public function test_shadowrocket_skips_unsupported_naive_modes(): void
+    {
+        $quic = [
+            'name' => 'SR Naive QUIC',
+            'host' => 'naive-quic.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'network' => 'quic',
+                'tls' => 1,
+            ],
+        ];
+        $insecure = [
+            'name' => 'SR Naive Insecure',
+            'host' => 'naive-insecure.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'network' => 'tcp',
+                'tls' => 1,
+                'tls_settings' => [
+                    'allow_insecure' => true,
+                ],
+            ],
+        ];
+
+        $this->assertSame('', Shadowrocket::buildNaive('user-uuid', $quic));
+        $this->assertSame('', Shadowrocket::buildNaive('user-uuid', $insecure));
+    }
+
+    public function test_shadowrocket_build_mieru_exports_simple_share_uri(): void
+    {
+        $uri = Shadowrocket::buildMieru('user-uuid', [
+            'name' => 'SR Mieru',
+            'host' => 'mieru.example.com',
+            'port' => 2999,
+            'protocol_settings' => [
+                'transport' => 'tcp',
+                'multiplexing' => 'MULTIPLEXING_MIDDLE',
+            ],
+        ]);
+
+        $this->assertSame(
+            "mierus://user-uuid:user-uuid@mieru.example.com?profile=SR%20Mieru&multiplexing=MULTIPLEXING_MIDDLE&port=2999&protocol=TCP\r\n",
+            $uri
+        );
+    }
+
+    public function test_shadowrocket_build_mieru_exports_port_range(): void
+    {
+        $uri = Shadowrocket::buildMieru('user-uuid', [
+            'name' => 'SR Mieru Range',
+            'host' => 'mieru-range.example.com',
+            'port' => 2999,
+            'ports' => '2090-2099',
+            'protocol_settings' => [
+                'transport' => 'udp',
+                'multiplexing' => 'MULTIPLEXING_LOW',
+            ],
+        ]);
+
+        $this->assertStringContainsString('port=2090-2099', $uri);
+        $this->assertStringContainsString('protocol=UDP', $uri);
+    }
+
     public function test_clashmeta_build_vless_reality_exports_meta_specific_fields(): void
     {
         $config = ClashMeta::buildVless('user-uuid', [
