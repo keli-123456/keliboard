@@ -167,7 +167,12 @@ class LoginService
         }
 
         // 验证邮箱验证码
-        if ((string) Cache::get(CacheKey::get('EMAIL_VERIFY_CODE', $email)) !== (string) $emailCode) {
+        $cachedEmailCode = Cache::get(CacheKey::get('EMAIL_VERIFY_CODE', $email));
+        if (
+            preg_match('/^\d{6}$/', $emailCode) !== 1
+            || !is_scalar($cachedEmailCode)
+            || !hash_equals((string) $cachedEmailCode, $emailCode)
+        ) {
             Cache::put($forgetRequestLimitKey, $forgetRequestLimit ? $forgetRequestLimit + 1 : 1, 300);
             return [false, [400, __('Incorrect email verification code')]];
         }

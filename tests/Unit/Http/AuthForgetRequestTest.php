@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Http;
 
 use App\Http\Requests\Passport\AuthForget;
+use App\Http\Requests\Passport\AuthRegister;
 use Illuminate\Translation\ArrayLoader;
 use Illuminate\Translation\Translator;
 use Illuminate\Validation\Factory as ValidatorFactory;
@@ -33,6 +34,41 @@ final class AuthForgetRequestTest extends TestCase
     public function test_forget_password_accepts_six_digit_email_code(): void
     {
         $request = AuthForget::create('/api/v1/passport/auth/forget', 'POST', [
+            'email' => 'user@example.com',
+            'password' => 'new-password',
+            'email_code' => '123456',
+        ]);
+
+        $validator = $this->validatorFactory()->make(
+            $request->all(),
+            $request->rules(),
+            $request->messages()
+        );
+
+        $this->assertTrue($validator->passes());
+    }
+
+    public function test_register_rejects_boolean_email_code_when_present(): void
+    {
+        $request = AuthRegister::create('/api/v1/passport/auth/register', 'POST', [
+            'email' => 'user@example.com',
+            'password' => 'new-password',
+            'email_code' => false,
+        ]);
+
+        $validator = $this->validatorFactory()->make(
+            $request->all(),
+            $request->rules(),
+            $request->messages()
+        );
+
+        $this->assertFalse($validator->passes());
+        $this->assertTrue($validator->errors()->has('email_code'));
+    }
+
+    public function test_register_accepts_six_digit_email_code_when_present(): void
+    {
+        $request = AuthRegister::create('/api/v1/passport/auth/register', 'POST', [
             'email' => 'user@example.com',
             'password' => 'new-password',
             'email_code' => '123456',

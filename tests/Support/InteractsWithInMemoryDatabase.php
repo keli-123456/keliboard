@@ -165,6 +165,8 @@ trait InteractsWithInMemoryDatabase
             $table->increments('id');
             $table->string('email')->nullable();
             $table->string('password')->nullable();
+            $table->string('password_algo')->nullable();
+            $table->string('password_salt')->nullable();
             $table->string('token')->nullable();
             $table->string('uuid')->nullable();
             $table->integer('invite_user_id')->nullable();
