@@ -106,7 +106,10 @@ class ProtocolCapabilityService
 
             $support = $rule['support'] ?? 'unknown';
             $minVersion = $rule['min_version'] ?? null;
-            if ($minVersion !== null) {
+            if (
+                $minVersion !== null
+                && !$this->shouldBypassCoreMinVersion($family, $normalizedClientName, $clientVersion, $clientConfig)
+            ) {
                 $compare = $this->compareVersion(
                     (string) ($clientConfig['version_kind'] ?? 'semver'),
                     $clientVersion,
@@ -370,5 +373,32 @@ class ProtocolCapabilityService
             'build' => ((int) $actual) <=> ((int) $required),
             default => version_compare($actual, $required),
         };
+    }
+
+    protected function shouldBypassCoreMinVersion(
+        string $family,
+        ?string $clientName,
+        ?string $clientVersion,
+        array $clientConfig
+    ): bool {
+        if (!is_string($clientName) || $clientName === '') {
+            return false;
+        }
+
+        if (!is_string($clientVersion) || $clientVersion === '') {
+            return false;
+        }
+
+        if (preg_match('/^\d+(?:\.\d+){3,}$/', $clientVersion) !== 1) {
+            return false;
+        }
+
+        $wrappers = $clientConfig['core_version_wrappers'] ?? [];
+        if (!is_array($wrappers)) {
+            return false;
+        }
+
+        return in_array($clientName, $wrappers, true)
+            || ($family === 'sing-box' && $clientName === 'sing-box');
     }
 }

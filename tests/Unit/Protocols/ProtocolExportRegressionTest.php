@@ -325,6 +325,87 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertSame('/h2', $config['h2-opts']['path']);
     }
 
+    public function test_clashmeta_keeps_vless_xhttp_for_supported_core_version(): void
+    {
+        $protocol = new class([], [[
+            'name' => 'Mihomo XHTTP',
+            'type' => Server::TYPE_VLESS,
+            'host' => 'xhttp.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 1,
+                'network' => 'xhttp',
+            ],
+        ]], 'mihomo', '1.19.22') extends ClashMeta {
+            public function exposeServers(): array
+            {
+                return $this->servers;
+            }
+
+            public function handle()
+            {
+                return $this->servers;
+            }
+        };
+
+        $this->assertCount(1, $protocol->exposeServers());
+    }
+
+    public function test_clashmeta_filters_vless_xhttp_for_old_core_version(): void
+    {
+        $protocol = new class([], [[
+            'name' => 'Old Mihomo XHTTP',
+            'type' => Server::TYPE_VLESS,
+            'host' => 'xhttp-old.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 1,
+                'network' => 'xhttp',
+            ],
+        ]], 'mihomo', '1.19.21') extends ClashMeta {
+            public function exposeServers(): array
+            {
+                return $this->servers;
+            }
+
+            public function handle()
+            {
+                return $this->servers;
+            }
+        };
+
+        $this->assertSame([], $protocol->exposeServers());
+    }
+
+    public function test_clashmeta_build_vless_xhttp_exports_xhttp_opts(): void
+    {
+        $config = ClashMeta::buildVless('user-uuid', [
+            'name' => 'Mihomo XHTTP',
+            'host' => 'xhttp.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'tls' => 1,
+                'network' => 'xhttp',
+                'tls_settings' => [
+                    'server_name' => 'xhttp-sni.example.com',
+                ],
+                'network_settings' => [
+                    'path' => '/xhttp',
+                    'host' => 'cdn.xhttp.example.com',
+                    'headers' => [
+                        'X-Test' => '1',
+                    ],
+                ],
+            ],
+        ]);
+
+        $this->assertSame('vless', $config['type']);
+        $this->assertSame('xhttp', $config['network']);
+        $this->assertSame('/xhttp', $config['xhttp-opts']['path']);
+        $this->assertSame('cdn.xhttp.example.com', $config['xhttp-opts']['host']);
+        $this->assertSame(['X-Test' => '1'], $config['xhttp-opts']['headers']);
+    }
+
     public function test_stash_build_hysteria_marks_version_two_as_hysteria2(): void
     {
         $config = Stash::buildHysteria('secret', [

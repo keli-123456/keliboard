@@ -139,7 +139,7 @@ abstract class AbstractProtocol
             if (blank($this->clientVersion)) {
                 return false;
             }
-            if (version_compare($this->clientVersion, $baseVersion, '<') && !$this->shouldBypassSingBoxVersionCheck()) {
+            if (version_compare($this->clientVersion, $baseVersion, '<') && !$this->shouldBypassCoreVersionCheck()) {
                 return false;
             }
         }
@@ -168,7 +168,7 @@ abstract class AbstractProtocol
                     if ($requiredVersion !== '0.0.0') {
                         if (
                             blank($this->clientVersion)
-                            || (version_compare($this->clientVersion, $requiredVersion, '<') && !$this->shouldBypassSingBoxVersionCheck())
+                            || (version_compare($this->clientVersion, $requiredVersion, '<') && !$this->shouldBypassCoreVersionCheck())
                         ) {
                             return false;
                         }
@@ -193,7 +193,7 @@ abstract class AbstractProtocol
             if ($requiredVersion !== '0.0.0') {
                 if (
                     blank($this->clientVersion)
-                    || (version_compare($this->clientVersion, $requiredVersion, '<') && !$this->shouldBypassSingBoxVersionCheck())
+                    || (version_compare($this->clientVersion, $requiredVersion, '<') && !$this->shouldBypassCoreVersionCheck())
                 ) {
                     return false;
                 }
@@ -203,19 +203,23 @@ abstract class AbstractProtocol
         return true;
     }
 
-    protected function shouldBypassSingBoxVersionCheck(): bool
+    protected function shouldBypassCoreVersionCheck(): bool
     {
-        if ($this->clientName !== 'sing-box') {
-            return false;
-        }
-
         if (!is_string($this->clientVersion) || $this->clientVersion === '') {
             return false;
         }
 
-        // Some wrapper apps reuse the sing-box UA but expose their own four-part app build
-        // version, e.g. 1.2.8.1103. These are not comparable to sing-box core semver gates.
-        return preg_match('/^\d+(?:\.\d+){3,}$/', $this->clientVersion) === 1;
+        if (preg_match('/^\d+(?:\.\d+){3,}$/', $this->clientVersion) !== 1) {
+            return false;
+        }
+
+        $family = app()->bound('protocols.capabilities')
+            ? app('protocols.capabilities')->resolveClientFamily($this->clientName)
+            : null;
+
+        return $this->clientName === 'sing-box'
+            || $family === 'sing-box'
+            || in_array($this->clientName, ['sparkle'], true);
     }
 
     /**

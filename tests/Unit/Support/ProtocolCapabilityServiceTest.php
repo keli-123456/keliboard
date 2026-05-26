@@ -139,6 +139,35 @@ final class ProtocolCapabilityServiceTest extends TestCase
         $this->assertTrue($result->supported);
     }
 
+    public function test_sing_box_wrapper_app_build_versions_do_not_block_core_features(): void
+    {
+        $anytls = $this->makeServer('anytls', [
+            'tls_mode' => 1,
+            'tls' => ['server_name' => 'example.com'],
+        ]);
+        $naive = $this->makeServer('naive', [
+            'network' => 'tcp',
+            'tls' => 1,
+        ]);
+
+        $this->assertTrue($this->service->supportsClient('karing', '1.2.8.1103', $anytls)->supported);
+        $this->assertTrue($this->service->supportsClient('hiddify', '1.2.8.1103', $anytls)->supported);
+        $this->assertTrue($this->service->supportsClient('karing', '1.2.8.1103', $naive)->supported);
+    }
+
+    public function test_sing_box_wrapper_app_build_versions_still_drop_unsupported_transports(): void
+    {
+        $server = $this->makeServer('anytls', [
+            'tls_mode' => 1,
+            'network' => 'ws',
+            'tls' => ['server_name' => 'example.com'],
+        ]);
+
+        $result = $this->service->supportsClient('karing', '1.2.8.1103', $server);
+
+        $this->assertFalse($result->supported);
+    }
+
     public function test_sing_box_drops_anytls_custom_transport(): void
     {
         $server = $this->makeServer('anytls', [
@@ -189,6 +218,42 @@ final class ProtocolCapabilityServiceTest extends TestCase
         $result = $this->service->supportsClient('verge', '1.7.0', $server);
 
         $this->assertFalse($result->supported);
+    }
+
+    public function test_mihomo_before_1_19_22_drops_vless_xhttp(): void
+    {
+        $server = $this->makeServer('vless', [
+            'tls' => 1,
+            'network' => 'xhttp',
+        ]);
+
+        $result = $this->service->supportsClient('mihomo', '1.19.21', $server);
+
+        $this->assertFalse($result->supported);
+    }
+
+    public function test_mihomo_1_19_22_keeps_vless_xhttp(): void
+    {
+        $server = $this->makeServer('vless', [
+            'tls' => 1,
+            'network' => 'xhttp',
+        ]);
+
+        $result = $this->service->supportsClient('mihomo', '1.19.22', $server);
+
+        $this->assertTrue($result->supported);
+    }
+
+    public function test_mihomo_wrapper_app_build_versions_do_not_block_xhttp_core_features(): void
+    {
+        $server = $this->makeServer('vless', [
+            'tls' => 1,
+            'network' => 'xhttp',
+        ]);
+
+        $result = $this->service->supportsClient('sparkle', '1.2.8.1103', $server);
+
+        $this->assertTrue($result->supported);
     }
 
     public function test_clash_verge_before_required_version_drops_hysteria2(): void

@@ -47,6 +47,7 @@ return [
             'aliases' => ['sing-box', 'hiddify', 'hiddifynext', 'sfm', 'karing'],
             'version_kind' => 'semver',
             'unknown_version_policy' => 'conservative',
+            'core_version_wrappers' => ['hiddify', 'hiddifynext', 'karing'],
             'protocols' => ['shadowsocks', 'trojan', 'vmess', 'vless', 'hysteria', 'tuic', 'anytls', 'socks', 'naive', 'http'],
             'variants' => [
                 'hiddify' => [
@@ -111,6 +112,7 @@ return [
             'aliases' => ['meta', 'mihomo', 'clashmeta', 'clash-meta', 'verge', 'flclash', 'nekobox', 'nekoray', 'sparkle', 'clashmetaforandroid', 'clashx meta', 'clashxmeta'],
             'version_kind' => 'semver',
             'unknown_version_policy' => 'conservative',
+            'core_version_wrappers' => ['sparkle'],
             'protocols' => ['shadowsocks', 'vmess', 'trojan', 'vless', 'hysteria', 'tuic', 'anytls', 'socks', 'http', 'mieru'],
             'variants' => [
                 'nekobox' => [
@@ -159,7 +161,8 @@ return [
             'supports' => [
                 'vless' => [
                     ['when' => ['network' => ['tcp', 'ws', 'grpc', 'http', 'h2']], 'support' => 'yes'],
-                    ['when' => ['network' => ['httpupgrade', 'xhttp', 'splithttp']], 'support' => 'no', 'reason' => 'network unsupported by mihomo docs'],
+                    ['when' => ['network' => 'xhttp'], 'min_version' => '1.19.22', 'support' => 'yes'],
+                    ['when' => ['network' => ['httpupgrade', 'splithttp']], 'support' => 'no', 'reason' => 'network unsupported by mihomo docs'],
                     ['when' => ['tls_mode' => 2], 'support' => 'yes'],
                     ['when' => ['flow' => 'xtls-rprx-vision'], 'support' => 'yes'],
                 ],

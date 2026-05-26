@@ -35,6 +35,7 @@ class ClashMeta extends AbstractProtocol
                 'grpc' => '0.0.0',
                 'http' => '0.0.0',
                 'h2' => '0.0.0',
+                'xhttp' => '1.19.22',
             ],
             'strict' => true,
         ],
@@ -350,6 +351,24 @@ class ClashMeta extends AbstractProtocol
                     'path' => data_get($protocol_settings, 'network_settings.path', '/'),
                 ], fn ($value) => !is_null($value) && $value !== [])) {
                     $array['h2-opts'] = $h2Opts;
+                }
+                break;
+            case 'xhttp':
+                $xhttpHost = data_get($protocol_settings, 'network_settings.host');
+                if (empty($xhttpHost)) {
+                    $xhttpHost = data_get($protocol_settings, 'network_settings.headers.Host');
+                }
+                if (is_array($xhttpHost)) {
+                    $xhttpHost = reset($xhttpHost) ?: null;
+                }
+
+                $array['network'] = 'xhttp';
+                if ($xhttpOpts = array_filter([
+                    'path' => data_get($protocol_settings, 'network_settings.path', '/'),
+                    'host' => $xhttpHost,
+                    'headers' => data_get($protocol_settings, 'network_settings.headers'),
+                ], fn ($value) => !is_null($value) && $value !== [])) {
+                    $array['xhttp-opts'] = $xhttpOpts;
                 }
                 break;
             default:
