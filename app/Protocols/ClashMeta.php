@@ -541,6 +541,7 @@ class ClashMeta extends AbstractProtocol
             'username' => $password,
             'password' => $password,
             'transport' => strtoupper(data_get($protocol_settings, 'transport', 'TCP')),
+            'udp' => true,
             'multiplexing' => data_get($protocol_settings, 'multiplexing', 'MULTIPLEXING_LOW')
         ];
 

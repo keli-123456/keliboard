@@ -259,6 +259,7 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertSame('11115-11120', $config['port-range']);
         $this->assertArrayNotHasKey('port', $config);
         $this->assertSame('TCP', $config['transport']);
+        $this->assertTrue($config['udp']);
         $this->assertSame('MULTIPLEXING_LOW', $config['multiplexing']);
     }
 
