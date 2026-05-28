@@ -650,6 +650,7 @@ class Plugin extends AbstractPlugin
                 'at' => time(),
                 'online_ip_count' => isset($meta['online_ip_count']) ? (int) $meta['online_ip_count'] : null,
                 'risk_score' => isset($meta['risk_score']) ? (int) $meta['risk_score'] : null,
+                'hit_count' => isset($meta['hit_count']) ? (int) $meta['hit_count'] : null,
                 'signals' => $meta['signals'] ?? null,
                 'threshold' => isset($meta['threshold']) ? (int) $meta['threshold'] : null,
             ], $eventTtl);
@@ -902,6 +903,7 @@ class Plugin extends AbstractPlugin
             'ip_count' => isset($meta['ip_count']) ? (int) $meta['ip_count'] : null,
             'risk_score' => isset($meta['risk_score']) ? (int) $meta['risk_score'] : null,
             'score_threshold' => isset($meta['score_threshold']) ? (int) $meta['score_threshold'] : null,
+            'hit_count' => isset($meta['hit_count']) ? (int) $meta['hit_count'] : null,
             'signals' => $meta['signals'] ?? null,
             'threshold' => isset($meta['threshold']) ? (int) $meta['threshold'] : null,
             'cooldown_hit' => (bool) ($notificationResult['cooldown_hit'] ?? false),

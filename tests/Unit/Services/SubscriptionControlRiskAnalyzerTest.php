@@ -184,4 +184,64 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertSame([], $decisions);
     }
+
+    public function test_leak_guard_strict_mode_blocks_known_client_from_new_pull_ip(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_leak_guard' => true,
+            'enable_leak_guard_strict_mode' => true,
+            'leak_guard_score_threshold' => 80,
+            'leak_guard_allowed_ip_count' => 1,
+            'ip_region_overrides' => [
+                '1.1.1.1' => 'US',
+                '1.1.1.2' => 'US',
+            ],
+        ]);
+
+        $first = $analyzer->inspectSubscriptionPull(1009, 'token-i', '1.1.1.1', 'Sparkle/1.0.0');
+        $second = $analyzer->inspectSubscriptionPull(1009, 'token-i', '1.1.1.2', 'Sparkle/1.0.0');
+
+        $this->assertSame([], $first);
+        $this->assertCount(1, $second);
+        $this->assertSame('subscription_leak_guard', $second[0]['code']);
+        $this->assertSame('empty', $second[0]['action']);
+        $this->assertContains('new_pull_ip', $second[0]['meta']['signals']);
+        $this->assertContains('many_pull_ips', $second[0]['meta']['signals']);
+    }
+
+    public function test_leak_guard_escalates_repeated_hits_to_credential_reset(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_leak_guard' => true,
+            'enable_leak_guard_escalation' => true,
+            'leak_guard_action' => 'empty',
+            'leak_guard_escalate_hits' => 2,
+            'leak_guard_escalate_action' => 'reset_token_uuid',
+            'leak_guard_score_threshold' => 80,
+            'ip_region_overrides' => [
+                '1.1.1.1' => 'US',
+                '2.2.2.2' => 'JP',
+            ],
+        ]);
+
+        $first = $analyzer->inspectSubscriptionPull(
+            1010,
+            'token-j',
+            '2.2.2.2',
+            'curl/8.5.0',
+            ['online_ips' => ['1.1.1.1']]
+        );
+        $second = $analyzer->inspectSubscriptionPull(
+            1010,
+            'token-j',
+            '2.2.2.2',
+            'curl/8.5.0',
+            ['online_ips' => ['1.1.1.1']]
+        );
+
+        $this->assertSame('empty', $first[0]['action']);
+        $this->assertSame(1, $first[0]['meta']['hit_count']);
+        $this->assertSame('reset_token_uuid', $second[0]['action']);
+        $this->assertSame(2, $second[0]['meta']['hit_count']);
+    }
 }

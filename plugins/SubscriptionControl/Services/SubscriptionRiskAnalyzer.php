@@ -260,6 +260,11 @@ TEXT;
 
     private function rememberWindowValue(string $cacheKey, string $value, int $window): array
     {
+        return $this->rememberWindowValueWithState($cacheKey, $value, $window)['values'];
+    }
+
+    private function rememberWindowValueWithState(string $cacheKey, string $value, int $window): array
+    {
         $now = time();
         $items = Cache::get($cacheKey, []);
         if (!is_array($items)) {
@@ -270,6 +275,8 @@ TEXT;
             $items,
             static fn($timestamp): bool => is_numeric($timestamp) && ($now - (int) $timestamp) < $window
         );
+        $hadValues = !empty($items);
+        $wasNew = !array_key_exists($value, $items);
         $items[$value] = $now;
 
         Cache::put($cacheKey, $items, $window);
@@ -277,7 +284,11 @@ TEXT;
         $values = array_keys($items);
         sort($values, SORT_STRING);
 
-        return $values;
+        return [
+            'values' => $values,
+            'had_values' => $hadValues,
+            'was_new' => $wasNew,
+        ];
     }
 
     private function cacheKey(string $kind, int $userId, string $token): string
@@ -313,10 +324,13 @@ TEXT;
         $allowedIpCount = $this->configInt('leak_guard_allowed_ip_count', 2, 1);
         $allowedUaCount = $this->configInt('leak_guard_allowed_ua_count', 1, 1);
         $allowedRegionCount = $this->configInt('leak_guard_allowed_region_count', 1, 1);
+        $strictMode = $this->configBool('enable_leak_guard_strict_mode', false);
 
         $score = 0;
         $signals = [];
         $category = (string) ($client['category'] ?? 'unknown');
+        $region = $this->resolveRegionKey($clientIp);
+        $onlineRegions = $this->resolveOnlineRegions((array) ($context['online_ips'] ?? []));
 
         if ((bool) ($client['risky'] ?? false)) {
             $score += 45;
@@ -331,41 +345,59 @@ TEXT;
         $ipFingerprint = filter_var($clientIp, FILTER_VALIDATE_IP)
             ? hash('sha256', trim($clientIp))
             : 'invalid';
-        $ipFingerprints = $this->rememberWindowValue(
+        $ipState = $this->rememberWindowValueWithState(
             $this->cacheKey('leak_ip', $userId, $token),
             $ipFingerprint,
             $window
         );
+        $ipFingerprints = $ipState['values'];
+        if ($strictMode && $ipState['had_values'] && $ipState['was_new']) {
+            $score += 35;
+            $signals[] = 'new_pull_ip';
+        }
         if (count($ipFingerprints) > $allowedIpCount) {
             $score += 25;
             $signals[] = 'many_pull_ips';
         }
 
-        $uaCategories = $this->rememberWindowValue(
+        $uaState = $this->rememberWindowValueWithState(
             $this->cacheKey('leak_ua', $userId, $token),
             $category,
             $window
         );
+        $uaCategories = $uaState['values'];
+        if ($strictMode && $uaState['had_values'] && $uaState['was_new']) {
+            $score += 35;
+            $signals[] = 'new_pull_ua_category';
+        }
         if (count($uaCategories) > $allowedUaCount) {
             $score += 35;
             $signals[] = 'many_pull_ua_categories';
         }
 
-        $region = $this->resolveRegionKey($clientIp);
         $regions = [];
         if ($this->isActionableRegion($region)) {
-            $regions = $this->rememberWindowValue(
+            $regionState = $this->rememberWindowValueWithState(
                 $this->cacheKey('leak_region', $userId, $token),
                 $region,
                 $window
             );
+            $regions = $regionState['values'];
+            if ($strictMode && $regionState['had_values'] && $regionState['was_new']) {
+                $score += 35;
+                $signals[] = 'new_pull_region';
+            }
             if (count($regions) > $allowedRegionCount) {
                 $score += 35;
                 $signals[] = 'many_pull_regions';
             }
         }
 
-        $onlineRegions = $this->resolveOnlineRegions((array) ($context['online_ips'] ?? []));
+        if ($strictMode && empty($onlineRegions)) {
+            $score += 25;
+            $signals[] = 'no_online_region_evidence';
+        }
+
         if ($this->isActionableRegion($region) && !empty($onlineRegions) && !in_array($region, $onlineRegions, true)) {
             $score += 45;
             $signals[] = 'online_region_mismatch';
@@ -375,14 +407,24 @@ TEXT;
             return null;
         }
 
+        $hitCount = $this->rememberLeakGuardHit($userId, $token, $window);
+        $action = $this->configAction('leak_guard_action', 'empty');
+        if (
+            $this->configBool('enable_leak_guard_escalation', true)
+            && $hitCount >= $this->configInt('leak_guard_escalate_hits', 3, 1)
+        ) {
+            $action = $this->configAction('leak_guard_escalate_action', 'reset_token_uuid');
+        }
+
         return $this->decision(
             'subscription_leak_guard',
             '订阅疑似被探测拉取，已进入保护模式',
-            $this->configAction('leak_guard_action', 'empty'),
+            $action,
             [
                 'risk_score' => $score,
                 'score_threshold' => $threshold,
                 'signals' => $signals,
+                'hit_count' => $hitCount,
                 'ua_category' => $category,
                 'ip_count' => count($ipFingerprints),
                 'ua_categories' => $uaCategories,
@@ -392,6 +434,26 @@ TEXT;
                 'threshold' => $threshold,
             ]
         );
+    }
+
+    private function rememberLeakGuardHit(int $userId, string $token, int $window): int
+    {
+        $cacheKey = $this->cacheKey('leak_hit', $userId, $token);
+        $now = time();
+        $items = Cache::get($cacheKey, []);
+        if (!is_array($items)) {
+            $items = [];
+        }
+
+        $items = array_values(array_filter(
+            $items,
+            static fn($timestamp): bool => is_numeric($timestamp) && ($now - (int) $timestamp) < $window
+        ));
+        $items[] = $now;
+
+        Cache::put($cacheKey, $items, $window);
+
+        return count($items);
     }
 
     private function resolveOnlineRegions(array $ips): array
