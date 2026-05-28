@@ -13,6 +13,7 @@ use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Http\Request;
+use Plugin\SubscriptionControl\Services\SubscriptionRiskAnalyzer;
 
 class Plugin extends AbstractPlugin
 {
@@ -65,6 +66,25 @@ class Plugin extends AbstractPlugin
             $ip = $this->getClientIp($request);
             $userAgent = $request->header('User-Agent', '');
             $userAgentLower = strtolower($userAgent);
+
+            $riskDecisionHalted = false;
+            $servers = $this->applyRiskDecisions(
+                $servers,
+                $user,
+                (new SubscriptionRiskAnalyzer($this->getConfig()))->inspectSubscriptionPull(
+                    (int) $user->id,
+                    (string) $user->token,
+                    $ip,
+                    $userAgent,
+                    ['online_ips' => $this->collectOnlineIpsForRisk((int) $user->id)]
+                ),
+                $ip,
+                $userAgent,
+                $riskDecisionHalted
+            );
+            if ($riskDecisionHalted) {
+                return $servers;
+            }
 
             // 0. UA 告警并重置凭据（可选）
             if ($this->getConfig('enable_ua_reset_token', false) && $this->isResetUA($userAgentLower)) {
@@ -168,6 +188,10 @@ class Plugin extends AbstractPlugin
                 'online_ip_threshold' => (bool) $this->getConfig('enable_online_ip_threshold', false),
                 'ua_reset_token' => (bool) $this->getConfig('enable_ua_reset_token', false),
                 'ua_blacklist' => (bool) $this->getConfig('enable_ua_blacklist', false),
+                'client_ua_whitelist' => (bool) $this->getConfig('enable_client_ua_whitelist', false),
+                'multi_ua_detection' => (bool) $this->getConfig('enable_multi_ua_detection', false),
+                'multi_region_pull_detection' => (bool) $this->getConfig('enable_multi_region_pull_detection', false),
+                'multi_region_online_detection' => (bool) $this->getConfig('enable_multi_region_online_detection', false),
                 'ip_limit' => (bool) $this->getConfig('enable_ip_limit', false),
                 'rate_limit' => (bool) $this->getConfig('enable_rate_limit', false),
                 'one_time' => (bool) $this->getConfig('enable_one_time', false),
@@ -178,6 +202,11 @@ class Plugin extends AbstractPlugin
                 'ip_limit_window' => (int) $this->getConfig('ip_limit_window', 600),
                 'rate_limit_requests' => (int) $this->getConfig('rate_limit_requests', 10),
                 'rate_limit_window' => (int) $this->getConfig('rate_limit_window', 86400),
+                'multi_ua_allowed_count' => (int) $this->getConfig('multi_ua_allowed_count', 2),
+                'multi_ua_window_seconds' => (int) $this->getConfig('multi_ua_window_seconds', 600),
+                'multi_region_pull_allowed_count' => (int) $this->getConfig('multi_region_pull_allowed_count', 2),
+                'multi_region_pull_window_seconds' => (int) $this->getConfig('multi_region_pull_window_seconds', 600),
+                'multi_region_online_allowed_count' => (int) $this->getConfig('multi_region_online_allowed_count', 2),
                 'one_time_max_uses' => (int) $this->getConfig('one_time_max_uses', 10),
                 'one_time_duration' => (int) $this->getConfig('one_time_duration', 3600),
             ],
@@ -452,6 +481,81 @@ class Plugin extends AbstractPlugin
         return $request->ip() ?? '0.0.0.0';
     }
 
+    private function collectOnlineIpsForRisk(int $userId): array
+    {
+        if (!$this->getConfig('enable_multi_region_online_detection', false)) {
+            return [];
+        }
+
+        try {
+            $summary = UserOnlineService::getUserDeviceIps($userId);
+            return array_values(array_filter(
+                (array) ($summary['ips'] ?? []),
+                static fn($ip): bool => is_string($ip) && trim($ip) !== ''
+            ));
+        } catch (\Throwable $e) {
+            Log::warning('[SubscriptionControl] 在线 IP 风险信息读取失败', [
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+            ]);
+            return [];
+        }
+    }
+
+    private function applyRiskDecisions(
+        array $servers,
+        User $user,
+        array $decisions,
+        string $ip,
+        string $userAgent,
+        bool &$halt = false
+    ): array
+    {
+        foreach ($decisions as $decision) {
+            if (!is_array($decision)) {
+                continue;
+            }
+
+            $code = (string) ($decision['code'] ?? 'subscription_risk');
+            $reason = (string) ($decision['reason'] ?? '订阅访问行为异常');
+            $action = (string) ($decision['action'] ?? 'observe');
+            $meta = array_merge((array) ($decision['meta'] ?? []), [
+                'action' => $action,
+                'client_ip' => $ip,
+                'user_agent' => $userAgent,
+            ]);
+
+            if ($action === 'observe') {
+                $this->recordRiskEvent($code, $reason, (int) $user->id, $user, $meta);
+                continue;
+            }
+
+            if ($action === 'empty') {
+                $this->recordRiskEvent($code, $reason, (int) $user->id, $user, $meta);
+                $halt = true;
+                return [];
+            }
+
+            if ($action === 'reset_token') {
+                $this->resetUserToken((int) $user->id, (string) $user->token);
+                $this->interceptRiskDecision($code, $reason, 403, $user, $meta);
+            }
+
+            if ($action === 'reset_token_uuid') {
+                $this->resetUserTokenAndUuid($user);
+                $this->interceptRiskDecision($code, $reason, 403, $user, $meta);
+            }
+
+            if ($action === 'throttle') {
+                $this->interceptRiskDecision($code, $reason, 429, $user, $meta);
+            }
+
+            $this->interceptRiskDecision($code, $reason, 403, $user, $meta);
+        }
+
+        return $servers;
+    }
+
     public function scanOnlineIpThreshold(): void
     {
         if (!$this->getConfig('enable_online_ip_threshold', false)) {
@@ -547,17 +651,28 @@ class Plugin extends AbstractPlugin
         ]));
     }
 
+    private function interceptRiskDecision(string $code, string $reason, int $status, User $user, array $meta = []): never
+    {
+        $meta['http_status'] = $status;
+        $this->recordRiskEvent($code, $reason, (int) $user->id, $user, $meta);
+        $this->intercept(response($this->buildBlockMessage($code, $reason, $meta), $status, [
+            'Content-Type' => 'text/plain; charset=UTF-8',
+        ]));
+    }
+
     private function recordRiskEvent(string $code, string $reason, int $userId = null, ?User $user = null, array $meta = []): void
     {
-        // 增加拦截计数
-        Cache::increment('subscription_control:blocked_count:' . date('Y-m-d'));
+        $action = (string) ($meta['action'] ?? 'block');
+        if ($action !== 'observe') {
+            Cache::increment('subscription_control:blocked_count:' . date('Y-m-d'));
+        }
 
         // 记录最近一次拦截事件，便于用户在面板中定位原因
         if ($userId) {
             $eventTtl = 60 * 60 * 24 * 3;
             Cache::put("subscription_control:last_event:{$userId}", [
                 'code' => $code,
-                'action' => $meta['action'] ?? 'block',
+                'action' => $action,
                 'reason' => $reason,
                 'at' => time(),
                 'online_ip_count' => isset($meta['online_ip_count']) ? (int) $meta['online_ip_count'] : null,
@@ -582,7 +697,7 @@ class Plugin extends AbstractPlugin
             'telegram_sent' => false,
         ];
 
-        if ($user) {
+        if ($user && $action !== 'observe') {
             try {
                 $notificationResult = $this->sendRiskNotifications($user, $code, $reason, $meta);
             } catch (\Throwable $e) {
@@ -600,8 +715,9 @@ class Plugin extends AbstractPlugin
     private function buildBlockMessage(string $code, string $reason, array $meta = []): string
     {
         $action = (string) ($meta['action'] ?? 'block');
+        $status = (int) ($meta['http_status'] ?? 403);
         $lines = [
-            '订阅请求已被系统拦截（403）。',
+            "订阅请求已被系统限制（{$status}）。",
         ];
 
         if (in_array($action, ['reset_token', 'reset_token_uuid'], true)) {
@@ -782,6 +898,10 @@ class Plugin extends AbstractPlugin
             'action' => (string) ($meta['action'] ?? 'block'),
             'client_ip' => $meta['client_ip'] ?? null,
             'user_agent' => $meta['user_agent'] ?? null,
+            'ua_category' => $meta['ua_category'] ?? null,
+            'ua_categories' => $meta['ua_categories'] ?? null,
+            'region' => $meta['region'] ?? null,
+            'regions' => $meta['regions'] ?? null,
             'online_ip_count' => isset($meta['online_ip_count']) ? (int) $meta['online_ip_count'] : null,
             'threshold' => isset($meta['threshold']) ? (int) $meta['threshold'] : null,
             'cooldown_hit' => (bool) ($notificationResult['cooldown_hit'] ?? false),

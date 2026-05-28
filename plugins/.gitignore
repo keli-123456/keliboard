@@ -13,3 +13,5 @@
 !RemoteCheckProxy/**
 !NodeAutoRename/
 !NodeAutoRename/**
+!SubscriptionControl/
+!SubscriptionControl/**
