@@ -12,7 +12,7 @@ use App\Utils\Helper;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Http\Request;
+use Plugin\SubscriptionControl\Services\SubscriptionClientIpResolver;
 use Plugin\SubscriptionControl\Services\SubscriptionRiskAnalyzer;
 
 class Plugin extends AbstractPlugin
@@ -63,7 +63,9 @@ class Plugin extends AbstractPlugin
                 return $servers;
             }
 
-            $ip = $this->getClientIp($request);
+            $ipInfo = (new SubscriptionClientIpResolver($this->getConfig()))->resolve($request);
+            $ip = (string) $ipInfo['client_ip'];
+            $ipMeta = $this->clientIpMeta($ipInfo);
             $userAgent = $request->header('User-Agent', '');
             $userAgentLower = strtolower($userAgent);
 
@@ -80,6 +82,7 @@ class Plugin extends AbstractPlugin
                 ),
                 $ip,
                 $userAgent,
+                $ipMeta,
                 $riskDecisionHalted
             );
             if ($riskDecisionHalted) {
@@ -98,7 +101,7 @@ class Plugin extends AbstractPlugin
                     'action' => 'reset_token_uuid',
                     'client_ip' => $ip,
                     'user_agent' => $userAgent,
-                ]);
+                ] + $ipMeta);
             }
 
             // 0.5 在线唯一 IP 数超阈值时，重置 token/uuid 并阻断订阅
@@ -114,7 +117,7 @@ class Plugin extends AbstractPlugin
                             'client_ip' => $ip,
                             'user_agent' => $userAgent,
                             'source' => 'subscribe_request',
-                        ],
+                        ] + $ipMeta,
                         true
                     );
                 }
@@ -126,7 +129,7 @@ class Plugin extends AbstractPlugin
                     $this->blockAccess('ua_blacklist', 'UA 拦截', $user->id, [
                         'client_ip' => $ip,
                         'user_agent' => $userAgent,
-                    ]);
+                    ] + $ipMeta);
                 }
             }
 
@@ -136,7 +139,7 @@ class Plugin extends AbstractPlugin
                     $this->blockAccess('ip_limit', 'IP 数量超限', $user->id, [
                         'client_ip' => $ip,
                         'user_agent' => $userAgent,
-                    ]);
+                    ] + $ipMeta);
                 }
             }
 
@@ -146,7 +149,7 @@ class Plugin extends AbstractPlugin
                     $this->blockAccess('rate_limit', '访问频率超限', $user->id, [
                         'client_ip' => $ip,
                         'user_agent' => $userAgent,
-                    ]);
+                    ] + $ipMeta);
                 }
             }
 
@@ -157,7 +160,7 @@ class Plugin extends AbstractPlugin
                         'action' => 'reset_token',
                         'client_ip' => $ip,
                         'user_agent' => $userAgent,
-                    ]);
+                    ] + $ipMeta);
                 }
             }
 
@@ -454,31 +457,14 @@ class Plugin extends AbstractPlugin
         return $this->parseKeywordList($this->getConfig('ua_reset_keywords', ''));
     }
 
-    /**
-     * 获取客户端真实IP
-     */
-    private function getClientIp(Request $request): string
+    private function clientIpMeta(array $ipInfo): array
     {
-        // 优先获取CF的真实IP
-        $cfIp = $request->header('CF-Connecting-IP');
-        if ($cfIp) {
-            return $cfIp;
-        }
-
-        // 获取X-Forwarded-For
-        $xForwardedFor = $request->header('X-Forwarded-For');
-        if ($xForwardedFor) {
-            $ips = explode(',', $xForwardedFor);
-            return trim($ips[0]);
-        }
-        
-        // 获取X-Real-IP
-        $xRealIp = $request->header('X-Real-IP');
-        if ($xRealIp) {
-            return $xRealIp;
-        }
-        
-        return $request->ip() ?? '0.0.0.0';
+        return [
+            'proxy_ip' => $ipInfo['proxy_ip'] ?? null,
+            'client_ip_source' => $ipInfo['client_ip_source'] ?? null,
+            'trusted_proxy' => (bool) ($ipInfo['trusted_proxy'] ?? false),
+            'cf_ray' => $ipInfo['cf_ray'] ?? null,
+        ];
     }
 
     private function collectOnlineIpsForRisk(int $userId): array
@@ -508,6 +494,7 @@ class Plugin extends AbstractPlugin
         array $decisions,
         string $ip,
         string $userAgent,
+        array $ipMeta,
         bool &$halt = false
     ): array
     {
@@ -519,7 +506,7 @@ class Plugin extends AbstractPlugin
             $code = (string) ($decision['code'] ?? 'subscription_risk');
             $reason = (string) ($decision['reason'] ?? '订阅访问行为异常');
             $action = (string) ($decision['action'] ?? 'observe');
-            $meta = array_merge((array) ($decision['meta'] ?? []), [
+            $meta = array_merge($ipMeta, (array) ($decision['meta'] ?? []), [
                 'action' => $action,
                 'client_ip' => $ip,
                 'user_agent' => $userAgent,
@@ -897,6 +884,10 @@ class Plugin extends AbstractPlugin
             'reason' => $reason,
             'action' => (string) ($meta['action'] ?? 'block'),
             'client_ip' => $meta['client_ip'] ?? null,
+            'proxy_ip' => $meta['proxy_ip'] ?? null,
+            'client_ip_source' => $meta['client_ip_source'] ?? null,
+            'trusted_proxy' => isset($meta['trusted_proxy']) ? (bool) $meta['trusted_proxy'] : null,
+            'cf_ray' => $meta['cf_ray'] ?? null,
             'user_agent' => $meta['user_agent'] ?? null,
             'ua_category' => $meta['ua_category'] ?? null,
             'ua_categories' => $meta['ua_categories'] ?? null,

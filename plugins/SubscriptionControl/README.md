@@ -299,7 +299,15 @@ IP数量: 2个
 - 查看日志确认是否有"订阅使用计数"记录
 - 如果使用文件缓存，尝试清空缓存后重试
 
-### IP限制不准确  
+### IP限制不准确
+订阅如果经过 Cloudflare / v2node 订阅反代，页面会区分：
+
+- `真实客户端 IP`：用于订阅 IP 限制、多地区拉取等风控判断。
+- `代理入口 IP`：例如 Cloudflare 边缘 IP 或本机 Nginx 反代 IP，只用于排查链路。
+- `IP 来源`：表示真实客户端 IP 来自 `CF-Connecting-IP`、`True-Client-IP`、`X-Forwarded-For`、`X-Real-IP` 还是 `REMOTE_ADDR`。
+
+只有请求来源 IP 命中 `可信代理 CIDR 列表` 时，插件才会信任这些真实 IP 头，避免外部直接伪造 `CF-Connecting-IP`。
+
 确保Nginx/Apache正确配置，传递真实IP：
 
 **Nginx配置示例：**
@@ -309,7 +317,7 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 ```
 
 **Cloudflare用户：**
-插件会自动识别 `CF-Connecting-IP` 头部
+插件会优先识别 `CF-Connecting-IP` / `True-Client-IP`，并内置 Cloudflare 官方 IPv4/IPv6 CIDR 列表。若 Cloudflare 更新 IP 段，应同步更新插件配置中的 `可信代理 CIDR 列表`。
 
 ### 误拦截正常用户
 - 检查UA黑名单是否设置过于宽泛
