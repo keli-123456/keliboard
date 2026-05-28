@@ -9,7 +9,6 @@ use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
-use App\Services\UserOnlineService;
 use Throwable;
 
 class Kernel extends ConsoleKernel
@@ -50,7 +49,6 @@ class Kernel extends ConsoleKernel
         $schedule->command('usersync:cleanup')->dailyAt('3:10')->onOneServer();
         $schedule->command('marketing:scan')->everyTenMinutes()->onOneServer()->withoutOverlapping(8);
         $schedule->command('spam-registration:scan')->hourly()->onOneServer()->withoutOverlapping(50);
-        $schedule->command('subscription-control:enforce')->everyMinute()->onOneServer()->withoutOverlapping(3);
         $schedule->command('subscription-proxy:probe')->everyMinute()->onOneServer()->withoutOverlapping(2);
         // send
         $schedule->command('send:remindMail', ['--force'])->dailyAt('11:30')->onOneServer();
