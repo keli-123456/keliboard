@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Plugin\SubscriptionControl\Services\SubscriptionClientIpResolver;
 use Plugin\SubscriptionControl\Services\SubscriptionRiskAnalyzer;
+use Plugin\SubscriptionControl\Services\SubscriptionTrustedEgressResolver;
 
 class Plugin extends AbstractPlugin
 {
@@ -69,11 +70,12 @@ class Plugin extends AbstractPlugin
             $userAgent = $request->header('User-Agent', '');
             $userAgentLower = strtolower($userAgent);
 
+            $riskConfig = $this->riskAnalyzerConfig();
             $riskDecisionHalted = false;
             $servers = $this->applyRiskDecisions(
                 $servers,
                 $user,
-                (new SubscriptionRiskAnalyzer($this->getConfig()))->inspectSubscriptionPull(
+                (new SubscriptionRiskAnalyzer($riskConfig))->inspectSubscriptionPull(
                     (int) $user->id,
                     (string) $user->token,
                     $ip,
@@ -194,6 +196,9 @@ class Plugin extends AbstractPlugin
                 'client_ua_whitelist' => (bool) $this->getConfig('enable_client_ua_whitelist', false),
                 'source_batch_detection' => (bool) $this->getConfig('enable_source_batch_detection', false),
                 'leak_guard' => (bool) $this->getConfig('enable_leak_guard', false),
+                'auto_trusted_node_ips' => (bool) $this->getConfig('enable_auto_trusted_node_ips', true),
+                'auto_trusted_machine_ips' => (bool) $this->getConfig('enable_auto_trusted_machine_ips', true),
+                'auto_trusted_node_dns' => (bool) $this->getConfig('enable_auto_trusted_node_dns', false),
                 'multi_ua_detection' => (bool) $this->getConfig('enable_multi_ua_detection', false),
                 'multi_region_pull_detection' => (bool) $this->getConfig('enable_multi_region_pull_detection', false),
                 'multi_region_online_detection' => (bool) $this->getConfig('enable_multi_region_online_detection', false),
@@ -440,6 +445,24 @@ class Plugin extends AbstractPlugin
                 'user_id' => $user->id
             ]);
         }
+    }
+
+    private function riskAnalyzerConfig(): array
+    {
+        $config = $this->getConfig();
+        if (!is_array($config)) {
+            $config = [];
+        }
+
+        try {
+            $config['trusted_egress_ips'] = (new SubscriptionTrustedEgressResolver($config))->resolve();
+        } catch (\Throwable $e) {
+            Log::warning('[SubscriptionControl] 可信出口自动解析失败，使用手动配置', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return $config;
     }
 
     /**
