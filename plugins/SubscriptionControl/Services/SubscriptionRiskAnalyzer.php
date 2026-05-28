@@ -435,9 +435,13 @@ TEXT;
     private function configAction(string $key, string $default): string
     {
         $action = strtolower(trim((string) ($this->config[$key] ?? $default)));
-        return in_array($action, ['observe', 'throttle', 'empty', 'block', 'reset_token', 'reset_token_uuid'], true)
+        if ($action === 'reset_token') {
+            return 'reset_token_uuid';
+        }
+
+        return in_array($action, ['observe', 'throttle', 'empty', 'block', 'reset_token_uuid'], true)
             ? $action
-            : $default;
+            : ($default === 'reset_token' ? 'reset_token_uuid' : $default);
     }
 
     private function parseKeywordList(string $input): array

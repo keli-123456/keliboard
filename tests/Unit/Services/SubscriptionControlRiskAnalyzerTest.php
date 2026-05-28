@@ -54,6 +54,22 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame(['mihomo', 'sing-box'], $decisions[0]['meta']['ua_categories']);
     }
 
+    public function test_legacy_reset_token_action_is_normalized_to_full_credential_reset(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_multi_ua_detection' => true,
+            'multi_ua_allowed_count' => 1,
+            'multi_ua_window_seconds' => 600,
+            'multi_ua_action' => 'reset_token',
+        ]);
+
+        $analyzer->inspectSubscriptionPull(1006, 'token-f', '1.1.1.1', 'mihomo/1.19.8');
+        $decisions = $analyzer->inspectSubscriptionPull(1006, 'token-f', '1.1.1.1', 'sing-box/1.11.0');
+
+        $this->assertCount(1, $decisions);
+        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
+    }
+
     public function test_client_ua_whitelist_flags_unapproved_client_family(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([

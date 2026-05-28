@@ -91,20 +91,20 @@ class Plugin extends AbstractPlugin
 
             // 0. UA 告警并重置凭据（可选）
             if ($this->getConfig('enable_ua_reset_token', false) && $this->isResetUA($userAgentLower)) {
-                $this->resetUserTokenAndUuid($user);
-                Log::warning('[SubscriptionControl] UA 可疑，已重置用户 token/uuid', [
+                $this->resetSubscriptionCredentials($user);
+                Log::warning('[SubscriptionControl] UA 可疑，已重置用户订阅凭证', [
                     'user_id' => $user->id,
                     'ua' => $userAgent,
                     'ip' => $ip
                 ]);
-                $this->blockAccess('ua_reset', 'UA 可疑，已重置订阅链接', $user->id, [
+                $this->blockAccess('ua_reset', 'UA 可疑，已重置订阅凭证', $user->id, [
                     'action' => 'reset_token_uuid',
                     'client_ip' => $ip,
                     'user_agent' => $userAgent,
                 ] + $ipMeta);
             }
 
-            // 0.5 在线唯一 IP 数超阈值时，重置 token/uuid 并阻断订阅
+            // 0.5 在线唯一 IP 数超阈值时，重置订阅凭证并阻断订阅
             if ($this->getConfig('enable_online_ip_threshold', false)) {
                 $onlineIpThreshold = max(1, (int) $this->getConfig('online_ip_threshold', 10));
                 $onlineIpCount = app(UserOnlineService::class)->getOnlineCount((int) $user->id);
@@ -157,7 +157,7 @@ class Plugin extends AbstractPlugin
             if ($this->getConfig('enable_one_time', false)) {
                 if (!$this->checkSubscriptionUsage($user->id, $user->token)) {
                     $this->blockAccess('one_time', '订阅链接使用次数已达上限', $user->id, [
-                        'action' => 'reset_token',
+                        'action' => 'reset_token_uuid',
                         'client_ip' => $ip,
                         'user_agent' => $userAgent,
                     ] + $ipMeta);
@@ -381,10 +381,12 @@ class Plugin extends AbstractPlugin
         
         // 检查使用次数
         if ($data['uses'] >= $maxUses) {
-            // 达到使用次数上限，重置用户的订阅token
-            $this->resetUserToken($userId, $token);
+            $user = User::find($userId);
+            if ($user) {
+                $this->resetSubscriptionCredentials($user, $token);
+            }
             
-            Log::warning('[SubscriptionControl] 订阅使用次数超限，已重置token', [
+            Log::warning('[SubscriptionControl] 订阅使用次数超限，已重置订阅凭证', [
                 'user_id' => $userId,
                 'uses' => $data['uses'],
                 'max_uses' => $maxUses,
@@ -409,44 +411,29 @@ class Plugin extends AbstractPlugin
     }
 
     /**
-     * 重置用户的订阅token
+     * 重置用户的订阅凭证：订阅 token 与节点 uuid 作为同一个泄露面处理。
      */
-    private function resetUserToken(int $userId, string $oldToken): void
+    private function resetSubscriptionCredentials(User $user, ?string $oldToken = null): void
     {
         try {
-            // 生成新的token
-            $newToken = bin2hex(random_bytes(16));
-            
-            // 更新数据库中的token
-            $user = User::find($userId);
-            if ($user) {
-                $user->token = $newToken;
-                $user->save();
-                
-                // 清理旧token的缓存记录
-                Cache::forget("subscription_control:usage:{$userId}:{$oldToken}");
-                
-                Log::info('[SubscriptionControl] 用户token已重置', [
-                    'user_id' => $userId,
-                    'old_token' => $oldToken,
-                    'new_token' => $newToken
-                ]);
-            }
+            $oldToken = $oldToken ?: (string) $user->token;
+
+            $user->uuid = Helper::guid(true);
+            $user->token = Helper::guid();
+            $user->save();
+
+            Cache::forget("subscription_control:usage:{$user->id}:{$oldToken}");
+
+            Log::info('[SubscriptionControl] 用户订阅凭证已重置', [
+                'user_id' => $user->id,
+                'old_token' => $oldToken,
+                'new_token' => $user->token
+            ]);
         } catch (\Exception $e) {
-            Log::error('[SubscriptionControl] 重置token失败: ' . $e->getMessage(), [
-                'user_id' => $userId
+            Log::error('[SubscriptionControl] 重置订阅凭证失败: ' . $e->getMessage(), [
+                'user_id' => $user->id
             ]);
         }
-    }
-
-    /**
-     * 重置用户 token 和 uuid（用于 UA 风控）
-     */
-    private function resetUserTokenAndUuid(User $user): void
-    {
-        $user->uuid = Helper::guid(true);
-        $user->token = Helper::guid();
-        $user->save();
     }
 
     /**
@@ -523,13 +510,9 @@ class Plugin extends AbstractPlugin
                 return [];
             }
 
-            if ($action === 'reset_token') {
-                $this->resetUserToken((int) $user->id, (string) $user->token);
-                $this->interceptRiskDecision($code, $reason, 403, $user, $meta);
-            }
-
-            if ($action === 'reset_token_uuid') {
-                $this->resetUserTokenAndUuid($user);
+            if (in_array($action, ['reset_token', 'reset_token_uuid'], true)) {
+                $meta['action'] = 'reset_token_uuid';
+                $this->resetSubscriptionCredentials($user);
                 $this->interceptRiskDecision($code, $reason, 403, $user, $meta);
             }
 
@@ -579,7 +562,7 @@ class Plugin extends AbstractPlugin
 
     private function handleOnlineIpThreshold(User $user, int $onlineIpCount, int $threshold, array $meta = [], bool $intercept = true): void
     {
-        $reason = '在线唯一IP数超阈值，已重置订阅链接';
+        $reason = '在线唯一IP数超阈值，已重置订阅凭证';
         $cooldownKey = "subscription_control:action_cooldown:{$user->id}:online_ip_threshold";
         $cooldown = max(60, (int) $this->getConfig('notify_cooldown_seconds', 1800));
         $baseMeta = array_merge($meta, [
@@ -605,8 +588,8 @@ class Plugin extends AbstractPlugin
             return;
         }
 
-        $this->resetUserTokenAndUuid($user);
-        Log::warning('[SubscriptionControl] 在线唯一IP数超阈值，已重置用户 token/uuid', [
+        $this->resetSubscriptionCredentials($user);
+        Log::warning('[SubscriptionControl] 在线唯一IP数超阈值，已重置用户订阅凭证', [
             'user_id' => $user->id,
             'online_ip_count' => $onlineIpCount,
             'threshold' => $threshold,
@@ -708,7 +691,7 @@ class Plugin extends AbstractPlugin
         ];
 
         if (in_array($action, ['reset_token', 'reset_token_uuid'], true)) {
-            $lines[] = '订阅链接可能已被重置：旧链接将立即失效，请登录面板复制新链接并重新导入客户端。';
+            $lines[] = '订阅凭证可能已被重置：旧订阅链接和旧节点配置将立即失效，请登录面板复制新链接并重新导入客户端。';
         } else {
             $lines[] = '请检查客户端/网络环境后重试，或登录面板查看提示信息。';
         }
@@ -864,7 +847,7 @@ class Plugin extends AbstractPlugin
 
         return match ($action) {
             'reset_token_uuid' => '系统已重置订阅链接和节点凭据，旧订阅与旧节点配置已失效，请重新获取并导入。',
-            'reset_token' => '系统已重置订阅链接，旧订阅链接已失效，请重新获取并导入。',
+            'reset_token' => '系统已重置订阅链接和节点凭据，旧订阅与旧节点配置已失效，请重新获取并导入。',
             default => '本次订阅请求已被拦截，请检查客户端或网络环境后重试。',
         };
     }
