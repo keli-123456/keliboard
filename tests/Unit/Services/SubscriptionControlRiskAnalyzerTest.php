@@ -278,4 +278,35 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame([], $analyzer->inspectSubscriptionPull(1112, 'token-l2', '3.3.3.2', 'Sparkle/1.0.0'));
         $this->assertSame([], $analyzer->inspectSubscriptionPull(1113, 'token-l3', '3.3.3.3', 'Sparkle/1.0.0'));
     }
+
+    public function test_trusted_egress_ip_is_excluded_from_source_batch_detection(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_source_batch_detection' => true,
+            'source_batch_user_threshold' => 3,
+            'trusted_egress_ips' => "3.3.3.3\n2001:db8::/32",
+        ]);
+
+        $this->assertSame([], $analyzer->inspectSubscriptionPull(1121, 'token-m1', '3.3.3.3', 'Sparkle/1.0.0'));
+        $this->assertSame([], $analyzer->inspectSubscriptionPull(1122, 'token-m2', '3.3.3.3', 'Sparkle/1.0.0'));
+        $this->assertSame([], $analyzer->inspectSubscriptionPull(1123, 'token-m3', '3.3.3.3', 'Sparkle/1.0.0'));
+    }
+
+    public function test_trusted_egress_ip_is_excluded_from_leak_guard_ip_signals(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_leak_guard' => true,
+            'enable_leak_guard_strict_mode' => true,
+            'leak_guard_score_threshold' => 80,
+            'leak_guard_allowed_ip_count' => 1,
+            'trusted_egress_ips' => '3.3.3.0/24',
+            'ip_region_overrides' => [
+                '3.3.3.1' => 'US',
+                '3.3.3.2' => 'JP',
+            ],
+        ]);
+
+        $this->assertSame([], $analyzer->inspectSubscriptionPull(1131, 'token-n', '3.3.3.1', 'Sparkle/1.0.0'));
+        $this->assertSame([], $analyzer->inspectSubscriptionPull(1131, 'token-n', '3.3.3.2', 'Sparkle/1.0.0'));
+    }
 }

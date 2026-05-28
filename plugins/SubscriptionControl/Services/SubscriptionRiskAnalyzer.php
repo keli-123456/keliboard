@@ -117,7 +117,9 @@ TEXT;
             );
         }
 
-        if ($this->configBool('enable_source_batch_detection', false)) {
+        $trustedEgress = $this->isTrustedEgressIp($clientIp);
+
+        if (!$trustedEgress && $this->configBool('enable_source_batch_detection', false)) {
             $decision = $this->inspectSourceBatchPull($userId, $clientIp, $client);
             if ($decision !== null) {
                 $decisions[] = $decision;
@@ -191,7 +193,7 @@ TEXT;
         }
 
         if ($this->configBool('enable_leak_guard', false)) {
-            $decision = $this->inspectLeakGuard($userId, $token, $clientIp, $userAgent, $client, $context);
+            $decision = $this->inspectLeakGuard($userId, $token, $clientIp, $userAgent, $client, $context, $trustedEgress);
             if ($decision !== null) {
                 $decisions[] = $decision;
             }
@@ -317,6 +319,65 @@ TEXT;
         );
     }
 
+    private function isTrustedEgressIp(string $ip): bool
+    {
+        $ip = trim($ip);
+        if ($ip === '' || !filter_var($ip, FILTER_VALIDATE_IP)) {
+            return false;
+        }
+
+        foreach ($this->parseKeywordList((string) ($this->config['trusted_egress_ips'] ?? '')) as $entry) {
+            if ($this->ipMatchesCidr($ip, $entry)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function ipMatchesCidr(string $ip, string $cidr): bool
+    {
+        $cidr = trim($cidr);
+        if ($cidr === '') {
+            return false;
+        }
+
+        if (!str_contains($cidr, '/')) {
+            return hash_equals(strtolower($cidr), strtolower($ip));
+        }
+
+        [$network, $prefix] = array_map('trim', explode('/', $cidr, 2));
+        if ($network === '' || $prefix === '' || !is_numeric($prefix)) {
+            return false;
+        }
+
+        $ipBytes = @inet_pton($ip);
+        $networkBytes = @inet_pton($network);
+        if ($ipBytes === false || $networkBytes === false || strlen($ipBytes) !== strlen($networkBytes)) {
+            return false;
+        }
+
+        $prefixBits = (int) $prefix;
+        $maxBits = strlen($ipBytes) * 8;
+        if ($prefixBits < 0 || $prefixBits > $maxBits) {
+            return false;
+        }
+
+        $fullBytes = intdiv($prefixBits, 8);
+        $remainingBits = $prefixBits % 8;
+
+        if ($fullBytes > 0 && substr($ipBytes, 0, $fullBytes) !== substr($networkBytes, 0, $fullBytes)) {
+            return false;
+        }
+
+        if ($remainingBits === 0) {
+            return true;
+        }
+
+        $mask = (0xff << (8 - $remainingBits)) & 0xff;
+        return (ord($ipBytes[$fullBytes]) & $mask) === (ord($networkBytes[$fullBytes]) & $mask);
+    }
+
     private function decision(string $code, string $reason, string $action, array $meta = []): array
     {
         return [
@@ -361,7 +422,8 @@ TEXT;
         string $clientIp,
         string $userAgent,
         array $client,
-        array $context
+        array $context,
+        bool $trustedEgress
     ): ?array {
         $window = $this->configInt('leak_guard_window_seconds', 600, 60);
         $threshold = $this->configInt('leak_guard_score_threshold', 80, 1);
@@ -389,19 +451,22 @@ TEXT;
         $ipFingerprint = filter_var($clientIp, FILTER_VALIDATE_IP)
             ? hash('sha256', trim($clientIp))
             : 'invalid';
-        $ipState = $this->rememberWindowValueWithState(
-            $this->cacheKey('leak_ip', $userId, $token),
-            $ipFingerprint,
-            $window
-        );
-        $ipFingerprints = $ipState['values'];
-        if ($strictMode && $ipState['had_values'] && $ipState['was_new']) {
-            $score += 35;
-            $signals[] = 'new_pull_ip';
-        }
-        if (count($ipFingerprints) > $allowedIpCount) {
-            $score += 25;
-            $signals[] = 'many_pull_ips';
+        $ipFingerprints = [];
+        if (!$trustedEgress) {
+            $ipState = $this->rememberWindowValueWithState(
+                $this->cacheKey('leak_ip', $userId, $token),
+                $ipFingerprint,
+                $window
+            );
+            $ipFingerprints = $ipState['values'];
+            if ($strictMode && $ipState['had_values'] && $ipState['was_new']) {
+                $score += 35;
+                $signals[] = 'new_pull_ip';
+            }
+            if (count($ipFingerprints) > $allowedIpCount) {
+                $score += 25;
+                $signals[] = 'many_pull_ips';
+            }
         }
 
         $uaState = $this->rememberWindowValueWithState(
@@ -420,7 +485,7 @@ TEXT;
         }
 
         $regions = [];
-        if ($this->isActionableRegion($region)) {
+        if (!$trustedEgress && $this->isActionableRegion($region)) {
             $regionState = $this->rememberWindowValueWithState(
                 $this->cacheKey('leak_region', $userId, $token),
                 $region,
@@ -437,12 +502,12 @@ TEXT;
             }
         }
 
-        if ($strictMode && empty($onlineRegions)) {
+        if (!$trustedEgress && $strictMode && empty($onlineRegions)) {
             $score += 25;
             $signals[] = 'no_online_region_evidence';
         }
 
-        if ($this->isActionableRegion($region) && !empty($onlineRegions) && !in_array($region, $onlineRegions, true)) {
+        if (!$trustedEgress && $this->isActionableRegion($region) && !empty($onlineRegions) && !in_array($region, $onlineRegions, true)) {
             $score += 45;
             $signals[] = 'online_region_mismatch';
         }
@@ -470,6 +535,7 @@ TEXT;
                 'signals' => $signals,
                 'hit_count' => $hitCount,
                 'ua_category' => $category,
+                'trusted_egress' => $trustedEgress,
                 'ip_count' => count($ipFingerprints),
                 'ua_categories' => $uaCategories,
                 'region' => $region,
