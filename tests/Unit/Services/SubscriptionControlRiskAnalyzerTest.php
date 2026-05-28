@@ -244,4 +244,38 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame('reset_token_uuid', $second[0]['action']);
         $this->assertSame(2, $second[0]['meta']['hit_count']);
     }
+
+    public function test_source_batch_detection_flags_same_ip_and_ua_across_many_users(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_source_batch_detection' => true,
+            'source_batch_user_threshold' => 3,
+            'source_batch_window_seconds' => 600,
+            'source_batch_action' => 'empty',
+        ]);
+
+        $this->assertSame([], $analyzer->inspectSubscriptionPull(1101, 'token-k1', '3.3.3.3', 'Sparkle/1.0.0'));
+        $this->assertSame([], $analyzer->inspectSubscriptionPull(1102, 'token-k2', '3.3.3.3', 'Sparkle/1.0.0'));
+        $decisions = $analyzer->inspectSubscriptionPull(1103, 'token-k3', '3.3.3.3', 'Sparkle/1.0.0');
+
+        $this->assertCount(1, $decisions);
+        $this->assertSame('source_batch_pull', $decisions[0]['code']);
+        $this->assertSame('empty', $decisions[0]['action']);
+        $this->assertSame(3, $decisions[0]['meta']['source_user_count']);
+        $this->assertSame('sparkle', $decisions[0]['meta']['ua_category']);
+    }
+
+    public function test_source_batch_detection_keeps_different_source_ips_separate(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_source_batch_detection' => true,
+            'source_batch_user_threshold' => 3,
+            'source_batch_window_seconds' => 600,
+            'source_batch_action' => 'empty',
+        ]);
+
+        $this->assertSame([], $analyzer->inspectSubscriptionPull(1111, 'token-l1', '3.3.3.1', 'Sparkle/1.0.0'));
+        $this->assertSame([], $analyzer->inspectSubscriptionPull(1112, 'token-l2', '3.3.3.2', 'Sparkle/1.0.0'));
+        $this->assertSame([], $analyzer->inspectSubscriptionPull(1113, 'token-l3', '3.3.3.3', 'Sparkle/1.0.0'));
+    }
 }

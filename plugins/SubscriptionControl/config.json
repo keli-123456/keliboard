@@ -1,7 +1,7 @@
 {
     "name": "订阅风控",
     "code": "subscription_control",
-    "version": "1.3.4",
+    "version": "1.3.5",
     "description": "提供订阅链接的主动风险控制能力，防止节点被恶意扫描。支持可信代理真实IP识别、订阅泄露保护、在线唯一IP阈值、邮件/TG通知、UA黑名单、客户端白名单、多UA/多地区订阅检测、订阅IP限制、阅后即焚功能。",
     "author": "XBoard",
     "require": {
@@ -43,6 +43,30 @@
             "default": "127.0.0.0/8\n::1/128\n10.0.0.0/8\n172.16.0.0/12\n192.168.0.0/16\nfc00::/7\nfe80::/10\n103.21.244.0/22\n103.22.200.0/22\n103.31.4.0/22\n104.16.0.0/13\n104.24.0.0/14\n108.162.192.0/18\n131.0.72.0/22\n141.101.64.0/18\n162.158.0.0/15\n172.64.0.0/13\n173.245.48.0/20\n188.114.96.0/20\n190.93.240.0/20\n197.234.240.0/22\n198.41.128.0/17\n2400:cb00::/32\n2606:4700::/32\n2803:f800::/32\n2405:b500::/32\n2405:8100::/32\n2a06:98c0::/29\n2c0f:f248::/32",
             "label": "可信代理 CIDR 列表",
             "description": "仅当请求来源 IP 命中该列表时，才信任 CF-Connecting-IP / True-Client-IP / X-Forwarded-For 等真实客户端 IP 头"
+        },
+        "enable_source_batch_detection": {
+            "type": "boolean",
+            "default": false,
+            "label": "启用同源批量订阅检测",
+            "description": "开启后，同一真实客户端IP和同一UA类别在短时间内拉取多个用户订阅会触发风控"
+        },
+        "source_batch_user_threshold": {
+            "type": "number",
+            "default": 3,
+            "label": "同源批量用户阈值",
+            "description": "同一来源在检测窗口内拉取达到该用户数时触发"
+        },
+        "source_batch_window_seconds": {
+            "type": "number",
+            "default": 600,
+            "label": "同源批量检测窗口（秒）",
+            "description": "统计同一来源拉取不同用户订阅的时间窗口"
+        },
+        "source_batch_action": {
+            "type": "string",
+            "default": "empty",
+            "label": "同源批量命中策略",
+            "description": "可选 empty / block / reset_token_uuid。建议使用 empty，避免向批量拉取来源下发真实节点"
         },
         "enable_leak_guard": {
             "type": "boolean",

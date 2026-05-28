@@ -117,6 +117,13 @@ TEXT;
             );
         }
 
+        if ($this->configBool('enable_source_batch_detection', false)) {
+            $decision = $this->inspectSourceBatchPull($userId, $clientIp, $client);
+            if ($decision !== null) {
+                $decisions[] = $decision;
+            }
+        }
+
         if ($this->configBool('enable_multi_ua_detection', false)) {
             $window = $this->configInt('multi_ua_window_seconds', 600, 60);
             $allowed = $this->configInt('multi_ua_allowed_count', 2, 1);
@@ -301,6 +308,15 @@ TEXT;
         );
     }
 
+    private function sourceBatchCacheKey(string $clientIp, string $uaCategory): string
+    {
+        return sprintf(
+            'subscription_control:risk:source_batch:%s:%s',
+            hash('sha256', trim($clientIp)),
+            hash('sha256', strtolower(trim($uaCategory)))
+        );
+    }
+
     private function decision(string $code, string $reason, string $action, array $meta = []): array
     {
         return [
@@ -309,6 +325,34 @@ TEXT;
             'action' => $action,
             'meta' => $meta,
         ];
+    }
+
+    private function inspectSourceBatchPull(int $userId, string $clientIp, array $client): ?array
+    {
+        $window = $this->configInt('source_batch_window_seconds', 600, 60);
+        $threshold = $this->configInt('source_batch_user_threshold', 3, 2);
+        $category = (string) ($client['category'] ?? 'unknown');
+        $users = $this->rememberWindowValue(
+            $this->sourceBatchCacheKey($clientIp, $category),
+            (string) $userId,
+            $window
+        );
+
+        if (count($users) < $threshold) {
+            return null;
+        }
+
+        return $this->decision(
+            'source_batch_pull',
+            '同一来源短时间内拉取多个用户订阅',
+            $this->configAction('source_batch_action', 'empty'),
+            [
+                'source_user_count' => count($users),
+                'source_user_threshold' => $threshold,
+                'ua_category' => $category,
+                'threshold' => $threshold,
+            ]
+        );
     }
 
     private function inspectLeakGuard(
