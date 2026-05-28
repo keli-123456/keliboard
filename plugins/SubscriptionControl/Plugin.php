@@ -192,6 +192,7 @@ class Plugin extends AbstractPlugin
                 'ua_reset_token' => (bool) $this->getConfig('enable_ua_reset_token', false),
                 'ua_blacklist' => (bool) $this->getConfig('enable_ua_blacklist', false),
                 'client_ua_whitelist' => (bool) $this->getConfig('enable_client_ua_whitelist', false),
+                'leak_guard' => (bool) $this->getConfig('enable_leak_guard', false),
                 'multi_ua_detection' => (bool) $this->getConfig('enable_multi_ua_detection', false),
                 'multi_region_pull_detection' => (bool) $this->getConfig('enable_multi_region_pull_detection', false),
                 'multi_region_online_detection' => (bool) $this->getConfig('enable_multi_region_online_detection', false),
@@ -205,6 +206,8 @@ class Plugin extends AbstractPlugin
                 'ip_limit_window' => (int) $this->getConfig('ip_limit_window', 600),
                 'rate_limit_requests' => (int) $this->getConfig('rate_limit_requests', 10),
                 'rate_limit_window' => (int) $this->getConfig('rate_limit_window', 86400),
+                'leak_guard_score_threshold' => (int) $this->getConfig('leak_guard_score_threshold', 80),
+                'leak_guard_window_seconds' => (int) $this->getConfig('leak_guard_window_seconds', 600),
                 'multi_ua_allowed_count' => (int) $this->getConfig('multi_ua_allowed_count', 2),
                 'multi_ua_window_seconds' => (int) $this->getConfig('multi_ua_window_seconds', 600),
                 'multi_region_pull_allowed_count' => (int) $this->getConfig('multi_region_pull_allowed_count', 2),
@@ -646,6 +649,8 @@ class Plugin extends AbstractPlugin
                 'reason' => $reason,
                 'at' => time(),
                 'online_ip_count' => isset($meta['online_ip_count']) ? (int) $meta['online_ip_count'] : null,
+                'risk_score' => isset($meta['risk_score']) ? (int) $meta['risk_score'] : null,
+                'signals' => $meta['signals'] ?? null,
                 'threshold' => isset($meta['threshold']) ? (int) $meta['threshold'] : null,
             ], $eventTtl);
             try {
@@ -798,6 +803,14 @@ class Plugin extends AbstractPlugin
             }
         }
 
+        if ($code === 'subscription_leak_guard') {
+            $score = max(0, (int) ($meta['risk_score'] ?? 0));
+            $threshold = max(1, (int) ($meta['score_threshold'] ?? $meta['threshold'] ?? 0));
+            if ($score > 0 && $threshold > 0) {
+                $lines[] = "风险分：{$score}（阈值 {$threshold}）";
+            }
+        }
+
         if (!empty($meta['client_ip'])) {
             $lines[] = '来源IP：' . (string) $meta['client_ip'];
         }
@@ -826,6 +839,14 @@ class Plugin extends AbstractPlugin
             $onlineIpCount = max(0, (int) ($meta['online_ip_count'] ?? 0));
             if ($onlineIpCount > 0 && $threshold > 0) {
                 $lines[] = "当前在线唯一IP数：{$onlineIpCount}（阈值 {$threshold}）";
+            }
+        }
+
+        if ($code === 'subscription_leak_guard') {
+            $score = max(0, (int) ($meta['risk_score'] ?? 0));
+            $threshold = max(1, (int) ($meta['score_threshold'] ?? $meta['threshold'] ?? 0));
+            if ($score > 0 && $threshold > 0) {
+                $lines[] = "风险分：{$score}（阈值 {$threshold}）";
             }
         }
 
@@ -876,7 +897,12 @@ class Plugin extends AbstractPlugin
             'ua_categories' => $meta['ua_categories'] ?? null,
             'region' => $meta['region'] ?? null,
             'regions' => $meta['regions'] ?? null,
+            'online_regions' => $meta['online_regions'] ?? null,
             'online_ip_count' => isset($meta['online_ip_count']) ? (int) $meta['online_ip_count'] : null,
+            'ip_count' => isset($meta['ip_count']) ? (int) $meta['ip_count'] : null,
+            'risk_score' => isset($meta['risk_score']) ? (int) $meta['risk_score'] : null,
+            'score_threshold' => isset($meta['score_threshold']) ? (int) $meta['score_threshold'] : null,
+            'signals' => $meta['signals'] ?? null,
             'threshold' => isset($meta['threshold']) ? (int) $meta['threshold'] : null,
             'cooldown_hit' => (bool) ($notificationResult['cooldown_hit'] ?? false),
             'email_sent' => (bool) ($notificationResult['email_sent'] ?? false),

@@ -183,6 +183,13 @@ TEXT;
             }
         }
 
+        if ($this->configBool('enable_leak_guard', false)) {
+            $decision = $this->inspectLeakGuard($userId, $token, $clientIp, $userAgent, $client, $context);
+            if ($decision !== null) {
+                $decisions[] = $decision;
+            }
+        }
+
         return $decisions;
     }
 
@@ -291,6 +298,100 @@ TEXT;
             'action' => $action,
             'meta' => $meta,
         ];
+    }
+
+    private function inspectLeakGuard(
+        int $userId,
+        string $token,
+        string $clientIp,
+        string $userAgent,
+        array $client,
+        array $context
+    ): ?array {
+        $window = $this->configInt('leak_guard_window_seconds', 600, 60);
+        $threshold = $this->configInt('leak_guard_score_threshold', 80, 1);
+        $allowedIpCount = $this->configInt('leak_guard_allowed_ip_count', 2, 1);
+        $allowedUaCount = $this->configInt('leak_guard_allowed_ua_count', 1, 1);
+        $allowedRegionCount = $this->configInt('leak_guard_allowed_region_count', 1, 1);
+
+        $score = 0;
+        $signals = [];
+        $category = (string) ($client['category'] ?? 'unknown');
+
+        if ((bool) ($client['risky'] ?? false)) {
+            $score += 45;
+            $signals[] = 'risky_ua';
+        }
+
+        if (!$this->isWhitelistedClient($client, $userAgent)) {
+            $score += 35;
+            $signals[] = 'non_whitelisted_ua';
+        }
+
+        $ipFingerprint = filter_var($clientIp, FILTER_VALIDATE_IP)
+            ? hash('sha256', trim($clientIp))
+            : 'invalid';
+        $ipFingerprints = $this->rememberWindowValue(
+            $this->cacheKey('leak_ip', $userId, $token),
+            $ipFingerprint,
+            $window
+        );
+        if (count($ipFingerprints) > $allowedIpCount) {
+            $score += 25;
+            $signals[] = 'many_pull_ips';
+        }
+
+        $uaCategories = $this->rememberWindowValue(
+            $this->cacheKey('leak_ua', $userId, $token),
+            $category,
+            $window
+        );
+        if (count($uaCategories) > $allowedUaCount) {
+            $score += 35;
+            $signals[] = 'many_pull_ua_categories';
+        }
+
+        $region = $this->resolveRegionKey($clientIp);
+        $regions = [];
+        if ($this->isActionableRegion($region)) {
+            $regions = $this->rememberWindowValue(
+                $this->cacheKey('leak_region', $userId, $token),
+                $region,
+                $window
+            );
+            if (count($regions) > $allowedRegionCount) {
+                $score += 35;
+                $signals[] = 'many_pull_regions';
+            }
+        }
+
+        $onlineRegions = $this->resolveOnlineRegions((array) ($context['online_ips'] ?? []));
+        if ($this->isActionableRegion($region) && !empty($onlineRegions) && !in_array($region, $onlineRegions, true)) {
+            $score += 45;
+            $signals[] = 'online_region_mismatch';
+        }
+
+        if ($score < $threshold) {
+            return null;
+        }
+
+        return $this->decision(
+            'subscription_leak_guard',
+            '订阅疑似被探测拉取，已进入保护模式',
+            $this->configAction('leak_guard_action', 'empty'),
+            [
+                'risk_score' => $score,
+                'score_threshold' => $threshold,
+                'signals' => $signals,
+                'ua_category' => $category,
+                'ip_count' => count($ipFingerprints),
+                'ua_categories' => $uaCategories,
+                'region' => $region,
+                'regions' => $regions,
+                'online_regions' => $onlineRegions,
+                'threshold' => $threshold,
+            ]
+        );
     }
 
     private function resolveOnlineRegions(array $ips): array

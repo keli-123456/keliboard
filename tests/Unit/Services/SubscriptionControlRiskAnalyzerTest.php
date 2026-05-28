@@ -135,4 +135,53 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame('observe', $decisions[0]['action']);
         $this->assertSame(['JP', 'US'], $decisions[0]['meta']['regions']);
     }
+
+    public function test_leak_guard_returns_empty_for_script_pull_outside_online_region(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_leak_guard' => true,
+            'leak_guard_action' => 'empty',
+            'leak_guard_score_threshold' => 80,
+            'ip_region_overrides' => [
+                '1.1.1.1' => 'US',
+                '2.2.2.2' => 'JP',
+            ],
+        ]);
+
+        $decisions = $analyzer->inspectSubscriptionPull(
+            1007,
+            'token-g',
+            '2.2.2.2',
+            'curl/8.5.0',
+            ['online_ips' => ['1.1.1.1']]
+        );
+
+        $this->assertCount(1, $decisions);
+        $this->assertSame('subscription_leak_guard', $decisions[0]['code']);
+        $this->assertSame('empty', $decisions[0]['action']);
+        $this->assertContains('risky_ua', $decisions[0]['meta']['signals']);
+        $this->assertContains('online_region_mismatch', $decisions[0]['meta']['signals']);
+        $this->assertGreaterThanOrEqual(80, $decisions[0]['meta']['risk_score']);
+    }
+
+    public function test_leak_guard_allows_known_client_inside_online_region(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_leak_guard' => true,
+            'leak_guard_score_threshold' => 80,
+            'ip_region_overrides' => [
+                '1.1.1.1' => 'US',
+            ],
+        ]);
+
+        $decisions = $analyzer->inspectSubscriptionPull(
+            1008,
+            'token-h',
+            '1.1.1.1',
+            'Sparkle/1.0.0',
+            ['online_ips' => ['1.1.1.1']]
+        );
+
+        $this->assertSame([], $decisions);
+    }
 }
