@@ -12,6 +12,30 @@ use Illuminate\Support\Facades\Schema;
 final class SubscriptionTrustedEgressResolver
 {
     private const CACHE_KEY = 'subscription_control:trusted_egress:auto:v1';
+    private const DEFAULT_CLOUDFLARE_CIDRS = <<<'TEXT'
+103.21.244.0/22
+103.22.200.0/22
+103.31.4.0/22
+104.16.0.0/13
+104.24.0.0/14
+108.162.192.0/18
+131.0.72.0/22
+141.101.64.0/18
+162.158.0.0/15
+172.64.0.0/13
+173.245.48.0/20
+188.114.96.0/20
+190.93.240.0/20
+197.234.240.0/22
+198.41.128.0/17
+2400:cb00::/32
+2606:4700::/32
+2803:f800::/32
+2405:b500::/32
+2405:8100::/32
+2a06:98c0::/29
+2c0f:f248::/32
+TEXT;
     private const SERVER_TABLES = [
         'v2_server',
         'v2_server_trojan',
@@ -21,8 +45,11 @@ final class SubscriptionTrustedEgressResolver
         'v2_server_hysteria',
     ];
 
-    public function __construct(private readonly array $config = [])
+    private $dnsResolver;
+
+    public function __construct(private readonly array $config = [], ?callable $dnsResolver = null)
     {
+        $this->dnsResolver = $dnsResolver;
     }
 
     public function resolve(): string
@@ -44,8 +71,7 @@ final class SubscriptionTrustedEgressResolver
                 $row = (array) $row;
             }
 
-            $host = $this->normalizeHost((string) ($row['host'] ?? ''));
-            if ($host !== '') {
+            foreach ($this->trustedHostCandidates($row) as $host) {
                 $entries = array_merge($entries, $this->trustedEntriesFromHost($host));
             }
 
@@ -68,7 +94,7 @@ final class SubscriptionTrustedEgressResolver
     {
         $ttl = $this->configInt('auto_trusted_node_ip_cache_ttl_seconds', 300, 60, 3600);
         $cacheKey = self::CACHE_KEY . ':' . hash('sha256', json_encode([
-            'node_dns' => $this->configBool('enable_auto_trusted_node_dns', false),
+            'node_dns' => $this->configBool('enable_auto_trusted_node_dns', true),
             'machine_ips' => $this->configBool('enable_auto_trusted_machine_ips', true),
             'machine_stale' => $this->configInt('auto_trusted_machine_stale_seconds', 900, 60, 86400),
         ], JSON_UNESCAPED_SLASHES));
@@ -94,6 +120,9 @@ final class SubscriptionTrustedEgressResolver
                 $columns = ['host'];
                 if (Schema::hasColumn($table, 'ips')) {
                     $columns[] = 'ips';
+                }
+                if (Schema::hasColumn($table, 'protocol_settings')) {
+                    $columns[] = 'protocol_settings';
                 }
 
                 $query = DB::table($table)->select($columns);
@@ -169,15 +198,24 @@ final class SubscriptionTrustedEgressResolver
             return [$host];
         }
 
-        if (!$this->configBool('enable_auto_trusted_node_dns', false) || !$this->isValidHostname($host)) {
+        if (!$this->configBool('enable_auto_trusted_node_dns', true) || !$this->isValidHostname($host)) {
             return [];
         }
 
-        return $this->resolveDnsRecords($host);
+        $records = $this->resolveDnsRecords($host);
+        if ($this->hasCloudflareDnsRecord($records)) {
+            return [];
+        }
+
+        return $records;
     }
 
     private function resolveDnsRecords(string $host): array
     {
+        if ($this->dnsResolver !== null) {
+            return $this->normalizeDnsIps((array) call_user_func($this->dnsResolver, $host));
+        }
+
         $entries = [];
 
         try {
@@ -204,7 +242,130 @@ final class SubscriptionTrustedEgressResolver
             }
         }
 
-        return $entries;
+        return $this->normalizeDnsIps($entries);
+    }
+
+    private function trustedHostCandidates(array $row): array
+    {
+        $settings = $this->normalizeSettings($row['protocol_settings'] ?? []);
+        $candidates = [
+            $row['host'] ?? '',
+            data_get($settings, 'server_name'),
+            data_get($settings, 'tls.server_name'),
+            data_get($settings, 'tls_settings.server_name'),
+            data_get($settings, 'reality_settings.server_name'),
+            data_get($settings, 'network_settings.host'),
+            data_get($settings, 'network_settings.headers.Host'),
+            data_get($settings, 'network_settings.headers.host'),
+            data_get($settings, 'network_settings.headers.:authority'),
+        ];
+
+        $hosts = [];
+        foreach ($candidates as $candidate) {
+            $host = $this->normalizeHost((string) $candidate);
+            if ($host !== '' && (filter_var($host, FILTER_VALIDATE_IP) || $this->isValidHostname($host))) {
+                $hosts[$host] = true;
+            }
+        }
+
+        return array_keys($hosts);
+    }
+
+    private function normalizeSettings(mixed $value): array
+    {
+        if (is_array($value)) {
+            return $value;
+        }
+
+        if (!is_string($value) || trim($value) === '') {
+            return [];
+        }
+
+        $decoded = json_decode($value, true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    private function normalizeDnsIps(array $entries): array
+    {
+        $ips = [];
+        foreach ($entries as $entry) {
+            $ip = trim((string) $entry);
+            if (filter_var($ip, FILTER_VALIDATE_IP)) {
+                $ips[$ip] = true;
+            }
+        }
+
+        return array_keys($ips);
+    }
+
+    private function hasCloudflareDnsRecord(array $ips): bool
+    {
+        foreach ($ips as $ip) {
+            if ($this->isCloudflareIp((string) $ip)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function isCloudflareIp(string $ip): bool
+    {
+        if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+            return false;
+        }
+
+        foreach ($this->cloudflareCidrs() as $cidr) {
+            if ($this->ipMatchesCidr($ip, $cidr)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function cloudflareCidrs(): array
+    {
+        return $this->parseStoredList($this->config['cloudflare_cidrs'] ?? self::DEFAULT_CLOUDFLARE_CIDRS);
+    }
+
+    private function ipMatchesCidr(string $ip, string $cidr): bool
+    {
+        $cidr = trim($cidr);
+        if ($cidr === '') {
+            return false;
+        }
+
+        if (!str_contains($cidr, '/')) {
+            return filter_var($cidr, FILTER_VALIDATE_IP) && hash_equals(strtolower($cidr), strtolower($ip));
+        }
+
+        [$network, $prefixText] = array_map('trim', explode('/', $cidr, 2));
+        if ($network === '' || $prefixText === '' || !ctype_digit($prefixText)) {
+            return false;
+        }
+
+        $ipBytes = @inet_pton($ip);
+        $networkBytes = @inet_pton($network);
+        if ($ipBytes === false || $networkBytes === false || strlen($ipBytes) !== strlen($networkBytes)) {
+            return false;
+        }
+
+        $maxPrefix = strlen($ipBytes) * 8;
+        $prefix = min($maxPrefix, max(0, (int) $prefixText));
+        $fullBytes = intdiv($prefix, 8);
+        $remainingBits = $prefix % 8;
+
+        if ($fullBytes > 0 && substr($ipBytes, 0, $fullBytes) !== substr($networkBytes, 0, $fullBytes)) {
+            return false;
+        }
+
+        if ($remainingBits === 0) {
+            return true;
+        }
+
+        $mask = (0xff << (8 - $remainingBits)) & 0xff;
+        return (ord($ipBytes[$fullBytes]) & $mask) === (ord($networkBytes[$fullBytes]) & $mask);
     }
 
     private function parseStoredList(mixed $value): array

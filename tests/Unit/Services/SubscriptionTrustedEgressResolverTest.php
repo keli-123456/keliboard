@@ -71,4 +71,54 @@ final class SubscriptionTrustedEgressResolverTest extends TestCase
 
         $this->assertSame([], $entries);
     }
+
+    public function test_direct_node_domain_dns_records_are_trusted_when_dns_is_enabled(): void
+    {
+        $resolver = new SubscriptionTrustedEgressResolver(
+            ['enable_auto_trusted_node_dns' => true],
+            static fn(string $host): array => $host === 'direct.example.com' ? ['8.8.8.8'] : []
+        );
+
+        $entries = $resolver->resolveFromRows([
+            [
+                'host' => 'direct.example.com',
+                'ips' => '',
+            ],
+        ]);
+
+        $this->assertContains('8.8.8.8', $entries);
+    }
+
+    public function test_cloudflare_proxied_sni_and_host_dns_records_are_not_trusted(): void
+    {
+        $resolver = new SubscriptionTrustedEgressResolver(
+            ['enable_auto_trusted_node_dns' => true],
+            static fn(string $host): array => match ($host) {
+                'origin.example.com' => ['8.8.4.4'],
+                'proxied.example.com' => ['104.16.1.2', '2606:4700::1'],
+                default => [],
+            }
+        );
+
+        $entries = $resolver->resolveFromRows([
+            [
+                'host' => 'origin.example.com',
+                'ips' => '',
+                'protocol_settings' => [
+                    'tls_settings' => [
+                        'server_name' => 'proxied.example.com',
+                    ],
+                    'network_settings' => [
+                        'headers' => [
+                            'Host' => 'proxied.example.com',
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+
+        $this->assertContains('8.8.4.4', $entries);
+        $this->assertNotContains('104.16.1.2', $entries);
+        $this->assertNotContains('2606:4700::1', $entries);
+    }
 }

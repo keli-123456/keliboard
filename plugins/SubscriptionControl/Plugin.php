@@ -198,7 +198,7 @@ class Plugin extends AbstractPlugin
                 'leak_guard' => (bool) $this->getConfig('enable_leak_guard', false),
                 'auto_trusted_node_ips' => (bool) $this->getConfig('enable_auto_trusted_node_ips', true),
                 'auto_trusted_machine_ips' => (bool) $this->getConfig('enable_auto_trusted_machine_ips', true),
-                'auto_trusted_node_dns' => (bool) $this->getConfig('enable_auto_trusted_node_dns', false),
+                'auto_trusted_node_dns' => (bool) $this->getConfig('enable_auto_trusted_node_dns', true),
                 'multi_ua_detection' => (bool) $this->getConfig('enable_multi_ua_detection', false),
                 'multi_region_pull_detection' => (bool) $this->getConfig('enable_multi_region_pull_detection', false),
                 'multi_region_online_detection' => (bool) $this->getConfig('enable_multi_region_online_detection', false),
