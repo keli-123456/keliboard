@@ -15,9 +15,21 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $mihomo = $analyzer->classifyUserAgent('mihomo/1.19.8');
         $clashMeta = $analyzer->classifyUserAgent('Clash.Meta/1.18.0');
+        $clashXMeta = $analyzer->classifyUserAgent('ClashX.Meta/1.118.0');
 
         $this->assertSame('mihomo', $mihomo['category']);
         $this->assertSame('mihomo', $clashMeta['category']);
+        $this->assertSame('mihomo', $clashXMeta['category']);
+    }
+
+    public function test_classifies_throne_as_known_client_family(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer();
+
+        $throne = $analyzer->classifyUserAgent('Throne/1.0.0');
+
+        $this->assertSame('throne', $throne['category']);
+        $this->assertFalse($throne['risky']);
     }
 
     public function test_multi_ua_detection_ignores_version_changes_inside_same_family(): void

@@ -12,6 +12,8 @@ final class SubscriptionRiskAnalyzer
 mihomo
 sing-box
 shadowrocket
+throne
+clashx.meta
 quantumult-x
 surge
 v2rayn
@@ -42,11 +44,16 @@ TEXT;
         if (
             str_contains($ua, 'mihomo')
             || str_contains($ua, 'clash.meta')
+            || str_contains($ua, 'clashx.meta')
             || str_contains($ua, 'clash-meta')
             || str_contains($ua, 'clashmeta')
             || preg_match('/\bclash\b/', $ua)
         ) {
             return $this->clientInfo('mihomo');
+        }
+
+        if (str_contains($ua, 'throne')) {
+            return $this->clientInfo('throne');
         }
 
         if (str_contains($ua, 'sing-box') || str_contains($ua, 'singbox')) {
