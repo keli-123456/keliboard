@@ -25,6 +25,7 @@ class SubscriptionControlController extends Controller
 
         $blockedToday = (int) Cache::get('subscription_control:blocked_count:' . date('Y-m-d'), 0);
         $resetCount = count(array_filter($events, fn(array $event) => in_array((string) ($event['action'] ?? ''), ['reset_token', 'reset_token_uuid'], true)));
+        $ipIntelligenceStats = $this->ipIntelligenceStats($events);
 
         return $this->success([
             'stats' => [
@@ -32,7 +33,7 @@ class SubscriptionControlController extends Controller
                 'recent_event_count' => count($events),
                 'recent_reset_count' => $resetCount,
                 'last_trigger_at' => $events[0]['created_at'] ?? null,
-            ],
+            ] + $ipIntelligenceStats,
             'recent_events' => $events,
         ]);
     }
@@ -58,5 +59,38 @@ class SubscriptionControlController extends Controller
 
         usort($events, fn(array $a, array $b) => (int) ($b['created_at'] ?? 0) <=> (int) ($a['created_at'] ?? 0));
         return array_slice($events, 0, $limit);
+    }
+
+    private function ipIntelligenceStats(array $events): array
+    {
+        $stats = [
+            'ip_intelligence_event_count' => 0,
+            'ip_intelligence_labeled_count' => 0,
+            'ip_intelligence_hosting_count' => 0,
+            'ip_intelligence_proxy_count' => 0,
+            'ip_intelligence_unknown_count' => 0,
+        ];
+
+        foreach ($events as $event) {
+            if (!is_array($event)) {
+                continue;
+            }
+
+            $stats['ip_intelligence_event_count']++;
+            $type = strtolower(trim((string) ($event['ip_type'] ?? 'unknown')));
+            if ($type === 'hosting') {
+                $stats['ip_intelligence_labeled_count']++;
+                $stats['ip_intelligence_hosting_count']++;
+            } elseif ($type === 'proxy') {
+                $stats['ip_intelligence_labeled_count']++;
+                $stats['ip_intelligence_proxy_count']++;
+            } elseif (in_array($type, ['residential', 'private'], true)) {
+                $stats['ip_intelligence_labeled_count']++;
+            } else {
+                $stats['ip_intelligence_unknown_count']++;
+            }
+        }
+
+        return $stats;
     }
 }
