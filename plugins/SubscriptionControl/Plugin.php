@@ -71,11 +71,13 @@ class Plugin extends AbstractPlugin
             $userAgentLower = strtolower($userAgent);
 
             $riskConfig = $this->riskAnalyzerConfig();
+            $riskAnalyzer = new SubscriptionRiskAnalyzer($riskConfig);
+            $trustedEgress = $riskAnalyzer->isTrustedEgressIp($ip);
             $riskDecisionHalted = false;
             $servers = $this->applyRiskDecisions(
                 $servers,
                 $user,
-                (new SubscriptionRiskAnalyzer($riskConfig))->inspectSubscriptionPull(
+                $riskAnalyzer->inspectSubscriptionPull(
                     (int) $user->id,
                     (string) $user->token,
                     $ip,
@@ -142,7 +144,7 @@ class Plugin extends AbstractPlugin
             }
 
             // 2. 检查IP限制（时间窗口内不同IP数量）
-            if ($this->getConfig('enable_ip_limit', false)) {
+            if (!$trustedEgress && $this->getConfig('enable_ip_limit', false)) {
                 if (!$this->checkIpLimit($user->id, $ip)) {
                     $this->blockAccess('ip_limit', 'IP 数量超限', $user->id, [
                         'client_ip' => $ip,

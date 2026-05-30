@@ -349,7 +349,7 @@ TEXT;
         );
     }
 
-    private function isTrustedEgressIp(string $ip): bool
+    public function isTrustedEgressIp(string $ip): bool
     {
         $ip = trim($ip);
         if ($ip === '' || !filter_var($ip, FILTER_VALIDATE_IP)) {

@@ -46,7 +46,7 @@ TEXT;
 
     public function resolve(Request $request): array
     {
-        $proxyIp = $this->normalizeIp($request->ip()) ?? '0.0.0.0';
+        $proxyIp = $this->normalizeIp($request->server('REMOTE_ADDR')) ?? $this->normalizeIp($request->ip()) ?? '0.0.0.0';
         $trustedProxy = $this->isTrustedProxy($proxyIp);
         $clientIp = $proxyIp;
         $source = 'remote_addr';
