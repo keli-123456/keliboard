@@ -73,10 +73,30 @@ TEXT;
 
     private function candidateHeaders(Request $request): array
     {
+        $cfConnectingIp = $this->normalizeIp($request->header('CF-Connecting-IP'));
+        $forwardedClientIp = $this->firstForwardedClientIp($request->header('X-Forwarded-For'));
+
+        if ($cfConnectingIp !== null && $this->isTrustedProxy($cfConnectingIp) && $forwardedClientIp !== null) {
+            return [
+                [
+                    'source' => 'x_forwarded_for_client',
+                    'ip' => $forwardedClientIp,
+                ],
+                [
+                    'source' => 'true_client_ip',
+                    'ip' => $this->normalizeIp($request->header('True-Client-IP')),
+                ],
+                [
+                    'source' => 'cf_connecting_ip',
+                    'ip' => $cfConnectingIp,
+                ],
+            ];
+        }
+
         return [
             [
                 'source' => 'cf_connecting_ip',
-                'ip' => $this->normalizeIp($request->header('CF-Connecting-IP')),
+                'ip' => $cfConnectingIp,
             ],
             [
                 'source' => 'true_client_ip',
@@ -102,6 +122,18 @@ TEXT;
         foreach (explode(',', (string) $value) as $part) {
             $ip = $this->normalizeIp($part);
             if ($ip !== null) {
+                return $ip;
+            }
+        }
+
+        return null;
+    }
+
+    private function firstForwardedClientIp(?string $value): ?string
+    {
+        foreach (explode(',', (string) $value) as $part) {
+            $ip = $this->normalizeIp($part);
+            if ($ip !== null && !$this->isTrustedProxy($ip)) {
                 return $ip;
             }
         }
