@@ -97,6 +97,7 @@ TEXT;
             'node_dns' => $this->configBool('enable_auto_trusted_node_dns', true),
             'machine_ips' => $this->configBool('enable_auto_trusted_machine_ips', true),
             'machine_stale' => $this->configInt('auto_trusted_machine_stale_seconds', 900, 60, 86400),
+            'subproxy_machine_ips' => true,
         ], JSON_UNESCAPED_SLASHES));
 
         return Cache::remember($cacheKey, $ttl, function (): array {
@@ -152,6 +153,9 @@ TEXT;
             }
 
             $columns = ['load_status'];
+            if (Schema::hasColumn('v2_server_machine', 'subproxy_enabled')) {
+                $columns[] = 'subproxy_enabled';
+            }
             $query = DB::table('v2_server_machine')->select($columns);
 
             if (Schema::hasColumn('v2_server_machine', 'is_active')) {
@@ -185,11 +189,22 @@ TEXT;
             return [];
         }
 
-        return $this->parseStoredList([
+        $entries = $this->parseStoredList([
             data_get($status, 'ip.public_ipv4'),
             data_get($status, 'ip.public_ipv6'),
             data_get($status, 'ip.panel_seen'),
         ]);
+
+        if ((bool) ($row['subproxy_enabled'] ?? false)) {
+            $entries = array_merge($entries, $this->parseStoredList([
+                data_get($status, 'agent.subscription_proxy.public_ipv4'),
+                data_get($status, 'agent.subscription_proxy.public_ipv6'),
+                data_get($status, 'agent.subscription_proxy.panel_seen'),
+                data_get($status, 'agent.subscription_proxy.bind_ip'),
+            ]));
+        }
+
+        return $entries;
     }
 
     private function trustedEntriesFromHost(string $host): array

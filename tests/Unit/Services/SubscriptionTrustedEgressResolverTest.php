@@ -72,6 +72,37 @@ final class SubscriptionTrustedEgressResolverTest extends TestCase
         $this->assertSame([], $entries);
     }
 
+    public function test_subscription_proxy_machine_reported_ips_are_trusted(): void
+    {
+        $resolver = new SubscriptionTrustedEgressResolver([
+            'enable_auto_trusted_machine_ips' => true,
+        ]);
+
+        $entries = $resolver->resolveFromRows(
+            [],
+            [
+                [
+                    'subproxy_enabled' => true,
+                    'load_status' => [
+                        'ip' => [
+                            'public_ipv4' => '103.14.76.98',
+                        ],
+                        'agent' => [
+                            'subscription_proxy' => [
+                                'public_ipv4' => '103.14.76.99',
+                                'panel_seen' => '103.14.76.100',
+                            ],
+                        ],
+                    ],
+                ],
+            ]
+        );
+
+        $this->assertContains('103.14.76.98', $entries);
+        $this->assertContains('103.14.76.99', $entries);
+        $this->assertContains('103.14.76.100', $entries);
+    }
+
     public function test_direct_node_domain_dns_records_are_trusted_when_dns_is_enabled(): void
     {
         $resolver = new SubscriptionTrustedEgressResolver(
