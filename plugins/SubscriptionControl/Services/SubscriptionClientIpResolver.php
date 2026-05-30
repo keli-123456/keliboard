@@ -123,9 +123,13 @@ TEXT;
     private function trustedProxyCidrs(): array
     {
         $value = (string) ($this->config['trusted_proxy_cidrs'] ?? self::DEFAULT_TRUSTED_PROXY_CIDRS);
-        $parts = preg_split('/[\r\n，,]+/', $value) ?: [];
+        $egressValue = $this->config['trusted_egress_ips'] ?? '';
+        if (is_array($egressValue)) {
+            $egressValue = implode("\n", array_map('strval', $egressValue));
+        }
+        $parts = preg_split('/[\r\n，,]+/', $value . "\n" . (string) $egressValue) ?: [];
 
-        return array_values(array_filter(array_map('trim', $parts), static fn($item): bool => $item !== ''));
+        return array_values(array_unique(array_filter(array_map('trim', $parts), static fn($item): bool => $item !== '')));
     }
 
     private function ipMatchesCidr(string $ip, string $cidr): bool

@@ -58,4 +58,21 @@ final class SubscriptionClientIpResolverTest extends TestCase
         $this->assertSame('x_forwarded_for', $result['client_ip_source']);
         $this->assertTrue($result['trusted_proxy']);
     }
+
+    public function test_uses_forwarded_ip_from_trusted_subscription_proxy_node(): void
+    {
+        $request = Request::create('/s/token', 'GET', [], [], [], [
+            'REMOTE_ADDR' => '2.56.116.39',
+            'HTTP_X_FORWARDED_FOR' => '203.0.113.9, 2.56.116.39',
+        ]);
+
+        $result = (new SubscriptionClientIpResolver([
+            'trusted_egress_ips' => '2.56.116.39',
+        ]))->resolve($request);
+
+        $this->assertSame('203.0.113.9', $result['client_ip']);
+        $this->assertSame('2.56.116.39', $result['proxy_ip']);
+        $this->assertSame('x_forwarded_for', $result['client_ip_source']);
+        $this->assertTrue($result['trusted_proxy']);
+    }
 }

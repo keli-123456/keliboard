@@ -1,7 +1,7 @@
 {
     "name": "订阅风控",
     "code": "subscription_control",
-    "version": "1.4.2",
+    "version": "1.4.3",
     "description": "提供订阅链接的主动风险控制能力，防止节点被恶意扫描。支持可信代理真实IP识别、订阅泄露保护、在线唯一IP阈值、邮件/TG通知、UA黑名单、客户端白名单、多UA/多地区订阅检测、订阅IP限制、阅后即焚功能。",
     "author": "XBoard",
     "require": {
@@ -48,7 +48,7 @@
             "type": "text",
             "default": "",
             "label": "自有节点/可信出口 IP 列表",
-            "description": "填写自有节点出口、订阅反代出口或可信出口 IP/CIDR。命中后会跳过同源批量订阅检测，并不把 IP/地区变化计入泄露保护风险"
+            "description": "填写自有节点出口、订阅反代出口或可信出口 IP/CIDR。命中后会信任其转发的真实客户端 IP 头，并跳过同源批量订阅检测，不把该出口的 IP/地区变化计入泄露保护风险"
         },
         "enable_auto_trusted_node_ips": {
             "type": "boolean",
