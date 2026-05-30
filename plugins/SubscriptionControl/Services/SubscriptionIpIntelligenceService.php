@@ -127,12 +127,16 @@ final class SubscriptionIpIntelligenceService
     private function parseOriginRecord(string $record): array
     {
         $parts = $this->splitPipeRecord($record);
+        $hasIpField = isset($parts[2]) && str_contains((string) $parts[2], '/');
+        $prefixIndex = $hasIpField ? 2 : 1;
+        $countryIndex = $hasIpField ? 3 : 2;
+        $registryIndex = $hasIpField ? 4 : 3;
 
         return [
             'ip_asn' => isset($parts[0]) && is_numeric($parts[0]) ? (int) $parts[0] : null,
-            'ip_prefix' => $parts[2] ?? null,
-            'ip_country' => $parts[3] ?? null,
-            'ip_registry' => $parts[4] ?? null,
+            'ip_prefix' => $parts[$prefixIndex] ?? null,
+            'ip_country' => $parts[$countryIndex] ?? null,
+            'ip_registry' => $parts[$registryIndex] ?? null,
         ];
     }
 
