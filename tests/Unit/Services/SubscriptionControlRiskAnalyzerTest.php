@@ -272,6 +272,64 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame(1024, $active[0]['meta']['used_traffic']);
     }
 
+    public function test_leak_guard_allows_low_usage_active_plan_user_with_normal_client_only(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_leak_guard' => true,
+            'leak_guard_score_threshold' => 80,
+            'ip_region_overrides' => [
+                '1.1.1.1' => 'US',
+            ],
+        ]);
+
+        $decisions = $analyzer->inspectSubscriptionPull(
+            1017,
+            'token-low-normal',
+            '1.1.1.1',
+            'Sparkle/1.0.0',
+            [
+                'online_ips' => ['1.1.1.1'],
+                'plan_id' => 3,
+                'expired_at' => time() + 3600,
+                'transfer_enable' => 100 * 1024 * 1024 * 1024,
+                'used_traffic' => 1024,
+            ]
+        );
+
+        $this->assertSame([], $decisions);
+    }
+
+    public function test_leak_guard_blocks_low_usage_active_plan_user_with_rotating_client_families(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_leak_guard' => true,
+            'leak_guard_score_threshold' => 80,
+            'leak_guard_allowed_ua_count' => 1,
+            'ip_region_overrides' => [
+                '1.1.1.1' => 'US',
+            ],
+        ]);
+
+        $context = [
+            'online_ips' => ['1.1.1.1'],
+            'plan_id' => 3,
+            'expired_at' => time() + 3600,
+            'transfer_enable' => 100 * 1024 * 1024 * 1024,
+            'used_traffic' => 1024,
+        ];
+
+        $first = $analyzer->inspectSubscriptionPull(1018, 'token-low-rotate', '1.1.1.1', 'Sparkle/1.0.0', $context);
+        $second = $analyzer->inspectSubscriptionPull(1018, 'token-low-rotate', '1.1.1.1', 'sing-box/1.12.0', $context);
+
+        $this->assertSame([], $first);
+        $this->assertCount(1, $second);
+        $this->assertSame('subscription_leak_guard', $second[0]['code']);
+        $this->assertContains('active_plan_low_usage', $second[0]['meta']['signals']);
+        $this->assertContains('active_plan_very_low_usage', $second[0]['meta']['signals']);
+        $this->assertContains('active_plan_low_usage_with_many_ua', $second[0]['meta']['signals']);
+        $this->assertGreaterThanOrEqual(80, $second[0]['meta']['risk_score']);
+    }
+
     public function test_leak_guard_strict_mode_blocks_known_client_from_new_pull_ip(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([

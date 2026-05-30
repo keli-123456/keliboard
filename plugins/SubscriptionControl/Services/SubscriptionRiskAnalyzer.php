@@ -593,8 +593,29 @@ TEXT;
         if ($activePlanUser) {
             $lowUsageBytes = $this->configInt('leak_guard_active_plan_low_usage_bytes', 100 * 1024 * 1024, 0);
             if ($lowUsageBytes > 0 && $usedTraffic < $lowUsageBytes) {
-                $score += 20;
+                $score += 15;
                 $signals[] = 'active_plan_low_usage';
+
+                $veryLowUsageBytes = $this->configInt('leak_guard_active_plan_very_low_usage_bytes', 10 * 1024 * 1024, 0);
+                if ($veryLowUsageBytes > 0 && $usedTraffic < $veryLowUsageBytes) {
+                    $score += 15;
+                    $signals[] = 'active_plan_very_low_usage';
+                }
+
+                if (count($uaCategories) > $allowedUaCount) {
+                    $score += 25;
+                    $signals[] = 'active_plan_low_usage_with_many_ua';
+                }
+
+                if (count($ipFingerprints) > $allowedIpCount) {
+                    $score += 20;
+                    $signals[] = 'active_plan_low_usage_with_many_ips';
+                }
+
+                if (!$trustedEgress && $this->isActionableRegion($region) && !empty($onlineRegions) && !in_array($region, $onlineRegions, true)) {
+                    $score += 20;
+                    $signals[] = 'active_plan_low_usage_with_online_mismatch';
+                }
             }
         }
 
