@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Plugin\SubscriptionControl\Services\SubscriptionClientIpResolver;
 use Plugin\SubscriptionControl\Services\SubscriptionControlEventStore;
+use Plugin\SubscriptionControl\Services\SubscriptionIpIntelligenceService;
 use Plugin\SubscriptionControl\Services\SubscriptionRiskAnalyzer;
 use Plugin\SubscriptionControl\Services\SubscriptionTrustedEgressResolver;
 
@@ -81,7 +82,10 @@ class Plugin extends AbstractPlugin
             $userAgent = $request->header('User-Agent', '');
             $userAgentLower = strtolower($userAgent);
 
-            $riskAnalyzer = new SubscriptionRiskAnalyzer($riskConfig);
+            $riskAnalyzer = new SubscriptionRiskAnalyzer(
+                $riskConfig,
+                new SubscriptionIpIntelligenceService($riskConfig)
+            );
             $trustedEgress = $riskAnalyzer->isTrustedEgressIp($ip);
             $riskDecisionHalted = false;
             $servers = $this->applyRiskDecisions(
@@ -701,6 +705,13 @@ class Plugin extends AbstractPlugin
                 'used_traffic' => isset($meta['used_traffic']) ? (int) $meta['used_traffic'] : null,
                 'transfer_enable' => isset($meta['transfer_enable']) ? (int) $meta['transfer_enable'] : null,
                 'threshold' => isset($meta['threshold']) ? (int) $meta['threshold'] : null,
+                'ip_asn' => isset($meta['ip_asn']) ? (int) $meta['ip_asn'] : null,
+                'ip_prefix' => $meta['ip_prefix'] ?? null,
+                'ip_country' => $meta['ip_country'] ?? null,
+                'ip_registry' => $meta['ip_registry'] ?? null,
+                'ip_org' => $meta['ip_org'] ?? null,
+                'ip_type' => $meta['ip_type'] ?? null,
+                'ip_risk_tags' => $meta['ip_risk_tags'] ?? null,
             ], $eventTtl);
             try {
                 if (!$user) {
@@ -941,6 +952,13 @@ class Plugin extends AbstractPlugin
             'client_ip_source' => $meta['client_ip_source'] ?? null,
             'trusted_proxy' => isset($meta['trusted_proxy']) ? (bool) $meta['trusted_proxy'] : null,
             'cf_ray' => $meta['cf_ray'] ?? null,
+            'ip_asn' => isset($meta['ip_asn']) ? (int) $meta['ip_asn'] : null,
+            'ip_prefix' => $meta['ip_prefix'] ?? null,
+            'ip_country' => $meta['ip_country'] ?? null,
+            'ip_registry' => $meta['ip_registry'] ?? null,
+            'ip_org' => $meta['ip_org'] ?? null,
+            'ip_type' => $meta['ip_type'] ?? null,
+            'ip_risk_tags' => $meta['ip_risk_tags'] ?? null,
             'user_agent' => $meta['user_agent'] ?? null,
             'ua_category' => $meta['ua_category'] ?? null,
             'ua_categories' => $meta['ua_categories'] ?? null,

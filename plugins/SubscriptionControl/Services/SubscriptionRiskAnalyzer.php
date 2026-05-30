@@ -27,7 +27,10 @@ stash
 streisand
 TEXT;
 
-    public function __construct(private readonly array $config = [])
+    public function __construct(
+        private readonly array $config = [],
+        private readonly ?SubscriptionIpIntelligenceService $ipIntelligence = null
+    )
     {
     }
 
@@ -127,6 +130,8 @@ TEXT;
     ): array {
         $client = $this->classifyUserAgent($userAgent);
         $decisions = [];
+        $trustedEgress = $this->isTrustedEgressIp($clientIp);
+        $ipIntelligence = null;
 
         if ($this->configBool('enable_client_ua_whitelist', false) && !$this->isWhitelistedClient($client, $userAgent)) {
             $decisions[] = $this->decision(
@@ -138,8 +143,6 @@ TEXT;
                 ]
             );
         }
-
-        $trustedEgress = $this->isTrustedEgressIp($clientIp);
 
         if (!$trustedEgress && $this->configBool('enable_source_batch_detection', false)) {
             $decision = $this->inspectSourceBatchPull($userId, $clientIp, $client);
@@ -215,13 +218,30 @@ TEXT;
         }
 
         if ($this->configBool('enable_leak_guard', false)) {
-            $decision = $this->inspectLeakGuard($userId, $token, $clientIp, $userAgent, $client, $context, $trustedEgress);
+            $ipIntelligence = $this->resolveIpIntelligence($clientIp, $trustedEgress);
+            $decision = $this->inspectLeakGuard(
+                $userId,
+                $token,
+                $clientIp,
+                $userAgent,
+                $client,
+                $context,
+                $trustedEgress,
+                $ipIntelligence
+            );
             if ($decision !== null) {
                 $decisions[] = $decision;
             }
         }
 
-        return $decisions;
+        if (!empty($decisions) && $ipIntelligence === null) {
+            $ipIntelligence = $this->resolveIpIntelligence($clientIp, $trustedEgress);
+        }
+
+        return array_map(
+            fn(array $decision): array => $this->withIpIntelligenceMeta($decision, $ipIntelligence),
+            $decisions
+        );
     }
 
     private function clientInfo(string $category, bool $risky = false): array
@@ -498,7 +518,8 @@ TEXT;
         string $userAgent,
         array $client,
         array $context,
-        bool $trustedEgress
+        bool $trustedEgress,
+        ?array $ipIntelligence = null
     ): ?array {
         $window = $this->configInt('leak_guard_window_seconds', 600, 60);
         $threshold = $this->configInt('leak_guard_score_threshold', 80, 1);
@@ -619,6 +640,18 @@ TEXT;
             }
         }
 
+        if (!$trustedEgress && $ipIntelligence !== null) {
+            $ipType = (string) ($ipIntelligence['ip_type'] ?? 'unknown');
+            $weight = $this->configInt('ip_intelligence_score_weight', 20, 0);
+            if ($ipType === 'hosting' && $weight > 0) {
+                $score += $weight;
+                $signals[] = 'ip_intelligence_hosting';
+            } elseif ($ipType === 'proxy' && $weight > 0) {
+                $score += $weight + 10;
+                $signals[] = 'ip_intelligence_proxy';
+            }
+        }
+
         if ($score < $threshold) {
             return null;
         }
@@ -654,6 +687,35 @@ TEXT;
                 'threshold' => $threshold,
             ]
         );
+    }
+
+    private function resolveIpIntelligence(string $clientIp, bool $trustedEgress): ?array
+    {
+        if ($trustedEgress || !$this->configBool('enable_ip_intelligence', true)) {
+            return null;
+        }
+
+        $service = $this->ipIntelligence ?? new SubscriptionIpIntelligenceService($this->config);
+        return $service->lookup($clientIp);
+    }
+
+    private function withIpIntelligenceMeta(array $decision, ?array $ipIntelligence): array
+    {
+        if ($ipIntelligence === null) {
+            return $decision;
+        }
+
+        $decision['meta'] = array_merge((array) ($decision['meta'] ?? []), [
+            'ip_asn' => $ipIntelligence['ip_asn'] ?? null,
+            'ip_prefix' => $ipIntelligence['ip_prefix'] ?? null,
+            'ip_country' => $ipIntelligence['ip_country'] ?? null,
+            'ip_registry' => $ipIntelligence['ip_registry'] ?? null,
+            'ip_org' => $ipIntelligence['ip_org'] ?? null,
+            'ip_type' => $ipIntelligence['ip_type'] ?? 'unknown',
+            'ip_risk_tags' => $ipIntelligence['ip_risk_tags'] ?? [],
+        ]);
+
+        return $decision;
     }
 
     private function isActivePlanUser(array $context): bool

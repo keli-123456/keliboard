@@ -24,6 +24,13 @@ return new class extends Migration {
             $table->string('client_ip_source', 64)->nullable();
             $table->boolean('trusted_proxy')->nullable();
             $table->string('cf_ray', 128)->nullable();
+            $table->integer('ip_asn')->nullable()->index();
+            $table->string('ip_prefix', 128)->nullable();
+            $table->string('ip_country', 8)->nullable()->index();
+            $table->string('ip_registry', 32)->nullable();
+            $table->string('ip_org', 191)->nullable();
+            $table->string('ip_type', 32)->nullable()->index();
+            $table->json('ip_risk_tags')->nullable();
             $table->text('user_agent')->nullable();
             $table->string('ua_category', 64)->nullable()->index();
             $table->json('ua_categories')->nullable();

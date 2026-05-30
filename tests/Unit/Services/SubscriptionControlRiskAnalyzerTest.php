@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Services;
 
 use Plugin\SubscriptionControl\Services\SubscriptionRiskAnalyzer;
+use Plugin\SubscriptionControl\Services\SubscriptionIpIntelligenceService;
 use Tests\TestCase;
 
 final class SubscriptionControlRiskAnalyzerTest extends TestCase
@@ -485,5 +486,31 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertSame([], $analyzer->inspectSubscriptionPull(1131, 'token-n', '3.3.3.1', 'Sparkle/1.0.0'));
         $this->assertSame([], $analyzer->inspectSubscriptionPull(1131, 'token-n', '3.3.3.2', 'Sparkle/1.0.0'));
+    }
+
+    public function test_leak_guard_uses_ip_intelligence_as_auxiliary_score_and_metadata(): void
+    {
+        $intelligence = new SubscriptionIpIntelligenceService([], function (string $query): array {
+            return match ($query) {
+                '4.3.2.1.origin.asn.cymru.com' => ['45090 | 1.2.3.4 | 1.2.3.0/24 | CN | apnic | 2020-01-01'],
+                'AS45090.asn.cymru.com' => ['45090 | CN | apnic | 2011-01-01 | TENCENT-NET-AP Shenzhen Tencent Computer Systems Company Limited, CN'],
+                default => [],
+            };
+        });
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_leak_guard' => true,
+            'enable_ip_intelligence' => true,
+            'ip_intelligence_score_weight' => 25,
+            'leak_guard_score_threshold' => 20,
+        ], $intelligence);
+
+        $decisions = $analyzer->inspectSubscriptionPull(1151, 'token-p', '1.2.3.4', 'Sparkle/1.0.0');
+
+        $this->assertCount(1, $decisions);
+        $this->assertSame('subscription_leak_guard', $decisions[0]['code']);
+        $this->assertContains('ip_intelligence_hosting', $decisions[0]['meta']['signals']);
+        $this->assertSame(45090, $decisions[0]['meta']['ip_asn']);
+        $this->assertSame('hosting', $decisions[0]['meta']['ip_type']);
+        $this->assertContains('cloud_provider', $decisions[0]['meta']['ip_risk_tags']);
     }
 }

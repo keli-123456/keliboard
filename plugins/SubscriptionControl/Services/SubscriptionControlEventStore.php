@@ -11,10 +11,11 @@ use Illuminate\Support\Facades\Schema;
 final class SubscriptionControlEventStore
 {
     private const TABLE = 'v2_subscription_control_event';
-    private const JSON_FIELDS = ['ua_categories', 'regions', 'online_regions', 'signals'];
+    private const JSON_FIELDS = ['ua_categories', 'regions', 'online_regions', 'signals', 'ip_risk_tags'];
     private const BOOL_FIELDS = ['trusted_proxy', 'active_plan_user', 'cooldown_hit', 'email_sent', 'telegram_sent'];
     private const INT_FIELDS = [
         'user_id',
+        'ip_asn',
         'online_ip_count',
         'source_user_count',
         'source_user_threshold',
@@ -110,6 +111,13 @@ final class SubscriptionControlEventStore
             'client_ip_source' => $this->stringOrNull($event['client_ip_source'] ?? null),
             'trusted_proxy' => $this->boolOrNull($event['trusted_proxy'] ?? null),
             'cf_ray' => $this->stringOrNull($event['cf_ray'] ?? null),
+            'ip_asn' => $this->intOrNull($event['ip_asn'] ?? null),
+            'ip_prefix' => $this->stringOrNull($event['ip_prefix'] ?? null),
+            'ip_country' => $this->stringOrNull($event['ip_country'] ?? null),
+            'ip_registry' => $this->stringOrNull($event['ip_registry'] ?? null),
+            'ip_org' => $this->stringOrNull($event['ip_org'] ?? null),
+            'ip_type' => $this->stringOrNull($event['ip_type'] ?? null),
+            'ip_risk_tags' => $this->jsonOrNull($event['ip_risk_tags'] ?? null),
             'user_agent' => $this->stringOrNull($event['user_agent'] ?? null),
             'ua_category' => $this->stringOrNull($event['ua_category'] ?? null),
             'ua_categories' => $this->jsonOrNull($event['ua_categories'] ?? null),

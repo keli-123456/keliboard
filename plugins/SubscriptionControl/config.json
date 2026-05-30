@@ -1,8 +1,8 @@
 {
     "name": "订阅风控",
     "code": "subscription_control",
-    "version": "1.4.9",
-    "description": "提供订阅链接的主动风险控制能力，防止节点被恶意扫描。支持可信代理真实IP识别、订阅泄露保护、在线唯一IP阈值、邮件/TG通知、UA黑名单、客户端白名单、多UA/多地区订阅检测、订阅IP限制、阅后即焚功能。",
+    "version": "1.5.0",
+    "description": "提供订阅链接的主动风险控制能力，防止节点被恶意扫描。支持可信代理真实IP识别、免费ASN/IP类型标签、订阅泄露保护、在线唯一IP阈值、邮件/TG通知、UA黑名单、客户端白名单、多UA/多地区订阅检测、订阅IP限制、阅后即焚功能。",
     "author": "XBoard",
     "require": {
         "xboard": ">=1.0.0"
@@ -253,6 +253,24 @@
             "default": 604800,
             "label": "IP地区缓存时间（秒）",
             "description": "IP归属地查询结果缓存时间，默认7天"
+        },
+        "enable_ip_intelligence": {
+            "type": "boolean",
+            "default": true,
+            "label": "启用免费 ASN/IP 类型标签",
+            "description": "使用 Team Cymru 免费 DNS ASN 映射识别订阅来源 IP 的 ASN、组织和类型。仅用于展示和泄露保护加分，不单独封禁"
+        },
+        "ip_intelligence_score_weight": {
+            "type": "number",
+            "default": 20,
+            "label": "IP 类型风险加分",
+            "description": "来源 IP 被识别为云厂商/IDC/代理倾向时增加的泄露保护分数；不会单独封禁"
+        },
+        "ip_intelligence_cache_ttl_seconds": {
+            "type": "number",
+            "default": 604800,
+            "label": "IP 类型标签缓存时间（秒）",
+            "description": "ASN/IP 类型查询结果缓存时间，默认7天，减少外部 DNS 查询"
         },
         "enable_ua_reset_token": {
             "type": "boolean",
