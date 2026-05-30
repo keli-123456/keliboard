@@ -228,6 +228,50 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame([], $decisions);
     }
 
+    public function test_leak_guard_adds_low_usage_signal_only_for_active_plan_user(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_leak_guard' => true,
+            'leak_guard_score_threshold' => 80,
+            'ip_region_overrides' => [
+                '1.1.1.1' => 'US',
+                '2.2.2.2' => 'JP',
+            ],
+        ]);
+
+        $expired = $analyzer->inspectSubscriptionPull(
+            1015,
+            'token-expired',
+            '2.2.2.2',
+            'curl/8.5.0',
+            [
+                'online_ips' => ['1.1.1.1'],
+                'plan_id' => 3,
+                'expired_at' => time() - 3600,
+                'transfer_enable' => 100 * 1024 * 1024 * 1024,
+                'used_traffic' => 1024,
+            ]
+        );
+        $active = $analyzer->inspectSubscriptionPull(
+            1016,
+            'token-active',
+            '2.2.2.2',
+            'curl/8.5.0',
+            [
+                'online_ips' => ['1.1.1.1'],
+                'plan_id' => 3,
+                'expired_at' => time() + 3600,
+                'transfer_enable' => 100 * 1024 * 1024 * 1024,
+                'used_traffic' => 1024,
+            ]
+        );
+
+        $this->assertNotContains('active_plan_low_usage', $expired[0]['meta']['signals']);
+        $this->assertContains('active_plan_low_usage', $active[0]['meta']['signals']);
+        $this->assertTrue($active[0]['meta']['active_plan_user']);
+        $this->assertSame(1024, $active[0]['meta']['used_traffic']);
+    }
+
     public function test_leak_guard_strict_mode_blocks_known_client_from_new_pull_ip(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([

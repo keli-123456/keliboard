@@ -1,7 +1,7 @@
 {
     "name": "订阅风控",
     "code": "subscription_control",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "description": "提供订阅链接的主动风险控制能力，防止节点被恶意扫描。支持可信代理真实IP识别、订阅泄露保护、在线唯一IP阈值、邮件/TG通知、UA黑名单、客户端白名单、多UA/多地区订阅检测、订阅IP限制、阅后即焚功能。",
     "author": "XBoard",
     "require": {
@@ -145,6 +145,12 @@
             "default": 80,
             "label": "泄露保护触发分数",
             "description": "风险分达到该值时触发保护。脚本/浏览器UA、非白名单UA、拉取地区和在线地区不一致会快速抬高分数"
+        },
+        "leak_guard_active_plan_low_usage_bytes": {
+            "type": "number",
+            "default": 104857600,
+            "label": "有效套餐低流量阈值（字节）",
+            "description": "仅对有套餐且未过期的用户生效。累计已用流量低于该值时，泄露保护会增加低流量风险信号；默认100MB"
         },
         "leak_guard_window_seconds": {
             "type": "number",

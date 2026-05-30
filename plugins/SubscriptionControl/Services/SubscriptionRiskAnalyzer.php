@@ -512,6 +512,9 @@ TEXT;
         $category = (string) ($client['category'] ?? 'unknown');
         $region = $this->resolveRegionKey($clientIp);
         $onlineRegions = $this->resolveOnlineRegions((array) ($context['online_ips'] ?? []));
+        $activePlanUser = $this->isActivePlanUser($context);
+        $usedTraffic = $this->contextInt($context, 'used_traffic', 0);
+        $transferEnable = $this->contextInt($context, 'transfer_enable', 0);
 
         if ((bool) ($client['risky'] ?? false)) {
             $score += 45;
@@ -587,6 +590,14 @@ TEXT;
             $signals[] = 'online_region_mismatch';
         }
 
+        if ($activePlanUser) {
+            $lowUsageBytes = $this->configInt('leak_guard_active_plan_low_usage_bytes', 100 * 1024 * 1024, 0);
+            if ($lowUsageBytes > 0 && $usedTraffic < $lowUsageBytes) {
+                $score += 20;
+                $signals[] = 'active_plan_low_usage';
+            }
+        }
+
         if ($score < $threshold) {
             return null;
         }
@@ -616,9 +627,43 @@ TEXT;
                 'region' => $region,
                 'regions' => $regions,
                 'online_regions' => $onlineRegions,
+                'active_plan_user' => $activePlanUser,
+                'used_traffic' => $usedTraffic,
+                'transfer_enable' => $transferEnable,
                 'threshold' => $threshold,
             ]
         );
+    }
+
+    private function isActivePlanUser(array $context): bool
+    {
+        $planId = $this->contextInt($context, 'plan_id', 0);
+        $transferEnable = $this->contextInt($context, 'transfer_enable', 0);
+        $expiredAt = $context['expired_at'] ?? null;
+
+        if ($planId <= 0 || $transferEnable <= 0) {
+            return false;
+        }
+
+        if ($expiredAt === null || $expiredAt === '') {
+            return true;
+        }
+
+        if (!is_numeric($expiredAt)) {
+            return false;
+        }
+
+        return (int) $expiredAt > time();
+    }
+
+    private function contextInt(array $context, string $key, int $default): int
+    {
+        $value = $context[$key] ?? $default;
+        if (!is_numeric($value)) {
+            return $default;
+        }
+
+        return max(0, (int) $value);
     }
 
     private function rememberLeakGuardHit(int $userId, string $token, int $window): int

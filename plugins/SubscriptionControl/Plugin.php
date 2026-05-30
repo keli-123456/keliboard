@@ -80,7 +80,13 @@ class Plugin extends AbstractPlugin
                     (string) $user->token,
                     $ip,
                     $userAgent,
-                    ['online_ips' => $this->collectOnlineIpsForRisk((int) $user->id)]
+                    [
+                        'online_ips' => $this->collectOnlineIpsForRisk((int) $user->id),
+                        'plan_id' => $user->plan_id,
+                        'expired_at' => $user->expired_at,
+                        'transfer_enable' => $user->transfer_enable,
+                        'used_traffic' => (int) $user->u + (int) $user->d,
+                    ]
                 ),
                 $ip,
                 $userAgent,
@@ -679,6 +685,9 @@ class Plugin extends AbstractPlugin
                 'risk_score' => isset($meta['risk_score']) ? (int) $meta['risk_score'] : null,
                 'hit_count' => isset($meta['hit_count']) ? (int) $meta['hit_count'] : null,
                 'signals' => $meta['signals'] ?? null,
+                'active_plan_user' => isset($meta['active_plan_user']) ? (bool) $meta['active_plan_user'] : null,
+                'used_traffic' => isset($meta['used_traffic']) ? (int) $meta['used_traffic'] : null,
+                'transfer_enable' => isset($meta['transfer_enable']) ? (int) $meta['transfer_enable'] : null,
                 'threshold' => isset($meta['threshold']) ? (int) $meta['threshold'] : null,
             ], $eventTtl);
             try {
@@ -934,6 +943,9 @@ class Plugin extends AbstractPlugin
             'score_threshold' => isset($meta['score_threshold']) ? (int) $meta['score_threshold'] : null,
             'hit_count' => isset($meta['hit_count']) ? (int) $meta['hit_count'] : null,
             'signals' => $meta['signals'] ?? null,
+            'active_plan_user' => isset($meta['active_plan_user']) ? (bool) $meta['active_plan_user'] : null,
+            'used_traffic' => isset($meta['used_traffic']) ? (int) $meta['used_traffic'] : null,
+            'transfer_enable' => isset($meta['transfer_enable']) ? (int) $meta['transfer_enable'] : null,
             'threshold' => isset($meta['threshold']) ? (int) $meta['threshold'] : null,
             'cooldown_hit' => (bool) ($notificationResult['cooldown_hit'] ?? false),
             'email_sent' => (bool) ($notificationResult['email_sent'] ?? false),
