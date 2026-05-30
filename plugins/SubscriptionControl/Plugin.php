@@ -13,6 +13,7 @@ use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Plugin\SubscriptionControl\Services\SubscriptionClientIpResolver;
+use Plugin\SubscriptionControl\Services\SubscriptionControlEventStore;
 use Plugin\SubscriptionControl\Services\SubscriptionRiskAnalyzer;
 use Plugin\SubscriptionControl\Services\SubscriptionTrustedEgressResolver;
 
@@ -35,6 +36,15 @@ class Plugin extends AbstractPlugin
 
     public function schedule(Schedule $schedule): void
     {
+        $schedule
+            ->call(function (): void {
+                (new SubscriptionControlEventStore())->prune(3);
+            })
+            ->name('plugin:subscription_control:prune_events')
+            ->daily()
+            ->onOneServer()
+            ->withoutOverlapping(10);
+
         if (!$this->getConfig('enable_online_ip_threshold', false)) {
             return;
         }
@@ -919,7 +929,7 @@ class Plugin extends AbstractPlugin
             $events = [];
         }
 
-        array_unshift($events, [
+        $event = [
             'id' => uniqid('sc_', true),
             'user_id' => $userId,
             'email' => $email,
@@ -953,12 +963,15 @@ class Plugin extends AbstractPlugin
             'email_sent' => (bool) ($notificationResult['email_sent'] ?? false),
             'telegram_sent' => (bool) ($notificationResult['telegram_sent'] ?? false),
             'created_at' => time(),
-        ]);
+        ];
+
+        array_unshift($events, $event);
 
         if (count($events) > self::RECENT_EVENTS_LIMIT) {
             $events = array_slice($events, 0, self::RECENT_EVENTS_LIMIT);
         }
 
-        Cache::put(self::RECENT_EVENTS_KEY, $events, 60 * 60 * 24 * 14);
+        Cache::put(self::RECENT_EVENTS_KEY, $events, 60 * 60 * 24 * 3);
+        (new SubscriptionControlEventStore())->append($event, 3);
     }
 }

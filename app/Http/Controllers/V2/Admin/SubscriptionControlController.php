@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Plugin\SubscriptionControl\Services\SubscriptionControlEventStore;
 
 class SubscriptionControlController extends Controller
 {
@@ -15,23 +16,12 @@ class SubscriptionControlController extends Controller
     {
         $limit = max(1, min(100, (int) $request->input('limit', 50)));
         $email = trim((string) $request->input('email', ''));
-        $events = Cache::get(self::RECENT_EVENTS_KEY, []);
-        if (!is_array($events)) {
-            $events = [];
+        $store = new SubscriptionControlEventStore();
+        $events = $store->recent($limit, $email);
+
+        if (empty($events)) {
+            $events = $this->recentEventsFromCache($limit, $email);
         }
-
-        $events = array_values(array_filter($events, fn($item) => is_array($item)));
-        if ($email !== '') {
-            $needle = strtolower($email);
-            $events = array_values(array_filter($events, function (array $event) use ($needle): bool {
-                $eventEmail = strtolower(trim((string) ($event['email'] ?? '')));
-
-                return $eventEmail !== '' && str_contains($eventEmail, $needle);
-            }));
-        }
-
-        usort($events, fn(array $a, array $b) => (int) ($b['created_at'] ?? 0) <=> (int) ($a['created_at'] ?? 0));
-        $events = array_slice($events, 0, $limit);
 
         $blockedToday = (int) Cache::get('subscription_control:blocked_count:' . date('Y-m-d'), 0);
         $resetCount = count(array_filter($events, fn(array $event) => in_array((string) ($event['action'] ?? ''), ['reset_token', 'reset_token_uuid'], true)));
@@ -45,5 +35,28 @@ class SubscriptionControlController extends Controller
             ],
             'recent_events' => $events,
         ]);
+    }
+
+    private function recentEventsFromCache(int $limit, string $email = ''): array
+    {
+        $events = Cache::get(self::RECENT_EVENTS_KEY, []);
+        if (!is_array($events)) {
+            return [];
+        }
+
+        $events = array_values(array_filter($events, fn($item) => is_array($item)));
+        $retentionCutoff = time() - (3 * 86400);
+        $events = array_values(array_filter($events, fn(array $event): bool => (int) ($event['created_at'] ?? 0) >= $retentionCutoff));
+        if ($email !== '') {
+            $needle = strtolower($email);
+            $events = array_values(array_filter($events, function (array $event) use ($needle): bool {
+                $eventEmail = strtolower(trim((string) ($event['email'] ?? '')));
+
+                return $eventEmail !== '' && str_contains($eventEmail, $needle);
+            }));
+        }
+
+        usort($events, fn(array $a, array $b) => (int) ($b['created_at'] ?? 0) <=> (int) ($a['created_at'] ?? 0));
+        return array_slice($events, 0, $limit);
     }
 }
