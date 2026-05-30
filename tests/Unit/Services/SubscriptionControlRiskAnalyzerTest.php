@@ -32,6 +32,19 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertFalse($throne['risky']);
     }
 
+    public function test_classifies_legacy_clash_as_risky_legacy_client_family(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer();
+
+        $windows = $analyzer->classifyUserAgent('ClashforWindows/0.20.39');
+        $android = $analyzer->classifyUserAgent('ClashForAndroid/2.5.12.premium');
+
+        $this->assertSame('legacy_clash', $windows['category']);
+        $this->assertSame('legacy_clash', $android['category']);
+        $this->assertTrue($windows['risky']);
+        $this->assertTrue($android['risky']);
+    }
+
     public function test_multi_ua_detection_ignores_version_changes_inside_same_family(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([
@@ -98,6 +111,24 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame('client_ua_not_allowed', $blocked[0]['code']);
         $this->assertSame('block', $blocked[0]['action']);
         $this->assertSame('script', $blocked[0]['meta']['ua_category']);
+    }
+
+    public function test_client_ua_whitelist_rejects_legacy_clash_even_when_modern_clash_is_allowed(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_client_ua_whitelist' => true,
+            'client_ua_whitelist' => "mihomo\nclashmeta\nclashxmeta\nsparkle",
+            'client_ua_unknown_action' => 'empty',
+        ]);
+
+        $allowed = $analyzer->inspectSubscriptionPull(1014, 'token-modern', '1.1.1.1', 'Clash.Meta/1.18.0');
+        $blocked = $analyzer->inspectSubscriptionPull(1014, 'token-modern', '1.1.1.1', 'ClashforWindows/0.20.39');
+
+        $this->assertSame([], $allowed);
+        $this->assertCount(1, $blocked);
+        $this->assertSame('client_ua_not_allowed', $blocked[0]['code']);
+        $this->assertSame('empty', $blocked[0]['action']);
+        $this->assertSame('legacy_clash', $blocked[0]['meta']['ua_category']);
     }
 
     public function test_multi_region_pull_detection_flags_same_token_from_distinct_regions(): void
@@ -275,6 +306,27 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame('empty', $decisions[0]['action']);
         $this->assertSame(3, $decisions[0]['meta']['source_user_count']);
         $this->assertSame('sparkle', $decisions[0]['meta']['ua_category']);
+    }
+
+    public function test_source_batch_detection_counts_same_ip_across_rotating_user_agents(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_source_batch_detection' => true,
+            'source_batch_user_threshold' => 3,
+            'source_batch_window_seconds' => 600,
+            'source_batch_action' => 'reset_token_uuid',
+        ]);
+
+        $this->assertSame([], $analyzer->inspectSubscriptionPull(1141, 'token-o1', '4.4.4.4', 'Sparkle/1.0.0'));
+        $this->assertSame([], $analyzer->inspectSubscriptionPull(1142, 'token-o2', '4.4.4.4', 'sing-box/1.12.0'));
+        $decisions = $analyzer->inspectSubscriptionPull(1143, 'token-o3', '4.4.4.4', 'curl/8.5.0');
+
+        $this->assertCount(1, $decisions);
+        $this->assertSame('source_batch_pull', $decisions[0]['code']);
+        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
+        $this->assertSame(3, $decisions[0]['meta']['source_user_count']);
+        $this->assertSame('script', $decisions[0]['meta']['ua_category']);
+        $this->assertSame(['sing-box', 'sparkle', 'script'], $decisions[0]['meta']['source_ua_categories']);
     }
 
     public function test_source_batch_detection_keeps_different_source_ips_separate(): void

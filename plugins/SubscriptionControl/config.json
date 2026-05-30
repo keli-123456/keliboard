@@ -1,7 +1,7 @@
 {
     "name": "订阅风控",
     "code": "subscription_control",
-    "version": "1.3.9",
+    "version": "1.4.0",
     "description": "提供订阅链接的主动风险控制能力，防止节点被恶意扫描。支持可信代理真实IP识别、订阅泄露保护、在线唯一IP阈值、邮件/TG通知、UA黑名单、客户端白名单、多UA/多地区订阅检测、订阅IP限制、阅后即焚功能。",
     "author": "XBoard",
     "require": {
@@ -28,9 +28,9 @@
         },
         "client_ua_whitelist": {
             "type": "text",
-            "default": "mihomo\nsing-box\nshadowrocket\nThrone\nClashX.Meta\nquantumult-x\nsurge\nv2rayn\nnekobox\nsparkle\nhiddify\nstreisand\nloon",
+            "default": "mihomo\nclashmeta\nclash-meta\nclashx.meta\nclashxmeta\nclashmetaforandroid\nflclash\nnekobox\nnekoray\nsparkle\nsing-box\nsingbox\nhiddify\nkaring\nshadowrocket\nstash\nstreisand",
             "label": "客户端UA白名单（逗号或换行分隔）",
-            "description": "填写允许拉取订阅的客户端关键词或内置分类，例如 mihomo、sing-box、shadowrocket"
+            "description": "填写允许拉取订阅的现代客户端关键词或内置分类。默认仅包含至少适合 HY2、VLESS、Trojan WS 的客户端；旧 Clash 客户端不建议放行"
         },
         "client_ua_unknown_action": {
             "type": "string",
@@ -84,7 +84,7 @@
             "type": "boolean",
             "default": false,
             "label": "启用同源批量订阅检测",
-            "description": "开启后，同一真实客户端IP和同一UA类别在短时间内拉取多个用户订阅会触发风控"
+            "description": "开启后，同一真实客户端IP在短时间内拉取多个用户订阅会触发风控；轮换UA也会被归入同一来源"
         },
         "source_batch_user_threshold": {
             "type": "number",

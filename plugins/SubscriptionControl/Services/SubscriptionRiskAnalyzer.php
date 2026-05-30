@@ -12,16 +12,19 @@ final class SubscriptionRiskAnalyzer
 mihomo
 sing-box
 shadowrocket
-throne
+clashmeta
+clash-meta
 clashx.meta
-quantumult-x
-surge
-v2rayn
+clashxmeta
+clashmetaforandroid
+flclash
 nekobox
+nekoray
 sparkle
 hiddify
+karing
+stash
 streisand
-loon
 TEXT;
 
     public function __construct(private readonly array $config = [])
@@ -41,13 +44,25 @@ TEXT;
             return $this->clientInfo('sparkle');
         }
 
+        if (str_contains($ua, 'clashforwindows') || str_contains($ua, 'clash for windows')) {
+            return $this->clientInfo('legacy_clash', true);
+        }
+
+        if (str_contains($ua, 'clashforandroid')) {
+            $version = $this->extractVersionAfter($ua, 'clashforandroid');
+            if ($version === null || version_compare($version, '2.9.0', '<')) {
+                return $this->clientInfo('legacy_clash', true);
+            }
+            return $this->clientInfo('mihomo');
+        }
+
         if (
             str_contains($ua, 'mihomo')
             || str_contains($ua, 'clash.meta')
             || str_contains($ua, 'clashx.meta')
             || str_contains($ua, 'clash-meta')
             || str_contains($ua, 'clashmeta')
-            || preg_match('/\bclash\b/', $ua)
+            || str_contains($ua, 'flclash')
         ) {
             return $this->clientInfo('mihomo');
         }
@@ -56,7 +71,7 @@ TEXT;
             return $this->clientInfo('throne');
         }
 
-        if (str_contains($ua, 'sing-box') || str_contains($ua, 'singbox')) {
+        if (str_contains($ua, 'sing-box') || str_contains($ua, 'singbox') || str_contains($ua, 'karing')) {
             return $this->clientInfo('sing-box');
         }
 
@@ -217,6 +232,15 @@ TEXT;
         ];
     }
 
+    private function extractVersionAfter(string $ua, string $name): ?string
+    {
+        if (preg_match('/' . preg_quote($name, '/') . '[^0-9]*([0-9]+(?:\.[0-9]+)*)/i', $ua, $matches)) {
+            return $matches[1];
+        }
+
+        return null;
+    }
+
     private function looksLikeScriptClient(string $ua): bool
     {
         foreach ([
@@ -317,12 +341,11 @@ TEXT;
         );
     }
 
-    private function sourceBatchCacheKey(string $clientIp, string $uaCategory): string
+    private function sourceBatchCacheKey(string $clientIp): string
     {
         return sprintf(
-            'subscription_control:risk:source_batch:%s:%s',
-            hash('sha256', trim($clientIp)),
-            hash('sha256', strtolower(trim($uaCategory)))
+            'subscription_control:risk:source_batch:%s',
+            hash('sha256', trim($clientIp))
         );
     }
 
@@ -400,11 +423,13 @@ TEXT;
         $window = $this->configInt('source_batch_window_seconds', 600, 60);
         $threshold = $this->configInt('source_batch_user_threshold', 3, 2);
         $category = (string) ($client['category'] ?? 'unknown');
-        $users = $this->rememberWindowValue(
-            $this->sourceBatchCacheKey($clientIp, $category),
+        $state = $this->rememberSourceBatchState(
+            $this->sourceBatchCacheKey($clientIp),
             (string) $userId,
+            $category,
             $window
         );
+        $users = $state['users'];
 
         if (count($users) < $threshold) {
             return null;
@@ -418,9 +443,52 @@ TEXT;
                 'source_user_count' => count($users),
                 'source_user_threshold' => $threshold,
                 'ua_category' => $category,
+                'source_ua_categories' => $state['ua_categories'],
                 'threshold' => $threshold,
             ]
         );
+    }
+
+    private function rememberSourceBatchState(string $cacheKey, string $userId, string $uaCategory, int $window): array
+    {
+        $now = time();
+        $state = Cache::get($cacheKey, []);
+        if (!is_array($state) || (!isset($state['users']) && !isset($state['ua_categories']))) {
+            $state = [
+                'users' => [],
+                'ua_categories' => [],
+            ];
+        }
+
+        $users = is_array($state['users'] ?? null) ? $state['users'] : [];
+        $uaCategories = is_array($state['ua_categories'] ?? null) ? $state['ua_categories'] : [];
+
+        $users = array_filter(
+            $users,
+            static fn($timestamp): bool => is_numeric($timestamp) && ($now - (int) $timestamp) < $window
+        );
+        $uaCategories = array_filter(
+            $uaCategories,
+            static fn($timestamp): bool => is_numeric($timestamp) && ($now - (int) $timestamp) < $window
+        );
+
+        $users[$userId] = $now;
+        $uaCategories[$uaCategory] = $now;
+
+        Cache::put($cacheKey, [
+            'users' => $users,
+            'ua_categories' => $uaCategories,
+        ], $window);
+
+        $userValues = array_keys($users);
+        $uaValues = array_keys($uaCategories);
+        sort($userValues, SORT_STRING);
+        sort($uaValues, SORT_STRING);
+
+        return [
+            'users' => $userValues,
+            'ua_categories' => $uaValues,
+        ];
     }
 
     private function inspectLeakGuard(
