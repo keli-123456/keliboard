@@ -64,13 +64,13 @@ class Plugin extends AbstractPlugin
                 return $servers;
             }
 
-            $ipInfo = (new SubscriptionClientIpResolver($this->getConfig()))->resolve($request);
+            $riskConfig = $this->riskAnalyzerConfig();
+            $ipInfo = (new SubscriptionClientIpResolver($riskConfig))->resolve($request);
             $ip = (string) $ipInfo['client_ip'];
             $ipMeta = $this->clientIpMeta($ipInfo);
             $userAgent = $request->header('User-Agent', '');
             $userAgentLower = strtolower($userAgent);
 
-            $riskConfig = $this->riskAnalyzerConfig();
             $riskAnalyzer = new SubscriptionRiskAnalyzer($riskConfig);
             $trustedEgress = $riskAnalyzer->isTrustedEgressIp($ip);
             $riskDecisionHalted = false;
