@@ -19,6 +19,7 @@ clash-meta
 clashx.meta
 clashxmeta
 clashmetaforandroid
+clash-verge
 clash-verge-rev
 clashvergerev
 clash-nyanpasu
@@ -61,6 +62,7 @@ deckyclash
 tomoon
 v2rayn
 v2rayng
+v2aya
 nekobox
 nekoray
 sparkle
@@ -119,6 +121,7 @@ TEXT;
             'clashx.meta',
             'clash-meta',
             'clashmeta',
+            'clash-verge',
             'clash-verge-rev',
             'clashvergerev',
             'clash-nyanpasu',
@@ -200,6 +203,10 @@ TEXT;
 
         if (str_contains($ua, 'v2rayn')) {
             return $this->clientInfo('v2rayn');
+        }
+
+        if (str_contains($ua, 'v2aya')) {
+            return $this->clientInfo('v2aya');
         }
 
         if (str_contains($ua, 'nekobox') || str_contains($ua, 'nekoray')) {
