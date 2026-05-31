@@ -44,5 +44,7 @@ final class SubscriptionControlOwnershipTest extends TestCase
         foreach (['ucloud', 'aliyun', 'alibaba', 'tencent', 'huawei cloud', 'huaweicloud', 'baidu cloud', 'volcengine', 'tianyi cloud', 'china mobile cloud'] as $keyword) {
             $this->assertStringContainsString($keyword, $keywords);
         }
+
+        $this->assertStringNotContainsString("\nmobile cloud", $keywords);
     }
 }
