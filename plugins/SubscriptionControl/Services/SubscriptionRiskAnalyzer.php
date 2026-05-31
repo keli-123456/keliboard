@@ -11,20 +11,78 @@ final class SubscriptionRiskAnalyzer
     private const DEFAULT_CLIENT_WHITELIST = <<<'TEXT'
 mihomo
 sing-box
+singbox
+sfa
 shadowrocket
 clashmeta
 clash-meta
 clashx.meta
 clashxmeta
 clashmetaforandroid
+clash-verge-rev
+clashvergerev
+clash-nyanpasu
+clashnyanpasu
+gui.for.clash
+guiforclash
 flclash
+flclashx
+clashmi
+flyclash
+yumebox
+bettbox
+monadbox
+clashfest
+pandora-box
+pandorabox
+mihomosh
+mihomo-tui
+mihomotui
+koala
+stelliberty
+clash-xiaoy
+clashxiaoy
+goclashz
+zephyr
+slothclash
+clashmac
+clashbar
+catbar
+mihoro
+shellcrash
+openclash
+openwrt-nikki
+nikki
+ssclash
+vclash
+merlinclash
+clashbox
+deckyclash
+tomoon
+v2rayn
+v2rayng
 nekobox
 nekoray
 sparkle
 hiddify
 karing
+gui.for.singbox
+gui.for.sing-box
+guiforsingbox
+onebox
+qsing-box
+qsingbox
+sing-box-windows
+singbox-windows
+singbox-launcher
+sing-box-launcher
 stash
 streisand
+throne
+quantumult-x
+quantumult
+surge
+loon
 TEXT;
 
     public function __construct(
@@ -52,21 +110,56 @@ TEXT;
         }
 
         if (str_contains($ua, 'clashforandroid')) {
-            $version = $this->extractVersionAfter($ua, 'clashforandroid');
-            if ($version === null || version_compare($version, '2.9.0', '<')) {
-                return $this->clientInfo('legacy_clash', true);
-            }
-            return $this->clientInfo('mihomo');
+            return $this->clientInfo('legacy_clash', true);
         }
 
-        if (
-            str_contains($ua, 'mihomo')
-            || str_contains($ua, 'clash.meta')
-            || str_contains($ua, 'clashx.meta')
-            || str_contains($ua, 'clash-meta')
-            || str_contains($ua, 'clashmeta')
-            || str_contains($ua, 'flclash')
-        ) {
+        if ($this->containsAny($ua, [
+            'mihomo',
+            'clash.meta',
+            'clashx.meta',
+            'clash-meta',
+            'clashmeta',
+            'clash-verge-rev',
+            'clashvergerev',
+            'clash-nyanpasu',
+            'clashnyanpasu',
+            'gui.for.clash',
+            'guiforclash',
+            'flclash',
+            'flclashx',
+            'clashmi',
+            'flyclash',
+            'yumebox',
+            'bettbox',
+            'monadbox',
+            'clashfest',
+            'pandora-box',
+            'pandorabox',
+            'mihomosh',
+            'mihomo-tui',
+            'mihomotui',
+            'koala',
+            'stelliberty',
+            'clash-xiaoy',
+            'clashxiaoy',
+            'goclashz',
+            'zephyr',
+            'slothclash',
+            'clashmac',
+            'clashbar',
+            'catbar',
+            'mihoro',
+            'shellcrash',
+            'openclash',
+            'openwrt-nikki',
+            'nikki',
+            'ssclash',
+            'vclash',
+            'merlinclash',
+            'clashbox',
+            'deckyclash',
+            'tomoon',
+        ])) {
             return $this->clientInfo('mihomo');
         }
 
@@ -74,7 +167,22 @@ TEXT;
             return $this->clientInfo('throne');
         }
 
-        if (str_contains($ua, 'sing-box') || str_contains($ua, 'singbox') || str_contains($ua, 'karing')) {
+        if ($this->containsAny($ua, [
+            'sing-box',
+            'singbox',
+            'sfa',
+            'karing',
+            'gui.for.singbox',
+            'gui.for.sing-box',
+            'guiforsingbox',
+            'onebox',
+            'qsing-box',
+            'qsingbox',
+            'sing-box-windows',
+            'singbox-windows',
+            'singbox-launcher',
+            'sing-box-launcher',
+        ])) {
             return $this->clientInfo('sing-box');
         }
 
@@ -259,6 +367,17 @@ TEXT;
         }
 
         return null;
+    }
+
+    private function containsAny(string $value, array $needles): bool
+    {
+        foreach ($needles as $needle) {
+            if (str_contains($value, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function looksLikeScriptClient(string $ua): bool

@@ -38,12 +38,45 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $analyzer = new SubscriptionRiskAnalyzer();
 
         $windows = $analyzer->classifyUserAgent('ClashforWindows/0.20.39');
-        $android = $analyzer->classifyUserAgent('ClashForAndroid/2.5.12.premium');
+        $android = $analyzer->classifyUserAgent('ClashForAndroid/3.0.0');
 
         $this->assertSame('legacy_clash', $windows['category']);
         $this->assertSame('legacy_clash', $android['category']);
         $this->assertTrue($windows['risky']);
         $this->assertTrue($android['risky']);
+    }
+
+    public function test_classifies_clash_meta_for_android_as_normal_subscription_client(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer();
+
+        $android = $analyzer->classifyUserAgent('ClashMetaForAndroid/2.11.28');
+
+        $this->assertSame('mihomo', $android['category']);
+        $this->assertFalse($android['risky']);
+    }
+
+    public function test_default_whitelist_allows_common_supported_clients_and_rejects_old_cfa(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_client_ua_whitelist' => true,
+            'client_ua_unknown_action' => 'reset_token_uuid',
+        ]);
+
+        $clashMetaForAndroid = $analyzer->inspectSubscriptionPull(1015, 'token-cmfa', '1.1.1.1', 'ClashMetaForAndroid/2.11.28');
+        $oldClashForAndroid = $analyzer->inspectSubscriptionPull(1017, 'token-cfa', '1.1.1.1', 'ClashForAndroid/2.5.12.premium');
+        $v2rayNg = $analyzer->inspectSubscriptionPull(1016, 'token-v2rayng', '1.1.1.1', 'v2rayNG/2.2.0');
+        $clashVergeRev = $analyzer->inspectSubscriptionPull(1018, 'token-verge', '1.1.1.1', 'Clash-Verge-Rev/2.4.0');
+        $sfa = $analyzer->inspectSubscriptionPull(1019, 'token-sfa', '1.1.1.1', 'SFA/1.13.12');
+
+        $this->assertSame([], $clashMetaForAndroid);
+        $this->assertSame([], $v2rayNg);
+        $this->assertSame([], $clashVergeRev);
+        $this->assertSame([], $sfa);
+        $this->assertCount(1, $oldClashForAndroid);
+        $this->assertSame('client_ua_not_allowed', $oldClashForAndroid[0]['code']);
+        $this->assertSame('reset_token_uuid', $oldClashForAndroid[0]['action']);
+        $this->assertSame('legacy_clash', $oldClashForAndroid[0]['meta']['ua_category']);
     }
 
     public function test_multi_ua_detection_ignores_version_changes_inside_same_family(): void
