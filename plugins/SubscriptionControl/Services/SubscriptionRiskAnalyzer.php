@@ -602,7 +602,7 @@ TEXT;
         return $this->decision(
             'source_batch_pull',
             '同一来源短时间内拉取多个用户订阅',
-            $this->configAction('source_batch_action', 'empty'),
+            $this->configAction('source_batch_action', 'reset_token_uuid'),
             [
                 'source_user_count' => count($users),
                 'source_user_threshold' => $threshold,
@@ -801,7 +801,7 @@ TEXT;
         }
 
         $hitCount = $this->rememberLeakGuardHit($userId, $token, $window);
-        $action = $this->configAction('leak_guard_action', 'empty');
+        $action = $this->configAction('leak_guard_action', 'reset_token_uuid');
         if (
             $this->configBool('enable_leak_guard_escalation', true)
             && $hitCount >= $this->configInt('leak_guard_escalate_hits', 3, 1)
