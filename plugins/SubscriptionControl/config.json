@@ -1,7 +1,7 @@
 {
     "name": "订阅风控",
     "code": "subscription_control",
-    "version": "1.5.4",
+    "version": "1.5.5",
     "description": "提供订阅链接的主动风险控制能力，防止节点被恶意扫描。支持可信代理真实IP识别、免费ASN/IP类型标签、订阅泄露保护、在线唯一IP阈值、邮件/TG通知、UA黑名单、客户端白名单、多UA/多地区订阅检测、订阅IP限制、阅后即焚功能。",
     "author": "XBoard",
     "require": {
@@ -34,9 +34,9 @@
         },
         "client_ua_unknown_action": {
             "type": "string",
-            "default": "observe",
+            "default": "reset_token_uuid",
             "label": "非白名单客户端处理策略",
-            "description": "可选 observe / throttle / empty / block / reset_token_uuid。旧值 reset_token 会自动按 reset_token_uuid 处理"
+            "description": "可选 observe / throttle / empty / block / reset_token_uuid。建议使用 reset_token_uuid：非客户端拉取订阅时重置凭证，用户用正确客户端重新导入后可恢复"
         },
         "trusted_proxy_cidrs": {
             "type": "text",
