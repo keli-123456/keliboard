@@ -22,34 +22,6 @@ class Plugin extends AbstractPlugin
 {
     private const RECENT_EVENTS_KEY = 'subscription_control:recent_events';
     private const RECENT_EVENTS_LIMIT = 100;
-    private const UNSAFE_UA_RESET_KEYWORDS = [
-        'mozilla',
-        'applewebkit',
-        'chrome',
-        'safari',
-        'firefox',
-        'edg',
-        'edge',
-        'mobile',
-        'android',
-        'iphone',
-        'ipad',
-        'macintosh',
-        'windows',
-        'linux',
-        'qq',
-        'mqqbrowser',
-        'telegram',
-        'wechat',
-        'weixin',
-        'micromessenger',
-        'weibo',
-        'tencent',
-        'baidu',
-        'sogou',
-        '360',
-        'none',
-    ];
 
     /**
      * 插件启动时调用
@@ -325,7 +297,7 @@ class Plugin extends AbstractPlugin
 
         foreach ($resetList as $keyword) {
             $normalized = strtolower(trim($keyword));
-            if ($normalized === '' || $this->isUnsafeUaResetKeyword($normalized)) {
+            if ($normalized === '') {
                 continue;
             }
 
@@ -335,11 +307,6 @@ class Plugin extends AbstractPlugin
         }
 
         return false;
-    }
-
-    private function isUnsafeUaResetKeyword(string $keyword): bool
-    {
-        return in_array(trim(strtolower($keyword)), self::UNSAFE_UA_RESET_KEYWORDS, true);
     }
 
     /**

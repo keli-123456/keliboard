@@ -218,6 +218,10 @@ TEXT;
             return $this->clientInfo('loon');
         }
 
+        if ($this->looksLikeSocialApp($ua)) {
+            return $this->clientInfo('social_app', true);
+        }
+
         if ($this->looksLikeScriptClient($ua)) {
             return $this->clientInfo('script', true);
         }
@@ -378,6 +382,20 @@ TEXT;
         }
 
         return false;
+    }
+
+    private function looksLikeSocialApp(string $ua): bool
+    {
+        return $this->containsAny($ua, [
+            'telegram',
+            'micromessenger',
+            'wechat',
+            'weixin',
+            'mqqbrowser',
+            'qq/',
+            ' qq',
+            'weibo',
+        ]);
     }
 
     private function looksLikeScriptClient(string $ua): bool

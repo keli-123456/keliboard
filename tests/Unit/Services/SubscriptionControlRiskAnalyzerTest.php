@@ -46,6 +46,25 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertTrue($android['risky']);
     }
 
+    public function test_classifies_browser_and_social_app_subscription_pull_as_risky(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer();
+
+        $mozilla = $analyzer->classifyUserAgent('Mozilla/5.0 Chrome/138.0 Safari/537.36');
+        $qq = $analyzer->classifyUserAgent('Mozilla/5.0 MQQBrowser/20.2 Mobile Safari/537.36 QQ/9.2.90');
+        $telegram = $analyzer->classifyUserAgent('TelegramBot (like TwitterBot)');
+        $wechat = $analyzer->classifyUserAgent('WeChat/8.0.45 MicroMessenger/8.0.45');
+
+        $this->assertSame('browser', $mozilla['category']);
+        $this->assertSame('social_app', $qq['category']);
+        $this->assertSame('social_app', $telegram['category']);
+        $this->assertSame('social_app', $wechat['category']);
+        $this->assertTrue($mozilla['risky']);
+        $this->assertTrue($qq['risky']);
+        $this->assertTrue($telegram['risky']);
+        $this->assertTrue($wechat['risky']);
+    }
+
     public function test_classifies_clash_meta_for_android_as_normal_subscription_client(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer();
