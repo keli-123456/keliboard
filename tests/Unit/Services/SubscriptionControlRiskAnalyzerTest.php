@@ -594,6 +594,35 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame(135377, $decisions[0]['meta']['ip_asn']);
     }
 
+    public function test_source_ip_denylist_blocks_major_china_clouds_by_org_keyword(): void
+    {
+        $intelligence = new SubscriptionIpIntelligenceService([], function (string $query): array {
+            return match ($query) {
+                '8.8.8.8.origin.asn.cymru.com' => ['45102 | 8.8.8.8 | 8.8.8.0/24 | US | arin | 2020-01-01'],
+                'AS45102.asn.cymru.com' => ['45102 | US | arin | 2010-01-01 | Alibaba (US) Technology Co., Ltd.'],
+                '9.9.9.9.origin.asn.cymru.com' => ['45090 | 9.9.9.9 | 9.9.9.0/24 | CN | apnic | 2020-01-01'],
+                'AS45090.asn.cymru.com' => ['45090 | CN | apnic | 2011-01-01 | Shenzhen Tencent Computer Systems Company Limited, CN'],
+                '10.10.10.10.origin.asn.cymru.com' => ['136907 | 10.10.10.10 | 10.10.10.0/24 | HK | apnic | 2020-01-01'],
+                'AS136907.asn.cymru.com' => ['136907 | HK | apnic | 2017-01-01 | HUAWEI CLOUDS'],
+                default => [],
+            };
+        });
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_source_ip_denylist' => true,
+            'source_ip_deny_org_keywords' => "alibaba\ntencent\nhuawei cloud\nhuawei clouds",
+            'source_ip_deny_action' => 'block',
+        ], $intelligence);
+
+        foreach (['8.8.8.8', '9.9.9.9', '10.10.10.10'] as $index => $ip) {
+            $decisions = $analyzer->inspectSubscriptionPull(1170 + $index, "token-deny-cloud-{$index}", $ip, 'Sparkle/1.0.0');
+
+            $this->assertCount(1, $decisions);
+            $this->assertSame('source_ip_denylist', $decisions[0]['code']);
+            $this->assertSame('block', $decisions[0]['action']);
+            $this->assertSame('org', $decisions[0]['meta']['source_ip_deny_match_type']);
+        }
+    }
+
     public function test_trusted_egress_ip_is_excluded_from_leak_guard_ip_signals(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([

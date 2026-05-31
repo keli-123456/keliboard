@@ -1,7 +1,7 @@
 {
     "name": "订阅风控",
     "code": "subscription_control",
-    "version": "1.5.8",
+    "version": "1.5.9",
     "description": "提供订阅链接的主动风险控制能力，防止节点被恶意扫描。支持可信代理真实IP识别、免费ASN/IP类型标签、订阅泄露保护、在线唯一IP阈值、邮件/TG通知、UA黑名单、客户端白名单、多UA/多地区订阅检测、订阅IP限制、阅后即焚功能。",
     "author": "XBoard",
     "require": {
@@ -94,15 +94,15 @@
         },
         "source_ip_deny_asns": {
             "type": "text",
-            "default": "AS135377\nAS59077",
+            "default": "AS135377\nAS59077\nAS45102\nAS37963\nAS134963\nAS24429\nAS45090\nAS133478\nAS132203\nAS136907\nAS55990\nAS131444",
             "label": "订阅来源 ASN 黑名单",
-            "description": "每行一个 ASN，支持 AS135377 或 135377。默认预置 UCloud 常见 ASN，开启黑名单后生效"
+            "description": "每行一个 ASN，支持 AS135377 或 135377。默认预置 UCloud、阿里云、腾讯云、华为云常见 ASN，开启黑名单后生效"
         },
         "source_ip_deny_org_keywords": {
             "type": "text",
-            "default": "ucloud\nUCLOUD INFORMATION TECHNOLOGY",
+            "default": "ucloud\nUCLOUD INFORMATION TECHNOLOGY\naliyun\nalibaba\nalibaba cloud\ntaobao network\ntencent\ntencent cloud\nhuawei cloud\nhuawei clouds\nhuaweicloud\nbaidu cloud\nbaidu netcom\nvolcengine\nbytedance\nbyteplus\ntianyi cloud\nctyun\nchina mobile cloud\nmobile cloud\njd cloud\njcloud\nkingsoft cloud",
             "label": "订阅来源组织关键词黑名单",
-            "description": "每行一个组织名关键词，基于 Team Cymru ASN 组织名匹配。适合 UCloud 等云厂商"
+            "description": "每行一个组织名关键词，基于 Team Cymru ASN 组织名匹配。适合 UCloud、阿里云、腾讯云、华为云等国内云厂商"
         },
         "source_ip_deny_action": {
             "type": "string",
