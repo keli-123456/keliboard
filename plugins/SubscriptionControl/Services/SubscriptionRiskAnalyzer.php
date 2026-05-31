@@ -252,6 +252,13 @@ TEXT;
         $trustedEgress = $this->isTrustedEgressIp($clientIp);
         $ipIntelligence = null;
 
+        if (!$trustedEgress && $this->configBool('enable_source_ip_denylist', false)) {
+            $decision = $this->inspectSourceIpDenylist($clientIp, $trustedEgress, $ipIntelligence);
+            if ($decision !== null) {
+                $decisions[] = $decision;
+            }
+        }
+
         if ($this->configBool('enable_client_ua_whitelist', false) && !$this->isWhitelistedClient($client, $userAgent)) {
             $decisions[] = $this->decision(
                 'client_ua_not_allowed',
@@ -655,6 +662,69 @@ TEXT;
         ];
     }
 
+    private function inspectSourceIpDenylist(string $clientIp, bool $trustedEgress, ?array &$ipIntelligence): ?array
+    {
+        if ($trustedEgress) {
+            return null;
+        }
+
+        foreach ($this->parseKeywordList((string) ($this->config['source_ip_deny_cidrs'] ?? '')) as $entry) {
+            if ($this->ipMatchesCidr($clientIp, $entry)) {
+                return $this->decision(
+                    'source_ip_denylist',
+                    '订阅来源 IP 命中黑名单',
+                    $this->configAction('source_ip_deny_action', 'block'),
+                    [
+                        'source_ip_deny_match_type' => 'cidr',
+                        'source_ip_deny_match' => $entry,
+                    ]
+                );
+            }
+        }
+
+        $denyAsns = $this->parseAsnList((string) ($this->config['source_ip_deny_asns'] ?? ''));
+        $denyOrgKeywords = $this->parseKeywordList((string) ($this->config['source_ip_deny_org_keywords'] ?? ''));
+        if (empty($denyAsns) && empty($denyOrgKeywords)) {
+            return null;
+        }
+
+        $ipIntelligence = $this->resolveIpIntelligence($clientIp, $trustedEgress, true);
+        if ($ipIntelligence === null) {
+            return null;
+        }
+
+        $asn = $ipIntelligence['ip_asn'] ?? null;
+        if (is_int($asn) && in_array($asn, $denyAsns, true)) {
+            return $this->decision(
+                'source_ip_denylist',
+                '订阅来源 ASN 命中黑名单',
+                $this->configAction('source_ip_deny_action', 'block'),
+                [
+                    'source_ip_deny_match_type' => 'asn',
+                    'source_ip_deny_match' => "AS{$asn}",
+                ]
+            );
+        }
+
+        $org = strtolower((string) ($ipIntelligence['ip_org'] ?? ''));
+        foreach ($denyOrgKeywords as $keyword) {
+            $normalized = strtolower(trim($keyword));
+            if ($normalized !== '' && $org !== '' && str_contains($org, $normalized)) {
+                return $this->decision(
+                    'source_ip_denylist',
+                    '订阅来源组织命中黑名单',
+                    $this->configAction('source_ip_deny_action', 'block'),
+                    [
+                        'source_ip_deny_match_type' => 'org',
+                        'source_ip_deny_match' => $keyword,
+                    ]
+                );
+            }
+        }
+
+        return null;
+    }
+
     private function inspectLeakGuard(
         int $userId,
         string $token,
@@ -833,9 +903,9 @@ TEXT;
         );
     }
 
-    private function resolveIpIntelligence(string $clientIp, bool $trustedEgress): ?array
+    private function resolveIpIntelligence(string $clientIp, bool $trustedEgress, bool $force = false): ?array
     {
-        if ($trustedEgress || !$this->configBool('enable_ip_intelligence', true)) {
+        if ($trustedEgress || (!$force && !$this->configBool('enable_ip_intelligence', true))) {
             return null;
         }
 
@@ -1062,6 +1132,22 @@ TEXT;
         return in_array($action, ['observe', 'throttle', 'empty', 'block', 'reset_token_uuid'], true)
             ? $action
             : ($default === 'reset_token' ? 'reset_token_uuid' : $default);
+    }
+
+    private function parseAsnList(string $input): array
+    {
+        $asns = [];
+        foreach ($this->parseKeywordList($input) as $item) {
+            $normalized = strtoupper(trim($item));
+            if (str_starts_with($normalized, 'AS')) {
+                $normalized = trim(substr($normalized, 2));
+            }
+            if ($normalized !== '' && ctype_digit($normalized)) {
+                $asns[] = (int) $normalized;
+            }
+        }
+
+        return array_values(array_unique($asns));
     }
 
     private function parseKeywordList(string $input): array

@@ -522,6 +522,78 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertFalse($analyzer->isTrustedEgressIp('4.4.4.4'));
     }
 
+    public function test_source_ip_denylist_blocks_matching_cidr_without_resetting_credentials(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_source_ip_denylist' => true,
+            'source_ip_deny_cidrs' => '107.150.104.0/21',
+            'source_ip_deny_action' => 'block',
+            'enable_ip_intelligence' => false,
+        ]);
+
+        $decisions = $analyzer->inspectSubscriptionPull(1161, 'token-deny-cidr', '107.150.111.5', 'Sparkle/1.0.0');
+
+        $this->assertCount(1, $decisions);
+        $this->assertSame('source_ip_denylist', $decisions[0]['code']);
+        $this->assertSame('block', $decisions[0]['action']);
+        $this->assertSame('cidr', $decisions[0]['meta']['source_ip_deny_match_type']);
+        $this->assertSame('107.150.104.0/21', $decisions[0]['meta']['source_ip_deny_match']);
+    }
+
+    public function test_source_ip_denylist_blocks_ucloud_by_asn_and_org_keyword(): void
+    {
+        $intelligence = new SubscriptionIpIntelligenceService([], function (string $query): array {
+            return match ($query) {
+                '5.111.150.107.origin.asn.cymru.com' => ['135377 | 107.150.111.5 | 107.150.104.0/21 | US | arin | 2020-01-01'],
+                'AS135377.asn.cymru.com' => ['135377 | US | arin | 2016-01-01 | UCLOUD INFORMATION TECHNOLOGY (HK) LIMITED'],
+                default => [],
+            };
+        });
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_source_ip_denylist' => true,
+            'source_ip_deny_asns' => "AS135377\n59077",
+            'source_ip_deny_org_keywords' => 'ucloud',
+            'source_ip_deny_action' => 'block',
+        ], $intelligence);
+
+        $decisions = $analyzer->inspectSubscriptionPull(1162, 'token-deny-asn', '107.150.111.5', 'Sparkle/1.0.0');
+
+        $this->assertCount(1, $decisions);
+        $this->assertSame('source_ip_denylist', $decisions[0]['code']);
+        $this->assertSame('block', $decisions[0]['action']);
+        $this->assertSame('asn', $decisions[0]['meta']['source_ip_deny_match_type']);
+        $this->assertSame('AS135377', $decisions[0]['meta']['source_ip_deny_match']);
+        $this->assertSame(135377, $decisions[0]['meta']['ip_asn']);
+        $this->assertSame('hosting', $decisions[0]['meta']['ip_type']);
+        $this->assertSame('UCLOUD INFORMATION TECHNOLOGY (HK) LIMITED', $decisions[0]['meta']['ip_org']);
+    }
+
+    public function test_source_ip_denylist_blocks_by_org_keyword_when_asn_is_not_listed(): void
+    {
+        $intelligence = new SubscriptionIpIntelligenceService([], function (string $query): array {
+            return match ($query) {
+                '6.111.150.107.origin.asn.cymru.com' => ['135377 | 107.150.111.6 | 107.150.104.0/21 | US | arin | 2020-01-01'],
+                'AS135377.asn.cymru.com' => ['135377 | US | arin | 2016-01-01 | UCLOUD INFORMATION TECHNOLOGY (HK) LIMITED'],
+                default => [],
+            };
+        });
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_source_ip_denylist' => true,
+            'source_ip_deny_asns' => '59077',
+            'source_ip_deny_org_keywords' => 'ucloud',
+            'source_ip_deny_action' => 'block',
+        ], $intelligence);
+
+        $decisions = $analyzer->inspectSubscriptionPull(1163, 'token-deny-org', '107.150.111.6', 'Sparkle/1.0.0');
+
+        $this->assertCount(1, $decisions);
+        $this->assertSame('source_ip_denylist', $decisions[0]['code']);
+        $this->assertSame('block', $decisions[0]['action']);
+        $this->assertSame('org', $decisions[0]['meta']['source_ip_deny_match_type']);
+        $this->assertSame('ucloud', $decisions[0]['meta']['source_ip_deny_match']);
+        $this->assertSame(135377, $decisions[0]['meta']['ip_asn']);
+    }
+
     public function test_trusted_egress_ip_is_excluded_from_leak_guard_ip_signals(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([
