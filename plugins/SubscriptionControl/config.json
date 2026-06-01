@@ -1,7 +1,7 @@
 {
     "name": "订阅风控",
     "code": "subscription_control",
-    "version": "1.5.14",
+    "version": "1.5.15",
     "description": "提供订阅链接的主动风险控制能力，防止节点被恶意扫描。支持可信代理真实IP识别、免费ASN/IP类型标签、订阅泄露保护、在线唯一IP阈值、邮件/TG通知、UA黑名单、客户端白名单、多UA/多地区订阅检测、订阅IP限制、阅后即焚功能。",
     "author": "XBoard",
     "require": {
@@ -82,9 +82,9 @@
         },
         "enable_source_ip_denylist": {
             "type": "boolean",
-            "default": false,
+            "default": true,
             "label": "启用订阅来源 IP 黑名单",
-            "description": "开启后，真实客户端来源 IP 命中下方 IP/CIDR、ASN 或组织关键词时，将按黑名单策略处理"
+            "description": "默认开启。真实客户端来源 IP 命中下方 IP/CIDR、ASN 或组织关键词时，将按黑名单策略处理"
         },
         "source_ip_deny_cidrs": {
             "type": "text",

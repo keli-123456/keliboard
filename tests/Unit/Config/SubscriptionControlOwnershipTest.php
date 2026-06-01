@@ -47,4 +47,16 @@ final class SubscriptionControlOwnershipTest extends TestCase
 
         $this->assertStringNotContainsString("\nmobile cloud", $keywords);
     }
+
+    public function test_subscription_control_source_denylist_is_enabled_by_default(): void
+    {
+        $path = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $config = json_decode((string) file_get_contents($path), true);
+
+        $this->assertIsArray($config);
+        $items = $config['config'] ?? [];
+
+        $this->assertTrue((bool) ($items['enable_source_ip_denylist']['default'] ?? false));
+        $this->assertTrue((bool) ($items['enable_node_source_ip_managed_routes']['default'] ?? false));
+    }
 }
