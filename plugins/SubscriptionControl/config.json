@@ -1,7 +1,7 @@
 {
     "name": "订阅风控",
     "code": "subscription_control",
-    "version": "1.5.11",
+    "version": "1.5.12",
     "description": "提供订阅链接的主动风险控制能力，防止节点被恶意扫描。支持可信代理真实IP识别、免费ASN/IP类型标签、订阅泄露保护、在线唯一IP阈值、邮件/TG通知、UA黑名单、客户端白名单、多UA/多地区订阅检测、订阅IP限制、阅后即焚功能。",
     "author": "XBoard",
     "require": {
@@ -122,11 +122,29 @@
             "label": "使用近期风控事件学习节点封禁前缀",
             "description": "开启后，会从最近风控事件中的 ip_prefix 提取云厂商来源前缀，生成节点侧 source_ip 拦截规则。默认只保留最近 3 天数据。"
         },
+        "enable_node_source_ip_builtin_provider_cidrs": {
+            "type": "boolean",
+            "default": true,
+            "label": "启用内置云厂商 CIDR 种子",
+            "description": "开启后，节点托管路由会使用内置的高置信云厂商 CIDR 种子，避免新安装时云厂商策略显示为 0。"
+        },
+        "enable_node_source_ip_bgp_prefix_refresh": {
+            "type": "boolean",
+            "default": true,
+            "label": "自动刷新云厂商 BGP 前缀",
+            "description": "开启后，插件会按内置 ASN 目录定期从公开 BGP 数据刷新云厂商 CIDR，并合并到节点 source_ip 路由。"
+        },
+        "node_source_ip_bgp_prefix_cache_hours": {
+            "type": "number",
+            "default": 24,
+            "label": "BGP 前缀缓存时间（小时）",
+            "description": "云厂商 ASN 到 CIDR 的刷新缓存时间。建议 24 小时，避免频繁请求公开 BGP 数据源。"
+        },
         "node_source_ip_managed_max_prefixes_per_provider": {
             "type": "number",
             "default": 300,
             "label": "每个云厂商最多下发前缀数",
-            "description": "限制自动学习前缀数量，避免节点配置过大。建议 100-500。"
+            "description": "限制自动学习和 BGP 刷新的前缀数量，避免节点配置过大。建议 100-500。"
         },
         "node_source_ip_provider_policy": {
             "type": "text",
@@ -138,7 +156,7 @@
             "type": "text",
             "default": "",
             "label": "节点来源 IP 云厂商 CIDR",
-            "description": "可选手动 CIDR 库，格式为 [ucloud] 后每行一个 CIDR。未填写时只使用近期风控事件学习到的明确前缀。"
+            "description": "可选手动 CIDR 库，格式为 [ucloud] 后每行一个 CIDR。手动 CIDR 会与内置种子、BGP 刷新和近期风控事件学习结果合并。"
         },
         "enable_source_batch_detection": {
             "type": "boolean",

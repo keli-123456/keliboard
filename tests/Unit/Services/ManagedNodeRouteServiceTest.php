@@ -51,6 +51,8 @@ final class ManagedNodeRouteServiceTest extends TestCase
 
         $result = (new ManagedNodeRouteService())->sync([
             'enable_node_source_ip_managed_routes' => true,
+            'enable_node_source_ip_builtin_provider_cidrs' => false,
+            'enable_node_source_ip_bgp_prefix_refresh' => false,
             'enable_node_source_ip_route_learned_prefixes' => true,
             'source_ip_deny_cidrs' => "198.51.100.0/24\nbad-value",
             'node_source_ip_provider_policy' => "ucloud=allow\ntencent=block",
@@ -88,6 +90,8 @@ final class ManagedNodeRouteServiceTest extends TestCase
 
         $first = (new ManagedNodeRouteService())->sync([
             'enable_node_source_ip_managed_routes' => true,
+            'enable_node_source_ip_builtin_provider_cidrs' => false,
+            'enable_node_source_ip_bgp_prefix_refresh' => false,
             'source_ip_deny_cidrs' => '',
             'node_source_ip_provider_policy' => 'tencent=block',
             'node_source_ip_provider_cidrs' => "[tencent]\n203.0.113.0/24",
@@ -99,6 +103,8 @@ final class ManagedNodeRouteServiceTest extends TestCase
 
         $second = (new ManagedNodeRouteService())->sync([
             'enable_node_source_ip_managed_routes' => true,
+            'enable_node_source_ip_builtin_provider_cidrs' => false,
+            'enable_node_source_ip_bgp_prefix_refresh' => false,
             'source_ip_deny_cidrs' => '',
             'node_source_ip_provider_policy' => 'tencent=allow',
             'node_source_ip_provider_cidrs' => "[tencent]\n203.0.113.0/24",
@@ -118,7 +124,7 @@ final class ManagedNodeRouteServiceTest extends TestCase
             'code' => ManagedNodeRouteService::PLUGIN_CODE,
             'name' => '订阅风控',
             'description' => '',
-            'version' => '1.5.11',
+            'version' => '1.5.12',
             'author' => '',
             'url' => '',
             'email' => '',
@@ -128,6 +134,8 @@ final class ManagedNodeRouteServiceTest extends TestCase
             'is_enabled' => true,
             'config' => json_encode([
                 'enable_leak_guard' => true,
+                'enable_node_source_ip_builtin_provider_cidrs' => false,
+                'enable_node_source_ip_bgp_prefix_refresh' => false,
                 'source_ip_deny_cidrs' => '198.51.100.0/24',
             ]),
         ]);
@@ -151,6 +159,36 @@ final class ManagedNodeRouteServiceTest extends TestCase
         $this->assertSame('198.51.100.0/24', $config['source_ip_deny_cidrs']);
         $this->assertStringContainsString('tencent=block', $config['node_source_ip_provider_policy']);
         $this->assertStringContainsString('[tencent]', $config['node_source_ip_provider_cidrs']);
+    }
+
+    public function test_sync_uses_builtin_provider_cidrs_without_waiting_for_events(): void
+    {
+        $this->createServer();
+
+        $result = (new ManagedNodeRouteService())->sync([
+            'enable_node_source_ip_managed_routes' => true,
+            'enable_node_source_ip_builtin_provider_cidrs' => true,
+            'enable_node_source_ip_bgp_prefix_refresh' => false,
+            'enable_node_source_ip_route_learned_prefixes' => false,
+            'source_ip_deny_cidrs' => '',
+            'node_source_ip_provider_policy' => "ucloud=allow\naliyun=allow\ntencent=allow\nhuawei=allow\nbaidu=allow\nvolcengine=allow\ntianyi=allow\nmobile_cloud=allow\njdcloud=block\nkingsoft=allow",
+            'node_source_ip_provider_cidrs' => '',
+            'node_source_ip_managed_max_prefixes_per_provider' => 100,
+        ]);
+
+        $this->assertCount(1, $result['active_route_ids']);
+
+        $route = ServerRoute::query()
+            ->where('remarks', ManagedNodeRouteService::ROUTE_REMARK_PREFIX . ' provider:jdcloud 云厂商 京东云')
+            ->first();
+        $this->assertNotNull($route);
+        $this->assertContains('source_ip:1.118.64.0/19', $route->match);
+
+        $overview = (new ManagedNodeRouteService())->overview();
+        $jdcloud = collect($overview['providers'])->firstWhere('key', 'jdcloud');
+        $this->assertNotNull($jdcloud);
+        $this->assertGreaterThan(0, $jdcloud['builtin_cidr_count']);
+        $this->assertGreaterThanOrEqual($jdcloud['builtin_cidr_count'], $jdcloud['cidr_count']);
     }
 
     private function createTables(): void
