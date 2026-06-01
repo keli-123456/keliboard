@@ -17,6 +17,7 @@ final class SubscriptionControlEventStoreTest extends TestCase
     {
         parent::setUp();
         $this->setUpInMemoryDatabase();
+        app()->instance('db.schema', $this->database->getConnection()->getSchemaBuilder());
         $this->createEventTable();
     }
 
@@ -93,6 +94,7 @@ final class SubscriptionControlEventStoreTest extends TestCase
 
     public function test_recent_can_filter_by_email(): void
     {
+        $now = time();
         $store = new SubscriptionControlEventStore();
         $store->append([
             'id' => 'first',
@@ -101,7 +103,7 @@ final class SubscriptionControlEventStoreTest extends TestCase
             'code' => 'source_batch_pull',
             'reason' => 'batch',
             'action' => 'observe',
-            'created_at' => 100,
+            'created_at' => $now - 10,
         ]);
         $store->append([
             'id' => 'second',
@@ -110,7 +112,7 @@ final class SubscriptionControlEventStoreTest extends TestCase
             'code' => 'source_batch_pull',
             'reason' => 'batch',
             'action' => 'observe',
-            'created_at' => 200,
+            'created_at' => $now,
         ]);
 
         $events = $store->recent(10, 'second');

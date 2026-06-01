@@ -8,6 +8,7 @@ use App\Models\ServerRoute;
 use App\Services\NodeRealtime\NodeRealtimePublisher;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Plugin\SubscriptionControl\Services\ManagedNodeRouteService;
 
 class RouteController extends Controller
 {
@@ -35,6 +36,36 @@ class RouteController extends Controller
         return [
             'data' => $routes
         ];
+    }
+
+    public function managedSourceIp(Request $request, ManagedNodeRouteService $service)
+    {
+        try {
+            return $this->success($service->overview());
+        } catch (\Throwable $e) {
+            Log::error($e);
+            return $this->fail([500, '读取托管来源 IP 路由失败']);
+        }
+    }
+
+    public function saveManagedSourceIp(Request $request, ManagedNodeRouteService $service)
+    {
+        $params = $request->validate([
+            'enabled' => 'sometimes|boolean',
+            'providers' => 'sometimes|array',
+            'providers.*' => 'sometimes',
+            'provider_cidrs' => 'sometimes|array',
+            'provider_cidrs.*' => 'sometimes|array',
+            'provider_cidrs.*.*' => 'string',
+            'max_prefixes_per_provider' => 'sometimes|integer|min:10|max:2000',
+        ]);
+
+        try {
+            return $this->success($service->saveSettings($params));
+        } catch (\Throwable $e) {
+            Log::error($e);
+            return $this->fail([500, '保存托管来源 IP 路由失败']);
+        }
     }
 
     public function save(Request $request)
@@ -79,7 +110,8 @@ class RouteController extends Controller
             }
         }
         try{
-            ServerRoute::create($params);
+            $route = ServerRoute::create($params);
+            app(NodeRealtimePublisher::class)->invalidateConfigForRoutes([(int) $route->id], 'admin.server_route.created');
             return $this->success(true);
         }catch(\Exception $e){
             Log::error($e);

@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Log;
 use Plugin\SubscriptionControl\Services\SubscriptionClientIpResolver;
 use Plugin\SubscriptionControl\Services\SubscriptionControlEventStore;
 use Plugin\SubscriptionControl\Services\SubscriptionIpIntelligenceService;
+use Plugin\SubscriptionControl\Services\ManagedNodeRouteService;
 use Plugin\SubscriptionControl\Services\SubscriptionRiskAnalyzer;
 use Plugin\SubscriptionControl\Services\SubscriptionTrustedEgressResolver;
 
@@ -45,6 +46,17 @@ class Plugin extends AbstractPlugin
             ->daily()
             ->onOneServer()
             ->withoutOverlapping(10);
+
+        if ($this->getConfig('enable_node_source_ip_managed_routes', true)) {
+            $schedule
+                ->call(function (): void {
+                    (new ManagedNodeRouteService())->sync($this->riskAnalyzerConfig());
+                })
+                ->name('plugin:subscription_control:managed_node_routes')
+                ->everyFiveMinutes()
+                ->onOneServer()
+                ->withoutOverlapping(10);
+        }
 
         if (!$this->getConfig('enable_online_ip_threshold', false)) {
             return;

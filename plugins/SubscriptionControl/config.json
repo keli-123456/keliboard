@@ -1,7 +1,7 @@
 {
     "name": "订阅风控",
     "code": "subscription_control",
-    "version": "1.5.10",
+    "version": "1.5.11",
     "description": "提供订阅链接的主动风险控制能力，防止节点被恶意扫描。支持可信代理真实IP识别、免费ASN/IP类型标签、订阅泄露保护、在线唯一IP阈值、邮件/TG通知、UA黑名单、客户端白名单、多UA/多地区订阅检测、订阅IP限制、阅后即焚功能。",
     "author": "XBoard",
     "require": {
@@ -109,6 +109,36 @@
             "default": "block",
             "label": "订阅来源黑名单命中策略",
             "description": "可选 block / reset_token_uuid。建议使用 block：禁止 IDC/云厂商来源订阅，但不重置正常用户凭证"
+        },
+        "enable_node_source_ip_managed_routes": {
+            "type": "boolean",
+            "default": true,
+            "label": "启用节点来源 IP 托管路由",
+            "description": "开启后，插件会在路由管理中生成 source_ip 禁止访问规则，并自动绑定到启用节点。节点端只接收明确 IP/CIDR，不会把 ASN/组织名误下发。"
+        },
+        "enable_node_source_ip_route_learned_prefixes": {
+            "type": "boolean",
+            "default": true,
+            "label": "使用近期风控事件学习节点封禁前缀",
+            "description": "开启后，会从最近风控事件中的 ip_prefix 提取云厂商来源前缀，生成节点侧 source_ip 拦截规则。默认只保留最近 3 天数据。"
+        },
+        "node_source_ip_managed_max_prefixes_per_provider": {
+            "type": "number",
+            "default": 300,
+            "label": "每个云厂商最多下发前缀数",
+            "description": "限制自动学习前缀数量，避免节点配置过大。建议 100-500。"
+        },
+        "node_source_ip_provider_policy": {
+            "type": "text",
+            "default": "ucloud=block\naliyun=block\ntencent=block\nhuawei=block\nbaidu=block\nvolcengine=block\ntianyi=block\nmobile_cloud=block\njdcloud=block\nkingsoft=block",
+            "label": "节点来源 IP 云厂商策略",
+            "description": "每行 provider=block/allow。建议在路由管理页使用可视化入口修改。"
+        },
+        "node_source_ip_provider_cidrs": {
+            "type": "text",
+            "default": "",
+            "label": "节点来源 IP 云厂商 CIDR",
+            "description": "可选手动 CIDR 库，格式为 [ucloud] 后每行一个 CIDR。未填写时只使用近期风控事件学习到的明确前缀。"
         },
         "enable_source_batch_detection": {
             "type": "boolean",

@@ -76,6 +76,8 @@ class AdminRoute
                 'prefix' => 'server/route'
             ], function ($router) {
                 $router->get('/fetch', [RouteController::class, 'fetch']);
+                $router->get('/managed-source-ip', [RouteController::class, 'managedSourceIp']);
+                $router->post('/managed-source-ip', [RouteController::class, 'saveManagedSourceIp']);
                 $router->post('/save', [RouteController::class, 'save']);
                 $router->post('/drop', [RouteController::class, 'drop']);
             });
