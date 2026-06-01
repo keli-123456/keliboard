@@ -128,7 +128,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertCount(1, $decisions);
         $this->assertSame('multi_ua_pull', $decisions[0]['code']);
-        $this->assertSame('empty', $decisions[0]['action']);
+        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
         $this->assertSame(['mihomo', 'sing-box'], $decisions[0]['meta']['ua_categories']);
     }
 
@@ -162,7 +162,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame([], $allowed);
         $this->assertCount(1, $blocked);
         $this->assertSame('client_ua_not_allowed', $blocked[0]['code']);
-        $this->assertSame('block', $blocked[0]['action']);
+        $this->assertSame('reset_token_uuid', $blocked[0]['action']);
         $this->assertSame('script', $blocked[0]['meta']['ua_category']);
     }
 
@@ -180,7 +180,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame([], $allowed);
         $this->assertCount(1, $blocked);
         $this->assertSame('client_ua_not_allowed', $blocked[0]['code']);
-        $this->assertSame('empty', $blocked[0]['action']);
+        $this->assertSame('reset_token_uuid', $blocked[0]['action']);
         $this->assertSame('legacy_clash', $blocked[0]['meta']['ua_category']);
     }
 
@@ -202,11 +202,11 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertCount(1, $decisions);
         $this->assertSame('multi_region_pull', $decisions[0]['code']);
-        $this->assertSame('empty', $decisions[0]['action']);
+        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
         $this->assertSame(['JP', 'US'], $decisions[0]['meta']['regions']);
     }
 
-    public function test_multi_region_online_detection_uses_existing_online_ips(): void
+    public function test_multi_region_online_detection_resets_credentials_even_when_configured_observe(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([
             'enable_multi_region_online_detection' => true,
@@ -228,11 +228,11 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertCount(1, $decisions);
         $this->assertSame('multi_region_online', $decisions[0]['code']);
-        $this->assertSame('observe', $decisions[0]['action']);
+        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
         $this->assertSame(['JP', 'US'], $decisions[0]['meta']['regions']);
     }
 
-    public function test_leak_guard_returns_empty_for_script_pull_outside_online_region(): void
+    public function test_leak_guard_resets_credentials_for_script_pull_outside_online_region(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([
             'enable_leak_guard' => true,
@@ -254,7 +254,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertCount(1, $decisions);
         $this->assertSame('subscription_leak_guard', $decisions[0]['code']);
-        $this->assertSame('empty', $decisions[0]['action']);
+        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
         $this->assertContains('risky_ua', $decisions[0]['meta']['signals']);
         $this->assertContains('online_region_mismatch', $decisions[0]['meta']['signals']);
         $this->assertGreaterThanOrEqual(80, $decisions[0]['meta']['risk_score']);
@@ -352,7 +352,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame([], $decisions);
     }
 
-    public function test_leak_guard_blocks_low_usage_active_plan_user_with_rotating_client_families(): void
+    public function test_leak_guard_resets_low_usage_active_plan_user_with_rotating_client_families(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([
             'enable_leak_guard' => true,
@@ -377,13 +377,14 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame([], $first);
         $this->assertCount(1, $second);
         $this->assertSame('subscription_leak_guard', $second[0]['code']);
+        $this->assertSame('reset_token_uuid', $second[0]['action']);
         $this->assertContains('active_plan_low_usage', $second[0]['meta']['signals']);
         $this->assertContains('active_plan_very_low_usage', $second[0]['meta']['signals']);
         $this->assertContains('active_plan_low_usage_with_many_ua', $second[0]['meta']['signals']);
         $this->assertGreaterThanOrEqual(80, $second[0]['meta']['risk_score']);
     }
 
-    public function test_leak_guard_strict_mode_blocks_known_client_from_new_pull_ip(): void
+    public function test_leak_guard_strict_mode_resets_known_client_from_new_pull_ip(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([
             'enable_leak_guard' => true,
@@ -437,7 +438,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
             ['online_ips' => ['1.1.1.1']]
         );
 
-        $this->assertSame('empty', $first[0]['action']);
+        $this->assertSame('reset_token_uuid', $first[0]['action']);
         $this->assertSame(1, $first[0]['meta']['hit_count']);
         $this->assertSame('reset_token_uuid', $second[0]['action']);
         $this->assertSame(2, $second[0]['meta']['hit_count']);
@@ -458,7 +459,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertCount(1, $decisions);
         $this->assertSame('source_batch_pull', $decisions[0]['code']);
-        $this->assertSame('empty', $decisions[0]['action']);
+        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
         $this->assertSame(3, $decisions[0]['meta']['source_user_count']);
         $this->assertSame('sparkle', $decisions[0]['meta']['ua_category']);
     }
@@ -522,7 +523,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertFalse($analyzer->isTrustedEgressIp('4.4.4.4'));
     }
 
-    public function test_source_ip_denylist_blocks_matching_cidr_without_resetting_credentials(): void
+    public function test_source_ip_denylist_resets_credentials_for_matching_cidr(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([
             'enable_source_ip_denylist' => true,
@@ -535,12 +536,12 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertCount(1, $decisions);
         $this->assertSame('source_ip_denylist', $decisions[0]['code']);
-        $this->assertSame('block', $decisions[0]['action']);
+        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
         $this->assertSame('cidr', $decisions[0]['meta']['source_ip_deny_match_type']);
         $this->assertSame('107.150.104.0/21', $decisions[0]['meta']['source_ip_deny_match']);
     }
 
-    public function test_source_ip_denylist_blocks_ucloud_by_asn_and_org_keyword(): void
+    public function test_source_ip_denylist_resets_credentials_for_ucloud_by_asn_and_org_keyword(): void
     {
         $intelligence = new SubscriptionIpIntelligenceService([], function (string $query): array {
             return match ($query) {
@@ -560,7 +561,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertCount(1, $decisions);
         $this->assertSame('source_ip_denylist', $decisions[0]['code']);
-        $this->assertSame('block', $decisions[0]['action']);
+        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
         $this->assertSame('asn', $decisions[0]['meta']['source_ip_deny_match_type']);
         $this->assertSame('AS135377', $decisions[0]['meta']['source_ip_deny_match']);
         $this->assertSame(135377, $decisions[0]['meta']['ip_asn']);
@@ -568,7 +569,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame('UCLOUD INFORMATION TECHNOLOGY (HK) LIMITED', $decisions[0]['meta']['ip_org']);
     }
 
-    public function test_source_ip_denylist_blocks_by_org_keyword_when_asn_is_not_listed(): void
+    public function test_source_ip_denylist_resets_credentials_by_org_keyword_when_asn_is_not_listed(): void
     {
         $intelligence = new SubscriptionIpIntelligenceService([], function (string $query): array {
             return match ($query) {
@@ -588,13 +589,13 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertCount(1, $decisions);
         $this->assertSame('source_ip_denylist', $decisions[0]['code']);
-        $this->assertSame('block', $decisions[0]['action']);
+        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
         $this->assertSame('org', $decisions[0]['meta']['source_ip_deny_match_type']);
         $this->assertSame('ucloud', $decisions[0]['meta']['source_ip_deny_match']);
         $this->assertSame(135377, $decisions[0]['meta']['ip_asn']);
     }
 
-    public function test_source_ip_denylist_blocks_major_china_clouds_by_org_keyword(): void
+    public function test_source_ip_denylist_resets_credentials_for_major_china_clouds_by_org_keyword(): void
     {
         $intelligence = new SubscriptionIpIntelligenceService([], function (string $query): array {
             return match ($query) {
@@ -618,7 +619,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
             $this->assertCount(1, $decisions);
             $this->assertSame('source_ip_denylist', $decisions[0]['code']);
-            $this->assertSame('block', $decisions[0]['action']);
+            $this->assertSame('reset_token_uuid', $decisions[0]['action']);
             $this->assertSame('org', $decisions[0]['meta']['source_ip_deny_match_type']);
         }
     }

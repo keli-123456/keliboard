@@ -1,7 +1,7 @@
 {
     "name": "订阅风控",
     "code": "subscription_control",
-    "version": "1.5.13",
+    "version": "1.5.14",
     "description": "提供订阅链接的主动风险控制能力，防止节点被恶意扫描。支持可信代理真实IP识别、免费ASN/IP类型标签、订阅泄露保护、在线唯一IP阈值、邮件/TG通知、UA黑名单、客户端白名单、多UA/多地区订阅检测、订阅IP限制、阅后即焚功能。",
     "author": "XBoard",
     "require": {
@@ -36,7 +36,7 @@
             "type": "string",
             "default": "reset_token_uuid",
             "label": "非白名单客户端处理策略",
-            "description": "可选 observe / throttle / empty / block / reset_token_uuid。建议使用 reset_token_uuid：非客户端拉取订阅时重置凭证，用户用正确客户端重新导入后可恢复"
+            "description": "固定按 reset_token_uuid 处理：命中后同时重置订阅 token 和节点 uuid。历史值 observe / throttle / empty / block / reset_token 会统一按 reset_token_uuid 处理"
         },
         "trusted_proxy_cidrs": {
             "type": "text",
@@ -106,9 +106,9 @@
         },
         "source_ip_deny_action": {
             "type": "string",
-            "default": "block",
+            "default": "reset_token_uuid",
             "label": "订阅来源黑名单命中策略",
-            "description": "可选 block / reset_token_uuid。建议使用 block：禁止 IDC/云厂商来源订阅，但不重置正常用户凭证"
+            "description": "固定按 reset_token_uuid 处理：命中后同时重置订阅 token 和节点 uuid。历史值 observe / block / empty / throttle / reset_token 会统一按 reset_token_uuid 处理"
         },
         "enable_node_source_ip_managed_routes": {
             "type": "boolean",
@@ -180,7 +180,7 @@
             "type": "string",
             "default": "reset_token_uuid",
             "label": "同源批量命中策略",
-            "description": "可选 observe / throttle / empty / block / reset_token_uuid。建议使用 reset_token_uuid，让批量探测来源触发订阅链接和节点凭据重置；empty 仅作为历史配置兼容"
+            "description": "固定按 reset_token_uuid 处理：命中后同时重置订阅 token 和节点 uuid。历史值 observe / throttle / empty / block / reset_token 会统一按 reset_token_uuid 处理"
         },
         "enable_leak_guard": {
             "type": "boolean",
@@ -192,7 +192,7 @@
             "type": "string",
             "default": "reset_token_uuid",
             "label": "泄露保护命中策略",
-            "description": "可选 observe / throttle / empty / block / reset_token_uuid。建议使用 reset_token_uuid，让疑似泄露订阅自恢复；empty 仅作为历史配置兼容"
+            "description": "固定按 reset_token_uuid 处理：命中后同时重置订阅 token 和节点 uuid。历史值 observe / throttle / empty / block / reset_token 会统一按 reset_token_uuid 处理"
         },
         "enable_leak_guard_strict_mode": {
             "type": "boolean",
@@ -204,7 +204,7 @@
             "type": "boolean",
             "default": true,
             "label": "启用泄露保护重复命中升级",
-            "description": "开启后，同一订阅在检测窗口内多次命中泄露保护，会从空订阅/拦截升级为下方动作"
+            "description": "开启后，同一订阅在检测窗口内多次命中泄露保护，会继续按下方策略重置订阅 token 和节点 uuid"
         },
         "leak_guard_escalate_hits": {
             "type": "number",
@@ -216,7 +216,7 @@
             "type": "string",
             "default": "reset_token_uuid",
             "label": "泄露保护升级策略",
-            "description": "可选 block / reset_token_uuid。建议使用 reset_token_uuid，让泄露订阅和旧节点凭据一起失效"
+            "description": "固定按 reset_token_uuid 处理：命中后同时重置订阅 token 和节点 uuid。历史值 observe / block / empty / throttle / reset_token 会统一按 reset_token_uuid 处理"
         },
         "leak_guard_score_threshold": {
             "type": "number",
@@ -280,9 +280,9 @@
         },
         "multi_ua_action": {
             "type": "string",
-            "default": "observe",
+            "default": "reset_token_uuid",
             "label": "多UA命中处理策略",
-            "description": "可选 observe / throttle / empty / block / reset_token_uuid。旧值 reset_token 会自动按 reset_token_uuid 处理"
+            "description": "固定按 reset_token_uuid 处理。历史值 observe / throttle / empty / block / reset_token 会统一按 reset_token_uuid 处理"
         },
         "enable_multi_region_pull_detection": {
             "type": "boolean",
@@ -304,9 +304,9 @@
         },
         "multi_region_pull_action": {
             "type": "string",
-            "default": "observe",
+            "default": "reset_token_uuid",
             "label": "多地区拉取处理策略",
-            "description": "可选 observe / throttle / empty / block / reset_token_uuid。旧值 reset_token 会自动按 reset_token_uuid 处理"
+            "description": "固定按 reset_token_uuid 处理。历史值 observe / throttle / empty / block / reset_token 会统一按 reset_token_uuid 处理"
         },
         "enable_multi_region_online_detection": {
             "type": "boolean",
@@ -322,9 +322,9 @@
         },
         "multi_region_online_action": {
             "type": "string",
-            "default": "observe",
+            "default": "reset_token_uuid",
             "label": "在线多地区处理策略",
-            "description": "可选 observe / throttle / empty / block / reset_token_uuid。旧值 reset_token 会自动按 reset_token_uuid 处理"
+            "description": "固定按 reset_token_uuid 处理。历史值 observe / throttle / empty / block / reset_token 会统一按 reset_token_uuid 处理"
         },
         "ip_region_cache_ttl_seconds": {
             "type": "number",
@@ -412,9 +412,9 @@
         },
         "ip_limit_action": {
             "type": "string",
-            "default": "限制访问",
+            "default": "reset_token_uuid",
             "label": "触发限制后的操作",
-            "description": "当超过IP限制后的处理方式"
+            "description": "固定为 reset_token_uuid：超过 IP 限制时同时重置订阅 token 和节点 uuid"
         },
         "enable_rate_limit": {
             "type": "boolean",

@@ -263,7 +263,7 @@ TEXT;
             $decisions[] = $this->decision(
                 'client_ua_not_allowed',
                 '客户端不在订阅白名单内',
-                $this->configAction('client_ua_unknown_action', 'observe'),
+                $this->configAction('client_ua_unknown_action', 'reset_token_uuid'),
                 [
                     'ua_category' => $client['category'],
                 ]
@@ -290,7 +290,7 @@ TEXT;
                 $decisions[] = $this->decision(
                     'multi_ua_pull',
                     '同一订阅短时间内被多个客户端拉取',
-                    $this->configAction('multi_ua_action', 'observe'),
+                    $this->configAction('multi_ua_action', 'reset_token_uuid'),
                     [
                         'ua_category' => $client['category'],
                         'ua_categories' => $categories,
@@ -315,7 +315,7 @@ TEXT;
                     $decisions[] = $this->decision(
                         'multi_region_pull',
                         '同一订阅短时间内从多个地区拉取',
-                        $this->configAction('multi_region_pull_action', 'observe'),
+                        $this->configAction('multi_region_pull_action', 'reset_token_uuid'),
                         [
                             'region' => $region,
                             'regions' => $regions,
@@ -333,7 +333,7 @@ TEXT;
                 $decisions[] = $this->decision(
                     'multi_region_online',
                     '同一用户当前在线 IP 分布在多个地区',
-                    $this->configAction('multi_region_online_action', 'observe'),
+                    $this->configAction('multi_region_online_action', 'reset_token_uuid'),
                     [
                         'regions' => $onlineRegions,
                         'online_ip_count' => count((array) ($context['online_ips'] ?? [])),
@@ -673,7 +673,7 @@ TEXT;
                 return $this->decision(
                     'source_ip_denylist',
                     '订阅来源 IP 命中黑名单',
-                    $this->configAction('source_ip_deny_action', 'block'),
+                    $this->configAction('source_ip_deny_action', 'reset_token_uuid'),
                     [
                         'source_ip_deny_match_type' => 'cidr',
                         'source_ip_deny_match' => $entry,
@@ -698,7 +698,7 @@ TEXT;
             return $this->decision(
                 'source_ip_denylist',
                 '订阅来源 ASN 命中黑名单',
-                $this->configAction('source_ip_deny_action', 'block'),
+                $this->configAction('source_ip_deny_action', 'reset_token_uuid'),
                 [
                     'source_ip_deny_match_type' => 'asn',
                     'source_ip_deny_match' => "AS{$asn}",
@@ -713,7 +713,7 @@ TEXT;
                 return $this->decision(
                     'source_ip_denylist',
                     '订阅来源组织命中黑名单',
-                    $this->configAction('source_ip_deny_action', 'block'),
+                    $this->configAction('source_ip_deny_action', 'reset_token_uuid'),
                     [
                         'source_ip_deny_match_type' => 'org',
                         'source_ip_deny_match' => $keyword,
@@ -1124,14 +1124,7 @@ TEXT;
 
     private function configAction(string $key, string $default): string
     {
-        $action = strtolower(trim((string) ($this->config[$key] ?? $default)));
-        if ($action === 'reset_token') {
-            return 'reset_token_uuid';
-        }
-
-        return in_array($action, ['observe', 'throttle', 'empty', 'block', 'reset_token_uuid'], true)
-            ? $action
-            : ($default === 'reset_token' ? 'reset_token_uuid' : $default);
+        return 'reset_token_uuid';
     }
 
     private function parseAsnList(string $input): array

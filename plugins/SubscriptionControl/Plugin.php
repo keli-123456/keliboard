@@ -127,14 +127,12 @@ class Plugin extends AbstractPlugin
 
             // 0. UA 告警并重置凭据（可选）
             if ($this->getConfig('enable_ua_reset_token', false) && $this->isResetUA($userAgentLower)) {
-                $this->resetSubscriptionCredentials($user);
                 Log::warning('[SubscriptionControl] UA 可疑，已重置用户订阅凭证', [
                     'user_id' => $user->id,
                     'ua' => $userAgent,
                     'ip' => $ip
                 ]);
-                $this->blockAccess('ua_reset', 'UA 可疑，已重置订阅凭证', $user->id, [
-                    'action' => 'reset_token_uuid',
+                $this->resetAndBlockAccess('ua_reset', 'UA 可疑，已重置订阅凭证', $user, [
                     'client_ip' => $ip,
                     'user_agent' => $userAgent,
                 ] + $ipMeta);
@@ -162,7 +160,7 @@ class Plugin extends AbstractPlugin
             // 1. 检查UA黑名单
             if ($this->getConfig('enable_ua_blacklist', false)) {
                 if ($this->isBlacklistedUA($userAgentLower)) {
-                    $this->blockAccess('ua_blacklist', 'UA 拦截', $user->id, [
+                    $this->resetAndBlockAccess('ua_blacklist', 'UA 拦截，已重置订阅凭证', $user, [
                         'client_ip' => $ip,
                         'user_agent' => $userAgent,
                     ] + $ipMeta);
@@ -172,7 +170,7 @@ class Plugin extends AbstractPlugin
             // 2. 检查IP限制（时间窗口内不同IP数量）
             if (!$trustedEgress && $this->getConfig('enable_ip_limit', false)) {
                 if (!$this->checkIpLimit($user->id, $ip)) {
-                    $this->blockAccess('ip_limit', 'IP 数量超限', $user->id, [
+                    $this->resetAndBlockAccess('ip_limit', 'IP 数量超限，已重置订阅凭证', $user, [
                         'client_ip' => $ip,
                         'user_agent' => $userAgent,
                     ] + $ipMeta);
@@ -182,7 +180,7 @@ class Plugin extends AbstractPlugin
             // 3. 检查访问频率限制
             if ($this->getConfig('enable_rate_limit', false)) {
                 if (!$this->checkRateLimit($user->id)) {
-                    $this->blockAccess('rate_limit', '访问频率超限', $user->id, [
+                    $this->resetAndBlockAccess('rate_limit', '访问频率超限，已重置订阅凭证', $user, [
                         'client_ip' => $ip,
                         'user_agent' => $userAgent,
                     ] + $ipMeta);
@@ -560,34 +558,15 @@ class Plugin extends AbstractPlugin
 
             $code = (string) ($decision['code'] ?? 'subscription_risk');
             $reason = (string) ($decision['reason'] ?? '订阅访问行为异常');
-            $action = (string) ($decision['action'] ?? 'observe');
+            $action = $this->normalizeRiskAction((string) ($decision['action'] ?? 'reset_token_uuid'));
             $meta = array_merge($ipMeta, (array) ($decision['meta'] ?? []), [
                 'action' => $action,
                 'client_ip' => $ip,
                 'user_agent' => $userAgent,
             ]);
 
-            if ($action === 'observe') {
-                $this->recordRiskEvent($code, $reason, (int) $user->id, $user, $meta);
-                continue;
-            }
-
-            if ($action === 'empty') {
-                $this->recordRiskEvent($code, $reason, (int) $user->id, $user, $meta);
-                $halt = true;
-                return [];
-            }
-
-            if (in_array($action, ['reset_token', 'reset_token_uuid'], true)) {
-                $meta['action'] = 'reset_token_uuid';
-                $this->resetSubscriptionCredentials($user);
-                $this->interceptRiskDecision($code, $reason, 403, $user, $meta);
-            }
-
-            if ($action === 'throttle') {
-                $this->interceptRiskDecision($code, $reason, 429, $user, $meta);
-            }
-
+            $meta['action'] = 'reset_token_uuid';
+            $this->resetSubscriptionCredentials($user);
             $this->interceptRiskDecision($code, $reason, 403, $user, $meta);
         }
 
@@ -680,6 +659,7 @@ class Plugin extends AbstractPlugin
      */
     private function blockAccess(string $code, string $reason, int $userId = null, array $meta = []): never
     {
+        $meta['action'] = $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid'));
         $this->recordRiskEvent($code, $reason, $userId, null, $meta);
 
         // 返回403错误（部分客户端会展示响应体，帮助用户自查/自救）
@@ -687,6 +667,18 @@ class Plugin extends AbstractPlugin
         $this->intercept(response($message, 403, [
             'Content-Type' => 'text/plain; charset=UTF-8',
         ]));
+    }
+
+    private function resetAndBlockAccess(string $code, string $reason, User $user, array $meta = []): never
+    {
+        $meta['action'] = 'reset_token_uuid';
+        $this->resetSubscriptionCredentials($user);
+        $this->interceptRiskDecision($code, $reason, 403, $user, $meta);
+    }
+
+    private function normalizeRiskAction(string $action): string
+    {
+        return 'reset_token_uuid';
     }
 
     private function interceptRiskDecision(string $code, string $reason, int $status, User $user, array $meta = []): never
@@ -700,10 +692,9 @@ class Plugin extends AbstractPlugin
 
     private function recordRiskEvent(string $code, string $reason, int $userId = null, ?User $user = null, array $meta = []): void
     {
-        $action = (string) ($meta['action'] ?? 'block');
-        if ($action !== 'observe') {
-            Cache::increment('subscription_control:blocked_count:' . date('Y-m-d'));
-        }
+        $action = $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid'));
+        $meta['action'] = $action;
+        Cache::increment('subscription_control:blocked_count:' . date('Y-m-d'));
 
         // 记录最近一次拦截事件，便于用户在面板中定位原因
         if ($userId) {
@@ -749,7 +740,7 @@ class Plugin extends AbstractPlugin
             'telegram_sent' => false,
         ];
 
-        if ($user && $action !== 'observe') {
+        if ($user) {
             try {
                 $notificationResult = $this->sendRiskNotifications($user, $code, $reason, $meta);
             } catch (\Throwable $e) {
@@ -766,7 +757,7 @@ class Plugin extends AbstractPlugin
 
     private function buildBlockMessage(string $code, string $reason, array $meta = []): string
     {
-        $action = (string) ($meta['action'] ?? 'block');
+        $action = $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid'));
         $status = (int) ($meta['http_status'] ?? 403);
         $lines = [
             "订阅请求已被系统限制（{$status}）。",
@@ -941,11 +932,10 @@ class Plugin extends AbstractPlugin
 
     private function buildActionText(array $meta = []): string
     {
-        $action = (string) ($meta['action'] ?? 'block');
+        $action = $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid'));
 
         return match ($action) {
             'reset_token_uuid' => '系统已重置订阅链接和节点凭据，旧订阅与旧节点配置已失效，请重新获取并导入。',
-            'reset_token' => '系统已重置订阅链接和节点凭据，旧订阅与旧节点配置已失效，请重新获取并导入。',
             default => '本次订阅请求已被拦截，请检查客户端或网络环境后重试。',
         };
     }
@@ -963,7 +953,7 @@ class Plugin extends AbstractPlugin
             'email' => $email,
             'code' => $code,
             'reason' => $reason,
-            'action' => (string) ($meta['action'] ?? 'block'),
+            'action' => $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid')),
             'client_ip' => $meta['client_ip'] ?? null,
             'proxy_ip' => $meta['proxy_ip'] ?? null,
             'client_ip_source' => $meta['client_ip_source'] ?? null,

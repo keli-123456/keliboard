@@ -32,4 +32,15 @@ final class SubscriptionControlPluginTest extends TestCase
         $this->assertTrue($isResetUa->invoke($plugin, strtolower('WeChat/8.0.45 MicroMessenger/8.0.45')));
         $this->assertTrue($isResetUa->invoke($plugin, strtolower('BadBot/1.0')));
     }
+
+    public function test_risk_actions_always_reset_credentials(): void
+    {
+        $plugin = new Plugin('subscription_control');
+        $normalize = new ReflectionMethod($plugin, 'normalizeRiskAction');
+        $normalize->setAccessible(true);
+
+        foreach (['observe', ' OBSERVE ', 'block', 'empty', 'throttle', 'reset_token', 'reset_token_uuid', '限制访问', ''] as $action) {
+            $this->assertSame('reset_token_uuid', $normalize->invoke($plugin, $action));
+        }
+    }
 }
