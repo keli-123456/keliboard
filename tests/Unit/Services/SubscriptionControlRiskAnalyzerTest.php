@@ -523,7 +523,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertFalse($analyzer->isTrustedEgressIp('4.4.4.4'));
     }
 
-    public function test_source_ip_denylist_resets_credentials_for_matching_cidr(): void
+    public function test_source_ip_denylist_blocks_matching_cidr_without_resetting_credentials(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([
             'enable_source_ip_denylist' => true,
@@ -536,12 +536,12 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertCount(1, $decisions);
         $this->assertSame('source_ip_denylist', $decisions[0]['code']);
-        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
+        $this->assertSame('block', $decisions[0]['action']);
         $this->assertSame('cidr', $decisions[0]['meta']['source_ip_deny_match_type']);
         $this->assertSame('107.150.104.0/21', $decisions[0]['meta']['source_ip_deny_match']);
     }
 
-    public function test_source_ip_denylist_resets_credentials_for_ucloud_by_asn_and_org_keyword(): void
+    public function test_source_ip_denylist_blocks_ucloud_by_asn_and_org_keyword(): void
     {
         $intelligence = new SubscriptionIpIntelligenceService([], function (string $query): array {
             return match ($query) {
@@ -561,7 +561,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertCount(1, $decisions);
         $this->assertSame('source_ip_denylist', $decisions[0]['code']);
-        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
+        $this->assertSame('block', $decisions[0]['action']);
         $this->assertSame('asn', $decisions[0]['meta']['source_ip_deny_match_type']);
         $this->assertSame('AS135377', $decisions[0]['meta']['source_ip_deny_match']);
         $this->assertSame(135377, $decisions[0]['meta']['ip_asn']);
@@ -569,7 +569,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame('UCLOUD INFORMATION TECHNOLOGY (HK) LIMITED', $decisions[0]['meta']['ip_org']);
     }
 
-    public function test_source_ip_denylist_resets_credentials_by_org_keyword_when_asn_is_not_listed(): void
+    public function test_source_ip_denylist_blocks_by_org_keyword_when_asn_is_not_listed(): void
     {
         $intelligence = new SubscriptionIpIntelligenceService([], function (string $query): array {
             return match ($query) {
@@ -589,13 +589,13 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertCount(1, $decisions);
         $this->assertSame('source_ip_denylist', $decisions[0]['code']);
-        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
+        $this->assertSame('block', $decisions[0]['action']);
         $this->assertSame('org', $decisions[0]['meta']['source_ip_deny_match_type']);
         $this->assertSame('ucloud', $decisions[0]['meta']['source_ip_deny_match']);
         $this->assertSame(135377, $decisions[0]['meta']['ip_asn']);
     }
 
-    public function test_source_ip_denylist_resets_credentials_for_major_china_clouds_by_org_keyword(): void
+    public function test_source_ip_denylist_blocks_major_china_clouds_by_org_keyword(): void
     {
         $intelligence = new SubscriptionIpIntelligenceService([], function (string $query): array {
             return match ($query) {
@@ -619,7 +619,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
             $this->assertCount(1, $decisions);
             $this->assertSame('source_ip_denylist', $decisions[0]['code']);
-            $this->assertSame('reset_token_uuid', $decisions[0]['action']);
+            $this->assertSame('block', $decisions[0]['action']);
             $this->assertSame('org', $decisions[0]['meta']['source_ip_deny_match_type']);
         }
     }

@@ -58,5 +58,6 @@ final class SubscriptionControlOwnershipTest extends TestCase
 
         $this->assertTrue((bool) ($items['enable_source_ip_denylist']['default'] ?? false));
         $this->assertTrue((bool) ($items['enable_node_source_ip_managed_routes']['default'] ?? false));
+        $this->assertSame('block', (string) ($items['source_ip_deny_action']['default'] ?? ''));
     }
 }

@@ -43,4 +43,15 @@ final class SubscriptionControlPluginTest extends TestCase
             $this->assertSame('reset_token_uuid', $normalize->invoke($plugin, $action));
         }
     }
+
+    public function test_source_ip_denylist_only_blocks_without_resetting_credentials(): void
+    {
+        $plugin = new Plugin('subscription_control');
+        $normalize = new ReflectionMethod($plugin, 'normalizeRiskAction');
+        $normalize->setAccessible(true);
+
+        foreach (['observe', 'block', 'empty', 'throttle', 'reset_token', 'reset_token_uuid', ''] as $action) {
+            $this->assertSame('block', $normalize->invoke($plugin, $action, 'source_ip_denylist'));
+        }
+    }
 }

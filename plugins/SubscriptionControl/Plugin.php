@@ -558,15 +558,18 @@ class Plugin extends AbstractPlugin
 
             $code = (string) ($decision['code'] ?? 'subscription_risk');
             $reason = (string) ($decision['reason'] ?? '订阅访问行为异常');
-            $action = $this->normalizeRiskAction((string) ($decision['action'] ?? 'reset_token_uuid'));
+            $action = $this->normalizeRiskAction((string) ($decision['action'] ?? 'reset_token_uuid'), $code);
             $meta = array_merge($ipMeta, (array) ($decision['meta'] ?? []), [
                 'action' => $action,
                 'client_ip' => $ip,
                 'user_agent' => $userAgent,
             ]);
 
-            $meta['action'] = 'reset_token_uuid';
-            $this->resetSubscriptionCredentials($user);
+            if ($action !== 'block') {
+                $meta['action'] = 'reset_token_uuid';
+                $this->resetSubscriptionCredentials($user);
+            }
+
             $this->interceptRiskDecision($code, $reason, 403, $user, $meta);
         }
 
@@ -659,7 +662,7 @@ class Plugin extends AbstractPlugin
      */
     private function blockAccess(string $code, string $reason, int $userId = null, array $meta = []): never
     {
-        $meta['action'] = $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid'));
+        $meta['action'] = $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid'), $code);
         $this->recordRiskEvent($code, $reason, $userId, null, $meta);
 
         // 返回403错误（部分客户端会展示响应体，帮助用户自查/自救）
@@ -676,8 +679,12 @@ class Plugin extends AbstractPlugin
         $this->interceptRiskDecision($code, $reason, 403, $user, $meta);
     }
 
-    private function normalizeRiskAction(string $action): string
+    private function normalizeRiskAction(string $action, string $code = ''): string
     {
+        if ($code === 'source_ip_denylist') {
+            return 'block';
+        }
+
         return 'reset_token_uuid';
     }
 
@@ -692,7 +699,7 @@ class Plugin extends AbstractPlugin
 
     private function recordRiskEvent(string $code, string $reason, int $userId = null, ?User $user = null, array $meta = []): void
     {
-        $action = $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid'));
+        $action = $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid'), $code);
         $meta['action'] = $action;
         Cache::increment('subscription_control:blocked_count:' . date('Y-m-d'));
 
@@ -757,14 +764,16 @@ class Plugin extends AbstractPlugin
 
     private function buildBlockMessage(string $code, string $reason, array $meta = []): string
     {
-        $action = $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid'));
+        $action = $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid'), $code);
         $status = (int) ($meta['http_status'] ?? 403);
         $lines = [
             "订阅请求已被系统限制（{$status}）。",
         ];
 
-        if (in_array($action, ['reset_token', 'reset_token_uuid'], true)) {
+        if ($action === 'reset_token_uuid') {
             $lines[] = '订阅凭证可能已被重置：旧订阅链接和旧节点配置将立即失效，请登录面板复制新链接并重新导入客户端。';
+        } elseif ($code === 'source_ip_denylist') {
+            $lines[] = '当前订阅来源网络被限制，订阅请求已拒绝；系统不会重置您的订阅链接和节点凭据。';
         } else {
             $lines[] = '请检查客户端/网络环境后重试，或登录面板查看提示信息。';
         }
@@ -932,10 +941,11 @@ class Plugin extends AbstractPlugin
 
     private function buildActionText(array $meta = []): string
     {
-        $action = $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid'));
+        $action = $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid'), $code);
 
         return match ($action) {
             'reset_token_uuid' => '系统已重置订阅链接和节点凭据，旧订阅与旧节点配置已失效，请重新获取并导入。',
+            'block' => '当前订阅来源网络被限制，订阅请求已拒绝，订阅链接和节点凭据未重置。',
             default => '本次订阅请求已被拦截，请检查客户端或网络环境后重试。',
         };
     }
@@ -953,7 +963,7 @@ class Plugin extends AbstractPlugin
             'email' => $email,
             'code' => $code,
             'reason' => $reason,
-            'action' => $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid')),
+            'action' => $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid'), $code),
             'client_ip' => $meta['client_ip'] ?? null,
             'proxy_ip' => $meta['proxy_ip'] ?? null,
             'client_ip_source' => $meta['client_ip_source'] ?? null,

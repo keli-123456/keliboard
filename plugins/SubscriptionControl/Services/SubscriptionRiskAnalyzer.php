@@ -673,7 +673,7 @@ TEXT;
                 return $this->decision(
                     'source_ip_denylist',
                     '订阅来源 IP 命中黑名单',
-                    $this->configAction('source_ip_deny_action', 'reset_token_uuid'),
+                    $this->configAction('source_ip_deny_action', 'block'),
                     [
                         'source_ip_deny_match_type' => 'cidr',
                         'source_ip_deny_match' => $entry,
@@ -698,7 +698,7 @@ TEXT;
             return $this->decision(
                 'source_ip_denylist',
                 '订阅来源 ASN 命中黑名单',
-                $this->configAction('source_ip_deny_action', 'reset_token_uuid'),
+                $this->configAction('source_ip_deny_action', 'block'),
                 [
                     'source_ip_deny_match_type' => 'asn',
                     'source_ip_deny_match' => "AS{$asn}",
@@ -713,7 +713,7 @@ TEXT;
                 return $this->decision(
                     'source_ip_denylist',
                     '订阅来源组织命中黑名单',
-                    $this->configAction('source_ip_deny_action', 'reset_token_uuid'),
+                    $this->configAction('source_ip_deny_action', 'block'),
                     [
                         'source_ip_deny_match_type' => 'org',
                         'source_ip_deny_match' => $keyword,
@@ -1124,6 +1124,10 @@ TEXT;
 
     private function configAction(string $key, string $default): string
     {
+        if ($key === 'source_ip_deny_action') {
+            return 'block';
+        }
+
         return 'reset_token_uuid';
     }
 
