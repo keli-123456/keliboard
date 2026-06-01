@@ -124,7 +124,7 @@ final class ManagedNodeRouteServiceTest extends TestCase
             'code' => ManagedNodeRouteService::PLUGIN_CODE,
             'name' => '订阅风控',
             'description' => '',
-            'version' => '1.5.12',
+            'version' => '1.5.13',
             'author' => '',
             'url' => '',
             'email' => '',
