@@ -83,7 +83,7 @@ class UniProxyController extends Controller
 
         if ($cacheTtl > 0) {
             $cache = $this->getServerApiCache();
-            $cacheKey = "server_api:user:{$node->id}";
+            $cacheKey = $this->nodeUserService->userCacheKey($node);
             $cached = $cache->get($cacheKey);
             if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
                 return $this->respondCacheEntry($request, $cached);

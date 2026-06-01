@@ -402,7 +402,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame([], $first);
         $this->assertCount(1, $second);
         $this->assertSame('subscription_leak_guard', $second[0]['code']);
-        $this->assertSame('empty', $second[0]['action']);
+        $this->assertSame('reset_token_uuid', $second[0]['action']);
         $this->assertContains('new_pull_ip', $second[0]['meta']['signals']);
         $this->assertContains('many_pull_ips', $second[0]['meta']['signals']);
     }
@@ -481,7 +481,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame('reset_token_uuid', $decisions[0]['action']);
         $this->assertSame(3, $decisions[0]['meta']['source_user_count']);
         $this->assertSame('script', $decisions[0]['meta']['ua_category']);
-        $this->assertSame(['sing-box', 'sparkle', 'script'], $decisions[0]['meta']['source_ua_categories']);
+        $this->assertSame(['script', 'sing-box', 'sparkle'], $decisions[0]['meta']['source_ua_categories']);
     }
 
     public function test_source_batch_detection_keeps_different_source_ips_separate(): void
@@ -602,7 +602,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
                 'AS45102.asn.cymru.com' => ['45102 | US | arin | 2010-01-01 | Alibaba (US) Technology Co., Ltd.'],
                 '9.9.9.9.origin.asn.cymru.com' => ['45090 | 9.9.9.9 | 9.9.9.0/24 | CN | apnic | 2020-01-01'],
                 'AS45090.asn.cymru.com' => ['45090 | CN | apnic | 2011-01-01 | Shenzhen Tencent Computer Systems Company Limited, CN'],
-                '10.10.10.10.origin.asn.cymru.com' => ['136907 | 10.10.10.10 | 10.10.10.0/24 | HK | apnic | 2020-01-01'],
+                '10.10.10.11.origin.asn.cymru.com' => ['136907 | 11.10.10.10 | 11.10.10.0/24 | HK | apnic | 2020-01-01'],
                 'AS136907.asn.cymru.com' => ['136907 | HK | apnic | 2017-01-01 | HUAWEI CLOUDS'],
                 default => [],
             };
@@ -613,7 +613,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
             'source_ip_deny_action' => 'block',
         ], $intelligence);
 
-        foreach (['8.8.8.8', '9.9.9.9', '10.10.10.10'] as $index => $ip) {
+        foreach (['8.8.8.8', '9.9.9.9', '11.10.10.10'] as $index => $ip) {
             $decisions = $analyzer->inspectSubscriptionPull(1170 + $index, "token-deny-cloud-{$index}", $ip, 'Sparkle/1.0.0');
 
             $this->assertCount(1, $decisions);

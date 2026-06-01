@@ -3,6 +3,7 @@
 namespace App\Services\NodeRealtime;
 
 use App\Models\Server;
+use App\Services\Node\NodeUserService;
 use DateTimeInterface;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -231,7 +232,31 @@ class NodeRealtimePublisher
 
     private function clearUserCache(?array $serverIds = null): void
     {
-        $this->clearServerApiCacheEntries('user', [''], $serverIds);
+        $ids = $serverIds === null
+            ? Server::query()->pluck('id')->map(fn ($id) => (int) $id)->all()
+            : $this->normalizeIntList($serverIds);
+
+        if ($ids === []) {
+            return;
+        }
+
+        $cache = $this->getServerApiCache();
+        $nodeUserService = app(NodeUserService::class);
+        Server::query()
+            ->whereIn('id', $ids)
+            ->get(['id', 'group_ids'])
+            ->each(function (Server $server) use ($cache, $nodeUserService): void {
+                foreach ($nodeUserService->userCacheKeys($server) as $key) {
+                    try {
+                        $cache->forget($key);
+                    } catch (\Throwable $e) {
+                        Log::warning('Node realtime cache clear failed', [
+                            'key' => $key,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
+            });
     }
 
     private function clearServerApiCacheEntries(string $prefix, array $suffixes, ?array $serverIds = null): void

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Node;
 
 use App\Models\UserSyncEvent;
+use App\Services\Plugin\HookManager;
 use App\Services\ServerService;
 use Illuminate\Contracts\Support\Arrayable;
 use Illuminate\Support\Collection;
@@ -17,9 +18,41 @@ class NodeUserService
 
     private static bool $deltaUnionQueryDisabled = false;
 
+    public function userCacheKey($node): string
+    {
+        if (HookManager::hasHook('server.users.get')) {
+            return $this->legacyUserCacheKey($node);
+        }
+
+        $groupIds = $this->normalizeGroupIds((array) ($node->group_ids ?? []));
+
+        return 'server_api:user:scope:' . sha1('groups:' . implode(',', $groupIds));
+    }
+
+    public function userCacheKeys($node): array
+    {
+        return array_values(array_unique([
+            $this->userCacheKey($node),
+            $this->legacyUserCacheKey($node),
+        ]));
+    }
+
     public function buildUserCacheEntry($node): array
     {
         return $this->encodeAvailableUsers($node, '{"users":[', ']}', true);
+    }
+
+    private function legacyUserCacheKey($node): string
+    {
+        return 'server_api:user:' . (int) ($node->id ?? 0);
+    }
+
+    private function normalizeGroupIds(array $groupIds): array
+    {
+        $normalized = array_values(array_unique(array_map('intval', $groupIds)));
+        sort($normalized);
+
+        return $normalized;
     }
 
     public function buildDeltaResponseEntry($node, int $since, $requestedLimit): array

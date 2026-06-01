@@ -338,5 +338,10 @@ final class MachineControllerInstallCommandTest extends TestCase
             $table->json('upgrade_state')->nullable();
             $table->timestamps();
         });
+
+        Schema::create('v2_server', function (Blueprint $table): void {
+            $table->id();
+            $table->foreignId('machine_id')->nullable();
+        });
     }
 }
