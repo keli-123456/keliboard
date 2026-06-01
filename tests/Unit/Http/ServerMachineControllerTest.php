@@ -233,6 +233,22 @@ final class ServerMachineControllerTest extends TestCase
                     ],
                     'version' => 'v0.3.8',
                     'uptime' => 12345,
+                    'mieru_port_forward' => [
+                        'enabled' => true,
+                        'expected_rules' => [['spec' => 'udp dpt:11112 redirect']],
+                    ],
+                    'metrics' => [
+                        'user_delta' => [
+                            'kelinode_user_delta_native_apply_success_total' => 3,
+                        ],
+                        'keli_core_rs' => [
+                            'keli_core_user_delta_apply_total' => 3,
+                        ],
+                        'native_core_gray_health' => [
+                            'mode' => 'native_delta',
+                            'metrics_available' => true,
+                        ],
+                    ],
                     'node_failures' => [
                         [
                             'api_host' => 'https://panel.example.test',
@@ -258,12 +274,17 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame('198.51.100.20', $status['ip']['panel_seen'] ?? null);
         $this->assertSame(12.3, $status['net']['rx_rate'] ?? null);
         $this->assertSame('edge-a', $status['system']['hostname'] ?? null);
+        $this->assertSame('native_delta', $status['metrics']['native_core_gray_health']['mode'] ?? null);
+        $this->assertSame(3, $status['metrics']['keli_core_rs']['keli_core_user_delta_apply_total'] ?? null);
+        $this->assertSame(true, $status['mieru_port_forward']['enabled'] ?? null);
         $this->assertSame(51, $status['node_failures'][0]['node_id'] ?? null);
         $this->assertSame('user_delta request failed: 403 Forbidden', $status['node_failures'][0]['error'] ?? null);
 
         $history = ServerMachineLoadHistory::query()->where('machine_id', $machine->id)->first();
         $this->assertSame('172.104.189.93', $history?->load_status['ip']['public_ipv4'] ?? null);
         $this->assertSame(45.6, $history?->load_status['net']['tx_rate'] ?? null);
+        $this->assertSame('native_delta', $history?->load_status['metrics']['native_core_gray_health']['mode'] ?? null);
+        $this->assertSame(true, $history?->load_status['mieru_port_forward']['enabled'] ?? null);
         $this->assertSame(51, $history?->load_status['node_failures'][0]['node_id'] ?? null);
     }
 

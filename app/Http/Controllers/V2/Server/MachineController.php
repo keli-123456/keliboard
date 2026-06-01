@@ -104,6 +104,8 @@ class MachineController extends Controller
             'runtime' => is_array(data_get($payload, 'runtime')) ? data_get($payload, 'runtime') : null,
             'core' => is_array(data_get($payload, 'core')) ? data_get($payload, 'core') : null,
             'hy2_port_forward' => is_array(data_get($payload, 'hy2_port_forward')) ? data_get($payload, 'hy2_port_forward') : null,
+            'mieru_port_forward' => is_array(data_get($payload, 'mieru_port_forward')) ? data_get($payload, 'mieru_port_forward') : null,
+            'metrics' => is_array(data_get($payload, 'metrics')) ? data_get($payload, 'metrics') : null,
             'agent' => is_array(data_get($payload, 'agent')) ? data_get($payload, 'agent') : null,
             'node_failures' => $this->normalizeNodeFailures(data_get($payload, 'node_failures')),
             'updated_at' => now()->timestamp,
