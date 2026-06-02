@@ -62,6 +62,45 @@ final class SubscriptionControlOwnershipTest extends TestCase
         $this->assertSame('block', (string) ($items['source_ip_deny_action']['default'] ?? ''));
     }
 
+    public function test_subscription_control_default_config_enables_anti_gfw_baseline(): void
+    {
+        $path = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $config = json_decode((string) file_get_contents($path), true);
+
+        $this->assertIsArray($config);
+        $items = $config['config'] ?? [];
+
+        foreach ([
+            'enable_ua_blacklist',
+            'enable_client_ua_whitelist',
+            'enable_ua_reset_token',
+            'enable_source_ip_denylist',
+            'enable_node_source_ip_managed_routes',
+            'enable_node_source_ip_route_learned_prefixes',
+            'enable_node_source_ip_builtin_provider_cidrs',
+            'enable_node_source_ip_bgp_prefix_refresh',
+            'enable_source_batch_detection',
+            'enable_leak_guard',
+            'enable_multi_ua_detection',
+            'enable_multi_region_pull_detection',
+            'enable_multi_region_online_detection',
+        ] as $key) {
+            $this->assertTrue((bool) ($items[$key]['default'] ?? false), $key . ' should be enabled by default');
+        }
+
+        foreach ([
+            'source_batch_action',
+            'leak_guard_action',
+            'multi_ua_action',
+            'multi_region_pull_action',
+            'multi_region_online_action',
+        ] as $key) {
+            $this->assertSame('reset_token_uuid', (string) ($items[$key]['default'] ?? ''), $key . ' should reset credentials');
+        }
+
+        $this->assertSame('block', (string) ($items['source_ip_deny_action']['default'] ?? ''));
+    }
+
     public function test_subscription_control_malicious_ua_blacklist_defaults_are_explicit(): void
     {
         $path = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';

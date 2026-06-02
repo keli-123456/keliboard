@@ -1,7 +1,7 @@
 {
     "name": "订阅风控",
     "code": "subscription_control",
-    "version": "1.5.19",
+    "version": "1.5.20",
     "description": "提供订阅链接的主动风险控制能力，防止节点被恶意扫描。支持可信代理真实IP识别、免费ASN/IP类型标签、订阅泄露保护、在线唯一IP阈值、邮件/TG通知、UA黑名单、客户端白名单、多UA/多地区订阅检测、订阅IP限制、阅后即焚功能。",
     "author": "XBoard",
     "require": {
@@ -22,9 +22,9 @@
         },
         "enable_client_ua_whitelist": {
             "type": "boolean",
-            "default": false,
+            "default": true,
             "label": "启用客户端UA白名单",
-            "description": "开启后，非白名单客户端访问订阅会按下方策略处理"
+            "description": "默认开启。非白名单客户端访问订阅会按下方分层策略处理"
         },
         "client_ua_whitelist": {
             "type": "text",
@@ -160,9 +160,9 @@
         },
         "enable_source_batch_detection": {
             "type": "boolean",
-            "default": false,
+            "default": true,
             "label": "启用同源批量订阅检测",
-            "description": "开启后，同一真实客户端IP在短时间内拉取多个用户订阅会触发风控；轮换UA也会被归入同一来源"
+            "description": "默认开启。同一真实客户端IP在短时间内拉取多个用户订阅会触发风控；轮换UA也会被归入同一来源"
         },
         "source_batch_user_threshold": {
             "type": "number",
@@ -184,9 +184,9 @@
         },
         "enable_leak_guard": {
             "type": "boolean",
-            "default": false,
+            "default": true,
             "label": "启用订阅泄露保护模式",
-            "description": "开启后，将按UA、拉取IP数、地区、在线地区不一致等信号打分；高风险请求会按下方策略处理，避免直接下发真实节点"
+            "description": "默认开启。将按UA、拉取IP数、地区、在线地区不一致等信号打分；高风险请求会按下方策略处理，避免直接下发真实节点"
         },
         "leak_guard_action": {
             "type": "string",
@@ -262,9 +262,9 @@
         },
         "enable_multi_ua_detection": {
             "type": "boolean",
-            "default": false,
+            "default": true,
             "label": "启用同订阅多UA检测",
-            "description": "开启后，同一订阅在短时间内被多个客户端类别拉取会触发风控"
+            "description": "默认开启。同一订阅在短时间内被多个客户端类别拉取会触发风控"
         },
         "multi_ua_allowed_count": {
             "type": "number",
@@ -286,9 +286,9 @@
         },
         "enable_multi_region_pull_detection": {
             "type": "boolean",
-            "default": false,
+            "default": true,
             "label": "启用同订阅多地区拉取检测",
-            "description": "开启后，同一订阅短时间内从多个地区拉取会触发风控"
+            "description": "默认开启。同一订阅短时间内从多个地区拉取会触发风控"
         },
         "multi_region_pull_allowed_count": {
             "type": "number",
@@ -310,9 +310,9 @@
         },
         "enable_multi_region_online_detection": {
             "type": "boolean",
-            "default": false,
+            "default": true,
             "label": "启用在线多地区检测",
-            "description": "开启后，插件会读取节点上报的在线IP列表，判断同一用户是否多地区同时在线"
+            "description": "默认开启。插件会读取节点上报的在线IP列表，判断同一用户是否多地区同时在线"
         },
         "multi_region_online_allowed_count": {
             "type": "number",
