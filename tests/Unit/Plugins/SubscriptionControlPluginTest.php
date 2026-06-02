@@ -5,7 +5,11 @@ declare(strict_types=1);
 namespace Tests\Unit\Plugins;
 
 use App\Models\Plugin as PluginModel;
+use App\Models\User;
+use App\Services\Plugin\InterceptResponseException;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Plugin\SubscriptionControl\Plugin;
 use ReflectionMethod;
 use Tests\Support\InteractsWithInMemoryDatabase;
@@ -71,6 +75,16 @@ final class SubscriptionControlPluginTest extends TestCase
         }
     }
 
+    public function test_client_ua_not_allowed_can_block_without_resetting_credentials(): void
+    {
+        $plugin = new Plugin('subscription_control');
+        $normalize = new ReflectionMethod($plugin, 'normalizeRiskAction');
+        $normalize->setAccessible(true);
+
+        $this->assertSame('block', $normalize->invoke($plugin, 'block', 'client_ua_not_allowed'));
+        $this->assertSame('reset_token_uuid', $normalize->invoke($plugin, 'reset_token_uuid', 'client_ua_not_allowed'));
+    }
+
     public function test_ua_blacklist_treats_none_keyword_as_empty_user_agent(): void
     {
         $plugin = new Plugin('subscription_control');
@@ -95,7 +109,7 @@ final class SubscriptionControlPluginTest extends TestCase
             'code' => 'subscription_control',
             'name' => '订阅风控',
             'description' => '',
-            'version' => '1.5.17',
+            'version' => '1.5.18',
             'author' => '',
             'url' => '',
             'email' => '',
@@ -137,7 +151,7 @@ final class SubscriptionControlPluginTest extends TestCase
             'code' => 'subscription_control',
             'name' => '订阅风控',
             'description' => '',
-            'version' => '1.5.17',
+            'version' => '1.5.18',
             'author' => '',
             'url' => '',
             'email' => '',
@@ -167,6 +181,80 @@ final class SubscriptionControlPluginTest extends TestCase
 
         $config = json_decode((string) PluginModel::query()->where('code', 'subscription_control')->value('config'), true);
         $this->assertSame("9.9.9.9", $config['source_ip_deny_cidrs']);
+    }
+
+    public function test_malicious_ua_blacklist_runs_before_client_whitelist_and_persists_source_ip(): void
+    {
+        $this->setUpInMemoryDatabase();
+        $this->bindJsonResponseFactory();
+        $this->createPluginTable();
+        $this->createUserTable();
+
+        PluginModel::create([
+            'code' => 'subscription_control',
+            'name' => '订阅风控',
+            'description' => '',
+            'version' => '1.5.18',
+            'author' => '',
+            'url' => '',
+            'email' => '',
+            'config' => json_encode([
+                'enable_ua_blacklist' => true,
+                'ua_blacklist' => "Censys\nNone",
+                'enable_client_ua_whitelist' => true,
+                'client_ua_unknown_action' => 'reset_token_uuid',
+                'enable_auto_trusted_node_ips' => false,
+                'enable_source_ip_denylist' => false,
+                'source_ip_deny_cidrs' => '',
+                'enable_email_notice' => false,
+                'enable_telegram_notice' => false,
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ]);
+
+        $user = User::query()->create([
+            'email' => 'risk@example.test',
+            'token' => 'old-token',
+            'uuid' => 'old-uuid',
+            'u' => 0,
+            'd' => 0,
+        ]);
+
+        $plugin = new Plugin('subscription_control');
+        $plugin->setConfig([
+            'enable_ua_blacklist' => true,
+            'ua_blacklist' => "Censys\nNone",
+            'enable_client_ua_whitelist' => true,
+            'client_ua_unknown_action' => 'reset_token_uuid',
+            'enable_auto_trusted_node_ips' => false,
+            'enable_source_ip_denylist' => false,
+            'source_ip_deny_cidrs' => '',
+            'enable_email_notice' => false,
+            'enable_telegram_notice' => false,
+        ]);
+
+        $request = Request::create('/api/v1/client/subscribe', 'GET', [], [], [], [
+            'REMOTE_ADDR' => '8.8.8.8',
+            'HTTP_USER_AGENT' => 'CensysInspect/1.1',
+        ]);
+
+        try {
+            $plugin->checkSubscribeAccess([], $user, $request);
+            $this->fail('Expected subscription request to be intercepted.');
+        } catch (InterceptResponseException $exception) {
+            $this->assertSame(403, $exception->getResponse()->getStatusCode());
+        }
+
+        $user->refresh();
+        $this->assertSame('old-token', $user->token);
+        $this->assertSame('old-uuid', $user->uuid);
+
+        $config = json_decode((string) PluginModel::query()->where('code', 'subscription_control')->value('config'), true);
+        $this->assertTrue((bool) $config['enable_source_ip_denylist']);
+        $this->assertSame('8.8.8.8', $config['source_ip_deny_cidrs']);
+
+        $event = Cache::get("subscription_control:last_event:{$user->id}");
+        $this->assertSame('ua_blacklist', $event['code']);
+        $this->assertSame('block', $event['action']);
     }
 
     private function createPluginTable(): void

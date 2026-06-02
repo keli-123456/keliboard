@@ -263,7 +263,7 @@ TEXT;
             $decisions[] = $this->decision(
                 'client_ua_not_allowed',
                 '客户端不在订阅白名单内',
-                $this->configAction('client_ua_unknown_action', 'reset_token_uuid'),
+                $this->clientUaNotAllowedAction($client),
                 [
                     'ua_category' => $client['category'],
                 ]
@@ -1129,6 +1129,16 @@ TEXT;
         }
 
         return 'reset_token_uuid';
+    }
+
+    private function clientUaNotAllowedAction(array $client): string
+    {
+        $category = (string) ($client['category'] ?? 'unknown');
+        if (in_array($category, ['browser', 'social_app', 'empty', 'script'], true)) {
+            return 'block';
+        }
+
+        return $this->configAction('client_ua_unknown_action', 'reset_token_uuid');
     }
 
     private function parseAsnList(string $input): array

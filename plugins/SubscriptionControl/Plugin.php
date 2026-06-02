@@ -101,6 +101,21 @@ class Plugin extends AbstractPlugin
                 new SubscriptionIpIntelligenceService($riskConfig)
             );
             $trustedEgress = $riskAnalyzer->isTrustedEgressIp($ip);
+
+            // 明确恶意 UA 优先于通用白名单策略：直接拒绝并尽量永久封禁真实来源 IP，不重置用户凭证。
+            if ($this->getConfig('enable_ua_blacklist', false) && $this->isBlacklistedUA($userAgentLower)) {
+                $meta = [
+                    'client_ip' => $ip,
+                    'user_agent' => $userAgent,
+                    'action' => 'block',
+                ] + $ipMeta;
+                $blocked = $this->persistPermanentSourceIpDeny($ip, $trustedEgress, $meta);
+                $reason = $blocked
+                    ? '恶意 UA 命中，已永久封禁订阅来源 IP'
+                    : '恶意 UA 命中，订阅请求已拒绝';
+                $this->interceptRiskDecision('ua_blacklist', $reason, 403, $user, $meta);
+            }
+
             $riskDecisionHalted = false;
             $servers = $this->applyRiskDecisions(
                 $servers,
@@ -156,22 +171,6 @@ class Plugin extends AbstractPlugin
                         ] + $ipMeta,
                         true
                     );
-                }
-            }
-
-            // 1. 检查UA黑名单
-            if ($this->getConfig('enable_ua_blacklist', false)) {
-                if ($this->isBlacklistedUA($userAgentLower)) {
-                    $meta = [
-                        'client_ip' => $ip,
-                        'user_agent' => $userAgent,
-                        'action' => 'block',
-                    ] + $ipMeta;
-                    $blocked = $this->persistPermanentSourceIpDeny($ip, $trustedEgress, $meta);
-                    $reason = $blocked
-                        ? '恶意 UA 命中，已永久封禁订阅来源 IP'
-                        : '恶意 UA 命中，订阅请求已拒绝';
-                    $this->interceptRiskDecision('ua_blacklist', $reason, 403, $user, $meta);
                 }
             }
 
@@ -831,6 +830,10 @@ class Plugin extends AbstractPlugin
     private function normalizeRiskAction(string $action, string $code = ''): string
     {
         if (in_array($code, ['source_ip_denylist', 'ua_blacklist'], true)) {
+            return 'block';
+        }
+
+        if ($code === 'client_ua_not_allowed' && strtolower(trim($action)) === 'block') {
             return 'block';
         }
 

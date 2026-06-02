@@ -98,6 +98,27 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame('legacy_clash', $oldClashForAndroid[0]['meta']['ua_category']);
     }
 
+    public function test_whitelist_rejects_accidental_browser_and_social_ua_without_resetting_credentials(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_client_ua_whitelist' => true,
+            'client_ua_unknown_action' => 'reset_token_uuid',
+        ]);
+
+        $browser = $analyzer->inspectSubscriptionPull(1020, 'token-browser', '1.1.1.1', 'Mozilla/5.0 Chrome/138.0 Safari/537.36');
+        $social = $analyzer->inspectSubscriptionPull(1021, 'token-social', '1.1.1.1', 'TelegramBot (like TwitterBot)');
+
+        $this->assertCount(1, $browser);
+        $this->assertSame('client_ua_not_allowed', $browser[0]['code']);
+        $this->assertSame('block', $browser[0]['action']);
+        $this->assertSame('browser', $browser[0]['meta']['ua_category']);
+
+        $this->assertCount(1, $social);
+        $this->assertSame('client_ua_not_allowed', $social[0]['code']);
+        $this->assertSame('block', $social[0]['action']);
+        $this->assertSame('social_app', $social[0]['meta']['ua_category']);
+    }
+
     public function test_multi_ua_detection_ignores_version_changes_inside_same_family(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([
@@ -148,7 +169,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame('reset_token_uuid', $decisions[0]['action']);
     }
 
-    public function test_client_ua_whitelist_flags_unapproved_client_family(): void
+    public function test_client_ua_whitelist_blocks_unapproved_script_family_without_resetting_credentials(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([
             'enable_client_ua_whitelist' => true,
@@ -162,7 +183,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame([], $allowed);
         $this->assertCount(1, $blocked);
         $this->assertSame('client_ua_not_allowed', $blocked[0]['code']);
-        $this->assertSame('reset_token_uuid', $blocked[0]['action']);
+        $this->assertSame('block', $blocked[0]['action']);
         $this->assertSame('script', $blocked[0]['meta']['ua_category']);
     }
 
