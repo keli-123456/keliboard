@@ -100,6 +100,29 @@ final class SubscriptionControlPluginTest extends TestCase
         $this->assertFalse($isBlacklistedUa->invoke($plugin, 'sparkle/1.0.0'));
     }
 
+    public function test_default_ua_blacklist_includes_social_platform_preview_user_agents(): void
+    {
+        $configPath = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $config = json_decode((string) file_get_contents($configPath), true);
+        $defaultBlacklist = (string) ($config['config']['ua_blacklist']['default'] ?? '');
+
+        foreach (['Telegram', 'TelegramBot', 'WeChat', 'Weixin', 'MicroMessenger', 'QQ', 'MQQBrowser', 'Weibo'] as $keyword) {
+            $this->assertStringContainsString($keyword, $defaultBlacklist);
+        }
+
+        $plugin = new Plugin('subscription_control');
+        $plugin->setConfig([
+            'ua_blacklist' => $defaultBlacklist,
+        ]);
+        $isBlacklistedUa = new ReflectionMethod($plugin, 'isBlacklistedUA');
+        $isBlacklistedUa->setAccessible(true);
+
+        $this->assertTrue($isBlacklistedUa->invoke($plugin, strtolower('TelegramBot (like TwitterBot)')));
+        $this->assertTrue($isBlacklistedUa->invoke($plugin, strtolower('WeChat/8.0.45 MicroMessenger/8.0.45')));
+        $this->assertTrue($isBlacklistedUa->invoke($plugin, strtolower('Mozilla/5.0 MQQBrowser/20.2 Mobile Safari/537.36 QQ/9.2.90')));
+        $this->assertTrue($isBlacklistedUa->invoke($plugin, strtolower('Weibo/13.0.0')));
+    }
+
     public function test_malicious_ua_persists_public_client_ip_to_source_denylist(): void
     {
         $this->setUpInMemoryDatabase();
@@ -109,7 +132,7 @@ final class SubscriptionControlPluginTest extends TestCase
             'code' => 'subscription_control',
             'name' => '订阅风控',
             'description' => '',
-            'version' => '1.5.18',
+            'version' => '1.5.19',
             'author' => '',
             'url' => '',
             'email' => '',
@@ -151,7 +174,7 @@ final class SubscriptionControlPluginTest extends TestCase
             'code' => 'subscription_control',
             'name' => '订阅风控',
             'description' => '',
-            'version' => '1.5.18',
+            'version' => '1.5.19',
             'author' => '',
             'url' => '',
             'email' => '',
@@ -194,7 +217,7 @@ final class SubscriptionControlPluginTest extends TestCase
             'code' => 'subscription_control',
             'name' => '订阅风控',
             'description' => '',
-            'version' => '1.5.18',
+            'version' => '1.5.19',
             'author' => '',
             'url' => '',
             'email' => '',
