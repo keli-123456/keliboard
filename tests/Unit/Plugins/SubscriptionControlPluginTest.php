@@ -75,6 +75,17 @@ final class SubscriptionControlPluginTest extends TestCase
         }
     }
 
+    public function test_ua_block_only_blocks_without_resetting_credentials(): void
+    {
+        $plugin = new Plugin('subscription_control');
+        $normalize = new ReflectionMethod($plugin, 'normalizeRiskAction');
+        $normalize->setAccessible(true);
+
+        foreach (['observe', 'block', 'empty', 'throttle', 'reset_token', 'reset_token_uuid', ''] as $action) {
+            $this->assertSame('block', $normalize->invoke($plugin, $action, 'ua_block_only'));
+        }
+    }
+
     public function test_client_ua_not_allowed_can_block_without_resetting_credentials(): void
     {
         $plugin = new Plugin('subscription_control');
@@ -132,7 +143,7 @@ final class SubscriptionControlPluginTest extends TestCase
             'code' => 'subscription_control',
             'name' => '订阅风控',
             'description' => '',
-            'version' => '1.5.23',
+            'version' => '1.5.24',
             'author' => '',
             'url' => '',
             'email' => '',
@@ -174,7 +185,7 @@ final class SubscriptionControlPluginTest extends TestCase
             'code' => 'subscription_control',
             'name' => '订阅风控',
             'description' => '',
-            'version' => '1.5.23',
+            'version' => '1.5.24',
             'author' => '',
             'url' => '',
             'email' => '',
@@ -217,7 +228,7 @@ final class SubscriptionControlPluginTest extends TestCase
             'code' => 'subscription_control',
             'name' => '订阅风控',
             'description' => '',
-            'version' => '1.5.23',
+            'version' => '1.5.24',
             'author' => '',
             'url' => '',
             'email' => '',
@@ -277,6 +288,82 @@ final class SubscriptionControlPluginTest extends TestCase
 
         $event = Cache::get("subscription_control:last_event:{$user->id}");
         $this->assertSame('ua_blacklist', $event['code']);
+        $this->assertSame('block', $event['action']);
+    }
+
+    public function test_browser_ua_block_only_runs_before_client_whitelist_without_resetting_credentials(): void
+    {
+        $this->setUpInMemoryDatabase();
+        $this->bindJsonResponseFactory();
+        $this->createPluginTable();
+        $this->createUserTable();
+
+        PluginModel::create([
+            'code' => 'subscription_control',
+            'name' => '订阅风控',
+            'description' => '',
+            'version' => '1.5.24',
+            'author' => '',
+            'url' => '',
+            'email' => '',
+            'config' => json_encode([
+                'enable_ua_blacklist' => false,
+                'enable_ua_block_only' => true,
+                'ua_block_only_keywords' => "Mozilla\nChrome\nSafari",
+                'enable_client_ua_whitelist' => true,
+                'client_ua_unknown_action' => 'reset_token_uuid',
+                'enable_auto_trusted_node_ips' => false,
+                'enable_source_ip_denylist' => false,
+                'source_ip_deny_cidrs' => '',
+                'enable_email_notice' => false,
+                'enable_telegram_notice' => false,
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ]);
+
+        $user = User::query()->create([
+            'email' => 'browser@example.test',
+            'token' => 'old-token',
+            'uuid' => 'old-uuid',
+            'u' => 0,
+            'd' => 0,
+        ]);
+
+        $plugin = new Plugin('subscription_control');
+        $plugin->setConfig([
+            'enable_ua_blacklist' => false,
+            'enable_ua_block_only' => true,
+            'ua_block_only_keywords' => "Mozilla\nChrome\nSafari",
+            'enable_client_ua_whitelist' => true,
+            'client_ua_unknown_action' => 'reset_token_uuid',
+            'enable_auto_trusted_node_ips' => false,
+            'enable_source_ip_denylist' => false,
+            'source_ip_deny_cidrs' => '',
+            'enable_email_notice' => false,
+            'enable_telegram_notice' => false,
+        ]);
+
+        $request = Request::create('/api/v1/client/subscribe', 'GET', [], [], [], [
+            'REMOTE_ADDR' => '8.8.8.8',
+            'HTTP_USER_AGENT' => 'Mozilla/5.0 Chrome/138.0 Safari/537.36',
+        ]);
+
+        try {
+            $plugin->checkSubscribeAccess([], $user, $request);
+            $this->fail('Expected browser subscription request to be intercepted.');
+        } catch (InterceptResponseException $exception) {
+            $this->assertSame(403, $exception->getResponse()->getStatusCode());
+        }
+
+        $user->refresh();
+        $this->assertSame('old-token', $user->token);
+        $this->assertSame('old-uuid', $user->uuid);
+
+        $config = json_decode((string) PluginModel::query()->where('code', 'subscription_control')->value('config'), true);
+        $this->assertFalse((bool) $config['enable_source_ip_denylist']);
+        $this->assertSame('', $config['source_ip_deny_cidrs']);
+
+        $event = Cache::get("subscription_control:last_event:{$user->id}");
+        $this->assertSame('ua_block_only', $event['code']);
         $this->assertSame('block', $event['action']);
     }
 

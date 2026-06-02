@@ -116,6 +116,15 @@ class Plugin extends AbstractPlugin
                 $this->interceptRiskDecision('ua_blacklist', $reason, 403, $user, $meta);
             }
 
+            // 浏览器等非客户端 UA 只拒绝订阅访问，不封禁来源 IP，也不重置用户凭证。
+            if ($this->getConfig('enable_ua_block_only', false) && $this->isBlockOnlyUA($userAgentLower)) {
+                $this->interceptRiskDecision('ua_block_only', '当前客户端不允许直接访问订阅', 403, $user, [
+                    'client_ip' => $ip,
+                    'user_agent' => $userAgent,
+                    'action' => 'block',
+                ] + $ipMeta);
+            }
+
             $riskDecisionHalted = false;
             $servers = $this->applyRiskDecisions(
                 $servers,
@@ -288,26 +297,16 @@ class Plugin extends AbstractPlugin
     private function isBlacklistedUA(string $userAgentLower): bool
     {
         $blacklist = $this->parseKeywordList($this->getConfig('ua_blacklist', ''));
-        if (empty($blacklist)) {
-            return false;
-        }
+        return $this->matchesUserAgentKeywords($userAgentLower, $blacklist, true);
+    }
 
-        $userAgentLower = trim($userAgentLower);
-        foreach ($blacklist as $keyword) {
-            $normalized = strtolower(trim($keyword));
-            if ($normalized === '') {
-                continue;
-            }
-            if ($userAgentLower === '' && in_array($normalized, ['none', 'empty', 'null'], true)) {
-                return true;
-            }
-            // 模糊匹配
-            if ($userAgentLower !== '' && stripos($userAgentLower, $normalized) !== false) {
-                return true;
-            }
-        }
-        
-        return false;
+    /**
+     * 检查 UA 是否只应拒绝订阅访问
+     */
+    private function isBlockOnlyUA(string $userAgentLower): bool
+    {
+        $blockOnlyList = $this->parseKeywordList($this->getConfig('ua_block_only_keywords', ''));
+        return $this->matchesUserAgentKeywords($userAgentLower, $blockOnlyList, true);
     }
 
     /**
@@ -316,17 +315,27 @@ class Plugin extends AbstractPlugin
     private function isResetUA(string $userAgentLower): bool
     {
         $resetList = $this->getUaResetKeywords();
-        if (empty($resetList)) {
+        return $this->matchesUserAgentKeywords($userAgentLower, $resetList, false);
+    }
+
+    private function matchesUserAgentKeywords(string $userAgentLower, array $keywords, bool $matchEmptyAliases): bool
+    {
+        if (empty($keywords)) {
             return false;
         }
 
-        foreach ($resetList as $keyword) {
+        $userAgentLower = trim($userAgentLower);
+        foreach ($keywords as $keyword) {
             $normalized = strtolower(trim($keyword));
             if ($normalized === '') {
                 continue;
             }
 
-            if (stripos($userAgentLower, $normalized) !== false) {
+            if ($matchEmptyAliases && $userAgentLower === '' && in_array($normalized, ['none', 'empty', 'null'], true)) {
+                return true;
+            }
+
+            if ($userAgentLower !== '' && stripos($userAgentLower, $normalized) !== false) {
                 return true;
             }
         }
@@ -829,7 +838,7 @@ class Plugin extends AbstractPlugin
 
     private function normalizeRiskAction(string $action, string $code = ''): string
     {
-        if (in_array($code, ['source_ip_denylist', 'ua_blacklist'], true)) {
+        if (in_array($code, ['source_ip_denylist', 'ua_blacklist', 'ua_block_only'], true)) {
             return 'block';
         }
 
@@ -926,6 +935,8 @@ class Plugin extends AbstractPlugin
             $lines[] = '订阅凭证可能已被重置：旧订阅链接和旧节点配置将立即失效，请登录面板复制新链接并重新导入客户端。';
         } elseif (in_array($code, ['source_ip_denylist', 'ua_blacklist'], true)) {
             $lines[] = '当前订阅来源网络被限制，订阅请求已拒绝；系统不会重置您的订阅链接和节点凭据。';
+        } elseif (in_array($code, ['ua_block_only', 'client_ua_not_allowed'], true)) {
+            $lines[] = '当前客户端不允许直接访问订阅；系统不会封禁您的来源 IP，也不会重置您的订阅链接和节点凭据。';
         } else {
             $lines[] = '请检查客户端/网络环境后重试，或登录面板查看提示信息。';
         }

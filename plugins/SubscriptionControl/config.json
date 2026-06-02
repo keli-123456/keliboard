@@ -1,8 +1,8 @@
 {
     "name": "订阅风控",
     "code": "subscription_control",
-    "version": "1.5.23",
-    "description": "提供订阅链接的主动风险控制能力，防止节点被恶意扫描。支持可信代理真实IP识别、免费ASN/IP类型标签、订阅泄露保护、在线唯一IP阈值、邮件/TG通知、UA黑名单、客户端白名单、多UA/多地区订阅检测、订阅IP限制、阅后即焚功能。",
+    "version": "1.5.24",
+    "description": "提供订阅链接的主动风险控制能力，防止节点被恶意扫描。支持可信代理真实IP识别、免费ASN/IP类型标签、订阅泄露保护、在线唯一IP阈值、邮件/TG通知、UA黑名单、UA仅拒绝规则、多UA/多地区订阅检测、订阅IP限制、阅后即焚功能。",
     "author": "XBoard",
     "require": {
         "xboard": ">=1.0.0"
@@ -20,11 +20,23 @@
             "label": "恶意 UA 黑名单（逗号或换行分隔，模糊匹配）",
             "description": "明确恶意或脚本探测 UA。命中后直接拒绝订阅请求，并把解析后的真实客户端 IP 永久写入订阅来源 IP 黑名单；不会重置用户订阅 token 和节点 uuid"
         },
-        "enable_client_ua_whitelist": {
+        "enable_ua_block_only": {
             "type": "boolean",
             "default": true,
-            "label": "启用客户端UA白名单",
-            "description": "默认开启。非白名单客户端访问订阅会按下方分层策略处理"
+            "label": "启用UA仅拒绝规则",
+            "description": "开启后将拒绝浏览器等不适合拉取订阅的 UA，但不会封禁来源 IP，也不会重置用户订阅 token 和节点 uuid"
+        },
+        "ua_block_only_keywords": {
+            "type": "text",
+            "default": "Mozilla\nChrome\nSafari\nFirefox\nEdg/\nEdge\nOPR/\nOpera\nMSIE\nTrident",
+            "label": "仅拒绝访问 UA（逗号或换行分隔，模糊匹配）",
+            "description": "普通浏览器或误点订阅链接的 UA。命中后只返回拒绝访问，不封禁 IP、不重置凭证。微信/TG/QQ 等会自动预览链接的平台应放在 UA 黑名单"
+        },
+        "enable_client_ua_whitelist": {
+            "type": "boolean",
+            "default": false,
+            "label": "高级：启用客户端UA白名单",
+            "description": "默认关闭。UA 容易伪造且容易误伤正常客户端；仅在需要严格限定订阅客户端时手动开启"
         },
         "client_ua_whitelist": {
             "type": "text",
@@ -36,7 +48,7 @@
             "type": "string",
             "default": "reset_token_uuid",
             "label": "非白名单客户端处理策略",
-            "description": "分层处理：明确恶意 UA 和社交平台预取 UA 请放入 UA 黑名单，会永久封禁真实来源 IP；普通浏览器、空 UA、通用脚本 UA 只拒绝本次订阅请求，不重置凭证；旧 Clash/未知客户端固定按 reset_token_uuid 处理"
+            "description": "仅在手动启用客户端 UA 白名单后生效。非白名单客户端固定按 reset_token_uuid 处理；默认风控不依赖白名单"
         },
         "trusted_proxy_cidrs": {
             "type": "text",

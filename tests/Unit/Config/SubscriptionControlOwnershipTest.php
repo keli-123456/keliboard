@@ -72,7 +72,7 @@ final class SubscriptionControlOwnershipTest extends TestCase
 
         foreach ([
             'enable_ua_blacklist',
-            'enable_client_ua_whitelist',
+            'enable_ua_block_only',
             'enable_ua_reset_token',
             'enable_source_ip_denylist',
             'enable_node_source_ip_managed_routes',
@@ -87,6 +87,8 @@ final class SubscriptionControlOwnershipTest extends TestCase
         ] as $key) {
             $this->assertTrue((bool) ($items[$key]['default'] ?? false), $key . ' should be enabled by default');
         }
+
+        $this->assertFalse((bool) ($items['enable_client_ua_whitelist']['default'] ?? true), 'UA whitelist should not be enabled by default');
 
         foreach ([
             'source_batch_action',
@@ -118,5 +120,29 @@ final class SubscriptionControlOwnershipTest extends TestCase
 
         $blacklistLines = array_map('trim', preg_split('/[\r\n]+/', $blacklist) ?: []);
         $this->assertNotContains('mozilla', $blacklistLines);
+    }
+
+    public function test_subscription_control_default_ua_policy_uses_negative_rules_not_whitelist(): void
+    {
+        $path = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $config = json_decode((string) file_get_contents($path), true);
+
+        $this->assertIsArray($config);
+        $items = $config['config'] ?? [];
+
+        $this->assertFalse((bool) ($items['enable_client_ua_whitelist']['default'] ?? true));
+        $this->assertTrue((bool) ($items['enable_ua_blacklist']['default'] ?? false));
+        $this->assertTrue((bool) ($items['enable_ua_reset_token']['default'] ?? false));
+        $this->assertTrue((bool) ($items['enable_ua_block_only']['default'] ?? false));
+
+        $blockOnly = (string) ($items['ua_block_only_keywords']['default'] ?? '');
+        foreach (['Mozilla', 'Chrome', 'Safari', 'Firefox', 'Edg/'] as $keyword) {
+            $this->assertStringContainsString($keyword, $blockOnly);
+        }
+
+        $resetList = (string) ($items['ua_reset_keywords']['default'] ?? '');
+        foreach (['Mozilla', 'Telegram', 'WeChat', 'QQ'] as $keyword) {
+            $this->assertStringNotContainsString($keyword, $resetList);
+        }
     }
 }
