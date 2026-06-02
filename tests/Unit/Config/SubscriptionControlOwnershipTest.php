@@ -145,4 +145,17 @@ final class SubscriptionControlOwnershipTest extends TestCase
             $this->assertStringNotContainsString($keyword, $resetList);
         }
     }
+
+    public function test_subscription_control_ua_keyword_lists_use_multiline_inputs(): void
+    {
+        $path = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $config = json_decode((string) file_get_contents($path), true);
+
+        $this->assertIsArray($config);
+        $items = $config['config'] ?? [];
+
+        foreach (['ua_blacklist', 'ua_block_only_keywords', 'ua_reset_keywords'] as $key) {
+            $this->assertSame('text', (string) ($items[$key]['type'] ?? ''), $key . ' should render as a multiline textarea');
+        }
+    }
 }
