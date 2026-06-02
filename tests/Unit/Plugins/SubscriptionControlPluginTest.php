@@ -111,6 +111,23 @@ final class SubscriptionControlPluginTest extends TestCase
         $this->assertFalse($isBlacklistedUa->invoke($plugin, 'sparkle/1.0.0'));
     }
 
+    public function test_ua_blacklist_allows_v2raya_webrequesthelper_but_blocks_other_webrequesthelper_agents(): void
+    {
+        $plugin = new Plugin('subscription_control');
+        $plugin->setConfig([
+            'ua_blacklist' => "Censys\ndaed\nWebRequestHelper",
+        ]);
+
+        $isBlacklistedUa = new ReflectionMethod($plugin, 'isBlacklistedUA');
+        $isBlacklistedUa->setAccessible(true);
+
+        $this->assertFalse($isBlacklistedUa->invoke($plugin, strtolower('v2rayA/2.2.7.5 WebRequestHelper')));
+        $this->assertTrue($isBlacklistedUa->invoke($plugin, strtolower('v2rayN/1.0 WebRequestHelper')));
+        $this->assertTrue($isBlacklistedUa->invoke($plugin, strtolower('WebRequestHelper')));
+        $this->assertTrue($isBlacklistedUa->invoke($plugin, strtolower('daed/v0.4.0rc1 (like v2rayA/1.0 WebRequestHelper)')));
+        $this->assertTrue($isBlacklistedUa->invoke($plugin, strtolower('CensysInspect/1.1 v2rayA/2.2.7.5 WebRequestHelper')));
+    }
+
     public function test_default_ua_blacklist_includes_social_platform_preview_user_agents(): void
     {
         $configPath = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';

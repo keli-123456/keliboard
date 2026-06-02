@@ -492,6 +492,10 @@ CACHE_DRIVER=redis
 
 ## 更新日志
 
+### v1.5.26
+- UA 黑名单保留 `WebRequestHelper` 拦截，但对 `v2rayA + WebRequestHelper` 客户端 UA 做内置例外，避免误封正常 v2rayA 用户
+- 如果同一 UA 仍命中 `Censys`、`daed` 等其他恶意关键词，会继续按恶意 UA 处理并封禁来源 IP
+
 ### v1.5.25
 - 将 UA 黑名单配置改为多行文本框，便于一行一个关键词维护
 - UA 黑名单、仅拒绝 UA、重置 UA 三类关键词均支持换行或逗号分隔

@@ -297,7 +297,7 @@ class Plugin extends AbstractPlugin
     private function isBlacklistedUA(string $userAgentLower): bool
     {
         $blacklist = $this->parseKeywordList($this->getConfig('ua_blacklist', ''));
-        return $this->matchesUserAgentKeywords($userAgentLower, $blacklist, true);
+        return $this->matchesUserAgentKeywords($userAgentLower, $blacklist, true, true);
     }
 
     /**
@@ -318,7 +318,12 @@ class Plugin extends AbstractPlugin
         return $this->matchesUserAgentKeywords($userAgentLower, $resetList, false);
     }
 
-    private function matchesUserAgentKeywords(string $userAgentLower, array $keywords, bool $matchEmptyAliases): bool
+    private function matchesUserAgentKeywords(
+        string $userAgentLower,
+        array $keywords,
+        bool $matchEmptyAliases,
+        bool $allowV2rayAWebRequestHelper = false
+    ): bool
     {
         if (empty($keywords)) {
             return false;
@@ -336,6 +341,14 @@ class Plugin extends AbstractPlugin
             }
 
             if ($userAgentLower !== '' && stripos($userAgentLower, $normalized) !== false) {
+                if (
+                    $allowV2rayAWebRequestHelper
+                    && $normalized === 'webrequesthelper'
+                    && str_contains($userAgentLower, 'v2raya')
+                ) {
+                    continue;
+                }
+
                 return true;
             }
         }
