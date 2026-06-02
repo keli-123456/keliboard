@@ -4,12 +4,17 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Plugins;
 
+use App\Models\Plugin as PluginModel;
+use Illuminate\Database\Schema\Blueprint;
 use Plugin\SubscriptionControl\Plugin;
 use ReflectionMethod;
+use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
 
 final class SubscriptionControlPluginTest extends TestCase
 {
+    use InteractsWithInMemoryDatabase;
+
     public function test_ua_reset_treats_browser_and_social_app_keywords_as_risky(): void
     {
         $plugin = new Plugin('subscription_control');
@@ -53,5 +58,134 @@ final class SubscriptionControlPluginTest extends TestCase
         foreach (['observe', 'block', 'empty', 'throttle', 'reset_token', 'reset_token_uuid', ''] as $action) {
             $this->assertSame('block', $normalize->invoke($plugin, $action, 'source_ip_denylist'));
         }
+    }
+
+    public function test_ua_blacklist_blocks_without_resetting_credentials(): void
+    {
+        $plugin = new Plugin('subscription_control');
+        $normalize = new ReflectionMethod($plugin, 'normalizeRiskAction');
+        $normalize->setAccessible(true);
+
+        foreach (['observe', 'block', 'empty', 'throttle', 'reset_token', 'reset_token_uuid', ''] as $action) {
+            $this->assertSame('block', $normalize->invoke($plugin, $action, 'ua_blacklist'));
+        }
+    }
+
+    public function test_ua_blacklist_treats_none_keyword_as_empty_user_agent(): void
+    {
+        $plugin = new Plugin('subscription_control');
+        $plugin->setConfig([
+            'ua_blacklist' => "Censys\nNone",
+        ]);
+
+        $isBlacklistedUa = new ReflectionMethod($plugin, 'isBlacklistedUA');
+        $isBlacklistedUa->setAccessible(true);
+
+        $this->assertTrue($isBlacklistedUa->invoke($plugin, ''));
+        $this->assertTrue($isBlacklistedUa->invoke($plugin, 'censysinspect/1.1'));
+        $this->assertFalse($isBlacklistedUa->invoke($plugin, 'sparkle/1.0.0'));
+    }
+
+    public function test_malicious_ua_persists_public_client_ip_to_source_denylist(): void
+    {
+        $this->setUpInMemoryDatabase();
+        $this->createPluginTable();
+
+        PluginModel::create([
+            'code' => 'subscription_control',
+            'name' => '订阅风控',
+            'description' => '',
+            'version' => '1.5.17',
+            'author' => '',
+            'url' => '',
+            'email' => '',
+            'config' => json_encode([
+                'enable_source_ip_denylist' => false,
+                'source_ip_deny_cidrs' => "9.9.9.9",
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ]);
+
+        $plugin = new Plugin('subscription_control');
+        $plugin->setConfig([
+            'enable_source_ip_denylist' => false,
+            'source_ip_deny_cidrs' => "9.9.9.9",
+        ]);
+
+        $persist = new ReflectionMethod($plugin, 'persistPermanentSourceIpDeny');
+        $persist->setAccessible(true);
+        $meta = [];
+
+        $this->assertTrue($persist->invokeArgs($plugin, ['8.8.8.8', false, &$meta]));
+        $this->assertTrue($meta['permanent_source_ip_blocked']);
+        $this->assertSame('added', $meta['permanent_source_ip_block_status']);
+
+        $config = json_decode((string) PluginModel::query()->where('code', 'subscription_control')->value('config'), true);
+        $this->assertTrue((bool) $config['enable_source_ip_denylist']);
+        $this->assertSame("9.9.9.9\n8.8.8.8", $config['source_ip_deny_cidrs']);
+
+        $this->assertTrue($persist->invokeArgs($plugin, ['8.8.8.8', false, &$meta]));
+        $config = json_decode((string) PluginModel::query()->where('code', 'subscription_control')->value('config'), true);
+        $this->assertSame("9.9.9.9\n8.8.8.8", $config['source_ip_deny_cidrs']);
+    }
+
+    public function test_malicious_ua_does_not_persist_trusted_or_non_public_client_ip(): void
+    {
+        $this->setUpInMemoryDatabase();
+        $this->createPluginTable();
+
+        PluginModel::create([
+            'code' => 'subscription_control',
+            'name' => '订阅风控',
+            'description' => '',
+            'version' => '1.5.17',
+            'author' => '',
+            'url' => '',
+            'email' => '',
+            'config' => json_encode([
+                'enable_source_ip_denylist' => true,
+                'source_ip_deny_cidrs' => "9.9.9.9",
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ]);
+
+        $plugin = new Plugin('subscription_control');
+        $plugin->setConfig([
+            'enable_source_ip_denylist' => true,
+            'source_ip_deny_cidrs' => "9.9.9.9",
+        ]);
+
+        $persist = new ReflectionMethod($plugin, 'persistPermanentSourceIpDeny');
+        $persist->setAccessible(true);
+
+        $trustedMeta = [];
+        $privateMeta = [];
+
+        $this->assertFalse($persist->invokeArgs($plugin, ['8.8.4.4', true, &$trustedMeta]));
+        $this->assertSame('trusted_egress', $trustedMeta['permanent_source_ip_block_status']);
+
+        $this->assertFalse($persist->invokeArgs($plugin, ['127.0.0.1', false, &$privateMeta]));
+        $this->assertSame('non_public_ip', $privateMeta['permanent_source_ip_block_status']);
+
+        $config = json_decode((string) PluginModel::query()->where('code', 'subscription_control')->value('config'), true);
+        $this->assertSame("9.9.9.9", $config['source_ip_deny_cidrs']);
+    }
+
+    private function createPluginTable(): void
+    {
+        $this->database->schema()->create('v2_plugins', function (Blueprint $table): void {
+            $table->id();
+            $table->string('code');
+            $table->string('name')->default('');
+            $table->text('description')->nullable();
+            $table->string('version')->default('1.0.0');
+            $table->string('author')->nullable();
+            $table->string('url')->nullable();
+            $table->string('email')->nullable();
+            $table->string('license')->nullable();
+            $table->string('requires')->nullable();
+            $table->text('config')->nullable();
+            $table->string('type')->default(PluginModel::TYPE_FEATURE);
+            $table->boolean('is_enabled')->default(true);
+            $table->timestamps();
+        });
     }
 }

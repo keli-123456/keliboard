@@ -56,8 +56,28 @@ final class SubscriptionControlOwnershipTest extends TestCase
         $this->assertIsArray($config);
         $items = $config['config'] ?? [];
 
+        $this->assertTrue((bool) ($items['enable_ua_blacklist']['default'] ?? false));
         $this->assertTrue((bool) ($items['enable_source_ip_denylist']['default'] ?? false));
         $this->assertTrue((bool) ($items['enable_node_source_ip_managed_routes']['default'] ?? false));
         $this->assertSame('block', (string) ($items['source_ip_deny_action']['default'] ?? ''));
+    }
+
+    public function test_subscription_control_malicious_ua_blacklist_defaults_are_explicit(): void
+    {
+        $path = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $config = json_decode((string) file_get_contents($path), true);
+
+        $this->assertIsArray($config);
+        $items = $config['config'] ?? [];
+        $blacklist = strtolower((string) ($items['ua_blacklist']['default'] ?? ''));
+        $resetList = strtolower((string) ($items['ua_reset_keywords']['default'] ?? ''));
+
+        foreach (['censys', 'java-http-client', 'apache-httpclient', 'webrequesthelper', 'sub_ua'] as $keyword) {
+            $this->assertStringContainsString($keyword, $blacklist);
+            $this->assertStringNotContainsString($keyword, $resetList);
+        }
+
+        $blacklistLines = array_map('trim', preg_split('/[\r\n]+/', $blacklist) ?: []);
+        $this->assertNotContains('mozilla', $blacklistLines);
     }
 }

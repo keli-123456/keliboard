@@ -4,8 +4,10 @@ namespace Plugin\SubscriptionControl;
 
 use App\Jobs\SendEmailJob;
 use App\Jobs\SendTelegramJob;
+use App\Models\Plugin as PluginModel;
 use App\Services\Plugin\AbstractPlugin;
 use App\Services\Plugin\InterceptResponseException;
+use App\Services\Plugin\PluginManager;
 use App\Services\UserOnlineService;
 use App\Models\User;
 use App\Utils\Helper;
@@ -160,10 +162,16 @@ class Plugin extends AbstractPlugin
             // 1. 检查UA黑名单
             if ($this->getConfig('enable_ua_blacklist', false)) {
                 if ($this->isBlacklistedUA($userAgentLower)) {
-                    $this->resetAndBlockAccess('ua_blacklist', 'UA 拦截，已重置订阅凭证', $user, [
+                    $meta = [
                         'client_ip' => $ip,
                         'user_agent' => $userAgent,
-                    ] + $ipMeta);
+                        'action' => 'block',
+                    ] + $ipMeta;
+                    $blocked = $this->persistPermanentSourceIpDeny($ip, $trustedEgress, $meta);
+                    $reason = $blocked
+                        ? '恶意 UA 命中，已永久封禁订阅来源 IP'
+                        : '恶意 UA 命中，订阅请求已拒绝';
+                    $this->interceptRiskDecision('ua_blacklist', $reason, 403, $user, $meta);
                 }
             }
 
@@ -285,9 +293,17 @@ class Plugin extends AbstractPlugin
             return false;
         }
 
+        $userAgentLower = trim($userAgentLower);
         foreach ($blacklist as $keyword) {
+            $normalized = strtolower(trim($keyword));
+            if ($normalized === '') {
+                continue;
+            }
+            if ($userAgentLower === '' && in_array($normalized, ['none', 'empty', 'null'], true)) {
+                return true;
+            }
             // 模糊匹配
-            if (stripos($userAgentLower, strtolower($keyword)) !== false) {
+            if ($userAgentLower !== '' && stripos($userAgentLower, $normalized) !== false) {
                 return true;
             }
         }
@@ -520,6 +536,139 @@ class Plugin extends AbstractPlugin
         ];
     }
 
+    private function persistPermanentSourceIpDeny(string $ip, bool $trustedEgress, array &$meta = []): bool
+    {
+        $ip = trim($ip);
+        $meta['permanent_source_ip_blocked'] = false;
+        $meta['permanent_source_ip_block_ip'] = $ip !== '' ? $ip : null;
+
+        if ($trustedEgress) {
+            $meta['permanent_source_ip_block_status'] = 'trusted_egress';
+            return false;
+        }
+
+        if (!$this->isPublicIpForPermanentDeny($ip)) {
+            $meta['permanent_source_ip_block_status'] = 'non_public_ip';
+            return false;
+        }
+
+        try {
+            $plugin = PluginModel::query()->where('code', $this->getPluginCode())->first();
+            if (!$plugin) {
+                $meta['permanent_source_ip_block_status'] = 'plugin_missing';
+                return false;
+            }
+
+            $dbConfig = json_decode((string) ($plugin->config ?? ''), true);
+            if (!is_array($dbConfig)) {
+                $dbConfig = [];
+            }
+
+            $currentText = (string) ($dbConfig['source_ip_deny_cidrs'] ?? $this->getConfig('source_ip_deny_cidrs', ''));
+            $cidrs = $this->parseKeywordList($currentText);
+            if ($this->sourceIpDenyListAlreadyCovers($ip, $cidrs)) {
+                $meta['permanent_source_ip_blocked'] = true;
+                $meta['permanent_source_ip_block_status'] = 'already_blocked';
+                return true;
+            }
+
+            $cidrs[] = $ip;
+            $nextText = implode("\n", array_values(array_unique($cidrs)));
+            $dbConfig['source_ip_deny_cidrs'] = $nextText;
+            $dbConfig['enable_source_ip_denylist'] = true;
+
+            $plugin->config = json_encode($dbConfig, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            $plugin->save();
+
+            $this->config['source_ip_deny_cidrs'] = $nextText;
+            $this->config['enable_source_ip_denylist'] = true;
+            Cache::forget('plugin_config_' . $this->getPluginCode());
+            try {
+                app(PluginManager::class)->flushEnabledPluginsCache();
+            } catch (\Throwable) {
+            }
+
+            $meta['permanent_source_ip_blocked'] = true;
+            $meta['permanent_source_ip_block_status'] = 'added';
+
+            Log::warning('[SubscriptionControl] 恶意 UA 来源 IP 已加入永久订阅黑名单', [
+                'client_ip' => $ip,
+                'client_ip_source' => $meta['client_ip_source'] ?? null,
+                'proxy_ip' => $meta['proxy_ip'] ?? null,
+                'ua' => $meta['user_agent'] ?? null,
+            ]);
+
+            return true;
+        } catch (\Throwable $e) {
+            $meta['permanent_source_ip_block_status'] = 'persist_failed';
+            $meta['permanent_source_ip_block_error'] = $e->getMessage();
+            Log::warning('[SubscriptionControl] 恶意 UA 来源 IP 写入永久黑名单失败', [
+                'client_ip' => $ip,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    private function isPublicIpForPermanentDeny(string $ip): bool
+    {
+        return filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false;
+    }
+
+    private function sourceIpDenyListAlreadyCovers(string $ip, array $cidrs): bool
+    {
+        foreach ($cidrs as $cidr) {
+            if ($this->ipMatchesCidr($ip, $cidr)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function ipMatchesCidr(string $ip, string $cidr): bool
+    {
+        $cidr = trim($cidr);
+        if ($cidr === '') {
+            return false;
+        }
+
+        if (!str_contains($cidr, '/')) {
+            return trim($cidr) === $ip;
+        }
+
+        [$network, $prefixText] = explode('/', $cidr, 2);
+        $network = trim($network);
+        $prefixText = trim($prefixText);
+        if ($network === '' || !ctype_digit($prefixText)) {
+            return false;
+        }
+
+        $ipBytes = @inet_pton($ip);
+        $networkBytes = @inet_pton($network);
+        if ($ipBytes === false || $networkBytes === false || strlen($ipBytes) !== strlen($networkBytes)) {
+            return false;
+        }
+
+        $maxPrefix = strlen($ipBytes) * 8;
+        $prefix = min($maxPrefix, max(0, (int) $prefixText));
+        $fullBytes = intdiv($prefix, 8);
+        $remainingBits = $prefix % 8;
+
+        for ($i = 0; $i < $fullBytes; $i++) {
+            if ($ipBytes[$i] !== $networkBytes[$i]) {
+                return false;
+            }
+        }
+
+        if ($remainingBits === 0) {
+            return true;
+        }
+
+        $mask = (0xff << (8 - $remainingBits)) & 0xff;
+        return (ord($ipBytes[$fullBytes]) & $mask) === (ord($networkBytes[$fullBytes]) & $mask);
+    }
+
     private function collectOnlineIpsForRisk(int $userId): array
     {
         if (!$this->getConfig('enable_multi_region_online_detection', false)) {
@@ -681,7 +830,7 @@ class Plugin extends AbstractPlugin
 
     private function normalizeRiskAction(string $action, string $code = ''): string
     {
-        if ($code === 'source_ip_denylist') {
+        if (in_array($code, ['source_ip_denylist', 'ua_blacklist'], true)) {
             return 'block';
         }
 
@@ -772,7 +921,7 @@ class Plugin extends AbstractPlugin
 
         if ($action === 'reset_token_uuid') {
             $lines[] = '订阅凭证可能已被重置：旧订阅链接和旧节点配置将立即失效，请登录面板复制新链接并重新导入客户端。';
-        } elseif ($code === 'source_ip_denylist') {
+        } elseif (in_array($code, ['source_ip_denylist', 'ua_blacklist'], true)) {
             $lines[] = '当前订阅来源网络被限制，订阅请求已拒绝；系统不会重置您的订阅链接和节点凭据。';
         } else {
             $lines[] = '请检查客户端/网络环境后重试，或登录面板查看提示信息。';
@@ -869,7 +1018,7 @@ class Plugin extends AbstractPlugin
             '检测到您的订阅触发了风控规则。',
             '时间：' . date('Y-m-d H:i:s'),
             '类型：' . $reason,
-            '处理：' . $this->buildActionText($meta),
+            '处理：' . $this->buildActionText($code, $meta),
         ];
 
         if ($code === 'online_ip_threshold') {
@@ -908,7 +1057,7 @@ class Plugin extends AbstractPlugin
         $lines = [
             '检测到您的订阅触发了风控规则。',
             '类型：' . $reason,
-            '处理：' . $this->buildActionText($meta),
+            '处理：' . $this->buildActionText($code, $meta),
         ];
 
         if ($code === 'online_ip_threshold') {
@@ -939,7 +1088,7 @@ class Plugin extends AbstractPlugin
         return implode("\n", $lines);
     }
 
-    private function buildActionText(array $meta = []): string
+    private function buildActionText(string $code, array $meta = []): string
     {
         $action = $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid'), $code);
 
