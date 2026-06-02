@@ -287,6 +287,8 @@ class AdminRoute
                 'prefix' => 'risk'
             ], function ($router) {
                 $router->get('/subscription-control/overview', [SubscriptionControlController::class, 'overview']);
+                $router->get('/subscription-control/source-ip-blocks', [SubscriptionControlController::class, 'sourceIpBlocks']);
+                $router->post('/subscription-control/source-ip-blocks/unblock', [SubscriptionControlController::class, 'unblockSourceIp']);
             });
 
             $router->group([

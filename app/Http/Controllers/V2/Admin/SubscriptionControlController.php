@@ -7,6 +7,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Plugin\SubscriptionControl\Services\SubscriptionControlEventStore;
+use Plugin\SubscriptionControl\Services\SubscriptionSourceIpBlockService;
 
 class SubscriptionControlController extends Controller
 {
@@ -36,6 +37,20 @@ class SubscriptionControlController extends Controller
             ] + $ipIntelligenceStats,
             'recent_events' => $events,
         ]);
+    }
+
+    public function sourceIpBlocks(SubscriptionSourceIpBlockService $service): JsonResponse
+    {
+        return $this->success($service->list());
+    }
+
+    public function unblockSourceIp(Request $request, SubscriptionSourceIpBlockService $service): JsonResponse
+    {
+        $data = $request->validate([
+            'entry' => ['required', 'string', 'max:128'],
+        ]);
+
+        return $this->success($service->unblock((string) $data['entry']));
     }
 
     private function recentEventsFromCache(int $limit, string $email = ''): array
