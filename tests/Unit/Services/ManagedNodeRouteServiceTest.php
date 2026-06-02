@@ -25,11 +25,17 @@ final class ManagedNodeRouteServiceTest extends TestCase
         $this->createTables();
     }
 
-    public function test_sync_creates_source_ip_routes_and_binds_enabled_servers(): void
+    public function test_sync_only_creates_provider_source_ip_routes_and_keeps_subscription_denylist_off_node(): void
     {
         $manual = ServerRoute::create([
             'remarks' => 'manual keep',
             'match' => ['domain:example.com'],
+            'action' => 'block',
+            'action_value' => null,
+        ]);
+        $staleManagedManual = ServerRoute::create([
+            'remarks' => ManagedNodeRouteService::ROUTE_REMARK_PREFIX . ' manual 手动来源 IP 黑名单',
+            'match' => ['source_ip:198.51.100.0/24'],
             'action' => 'block',
             'action_value' => null,
         ]);
@@ -60,13 +66,14 @@ final class ManagedNodeRouteServiceTest extends TestCase
             'node_source_ip_managed_max_prefixes_per_provider' => 100,
         ]);
 
-        $this->assertCount(2, $result['active_route_ids']);
+        $this->assertCount(1, $result['active_route_ids']);
+        $this->assertSame(1, $result['manual_cidr_count']);
+        $this->assertContains((int) $staleManagedManual->id, $result['deleted_route_ids']);
 
         $manualRoute = ServerRoute::query()
             ->where('remarks', ManagedNodeRouteService::ROUTE_REMARK_PREFIX . ' manual 手动来源 IP 黑名单')
             ->first();
-        $this->assertNotNull($manualRoute);
-        $this->assertSame(['source_ip:198.51.100.0/24'], $manualRoute->match);
+        $this->assertNull($manualRoute);
 
         $providerRoute = ServerRoute::query()
             ->where('remarks', ManagedNodeRouteService::ROUTE_REMARK_PREFIX . ' provider:tencent 云厂商 腾讯云')
@@ -76,7 +83,7 @@ final class ManagedNodeRouteServiceTest extends TestCase
 
         $enabled->refresh();
         $this->assertSame(
-            [$manual->id, $manualRoute->id, $providerRoute->id],
+            [$manual->id, $providerRoute->id],
             array_values(array_map('intval', $enabled->route_ids))
         );
 

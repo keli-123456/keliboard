@@ -21,7 +21,6 @@ final class ManagedNodeRouteService
     public const PLUGIN_CODE = 'subscription_control';
     public const ROUTE_REMARK_PREFIX = '[订阅风控托管]';
 
-    private const MANUAL_KEY = 'manual';
     private const POLICY_BLOCK = 'block';
     private const POLICY_ALLOW = 'allow';
     private const DEFAULT_MAX_PREFIXES_PER_PROVIDER = 300;
@@ -264,13 +263,6 @@ final class ManagedNodeRouteService
         $eventPrefixes = $this->eventPrefixesByProvider($config, $policies);
 
         $desired = [];
-        if ($enabled && $manualCidrs !== []) {
-            $desired[self::MANUAL_KEY] = [
-                'remarks' => $this->managedRemark(self::MANUAL_KEY, '手动来源 IP 黑名单'),
-                'match' => $this->toSourceIpRules($manualCidrs),
-            ];
-        }
-
         if ($enabled) {
             foreach ($this->providerDefinitions() as $provider) {
                 $key = $provider['key'];
