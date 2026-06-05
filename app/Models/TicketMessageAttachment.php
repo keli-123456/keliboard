@@ -38,6 +38,8 @@ class TicketMessageAttachment extends Model
     protected $appends = [
         'preview_url',
         'thumbnail_url',
+        'preview_path',
+        'thumbnail_path',
     ];
 
     public function ticket(): BelongsTo
@@ -56,21 +58,35 @@ class TicketMessageAttachment extends Model
         // require APP_URL to match the public HTTPS origin and TrustProxies to
         // trust X-Forwarded-Proto/Host from the reverse proxy; otherwise HTTPS
         // admin pages can receive mixed-content http:// image URLs.
-        $ttlMinutes = max(1, (int) config('tickets.attachments.preview_ttl', 15));
-        return URL::temporarySignedRoute(
-            'api.v2.ticket.attachment.preview',
-            now()->addMinutes($ttlMinutes),
-            ['id' => $this->id]
-        );
+        return $this->signedPreviewRoute(['id' => $this->id], true);
     }
 
     public function getThumbnailUrlAttribute(): string
+    {
+        return $this->signedPreviewRoute(['id' => $this->id, 'variant' => 'thumb'], true);
+    }
+
+    public function getPreviewPathAttribute(): string
+    {
+        return $this->signedPreviewRoute(['id' => $this->id], false);
+    }
+
+    public function getThumbnailPathAttribute(): string
+    {
+        return $this->signedPreviewRoute(['id' => $this->id, 'variant' => 'thumb'], false);
+    }
+
+    /**
+     * @param array<string, mixed> $parameters
+     */
+    private function signedPreviewRoute(array $parameters, bool $absolute): string
     {
         $ttlMinutes = max(1, (int) config('tickets.attachments.preview_ttl', 15));
         return URL::temporarySignedRoute(
             'api.v2.ticket.attachment.preview',
             now()->addMinutes($ttlMinutes),
-            ['id' => $this->id, 'variant' => 'thumb']
+            $parameters,
+            $absolute
         );
     }
 }

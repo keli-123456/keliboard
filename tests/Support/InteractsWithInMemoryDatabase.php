@@ -252,5 +252,20 @@ trait InteractsWithInMemoryDatabase
             $table->integer('created_at')->nullable();
             $table->integer('updated_at')->nullable();
         });
+
+        $this->database->schema()->create('v2_ticket_message_attachment', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('ticket_id')->index();
+            $table->integer('ticket_message_id')->index();
+            $table->integer('user_id')->index();
+            $table->string('disk', 32)->default('local');
+            $table->string('path', 255);
+            $table->string('mime', 64)->default('image/webp');
+            $table->integer('size')->default(0);
+            $table->integer('width')->nullable();
+            $table->integer('height')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
     }
 }
