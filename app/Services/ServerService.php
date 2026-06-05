@@ -323,8 +323,6 @@ class ServerService
         return User::toBase()
             ->whereIn('group_id', $groupIds)
             ->whereNotNull('plan_id')
-            ->where('is_admin', 0)
-            ->where('is_staff', 0)
             ->whereRaw('u + d < transfer_enable')
             ->where(function ($query) {
                 $query->where('expired_at', '>=', time())
@@ -357,9 +355,7 @@ class ServerService
                     $query->selectRaw('1')
                         ->from('v2_user as u')
                         ->whereColumn('u.id', 'user_sync_states.user_id')
-                        ->whereNotNull('u.plan_id')
-                        ->where('u.is_admin', 0)
-                        ->where('u.is_staff', 0);
+                        ->whereNotNull('u.plan_id');
                 })
                 ->orderBy('user_id', 'asc');
         } catch (\Throwable $e) {

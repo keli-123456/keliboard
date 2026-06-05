@@ -27,9 +27,6 @@ class UserSyncService
         if ($user->plan_id === null) {
             $available = false;
         }
-        if ($user->is_admin || $user->is_staff) {
-            $available = false;
-        }
         if ($user->banned) {
             $available = false;
         }

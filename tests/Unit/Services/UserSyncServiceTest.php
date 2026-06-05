@@ -26,7 +26,7 @@ final class UserSyncServiceTest extends TestCase
         $this->assertFalse($snapshot['available']);
     }
 
-    public function test_compute_snapshot_excludes_admin_and_staff_users_from_node_users(): void
+    public function test_compute_snapshot_includes_admin_and_staff_users_with_active_subscription(): void
     {
         $service = new UserSyncService();
 
@@ -37,8 +37,8 @@ final class UserSyncServiceTest extends TestCase
             'is_staff' => true,
         ]));
 
-        $this->assertFalse($admin['available']);
-        $this->assertFalse($staff['available']);
+        $this->assertTrue($admin['available']);
+        $this->assertTrue($staff['available']);
     }
 
     private function makeNodeUser(array $overrides = []): User

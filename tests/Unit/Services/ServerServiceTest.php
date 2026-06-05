@@ -44,7 +44,7 @@ final class ServerServiceTest extends TestCase
         $this->assertSame([7, 5, 9], $ordered->pluck('id')->all());
     }
 
-    public function test_available_users_excludes_system_users_from_state_table_path(): void
+    public function test_available_users_includes_admin_and_staff_from_state_table_path(): void
     {
         $this->setUpNodeUserDatabase();
         $this->createUserSyncStateTable();
@@ -63,10 +63,10 @@ final class ServerServiceTest extends TestCase
 
         $users = ServerService::getAvailableUsers($this->nodeForGroup(10));
 
-        $this->assertSame([1], $users->pluck('id')->all());
+        $this->assertSame([1, 2, 3], $users->pluck('id')->all());
     }
 
-    public function test_available_users_excludes_system_users_from_fallback_path(): void
+    public function test_available_users_includes_admin_and_staff_from_fallback_path(): void
     {
         $this->setUpNodeUserDatabase();
         config(['user_sync.use_state_table_for_server_users' => false]);
@@ -74,7 +74,7 @@ final class ServerServiceTest extends TestCase
 
         $users = ServerService::getAvailableUsers($this->nodeForGroup(10));
 
-        $this->assertSame([1], $users->pluck('id')->all());
+        $this->assertSame([1, 2, 3], $users->pluck('id')->all());
     }
 
     private function setUpNodeUserDatabase(): void

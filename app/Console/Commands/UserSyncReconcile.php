@@ -31,24 +31,44 @@ class UserSyncReconcile extends Command
         }
         $limit = min($limit, 50000);
 
+        $validSubscription = function ($q) use ($now) {
+            $q->whereNotNull('u.group_id')
+                ->whereNotNull('u.plan_id')
+                ->where('u.banned', 0)
+                ->whereNotNull('u.transfer_enable')
+                ->where(function ($q) use ($now) {
+                    $q->whereNull('u.expired_at')
+                        ->orWhere('u.expired_at', 0)
+                        ->orWhere('u.expired_at', '>=', $now);
+                })
+                ->whereRaw('(COALESCE(u.u, 0) + COALESCE(u.d, 0)) < u.transfer_enable');
+        };
+
+        $invalidSubscription = function ($q) use ($now) {
+            $q->whereNull('u.group_id')
+                ->orWhereNull('u.plan_id')
+                ->orWhere('u.banned', 1)
+                ->orWhereNull('u.transfer_enable')
+                ->orWhere(function ($q) use ($now) {
+                    $q->whereNotNull('u.expired_at')
+                        ->where('u.expired_at', '>', 0)
+                        ->where('u.expired_at', '<', $now);
+                })->orWhere(function ($q) {
+                    $q->whereNotNull('u.transfer_enable')
+                        ->whereRaw('(COALESCE(u.u, 0) + COALESCE(u.d, 0)) >= u.transfer_enable');
+                });
+        };
+
         $ids = DB::table('v2_user as u')
             ->join('user_sync_states as s', 's.user_id', '=', 'u.id')
-            ->where('s.available', 1)
-            ->where(function ($q) use ($now) {
-                $q->whereNull('u.group_id')
-                    ->orWhereNull('u.plan_id')
-                    ->orWhere('u.is_admin', 1)
-                    ->orWhere('u.is_staff', 1)
-                    ->orWhere('u.banned', 1)
-                    ->orWhereNull('u.transfer_enable')
-                    ->orWhere(function ($q) use ($now) {
-                        $q->whereNotNull('u.expired_at')
-                            ->where('u.expired_at', '>', 0)
-                            ->where('u.expired_at', '<', $now);
-                    })->orWhere(function ($q) {
-                        $q->whereNotNull('u.transfer_enable')
-                            ->whereRaw('(COALESCE(u.u, 0) + COALESCE(u.d, 0)) >= u.transfer_enable');
-                    });
+            ->where(function ($q) use ($validSubscription, $invalidSubscription) {
+                $q->where(function ($q) use ($invalidSubscription) {
+                    $q->where('s.available', 1)
+                        ->where($invalidSubscription);
+                })->orWhere(function ($q) use ($validSubscription) {
+                    $q->where('s.available', 0)
+                        ->where($validSubscription);
+                });
             })
             ->orderBy('u.id')
             ->limit($limit)
