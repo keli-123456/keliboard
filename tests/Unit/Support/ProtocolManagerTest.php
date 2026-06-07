@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Support;
 
 use App\Protocols\ClashMeta;
+use App\Protocols\General;
 use App\Protocols\QuantumultX;
 use App\Protocols\Shadowrocket;
 use App\Protocols\SingBox;
@@ -21,10 +22,11 @@ final class ProtocolManagerTest extends TestCase
             ClashMeta::class,
             Shadowrocket::class,
             SingBox::class,
+            General::class,
         ]);
 
         $this->assertSame(SingBox::class, $manager->matchProtocolClassName('singbox/1.12.0'));
-        $this->assertSame(SingBox::class, $manager->matchProtocolClassName('Karing/1.2.8.1103'));
+        $this->assertSame(General::class, $manager->matchProtocolClassName('Karing/1.2.8.1103'));
         $this->assertSame(SingBox::class, $manager->matchProtocolClassName('Hiddify/1.2.8.1103'));
         $this->assertSame(ClashMeta::class, $manager->matchProtocolClassName('Sparkle/1.2.8.1103'));
         $this->assertSame(ClashMeta::class, $manager->matchProtocolClassName('ClashXMeta/1.3.5'));
@@ -42,6 +44,7 @@ final class ProtocolManagerTest extends TestCase
             ClashMeta::class,
             Shadowrocket::class,
             SingBox::class,
+            General::class,
         ]);
 
         $this->assertSame('sing-box', $manager->matchClientFlag('singbox'));
@@ -63,6 +66,7 @@ final class ProtocolManagerTest extends TestCase
             ClashMeta::class,
             Shadowrocket::class,
             SingBox::class,
+            General::class,
         ]);
 
         $this->assertSame('1.12.0', $manager->extractClientVersion('singbox 1.12.0', 'sing-box'));

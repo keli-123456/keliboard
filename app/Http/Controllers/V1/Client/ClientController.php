@@ -239,7 +239,7 @@ class ClientController extends Controller
             return false;
         }
 
-        // Wrapper clients such as Karing/Hiddify expose app build versions like
+        // Wrapper clients such as Hiddify expose app build versions like
         // 1.2.8.1103 instead of sing-box core semver.
         $family = app('protocols.capabilities')->resolveClientFamily($clientName);
         return $clientName === 'sing-box' || $family === 'sing-box';

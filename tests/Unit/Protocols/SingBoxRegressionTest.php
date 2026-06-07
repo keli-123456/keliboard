@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Protocols;
 
 use App\Models\Server;
+use App\Protocols\General;
 use App\Protocols\SingBox;
 use App\Support\ProtocolManager;
 use Illuminate\Container\Container;
@@ -42,15 +43,17 @@ final class SingBoxRegressionTest extends TestCase
         };
     }
 
-    public function test_protocol_manager_matches_karing_to_singbox_exporter(): void
+    public function test_protocol_manager_keeps_singbox_wrappers_on_singbox_exporter(): void
     {
         $manager = new ProtocolManager(new Container());
 
         $reflection = new \ReflectionProperty(ProtocolManager::class, 'protocolClasses');
         $reflection->setAccessible(true);
-        $reflection->setValue($manager, [SingBox::class]);
+        $reflection->setValue($manager, [SingBox::class, General::class]);
 
-        $this->assertSame(SingBox::class, $manager->matchProtocolClassName('Karing/1.2.8.1103'));
+        $this->assertSame(SingBox::class, $manager->matchProtocolClassName('sing-box/1.13.0'));
+        $this->assertSame(SingBox::class, $manager->matchProtocolClassName('Hiddify/1.2.8.1103'));
+        $this->assertSame(General::class, $manager->matchProtocolClassName('Karing/1.2.19.2209 ios'));
     }
 
     public function test_singbox_build_hysteria2_port_hopping_uses_colon_ranges_and_keeps_base_port(): void

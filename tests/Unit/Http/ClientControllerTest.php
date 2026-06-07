@@ -6,6 +6,7 @@ namespace Tests\Unit\Http;
 
 use App\Http\Controllers\V1\Client\ClientController;
 use App\Protocols\ClashMeta;
+use App\Protocols\General;
 use App\Protocols\QuantumultX;
 use App\Protocols\Shadowrocket;
 use App\Protocols\SingBox;
@@ -23,6 +24,7 @@ final class ClientControllerTest extends TestCase
             QuantumultX::class,
             ClashMeta::class,
             SingBox::class,
+            General::class,
         ]);
 
         $controller = new ClientController();
@@ -83,6 +85,7 @@ final class ClientControllerTest extends TestCase
             ClashMeta::class,
             Shadowrocket::class,
             SingBox::class,
+            General::class,
         ]);
 
         $controller = new ClientController();
@@ -123,7 +126,7 @@ final class ClientControllerTest extends TestCase
             'name' => 'sing-box',
             'version' => '1.2.8.1103',
         ]));
-        $this->assertTrue($method->invoke($controller, [
+        $this->assertFalse($method->invoke($controller, [
             'name' => 'karing',
             'version' => '1.2.8.1103',
         ]));

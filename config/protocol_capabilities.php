@@ -44,10 +44,10 @@ return [
 
     'clients' => [
         'sing-box' => [
-            'aliases' => ['sing-box', 'hiddify', 'hiddifynext', 'sfm', 'karing'],
+            'aliases' => ['sing-box', 'hiddify', 'hiddifynext', 'sfm'],
             'version_kind' => 'semver',
             'unknown_version_policy' => 'conservative',
-            'core_version_wrappers' => ['hiddify', 'hiddifynext', 'karing'],
+            'core_version_wrappers' => ['hiddify', 'hiddifynext'],
             'protocols' => ['shadowsocks', 'trojan', 'vmess', 'vless', 'hysteria', 'tuic', 'anytls', 'socks', 'naive', 'http'],
             'variants' => [
                 'hiddify' => [
@@ -355,7 +355,7 @@ return [
         ],
 
         'general' => [
-            'aliases' => ['general', 'passwall', 'ssrplus', 'sagernet'],
+            'aliases' => ['general', 'karing', 'passwall', 'ssrplus', 'sagernet'],
             'version_kind' => 'semver',
             'unknown_version_policy' => 'conservative',
             'protocols' => ['vmess', 'vless', 'shadowsocks', 'trojan', 'hysteria', 'socks'],

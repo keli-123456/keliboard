@@ -29,9 +29,9 @@ final class ProtocolCapabilityServiceTest extends TestCase
         $this->assertSame('mihomo', $this->service->resolveClientFamily('sparkle'));
     }
 
-    public function test_resolve_client_family_maps_karing_to_sing_box(): void
+    public function test_resolve_client_family_maps_karing_to_general(): void
     {
-        $this->assertSame('sing-box', $this->service->resolveClientFamily('karing'));
+        $this->assertSame('general', $this->service->resolveClientFamily('karing'));
     }
 
     public function test_sing_box_before_1_12_drops_anytls(): void
@@ -150,9 +150,27 @@ final class ProtocolCapabilityServiceTest extends TestCase
             'tls' => 1,
         ]);
 
-        $this->assertTrue($this->service->supportsClient('karing', '1.2.8.1103', $anytls)->supported);
         $this->assertTrue($this->service->supportsClient('hiddify', '1.2.8.1103', $anytls)->supported);
-        $this->assertTrue($this->service->supportsClient('karing', '1.2.8.1103', $naive)->supported);
+        $this->assertTrue($this->service->supportsClient('hiddify', '1.2.8.1103', $naive)->supported);
+    }
+
+    public function test_karing_uses_general_share_link_capabilities(): void
+    {
+        $hy2 = $this->makeServer('hysteria', [
+            'version' => 2,
+        ]);
+        $anytls = $this->makeServer('anytls', [
+            'tls_mode' => 1,
+            'tls' => ['server_name' => 'example.com'],
+        ]);
+        $naive = $this->makeServer('naive', [
+            'network' => 'tcp',
+            'tls' => 1,
+        ]);
+
+        $this->assertTrue($this->service->supportsClient('karing', '1.2.19.2209', $hy2)->supported);
+        $this->assertFalse($this->service->supportsClient('karing', '1.2.19.2209', $anytls)->supported);
+        $this->assertFalse($this->service->supportsClient('karing', '1.2.19.2209', $naive)->supported);
     }
 
     public function test_sing_box_wrapper_app_build_versions_still_drop_unsupported_transports(): void
@@ -163,7 +181,7 @@ final class ProtocolCapabilityServiceTest extends TestCase
             'tls' => ['server_name' => 'example.com'],
         ]);
 
-        $result = $this->service->supportsClient('karing', '1.2.8.1103', $server);
+        $result = $this->service->supportsClient('hiddify', '1.2.8.1103', $server);
 
         $this->assertFalse($result->supported);
     }

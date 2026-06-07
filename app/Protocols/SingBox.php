@@ -8,7 +8,7 @@ use App\Models\Server;
 
 class SingBox extends AbstractProtocol
 {
-    public $flags = ['sing-box', 'hiddify', 'hiddifynext', 'sfm', 'karing'];
+    public $flags = ['sing-box', 'hiddify', 'hiddifynext', 'sfm'];
     public $allowedProtocols = [
         Server::TYPE_SHADOWSOCKS,
         Server::TYPE_TROJAN,
