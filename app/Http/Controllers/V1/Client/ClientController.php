@@ -15,6 +15,10 @@ use Illuminate\Http\Request;
 
 class ClientController extends Controller
 {
+    private const DEFAULT_CLIENT_VERSIONS = [
+        'sing-box' => '1.12.0',
+    ];
+
     /**
      * Protocol prefix mapping for server names
      */
@@ -214,6 +218,10 @@ class ClientController extends Controller
                 $clientName = $matchedName;
                 $clientVersion = preg_replace('/^v/', '', $matches[2]) ?: null;
             }
+        }
+
+        if ($clientName && !$clientVersion && isset(self::DEFAULT_CLIENT_VERSIONS[$clientName])) {
+            $clientVersion = self::DEFAULT_CLIENT_VERSIONS[$clientName];
         }
 
         return [
