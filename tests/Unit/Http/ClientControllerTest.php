@@ -34,6 +34,7 @@ final class ClientControllerTest extends TestCase
         $singBox = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'singbox 1.12.0']));
         $singBoxWrapper = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'sing-box/1.2.8.1103']));
         $bareSingBox = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'sing-box']));
+        $karing = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'Karing/1.2.19.2209 platform/windows']));
         $clashMeta = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'ClashX Meta/1.3.5']));
         $mihomo = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'mihomo/1.19.0']));
         $verge = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'Clash Verge/v1.7.0']));
@@ -46,13 +47,15 @@ final class ClientControllerTest extends TestCase
         $this->assertSame('1.2.8.1103', $singBoxWrapper['version']);
         $this->assertSame('sing-box', $bareSingBox['name']);
         $this->assertSame('1.12.0', $bareSingBox['version']);
+        $this->assertSame('karing', $karing['name']);
+        $this->assertSame('1.13.0', $karing['version']);
 
         $this->assertSame('clashx meta', $clashMeta['name']);
         $this->assertSame('1.3.5', $clashMeta['version']);
         $this->assertSame('mihomo', $mihomo['name']);
         $this->assertSame('1.19.0', $mihomo['version']);
 
-        $this->assertSame('verge', $verge['name']);
+        $this->assertSame('clash-verge', $verge['name']);
         $this->assertSame('1.7.0', $verge['version']);
 
         $this->assertSame('hiddify', $hiddify['name']);
@@ -97,11 +100,13 @@ final class ClientControllerTest extends TestCase
 
         $cases = [
             ['sing-box/1.13.11', 'sing-box', '1.13.11'],
-            ['Karing/1.2.8.1103', 'karing', '1.2.8.1103'],
+            ['Karing/1.2.8.1103', 'karing', '1.13.0'],
             ['Hiddify/1.2.8.1103', 'hiddify', '1.2.8.1103'],
             ['Sparkle/1.2.8.1103', 'sparkle', '1.2.8.1103'],
             ['mihomo/1.19.0', 'mihomo', '1.19.0'],
-            ['Clash Verge/v1.7.0', 'verge', '1.7.0'],
+            ['Clash Verge/v1.7.0', 'clash-verge', '1.7.0'],
+            ['NekoBox/Android/1.4.1 (Prefer ClashMeta Format)', 'clash-meta', '1.4.1'],
+            ['v2ray', 'v2ray', null],
             ['Shadowrocket/2698 CFNetwork/1496.0.7 Darwin/23.5.0', 'shadowrocket', '2698'],
         ];
 

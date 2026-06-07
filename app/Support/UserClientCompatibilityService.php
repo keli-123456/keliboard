@@ -19,7 +19,6 @@ class UserClientCompatibilityService
         ['key' => 'v2rayng', 'label' => 'v2rayNG', 'client_name' => 'v2rayng'],
         ['key' => 'singbox', 'label' => 'sing-box', 'client_name' => 'sing-box'],
         ['key' => 'hiddify', 'label' => 'Hiddify', 'client_name' => 'hiddify'],
-        // Karing imports the generic share-link subscription more reliably than full sing-box JSON.
         ['key' => 'karing', 'label' => 'Karing', 'client_name' => 'karing'],
     ];
 

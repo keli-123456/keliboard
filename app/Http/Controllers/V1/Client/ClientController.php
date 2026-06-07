@@ -19,6 +19,10 @@ class ClientController extends Controller
         'sing-box' => '1.12.0',
     ];
 
+    private const CLIENT_CORE_VERSION_OVERRIDES = [
+        'karing' => '1.13.0',
+    ];
+
     /**
      * Protocol prefix mapping for server names
      */
@@ -218,6 +222,14 @@ class ClientController extends Controller
                 $clientName = $matchedName;
                 $clientVersion = preg_replace('/^v/', '', $matches[2]) ?: null;
             }
+        }
+
+        if ($clientName && !$clientVersion && preg_match('/(?:^|[^0-9])v?(\d+(?:\.\d+)+)(?=$|[^0-9])/', $flag, $matches)) {
+            $clientVersion = $matches[1];
+        }
+
+        if ($clientName && isset(self::CLIENT_CORE_VERSION_OVERRIDES[$clientName])) {
+            $clientVersion = self::CLIENT_CORE_VERSION_OVERRIDES[$clientName];
         }
 
         if ($clientName && !$clientVersion && isset(self::DEFAULT_CLIENT_VERSIONS[$clientName])) {

@@ -9,7 +9,7 @@ use App\Support\AbstractProtocol;
 
 class General extends AbstractProtocol
 {
-    public $flags = ['general', 'karing', 'v2rayn', 'v2rayng', 'passwall', 'ssrplus', 'sagernet'];
+    public $flags = ['general', 'v2ray', 'v2rayn', 'v2rayng', 'passwall', 'ssrplus', 'sagernet'];
 
     public $allowedProtocols = [
         Server::TYPE_VMESS,
