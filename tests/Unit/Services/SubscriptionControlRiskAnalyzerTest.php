@@ -33,6 +33,16 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertFalse($throne['risky']);
     }
 
+    public function test_classifies_karing_as_sing_box_client_family(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer();
+
+        $karing = $analyzer->classifyUserAgent('Karing/1.2.19.2209 windows');
+
+        $this->assertSame('sing-box', $karing['category']);
+        $this->assertFalse($karing['risky']);
+    }
+
     public function test_classifies_legacy_clash_as_risky_legacy_client_family(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer();
@@ -373,7 +383,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame([], $decisions);
     }
 
-    public function test_leak_guard_resets_low_usage_active_plan_user_with_rotating_client_families(): void
+    public function test_leak_guard_resets_low_usage_active_plan_user_with_rotating_risky_client_families(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([
             'enable_leak_guard' => true,
@@ -393,16 +403,47 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         ];
 
         $first = $analyzer->inspectSubscriptionPull(1018, 'token-low-rotate', '1.1.1.1', 'Sparkle/1.0.0', $context);
-        $second = $analyzer->inspectSubscriptionPull(1018, 'token-low-rotate', '1.1.1.1', 'sing-box/1.12.0', $context);
+        $second = $analyzer->inspectSubscriptionPull(1018, 'token-low-rotate', '1.1.1.1', 'curl/8.5.0', $context);
 
         $this->assertSame([], $first);
         $this->assertCount(1, $second);
         $this->assertSame('subscription_leak_guard', $second[0]['code']);
         $this->assertSame('reset_token_uuid', $second[0]['action']);
+        $this->assertContains('risky_ua', $second[0]['meta']['signals']);
+        $this->assertContains('non_whitelisted_ua', $second[0]['meta']['signals']);
+        $this->assertContains('many_pull_ua_categories', $second[0]['meta']['signals']);
         $this->assertContains('active_plan_low_usage', $second[0]['meta']['signals']);
         $this->assertContains('active_plan_very_low_usage', $second[0]['meta']['signals']);
         $this->assertContains('active_plan_low_usage_with_many_ua', $second[0]['meta']['signals']);
         $this->assertGreaterThanOrEqual(80, $second[0]['meta']['risk_score']);
+    }
+
+    public function test_leak_guard_allows_karing_after_prior_accidental_probe_category(): void
+    {
+        $analyzer = new SubscriptionRiskAnalyzer([
+            'enable_leak_guard' => true,
+            'enable_ip_intelligence' => false,
+            'leak_guard_score_threshold' => 80,
+            'leak_guard_allowed_ua_count' => 1,
+            'leak_guard_active_plan_low_usage_bytes' => 100 * 1024 * 1024,
+            'leak_guard_active_plan_very_low_usage_bytes' => 10 * 1024 * 1024,
+            'ip_region_overrides' => [
+                '1.1.1.1' => 'US',
+            ],
+        ]);
+
+        $context = [
+            'online_ips' => ['1.1.1.1'],
+            'plan_id' => 3,
+            'expired_at' => time() + 3600,
+            'transfer_enable' => 100 * 1024 * 1024 * 1024,
+            'used_traffic' => 1024,
+        ];
+
+        $analyzer->inspectSubscriptionPull(1022, 'token-karing-after-probe', '1.1.1.1', 'curl/8.5.0', $context);
+        $decisions = $analyzer->inspectSubscriptionPull(1022, 'token-karing-after-probe', '1.1.1.1', 'Karing/1.2.19.2209 windows', $context);
+
+        $this->assertSame([], $decisions);
     }
 
     public function test_leak_guard_strict_mode_resets_known_client_from_new_pull_ip(): void

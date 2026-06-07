@@ -750,13 +750,15 @@ TEXT;
         $activePlanUser = $this->isActivePlanUser($context);
         $usedTraffic = $this->contextInt($context, 'used_traffic', 0);
         $transferEnable = $this->contextInt($context, 'transfer_enable', 0);
+        $whitelistedClient = $this->isWhitelistedClient($client, $userAgent);
+        $trustedClient = $whitelistedClient && !(bool) ($client['risky'] ?? false);
 
         if ((bool) ($client['risky'] ?? false)) {
             $score += 45;
             $signals[] = 'risky_ua';
         }
 
-        if (!$this->isWhitelistedClient($client, $userAgent)) {
+        if (!$whitelistedClient) {
             $score += 35;
             $signals[] = 'non_whitelisted_ua';
         }
@@ -788,11 +790,11 @@ TEXT;
             $window
         );
         $uaCategories = $uaState['values'];
-        if ($strictMode && $uaState['had_values'] && $uaState['was_new']) {
+        if (!$trustedClient && $strictMode && $uaState['had_values'] && $uaState['was_new']) {
             $score += 35;
             $signals[] = 'new_pull_ua_category';
         }
-        if (count($uaCategories) > $allowedUaCount) {
+        if (!$trustedClient && count($uaCategories) > $allowedUaCount) {
             $score += 35;
             $signals[] = 'many_pull_ua_categories';
         }
@@ -837,7 +839,7 @@ TEXT;
                     $signals[] = 'active_plan_very_low_usage';
                 }
 
-                if (count($uaCategories) > $allowedUaCount) {
+                if (!$trustedClient && count($uaCategories) > $allowedUaCount) {
                     $score += 25;
                     $signals[] = 'active_plan_low_usage_with_many_ua';
                 }
@@ -895,6 +897,7 @@ TEXT;
                 'region' => $region,
                 'regions' => $regions,
                 'online_regions' => $onlineRegions,
+                'trusted_client' => $trustedClient,
                 'active_plan_user' => $activePlanUser,
                 'used_traffic' => $usedTraffic,
                 'transfer_enable' => $transferEnable,
