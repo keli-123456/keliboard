@@ -22,16 +22,19 @@ class NodeRealtimeAuthenticator
             return null;
         }
 
-        $nodeType = is_string($nodeType) ? trim($nodeType) : null;
-        if (!ServerModel::isValidType($nodeType)) {
-            return null;
-        }
-
-        $normalizedNodeType = ServerModel::normalizeType($nodeType);
         if ($this->isMachineOnlyV2Node($machineId, $nodeId, $isV2Node)) {
             return $this->authenticateMachineOnly((int) $machineId, $token);
         }
 
+        $nodeType = is_string($nodeType) ? trim($nodeType) : null;
+        if ($nodeType !== null && !ServerModel::isValidType($nodeType)) {
+            return null;
+        }
+        if ($nodeType === null && !$isV2Node) {
+            return null;
+        }
+
+        $normalizedNodeType = $nodeType !== null ? ServerModel::normalizeType($nodeType) : null;
         if (!is_scalar($nodeId)) {
             return null;
         }
@@ -42,7 +45,7 @@ class NodeRealtimeAuthenticator
                 $token,
                 (string) $nodeId,
                 $normalizedNodeType,
-                $isV2Node
+                true
             );
         }
 
