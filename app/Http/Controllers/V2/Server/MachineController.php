@@ -42,6 +42,8 @@ class MachineController extends Controller
                     'id' => (int) $server->id,
                     'code' => $server->code,
                     'type' => $server->type,
+                    'protocol' => $this->machineNodeProtocol($server),
+                    'node_type' => $server->type,
                     'name' => $server->name,
                     'updated_at' => $server->updated_at,
                 ];
@@ -55,6 +57,17 @@ class MachineController extends Controller
                 'subscription_proxy' => $this->buildSubscriptionProxyConfig($request, $machine),
             ],
         ]);
+    }
+
+    private function machineNodeProtocol($server): string
+    {
+        $type = (string) $server->type;
+        if ($type === 'hysteria') {
+            $settings = is_array($server->protocol_settings) ? $server->protocol_settings : [];
+            return (int) data_get($settings, 'version', 2) === 2 ? 'hysteria2' : 'hysteria';
+        }
+
+        return $type;
     }
 
     public function status(Request $request): JsonResponse
