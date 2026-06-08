@@ -79,16 +79,30 @@ class ConfigController extends Controller
 
     public function testSendMail(Request $request)
     {
-        $mailLog = MailService::sendEmail([
-            'email' => $request->user()->email,
-            'subject' => 'This is xboard test email',
-            'template_name' => 'notify',
-            'template_value' => [
-                'name' => admin_setting('app_name', 'XBoard'),
-                'content' => 'This is xboard test email',
-                'url' => admin_setting('app_url')
-            ]
-        ]);
+        try {
+            $mailLog = MailService::sendEmail([
+                'email' => $request->user()->email,
+                'subject' => 'This is xboard test email',
+                'template_name' => 'notify',
+                'template_value' => [
+                    'name' => admin_setting('app_name', 'XBoard'),
+                    'content' => 'This is xboard test email',
+                    'url' => admin_setting('app_url')
+                ]
+            ], [
+                'context' => [
+                    'source' => 'admin_test_mail',
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            report($e);
+            return $this->fail([500001, '测试邮件发送失败'], null, $e->getMessage());
+        }
+
+        if (!empty($mailLog['error'])) {
+            return $this->fail([500001, '测试邮件发送失败'], $mailLog, $mailLog['error']);
+        }
+
         return $this->success($mailLog);
     }
     /**
