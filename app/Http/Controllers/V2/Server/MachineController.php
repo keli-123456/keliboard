@@ -429,6 +429,12 @@ class MachineController extends Controller
             return true;
         }
 
+        $desiredDomain = trim((string) ($desired['certificate_domain'] ?? ''));
+        $reportedDomain = trim((string) data_get($reported, 'certificate_domain', ''));
+        if ($desiredDomain !== '' && $reportedDomain !== '' && $reportedDomain !== $desiredDomain) {
+            return true;
+        }
+
         $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
         $certificateId = trim((string) ($state['certificate_id'] ?? ''));
         $certificateStatus = trim((string) ($state['status'] ?? ''));

@@ -403,6 +403,7 @@ class ZeroSslCertificateService
         $payload = $this->jsonResponse($response, 'get certificate');
         $state['status'] = (string) ($payload['status'] ?? ($state['status'] ?? ''));
         $state['expires_at'] = (string) ($payload['expires'] ?? ($state['expires_at'] ?? ''));
+        $state['last_error'] = null;
         return $state;
     }
 

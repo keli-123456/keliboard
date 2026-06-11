@@ -695,6 +695,60 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertTrue($payload['reload']);
     }
 
+    public function test_status_response_requests_reload_when_agent_reports_stale_certificate_domain(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscription_proxy_enable' => true,
+            'subscription_proxy_site_id' => 'panel-a',
+            'zerossl_access_key' => 'test-key',
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $machine->forceFill([
+            'subproxy_enabled' => true,
+            'subproxy_cert_state' => [
+                'provider' => 'zerossl',
+                'certificate_id' => 'cert-1',
+                'domain' => '2.56.116.39',
+                'domain_source' => 'auto',
+                'status' => 'pending_validation',
+                'validation_path' => '/.well-known/pki-validation/token.txt',
+                'validation_content' => ['line-a', 'line-b'],
+            ],
+        ])->save();
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'agent' => [
+                        'subscription_proxy' => [
+                            'enabled' => true,
+                            'certificate_domain' => '2607:f358:1a:e::d4d9:5831',
+                            'certificate_id' => 'cert-1',
+                            'validation_ready' => true,
+                            'csr_pem' => '-----BEGIN CERTIFICATE REQUEST-----test-----END CERTIFICATE REQUEST-----',
+                        ],
+                    ],
+                ],
+            ],
+            [],
+            [],
+            ['REMOTE_ADDR' => '2607:f358:1a:e::d4d9:5831']
+        ));
+        $payload = $response->getData(true);
+
+        $this->assertTrue($payload['reload']);
+    }
+
     public function test_nodes_response_includes_zero_ssl_diagnostic_state(): void
     {
         $this->bindSettings([
