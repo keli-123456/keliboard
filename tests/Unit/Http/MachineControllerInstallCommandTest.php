@@ -46,12 +46,10 @@ final class MachineControllerInstallCommandTest extends TestCase
         $response = (new MachineController())->installCommand($request);
         $payload = $response->getData(true);
         $command = $payload['data']['command'];
-        $nativeCommand = $payload['data']['native_command'];
-        $nativeUninstallCommand = $payload['data']['native_uninstall_command'];
-        $nativeLogCommand = $payload['data']['native_log_command'];
-        $nativeConfig = $payload['data']['native_config'];
 
         $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('kelinode', $payload['data']['default_agent']);
+        $this->assertFalse($payload['data']['native_enabled']);
         $this->assertStringStartsWith(
             "curl -fsSL 'https://raw.githubusercontent.com/keli-123456/kelinode/main/script/install.sh' -o /tmp/v2node-install.sh && bash /tmp/v2node-install.sh",
             $command
@@ -60,17 +58,51 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertStringContainsString('--machine-id ' . $machine->id, $command);
         $this->assertStringContainsString("--machine-token 'tok'\"'\"'en'", $command);
         $this->assertStringContainsString("--machine-name 'edge '\"'\"'hk'", $command);
+        $this->assertArrayNotHasKey('native_command', $payload['data']);
+        $this->assertArrayNotHasKey('native_config', $payload['data']);
+    }
 
+    public function test_install_command_uses_native_command_as_default_when_kelinode_rs_enabled(): void
+    {
+        $this->settings->values['server_machine_default_agent'] = 'kelinode-rs';
+        $machine = ServerMachine::create([
+            'name' => "edge 'hk",
+            'token' => "tok'en",
+            'is_active' => true,
+        ]);
+
+        $request = $this->installRequest('https://panel.example.test/admin/server/machine/install', [
+            'id' => $machine->id,
+        ]);
+
+        $response = (new MachineController())->installCommand($request);
+        $payload = $response->getData(true);
+        $command = $payload['data']['command'];
+        $config = $payload['data']['config'];
+        $nativeCommand = $payload['data']['native_command'];
+        $nativeUninstallCommand = $payload['data']['native_uninstall_command'];
+        $nativeLogCommand = $payload['data']['native_log_command'];
+        $nativeConfig = $payload['data']['native_config'];
+        $legacyCommand = $payload['data']['legacy_command'];
+        $legacyConfig = $payload['data']['legacy_config'];
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('kelinode-rs', $payload['data']['default_agent']);
+        $this->assertTrue($payload['data']['native_enabled']);
         $this->assertSame('latest', $payload['data']['native_version']);
         $this->assertStringStartsWith(
             "curl -fsSL 'https://raw.githubusercontent.com/keli-123456/kelinode-rs/main/script/install.sh' -o /tmp/keli-native-node-install.sh && bash /tmp/keli-native-node-install.sh",
-            $nativeCommand
+            $command
         );
-        $this->assertStringNotContainsString('--version', $nativeCommand);
-        $this->assertStringContainsString("--machine-url 'https://panel.example.test'", $nativeCommand);
-        $this->assertStringContainsString('--machine-id ' . $machine->id, $nativeCommand);
-        $this->assertStringContainsString("--machine-token 'tok'\"'\"'en'", $nativeCommand);
-        $this->assertStringContainsString("--machine-name 'edge '\"'\"'hk'", $nativeCommand);
+        $this->assertSame($command, $nativeCommand);
+        $this->assertStringNotContainsString('--version', $command);
+        $this->assertStringContainsString("--machine-url 'https://panel.example.test'", $command);
+        $this->assertStringContainsString('--machine-id ' . $machine->id, $command);
+        $this->assertStringContainsString("--machine-token 'tok'\"'\"'en'", $command);
+        $this->assertStringContainsString("--machine-name 'edge '\"'\"'hk'", $command);
+        $this->assertStringContainsString('kernel:', $config);
+        $this->assertStringContainsString('  type: keli-core-rs', $config);
+        $this->assertSame($config, $nativeConfig);
         $this->assertStringStartsWith(
             "curl -fsSL 'https://raw.githubusercontent.com/keli-123456/kelinode-rs/main/script/install.sh' -o /tmp/keli-native-node-install.sh && bash /tmp/keli-native-node-install.sh uninstall",
             $nativeUninstallCommand
@@ -82,11 +114,18 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertStringContainsString('  config_dir: "/etc/kelinode"', $nativeConfig);
         $this->assertStringContainsString('      config_dir: "/etc/kelinode"', $nativeConfig);
         $this->assertStringContainsString('      token: "tok\'en"', $nativeConfig);
+        $this->assertStringStartsWith(
+            "curl -fsSL 'https://raw.githubusercontent.com/keli-123456/kelinode/main/script/install.sh' -o /tmp/v2node-install.sh && bash /tmp/v2node-install.sh",
+            $legacyCommand
+        );
+        $this->assertStringContainsString('machine:', $legacyConfig);
+        $this->assertStringNotContainsString('kernel:', $legacyConfig);
     }
 
     public function test_install_command_uses_configured_node_api_base_url(): void
     {
         $this->settings->values['node_api_base_url'] = 'https://node-api.example.test/';
+        $this->settings->values['server_machine_default_agent'] = 'kelinode-rs';
         $machine = ServerMachine::create([
             'name' => 'edge-vn',
             'token' => 'machine-token',
@@ -102,11 +141,13 @@ final class MachineControllerInstallCommandTest extends TestCase
         $command = $payload['data']['command'];
         $config = $payload['data']['config'];
         $nativeConfig = $payload['data']['native_config'];
+        $legacyCommand = $payload['data']['legacy_command'];
 
         $this->assertStringContainsString("--machine-url 'https://node-api.example.test'", $command);
         $this->assertStringNotContainsString("--machine-url 'https://panel.example.test'", $command);
         $this->assertStringContainsString('      url: "https://node-api.example.test"', $config);
         $this->assertStringContainsString('      url: "https://node-api.example.test"', $nativeConfig);
+        $this->assertStringContainsString("--machine-url 'https://node-api.example.test'", $legacyCommand);
     }
 
     public function test_fetch_includes_agent_online_status(): void

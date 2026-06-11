@@ -279,24 +279,29 @@ class MachineController extends Controller
         $baseURL = $this->resolveMachineApiBaseURL($request);
         $defaultAgent = $this->serverMachineDefaultAgent();
         $nativeEnabled = $defaultAgent === 'kelinode-rs';
+        $legacyConfig = $this->buildMachineConfig($baseURL, $machine);
+        $legacyCommand = $this->buildInstallCommand($baseURL, $machine);
+        $nativeConfig = $nativeEnabled ? $this->buildNativeInstallConfig($baseURL, $machine) : null;
+        $nativeCommand = $nativeEnabled ? $this->buildNativeInstallCommand($baseURL, $machine) : null;
 
-        $config = $this->buildMachineConfig($baseURL, $machine);
         $data = [
             'machine_id' => (int) $machine->id,
             'token' => $machine->token,
-            'config' => $config,
-            'command' => $this->buildInstallCommand($baseURL, $machine),
+            'config' => $nativeConfig ?: $legacyConfig,
+            'command' => $nativeCommand ?: $legacyCommand,
             'default_agent' => $defaultAgent,
             'native_enabled' => $nativeEnabled,
         ];
 
         if ($nativeEnabled) {
             $data += [
-                'native_config' => $this->buildNativeInstallConfig($baseURL, $machine),
-                'native_command' => $this->buildNativeInstallCommand($baseURL, $machine),
+                'native_config' => $nativeConfig,
+                'native_command' => $nativeCommand,
                 'native_uninstall_command' => $this->buildNativeUninstallCommand(),
                 'native_log_command' => $this->buildNativeLogCommand(),
                 'native_version' => self::NATIVE_NODE_INSTALL_VERSION,
+                'legacy_config' => $legacyConfig,
+                'legacy_command' => $legacyCommand,
             ];
         }
 
