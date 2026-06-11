@@ -214,15 +214,15 @@ final class SubscriptionControlOwnershipTest extends TestCase
             'clashx/',
             'clashdotnetframework',
             'clash.net',
-            'clash-verge/v1.',
             'clashr',
             'v2rayn/6.23',
             'v2rayng/1.8.',
-            'shadowrocket/1.9.',
             'quantumult%20x/1.0.',
             'quantumult x/1.0.',
-            'loon/2.1.',
-            'surfboard/2.15.',
+            'loon/636',
+            'surge/2390',
+            'stash/2.4.',
+            'surfboard',
             'kitsunebi',
             'sagernet',
             'potatso',
@@ -238,7 +238,18 @@ final class SubscriptionControlOwnershipTest extends TestCase
             $this->assertStringNotContainsString($keyword, $blockOnly);
         }
 
-        foreach (['karing', 'mihomo', 'sing-box', 'clash-verge-rev/2.', 'v2rayng/2.'] as $keyword) {
+        foreach ([
+            'karing',
+            'mihomo',
+            'sing-box',
+            'clash-verge/v1.3.8',
+            'clash-verge-rev/2.',
+            'shadowrocket/1993',
+            'shadowrocket/2698',
+            'loon/637',
+            'stash/2.5.0',
+            'v2rayng/2.',
+        ] as $keyword) {
             $this->assertStringNotContainsString($keyword, $resetList);
         }
     }

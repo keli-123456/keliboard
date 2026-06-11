@@ -1,7 +1,7 @@
 {
     "name": "订阅风控",
     "code": "subscription_control",
-    "version": "1.5.29",
+    "version": "1.5.30",
     "description": "提供订阅链接的主动风险控制能力，防止节点被恶意扫描。支持可信代理真实IP识别、免费ASN/IP类型标签、订阅泄露保护、在线唯一IP阈值、邮件/TG通知、UA黑名单、UA仅拒绝规则、多UA/多地区订阅检测、订阅IP限制、阅后即焚功能。",
     "author": "XBoard",
     "require": {
@@ -370,7 +370,7 @@
         },
         "ua_reset_keywords": {
             "type": "text",
-            "default": "west2online\nClashForWindows\nClash for Windows\nClashForAndroid\nClash for Android\nClashX/\nClashDotNetFramework\nClash.NET\nclash-verge/v1.\nclash-verge/v1.3.8\nclashR\nv2rayN/6.23\nv2rayNG/1.8.\nv2rayNG/1.8.5\nshadowrocket/1.9.\nshadowrocket/1.9.8\nQuantumult%20X/1.0.\nQuantumult%20X/1.0.29\nQuantumult X/1.0.\nLoon/2.1.\nLoon/2.1.0\nSurfboard/2.15.\nSurfboard/2.15.0\nKitsunebi\nSagerNet\nPotatso\nPharos\nPostern\nShadowsocksX-NG\nsstap\nSSD\nv2raytun",
+            "default": "west2online\nClashForWindows\nClash for Windows\nClashForAndroid\nClash for Android\nClashX/\nClashDotNetFramework\nClash.NET\nclashR\nv2rayN/6.23\nv2rayNG/1.8.\nv2rayNG/1.8.5\nQuantumult%20X/1.0.\nQuantumult%20X/1.0.29\nQuantumult X/1.0.\nLoon/636\nSurge/2390\nStash/2.4.\nSurfboard\nKitsunebi\nSagerNet\nPotatso\nPharos\nPostern\nShadowsocksX-NG\nsstap\nSSD\nv2raytun",
             "label": "重置UA关键词列表（逗号或换行分隔）",
             "description": "命中后同时重置用户订阅 token 和节点 uuid 并阻断订阅。建议放老旧客户端或疑似伪造客户端；社交平台预取 UA 应放在 UA 黑名单中封禁来源 IP，普通浏览器误点只拒绝展示"
         },
