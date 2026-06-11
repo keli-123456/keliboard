@@ -6,6 +6,14 @@ use Illuminate\Contracts\Container\Container;
 
 class ProtocolManager
 {
+    private const LEADING_CLIENT_FLAG_PRIORITY = [
+        'karing',
+        'hiddify',
+        'hiddifynext',
+        'singbox',
+        'sfm',
+    ];
+
     /**
      * @var Container Laravel容器实例
      */
@@ -94,6 +102,10 @@ class ProtocolManager
     public function matchClientFlag(string $flag): ?string
     {
         $flags = $this->getAllFlags();
+        if ($leadingFlag = $this->matchLeadingClientFlag($flag, $flags)) {
+            return $leadingFlag;
+        }
+
         usort($flags, function ($left, $right) {
             $leftLength = strlen($this->normalizeFlagValue((string) $left));
             $rightLength = strlen($this->normalizeFlagValue((string) $right));
@@ -139,6 +151,8 @@ class ProtocolManager
      */
     public function matchProtocolClassName(string $flag): ?string
     {
+        $leadingFlag = $this->matchLeadingClientFlag($flag, $this->getAllFlags());
+
         // 按照相反顺序，使最新定义的协议有更高优先级
         foreach (array_reverse($this->getProtocolClasses()) as $protocolClassString) {
             try {
@@ -151,6 +165,10 @@ class ProtocolManager
                 // 'flags' is a public property in AbstractProtocol
                 $instanceForFlags = $reflection->newInstanceWithoutConstructor();
                 $flags = $instanceForFlags->flags;
+
+                if ($leadingFlag && collect($flags)->contains(fn($f) => $this->normalizeFlagValue((string) $f) === $this->normalizeFlagValue($leadingFlag))) {
+                    return $protocolClassString;
+                }
 
                 if (collect($flags)->contains(fn($f) => $this->matchesFlag($flag, (string) $f))) {
                     return $protocolClassString; // 返回类名字符串
@@ -178,6 +196,37 @@ class ProtocolManager
 
         return $normalizedNeedle !== ''
             && str_contains($normalizedHaystack, $normalizedNeedle);
+    }
+
+    protected function matchLeadingClientFlag(string $flag, array $flags): ?string
+    {
+        foreach ($flags as $candidate) {
+            $candidate = (string) $candidate;
+            if (!in_array($this->normalizeFlagValue($candidate), self::LEADING_CLIENT_FLAG_PRIORITY, true)) {
+                continue;
+            }
+
+            if ($this->matchesFlagAtStart($flag, $candidate)) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    protected function matchesFlagAtStart(string $haystack, string $needle): bool
+    {
+        if ($needle === '') {
+            return false;
+        }
+
+        $tokens = preg_split('/[^a-z0-9]+/i', strtolower(rawurldecode($needle)), -1, PREG_SPLIT_NO_EMPTY);
+        if (empty($tokens)) {
+            return false;
+        }
+
+        $pattern = '/^\s*' . implode('[^a-z0-9]*', array_map(static fn($token) => preg_quote($token, '/'), $tokens)) . '(?=$|[^a-z0-9])/i';
+        return preg_match($pattern, rawurldecode($haystack)) === 1;
     }
 
     protected function extractVersionUsingCandidate(string $flag, string $candidate): ?string

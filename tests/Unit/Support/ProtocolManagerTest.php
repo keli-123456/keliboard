@@ -27,6 +27,7 @@ final class ProtocolManagerTest extends TestCase
 
         $this->assertSame(SingBox::class, $manager->matchProtocolClassName('singbox/1.12.0'));
         $this->assertSame(SingBox::class, $manager->matchProtocolClassName('Karing/1.2.8.1103'));
+        $this->assertSame(SingBox::class, $manager->matchProtocolClassName('Karing/1.2.19.2209 platform/windows mihomo/1.19.23 ClashMeta'));
         $this->assertSame(SingBox::class, $manager->matchProtocolClassName('Hiddify/1.2.8.1103'));
         $this->assertSame(ClashMeta::class, $manager->matchProtocolClassName('Sparkle/1.2.8.1103'));
         $this->assertSame(ClashMeta::class, $manager->matchProtocolClassName('ClashXMeta/1.3.5'));
@@ -50,6 +51,7 @@ final class ProtocolManagerTest extends TestCase
 
         $this->assertSame('sing-box', $manager->matchClientFlag('singbox'));
         $this->assertSame('karing', $manager->matchClientFlag('Karing/1.2.8.1103'));
+        $this->assertSame('karing', $manager->matchClientFlag('Karing/1.2.19.2209 platform/windows mihomo/1.19.23 ClashMeta'));
         $this->assertSame('hiddify', $manager->matchClientFlag('Hiddify/1.2.8.1103'));
         $this->assertSame('sparkle', $manager->matchClientFlag('Sparkle/1.2.8.1103'));
         $this->assertSame('mihomo', $manager->matchClientFlag('mihomo'));

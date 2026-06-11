@@ -35,6 +35,7 @@ final class ClientControllerTest extends TestCase
         $singBoxWrapper = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'sing-box/1.2.8.1103']));
         $bareSingBox = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'sing-box']));
         $karing = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'Karing/1.2.19.2209 platform/windows']));
+        $karingComposite = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'Karing/1.2.19.2209 platform/windows mihomo/1.19.23 ClashMeta']));
         $clashMeta = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'ClashX Meta/1.3.5']));
         $mihomo = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'mihomo/1.19.0']));
         $verge = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'Clash Verge/v1.7.0']));
@@ -49,6 +50,8 @@ final class ClientControllerTest extends TestCase
         $this->assertSame('1.12.0', $bareSingBox['version']);
         $this->assertSame('karing', $karing['name']);
         $this->assertSame('1.13.0', $karing['version']);
+        $this->assertSame('karing', $karingComposite['name']);
+        $this->assertSame('1.13.0', $karingComposite['version']);
 
         $this->assertSame('clashx meta', $clashMeta['name']);
         $this->assertSame('1.3.5', $clashMeta['version']);
@@ -101,6 +104,7 @@ final class ClientControllerTest extends TestCase
         $cases = [
             ['sing-box/1.13.11', 'sing-box', '1.13.11'],
             ['Karing/1.2.8.1103', 'karing', '1.13.0'],
+            ['Karing/1.2.19.2209 platform/ios mihomo/1.19.23 ClashMeta', 'karing', '1.13.0'],
             ['Hiddify/1.2.8.1103', 'hiddify', '1.2.8.1103'],
             ['Sparkle/1.2.8.1103', 'sparkle', '1.2.8.1103'],
             ['mihomo/1.19.0', 'mihomo', '1.19.0'],
