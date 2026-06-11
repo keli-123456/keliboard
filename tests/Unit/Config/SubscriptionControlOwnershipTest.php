@@ -153,7 +153,38 @@ final class SubscriptionControlOwnershipTest extends TestCase
         $this->assertTrue((bool) ($items['enable_ua_block_only']['default'] ?? false));
 
         $blockOnly = (string) ($items['ua_block_only_keywords']['default'] ?? '');
-        foreach (['Mozilla', 'Chrome', 'Safari', 'Firefox', 'Edg/'] as $keyword) {
+        foreach ([
+            'Mozilla',
+            'Chrome',
+            'Safari',
+            'Firefox',
+            'Chromium',
+            'CriOS',
+            'FxiOS',
+            'Version/',
+            'Mobile Safari',
+            'Edg/',
+            'Edge',
+            'OPR/',
+            'Opera',
+            'MSIE',
+            'Trident',
+            'SamsungBrowser',
+            'UCBrowser',
+            'YaBrowser',
+            'DuckDuckGo',
+            'Vivaldi',
+            'Brave',
+            'Avast',
+            'AVG',
+            'Whale',
+            'MiuiBrowser',
+            'HuaweiBrowser',
+            'HeyTapBrowser',
+            'Quark',
+            'SogouMobileBrowser',
+            'BaiduBrowser',
+        ] as $keyword) {
             $this->assertStringContainsString($keyword, $blockOnly);
         }
 

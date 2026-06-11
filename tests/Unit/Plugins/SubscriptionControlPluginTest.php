@@ -427,6 +427,36 @@ final class SubscriptionControlPluginTest extends TestCase
         $this->assertSame('block', $event['action']);
     }
 
+    public function test_default_browser_ua_block_only_matches_common_browsers(): void
+    {
+        $configPath = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $config = json_decode((string) file_get_contents($configPath), true);
+        $defaultBlockOnly = (string) ($config['config']['ua_block_only_keywords']['default'] ?? '');
+
+        $plugin = new Plugin('subscription_control');
+        $plugin->setConfig([
+            'ua_block_only_keywords' => $defaultBlockOnly,
+        ]);
+        $isBlockOnlyUa = new ReflectionMethod($plugin, 'isBlockOnlyUA');
+        $isBlockOnlyUa->setAccessible(true);
+
+        foreach ([
+            'Mozilla/5.0 AppleWebKit/537.36 Chrome/138.0 Safari/537.36',
+            'Mozilla/5.0 AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15',
+            'Mozilla/5.0 AppleWebKit/605.1.15 CriOS/138.0 Mobile/15E148 Safari/604.1',
+            'Mozilla/5.0 AppleWebKit/605.1.15 FxiOS/127.0 Mobile/15E148 Safari/605.1.15',
+            'Mozilla/5.0 AppleWebKit/537.36 SamsungBrowser/26.0 Chrome/122.0 Mobile Safari/537.36',
+            'Mozilla/5.0 AppleWebKit/537.36 UCBrowser/15.5 Mobile Safari/537.36',
+            'Mozilla/5.0 AppleWebKit/537.36 MiuiBrowser/13.0 Mobile Safari/537.36',
+            'Mozilla/5.0 AppleWebKit/537.36 HuaweiBrowser/15.0 Mobile Safari/537.36',
+            'Mozilla/5.0 AppleWebKit/537.36 Quark/7.0 Mobile Safari/537.36',
+            'Mozilla/5.0 AppleWebKit/537.36 SogouMobileBrowser/7.0 Mobile Safari/537.36',
+            'Mozilla/5.0 AppleWebKit/537.36 BaiduBrowser/13.0 Mobile Safari/537.36',
+        ] as $userAgent) {
+            $this->assertTrue($isBlockOnlyUa->invoke($plugin, strtolower($userAgent)), $userAgent);
+        }
+    }
+
     private function createPluginTable(): void
     {
         $this->database->schema()->create('v2_plugins', function (Blueprint $table): void {
