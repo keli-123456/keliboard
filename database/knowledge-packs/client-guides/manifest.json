@@ -1,0 +1,90 @@
+{
+  "name": "client-guides",
+  "version": "2026.06.11",
+  "description": "HTML client setup guides for the Keli user knowledge base.",
+  "category": "客户端教程",
+  "language": "zh-CN",
+  "asset_base_url": "/knowledge-assets/clients",
+  "articles": [
+    {
+      "slug": "karing",
+      "title": "Karing 使用教程",
+      "category": "客户端教程",
+      "language": "zh-CN",
+      "sort": 10,
+      "show": true,
+      "body": "articles/karing.html",
+      "assets": []
+    },
+    {
+      "slug": "clash-verge-rev",
+      "title": "Clash Verge Rev 使用教程",
+      "category": "客户端教程",
+      "language": "zh-CN",
+      "sort": 20,
+      "show": true,
+      "body": "articles/clash-verge-rev.html",
+      "assets": []
+    },
+    {
+      "slug": "flclash",
+      "title": "FlClash 使用教程",
+      "category": "客户端教程",
+      "language": "zh-CN",
+      "sort": 30,
+      "show": true,
+      "body": "articles/flclash.html",
+      "assets": []
+    },
+    {
+      "slug": "hiddify",
+      "title": "Hiddify 使用教程",
+      "category": "客户端教程",
+      "language": "zh-CN",
+      "sort": 40,
+      "show": true,
+      "body": "articles/hiddify.html",
+      "assets": []
+    },
+    {
+      "slug": "v2rayn",
+      "title": "v2rayN 使用教程",
+      "category": "客户端教程",
+      "language": "zh-CN",
+      "sort": 50,
+      "show": true,
+      "body": "articles/v2rayn.html",
+      "assets": []
+    },
+    {
+      "slug": "v2rayng",
+      "title": "v2rayNG 使用教程",
+      "category": "客户端教程",
+      "language": "zh-CN",
+      "sort": 60,
+      "show": true,
+      "body": "articles/v2rayng.html",
+      "assets": []
+    },
+    {
+      "slug": "shadowrocket",
+      "title": "Shadowrocket 使用教程",
+      "category": "客户端教程",
+      "language": "zh-CN",
+      "sort": 70,
+      "show": true,
+      "body": "articles/shadowrocket.html",
+      "assets": []
+    },
+    {
+      "slug": "stash",
+      "title": "Stash 使用教程",
+      "category": "客户端教程",
+      "language": "zh-CN",
+      "sort": 80,
+      "show": true,
+      "body": "articles/stash.html",
+      "assets": []
+    }
+  ]
+}
