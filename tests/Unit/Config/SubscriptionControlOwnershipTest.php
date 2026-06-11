@@ -137,6 +137,10 @@ final class SubscriptionControlOwnershipTest extends TestCase
 
         $blacklistLines = array_map('trim', preg_split('/[\r\n]+/', $blacklist) ?: []);
         $this->assertNotContains('mozilla', $blacklistLines);
+
+        foreach (['telegram', 'telegrambot', 'wechat', 'weixin', 'micromessenger', 'qq', 'mqqbrowser', 'weibo'] as $keyword) {
+            $this->assertStringNotContainsString($keyword, $blacklist);
+        }
     }
 
     public function test_subscription_control_default_ua_policy_uses_negative_rules_not_whitelist(): void
@@ -184,6 +188,14 @@ final class SubscriptionControlOwnershipTest extends TestCase
             'Quark',
             'SogouMobileBrowser',
             'BaiduBrowser',
+            'Telegram',
+            'TelegramBot',
+            'WeChat',
+            'Weixin',
+            'MicroMessenger',
+            'QQ',
+            'MQQBrowser',
+            'Weibo',
         ] as $keyword) {
             $this->assertStringContainsString($keyword, $blockOnly);
         }

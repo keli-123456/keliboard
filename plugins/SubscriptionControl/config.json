@@ -1,7 +1,7 @@
 {
     "name": "订阅风控",
     "code": "subscription_control",
-    "version": "1.5.30",
+    "version": "1.5.31",
     "description": "提供订阅链接的主动风险控制能力，防止节点被恶意扫描。支持可信代理真实IP识别、免费ASN/IP类型标签、订阅泄露保护、在线唯一IP阈值、邮件/TG通知、UA黑名单、UA仅拒绝规则、多UA/多地区订阅检测、订阅IP限制、阅后即焚功能。",
     "author": "XBoard",
     "require": {
@@ -16,7 +16,7 @@
         },
         "ua_blacklist": {
             "type": "text",
-            "default": "Censys\nNone\nTelegram\nTelegramBot\nWeChat\nWeixin\nMicroMessenger\nQQ\nMQQBrowser\nWeibo\nMozilla/5.0 (bang2013@atomicmail.io)\nJava-http-client\nApache-HttpClient\nShodan\nzgrab\nzmap\nmasscan\nnuclei\nsqlmap\nNikto\ndaed/v0.4.0rc1 (like v2rayA/1.0 WebRequestHelper) (like v2rayN/1.0 WebRequestHelper)\ndaed\ndaed/v0.4.0rc1\nMatsuri\n${sub_ua}\nscan\nASUS\nChrome/2\nChrome/3\nChrome/4\nChrome/5\nChrome/6\nChrome/16.0.912.77\nZTE\nAndroid 9\npython-requests/2.9.1\npython-requests/2.22.0\nGo-http-client\nsubconverter\nWebRequestHelper",
+            "default": "Censys\nNone\nMozilla/5.0 (bang2013@atomicmail.io)\nJava-http-client\nApache-HttpClient\nShodan\nzgrab\nzmap\nmasscan\nnuclei\nsqlmap\nNikto\ndaed/v0.4.0rc1 (like v2rayA/1.0 WebRequestHelper) (like v2rayN/1.0 WebRequestHelper)\ndaed\ndaed/v0.4.0rc1\nMatsuri\n${sub_ua}\nscan\nASUS\nChrome/2\nChrome/3\nChrome/4\nChrome/5\nChrome/6\nChrome/16.0.912.77\nZTE\nAndroid 9\npython-requests/2.9.1\npython-requests/2.22.0\nGo-http-client\nsubconverter\nWebRequestHelper",
             "label": "恶意 UA 黑名单（逗号或换行分隔，模糊匹配）",
             "description": "明确恶意或脚本探测 UA。命中后直接拒绝订阅请求，并把解析后的真实客户端 IP 永久写入订阅来源 IP 黑名单；不会重置用户订阅 token 和节点 uuid"
         },
@@ -28,9 +28,9 @@
         },
         "ua_block_only_keywords": {
             "type": "text",
-            "default": "Mozilla\nChrome\nSafari\nFirefox\nChromium\nCriOS\nFxiOS\nVersion/\nMobile Safari\nEdg/\nEdge\nOPR/\nOpera\nMSIE\nTrident\nSamsungBrowser\nUCBrowser\nYaBrowser\nDuckDuckGo\nVivaldi\nBrave\nAvast\nAVG\nWhale\nMiuiBrowser\nHuaweiBrowser\nHeyTapBrowser\nQuark\nSogouMobileBrowser\nBaiduBrowser",
+            "default": "Mozilla\nChrome\nSafari\nFirefox\nChromium\nCriOS\nFxiOS\nVersion/\nMobile Safari\nEdg/\nEdge\nOPR/\nOpera\nMSIE\nTrident\nSamsungBrowser\nUCBrowser\nYaBrowser\nDuckDuckGo\nVivaldi\nBrave\nAvast\nAVG\nWhale\nMiuiBrowser\nHuaweiBrowser\nHeyTapBrowser\nQuark\nSogouMobileBrowser\nBaiduBrowser\nTelegram\nTelegramBot\nWeChat\nWeixin\nMicroMessenger\nQQ\nMQQBrowser\nWeibo",
             "label": "仅拒绝访问 UA（逗号或换行分隔，模糊匹配）",
-            "description": "普通浏览器或误点订阅链接的 UA。命中后只返回拒绝访问，不封禁 IP、不重置凭证。微信/TG/QQ 等会自动预览链接的平台应放在 UA 黑名单"
+            "description": "普通浏览器、微信/TG/QQ/微博等内置浏览器或误点订阅链接的 UA。命中后只返回拒绝访问，不封禁 IP、不重置凭证"
         },
         "enable_client_ua_whitelist": {
             "type": "boolean",

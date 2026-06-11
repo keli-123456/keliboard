@@ -128,27 +128,38 @@ final class SubscriptionControlPluginTest extends TestCase
         $this->assertTrue($isBlacklistedUa->invoke($plugin, strtolower('CensysInspect/1.1 v2rayA/2.2.7.5 WebRequestHelper')));
     }
 
-    public function test_default_ua_blacklist_includes_social_platform_preview_user_agents(): void
+    public function test_default_ua_blacklist_excludes_social_platform_preview_user_agents(): void
     {
         $configPath = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
         $config = json_decode((string) file_get_contents($configPath), true);
         $defaultBlacklist = (string) ($config['config']['ua_blacklist']['default'] ?? '');
+        $defaultBlockOnly = (string) ($config['config']['ua_block_only_keywords']['default'] ?? '');
 
         foreach (['Telegram', 'TelegramBot', 'WeChat', 'Weixin', 'MicroMessenger', 'QQ', 'MQQBrowser', 'Weibo'] as $keyword) {
-            $this->assertStringContainsString($keyword, $defaultBlacklist);
+            $this->assertStringNotContainsString($keyword, $defaultBlacklist);
+            $this->assertStringContainsString($keyword, $defaultBlockOnly);
         }
 
         $plugin = new Plugin('subscription_control');
         $plugin->setConfig([
             'ua_blacklist' => $defaultBlacklist,
+            'ua_block_only_keywords' => $defaultBlockOnly,
         ]);
         $isBlacklistedUa = new ReflectionMethod($plugin, 'isBlacklistedUA');
         $isBlacklistedUa->setAccessible(true);
+        $isBlockOnlyUa = new ReflectionMethod($plugin, 'isBlockOnlyUA');
+        $isBlockOnlyUa->setAccessible(true);
 
-        $this->assertTrue($isBlacklistedUa->invoke($plugin, strtolower('TelegramBot (like TwitterBot)')));
-        $this->assertTrue($isBlacklistedUa->invoke($plugin, strtolower('WeChat/8.0.45 MicroMessenger/8.0.45')));
-        $this->assertTrue($isBlacklistedUa->invoke($plugin, strtolower('Mozilla/5.0 MQQBrowser/20.2 Mobile Safari/537.36 QQ/9.2.90')));
-        $this->assertTrue($isBlacklistedUa->invoke($plugin, strtolower('Weibo/13.0.0')));
+        foreach ([
+            'TelegramBot (like TwitterBot)',
+            'WeChat/8.0.45 MicroMessenger/8.0.45',
+            'Mozilla/5.0 MQQBrowser/20.2 Mobile Safari/537.36 QQ/9.2.90',
+            'Weibo/13.0.0',
+        ] as $userAgent) {
+            $normalized = strtolower($userAgent);
+            $this->assertFalse($isBlacklistedUa->invoke($plugin, $normalized), $userAgent);
+            $this->assertTrue($isBlockOnlyUa->invoke($plugin, $normalized), $userAgent);
+        }
     }
 
     public function test_default_ua_blacklist_matches_scanner_user_agents(): void
