@@ -23,7 +23,7 @@ The first version covers these client tutorials:
 - Shadowrocket
 - Stash
 
-Each guide will include applicable platforms, download guidance, one-click import where supported, manual subscription import, subscription refresh, and common troubleshooting.
+Each guide will include applicable platforms, manual subscription import, subscription refresh, and common troubleshooting.
 
 ## File Layout
 
@@ -43,17 +43,9 @@ database/knowledge-packs/client-guides/
     stash.html
   assets/
     clients/
-      karing/
-      clash-verge-rev/
-      flclash/
-      hiddify/
-      v2rayn/
-      v2rayng/
-      shadowrocket/
-      stash/
 ```
 
-`manifest.json` is the source of truth for category, language, title, sort order, visibility, article file path, and referenced image assets.
+`manifest.json` is the source of truth for category, language, title, sort order, visibility, article file path, and referenced assets. The first version intentionally has no image assets.
 
 ## Article Format
 
@@ -62,37 +54,28 @@ Articles will be authored as sanitized HTML compatible with `keli-user`.
 Allowed patterns:
 
 - Semantic text tags: `h2`, `h3`, `p`, `ol`, `ul`, `li`, `blockquote`, `code`, `pre`, `table`.
-- Images: `<img src="/knowledge-assets/clients/karing/import-url.png" alt="Karing import subscription screenshot" />`.
-- Buttons: `<a class="btn btn-primary" href="karing://install-config?url={{subscribeUrlEncoded}}">一键导入 Karing</a>`.
-- Button wrappers: `<div class="btn-wrap">...</div>`.
 - Collapsible FAQ: `details` and `summary`.
 
 Disallowed patterns:
 
 - Inline `style` attributes.
 - `script`, `iframe`, external embed code, or unsafe event handlers.
-- Markdown-only image syntax such as `![alt](url)` in final article HTML.
+- HTML images and Markdown-only image syntax such as `![alt](url)` in final article HTML.
 
 ## Variables
 
 The article content may use:
 
 - `{{siteName}}`
-- `{{siteNameEncoded}}`
 - `{{subscribeUrl}}`
-- `{{subscribeUrlEncoded}}`
 
-The user frontend and backend already support these values. Tutorials should always show a manual copy fallback even when a one-click import link is present.
+The user backend already replaces these values before rendering. Tutorials should always show a manual copy fallback.
 
 ## Images
 
-Images should be real client screenshots whenever practical. Source priority:
+Images are intentionally omitted from the first guide pack. Client interfaces change often, and screenshot maintenance would make the knowledge base harder to keep accurate across deployments.
 
-1. Official public screenshots from the client project, website, app store, or release page.
-2. Screenshots captured from real client usage.
-3. Placeholder asset references only when a real screenshot is not yet available.
-
-All image references must be stable relative URLs under `/knowledge-assets/clients/...`. The first implementation may include a screenshot checklist next to placeholder assets so missing images can be replaced without rewriting article text.
+If images are added later, only local assets from official public screenshots or real captured client usage should be used. Hotlinked remote images should not be used.
 
 ## Import Path
 
@@ -123,8 +106,8 @@ The first content-only implementation should verify:
 
 - `manifest.json` is valid JSON.
 - Every manifest article path exists.
-- Every article uses HTML image tags instead of Markdown image syntax.
-- Every article includes `{{subscribeUrl}}` or `{{subscribeUrlEncoded}}`.
+- Every article contains no HTML or Markdown image syntax.
+- Every article includes `{{subscribeUrl}}`.
 - Every article avoids `script`, `iframe`, inline `style`, and unsafe event attributes.
 
 Future importer tests should verify idempotent create/update behavior and correct handling of missing files.

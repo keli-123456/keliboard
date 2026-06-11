@@ -1,10 +1,9 @@
-# Client Guide Image Sources
+# Client Guide Asset Policy
 
-Each image in this pack must map to an official public screenshot or a screenshot captured from real client usage. Do not reference an image in an article until the file exists in `assets/clients/<client>/`.
+This pack intentionally ships without images. Client UI changes often, and pure HTML text keeps the knowledge base easier to maintain across Keli deployments.
 
-## Source Policy
+## Rules
 
-- Prefer official project websites, GitHub repositories, app stores, or release pages.
-- Save the source URL and access date for each image.
-- Use local relative assets in articles, not hotlinked remote images.
-- If an image cannot be verified, omit it from the article body and record the exact screen that should be captured.
+- Do not add screenshots or hotlinked remote images to the articles.
+- Keep the tutorials focused on stable flows: copy subscription, import URL, update subscription, select node, connect, and troubleshoot.
+- If images are added in the future, only use local assets verified from official public screenshots or real captured client usage.

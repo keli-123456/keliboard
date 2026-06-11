@@ -4,7 +4,7 @@
 
 **Goal:** Build a repository-managed HTML knowledge pack for client setup tutorials that can be safely rendered by `keli-user`.
 
-**Architecture:** The pack is content-first: a manifest defines article metadata, HTML files hold sanitized guide bodies, asset folders hold verified screenshots, and a local PHP validator checks the pack before commit. The first deliverable does not write to the database; it creates import-ready source files for a separate import command.
+**Architecture:** The pack is content-first: a manifest defines article metadata, HTML files hold sanitized guide bodies, asset folders are reserved for future local assets, and a local PHP validator checks the pack before commit. The first deliverable does not write to the database; it creates import-ready source files for a separate import command.
 
 **Tech Stack:** Laravel repository, JSON manifest, HTML article bodies, PHP validation script, Git.
 
@@ -16,10 +16,10 @@
   - Owns pack metadata, article order, titles, language, body paths, and asset paths.
 - Create: `database/knowledge-packs/client-guides/articles/*.html`
   - One sanitized HTML article per client.
-- Create: `database/knowledge-packs/client-guides/assets/clients/<client>/`
-  - Real screenshots collected from official public materials or captured from real client usage.
+- Create: `database/knowledge-packs/client-guides/assets/clients/.gitkeep`
+  - Placeholder directory for future local assets. The current pack intentionally contains no images.
 - Create: `database/knowledge-packs/client-guides/assets/sources.md`
-  - Records image source URLs, capture notes, and article-to-asset mapping.
+  - Records the no-image policy and future local-asset rules.
 - Create: `database/knowledge-packs/client-guides/validate.php`
   - Validates manifest shape, article files, asset references, required subscription variables, and unsafe HTML.
 
@@ -41,15 +41,13 @@ Use category `客户端教程`, language `zh-CN`, and these sort values:
 Every article must contain:
 
 - A short platform paragraph.
-- A download/source paragraph.
 - A subscription import block.
 - A manual import section.
 - A refresh subscription section.
 - A troubleshooting `details` block.
-- At least one verified image reference when an official or captured screenshot is available.
 - A manual fallback using `<code>{{subscribeUrl}}</code>`.
 
-Use `{{subscribeUrl}}` for visible text. Use `{{subscribeUrlEncoded}}` for `keli-user` frontend substitution, and `{{urlEncodeSubscribeUrl}}` only when relying on backend substitution.
+Use `{{subscribeUrl}}` for visible text. The user API replaces it with the current user's real subscription link.
 
 ---
 
@@ -174,16 +172,15 @@ Create `database/knowledge-packs/client-guides/manifest.json` with:
 Create `database/knowledge-packs/client-guides/assets/sources.md` with:
 
 ```markdown
-# Client Guide Image Sources
+# Client Guide Asset Policy
 
-Each image in this pack must map to an official public screenshot or a screenshot captured from real client usage. Do not reference an image in an article until the file exists in `assets/clients/<client>/`.
+This pack intentionally ships without images. Client UI changes often, and pure HTML text keeps the knowledge base easier to maintain across Keli deployments.
 
-## Source Policy
+## Rules
 
-- Prefer official project websites, GitHub repositories, app stores, or release pages.
-- Save the source URL and access date for each image.
-- Use local relative assets in articles, not hotlinked remote images.
-- If an image cannot be verified, omit it from the article body and record the exact screen that should be captured.
+- Do not add screenshots or hotlinked remote images to the articles.
+- Keep the tutorials focused on stable flows: copy subscription, import URL, update subscription, select node, connect, and troubleshoot.
+- If images are added in the future, only use local assets verified from official public screenshots or real captured client usage.
 ```
 
 - [ ] **Step 4: Commit skeleton**
@@ -199,69 +196,27 @@ Expected: commit succeeds with only new pack skeleton files.
 
 ---
 
-### Task 2: Collect Verified Screenshots
+### Task 2: Keep Pack Image-Free
 
 **Files:**
-- Modify: `database/knowledge-packs/client-guides/manifest.json`
 - Modify: `database/knowledge-packs/client-guides/assets/sources.md`
-- Create: `database/knowledge-packs/client-guides/assets/clients/<client>/*`
 
-- [ ] **Step 1: Search official sources**
+- [ ] **Step 1: Record no-image policy**
 
-For each client, inspect official project pages, app store pages, or release pages. Record source URLs in `assets/sources.md`.
+Record that this pack intentionally ships without images.
 
-Use these search targets:
+Expected: `assets/sources.md` says not to add screenshots or hotlinked remote images to articles.
 
-```text
-Karing official screenshots
-Clash Verge Rev GitHub screenshots
-FlClash GitHub screenshots
-Hiddify app screenshots
-v2rayN GitHub screenshots
-v2rayNG GitHub screenshots
-Shadowrocket App Store screenshots
-Stash App Store screenshots
-```
-
-Expected: each client has either a saved screenshot asset or a capture instruction in `assets/sources.md`.
-
-- [ ] **Step 2: Save images with stable filenames**
-
-Use these filename patterns when image assets are available:
-
-```text
-assets/clients/karing/import-subscription.png
-assets/clients/clash-verge-rev/import-subscription.png
-assets/clients/flclash/import-subscription.png
-assets/clients/hiddify/import-subscription.png
-assets/clients/v2rayn/import-subscription.png
-assets/clients/v2rayng/import-subscription.png
-assets/clients/shadowrocket/import-subscription.png
-assets/clients/stash/import-subscription.png
-```
-
-Expected: each saved image is a real UI screenshot and can be opened locally.
-
-- [ ] **Step 3: Add asset paths to manifest**
-
-For each saved image, add its relative path to the matching article entry:
-
-```json
-"assets": ["assets/clients/karing/import-subscription.png"]
-```
-
-Expected: manifest assets only reference files that exist.
-
-- [ ] **Step 4: Commit screenshots**
+- [ ] **Step 2: Commit policy update**
 
 Run:
 
 ```powershell
-git add database\knowledge-packs\client-guides\manifest.json database\knowledge-packs\client-guides\assets
-git commit -m "Add client guide screenshot assets"
+git add database\knowledge-packs\client-guides\assets\sources.md docs\superpowers\specs\2026-06-11-client-knowledge-guides-design.md docs\superpowers\plans\2026-06-11-client-knowledge-guides.md
+git commit -m "Document image-free client guide policy"
 ```
 
-Expected: commit includes image assets and source documentation.
+Expected: policy files describe the no-image direction.
 
 ---
 
@@ -296,14 +251,12 @@ Every article must use the same section order:
 
 1. `<h2>` title.
 2. Platform paragraph.
-3. Manual import button linking to the article-local manual import heading.
-4. Download section.
-5. Manual import section with `<code>{{subscribeUrl}}</code>`.
-6. Screenshot image after the manual import section when the local image exists.
-7. Refresh subscription section.
-8. Troubleshooting `details` block.
+3. Subscription import block with `<code>{{subscribeUrl}}</code>`.
+4. Manual import section.
+5. Refresh subscription section.
+6. Troubleshooting `details` block.
 
-Use one-click import buttons only when the URL scheme has been verified and recorded in `assets/sources.md`. If the scheme is not verified, the article must only show the manual import button.
+Do not add one-click import buttons in the first version. Manual import is more stable across client versions.
 
 For `articles/karing.html`, the structure should look like this:
 
@@ -315,13 +268,6 @@ For `articles/karing.html`, the structure should look like this:
 <blockquote>
   <p>如果导入失败，请复制订阅链接后使用手动导入。</p>
 </blockquote>
-
-<div class="btn-wrap">
-  <a class="btn btn-primary" href="#manual-import-karing">查看手动导入</a>
-</div>
-
-<h3>下载客户端</h3>
-<p>请从 Karing 官方项目页、应用商店或可信发布页下载客户端。安装完成后打开 Karing，准备导入订阅。</p>
 
 <h3 id="manual-import-karing">手动导入订阅</h3>
 <ol>
@@ -339,19 +285,13 @@ For `articles/karing.html`, the structure should look like this:
   <summary>常见问题</summary>
   <p><strong>导入后没有节点：</strong>确认套餐未过期、订阅链接没有被空格截断，并在客户端里执行一次更新订阅。</p>
   <p><strong>能导入但不能连接：</strong>切换另一个节点测试；如果全部失败，请复制错误提示并提交工单。</p>
-  <p><strong>一键导入无反应：</strong>说明当前设备没有关联该客户端协议，请改用手动导入。</p>
+  <p><strong>导入入口名称不同：</strong>不同客户端版本的按钮名称可能不同，优先寻找 URL、订阅、远程配置或 Profile Link。</p>
 </details>
 ```
 
-- [ ] **Step 2: Add image blocks only for existing assets**
+- [ ] **Step 2: Confirm no image blocks exist**
 
-When an asset exists, insert it after the manual import steps:
-
-```html
-<img src="/knowledge-assets/clients/karing/import-subscription.png" alt="Karing 导入订阅截图" />
-```
-
-Expected: every `<img>` path matches an existing manifest asset after replacing `/knowledge-assets/clients/` with `assets/clients/`.
+Expected: articles contain no `<img>` tags and no Markdown image syntax.
 
 - [ ] **Step 3: Commit articles**
 
@@ -408,6 +348,7 @@ if (!is_array($manifest['articles']) || count($manifest['articles']) === 0) {
 
 $seenSlugs = [];
 $unsafePattern = '/<\s*(script|iframe)\b|on[a-z]+\s*=|style\s*=/i';
+$htmlImagePattern = '/<\s*img\b/i';
 $markdownImagePattern = '/!\[[^\]]*\]\([^)]+\)/';
 
 foreach ($manifest['articles'] as $index => $article) {
@@ -441,44 +382,28 @@ foreach ($manifest['articles'] as $index => $article) {
         fail("article {$slug} body is empty");
     }
 
-    if (!str_contains($body, '{{subscribeUrl}}') && !str_contains($body, '{{subscribeUrlEncoded}}') && !str_contains($body, '{{urlEncodeSubscribeUrl}}')) {
-        fail("article {$slug} must include a subscription variable");
+    if (!str_contains($body, '{{subscribeUrl}}')) {
+        fail("article {$slug} must include {{subscribeUrl}}");
     }
 
     if (preg_match($unsafePattern, $body)) {
         fail("article {$slug} contains unsafe HTML");
     }
 
-    if (preg_match($markdownImagePattern, $body)) {
-        fail("article {$slug} contains Markdown image syntax");
+    if (preg_match($htmlImagePattern, $body) || preg_match($markdownImagePattern, $body)) {
+        fail("article {$slug} contains image syntax; this pack is intentionally image-free");
     }
 
     if (!is_array($article['assets'])) {
         fail("article {$slug} assets must be an array");
     }
 
-    foreach ($article['assets'] as $asset) {
-        $assetPath = $baseDir . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, (string) $asset);
-        if (!is_file($assetPath)) {
-            fail("article {$slug} asset is missing: {$asset}");
-        }
-    }
-
-    preg_match_all('/<img\b[^>]*\bsrc=["\']([^"\']+)["\']/i', $body, $matches);
-    foreach ($matches[1] ?? [] as $src) {
-        $src = (string) $src;
-        if (!str_starts_with($src, (string) $manifest['asset_base_url'] . '/')) {
-            fail("article {$slug} image src must start with {$manifest['asset_base_url']}: {$src}");
-        }
-        $relative = 'assets/clients/' . substr($src, strlen((string) $manifest['asset_base_url']) + 1);
-        $localPath = $baseDir . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relative);
-        if (!is_file($localPath)) {
-            fail("article {$slug} image file is missing: {$relative}");
-        }
+    if (count($article['assets']) > 0) {
+        fail("article {$slug} references assets; this pack is intentionally image-free");
     }
 }
 
-fwrite(STDOUT, "[client-guides] OK: " . count($manifest['articles']) . " articles validated\n");
+fwrite(STDOUT, "[client-guides] OK: " . count($manifest['articles']) . " image-free articles validated\n");
 ```
 
 - [ ] **Step 2: Run validator**
@@ -492,7 +417,7 @@ php database\knowledge-packs\client-guides\validate.php
 Expected:
 
 ```text
-[client-guides] OK: 8 articles validated
+[client-guides] OK: 8 image-free articles validated
 ```
 
 - [ ] **Step 3: Commit validator**
@@ -561,6 +486,6 @@ Expected: remote `main` receives all tutorial pack commits.
 
 ## Self-Review
 
-- Spec coverage: The plan creates a versioned HTML knowledge pack, the exact article inventory, image source tracking, and validation. It keeps database import and admin image upload outside this first deliverable.
+- Spec coverage: The plan creates a versioned image-free HTML knowledge pack, the exact article inventory, asset policy, and validation. It keeps database import and admin image upload outside this first deliverable.
 - No unresolved implementation tokens: The plan uses fixed file paths, exact manifest shape, exact validation code, and exact commands.
 - Type consistency: Manifest fields used by the validator match the manifest JSON in Task 1.
