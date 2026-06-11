@@ -92,6 +92,7 @@ class AdminRoute
                 $router->get('/getToken', [MachineController::class, 'getToken']);
                 $router->get('/nodes', [MachineController::class, 'nodes']);
                 $router->post('/bindNodes', [MachineController::class, 'bindNodes']);
+                $router->post('/batchBindNodes', [MachineController::class, 'batchBindNodes']);
                 $router->get('/history', [MachineController::class, 'history']);
                 $router->get('/installCommand', [MachineController::class, 'installCommand']);
                 $router->get('/versionInfo', [MachineController::class, 'versionInfo']);
