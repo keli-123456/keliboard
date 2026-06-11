@@ -194,6 +194,55 @@ final class SubscriptionControlOwnershipTest extends TestCase
         }
     }
 
+    public function test_subscription_control_legacy_ua_reset_defaults_are_explicit(): void
+    {
+        $path = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $config = json_decode((string) file_get_contents($path), true);
+
+        $this->assertIsArray($config);
+        $items = $config['config'] ?? [];
+        $blacklist = strtolower((string) ($items['ua_blacklist']['default'] ?? ''));
+        $blockOnly = strtolower((string) ($items['ua_block_only_keywords']['default'] ?? ''));
+        $resetList = strtolower((string) ($items['ua_reset_keywords']['default'] ?? ''));
+
+        foreach ([
+            'west2online',
+            'clashforwindows',
+            'clash for windows',
+            'clashforandroid',
+            'clash for android',
+            'clashx/',
+            'clashdotnetframework',
+            'clash.net',
+            'clash-verge/v1.',
+            'clashr',
+            'v2rayn/6.23',
+            'v2rayng/1.8.',
+            'shadowrocket/1.9.',
+            'quantumult%20x/1.0.',
+            'quantumult x/1.0.',
+            'loon/2.1.',
+            'surfboard/2.15.',
+            'kitsunebi',
+            'sagernet',
+            'potatso',
+            'pharos',
+            'postern',
+            'shadowsocksx-ng',
+            'sstap',
+            'ssd',
+            'v2raytun',
+        ] as $keyword) {
+            $this->assertStringContainsString($keyword, $resetList);
+            $this->assertStringNotContainsString($keyword, $blacklist);
+            $this->assertStringNotContainsString($keyword, $blockOnly);
+        }
+
+        foreach (['karing', 'mihomo', 'sing-box', 'clash-verge-rev/2.', 'v2rayng/2.'] as $keyword) {
+            $this->assertStringNotContainsString($keyword, $resetList);
+        }
+    }
+
     public function test_subscription_control_ua_keyword_lists_use_multiline_inputs(): void
     {
         $path = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';

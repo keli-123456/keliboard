@@ -457,6 +457,62 @@ final class SubscriptionControlPluginTest extends TestCase
         }
     }
 
+    public function test_default_ua_reset_matches_legacy_clients_without_matching_modern_clients(): void
+    {
+        $configPath = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $config = json_decode((string) file_get_contents($configPath), true);
+        $defaultReset = (string) ($config['config']['ua_reset_keywords']['default'] ?? '');
+
+        $plugin = new Plugin('subscription_control');
+        $plugin->setConfig([
+            'ua_reset_keywords' => $defaultReset,
+        ]);
+        $isResetUa = new ReflectionMethod($plugin, 'isResetUA');
+        $isResetUa->setAccessible(true);
+
+        foreach ([
+            'west2online',
+            'ClashForWindows/0.20.39',
+            'Clash for Windows/0.20.39',
+            'ClashForAndroid/3.0.0',
+            'Clash for Android/3.0.0',
+            'ClashX/1.118.0',
+            'ClashDotNetFramework/1.2.0',
+            'Clash.NET/0.2.0',
+            'clash-verge/v1.3.8',
+            'clashR',
+            'v2rayN/6.23',
+            'v2rayNG/1.8.5',
+            'shadowrocket/1.9.8',
+            'Quantumult%20X/1.0.29',
+            'Quantumult X/1.0.29',
+            'Loon/2.1.0',
+            'Surfboard/2.15.0',
+            'Kitsunebi/1.8.0',
+            'SagerNet/0.8.1',
+            'Potatso/2.9.0',
+            'Pharos/1.0',
+            'Postern/3.1',
+            'ShadowsocksX-NG',
+            'sstap',
+            'SSD',
+            'v2raytun',
+        ] as $userAgent) {
+            $this->assertTrue($isResetUa->invoke($plugin, strtolower($userAgent)), $userAgent);
+        }
+
+        foreach ([
+            'Karing/1.2.19.2209 windows',
+            'mihomo/1.19.8',
+            'sing-box/1.13.0',
+            'ClashX.Meta/1.118.0',
+            'Clash-Verge-Rev/2.4.0',
+            'v2rayNG/2.2.0',
+        ] as $userAgent) {
+            $this->assertFalse($isResetUa->invoke($plugin, strtolower($userAgent)), $userAgent);
+        }
+    }
+
     private function createPluginTable(): void
     {
         $this->database->schema()->create('v2_plugins', function (Blueprint $table): void {
