@@ -57,6 +57,17 @@ class ZeroSslCertificateService
             );
             return false;
         }
+        if ($this->isIPv6Address($domain)) {
+            $this->saveDiagnosticState(
+                $machine,
+                $state,
+                $domain,
+                $hasConfiguredDomain,
+                'unsupported_certificate_domain',
+                'ZeroSSL subscription proxy certificate automation requires an IPv4 address.'
+            );
+            return false;
+        }
 
         try {
             $previousState = $state;
@@ -301,6 +312,11 @@ class ZeroSslCertificateService
             'expiring_soon',
             'waiting_agent_reload',
         ], true);
+    }
+
+    private function isIPv6Address(string $value): bool
+    {
+        return filter_var($value, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false;
     }
 
     private function shouldRenew(array $state, int $renewDays): bool

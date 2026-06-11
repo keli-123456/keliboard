@@ -421,6 +421,30 @@ final class ZeroSslCertificateServiceTest extends TestCase
         $this->assertSame('2026-06-11T10:00:00+00:00', $fresh?->subproxy_cert_state['updated_at'] ?? null);
     }
 
+    public function test_handle_machine_status_rejects_ipv6_certificate_domain_without_zerossl_request(): void
+    {
+        Http::fake();
+
+        $machine = $this->createMachine([
+            'subproxy_cert_domain' => null,
+        ]);
+
+        app(ZeroSslCertificateService::class)->handleMachineStatus($machine, [
+            'agent' => [
+                'subscription_proxy' => [
+                    'certificate_domain' => '2607:f358:1a:e::d4d9:5831',
+                    'csr_pem' => '-----BEGIN CERTIFICATE REQUEST-----ipv6-----END CERTIFICATE REQUEST-----',
+                    'validation_ready' => false,
+                ],
+            ],
+        ]);
+
+        Http::assertNothingSent();
+        $fresh = ServerMachine::find($machine->id);
+        $this->assertSame('unsupported_certificate_domain', $fresh?->subproxy_cert_state['status'] ?? null);
+        $this->assertStringContainsString('IPv4', $fresh?->subproxy_cert_state['last_error'] ?? '');
+    }
+
     private function createTables(): void
     {
         Schema::create('v2_server_machine', function (Blueprint $table): void {

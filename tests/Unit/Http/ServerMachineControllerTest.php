@@ -193,6 +193,84 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame('198.51.100.20', $proxy['certificate_domain']);
     }
 
+    public function test_nodes_response_prefers_existing_auto_ipv4_when_request_ip_is_ipv6(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscribe_path' => 's',
+            'subscription_proxy_enable' => true,
+            'subscription_proxy_site_id' => 'panel-a',
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $machine->forceFill([
+            'subproxy_enabled' => true,
+            'subproxy_cert_state' => [
+                'provider' => 'zerossl',
+                'certificate_id' => 'cert-1',
+                'domain' => '2.56.116.39',
+                'domain_source' => 'auto',
+                'status' => 'pending_validation',
+            ],
+        ])->save();
+
+        $response = (new MachineController())->nodes(Request::create(
+            'https://panel.example.test/api/v2/server/machine/nodes',
+            'POST',
+            ['machine_id' => $machine->id, 'token' => 'machine-token'],
+            [],
+            [],
+            ['REMOTE_ADDR' => '2607:f358:1a:e::d4d9:5831']
+        ));
+        $payload = $response->getData(true);
+
+        $proxy = $payload['agent']['subscription_proxy'];
+        $this->assertTrue($proxy['enabled']);
+        $this->assertSame('2.56.116.39', $proxy['certificate_domain']);
+    }
+
+    public function test_nodes_response_prefers_last_reported_public_ipv4_when_request_ip_is_ipv6(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscribe_path' => 's',
+            'subscription_proxy_enable' => true,
+            'subscription_proxy_site_id' => 'panel-a',
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $machine->forceFill([
+            'subproxy_enabled' => true,
+            'load_status' => [
+                'ip' => [
+                    'public_ipv4' => '2.56.116.39',
+                ],
+            ],
+        ])->save();
+
+        $response = (new MachineController())->nodes(Request::create(
+            'https://panel.example.test/api/v2/server/machine/nodes',
+            'POST',
+            ['machine_id' => $machine->id, 'token' => 'machine-token'],
+            [],
+            [],
+            ['REMOTE_ADDR' => '2607:f358:1a:e::d4d9:5831']
+        ));
+        $payload = $response->getData(true);
+
+        $proxy = $payload['agent']['subscription_proxy'];
+        $this->assertTrue($proxy['enabled']);
+        $this->assertSame('2.56.116.39', $proxy['certificate_domain']);
+    }
+
     public function test_status_persists_machine_ip_and_network_metrics(): void
     {
         $this->bindSettings([

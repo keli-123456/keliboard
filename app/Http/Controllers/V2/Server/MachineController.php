@@ -566,22 +566,62 @@ class MachineController extends Controller
         $requestIP = trim((string) $request->ip());
         $configured = trim((string) ($machine->subproxy_cert_domain ?? ''));
         if ($configured !== '') {
-            if ($requestIP !== '' && $this->shouldIgnoreConfiguredCertificateDomain($configured, $state)) {
-                return $requestIP;
+            if ($this->shouldIgnoreConfiguredCertificateDomain($configured, $state)) {
+                return $this->resolveAutomaticCertificateDomain($requestIP, $machine, $state);
             }
             return $configured;
         }
 
-        if ($requestIP !== '') {
+        return $this->resolveAutomaticCertificateDomain($requestIP, $machine, $state);
+    }
+
+    private function resolveAutomaticCertificateDomain(string $requestIP, ServerMachine $machine, array $state): string
+    {
+        if ($this->isIPv4Address($requestIP)) {
             return $requestIP;
         }
 
+        $statusIPv4 = $this->machineStatusIPv4($machine);
+        if ($statusIPv4 !== '') {
+            return $statusIPv4;
+        }
+
         $domain = trim((string) ($state['domain'] ?? ''));
-        if ($domain !== '') {
+        if ($this->isIPv4Address($domain)) {
             return $domain;
         }
 
         return '';
+    }
+
+    private function machineStatusIPv4(ServerMachine $machine): string
+    {
+        $status = is_array($machine->load_status) ? $machine->load_status : [];
+        $candidates = [
+            data_get($status, 'ip.public_ipv4'),
+            data_get($status, 'ip.panel_seen'),
+        ];
+        $local = data_get($status, 'ip.local');
+        if (is_array($local)) {
+            $candidates = array_merge($candidates, $local);
+        }
+
+        foreach ($candidates as $candidate) {
+            if (!is_scalar($candidate)) {
+                continue;
+            }
+            $ip = trim((string) $candidate);
+            if ($this->isIPv4Address($ip)) {
+                return $ip;
+            }
+        }
+
+        return '';
+    }
+
+    private function isIPv4Address(string $value): bool
+    {
+        return filter_var($value, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false;
     }
 
     private function shouldIgnoreConfiguredCertificateDomain(string $configured, array $state): bool
