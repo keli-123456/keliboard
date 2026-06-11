@@ -18,11 +18,6 @@ class ZeroSslCertificateService
             return false;
         }
 
-        $accessKey = trim((string) admin_setting('zerossl_access_key', ''));
-        if ($accessKey === '') {
-            return false;
-        }
-
         $proxy = data_get($status, 'agent.subscription_proxy');
         if (!is_array($proxy)) {
             return false;
@@ -37,7 +32,29 @@ class ZeroSslCertificateService
         }
         $domain = $configuredDomain !== '' ? $configuredDomain : $reportedDomain;
         $csr = trim((string) data_get($proxy, 'csr_pem', ''));
+
+        $accessKey = trim((string) admin_setting('zerossl_access_key', ''));
+        if ($accessKey === '') {
+            $this->saveDiagnosticState(
+                $machine,
+                $state,
+                $domain,
+                $hasConfiguredDomain,
+                'missing_access_key',
+                'ZeroSSL access key is not configured.'
+            );
+            return false;
+        }
+
         if ($domain === '' || $csr === '') {
+            $this->saveDiagnosticState(
+                $machine,
+                $state,
+                $domain,
+                $hasConfiguredDomain,
+                'waiting_agent_csr',
+                'Agent has not reported the subscription proxy certificate domain and CSR yet.'
+            );
             return false;
         }
 
@@ -113,6 +130,9 @@ class ZeroSslCertificateService
                 'machine_id' => (int) $machine->id,
                 'error' => $e->getMessage(),
             ]);
+            if (trim((string) ($state['status'] ?? '')) === '') {
+                $state['status'] = 'error';
+            }
             $state['last_error'] = $e->getMessage();
             $this->saveCertificateState($machine, $state, $domain, $hasConfiguredDomain);
             return false;
@@ -246,6 +266,41 @@ class ZeroSslCertificateService
             'subproxy_cert_state' => $this->withUpdatedAt($state),
         ];
         $machine->forceFill($payload)->save();
+    }
+
+    private function saveDiagnosticState(ServerMachine $machine, array $state, string $domain, bool $hasConfiguredDomain, string $status, string $message): void
+    {
+        $previousState = $state;
+        if ($this->canReplaceWithDiagnosticStatus($state)) {
+            $state['provider'] = 'zerossl';
+            $state['status'] = $status;
+            if ($domain !== '') {
+                $state['domain'] = $domain;
+            }
+        }
+        $state['last_error'] = $message;
+        if ($this->stableStateSignature($previousState) === $this->stableStateSignature($state)) {
+            return;
+        }
+        $this->saveCertificateState($machine, $state, $domain, $hasConfiguredDomain);
+    }
+
+    private function canReplaceWithDiagnosticStatus(array $state): bool
+    {
+        $status = trim((string) ($state['status'] ?? ''));
+        $certificateId = trim((string) ($state['certificate_id'] ?? ''));
+        if ($certificateId !== '') {
+            return false;
+        }
+
+        return !in_array($status, [
+            'delegated',
+            'draft',
+            'pending_validation',
+            'issued',
+            'expiring_soon',
+            'waiting_agent_reload',
+        ], true);
     }
 
     private function shouldRenew(array $state, int $renewDays): bool

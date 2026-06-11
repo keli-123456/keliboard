@@ -378,6 +378,49 @@ final class ZeroSslCertificateServiceTest extends TestCase
         $this->assertStringContainsString('2400:8901::2000:49ff:fe93:6d50', $fresh?->subproxy_cert_state['last_error'] ?? '');
     }
 
+    public function test_handle_machine_status_records_missing_access_key_instead_of_staying_silent(): void
+    {
+        $this->bindSettings([
+            'subscription_proxy_enable' => true,
+            'zerossl_access_key' => '',
+        ]);
+        Http::fake();
+
+        $machine = $this->createMachine();
+        $reload = app(ZeroSslCertificateService::class)->handleMachineStatus($machine, $this->statusPayload(false));
+
+        Http::assertNothingSent();
+        $fresh = ServerMachine::find($machine->id);
+        $this->assertFalse($reload);
+        $this->assertSame('missing_access_key', $fresh?->subproxy_cert_state['status'] ?? null);
+        $this->assertStringContainsString('ZeroSSL access key', $fresh?->subproxy_cert_state['last_error'] ?? '');
+    }
+
+    public function test_handle_machine_status_does_not_rewrite_unchanged_missing_access_key_state(): void
+    {
+        $this->bindSettings([
+            'subscription_proxy_enable' => true,
+            'zerossl_access_key' => '',
+        ]);
+        Http::fake();
+
+        $machine = $this->createMachine([
+            'subproxy_cert_state' => [
+                'provider' => 'zerossl',
+                'status' => 'missing_access_key',
+                'domain' => '203.0.113.10',
+                'domain_source' => 'manual',
+                'last_error' => 'ZeroSSL access key is not configured.',
+                'updated_at' => '2026-06-11T10:00:00+00:00',
+            ],
+        ]);
+
+        app(ZeroSslCertificateService::class)->handleMachineStatus($machine, $this->statusPayload(false));
+
+        $fresh = ServerMachine::find($machine->id);
+        $this->assertSame('2026-06-11T10:00:00+00:00', $fresh?->subproxy_cert_state['updated_at'] ?? null);
+    }
+
     private function createTables(): void
     {
         Schema::create('v2_server_machine', function (Blueprint $table): void {

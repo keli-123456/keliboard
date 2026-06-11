@@ -425,7 +425,34 @@ class MachineController extends Controller
             return true;
         }
 
-        return (bool) data_get($reported, 'enabled', false) !== true;
+        if ((bool) data_get($reported, 'enabled', false) !== true) {
+            return true;
+        }
+
+        $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
+        $certificateId = trim((string) ($state['certificate_id'] ?? ''));
+        $certificateStatus = trim((string) ($state['status'] ?? ''));
+        if ($certificateId === '' || $certificateStatus === '' || $certificateStatus === 'delegated') {
+            return false;
+        }
+
+        $reportedCertificateId = trim((string) data_get($reported, 'certificate_id', ''));
+        if (in_array($certificateStatus, ['draft', 'pending_validation', 'waiting_agent_reload'], true)) {
+            if (empty($state['validation_path']) || empty($state['validation_content'])) {
+                return false;
+            }
+
+            return $reportedCertificateId !== $certificateId
+                || (bool) data_get($reported, 'validation_ready', false) !== true;
+        }
+
+        if ($certificateStatus === 'issued' && !empty($state['certificate_pem'])) {
+            return $reportedCertificateId !== $certificateId
+                || trim((string) data_get($reported, 'cert_not_after', '')) === ''
+                || (bool) data_get($reported, 'need_certificate', false) === true;
+        }
+
+        return false;
     }
 
     private function authenticateMachine(Request $request, bool $allowInactive = false): ?ServerMachine
@@ -583,15 +610,27 @@ class MachineController extends Controller
             return ['status' => 'idle'];
         }
         if (($state['status'] ?? '') === 'delegated') {
-            return ['status' => 'delegated'];
+            return [
+                'status' => 'delegated',
+                'domain' => (string) ($state['domain'] ?? ''),
+                'domain_source' => (string) ($state['domain_source'] ?? ''),
+                'certificate_owner_site_id' => (string) ($state['certificate_owner_site_id'] ?? ''),
+                'last_error' => $state['last_error'] ?? null,
+                'updated_at' => (string) ($state['updated_at'] ?? ''),
+            ];
         }
 
         $config = [
             'status' => (string) ($state['status'] ?? 'idle'),
             'certificate_id' => (string) ($state['certificate_id'] ?? ''),
+            'domain' => (string) ($state['domain'] ?? ''),
+            'domain_source' => (string) ($state['domain_source'] ?? ''),
             'validation_path' => (string) ($state['validation_path'] ?? ''),
             'validation_content' => $state['validation_content'] ?? null,
+            'validation_requested_at' => (string) ($state['validation_requested_at'] ?? ''),
             'expires_at' => (string) ($state['expires_at'] ?? ''),
+            'last_error' => $state['last_error'] ?? null,
+            'updated_at' => (string) ($state['updated_at'] ?? ''),
         ];
 
         if (($state['status'] ?? '') === 'issued') {

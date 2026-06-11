@@ -512,6 +512,161 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertTrue($payload['reload']);
     }
 
+    public function test_status_response_requests_reload_until_agent_writes_current_validation_file(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscription_proxy_enable' => true,
+            'subscription_proxy_site_id' => 'panel-a',
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $machine->forceFill([
+            'subproxy_enabled' => true,
+            'subproxy_cert_state' => [
+                'provider' => 'zerossl',
+                'certificate_id' => 'cert-1',
+                'domain' => '198.51.100.20',
+                'status' => 'draft',
+                'validation_path' => '/.well-known/pki-validation/token.txt',
+                'validation_content' => ['line-a', 'line-b'],
+            ],
+        ])->save();
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'agent' => [
+                        'subscription_proxy' => [
+                            'enabled' => true,
+                            'certificate_domain' => '198.51.100.20',
+                            'certificate_id' => '',
+                            'validation_ready' => false,
+                        ],
+                    ],
+                ],
+            ],
+            [],
+            [],
+            ['REMOTE_ADDR' => '198.51.100.20']
+        ));
+        $payload = $response->getData(true);
+
+        $this->assertTrue($payload['reload']);
+    }
+
+    public function test_status_response_requests_reload_until_agent_writes_issued_certificate(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscription_proxy_enable' => true,
+            'subscription_proxy_site_id' => 'panel-a',
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $machine->forceFill([
+            'subproxy_enabled' => true,
+            'subproxy_cert_state' => [
+                'provider' => 'zerossl',
+                'certificate_id' => 'cert-1',
+                'domain' => '198.51.100.20',
+                'status' => 'issued',
+                'certificate_pem' => "-----BEGIN CERTIFICATE-----\nleaf\n-----END CERTIFICATE-----",
+                'ca_bundle_pem' => "-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----",
+            ],
+        ])->save();
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'agent' => [
+                        'subscription_proxy' => [
+                            'enabled' => true,
+                            'running' => true,
+                            'mode' => 'http_fallback',
+                            'certificate_domain' => '198.51.100.20',
+                            'certificate_id' => 'cert-1',
+                            'cert_not_after' => '',
+                            'need_certificate' => false,
+                        ],
+                    ],
+                ],
+            ],
+            [],
+            [],
+            ['REMOTE_ADDR' => '198.51.100.20']
+        ));
+        $payload = $response->getData(true);
+
+        $this->assertTrue($payload['reload']);
+    }
+
+    public function test_nodes_response_includes_zero_ssl_diagnostic_state(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscribe_path' => 's',
+            'subscription_proxy_enable' => true,
+            'subscription_proxy_site_id' => 'panel-a',
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $machine->forceFill([
+            'subproxy_enabled' => true,
+            'subproxy_cert_state' => [
+                'provider' => 'zerossl',
+                'certificate_id' => 'cert-1',
+                'domain' => '198.51.100.20',
+                'domain_source' => 'auto',
+                'status' => 'pending_validation',
+                'validation_path' => '/.well-known/pki-validation/token.txt',
+                'validation_content' => ['line-a', 'line-b'],
+                'validation_requested_at' => '2026-06-11T10:00:00+00:00',
+                'last_error' => 'waiting for ZeroSSL validation',
+                'updated_at' => '2026-06-11T10:01:00+00:00',
+            ],
+        ])->save();
+
+        $response = (new MachineController())->nodes(Request::create(
+            'https://panel.example.test/api/v2/server/machine/nodes',
+            'POST',
+            ['machine_id' => $machine->id, 'token' => 'machine-token'],
+            [],
+            [],
+            ['REMOTE_ADDR' => '198.51.100.20']
+        ));
+        $payload = $response->getData(true);
+        $zeroSsl = $payload['agent']['subscription_proxy']['zerossl'];
+
+        $this->assertSame('pending_validation', $zeroSsl['status']);
+        $this->assertSame('cert-1', $zeroSsl['certificate_id']);
+        $this->assertSame('198.51.100.20', $zeroSsl['domain']);
+        $this->assertSame('auto', $zeroSsl['domain_source']);
+        $this->assertSame('waiting for ZeroSSL validation', $zeroSsl['last_error']);
+        $this->assertSame('2026-06-11T10:00:00+00:00', $zeroSsl['validation_requested_at']);
+        $this->assertSame('2026-06-11T10:01:00+00:00', $zeroSsl['updated_at']);
+    }
+
     public function test_status_dispatches_component_upgrade_command(): void
     {
         $this->bindSettings([
