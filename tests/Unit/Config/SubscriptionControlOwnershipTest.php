@@ -113,7 +113,24 @@ final class SubscriptionControlOwnershipTest extends TestCase
         $blacklist = strtolower((string) ($items['ua_blacklist']['default'] ?? ''));
         $resetList = strtolower((string) ($items['ua_reset_keywords']['default'] ?? ''));
 
-        foreach (['censys', 'java-http-client', 'apache-httpclient', 'webrequesthelper', 'sub_ua'] as $keyword) {
+        foreach ([
+            'censys',
+            'java-http-client',
+            'apache-httpclient',
+            'shodan',
+            'zgrab',
+            'zmap',
+            'masscan',
+            'nuclei',
+            'sqlmap',
+            'nikto',
+            'daed',
+            'matsuri',
+            'sub_ua',
+            'scan',
+            'chrome/16.0.912.77',
+            'webrequesthelper',
+        ] as $keyword) {
             $this->assertStringContainsString($keyword, $blacklist);
             $this->assertStringNotContainsString($keyword, $resetList);
         }

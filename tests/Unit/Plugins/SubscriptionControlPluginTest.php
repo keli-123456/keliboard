@@ -151,6 +151,49 @@ final class SubscriptionControlPluginTest extends TestCase
         $this->assertTrue($isBlacklistedUa->invoke($plugin, strtolower('Weibo/13.0.0')));
     }
 
+    public function test_default_ua_blacklist_matches_scanner_user_agents(): void
+    {
+        $configPath = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $config = json_decode((string) file_get_contents($configPath), true);
+        $defaultBlacklist = (string) ($config['config']['ua_blacklist']['default'] ?? '');
+
+        $plugin = new Plugin('subscription_control');
+        $plugin->setConfig([
+            'ua_blacklist' => $defaultBlacklist,
+        ]);
+        $isBlacklistedUa = new ReflectionMethod($plugin, 'isBlacklistedUA');
+        $isBlacklistedUa->setAccessible(true);
+
+        foreach ([
+            '',
+            'CensysInspect/1.1',
+            'Mozilla/5.0 (bang2013@atomicmail.io)',
+            'Java-http-client/17',
+            'Apache-HttpClient/4.5.13',
+            'Shodan/1.0',
+            'zgrab/0.x',
+            'zmap',
+            'masscan/1.3',
+            'nuclei - Open-source project',
+            'sqlmap/1.8',
+            'Nikto/2.5.0',
+            'daed/v0.4.0rc1 (like v2rayA/1.0 WebRequestHelper) (like v2rayN/1.0 WebRequestHelper)',
+            'Matsuri/0.8.0',
+            '${sub_ua}',
+            'scan',
+            'ASUS',
+            'Chrome/3',
+            'Chrome/4',
+            'Chrome/16.0.912.77',
+            'Chrome/5',
+            'Chrome/6',
+            'ZTE',
+            'Chrome/2',
+        ] as $userAgent) {
+            $this->assertTrue($isBlacklistedUa->invoke($plugin, strtolower($userAgent)), $userAgent);
+        }
+    }
+
     public function test_malicious_ua_persists_public_client_ip_to_source_denylist(): void
     {
         $this->setUpInMemoryDatabase();
