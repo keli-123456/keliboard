@@ -277,21 +277,30 @@ class MachineController extends Controller
         }
 
         $baseURL = $this->resolveMachineApiBaseURL($request);
+        $defaultAgent = $this->serverMachineDefaultAgent();
+        $nativeEnabled = $defaultAgent === 'kelinode-rs';
 
         $config = $this->buildMachineConfig($baseURL, $machine);
-        $nativeConfig = $this->buildNativeInstallConfig($baseURL, $machine);
-
-        return $this->success([
+        $data = [
             'machine_id' => (int) $machine->id,
             'token' => $machine->token,
             'config' => $config,
-            'native_config' => $nativeConfig,
             'command' => $this->buildInstallCommand($baseURL, $machine),
-            'native_command' => $this->buildNativeInstallCommand($baseURL, $machine),
-            'native_uninstall_command' => $this->buildNativeUninstallCommand(),
-            'native_log_command' => $this->buildNativeLogCommand(),
-            'native_version' => self::NATIVE_NODE_INSTALL_VERSION,
-        ]);
+            'default_agent' => $defaultAgent,
+            'native_enabled' => $nativeEnabled,
+        ];
+
+        if ($nativeEnabled) {
+            $data += [
+                'native_config' => $this->buildNativeInstallConfig($baseURL, $machine),
+                'native_command' => $this->buildNativeInstallCommand($baseURL, $machine),
+                'native_uninstall_command' => $this->buildNativeUninstallCommand(),
+                'native_log_command' => $this->buildNativeLogCommand(),
+                'native_version' => self::NATIVE_NODE_INSTALL_VERSION,
+            ];
+        }
+
+        return $this->success($data);
     }
 
     private function buildMachineConfig(string $baseURL, ServerMachine $machine): string
@@ -447,6 +456,12 @@ class MachineController extends Controller
     private function buildNativeLogCommand(): string
     {
         return 'kelinode log';
+    }
+
+    private function serverMachineDefaultAgent(): string
+    {
+        $agent = strtolower(trim((string) admin_setting('server_machine_default_agent', 'kelinode')));
+        return in_array($agent, ['kelinode-rs', 'native-node', 'native_node'], true) ? 'kelinode-rs' : 'kelinode';
     }
 
     private function resolveMachineApiBaseURL(Request $request): string

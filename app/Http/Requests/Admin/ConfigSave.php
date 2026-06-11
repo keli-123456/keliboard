@@ -91,6 +91,7 @@ class ConfigSave extends FormRequest
         // server
         'server_token' => 'nullable|min:16',
         'node_api_base_url' => 'nullable|url|max:500',
+        'server_machine_default_agent' => 'nullable|in:kelinode,kelinode-rs',
         'server_pull_interval' => 'integer',
         'server_push_interval' => 'integer',
         'message_ops_enable' => 'boolean',

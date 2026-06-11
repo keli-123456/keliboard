@@ -245,6 +245,9 @@ class ConfigController extends Controller
             'server' => [
                 'server_token' => admin_setting('server_token'),
                 'node_api_base_url' => (string) admin_setting('node_api_base_url', ''),
+                'server_machine_default_agent' => $this->normalizeServerMachineDefaultAgent(
+                    admin_setting('server_machine_default_agent', 'kelinode')
+                ),
                 'server_pull_interval' => admin_setting('server_pull_interval', 60),
                 'server_push_interval' => admin_setting('server_push_interval', 60),
                 'message_ops_enable' => MessageOpsSettings::enabled(),
@@ -473,6 +476,12 @@ class ConfigController extends Controller
         app(NodeRealtimePublisher::class)->invalidateConfig('admin.config.saved', [
             'keys' => $affectedKeys,
         ]);
+    }
+
+    private function normalizeServerMachineDefaultAgent(mixed $value): string
+    {
+        $agent = strtolower(trim((string) ($value ?? '')));
+        return in_array($agent, ['kelinode-rs', 'native-node', 'native_node'], true) ? 'kelinode-rs' : 'kelinode';
     }
 
     /**
