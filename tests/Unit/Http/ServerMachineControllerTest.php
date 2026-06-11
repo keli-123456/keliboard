@@ -472,6 +472,46 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame('/.well-known/pki-validation/token.txt', $state['validation_path'] ?? null);
     }
 
+    public function test_status_response_requests_reload_when_subscription_proxy_is_enabled_but_agent_has_no_proxy_status(): void
+    {
+        $this->bindSettings([
+            'subscription_proxy_enable' => true,
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $machine->forceFill([
+            'subproxy_enabled' => true,
+        ])->save();
+        $server = $this->createServer(['machine_id' => $machine->id]);
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'cpu' => 12.5,
+                    'mem' => ['total' => 1024, 'used' => 512],
+                    'swap' => ['total' => 0, 'used' => 0],
+                    'disk' => ['total' => 4096, 'used' => 1024],
+                    'runtime' => [
+                        'node_statuses' => [
+                            ['node_id' => $server->id],
+                        ],
+                    ],
+                ],
+            ]
+        ));
+        $payload = $response->getData(true);
+
+        $this->assertTrue($payload['reload']);
+    }
+
     public function test_status_dispatches_component_upgrade_command(): void
     {
         $this->bindSettings([

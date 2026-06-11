@@ -147,6 +147,9 @@ class MachineController extends Controller
         if (!$reload && $this->shouldRequestReloadForMachineConfigDrift($machine, $status)) {
             $reload = true;
         }
+        if (!$reload && $this->shouldRequestReloadForSubscriptionProxyDrift($request, $machine, $status)) {
+            $reload = true;
+        }
 
         $machine->forceFill([
             'last_seen_at' => now()->timestamp,
@@ -408,6 +411,21 @@ class MachineController extends Controller
         }
 
         return (int) $runtimeNodes !== count($boundNodeIds);
+    }
+
+    private function shouldRequestReloadForSubscriptionProxyDrift(Request $request, ServerMachine $machine, array $status): bool
+    {
+        $desired = $this->buildSubscriptionProxyConfig($request, $machine);
+        if (!(bool) ($desired['enabled'] ?? false)) {
+            return false;
+        }
+
+        $reported = data_get($status, 'agent.subscription_proxy');
+        if (!is_array($reported)) {
+            return true;
+        }
+
+        return (bool) data_get($reported, 'enabled', false) !== true;
     }
 
     private function authenticateMachine(Request $request, bool $allowInactive = false): ?ServerMachine
