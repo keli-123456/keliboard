@@ -250,6 +250,10 @@ class ConfigController extends Controller
                 'server_machine_default_agent' => $this->normalizeServerMachineDefaultAgent(
                     admin_setting('server_machine_default_agent', 'kelinode')
                 ),
+                'server_machine_distribution_source' => $this->normalizeMachineDistributionSource(
+                    admin_setting('server_machine_distribution_source', 'github')
+                ),
+                'server_machine_distribution_base_url' => (string) admin_setting('server_machine_distribution_base_url', ''),
                 'server_pull_interval' => admin_setting('server_pull_interval', 60),
                 'server_push_interval' => admin_setting('server_push_interval', 60),
                 'message_ops_enable' => MessageOpsSettings::enabled(),
@@ -486,6 +490,12 @@ class ConfigController extends Controller
     {
         $agent = strtolower(trim((string) ($value ?? '')));
         return in_array($agent, ['kelinode-rs', 'native-node', 'native_node'], true) ? 'kelinode-rs' : 'kelinode';
+    }
+
+    private function normalizeMachineDistributionSource(mixed $value): string
+    {
+        $value = strtolower(trim((string) ($value ?? '')));
+        return in_array($value, ['github', 'panel', 'custom'], true) ? $value : 'github';
     }
 
     /**

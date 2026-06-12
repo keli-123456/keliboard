@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\ServerMachine;
 use App\Models\ServerMachineLoadHistory;
 use App\Services\NodeRealtime\NodeRealtimeSettings;
+use App\Services\ServerMachine\MachineReleaseDistributionService;
 use App\Services\ServerService;
 use App\Services\SubscriptionProxy\ZeroSslCertificateService;
 use Illuminate\Http\JsonResponse;
@@ -156,7 +157,7 @@ class MachineController extends Controller
             'load_status' => $status,
             'upgrade_state' => $upgradeState,
         ])->save();
-        $upgradeCommand = $this->buildUpgradeCommand($machine);
+        $upgradeCommand = $this->buildUpgradeCommand($machine, $this->resolvePanelBaseURL($request));
 
         ServerMachineLoadHistory::create([
             'machine_id' => (int) $machine->id,
@@ -279,7 +280,7 @@ class MachineController extends Controller
         return $state;
     }
 
-    private function buildUpgradeCommand(ServerMachine $machine): ?array
+    private function buildUpgradeCommand(ServerMachine $machine, string $panelBaseUrl): ?array
     {
         $state = is_array($machine->upgrade_state) ? $machine->upgrade_state : null;
         if (($state['status'] ?? '') !== 'queued') {
@@ -301,11 +302,24 @@ class MachineController extends Controller
         $state['updated_at'] = now()->timestamp;
         $machine->forceFill(['upgrade_state' => $state])->save();
 
-        return [
+        $command = [
             'id' => (string) ($state['id'] ?? ''),
             'component' => $this->normalizeUpgradeComponent($state['component'] ?? 'node'),
             'target_version' => $targetVersion,
         ];
+
+        $distribution = app(MachineReleaseDistributionService::class);
+        $source = $distribution->source();
+        $releaseBaseUrl = $distribution->releaseBaseUrl($panelBaseUrl);
+        if ($source !== MachineReleaseDistributionService::SOURCE_GITHUB && $releaseBaseUrl !== '') {
+            $command += [
+                'release_source' => $source,
+                'release_base_url' => $releaseBaseUrl,
+                'release_auth' => $distribution->releaseAuth($machine),
+            ];
+        }
+
+        return $command;
     }
 
     private function versionsMatch(string $current, string $target): bool

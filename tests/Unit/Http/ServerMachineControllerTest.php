@@ -983,6 +983,50 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame('core', $state['component']);
     }
 
+    public function test_status_dispatches_panel_release_source_with_upgrade_command(): void
+    {
+        $this->bindSettings([
+            'subscription_proxy_enable' => false,
+            'server_machine_distribution_source' => 'panel',
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-panel-upgrade',
+            'token' => 'machine-token',
+            'is_active' => true,
+            'upgrade_state' => [
+                'id' => 'upgrade-core-1',
+                'status' => 'queued',
+                'component' => 'core',
+                'target_version' => 'v0.1.1',
+                'requested_at' => now()->timestamp,
+            ],
+        ]);
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'version' => 'v0.1.4',
+                    'core' => [
+                        'version' => 'v0.1.0',
+                    ],
+                ],
+            ]
+        ));
+        $payload = $response->getData(true);
+
+        $this->assertSame('panel', $payload['upgrade']['release_source']);
+        $this->assertSame('https://panel.example.test/server/machine/releases', $payload['upgrade']['release_base_url']);
+        $this->assertSame([
+            'machine_id' => (string) $machine->id,
+            'machine_token' => 'machine-token',
+        ], $payload['upgrade']['release_auth']);
+    }
+
     public function test_status_marks_core_upgrade_succeeded_from_core_version(): void
     {
         $this->bindSettings([

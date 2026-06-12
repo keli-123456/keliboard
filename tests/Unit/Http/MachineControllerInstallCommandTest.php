@@ -11,6 +11,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
 
@@ -120,6 +121,61 @@ final class MachineControllerInstallCommandTest extends TestCase
         );
         $this->assertStringContainsString('machine:', $legacyConfig);
         $this->assertStringNotContainsString('kernel:', $legacyConfig);
+    }
+
+    public function test_install_command_uses_panel_distribution_source_setting(): void
+    {
+        $this->settings->values['server_machine_default_agent'] = 'kelinode-rs';
+        $this->settings->values['server_machine_distribution_source'] = 'panel';
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-panel',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+
+        $request = $this->installRequest('https://panel.example.test/admin/server/machine/install', [
+            'id' => $machine->id,
+        ]);
+
+        $response = (new MachineController())->installCommand($request);
+        $payload = $response->getData(true);
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertStringStartsWith(
+            "curl -fsSL 'https://panel.example.test/server/machine/kelinode-rs/install.sh'",
+            $payload['data']['command']
+        );
+        $this->assertStringContainsString("--release-base-url 'https://panel.example.test/server/machine/releases'", $payload['data']['command']);
+        $this->assertStringContainsString("--machine-id {$machine->id}", $payload['data']['command']);
+        $this->assertStringContainsString("--machine-token 'machine-token'", $payload['data']['command']);
+        $this->assertSame('panel', $payload['data']['distribution_source']);
+    }
+
+    public function test_install_command_uses_custom_distribution_base_url(): void
+    {
+        $this->settings->values['server_machine_default_agent'] = 'kelinode-rs';
+        $this->settings->values['server_machine_distribution_source'] = 'custom';
+        $this->settings->values['server_machine_distribution_base_url'] = 'https://mirror.example.test/keli';
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-custom',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+
+        $request = $this->installRequest('https://panel.example.test/admin/server/machine/install', [
+            'id' => $machine->id,
+        ]);
+
+        $payload = (new MachineController())->installCommand($request)->getData(true);
+
+        $this->assertStringStartsWith(
+            "curl -fsSL 'https://mirror.example.test/keli/kelinode-rs/install.sh'",
+            $payload['data']['command']
+        );
+        $this->assertStringContainsString("--release-base-url 'https://mirror.example.test/keli/releases'", $payload['data']['command']);
+        $this->assertSame('custom', $payload['data']['distribution_source']);
     }
 
     public function test_install_command_uses_configured_node_api_base_url(): void
@@ -232,6 +288,26 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertSame('v0.1.4', $payload['data']['latest_version']);
         $this->assertSame('kelinode-rs', $payload['data']['component']);
         $this->assertSame('kelinode-rs', $payload['data']['repository']);
+    }
+
+    public function test_version_info_uses_panel_local_release_when_distribution_source_is_panel(): void
+    {
+        Storage::fake('local');
+        Storage::disk('local')->put(
+            'kelinode-rs/releases/kelinode-rs/v0.1.292/linux-x86_64/keli-native-node-v0.1.292-linux-x86_64.manifest.json',
+            '{"component":"kelinode-rs","version":"v0.1.292","platform":"linux-x86_64","asset":"keli-native-node-v0.1.292-linux-x86_64.tar.gz","binary":"kelinode","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}'
+        );
+        $this->settings->values['server_machine_distribution_source'] = 'panel';
+
+        $request = $this->installRequest('https://panel.example.test/admin/server/machine/versionInfo', [
+            'component' => 'kelinode-rs',
+            'force' => true,
+        ]);
+
+        $payload = (new MachineController())->versionInfo($request)->getData(true);
+
+        $this->assertSame('v0.1.292', $payload['data']['latest_version']);
+        $this->assertSame('panel', $payload['data']['source']);
     }
 
     public function test_upgrade_queues_component_specific_target_version(): void

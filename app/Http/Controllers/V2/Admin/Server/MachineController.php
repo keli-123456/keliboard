@@ -7,6 +7,7 @@ use App\Models\Server;
 use App\Models\ServerMachine;
 use App\Models\ServerMachineLoadHistory;
 use App\Services\NodeRealtime\NodeRealtimePublisher;
+use App\Services\ServerMachine\MachineReleaseDistributionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -507,6 +508,7 @@ class MachineController extends Controller
             'config' => $nativeConfig ?: $legacyConfig,
             'command' => $nativeCommand ?: $legacyCommand,
             'default_agent' => $defaultAgent,
+            'distribution_source' => $this->releaseDistribution()->source(),
             'native_enabled' => $nativeEnabled,
         ];
 
@@ -514,7 +516,7 @@ class MachineController extends Controller
             $data += [
                 'native_config' => $nativeConfig,
                 'native_command' => $nativeCommand,
-                'native_uninstall_command' => $this->buildNativeUninstallCommand(),
+                'native_uninstall_command' => $this->buildNativeUninstallCommand($baseURL),
                 'native_log_command' => $this->buildNativeLogCommand(),
                 'native_version' => self::NATIVE_NODE_INSTALL_VERSION,
                 'legacy_config' => $legacyConfig,
@@ -647,12 +649,22 @@ class MachineController extends Controller
 
     private function buildNativeInstallCommand(string $baseURL, ServerMachine $machine): string
     {
-        $scriptURL = 'https://raw.githubusercontent.com/keli-123456/kelinode-rs/main/script/install.sh';
-        return implode(' ', [
+        $distribution = $this->releaseDistribution();
+        $scriptURL = $distribution->installScriptUrl($baseURL);
+        $parts = [
             'curl -fsSL',
             $this->shellQuote($scriptURL),
             '-o /tmp/keli-native-node-install.sh',
             '&& bash /tmp/keli-native-node-install.sh',
+        ];
+
+        $releaseBaseUrl = $distribution->releaseBaseUrl($baseURL);
+        if ($releaseBaseUrl !== '') {
+            $parts[] = '--release-base-url';
+            $parts[] = $this->shellQuote($releaseBaseUrl);
+        }
+
+        return implode(' ', array_merge($parts, [
             '--machine-url',
             $this->shellQuote($baseURL),
             '--machine-id',
@@ -661,12 +673,12 @@ class MachineController extends Controller
             $this->shellQuote((string) $machine->token),
             '--machine-name',
             $this->shellQuote($machine->name ?: ('machine-' . $machine->id)),
-        ]);
+        ]));
     }
 
-    private function buildNativeUninstallCommand(): string
+    private function buildNativeUninstallCommand(string $baseURL): string
     {
-        $scriptURL = 'https://raw.githubusercontent.com/keli-123456/kelinode-rs/main/script/install.sh';
+        $scriptURL = $this->releaseDistribution()->installScriptUrl($baseURL);
         return implode(' ', [
             'curl -fsSL',
             $this->shellQuote($scriptURL),
@@ -684,6 +696,11 @@ class MachineController extends Controller
     {
         $agent = strtolower(trim((string) admin_setting('server_machine_default_agent', 'kelinode')));
         return in_array($agent, ['kelinode-rs', 'native-node', 'native_node'], true) ? 'kelinode-rs' : 'kelinode';
+    }
+
+    private function releaseDistribution(): MachineReleaseDistributionService
+    {
+        return app(MachineReleaseDistributionService::class);
     }
 
     private function resolveMachineApiBaseURL(Request $request): string
@@ -705,9 +722,27 @@ class MachineController extends Controller
     {
         $component = $this->normalizeUpgradeComponent($component) ?? 'node';
         $repository = $this->upgradeComponentRepository($component);
-        $cacheKey = 'server_machine:latest_release:' . $component;
+        $distribution = $this->releaseDistribution();
+        $source = $distribution->source();
+        $cacheKey = 'server_machine:latest_release:' . $source . ':' . $component;
         if ($force) {
             Cache::forget($cacheKey);
+        }
+
+        if ($source === MachineReleaseDistributionService::SOURCE_PANEL && $component !== 'node') {
+            $checkedAt = now()->timestamp;
+            $version = $distribution->latestLocalVersion(
+                $distribution->componentFromUpgradeComponent($component),
+                MachineReleaseDistributionService::PLATFORM_LINUX_X86_64
+            );
+            return [
+                'latest_version' => $version,
+                'checked_at' => $checkedAt,
+                'component' => $component,
+                'repository' => $repository,
+                'source' => 'panel',
+                'error' => $version ? null : 'no_local_release',
+            ];
         }
 
         return Cache::remember($cacheKey, now()->addMinutes(10), function () use ($component, $repository): array {

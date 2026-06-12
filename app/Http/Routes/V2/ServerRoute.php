@@ -6,6 +6,7 @@ use App\Http\Controllers\V1\Server\ShadowsocksTidalabController;
 use App\Http\Controllers\V1\Server\TrojanTidalabController;
 use App\Http\Controllers\V1\Server\UniProxyController;
 use App\Http\Controllers\V2\Server\MachineController;
+use App\Http\Controllers\V2\Server\MachineReleaseController;
 use App\Http\Controllers\V2\Server\ServerController;
 use Illuminate\Contracts\Routing\Registrar;
 
@@ -32,6 +33,10 @@ class ServerRoute
         $router->group([
             'prefix' => NodeApiContract::V2_SERVER_MACHINE_PREFIX,
         ], function ($route) {
+            $route->get('kelinode-rs/install.sh', [MachineReleaseController::class, 'installScript']);
+            $route->get('releases/{component}/{platform}/latest', [MachineReleaseController::class, 'latest']);
+            $route->get('releases/{component}/{version}/{platform}/manifest.json', [MachineReleaseController::class, 'manifest']);
+            $route->get('releases/{component}/{version}/{platform}/archive.tar.gz', [MachineReleaseController::class, 'archive']);
             $route->post(NodeApiContract::ENDPOINT_MACHINE_NODES, [MachineController::class, 'nodes']);
             $route->post(NodeApiContract::ENDPOINT_MACHINE_STATUS, [MachineController::class, 'status']);
         });
