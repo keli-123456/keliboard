@@ -59,6 +59,29 @@ final class MachineReleaseManagementControllerTest extends TestCase
         $this->assertSame('v0.1.308', app(MachineReleaseDistributionService::class)->latestLocalVersion('kelinode-rs', 'linux-x86_64'));
     }
 
+    public function test_upload_accepts_github_release_manifest_name_field(): void
+    {
+        Storage::fake('local');
+        $archiveContent = 'native-node-tarball';
+        $sha256 = hash('sha256', $archiveContent);
+        $manifestContent = $this->manifestJsonWithName('kelinode-rs', 'v0.1.308', 'linux-x86_64', $sha256);
+        $request = Request::create('/admin/server/machine/release/upload', 'POST', [
+            'component' => 'kelinode-rs',
+            'version' => 'v0.1.308',
+            'platform' => 'linux-x86_64',
+        ], [], [
+            'manifest' => $this->upload('keli-native-node-v0.1.308-linux-x86_64.manifest.json', $manifestContent),
+            'archive' => $this->upload('keli-native-node-v0.1.308-linux-x86_64.tar.gz', $archiveContent),
+        ]);
+
+        $response = (new MachineReleaseManagementController(app(MachineReleaseDistributionService::class)))->upload($request);
+        $payload = $response->getData(true);
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('v0.1.308', $payload['data']['version']);
+        $this->assertSame('kelinode-rs', $payload['data']['component']);
+    }
+
     public function test_set_default_changes_latest_local_version(): void
     {
         Storage::fake('local');
@@ -161,6 +184,21 @@ final class MachineReleaseManagementControllerTest extends TestCase
             'asset' => ($component === 'keli-core-rs' ? 'keli-core-rs' : 'keli-native-node') . '-' . $version . '-' . $platform . '.tar.gz',
             'binary' => $component === 'keli-core-rs' ? 'keli-core-rs' : 'kelinode',
             'sha256' => $sha256,
+        ], JSON_THROW_ON_ERROR);
+    }
+
+    private function manifestJsonWithName(string $name, string $version, string $platform, string $sha256): string
+    {
+        return json_encode([
+            'name' => $name,
+            'version' => $version,
+            'platform' => $platform,
+            'archive' => 'keli-native-node-' . $version . '-' . $platform . '.tar.gz',
+            'sha256' => $sha256,
+            'binary' => 'kelinode',
+            'binaries' => [
+                'agent' => 'bin/kelinode',
+            ],
         ], JSON_THROW_ON_ERROR);
     }
 }

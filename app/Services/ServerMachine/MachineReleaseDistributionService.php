@@ -203,7 +203,7 @@ final class MachineReleaseDistributionService
         if ($manifestSha256 === '' || !hash_equals($sha256, $manifestSha256)) {
             throw new InvalidArgumentException('Manifest SHA256 与压缩包不一致');
         }
-        if (trim((string) data_get($manifestData, 'component', '')) !== $component) {
+        if (!$this->manifestComponentMatches($manifestData, $component)) {
             throw new InvalidArgumentException('Manifest component 与表单不一致');
         }
         if (trim((string) data_get($manifestData, 'version', '')) !== $version) {
@@ -344,6 +344,22 @@ final class MachineReleaseDistributionService
         }
 
         return (string) $release->version;
+    }
+
+    private function manifestComponentMatches(array $manifestData, string $component): bool
+    {
+        $candidates = [
+            data_get($manifestData, 'component'),
+            data_get($manifestData, 'name'),
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (strtolower(trim((string) $candidate)) === $component) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function releaseTableExists(): bool
