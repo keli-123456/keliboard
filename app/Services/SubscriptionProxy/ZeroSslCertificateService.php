@@ -118,7 +118,7 @@ class ZeroSslCertificateService
                 $state = $this->refreshCertificate($accessKey, $state);
             }
 
-            if (($state['status'] ?? '') === 'issued' && empty($state['certificate_pem'])) {
+            if ($this->shouldDownloadIssuedCertificate($state)) {
                 $state = $this->downloadCertificate($accessKey, $state);
             }
 
@@ -424,11 +424,78 @@ class ZeroSslCertificateService
 
         $response = Http::timeout(30)->get($this->apiURL("/certificates/{$id}/download/json", $accessKey));
         $payload = $this->jsonResponse($response, 'download certificate');
-        $state['certificate_pem'] = trim((string) ($payload['certificate.crt'] ?? ''));
-        $state['ca_bundle_pem'] = trim((string) ($payload['ca_bundle.crt'] ?? ''));
+        [$certificate, $caBundle] = $this->normalizeDownloadedCertificateChain(
+            $this->firstString($payload, ['certificate.crt', 'certificate', 'certificate_pem']),
+            $this->firstString($payload, ['ca_bundle.crt', 'ca_bundle', 'ca_bundle.pem', 'ca_bundle_pem'])
+        );
+        $state['certificate_pem'] = $certificate;
+        $state['ca_bundle_pem'] = $caBundle;
         $state['downloaded_at'] = now()->toIso8601String();
-        $state['last_error'] = null;
+        $state['last_error'] = $this->hasUsableCertificateChain($state)
+            ? null
+            : 'ZeroSSL issued certificate download did not include a usable CA bundle.';
         return $state;
+    }
+
+    private function shouldDownloadIssuedCertificate(array $state): bool
+    {
+        return ($state['status'] ?? '') === 'issued'
+            && !$this->hasUsableCertificateChain($state);
+    }
+
+    private function hasUsableCertificateChain(array $state): bool
+    {
+        $certificate = trim((string) ($state['certificate_pem'] ?? ''));
+        if ($certificate === '') {
+            return false;
+        }
+
+        if (trim((string) ($state['ca_bundle_pem'] ?? '')) !== '') {
+            return true;
+        }
+
+        return count($this->extractPemCertificates($certificate)) > 1;
+    }
+
+    private function normalizeDownloadedCertificateChain(string $certificate, string $caBundle): array
+    {
+        $certificateBlocks = $this->extractPemCertificates($certificate);
+        $caBlocks = $this->extractPemCertificates($caBundle);
+
+        if (empty($certificateBlocks)) {
+            return [trim($certificate), trim($caBundle)];
+        }
+
+        $leaf = $certificateBlocks[0];
+        $chain = array_slice($certificateBlocks, 1);
+        foreach ($caBlocks as $block) {
+            $chain[] = $block;
+        }
+
+        return [$leaf, implode("\n", array_values(array_unique($chain)))];
+    }
+
+    private function extractPemCertificates(string $value): array
+    {
+        if (!preg_match_all('/-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----/s', $value, $matches)) {
+            return [];
+        }
+
+        return array_values(array_filter(array_map(static fn ($block) => trim((string) $block), $matches[0])));
+    }
+
+    private function firstString(array $payload, array $keys): string
+    {
+        foreach ($keys as $key) {
+            if (!array_key_exists($key, $payload)) {
+                continue;
+            }
+            $value = trim((string) $payload[$key]);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+        return '';
     }
 
     private function extractHTTPValidation(array $payload, string $domain): array
@@ -481,7 +548,7 @@ class ZeroSslCertificateService
             return true;
         }
 
-        if (($state['status'] ?? '') === 'issued' && !empty($state['certificate_pem'])) {
+        if (($state['status'] ?? '') === 'issued' && $this->hasUsableCertificateChain($state)) {
             $certNotAfter = trim((string) data_get($proxy, 'cert_not_after', ''));
             return $certNotAfter === '' || (bool) data_get($proxy, 'need_certificate', false);
         }

@@ -172,6 +172,68 @@ final class ZeroSslCertificateServiceTest extends TestCase
         $this->assertArrayHasKey('validation_requested_at', $state);
     }
 
+    public function test_handle_machine_status_redownloads_issued_certificate_when_ca_bundle_is_missing(): void
+    {
+        $machine = $this->createMachine([
+            'subproxy_cert_state' => [
+                'provider' => 'zerossl',
+                'certificate_id' => 'cert-1',
+                'domain' => '203.0.113.10',
+                'csr_hash' => hash('sha256', '-----BEGIN CERTIFICATE REQUEST-----test-----END CERTIFICATE REQUEST-----'),
+                'status' => 'issued',
+                'certificate_pem' => "-----BEGIN CERTIFICATE-----\nleaf\n-----END CERTIFICATE-----",
+                'ca_bundle_pem' => '',
+            ],
+        ]);
+
+        Http::fake([
+            'https://api.zerossl.com/certificates/cert-1/download/json?*' => Http::response([
+                'certificate.crt' => "-----BEGIN CERTIFICATE-----\nleaf\n-----END CERTIFICATE-----",
+                'ca_bundle.crt' => "-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----",
+            ]),
+        ]);
+
+        app(ZeroSslCertificateService::class)->handleMachineStatus($machine, $this->statusPayload(true, 'cert-1'));
+
+        $state = ServerMachine::find($machine->id)?->subproxy_cert_state;
+        $this->assertStringContainsString('leaf', $state['certificate_pem']);
+        $this->assertStringContainsString('ca', $state['ca_bundle_pem']);
+        $this->assertArrayHasKey('downloaded_at', $state);
+    }
+
+    public function test_handle_machine_status_splits_fullchain_certificate_download_when_ca_bundle_is_empty(): void
+    {
+        $machine = $this->createMachine([
+            'subproxy_cert_state' => [
+                'provider' => 'zerossl',
+                'certificate_id' => 'cert-1',
+                'domain' => '203.0.113.10',
+                'csr_hash' => hash('sha256', '-----BEGIN CERTIFICATE REQUEST-----test-----END CERTIFICATE REQUEST-----'),
+                'status' => 'issued',
+            ],
+        ]);
+
+        Http::fake([
+            'https://api.zerossl.com/certificates/cert-1/download/json?*' => Http::response([
+                'certificate.crt' => implode("\n", [
+                    '-----BEGIN CERTIFICATE-----',
+                    'leaf',
+                    '-----END CERTIFICATE-----',
+                    '-----BEGIN CERTIFICATE-----',
+                    'compat-ca',
+                    '-----END CERTIFICATE-----',
+                ]),
+                'ca_bundle.crt' => '',
+            ]),
+        ]);
+
+        app(ZeroSslCertificateService::class)->handleMachineStatus($machine, $this->statusPayload(true, 'cert-1'));
+
+        $state = ServerMachine::find($machine->id)?->subproxy_cert_state;
+        $this->assertSame("-----BEGIN CERTIFICATE-----\nleaf\n-----END CERTIFICATE-----", $state['certificate_pem']);
+        $this->assertSame("-----BEGIN CERTIFICATE-----\ncompat-ca\n-----END CERTIFICATE-----", $state['ca_bundle_pem']);
+    }
+
     public function test_handle_machine_status_clears_last_error_after_successful_certificate_refresh(): void
     {
         $machine = $this->createMachine([

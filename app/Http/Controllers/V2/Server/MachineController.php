@@ -474,7 +474,7 @@ class MachineController extends Controller
                 || (bool) data_get($reported, 'validation_ready', false) !== true;
         }
 
-        if ($certificateStatus === 'issued' && !empty($state['certificate_pem'])) {
+        if ($certificateStatus === 'issued' && $this->hasUsableZeroSslCertificateChain($state)) {
             return $reportedCertificateId !== $certificateId
                 || trim((string) data_get($reported, 'cert_not_after', '')) === ''
                 || (bool) data_get($reported, 'need_certificate', false) === true;
@@ -756,11 +756,25 @@ class MachineController extends Controller
             'updated_at' => (string) ($state['updated_at'] ?? ''),
         ];
 
-        if (($state['status'] ?? '') === 'issued') {
+        if (($state['status'] ?? '') === 'issued' && $this->hasUsableZeroSslCertificateChain($state)) {
             $config['certificate_pem'] = (string) ($state['certificate_pem'] ?? '');
             $config['ca_bundle_pem'] = (string) ($state['ca_bundle_pem'] ?? '');
         }
 
         return $config;
+    }
+
+    private function hasUsableZeroSslCertificateChain(array $state): bool
+    {
+        $certificate = trim((string) ($state['certificate_pem'] ?? ''));
+        if ($certificate === '') {
+            return false;
+        }
+
+        if (trim((string) ($state['ca_bundle_pem'] ?? '')) !== '') {
+            return true;
+        }
+
+        return preg_match_all('/-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----/s', $certificate) > 1;
     }
 }

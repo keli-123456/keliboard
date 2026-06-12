@@ -940,6 +940,51 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame('2026-06-11T10:01:00+00:00', $zeroSsl['updated_at']);
     }
 
+    public function test_nodes_response_does_not_send_issued_zero_ssl_certificate_without_ca_chain(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscribe_path' => 's',
+            'subscription_proxy_enable' => true,
+            'subscription_proxy_site_id' => 'panel-a',
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $machine->forceFill([
+            'subproxy_enabled' => true,
+            'subproxy_cert_state' => [
+                'provider' => 'zerossl',
+                'certificate_id' => 'cert-1',
+                'domain' => '198.51.100.20',
+                'domain_source' => 'auto',
+                'status' => 'issued',
+                'certificate_pem' => "-----BEGIN CERTIFICATE-----\nleaf\n-----END CERTIFICATE-----",
+                'ca_bundle_pem' => '',
+                'updated_at' => '2026-06-11T10:01:00+00:00',
+            ],
+        ])->save();
+
+        $response = (new MachineController())->nodes(Request::create(
+            'https://panel.example.test/api/v2/server/machine/nodes',
+            'POST',
+            ['machine_id' => $machine->id, 'token' => 'machine-token'],
+            [],
+            [],
+            ['REMOTE_ADDR' => '198.51.100.20']
+        ));
+        $payload = $response->getData(true);
+        $zeroSsl = $payload['agent']['subscription_proxy']['zerossl'];
+
+        $this->assertSame('issued', $zeroSsl['status']);
+        $this->assertSame('cert-1', $zeroSsl['certificate_id']);
+        $this->assertArrayNotHasKey('certificate_pem', $zeroSsl);
+        $this->assertArrayNotHasKey('ca_bundle_pem', $zeroSsl);
+    }
+
     public function test_status_dispatches_component_upgrade_command(): void
     {
         $this->bindSettings([
