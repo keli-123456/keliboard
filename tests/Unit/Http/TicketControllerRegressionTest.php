@@ -48,7 +48,7 @@ final class TicketControllerRegressionTest extends TestCase
         $this->assertSame('Ticket does not exist', $payload['message']);
     }
 
-    public function test_fetch_ticket_detail_includes_attachment_preview_urls(): void
+    public function test_fetch_ticket_detail_includes_relative_attachment_preview_urls(): void
     {
         if (!Route::has('api.v2.ticket.attachment.preview')) {
             Route::get('/api/v2/ticket/attachment/{id}/preview', fn () => response('ok'))
@@ -96,10 +96,11 @@ final class TicketControllerRegressionTest extends TestCase
         $attachment = $payload['data']['message'][0]['attachments'][0] ?? [];
 
         $this->assertSame('success', $payload['status']);
-        $this->assertStringContainsString('/api/v2/ticket/attachment/1/preview', $attachment['preview_url']);
-        $this->assertStringContainsString('/api/v2/ticket/attachment/1/preview', $attachment['thumbnail_url']);
+        $this->assertStringStartsWith('/api/v2/ticket/attachment/1/preview', $attachment['preview_url']);
+        $this->assertStringStartsWith('/api/v2/ticket/attachment/1/preview', $attachment['thumbnail_url']);
         $this->assertStringStartsWith('/api/v2/ticket/attachment/1/preview', $attachment['preview_path']);
         $this->assertStringStartsWith('/api/v2/ticket/attachment/1/preview', $attachment['thumbnail_path']);
+        $this->assertStringContainsString('signature=', $attachment['preview_url']);
         $this->assertStringContainsString('variant=thumb', $attachment['thumbnail_path']);
     }
 }

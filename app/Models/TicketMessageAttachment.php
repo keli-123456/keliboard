@@ -54,16 +54,15 @@ class TicketMessageAttachment extends Model
 
     public function getPreviewUrlAttribute(): string
     {
-        // temporarySignedRoute() emits absolute signed URLs. Production previews
-        // require APP_URL to match the public HTTPS origin and TrustProxies to
-        // trust X-Forwarded-Proto/Host from the reverse proxy; otherwise HTTPS
-        // admin pages can receive mixed-content http:// image URLs.
-        return $this->signedPreviewRoute(['id' => $this->id], true);
+        // Ticket images are loaded by browser clients from the same site as the
+        // panel. Keep signed preview URLs relative so APP_URL/proxy scheme
+        // mismatches cannot produce mixed-content http:// image links.
+        return $this->signedPreviewRoute(['id' => $this->id], false);
     }
 
     public function getThumbnailUrlAttribute(): string
     {
-        return $this->signedPreviewRoute(['id' => $this->id, 'variant' => 'thumb'], true);
+        return $this->signedPreviewRoute(['id' => $this->id, 'variant' => 'thumb'], false);
     }
 
     public function getPreviewPathAttribute(): string
