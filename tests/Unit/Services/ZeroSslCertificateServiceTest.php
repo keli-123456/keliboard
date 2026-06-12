@@ -426,6 +426,28 @@ final class ZeroSslCertificateServiceTest extends TestCase
         $this->assertStringContainsString('ZeroSSL access key', $fresh?->subproxy_cert_state['last_error'] ?? '');
     }
 
+    public function test_handle_machine_status_runs_for_website_proxy_only_machine(): void
+    {
+        $this->bindSettings([
+            'subscription_proxy_enable' => false,
+            'website_proxy_enable' => true,
+            'zerossl_access_key' => '',
+        ]);
+        Http::fake();
+
+        $machine = $this->createMachine([
+            'subproxy_enabled' => false,
+            'webproxy_enabled' => true,
+        ]);
+        $reload = app(ZeroSslCertificateService::class)->handleMachineStatus($machine, $this->statusPayload(false));
+
+        Http::assertNothingSent();
+        $fresh = ServerMachine::find($machine->id);
+        $this->assertFalse($reload);
+        $this->assertSame('missing_access_key', $fresh?->subproxy_cert_state['status'] ?? null);
+        $this->assertSame('203.0.113.10', $fresh?->subproxy_cert_state['domain'] ?? null);
+    }
+
     public function test_handle_machine_status_does_not_rewrite_unchanged_missing_access_key_state(): void
     {
         $this->bindSettings([
@@ -483,6 +505,8 @@ final class ZeroSslCertificateServiceTest extends TestCase
             $table->string('token');
             $table->boolean('is_active')->default(true);
             $table->boolean('subproxy_enabled')->default(false);
+            $table->boolean('webproxy_enabled')->default(false);
+            $table->string('webproxy_path_prefix')->nullable();
             $table->unsignedSmallInteger('subproxy_https_port')->nullable();
             $table->unsignedSmallInteger('subproxy_http_port')->nullable();
             $table->string('subproxy_cert_domain')->nullable();

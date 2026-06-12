@@ -123,6 +123,8 @@ class ConfigSave extends FormRequest
         'subscription_proxy_challenge_dir' => 'nullable|string|max:500',
         'subscription_proxy_allow_http_fallback' => 'boolean',
         'subscription_proxy_max_response_bytes' => 'integer|min:1048576|max:104857600',
+        'website_proxy_enable' => 'boolean',
+        'website_proxy_path_prefix' => 'nullable|string|max:255',
         'zerossl_access_key' => 'nullable|string|max:255',
         'subscription_proxy_renew_days' => 'integer|min:1|max:60',
         // frontend

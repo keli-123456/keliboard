@@ -429,6 +429,14 @@ class MachineController extends Controller
             return true;
         }
 
+        if ($this->reportedProxyProfileCount($reported, 'profiles') !== count($desired['profiles'] ?? [])) {
+            return true;
+        }
+
+        if ($this->reportedProxyProfileCount($reported, 'website_profiles') !== count($desired['website_profiles'] ?? [])) {
+            return true;
+        }
+
         $desiredDomain = trim((string) ($desired['certificate_domain'] ?? ''));
         $reportedDomain = trim((string) data_get($reported, 'certificate_domain', ''));
         if ($desiredDomain !== '' && $reportedDomain !== '' && $reportedDomain !== $desiredDomain) {
@@ -461,6 +469,18 @@ class MachineController extends Controller
         return false;
     }
 
+    private function reportedProxyProfileCount(array $reported, string $key): int
+    {
+        $value = data_get($reported, $key);
+        if (is_array($value)) {
+            return count($value);
+        }
+        if (is_numeric($value)) {
+            return max(0, (int) $value);
+        }
+        return 0;
+    }
+
     private function authenticateMachine(Request $request, bool $allowInactive = false): ?ServerMachine
     {
         $machineId = $request->input('machine_id');
@@ -489,9 +509,9 @@ class MachineController extends Controller
 
     private function buildSubscriptionProxyConfig(Request $request, ServerMachine $machine): array
     {
-        $globalEnabled = (bool) admin_setting('subscription_proxy_enable', false);
-        $machineEnabled = (bool) $machine->getAttribute('subproxy_enabled');
-        if (!$globalEnabled || !$machineEnabled) {
+        $subscriptionEnabled = $this->machineWantsSubscriptionProxy($machine);
+        $websiteEnabled = $this->machineWantsWebsiteProxy($machine);
+        if (!$subscriptionEnabled && !$websiteEnabled) {
             return ['enabled' => false];
         }
 
@@ -500,12 +520,10 @@ class MachineController extends Controller
         if ($subscribePath === '') {
             $subscribePath = 's';
         }
+        $siteId = $this->resolveSubscriptionProxySiteId($upstreamBaseURL);
 
-        return [
+        $config = [
             'enabled' => true,
-            'site_id' => $this->resolveSubscriptionProxySiteId($upstreamBaseURL),
-            'upstream_base_url' => $upstreamBaseURL,
-            'subscribe_path' => $subscribePath,
             'https_listen' => $this->listenAddress(
                 (int) ($machine->subproxy_https_port ?: admin_setting('subscription_proxy_https_port', 443)),
                 443
@@ -521,7 +539,52 @@ class MachineController extends Controller
             'zerossl' => $this->buildZeroSslAgentConfig($machine),
             'allow_http_fallback' => (bool) admin_setting('subscription_proxy_allow_http_fallback', false),
             'max_response_bytes' => max(1024 * 1024, (int) admin_setting('subscription_proxy_max_response_bytes', 10485760)),
+            'profiles' => [],
+            'website_profiles' => [],
         ];
+
+        if ($subscriptionEnabled) {
+            $subscriptionProfile = [
+                'site_id' => $siteId,
+                'upstream_base_url' => $upstreamBaseURL,
+                'subscribe_path' => $subscribePath,
+            ];
+            $config['site_id'] = $subscriptionProfile['site_id'];
+            $config['upstream_base_url'] = $subscriptionProfile['upstream_base_url'];
+            $config['subscribe_path'] = $subscriptionProfile['subscribe_path'];
+            $config['profiles'][] = $subscriptionProfile;
+        }
+
+        if ($websiteEnabled) {
+            $config['website_profiles'][] = [
+                'site_id' => $siteId,
+                'upstream_base_url' => $upstreamBaseURL,
+                'path_prefix' => $this->resolveWebsiteProxyPathPrefix($machine),
+            ];
+        }
+
+        return $config;
+    }
+
+    private function machineWantsSubscriptionProxy(ServerMachine $machine): bool
+    {
+        return (bool) admin_setting('subscription_proxy_enable', false)
+            && (bool) $machine->getAttribute('subproxy_enabled');
+    }
+
+    private function machineWantsWebsiteProxy(ServerMachine $machine): bool
+    {
+        return (bool) admin_setting('website_proxy_enable', false)
+            && (bool) $machine->getAttribute('webproxy_enabled');
+    }
+
+    private function resolveWebsiteProxyPathPrefix(ServerMachine $machine): string
+    {
+        $value = trim((string) ($machine->getAttribute('webproxy_path_prefix') ?: admin_setting('website_proxy_path_prefix', '/')));
+        if ($value === '' || $value === '/') {
+            return '/';
+        }
+        return '/' . trim($value, '/');
     }
 
     private function resolvePanelBaseURL(Request $request): string

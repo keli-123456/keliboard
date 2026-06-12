@@ -14,7 +14,7 @@ class ZeroSslCertificateService
 
     public function handleMachineStatus(ServerMachine $machine, array $status, string $currentSiteId = ''): bool
     {
-        if (!(bool) admin_setting('subscription_proxy_enable', false) || !(bool) $machine->getAttribute('subproxy_enabled')) {
+        if (!$this->machineWantsSharedHttpsProxy($machine)) {
             return false;
         }
 
@@ -148,6 +148,14 @@ class ZeroSslCertificateService
             $this->saveCertificateState($machine, $state, $domain, $hasConfiguredDomain);
             return false;
         }
+    }
+
+    private function machineWantsSharedHttpsProxy(ServerMachine $machine): bool
+    {
+        return ((bool) admin_setting('subscription_proxy_enable', false)
+                && (bool) $machine->getAttribute('subproxy_enabled'))
+            || ((bool) admin_setting('website_proxy_enable', false)
+                && (bool) $machine->getAttribute('webproxy_enabled'));
     }
 
     private function shouldCreateCertificate(array $state, string $domain, string $csrHash, int $renewDays): bool

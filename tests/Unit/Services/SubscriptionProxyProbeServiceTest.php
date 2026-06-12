@@ -110,6 +110,8 @@ final class SubscriptionProxyProbeServiceTest extends TestCase
             $table->string('token');
             $table->boolean('is_active')->default(true);
             $table->boolean('subproxy_enabled')->default(false);
+            $table->boolean('webproxy_enabled')->default(false);
+            $table->string('webproxy_path_prefix')->nullable();
             $table->unsignedSmallInteger('subproxy_https_port')->nullable();
             $table->unsignedSmallInteger('subproxy_http_port')->nullable();
             $table->string('subproxy_cert_domain')->nullable();

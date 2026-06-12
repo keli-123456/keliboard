@@ -40,6 +40,8 @@ class MachineController extends Controller
             'description' => 'nullable|string|max:255',
             'is_active' => 'nullable|boolean',
             'subproxy_enabled' => 'nullable|boolean',
+            'webproxy_enabled' => 'nullable|boolean',
+            'webproxy_path_prefix' => 'nullable|string|max:255',
             'subproxy_https_port' => 'nullable|integer|min:1|max:65535',
             'subproxy_http_port' => 'nullable|integer|min:1|max:65535',
             'subproxy_cert_domain' => 'nullable|string|max:255',
@@ -63,6 +65,12 @@ class MachineController extends Controller
                 'subproxy_enabled' => array_key_exists('subproxy_enabled', $params)
                     ? (bool) $params['subproxy_enabled']
                     : (bool) ($machine->subproxy_enabled ?? false),
+                'webproxy_enabled' => array_key_exists('webproxy_enabled', $params)
+                    ? (bool) $params['webproxy_enabled']
+                    : (bool) ($machine->webproxy_enabled ?? false),
+                'webproxy_path_prefix' => array_key_exists('webproxy_path_prefix', $params)
+                    ? $this->normalizeProxyPathPrefix($params['webproxy_path_prefix'])
+                    : $this->normalizeProxyPathPrefix($machine->webproxy_path_prefix ?? null),
                 'subproxy_https_port' => array_key_exists('subproxy_https_port', $params)
                     ? $this->normalizeNullablePort($params['subproxy_https_port'])
                     : $this->normalizeNullablePort($machine->subproxy_https_port ?? null),
@@ -835,6 +843,16 @@ class MachineController extends Controller
         }
         $port = (int) $value;
         return $port >= 1 && $port <= 65535 ? $port : null;
+    }
+
+    private function normalizeProxyPathPrefix(mixed $value): ?string
+    {
+        $value = trim((string) ($value ?? ''));
+        if ($value === '' || $value === '/') {
+            return null;
+        }
+        $value = '/' . trim($value, '/');
+        return $value === '/' ? null : $value;
     }
 
     private function normalizeCertificateDomain(mixed $value): ?string

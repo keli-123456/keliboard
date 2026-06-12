@@ -91,6 +91,104 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame('/etc/v2node/subproxy/key.pem', $proxy['key_file']);
     }
 
+    public function test_nodes_response_includes_website_proxy_profile_without_subscription_profile(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscription_proxy_enable' => false,
+            'website_proxy_enable' => true,
+            'website_proxy_path_prefix' => '/shop',
+            'subscription_proxy_https_port' => 443,
+            'subscription_proxy_http_port' => 80,
+            'subscription_proxy_cert_file' => '/etc/v2node/subproxy/fullchain.pem',
+            'subscription_proxy_key_file' => '/etc/v2node/subproxy/key.pem',
+            'subscription_proxy_challenge_dir' => '/etc/v2node/subproxy/challenges',
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $machine->forceFill([
+            'subproxy_enabled' => false,
+            'webproxy_enabled' => true,
+            'webproxy_path_prefix' => '/checkout',
+            'subproxy_cert_domain' => '203.0.113.10',
+        ])->save();
+        $machine = $machine->fresh();
+
+        $response = (new MachineController())->nodes(Request::create(
+            'https://panel.example.test/api/v2/server/machine/nodes',
+            'POST',
+            ['machine_id' => $machine->id, 'token' => 'machine-token']
+        ));
+        $payload = $response->getData(true);
+        $proxy = $payload['agent']['subscription_proxy'];
+
+        $this->assertTrue($proxy['enabled']);
+        $this->assertSame([], $proxy['profiles']);
+        $this->assertArrayNotHasKey('site_id', $proxy);
+        $this->assertSame('0.0.0.0:443', $proxy['https_listen']);
+        $this->assertSame('203.0.113.10', $proxy['certificate_domain']);
+        $this->assertSame('/etc/v2node/subproxy/fullchain.pem', $proxy['cert_file']);
+        $this->assertSame('/etc/v2node/subproxy/key.pem', $proxy['key_file']);
+        $this->assertSame([
+            [
+                'site_id' => 'panel.example.test',
+                'upstream_base_url' => 'https://panel.example.test',
+                'path_prefix' => '/checkout',
+            ],
+        ], $proxy['website_profiles']);
+    }
+
+    public function test_nodes_response_reuses_subscription_proxy_certificate_for_website_proxy(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscribe_path' => 'answer/land',
+            'subscription_proxy_enable' => true,
+            'website_proxy_enable' => true,
+            'website_proxy_path_prefix' => '/',
+            'subscription_proxy_site_id' => 'panel-a',
+            'subscription_proxy_https_port' => 443,
+            'subscription_proxy_http_port' => 80,
+            'subscription_proxy_cert_file' => '/etc/v2node/subproxy/fullchain.pem',
+            'subscription_proxy_key_file' => '/etc/v2node/subproxy/key.pem',
+            'subscription_proxy_challenge_dir' => '/etc/v2node/subproxy/challenges',
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $machine->forceFill([
+            'subproxy_enabled' => true,
+            'webproxy_enabled' => true,
+            'subproxy_https_port' => 8443,
+            'subproxy_http_port' => 8080,
+            'subproxy_cert_domain' => '203.0.113.10',
+        ])->save();
+        $machine = $machine->fresh();
+
+        $response = (new MachineController())->nodes(Request::create(
+            'https://panel.example.test/api/v2/server/machine/nodes',
+            'POST',
+            ['machine_id' => $machine->id, 'token' => 'machine-token']
+        ));
+        $payload = $response->getData(true);
+        $proxy = $payload['agent']['subscription_proxy'];
+
+        $this->assertTrue($proxy['enabled']);
+        $this->assertSame('panel-a', $proxy['profiles'][0]['site_id']);
+        $this->assertSame('panel-a', $proxy['website_profiles'][0]['site_id']);
+        $this->assertSame('/', $proxy['website_profiles'][0]['path_prefix']);
+        $this->assertSame('0.0.0.0:8443', $proxy['https_listen']);
+        $this->assertSame('/etc/v2node/subproxy/fullchain.pem', $proxy['cert_file']);
+        $this->assertSame('/etc/v2node/subproxy/key.pem', $proxy['key_file']);
+    }
+
     public function test_nodes_response_disables_subscription_proxy_when_machine_is_not_bound(): void
     {
         $this->bindSettings([
@@ -590,6 +688,49 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertTrue($payload['reload']);
     }
 
+    public function test_status_response_requests_reload_when_website_proxy_profile_is_missing(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscription_proxy_enable' => false,
+            'website_proxy_enable' => true,
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $machine->forceFill([
+            'webproxy_enabled' => true,
+        ])->save();
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'agent' => [
+                        'subscription_proxy' => [
+                            'enabled' => true,
+                            'profiles' => 0,
+                            'website_profiles' => 0,
+                            'certificate_domain' => '198.51.100.20',
+                        ],
+                    ],
+                ],
+            ],
+            [],
+            [],
+            ['REMOTE_ADDR' => '198.51.100.20']
+        ));
+        $payload = $response->getData(true);
+
+        $this->assertTrue($payload['reload']);
+    }
+
     public function test_status_response_requests_reload_until_agent_writes_current_validation_file(): void
     {
         $this->bindSettings([
@@ -895,6 +1036,8 @@ final class ServerMachineControllerTest extends TestCase
             $table->string('token');
             $table->boolean('is_active')->default(true);
             $table->boolean('subproxy_enabled')->default(false);
+            $table->boolean('webproxy_enabled')->default(false);
+            $table->string('webproxy_path_prefix')->nullable();
             $table->unsignedSmallInteger('subproxy_https_port')->nullable();
             $table->unsignedSmallInteger('subproxy_http_port')->nullable();
             $table->string('subproxy_cert_domain')->nullable();
