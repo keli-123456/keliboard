@@ -473,10 +473,12 @@ final class SubscriptionControlPluginTest extends TestCase
         $configPath = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
         $config = json_decode((string) file_get_contents($configPath), true);
         $defaultReset = (string) ($config['config']['ua_reset_keywords']['default'] ?? '');
+        $defaultResetExclude = (string) ($config['config']['ua_reset_exclude_keywords']['default'] ?? '');
 
         $plugin = new Plugin('subscription_control');
         $plugin->setConfig([
             'ua_reset_keywords' => $defaultReset,
+            'ua_reset_exclude_keywords' => $defaultResetExclude,
         ]);
         $isResetUa = new ReflectionMethod($plugin, 'isResetUA');
         $isResetUa->setAccessible(true);
@@ -513,6 +515,7 @@ final class SubscriptionControlPluginTest extends TestCase
         }
 
         foreach ([
+            'ClashforWindows/0.19.23',
             'Karing/1.2.19.2209 windows',
             'mihomo/1.19.8',
             'sing-box/1.13.0',

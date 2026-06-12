@@ -314,6 +314,11 @@ class Plugin extends AbstractPlugin
      */
     private function isResetUA(string $userAgentLower): bool
     {
+        $excludeList = $this->getUaResetExcludeKeywords();
+        if ($this->matchesUserAgentKeywords($userAgentLower, $excludeList, false)) {
+            return false;
+        }
+
         $resetList = $this->getUaResetKeywords();
         return $this->matchesUserAgentKeywords($userAgentLower, $resetList, false);
     }
@@ -545,6 +550,11 @@ class Plugin extends AbstractPlugin
     private function getUaResetKeywords(): array
     {
         return $this->parseKeywordList($this->getConfig('ua_reset_keywords', ''));
+    }
+
+    private function getUaResetExcludeKeywords(): array
+    {
+        return $this->parseKeywordList($this->getConfig('ua_reset_exclude_keywords', ''));
     }
 
     private function clientIpMeta(array $ipInfo): array

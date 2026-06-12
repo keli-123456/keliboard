@@ -374,6 +374,12 @@
             "label": "重置UA关键词列表（逗号或换行分隔）",
             "description": "命中后同时重置用户订阅 token 和节点 uuid 并阻断订阅。建议放老旧客户端或疑似伪造客户端；社交平台预取 UA 应放在 UA 黑名单中封禁来源 IP，普通浏览器误点只拒绝展示"
         },
+        "ua_reset_exclude_keywords": {
+            "type": "text",
+            "default": "ClashforWindows/0.19.23",
+            "label": "重置UA排除关键词列表（逗号或换行分隔）",
+            "description": "命中排除关键词时，即使同时命中重置 UA 关键词也不会重置订阅凭证。用于排除确认正常客户端的兼容 UA，例如 Clash Meta for Android 2.11.0.Meta 使用的 ClashforWindows/0.19.23"
+        },
         "enable_online_ip_threshold": {
             "type": "boolean",
             "default": false,

@@ -216,6 +216,7 @@ final class SubscriptionControlOwnershipTest extends TestCase
         $blacklist = strtolower((string) ($items['ua_blacklist']['default'] ?? ''));
         $blockOnly = strtolower((string) ($items['ua_block_only_keywords']['default'] ?? ''));
         $resetList = strtolower((string) ($items['ua_reset_keywords']['default'] ?? ''));
+        $resetExcludeList = strtolower((string) ($items['ua_reset_exclude_keywords']['default'] ?? ''));
 
         foreach ([
             'west2online',
@@ -264,6 +265,8 @@ final class SubscriptionControlOwnershipTest extends TestCase
         ] as $keyword) {
             $this->assertStringNotContainsString($keyword, $resetList);
         }
+
+        $this->assertStringContainsString('clashforwindows/0.19.23', $resetExcludeList);
     }
 
     public function test_subscription_control_ua_keyword_lists_use_multiline_inputs(): void
@@ -274,7 +277,7 @@ final class SubscriptionControlOwnershipTest extends TestCase
         $this->assertIsArray($config);
         $items = $config['config'] ?? [];
 
-        foreach (['ua_blacklist', 'ua_block_only_keywords', 'ua_reset_keywords'] as $key) {
+        foreach (['ua_blacklist', 'ua_block_only_keywords', 'ua_reset_keywords', 'ua_reset_exclude_keywords'] as $key) {
             $this->assertSame('text', (string) ($items[$key]['type'] ?? ''), $key . ' should render as a multiline textarea');
         }
     }
