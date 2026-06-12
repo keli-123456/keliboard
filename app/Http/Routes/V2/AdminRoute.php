@@ -5,6 +5,7 @@ use App\Http\Controllers\V2\Admin\ConfigController;
 use App\Http\Controllers\V2\Admin\PlanController;
 use App\Http\Controllers\V2\Admin\Server\GroupController;
 use App\Http\Controllers\V2\Admin\Server\MachineController;
+use App\Http\Controllers\V2\Admin\Server\MachineReleaseManagementController;
 use App\Http\Controllers\V2\Admin\Server\RouteController;
 use App\Http\Controllers\V2\Admin\Server\ManageController;
 use App\Http\Controllers\V2\Admin\OrderController;
@@ -97,6 +98,10 @@ class AdminRoute
                 $router->get('/installCommand', [MachineController::class, 'installCommand']);
                 $router->get('/versionInfo', [MachineController::class, 'versionInfo']);
                 $router->post('/upgrade', [MachineController::class, 'upgrade']);
+                $router->get('/release/fetch', [MachineReleaseManagementController::class, 'fetch']);
+                $router->post('/release/upload', [MachineReleaseManagementController::class, 'upload']);
+                $router->post('/release/setDefault', [MachineReleaseManagementController::class, 'setDefault']);
+                $router->post('/release/drop', [MachineReleaseManagementController::class, 'drop']);
             });
             $router->group([
                 'prefix' => 'server/manage'
