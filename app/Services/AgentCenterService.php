@@ -1,0 +1,580 @@
+<?php
+
+namespace App\Services;
+
+use App\Exceptions\ApiException;
+use App\Models\AgentLedger;
+use App\Models\AgentProfile;
+use App\Models\AgentUser;
+use App\Models\Plan;
+use App\Models\User;
+use Illuminate\Support\Facades\DB;
+
+class AgentCenterService
+{
+    public const STATUS_ACTIVE = 'active';
+    public const STATUS_DISABLED = 'disabled';
+    public const STATUS_PENDING = 'pending';
+
+    public const LEDGER_UNLOCK = 'unlock';
+    public const LEDGER_ASSIGN_PLAN = 'assign_plan';
+    public const LEDGER_RESET_TRAFFIC = 'reset_traffic';
+    public const LEDGER_REFUND = 'refund';
+    public const LEDGER_ADMIN_ADJUST = 'admin_adjust';
+
+    public function overview(User $agent): array
+    {
+        $this->assertEnabled();
+
+        $profile = $this->profileFor($agent);
+        $agent->refresh();
+
+        return [
+            'enabled' => true,
+            'eligible' => $this->isEligible($agent),
+            'profile' => $profile ? $this->profileSnapshot($profile) : null,
+            'summary' => $this->summary($agent),
+            'rules' => $this->rules(),
+        ];
+    }
+
+    public function unlock(User $agent): array
+    {
+        $this->assertEnabled();
+
+        $profile = $this->profileFor($agent);
+        if ($profile && $profile->status === self::STATUS_ACTIVE) {
+            return $this->overview($agent);
+        }
+
+        if (!$this->isEligible($agent)) {
+            throw new ApiException('Agent unlock threshold has not been reached');
+        }
+
+        $now = time();
+        $status = $this->boolSetting('agent_center_auto_activate', true)
+            ? self::STATUS_ACTIVE
+            : self::STATUS_PENDING;
+
+        $profile = AgentProfile::query()->updateOrCreate(
+            ['user_id' => $agent->id],
+            [
+                'status' => $status,
+                'level' => 'default',
+                'enabled_at' => $status === self::STATUS_ACTIVE ? $now : null,
+                'disabled_at' => null,
+                'updated_at' => $now,
+            ]
+        );
+
+        return $this->overview($agent->fresh() ?: $agent);
+    }
+
+    public function listUsers(User $agent): array
+    {
+        $this->activeProfile($agent);
+
+        return AgentUser::query()
+            ->with(['subordinate.plan:id,name'])
+            ->where('agent_user_id', $agent->id)
+            ->orderByDesc('id')
+            ->get()
+            ->map(fn (AgentUser $row) => $this->ownedUserSnapshot($row))
+            ->values()
+            ->all();
+    }
+
+    public function createSubordinate(User $agent, array $payload): array
+    {
+        $this->activeProfile($agent);
+        $this->assertCreateLimit($agent);
+
+        $email = strtolower(trim((string) ($payload['email'] ?? '')));
+        $password = (string) ($payload['password'] ?? '');
+        $remark = $this->cleanNullableString($payload['remark'] ?? null, 255);
+
+        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            throw new ApiException('Invalid email');
+        }
+        if (strlen($password) < 6) {
+            throw new ApiException('Password must be at least 6 characters');
+        }
+        if (User::query()->where('email', $email)->exists()) {
+            throw new ApiException('Email already exists');
+        }
+
+        return DB::transaction(function () use ($agent, $email, $password, $remark): array {
+            $now = time();
+            $user = User::query()->create([
+                'email' => $email,
+                'password' => password_hash($password, PASSWORD_BCRYPT),
+                'uuid' => $this->randomToken(32),
+                'token' => $this->randomToken(32),
+                'invite_user_id' => null,
+                'expired_at' => 0,
+                'transfer_enable' => 0,
+                'u' => 0,
+                'd' => 0,
+                'balance' => 0,
+                'commission_balance' => 0,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+
+            $ownership = AgentUser::query()->create([
+                'agent_user_id' => $agent->id,
+                'sub_user_id' => $user->id,
+                'remark' => $remark,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+
+            $ownership->setRelation('subordinate', $user);
+
+            return [
+                'user' => $this->ownedUserSnapshot($ownership),
+                'summary' => $this->summary($agent),
+            ];
+        });
+    }
+
+    public function previewAssignPlan(User $agent, int $subUserId, array $payload): array
+    {
+        $this->activeProfile($agent);
+        $ownership = $this->ownership($agent, $subUserId);
+        [$plan, $period, $amount] = $this->resolvePlanPrice($payload);
+
+        return [
+            'target_user' => $this->ownedUserSnapshot($ownership),
+            'plan' => $this->planSnapshot($plan),
+            'period' => $period,
+            'amount' => $amount,
+            'balance_after' => max(0, (int) $agent->balance - $amount),
+        ];
+    }
+
+    public function assignPlan(User $agent, int $subUserId, array $payload): array
+    {
+        $this->activeProfile($agent);
+        [$plan, $period, $amount] = $this->resolvePlanPrice($payload);
+
+        return DB::transaction(function () use ($agent, $subUserId, $plan, $period, $amount): array {
+            $lockedAgent = User::query()->lockForUpdate()->find($agent->id);
+            if (!$lockedAgent) {
+                throw new ApiException('Agent user does not exist');
+            }
+
+            $ownership = $this->ownership($lockedAgent, $subUserId);
+            $subordinate = User::query()->lockForUpdate()->find($ownership->sub_user_id);
+            if (!$subordinate) {
+                throw new ApiException('Target user does not exist');
+            }
+
+            $before = (int) $lockedAgent->balance;
+            if ($before < $amount) {
+                throw new ApiException('Insufficient balance');
+            }
+
+            $lockedAgent->balance = $before - $amount;
+            $lockedAgent->updated_at = time();
+            $lockedAgent->save();
+
+            $this->applyPlan($subordinate, $plan, $period);
+
+            $ledger = $this->ledgerEntry(
+                $lockedAgent,
+                $subordinate,
+                self::LEDGER_ASSIGN_PLAN,
+                -$amount,
+                $before,
+                (int) $lockedAgent->balance,
+                $plan,
+                $period,
+                ['plan_name' => $plan->name]
+            );
+
+            $ownership->setRelation('subordinate', $subordinate->fresh(['plan:id,name']) ?: $subordinate);
+
+            return [
+                'summary' => $this->summary($lockedAgent),
+                'user' => $this->ownedUserSnapshot($ownership),
+                'ledger' => $this->ledgerSnapshot($ledger),
+            ];
+        });
+    }
+
+    public function previewResetTraffic(User $agent, int $subUserId): array
+    {
+        $this->activeProfile($agent);
+        $ownership = $this->ownership($agent, $subUserId);
+        $subordinate = $ownership->subordinate ?: User::query()->find($subUserId);
+        if (!$subordinate) {
+            throw new ApiException('Target user does not exist');
+        }
+        $plan = $subordinate->plan_id ? Plan::query()->find($subordinate->plan_id) : null;
+        $amount = $plan ? $this->resetPrice($plan) : 0;
+
+        return [
+            'target_user' => $this->ownedUserSnapshot($ownership),
+            'amount' => $amount,
+            'balance_after' => max(0, (int) $agent->balance - $amount),
+        ];
+    }
+
+    public function resetTraffic(User $agent, int $subUserId): array
+    {
+        $this->activeProfile($agent);
+        if (!$this->boolSetting('agent_center_allow_traffic_reset', true)) {
+            throw new ApiException('Traffic reset is disabled');
+        }
+
+        return DB::transaction(function () use ($agent, $subUserId): array {
+            $lockedAgent = User::query()->lockForUpdate()->find($agent->id);
+            if (!$lockedAgent) {
+                throw new ApiException('Agent user does not exist');
+            }
+
+            $ownership = $this->ownership($lockedAgent, $subUserId);
+            $subordinate = User::query()->lockForUpdate()->find($ownership->sub_user_id);
+            if (!$subordinate) {
+                throw new ApiException('Target user does not exist');
+            }
+
+            $plan = $subordinate->plan_id ? Plan::query()->find($subordinate->plan_id) : null;
+            $amount = $plan ? $this->resetPrice($plan) : 0;
+            $before = (int) $lockedAgent->balance;
+            if ($before < $amount) {
+                throw new ApiException('Insufficient balance');
+            }
+
+            if ($amount > 0) {
+                $lockedAgent->balance = $before - $amount;
+                $lockedAgent->updated_at = time();
+                $lockedAgent->save();
+            }
+
+            $subordinate->u = 0;
+            $subordinate->d = 0;
+            $subordinate->updated_at = time();
+            $subordinate->save();
+
+            $ledger = $this->ledgerEntry(
+                $lockedAgent,
+                $subordinate,
+                self::LEDGER_RESET_TRAFFIC,
+                -$amount,
+                $before,
+                (int) $lockedAgent->balance,
+                $plan,
+                Plan::PERIOD_RESET_TRAFFIC,
+                ['plan_name' => $plan?->name]
+            );
+
+            $ownership->setRelation('subordinate', $subordinate->fresh(['plan:id,name']) ?: $subordinate);
+
+            return [
+                'summary' => $this->summary($lockedAgent),
+                'user' => $this->ownedUserSnapshot($ownership),
+                'ledger' => $this->ledgerSnapshot($ledger),
+            ];
+        });
+    }
+
+    public function ledger(User $agent, int $limit = 50): array
+    {
+        $this->activeProfile($agent);
+
+        return AgentLedger::query()
+            ->where('agent_user_id', $agent->id)
+            ->orderByDesc('id')
+            ->limit(max(1, min(100, $limit)))
+            ->get()
+            ->map(fn (AgentLedger $ledger) => $this->ledgerSnapshot($ledger))
+            ->values()
+            ->all();
+    }
+
+    private function assertEnabled(): void
+    {
+        if (!$this->boolSetting('agent_center_enable', false)) {
+            throw new ApiException('Agent center is disabled');
+        }
+    }
+
+    private function activeProfile(User $agent): AgentProfile
+    {
+        $this->assertEnabled();
+        $profile = $this->profileFor($agent);
+        if (!$profile || $profile->status !== self::STATUS_ACTIVE) {
+            throw new ApiException('Agent permission is not active');
+        }
+        return $profile;
+    }
+
+    private function profileFor(User $agent): ?AgentProfile
+    {
+        return AgentProfile::query()->where('user_id', $agent->id)->first();
+    }
+
+    private function isEligible(User $agent): bool
+    {
+        $mode = (string) admin_setting('agent_center_unlock_mode', 'balance_threshold');
+        if ($mode === 'manual') {
+            return false;
+        }
+        $threshold = max(0, (int) admin_setting('agent_center_unlock_balance', 0));
+        return (int) $agent->balance >= $threshold;
+    }
+
+    private function assertCreateLimit(User $agent): void
+    {
+        $limit = (int) admin_setting('agent_center_daily_create_limit', 20);
+        if ($limit <= 0) {
+            return;
+        }
+        $today = strtotime(date('Y-m-d'));
+        $count = AgentUser::query()
+            ->where('agent_user_id', $agent->id)
+            ->where('created_at', '>=', $today)
+            ->count();
+        if ($count >= $limit) {
+            throw new ApiException('Daily creation limit exceeded');
+        }
+    }
+
+    private function ownership(User $agent, int $subUserId): AgentUser
+    {
+        $ownership = AgentUser::query()
+            ->with(['subordinate.plan:id,name'])
+            ->where('agent_user_id', $agent->id)
+            ->where('sub_user_id', $subUserId)
+            ->first();
+        if (!$ownership) {
+            throw new ApiException('Target user is not managed by this agent');
+        }
+        return $ownership;
+    }
+
+    private function resolvePlanPrice(array $payload): array
+    {
+        $planId = (int) ($payload['plan_id'] ?? 0);
+        $period = $this->periodKey((string) ($payload['period'] ?? ''));
+        if ($planId <= 0 || $period === '') {
+            throw new ApiException('Invalid parameter');
+        }
+
+        $plan = Plan::query()->find($planId);
+        if (!$plan || !$plan->sell) {
+            throw new ApiException('Plan is not available');
+        }
+        if (!$this->planAllowed($plan)) {
+            throw new ApiException('Plan is not allowed for agents');
+        }
+
+        $price = $plan->prices[$period] ?? null;
+        if ($price === null || $price === '' || (float) $price < 0) {
+            throw new ApiException('Period is not available');
+        }
+
+        $baseAmount = OrderService::amountToCents($price);
+        $discountPercent = max(0, min(100, (float) admin_setting('agent_center_discount_percent', 100)));
+        $amount = (int) round($baseAmount * ($discountPercent / 100));
+
+        return [$plan, $period, $amount];
+    }
+
+    private function resetPrice(Plan $plan): int
+    {
+        if (!$this->boolSetting('agent_center_allow_traffic_reset', true)) {
+            throw new ApiException('Traffic reset is disabled');
+        }
+        $price = $plan->prices[Plan::PERIOD_RESET_TRAFFIC] ?? 0;
+        $baseAmount = OrderService::amountToCents($price);
+        $discountPercent = max(0, min(100, (float) admin_setting('agent_center_discount_percent', 100)));
+        return (int) round($baseAmount * ($discountPercent / 100));
+    }
+
+    private function planAllowed(Plan $plan): bool
+    {
+        $raw = trim((string) admin_setting('agent_center_allowed_plan_ids', ''));
+        if ($raw === '') {
+            return true;
+        }
+        $ids = array_filter(array_map(
+            static fn (string $value): int => (int) trim($value),
+            explode(',', $raw)
+        ));
+        return in_array((int) $plan->id, $ids, true);
+    }
+
+    private function applyPlan(User $user, Plan $plan, string $period): void
+    {
+        $user->plan_id = $plan->id;
+        $user->group_id = $plan->group_id;
+        $user->transfer_enable = (int) $plan->transfer_enable * 1073741824;
+        $user->speed_limit = $plan->speed_limit;
+        $user->device_limit = $plan->device_limit;
+        $user->u = 0;
+        $user->d = 0;
+
+        if ($period === Plan::PERIOD_ONETIME) {
+            $user->expired_at = null;
+        } else {
+            $days = $this->periodDays($period);
+            if ($days > 0) {
+                $base = max((int) ($user->expired_at ?: 0), time());
+                $user->expired_at = $base + ($days * 86400);
+            }
+        }
+
+        $user->updated_at = time();
+        $user->save();
+    }
+
+    private function periodDays(string $period): int
+    {
+        $periods = Plan::getAvailablePeriods();
+        return (int) ($periods[$period]['days'] ?? 0);
+    }
+
+    private function periodKey(string $period): string
+    {
+        $period = trim($period);
+        return Plan::LEGACY_PERIOD_MAPPING[$period] ?? $period;
+    }
+
+    private function ledgerEntry(
+        User $agent,
+        ?User $target,
+        string $type,
+        int $amount,
+        int $before,
+        int $after,
+        ?Plan $plan = null,
+        ?string $period = null,
+        array $metadata = []
+    ): AgentLedger {
+        return AgentLedger::query()->create([
+            'agent_user_id' => $agent->id,
+            'target_user_id' => $target?->id,
+            'type' => $type,
+            'amount' => $amount,
+            'balance_before' => $before,
+            'balance_after' => $after,
+            'plan_id' => $plan?->id,
+            'period' => $period,
+            'metadata' => array_filter($metadata, static fn ($value) => $value !== null),
+            'created_at' => time(),
+        ]);
+    }
+
+    private function summary(User $agent): array
+    {
+        $agentId = (int) $agent->id;
+        $monthStart = strtotime(date('Y-m-01'));
+        $monthSpend = abs((int) AgentLedger::query()
+            ->where('agent_user_id', $agentId)
+            ->where('amount', '<', 0)
+            ->where('created_at', '>=', $monthStart)
+            ->sum('amount'));
+
+        return [
+            'balance' => (int) $agent->balance,
+            'managed_users' => AgentUser::query()->where('agent_user_id', $agentId)->count(),
+            'month_spending' => $monthSpend,
+            'ledger_count' => AgentLedger::query()->where('agent_user_id', $agentId)->count(),
+        ];
+    }
+
+    private function rules(): array
+    {
+        return [
+            'unlock_mode' => (string) admin_setting('agent_center_unlock_mode', 'balance_threshold'),
+            'unlock_balance' => (int) admin_setting('agent_center_unlock_balance', 0),
+            'discount_percent' => (float) admin_setting('agent_center_discount_percent', 100),
+            'daily_create_limit' => (int) admin_setting('agent_center_daily_create_limit', 20),
+            'allow_traffic_reset' => $this->boolSetting('agent_center_allow_traffic_reset', true),
+            'allowed_plan_ids' => trim((string) admin_setting('agent_center_allowed_plan_ids', '')),
+        ];
+    }
+
+    private function profileSnapshot(AgentProfile $profile): array
+    {
+        return [
+            'id' => (int) $profile->id,
+            'user_id' => (int) $profile->user_id,
+            'status' => (string) $profile->status,
+            'level' => (string) $profile->level,
+            'remark' => $profile->remark,
+            'enabled_at' => $profile->enabled_at ? (int) $profile->enabled_at : null,
+            'disabled_at' => $profile->disabled_at ? (int) $profile->disabled_at : null,
+        ];
+    }
+
+    private function ownedUserSnapshot(AgentUser $ownership): array
+    {
+        $user = $ownership->subordinate;
+        return [
+            'id' => (int) $ownership->sub_user_id,
+            'email' => (string) ($user?->email ?? ''),
+            'remark' => $ownership->remark,
+            'plan_id' => $user?->plan_id !== null ? (int) $user->plan_id : null,
+            'plan_name' => $user?->plan?->name,
+            'expired_at' => $user?->expired_at !== null ? (int) $user->expired_at : null,
+            'transfer_enable' => (int) ($user?->transfer_enable ?? 0),
+            'u' => (int) ($user?->u ?? 0),
+            'd' => (int) ($user?->d ?? 0),
+            'banned' => (bool) ($user?->banned ?? false),
+            'created_at' => $ownership->created_at ? (int) $ownership->created_at : null,
+        ];
+    }
+
+    private function planSnapshot(Plan $plan): array
+    {
+        return [
+            'id' => (int) $plan->id,
+            'name' => (string) $plan->name,
+            'prices' => $plan->prices ?? [],
+            'transfer_enable' => (int) $plan->transfer_enable,
+            'device_limit' => $plan->device_limit !== null ? (int) $plan->device_limit : null,
+            'speed_limit' => $plan->speed_limit !== null ? (int) $plan->speed_limit : null,
+        ];
+    }
+
+    private function ledgerSnapshot(AgentLedger $ledger): array
+    {
+        return [
+            'id' => (int) $ledger->id,
+            'agent_user_id' => (int) $ledger->agent_user_id,
+            'target_user_id' => $ledger->target_user_id !== null ? (int) $ledger->target_user_id : null,
+            'type' => (string) $ledger->type,
+            'amount' => (int) $ledger->amount,
+            'balance_before' => (int) $ledger->balance_before,
+            'balance_after' => (int) $ledger->balance_after,
+            'plan_id' => $ledger->plan_id !== null ? (int) $ledger->plan_id : null,
+            'period' => $ledger->period,
+            'metadata' => $ledger->metadata ?? [],
+            'created_at' => $ledger->created_at ? (int) $ledger->created_at : null,
+        ];
+    }
+
+    private function boolSetting(string $key, bool $default): bool
+    {
+        $value = admin_setting($key, $default ? 1 : 0);
+        return $value === true || $value === 1 || $value === '1' || $value === 'true';
+    }
+
+    private function cleanNullableString(mixed $value, int $max): ?string
+    {
+        $text = trim((string) $value);
+        if ($text === '') {
+            return null;
+        }
+        return mb_substr($text, 0, $max);
+    }
+
+    private function randomToken(int $length): string
+    {
+        return substr(bin2hex(random_bytes(max(16, (int) ceil($length / 2)))), 0, $length);
+    }
+}

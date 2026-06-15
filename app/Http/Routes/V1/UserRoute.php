@@ -2,6 +2,7 @@
 namespace App\Http\Routes\V1;
 
 use App\Http\Controllers\V1\User\CommController;
+use App\Http\Controllers\V1\User\AgentController;
 use App\Http\Controllers\V1\User\CouponController;
 use App\Http\Controllers\V1\User\GiftCardController;
 use App\Http\Controllers\V1\User\InviteController;
@@ -37,6 +38,16 @@ class UserRoute
             $router->post('/getQuickLoginUrl', [UserController::class, 'getQuickLoginUrl']);
             $router->get('/getActiveSession', [UserController::class, 'getActiveSession']);
             $router->post('/removeActiveSession', [UserController::class, 'removeActiveSession']);
+            // Agent Center
+            $router->get('/agent/overview', [AgentController::class, 'overview']);
+            $router->post('/agent/unlock', [AgentController::class, 'unlock']);
+            $router->get('/agent/users', [AgentController::class, 'users']);
+            $router->post('/agent/users', [AgentController::class, 'createUser']);
+            $router->post('/agent/users/{id}/assign-plan/preview', [AgentController::class, 'assignPlanPreview']);
+            $router->post('/agent/users/{id}/assign-plan', [AgentController::class, 'assignPlan']);
+            $router->post('/agent/users/{id}/reset-traffic/preview', [AgentController::class, 'resetTrafficPreview']);
+            $router->post('/agent/users/{id}/reset-traffic', [AgentController::class, 'resetTraffic']);
+            $router->get('/agent/ledger', [AgentController::class, 'ledger']);
             // Order
             $router->post('/order/save', [OrderController::class, 'save']);
             $router->post('/order/recharge', [OrderController::class, 'recharge']);
