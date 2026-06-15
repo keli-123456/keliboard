@@ -20,6 +20,7 @@ class AgentCenterService
     public const LEDGER_UNLOCK = 'unlock';
     public const LEDGER_ASSIGN_PLAN = 'assign_plan';
     public const LEDGER_RESET_TRAFFIC = 'reset_traffic';
+    public const LEDGER_DELETE_SUBORDINATE = 'delete_subordinate';
     public const LEDGER_REFUND = 'refund';
     public const LEDGER_ADMIN_ADJUST = 'admin_adjust';
 
@@ -107,7 +108,6 @@ class AgentCenterService
     public function createSubordinate(User $agent, array $payload): array
     {
         $this->activeProfile($agent);
-        $this->assertCreateLimit($agent);
 
         $email = strtolower(trim((string) ($payload['email'] ?? '')));
         $password = (string) ($payload['password'] ?? '');
@@ -124,6 +124,12 @@ class AgentCenterService
         }
 
         return DB::transaction(function () use ($agent, $email, $password, $remark): array {
+            $lockedAgent = User::query()->lockForUpdate()->find($agent->id);
+            if (!$lockedAgent) {
+                throw new ApiException('Agent user does not exist');
+            }
+            $this->assertUserLimit($lockedAgent);
+
             $now = time();
             $user = User::query()->create([
                 'email' => $email,
@@ -142,7 +148,7 @@ class AgentCenterService
             ]);
 
             $ownership = AgentUser::query()->create([
-                'agent_user_id' => $agent->id,
+                'agent_user_id' => $lockedAgent->id,
                 'sub_user_id' => $user->id,
                 'remark' => $remark,
                 'created_at' => $now,
@@ -153,9 +159,69 @@ class AgentCenterService
 
             return [
                 'user' => $this->ownedUserSnapshot($ownership),
-                'summary' => $this->summary($agent),
+                'summary' => $this->summary($lockedAgent),
             ];
         });
+    }
+
+    public function deleteSubordinate(User $agent, int $subUserId): array
+    {
+        $this->activeProfile($agent);
+        $ticketAttachments = collect();
+
+        $result = DB::transaction(function () use ($agent, $subUserId, &$ticketAttachments): array {
+            $lockedAgent = User::query()->lockForUpdate()->find($agent->id);
+            if (!$lockedAgent) {
+                throw new ApiException('Agent user does not exist');
+            }
+
+            $ownership = AgentUser::query()
+                ->where('agent_user_id', $lockedAgent->id)
+                ->where('sub_user_id', $subUserId)
+                ->lockForUpdate()
+                ->first();
+            if (!$ownership) {
+                throw new ApiException('Target user is not managed by this agent');
+            }
+
+            $subordinate = User::query()->lockForUpdate()->find($ownership->sub_user_id);
+            if (!$subordinate) {
+                throw new ApiException('Target user does not exist');
+            }
+
+            $ticketCleanup = app(TicketCleanupService::class);
+            $ticketIds = $subordinate->tickets()->pluck('id')->map(fn ($id) => (int) $id)->all();
+            $ticketAttachments = $ticketCleanup->collectAttachmentsByTicketIds($ticketIds);
+
+            AgentUser::query()->where('sub_user_id', $subordinate->id)->delete();
+            $subordinate->orders()->delete();
+            $subordinate->codes()->delete();
+            $subordinate->stat()->delete();
+            $ticketCleanup->deleteRowsByTicketIds($ticketIds);
+            $subordinate->delete();
+
+            $ledger = $this->ledgerEntry(
+                $lockedAgent,
+                null,
+                self::LEDGER_DELETE_SUBORDINATE,
+                0,
+                (int) $lockedAgent->balance,
+                (int) $lockedAgent->balance,
+                null,
+                null,
+                ['deleted_user_id' => $subUserId, 'email' => $subordinate->email]
+            );
+
+            return [
+                'deleted_user_id' => $subUserId,
+                'summary' => $this->summary($lockedAgent),
+                'ledger' => $this->ledgerSnapshot($ledger),
+            ];
+        });
+
+        app(TicketCleanupService::class)->deleteAttachmentFiles($ticketAttachments);
+
+        return $result;
     }
 
     public function previewAssignPlan(User $agent, int $subUserId, array $payload): array
@@ -346,20 +412,27 @@ class AgentCenterService
         return (int) $agent->balance >= $threshold;
     }
 
-    private function assertCreateLimit(User $agent): void
+    private function assertUserLimit(User $agent): void
     {
-        $limit = (int) admin_setting('agent_center_daily_create_limit', 20);
+        $limit = $this->agentUserLimit();
         if ($limit <= 0) {
             return;
         }
-        $today = strtotime(date('Y-m-d'));
         $count = AgentUser::query()
             ->where('agent_user_id', $agent->id)
-            ->where('created_at', '>=', $today)
             ->count();
         if ($count >= $limit) {
-            throw new ApiException('Daily creation limit exceeded');
+            throw new ApiException('Agent user limit exceeded');
         }
+    }
+
+    private function agentUserLimit(): int
+    {
+        $value = admin_setting('agent_center_user_limit', null);
+        if ($value === null || $value === '') {
+            $value = admin_setting('agent_center_daily_create_limit', 20);
+        }
+        return max(0, (int) $value);
     }
 
     private function ownership(User $agent, int $subUserId): AgentUser
@@ -515,7 +588,8 @@ class AgentCenterService
             'unlock_mode' => (string) admin_setting('agent_center_unlock_mode', 'balance_threshold'),
             'unlock_balance' => (int) admin_setting('agent_center_unlock_balance', 0),
             'discount_percent' => (float) admin_setting('agent_center_discount_percent', 100),
-            'daily_create_limit' => (int) admin_setting('agent_center_daily_create_limit', 20),
+            'user_limit' => $this->agentUserLimit(),
+            'daily_create_limit' => $this->agentUserLimit(),
             'allow_traffic_reset' => $this->boolSetting('agent_center_allow_traffic_reset', true),
             'allowed_plan_ids' => trim((string) admin_setting('agent_center_allowed_plan_ids', '')),
         ];

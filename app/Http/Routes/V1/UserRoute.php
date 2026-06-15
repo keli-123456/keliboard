@@ -43,6 +43,7 @@ class UserRoute
             $router->post('/agent/unlock', [AgentController::class, 'unlock']);
             $router->get('/agent/users', [AgentController::class, 'users']);
             $router->post('/agent/users', [AgentController::class, 'createUser']);
+            $router->post('/agent/users/{id}/delete', [AgentController::class, 'deleteUser']);
             $router->get('/agent/users/{id}/subscribe-link', [AgentController::class, 'subscribeLink']);
             $router->post('/agent/users/{id}/assign-plan/preview', [AgentController::class, 'assignPlanPreview']);
             $router->post('/agent/users/{id}/assign-plan', [AgentController::class, 'assignPlan']);

@@ -191,7 +191,14 @@ class ConfigController extends Controller
                     admin_setting('agent_center_allowed_plan_ids', '')
                 ),
                 'agent_center_discount_percent' => max(0, min(100, (float) admin_setting('agent_center_discount_percent', 100))),
-                'agent_center_daily_create_limit' => max(0, (int) admin_setting('agent_center_daily_create_limit', 20)),
+                'agent_center_user_limit' => max(0, (int) admin_setting(
+                    'agent_center_user_limit',
+                    admin_setting('agent_center_daily_create_limit', 20)
+                )),
+                'agent_center_daily_create_limit' => max(0, (int) admin_setting(
+                    'agent_center_user_limit',
+                    admin_setting('agent_center_daily_create_limit', 20)
+                )),
                 'agent_center_allow_traffic_reset' => (bool) admin_setting('agent_center_allow_traffic_reset', true),
                 'agent_center_reset_price_mode' => $this->normalizeAgentCenterResetPriceMode(
                     admin_setting('agent_center_reset_price_mode', 'plan_reset_price')

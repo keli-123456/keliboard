@@ -28,6 +28,7 @@ class ConfigSave extends FormRequest
         'agent_center_auto_activate' => 'boolean',
         'agent_center_allowed_plan_ids' => 'nullable|string|max:1000|regex:/^[0-9,\\s]*$/',
         'agent_center_discount_percent' => 'numeric|min:0|max:100',
+        'agent_center_user_limit' => 'integer|min:0|max:100000',
         'agent_center_daily_create_limit' => 'integer|min:0|max:100000',
         'agent_center_allow_traffic_reset' => 'boolean',
         'agent_center_reset_price_mode' => 'nullable|in:plan_reset_price,free',

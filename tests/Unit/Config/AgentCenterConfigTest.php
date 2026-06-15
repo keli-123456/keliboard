@@ -18,6 +18,7 @@ final class AgentCenterConfigTest extends TestCase
             'agent_center_auto_activate',
             'agent_center_allowed_plan_ids',
             'agent_center_discount_percent',
+            'agent_center_user_limit',
             'agent_center_daily_create_limit',
             'agent_center_allow_traffic_reset',
             'agent_center_reset_price_mode',

@@ -23,6 +23,10 @@ final class AgentCenterServiceTest extends TestCase
 
         $this->setUpInMemoryDatabase();
         $this->createUserTable();
+        $this->createOrderTable();
+        $this->createInviteCodeTable();
+        $this->createStatUserTable();
+        $this->createTicketTables();
         $this->createPlanTable();
         $this->createAgentTables();
         $this->bindAgentSettings();
@@ -62,6 +66,58 @@ final class AgentCenterServiceTest extends TestCase
         $this->assertSame('buyer@example.test', $created['user']['email']);
         $this->assertSame('first customer', $created['user']['remark']);
         $this->assertSame(1, $this->tableCount('v2_agent_user'));
+    }
+
+    public function test_create_subordinate_rejects_total_user_limit(): void
+    {
+        $this->bindAgentSettings(['agent_center_user_limit' => 1]);
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $this->createOwnedSubordinate($agent, 'buyer@example.test');
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Agent user limit exceeded');
+
+        app(AgentCenterService::class)->createSubordinate($agent, [
+            'email' => 'buyer2@example.test',
+            'password' => 'secret123',
+        ]);
+    }
+
+    public function test_delete_subordinate_removes_owned_user_and_releases_total_limit(): void
+    {
+        $this->bindAgentSettings(['agent_center_user_limit' => 1]);
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+
+        $created = app(AgentCenterService::class)->createSubordinate($agent, [
+            'email' => 'buyer@example.test',
+            'password' => 'secret123',
+        ]);
+
+        $deleted = app(AgentCenterService::class)->deleteSubordinate($agent, $created['user']['id']);
+
+        $this->assertSame($created['user']['id'], $deleted['deleted_user_id']);
+        $this->assertSame(0, $this->tableCount('v2_agent_user'));
+        $this->assertSame(0, User::query()->where('email', 'buyer@example.test')->count());
+
+        $createdAgain = app(AgentCenterService::class)->createSubordinate($agent, [
+            'email' => 'buyer2@example.test',
+            'password' => 'secret123',
+        ]);
+
+        $this->assertSame('buyer2@example.test', $createdAgain['user']['email']);
+        $this->assertSame(1, $this->tableCount('v2_agent_user'));
+    }
+
+    public function test_delete_subordinate_rejects_unowned_user(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $otherAgent = $this->createActiveAgent('other-agent@example.test', 10000);
+        $unownedUser = $this->createOwnedSubordinate($otherAgent, 'buyer@example.test');
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Target user is not managed by this agent');
+
+        app(AgentCenterService::class)->deleteSubordinate($agent, $unownedUser->id);
     }
 
     public function test_subscribe_link_returns_owned_subordinate_subscription_url(): void
@@ -207,6 +263,31 @@ final class AgentCenterServiceTest extends TestCase
         });
     }
 
+    private function createInviteCodeTable(): void
+    {
+        $this->database->schema()->create('v2_invite_code', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('user_id')->index();
+            $table->string('code')->nullable();
+            $table->boolean('status')->default(false);
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+    }
+
+    private function createStatUserTable(): void
+    {
+        $this->database->schema()->create('v2_stat_user', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('user_id')->index();
+            $table->bigInteger('u')->default(0);
+            $table->bigInteger('d')->default(0);
+            $table->integer('record_at')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+    }
+
     private function createAgentTables(): void
     {
         $this->database->schema()->create('v2_agent_profile', function (Blueprint $table): void {
@@ -254,6 +335,7 @@ final class AgentCenterServiceTest extends TestCase
             'agent_center_auto_activate' => 1,
             'agent_center_allowed_plan_ids' => '',
             'agent_center_discount_percent' => 100,
+            'agent_center_user_limit' => 20,
             'agent_center_daily_create_limit' => 20,
             'agent_center_allow_traffic_reset' => 1,
             'agent_center_reset_price_mode' => 'plan_reset_price',
