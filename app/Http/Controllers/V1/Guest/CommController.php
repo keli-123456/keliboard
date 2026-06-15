@@ -5,6 +5,7 @@ namespace App\Http\Controllers\V1\Guest;
 use App\Http\Controllers\Controller;
 use App\Services\Plugin\HookManager;
 use App\Services\RechargeBonusService;
+use App\Services\ThemeService;
 use App\Utils\Dict;
 use App\Utils\Helper;
 use Illuminate\Support\Facades\Http;
@@ -13,6 +14,8 @@ class CommController extends Controller
 {
     public function config()
     {
+        $themeConfig = $this->getCurrentThemeConfig();
+
         $data = [
             'tos_url' => admin_setting('tos_url'),
             'is_email_verify' => (int) admin_setting('email_verify', 0) ? 1 : 0,
@@ -33,6 +36,8 @@ class CommController extends Controller
             'currency_symbol' => admin_setting('currency_symbol', '¥'),
             'invite_gen_limit' => (int) admin_setting('invite_gen_limit', 5),
             'logo' => admin_setting('logo'),
+            'theme_config' => $themeConfig,
+            'landing_theme' => data_get($themeConfig, 'landing_theme'),
             // 保持向后兼容
             'is_recaptcha' => (int) admin_setting('captcha_enable', 0) ? 1 : 0,
         ];
@@ -41,5 +46,20 @@ class CommController extends Controller
         $data = HookManager::filter('guest_comm_config', $data);
 
         return $this->success($data);
+    }
+
+    private function getCurrentThemeConfig(): array
+    {
+        try {
+            $theme = admin_setting('frontend_theme', admin_setting('current_theme', 'Xboard'));
+            $themeService = app(ThemeService::class);
+            if (!$theme || !$themeService->exists($theme)) {
+                return [];
+            }
+
+            return $themeService->getConfig($theme) ?: [];
+        } catch (\Throwable $e) {
+            return [];
+        }
     }
 }
