@@ -8,6 +8,7 @@ use App\Models\AgentProfile;
 use App\Models\AgentUser;
 use App\Models\Plan;
 use App\Models\User;
+use App\Utils\Helper;
 use Illuminate\Support\Facades\DB;
 
 class AgentCenterService
@@ -82,6 +83,25 @@ class AgentCenterService
             ->map(fn (AgentUser $row) => $this->ownedUserSnapshot($row))
             ->values()
             ->all();
+    }
+
+    public function subscribeLink(User $agent, int $subUserId): array
+    {
+        $this->activeProfile($agent);
+        $ownership = $this->ownership($agent, $subUserId);
+        $subordinate = $ownership->subordinate ?: User::query()->find($ownership->sub_user_id);
+        if (!$subordinate) {
+            throw new ApiException('Target user does not exist');
+        }
+
+        $token = trim((string) $subordinate->token);
+        if ($token === '') {
+            throw new ApiException('Subscription token is unavailable');
+        }
+
+        return [
+            'subscribe_url' => Helper::getSubscribeUrl($token),
+        ];
     }
 
     public function createSubordinate(User $agent, array $payload): array

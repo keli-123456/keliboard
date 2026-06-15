@@ -34,6 +34,11 @@ class AgentController extends Controller
         return $this->success($this->service()->createSubordinate($request->user(), $params));
     }
 
+    public function subscribeLink(Request $request, int $id)
+    {
+        return $this->success($this->service()->subscribeLink($request->user(), $id));
+    }
+
     public function assignPlanPreview(Request $request, int $id)
     {
         $params = $request->validate([

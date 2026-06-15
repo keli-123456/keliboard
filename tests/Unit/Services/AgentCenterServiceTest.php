@@ -64,6 +64,33 @@ final class AgentCenterServiceTest extends TestCase
         $this->assertSame(1, $this->tableCount('v2_agent_user'));
     }
 
+    public function test_subscribe_link_returns_owned_subordinate_subscription_url(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $subordinate = $this->createOwnedSubordinate($agent, 'buyer@example.test', [
+            'token' => 'buyer-token-123',
+        ]);
+
+        $result = app(AgentCenterService::class)->subscribeLink($agent, $subordinate->id);
+
+        $this->assertArrayHasKey('subscribe_url', $result);
+        $this->assertStringContainsString('/s/buyer-token-123', $result['subscribe_url']);
+    }
+
+    public function test_subscribe_link_rejects_unowned_subordinate(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $otherAgent = $this->createActiveAgent('other-agent@example.test', 10000);
+        $unownedUser = $this->createOwnedSubordinate($otherAgent, 'buyer@example.test', [
+            'token' => 'buyer-token-123',
+        ]);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Target user is not managed by this agent');
+
+        app(AgentCenterService::class)->subscribeLink($agent, $unownedUser->id);
+    }
+
     public function test_assign_plan_deducts_agent_balance_updates_subordinate_and_writes_ledger(): void
     {
         $agent = $this->createActiveAgent('agent@example.test', 10000);
