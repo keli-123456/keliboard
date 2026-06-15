@@ -134,6 +134,28 @@ final class AgentCenterServiceTest extends TestCase
         $this->assertSame(1, $this->ledgerCount('reset_traffic'));
     }
 
+    public function test_reset_traffic_can_be_free_when_configured(): void
+    {
+        $this->bindAgentSettings(['agent_center_reset_price_mode' => 'free']);
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $plan = $this->createPlan('Starter', ['monthly' => 20.00, 'reset_traffic' => 3.50], 128, 2);
+        $subordinate = $this->createOwnedSubordinate($agent, 'buyer@example.test', [
+            'plan_id' => $plan->id,
+            'u' => 1024,
+            'd' => 2048,
+        ]);
+
+        $result = app(AgentCenterService::class)->resetTraffic($agent, $subordinate->id);
+
+        $agent->refresh();
+        $subordinate->refresh();
+
+        $this->assertSame(10000, (int) $agent->balance);
+        $this->assertSame(0, (int) $subordinate->u);
+        $this->assertSame(0, (int) $subordinate->d);
+        $this->assertSame(0, (int) $result['ledger']['amount']);
+    }
+
     private function createPlanTable(): void
     {
         $this->database->schema()->create('v2_plan', function (Blueprint $table): void {

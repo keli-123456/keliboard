@@ -388,6 +388,9 @@ class AgentCenterService
         if (!$this->boolSetting('agent_center_allow_traffic_reset', true)) {
             throw new ApiException('Traffic reset is disabled');
         }
+        if ((string) admin_setting('agent_center_reset_price_mode', 'plan_reset_price') === 'free') {
+            return 0;
+        }
         $price = $plan->prices[Plan::PERIOD_RESET_TRAFFIC] ?? 0;
         $baseAmount = OrderService::amountToCents($price);
         $discountPercent = max(0, min(100, (float) admin_setting('agent_center_discount_percent', 100)));

@@ -180,6 +180,23 @@ class ConfigController extends Controller
                 'commission_distribution_l2' => admin_setting('commission_distribution_l2'),
                 'commission_distribution_l3' => admin_setting('commission_distribution_l3')
             ],
+            'agent' => [
+                'agent_center_enable' => (bool) admin_setting('agent_center_enable', false),
+                'agent_center_unlock_mode' => $this->normalizeAgentCenterUnlockMode(
+                    admin_setting('agent_center_unlock_mode', 'balance_threshold')
+                ),
+                'agent_center_unlock_balance' => max(0, (int) admin_setting('agent_center_unlock_balance', 0)),
+                'agent_center_auto_activate' => (bool) admin_setting('agent_center_auto_activate', true),
+                'agent_center_allowed_plan_ids' => $this->normalizeAgentCenterAllowedPlanIds(
+                    admin_setting('agent_center_allowed_plan_ids', '')
+                ),
+                'agent_center_discount_percent' => max(0, min(100, (float) admin_setting('agent_center_discount_percent', 100))),
+                'agent_center_daily_create_limit' => max(0, (int) admin_setting('agent_center_daily_create_limit', 20)),
+                'agent_center_allow_traffic_reset' => (bool) admin_setting('agent_center_allow_traffic_reset', true),
+                'agent_center_reset_price_mode' => $this->normalizeAgentCenterResetPriceMode(
+                    admin_setting('agent_center_reset_price_mode', 'plan_reset_price')
+                ),
+            ],
             'ticket' => [
                 'ticket_must_wait_reply' => (bool) admin_setting('ticket_must_wait_reply', 1),
                 'ticket_auto_reply_enable' => (bool) admin_setting('ticket_auto_reply_enable', 0),
@@ -360,6 +377,29 @@ class ConfigController extends Controller
                 'subscribe_template_surfboard' => subscribe_template('surfboard', $this->getDefaultTemplate('surfboard'))
             ]
         ];
+    }
+
+    private function normalizeAgentCenterUnlockMode(mixed $mode): string
+    {
+        return in_array($mode, ['balance_threshold', 'manual'], true) ? (string) $mode : 'balance_threshold';
+    }
+
+    private function normalizeAgentCenterResetPriceMode(mixed $mode): string
+    {
+        return in_array($mode, ['plan_reset_price', 'free'], true) ? (string) $mode : 'plan_reset_price';
+    }
+
+    private function normalizeAgentCenterAllowedPlanIds(mixed $value): string
+    {
+        $ids = collect(preg_split('/[\s,]+/', (string) $value) ?: [])
+            ->map(static fn ($item) => (int) trim((string) $item))
+            ->filter(static fn (int $id): bool => $id > 0)
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
+
+        return implode(',', $ids);
     }
 
     /**

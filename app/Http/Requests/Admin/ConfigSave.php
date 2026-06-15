@@ -21,6 +21,16 @@ class ConfigSave extends FormRequest
         'commission_distribution_l1' => 'nullable|numeric',
         'commission_distribution_l2' => 'nullable|numeric',
         'commission_distribution_l3' => 'nullable|numeric',
+        // agent center
+        'agent_center_enable' => 'boolean',
+        'agent_center_unlock_mode' => 'nullable|in:balance_threshold,manual',
+        'agent_center_unlock_balance' => 'integer|min:0|max:100000000',
+        'agent_center_auto_activate' => 'boolean',
+        'agent_center_allowed_plan_ids' => 'nullable|string|max:1000|regex:/^[0-9,\\s]*$/',
+        'agent_center_discount_percent' => 'numeric|min:0|max:100',
+        'agent_center_daily_create_limit' => 'integer|min:0|max:100000',
+        'agent_center_allow_traffic_reset' => 'boolean',
+        'agent_center_reset_price_mode' => 'nullable|in:plan_reset_price,free',
         // ticket auto-reply
         'ticket_must_wait_reply' => 'boolean',
         'ticket_auto_reply_enable' => 'boolean',
@@ -236,6 +246,7 @@ class ConfigSave extends FormRequest
             'recharge_bonus_rules.*.bonus.numeric' => '赠送金额必须为数字',
             'recharge_bonus_rules.*.bonus.min' => '赠送金额必须大于 0',
             'subscription_proxy_site_id.regex' => '订阅反代站点标识只能包含字母、数字、点、下划线和短横线',
+            'agent_center_allowed_plan_ids.regex' => '代理中心允许套餐只能填写套餐 ID，用英文逗号分隔',
             'ticket_ai_base_url.url' => 'AI 接口地址格式不正确，必须携带 http(s)://'
         ];
     }
