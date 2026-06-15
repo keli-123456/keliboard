@@ -7,6 +7,7 @@ use App\Http\Requests\Admin\UserGenerate;
 use App\Http\Requests\Admin\UserSendMail;
 use App\Http\Requests\Admin\UserUpdate;
 use App\Jobs\SendEmailJob;
+use App\Models\AgentUser;
 use App\Models\MarketingRule;
 use App\Models\Plan;
 use App\Models\User;
@@ -667,8 +668,14 @@ class UserController extends Controller
         ];
 
         $chunkSize = 500;
+        $agentSubUserIds = fn () => AgentUser::query()->select('sub_user_id');
+        $skippedAgentUsersCount = (clone $builder)
+            ->whereIn('id', $agentSubUserIds())
+            ->count();
+        $builder->whereNotIn('id', $agentSubUserIds());
+        $queuedCount = 0;
 
-        $builder->chunk($chunkSize, function ($users) use ($subject, $templateValue) {
+        $builder->chunk($chunkSize, function ($users) use ($subject, $templateValue, &$queuedCount) {
             foreach ($users as $user) {
                 dispatch(new SendEmailJob([
                     'email' => $user->email,
@@ -677,10 +684,14 @@ class UserController extends Controller
                     'template_name' => 'notify',
                     'template_value' => $templateValue
                 ], 'send_email_mass'));
+                $queuedCount++;
             }
         });
 
-        return $this->success(true);
+        return $this->success([
+            'queued_count' => $queuedCount,
+            'skipped_agent_users_count' => $skippedAgentUsersCount,
+        ]);
     }
 
     public function ban(Request $request)
