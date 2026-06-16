@@ -20,7 +20,8 @@ class AgentController extends Controller
 
     public function users(Request $request)
     {
-        return $this->success($this->service()->listUsers($request->user()));
+        $keyword = trim((string) $request->query('keyword', ''));
+        return $this->success($this->service()->listUsers($request->user(), $keyword));
     }
 
     public function createUser(Request $request)

@@ -73,13 +73,33 @@ class AgentCenterService
         return $this->overview($agent->fresh() ?: $agent);
     }
 
-    public function listUsers(User $agent): array
+    public function listUsers(User $agent, ?string $keyword = null): array
     {
         $this->activeProfile($agent);
+        $keyword = mb_substr(trim((string) $keyword), 0, 255);
 
         return AgentUser::query()
             ->with(['subordinate.plan:id,name'])
             ->where('agent_user_id', $agent->id)
+            ->when($keyword !== '', function ($query) use ($keyword): void {
+                $like = '%' . addcslashes($keyword, '\\%_') . '%';
+                $query->where(function ($inner) use ($keyword, $like): void {
+                    $inner->where('remark', 'like', $like)
+                        ->orWhereHas('subordinate', function ($subQuery) use ($keyword, $like): void {
+                            $subQuery->where('email', 'like', $like)
+                                ->orWhere('token', 'like', $like)
+                                ->orWhere('uuid', 'like', $like);
+
+                            if (ctype_digit($keyword)) {
+                                $subQuery->orWhere('id', (int) $keyword);
+                            }
+                        });
+
+                    if (ctype_digit($keyword)) {
+                        $inner->orWhere('sub_user_id', (int) $keyword);
+                    }
+                });
+            })
             ->orderByDesc('id')
             ->get()
             ->map(fn (AgentUser $row) => $this->ownedUserSnapshot($row))

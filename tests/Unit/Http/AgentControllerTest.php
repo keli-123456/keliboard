@@ -46,19 +46,25 @@ final class AgentControllerTest extends TestCase
     {
         $service = new class extends AgentCenterService {
             public ?int $userId = null;
+            public ?string $keyword = null;
 
-            public function listUsers(User $agent): array
+            public function listUsers(User $agent, ?string $keyword = null): array
             {
                 $this->userId = (int) $agent->id;
+                $this->keyword = $keyword;
                 return [['id' => 7, 'email' => 'buyer@example.test']];
             }
         };
         app()->instance(AgentCenterService::class, $service);
 
-        $response = (new AgentController())->users($this->requestForUser(9));
+        $request = $this->requestForUser(9);
+        $request->query->set('keyword', ' buyer-token ');
+
+        $response = (new AgentController())->users($request);
         $payload = json_decode($response->getContent(), true);
 
         $this->assertSame(9, $service->userId);
+        $this->assertSame('buyer-token', $service->keyword);
         $this->assertSame('buyer@example.test', $payload['data'][0]['email']);
     }
 

@@ -147,6 +147,43 @@ final class AgentCenterServiceTest extends TestCase
         app(AgentCenterService::class)->subscribeLink($agent, $unownedUser->id);
     }
 
+    public function test_list_users_can_search_owned_subordinate_by_token_and_uuid(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $tokenMatch = $this->createOwnedSubordinate($agent, 'token-buyer@example.test', [
+            'token' => 'agent-owned-token-123',
+            'uuid' => 'not-the-uuid',
+        ]);
+        $uuidMatch = $this->createOwnedSubordinate($agent, 'uuid-buyer@example.test', [
+            'token' => 'not-the-token',
+            'uuid' => 'agent-owned-uuid-456',
+        ]);
+        $this->createOwnedSubordinate($agent, 'other-buyer@example.test', [
+            'token' => 'plain-token',
+            'uuid' => 'plain-uuid',
+        ]);
+
+        $tokenResult = app(AgentCenterService::class)->listUsers($agent, 'owned-token-123');
+        $uuidResult = app(AgentCenterService::class)->listUsers($agent, 'owned-uuid-456');
+
+        $this->assertSame([$tokenMatch->id], array_column($tokenResult, 'id'));
+        $this->assertSame([$uuidMatch->id], array_column($uuidResult, 'id'));
+    }
+
+    public function test_list_users_search_never_crosses_agent_ownership(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $otherAgent = $this->createActiveAgent('other-agent@example.test', 10000);
+        $this->createOwnedSubordinate($otherAgent, 'other-buyer@example.test', [
+            'token' => 'shared-lookup-token',
+            'uuid' => 'shared-lookup-uuid',
+        ]);
+
+        $result = app(AgentCenterService::class)->listUsers($agent, 'shared-lookup');
+
+        $this->assertSame([], $result);
+    }
+
     public function test_reset_subscription_regenerates_owned_subordinate_credentials_and_returns_new_link(): void
     {
         $agent = $this->createActiveAgent('agent@example.test', 10000);
