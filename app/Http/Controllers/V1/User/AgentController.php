@@ -44,6 +44,11 @@ class AgentController extends Controller
         return $this->success($this->service()->subscribeLink($request->user(), $id));
     }
 
+    public function resetSubscription(Request $request, int $id)
+    {
+        return $this->success($this->service()->resetSubscription($request->user(), $id));
+    }
+
     public function assignPlanPreview(Request $request, int $id)
     {
         $params = $request->validate([

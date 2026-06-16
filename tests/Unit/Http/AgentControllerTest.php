@@ -85,6 +85,29 @@ final class AgentControllerTest extends TestCase
         $this->assertSame('https://example.test/s/buyer-token', $payload['data']['subscribe_url']);
     }
 
+    public function test_reset_subscription_returns_service_payload_for_current_user_and_target(): void
+    {
+        $service = new class extends AgentCenterService {
+            public ?int $userId = null;
+            public ?int $targetUserId = null;
+
+            public function resetSubscription(User $agent, int $targetUserId): array
+            {
+                $this->userId = (int) $agent->id;
+                $this->targetUserId = $targetUserId;
+                return ['subscribe_url' => 'https://example.test/s/new-token'];
+            }
+        };
+        app()->instance(AgentCenterService::class, $service);
+
+        $response = (new AgentController())->resetSubscription($this->requestForUser(9), 7);
+        $payload = json_decode($response->getContent(), true);
+
+        $this->assertSame(9, $service->userId);
+        $this->assertSame(7, $service->targetUserId);
+        $this->assertSame('https://example.test/s/new-token', $payload['data']['subscribe_url']);
+    }
+
     private function requestForUser(int $id): Request
     {
         $request = Request::create('/user/agent/overview', 'GET');

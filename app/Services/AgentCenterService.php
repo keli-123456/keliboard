@@ -20,6 +20,7 @@ class AgentCenterService
     public const LEDGER_UNLOCK = 'unlock';
     public const LEDGER_ASSIGN_PLAN = 'assign_plan';
     public const LEDGER_RESET_TRAFFIC = 'reset_traffic';
+    public const LEDGER_RESET_SUBSCRIPTION = 'reset_subscription';
     public const LEDGER_DELETE_SUBORDINATE = 'delete_subordinate';
     public const LEDGER_REFUND = 'refund';
     public const LEDGER_ADMIN_ADJUST = 'admin_adjust';
@@ -103,6 +104,50 @@ class AgentCenterService
         return [
             'subscribe_url' => Helper::getSubscribeUrl($token),
         ];
+    }
+
+    public function resetSubscription(User $agent, int $subUserId): array
+    {
+        $this->activeProfile($agent);
+
+        return DB::transaction(function () use ($agent, $subUserId): array {
+            $lockedAgent = User::query()->lockForUpdate()->find($agent->id);
+            if (!$lockedAgent) {
+                throw new ApiException('Agent user does not exist');
+            }
+
+            $ownership = $this->ownership($lockedAgent, $subUserId);
+            $subordinate = User::query()->lockForUpdate()->find($ownership->sub_user_id);
+            if (!$subordinate) {
+                throw new ApiException('Target user does not exist');
+            }
+
+            $subordinate->uuid = Helper::guid(true);
+            $subordinate->token = Helper::guid();
+            $subordinate->updated_at = time();
+            $subordinate->save();
+
+            $ledger = $this->ledgerEntry(
+                $lockedAgent,
+                $subordinate,
+                self::LEDGER_RESET_SUBSCRIPTION,
+                0,
+                (int) $lockedAgent->balance,
+                (int) $lockedAgent->balance,
+                null,
+                null,
+                ['reason' => 'agent_manual']
+            );
+
+            $ownership->setRelation('subordinate', $subordinate->fresh(['plan:id,name']) ?: $subordinate);
+
+            return [
+                'subscribe_url' => Helper::getSubscribeUrl((string) $subordinate->token),
+                'summary' => $this->summary($lockedAgent),
+                'user' => $this->ownedUserSnapshot($ownership),
+                'ledger' => $this->ledgerSnapshot($ledger),
+            ];
+        });
     }
 
     public function createSubordinate(User $agent, array $payload): array

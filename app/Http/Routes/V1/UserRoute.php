@@ -45,6 +45,7 @@ class UserRoute
             $router->post('/agent/users', [AgentController::class, 'createUser']);
             $router->post('/agent/users/{id}/delete', [AgentController::class, 'deleteUser']);
             $router->get('/agent/users/{id}/subscribe-link', [AgentController::class, 'subscribeLink']);
+            $router->post('/agent/users/{id}/reset-subscription', [AgentController::class, 'resetSubscription']);
             $router->post('/agent/users/{id}/assign-plan/preview', [AgentController::class, 'assignPlanPreview']);
             $router->post('/agent/users/{id}/assign-plan', [AgentController::class, 'assignPlan']);
             $router->post('/agent/users/{id}/reset-traffic/preview', [AgentController::class, 'resetTrafficPreview']);

@@ -147,6 +147,37 @@ final class AgentCenterServiceTest extends TestCase
         app(AgentCenterService::class)->subscribeLink($agent, $unownedUser->id);
     }
 
+    public function test_reset_subscription_regenerates_owned_subordinate_credentials_and_returns_new_link(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $subordinate = $this->createOwnedSubordinate($agent, 'buyer@example.test', [
+            'token' => 'old-token-123',
+            'uuid' => 'old-uuid-123',
+        ]);
+
+        $result = app(AgentCenterService::class)->resetSubscription($agent, $subordinate->id);
+
+        $subordinate->refresh();
+
+        $this->assertNotSame('old-token-123', $subordinate->token);
+        $this->assertNotSame('old-uuid-123', $subordinate->uuid);
+        $this->assertStringContainsString('/s/' . $subordinate->token, $result['subscribe_url']);
+        $this->assertSame($subordinate->id, $result['user']['id']);
+        $this->assertSame(1, $this->ledgerCount('reset_subscription'));
+    }
+
+    public function test_reset_subscription_rejects_unowned_subordinate(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $otherAgent = $this->createActiveAgent('other-agent@example.test', 10000);
+        $unownedUser = $this->createOwnedSubordinate($otherAgent, 'buyer@example.test');
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Target user is not managed by this agent');
+
+        app(AgentCenterService::class)->resetSubscription($agent, $unownedUser->id);
+    }
+
     public function test_assign_plan_deducts_agent_balance_updates_subordinate_and_writes_ledger(): void
     {
         $agent = $this->createActiveAgent('agent@example.test', 10000);
