@@ -22,6 +22,7 @@ final class AgentCenterConfigTest extends TestCase
             'agent_center_daily_create_limit',
             'agent_center_allow_traffic_reset',
             'agent_center_reset_price_mode',
+            'agent_center_bonus_day_price',
         ] as $key) {
             $this->assertArrayHasKey($key, ConfigSave::RULES);
         }

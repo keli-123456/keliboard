@@ -68,6 +68,45 @@ final class AgentCenterServiceTest extends TestCase
         $this->assertSame(1, $this->tableCount('v2_agent_user'));
     }
 
+    public function test_create_subordinate_can_assign_plan_and_charge_agent_balance(): void
+    {
+        $this->bindAgentSettings([
+            'agent_center_discount_percent' => 50,
+            'agent_center_bonus_day_price' => 200,
+        ]);
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $plan = $this->createPlan('Starter', ['monthly' => 20.00], 128, 2);
+        $before = time();
+
+        $created = app(AgentCenterService::class)->createSubordinate($agent, [
+            'email' => 'buyer@example.test',
+            'password' => 'secret123',
+            'remark' => 'first customer',
+            'plan_id' => $plan->id,
+            'period' => 'monthly',
+            'bonus_days' => 3,
+        ]);
+
+        $agent->refresh();
+        $subordinate = User::query()->findOrFail($created['user']['id']);
+
+        $this->assertSame(8400, (int) $agent->balance);
+        $this->assertSame($plan->id, (int) $subordinate->plan_id);
+        $this->assertSame(2, (int) $subordinate->group_id);
+        $this->assertSame(128 * 1073741824, (int) $subordinate->transfer_enable);
+        $this->assertGreaterThanOrEqual($before + 33 * 86400 - 2, (int) $subordinate->expired_at);
+        $this->assertLessThanOrEqual(time() + 33 * 86400 + 2, (int) $subordinate->expired_at);
+        $this->assertSame(1, $this->ledgerCount('assign_plan'));
+        $this->assertSame(-1600, (int) $created['ledger']['amount']);
+        $this->assertSame([
+            'plan_name' => 'Starter',
+            'base_amount' => 1000,
+            'bonus_days' => 3,
+            'bonus_day_price' => 200,
+            'bonus_amount' => 600,
+        ], $created['ledger']['metadata']);
+    }
+
     public function test_create_subordinate_rejects_total_user_limit(): void
     {
         $this->bindAgentSettings(['agent_center_user_limit' => 1]);
@@ -239,6 +278,65 @@ final class AgentCenterServiceTest extends TestCase
         $this->assertSame(1, $this->ledgerCount('assign_plan'));
     }
 
+    public function test_assign_plan_charges_configured_bonus_day_price_without_agent_discount(): void
+    {
+        $this->bindAgentSettings([
+            'agent_center_discount_percent' => 50,
+            'agent_center_bonus_day_price' => 200,
+        ]);
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $subordinate = $this->createOwnedSubordinate($agent, 'buyer@example.test');
+        $plan = $this->createPlan('Starter', ['monthly' => 20.00], 128, 2);
+        $before = time();
+
+        $preview = app(AgentCenterService::class)->previewAssignPlan($agent, $subordinate->id, [
+            'plan_id' => $plan->id,
+            'period' => 'monthly',
+            'bonus_days' => 3,
+        ]);
+        $result = app(AgentCenterService::class)->assignPlan($agent, $subordinate->id, [
+            'plan_id' => $plan->id,
+            'period' => 'monthly',
+            'bonus_days' => 3,
+        ]);
+
+        $agent->refresh();
+        $subordinate->refresh();
+
+        $this->assertSame(1000, $preview['base_amount']);
+        $this->assertSame(600, $preview['bonus_amount']);
+        $this->assertSame(3, $preview['bonus_days']);
+        $this->assertSame(1600, $preview['amount']);
+        $this->assertSame(8400, (int) $agent->balance);
+        $this->assertGreaterThanOrEqual($before + 33 * 86400 - 2, (int) $subordinate->expired_at);
+        $this->assertLessThanOrEqual(time() + 33 * 86400 + 2, (int) $subordinate->expired_at);
+        $this->assertSame(-1600, (int) $result['ledger']['amount']);
+        $this->assertSame([
+            'plan_name' => 'Starter',
+            'base_amount' => 1000,
+            'bonus_days' => 3,
+            'bonus_day_price' => 200,
+            'bonus_amount' => 600,
+        ], $result['ledger']['metadata']);
+    }
+
+    public function test_assign_plan_rejects_bonus_days_when_price_is_not_configured(): void
+    {
+        $this->bindAgentSettings(['agent_center_bonus_day_price' => 0]);
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $subordinate = $this->createOwnedSubordinate($agent, 'buyer@example.test');
+        $plan = $this->createPlan('Starter', ['monthly' => 20.00], 128, 2);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Agent bonus day price is not configured');
+
+        app(AgentCenterService::class)->assignPlan($agent, $subordinate->id, [
+            'plan_id' => $plan->id,
+            'period' => 'monthly',
+            'bonus_days' => 1,
+        ]);
+    }
+
     public function test_assign_plan_rolls_back_when_balance_is_insufficient(): void
     {
         $agent = $this->createActiveAgent('agent@example.test', 100);
@@ -407,6 +505,7 @@ final class AgentCenterServiceTest extends TestCase
             'agent_center_daily_create_limit' => 20,
             'agent_center_allow_traffic_reset' => 1,
             'agent_center_reset_price_mode' => 'plan_reset_price',
+            'agent_center_bonus_day_price' => 0,
         ], $overrides);
 
         app()->instance(Setting::class, new class($settings) {

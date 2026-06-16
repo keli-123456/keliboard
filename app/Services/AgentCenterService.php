@@ -187,8 +187,9 @@ class AgentCenterService
         if (User::query()->where('email', $email)->exists()) {
             throw new ApiException('Email already exists');
         }
+        $assignment = $this->resolveOptionalPlanPrice($payload);
 
-        return DB::transaction(function () use ($agent, $email, $password, $remark): array {
+        return DB::transaction(function () use ($agent, $email, $password, $remark, $assignment): array {
             $lockedAgent = User::query()->lockForUpdate()->find($agent->id);
             if (!$lockedAgent) {
                 throw new ApiException('Agent user does not exist');
@@ -220,12 +221,50 @@ class AgentCenterService
                 'updated_at' => $now,
             ]);
 
-            $ownership->setRelation('subordinate', $user);
+            $ledger = null;
+            if ($assignment !== null) {
+                [$plan, $period, $baseAmount, $bonusDays, $bonusDayPrice, $bonusAmount, $amount] = $assignment;
+                $before = (int) $lockedAgent->balance;
+                if ($before < $amount) {
+                    throw new ApiException('Insufficient balance');
+                }
 
-            return [
+                $lockedAgent->balance = $before - $amount;
+                $lockedAgent->updated_at = time();
+                $lockedAgent->save();
+
+                $this->applyPlan($user, $plan, $period, $bonusDays);
+
+                $ledger = $this->ledgerEntry(
+                    $lockedAgent,
+                    $user,
+                    self::LEDGER_ASSIGN_PLAN,
+                    -$amount,
+                    $before,
+                    (int) $lockedAgent->balance,
+                    $plan,
+                    $period,
+                    [
+                        'plan_name' => $plan->name,
+                        'base_amount' => $baseAmount,
+                        'bonus_days' => $bonusDays,
+                        'bonus_day_price' => $bonusDayPrice,
+                        'bonus_amount' => $bonusAmount,
+                    ]
+                );
+            }
+
+            $ownership->setRelation('subordinate', $user->fresh(['plan:id,name']) ?: $user);
+
+            $result = [
                 'user' => $this->ownedUserSnapshot($ownership),
                 'summary' => $this->summary($lockedAgent),
             ];
+            if ($ledger) {
+                $result['ledger'] = $this->ledgerSnapshot($ledger);
+            }
+
+            return $result;
         });
     }
 
@@ -293,12 +332,16 @@ class AgentCenterService
     {
         $this->activeProfile($agent);
         $ownership = $this->ownership($agent, $subUserId);
-        [$plan, $period, $amount] = $this->resolvePlanPrice($payload);
+        [$plan, $period, $baseAmount, $bonusDays, $bonusDayPrice, $bonusAmount, $amount] = $this->resolvePlanPrice($payload);
 
         return [
             'target_user' => $this->ownedUserSnapshot($ownership),
             'plan' => $this->planSnapshot($plan),
             'period' => $period,
+            'base_amount' => $baseAmount,
+            'bonus_days' => $bonusDays,
+            'bonus_day_price' => $bonusDayPrice,
+            'bonus_amount' => $bonusAmount,
             'amount' => $amount,
             'balance_after' => max(0, (int) $agent->balance - $amount),
         ];
@@ -307,9 +350,9 @@ class AgentCenterService
     public function assignPlan(User $agent, int $subUserId, array $payload): array
     {
         $this->activeProfile($agent);
-        [$plan, $period, $amount] = $this->resolvePlanPrice($payload);
+        [$plan, $period, $baseAmount, $bonusDays, $bonusDayPrice, $bonusAmount, $amount] = $this->resolvePlanPrice($payload);
 
-        return DB::transaction(function () use ($agent, $subUserId, $plan, $period, $amount): array {
+        return DB::transaction(function () use ($agent, $subUserId, $plan, $period, $baseAmount, $bonusDays, $bonusDayPrice, $bonusAmount, $amount): array {
             $lockedAgent = User::query()->lockForUpdate()->find($agent->id);
             if (!$lockedAgent) {
                 throw new ApiException('Agent user does not exist');
@@ -330,7 +373,7 @@ class AgentCenterService
             $lockedAgent->updated_at = time();
             $lockedAgent->save();
 
-            $this->applyPlan($subordinate, $plan, $period);
+            $this->applyPlan($subordinate, $plan, $period, $bonusDays);
 
             $ledger = $this->ledgerEntry(
                 $lockedAgent,
@@ -341,7 +384,13 @@ class AgentCenterService
                 (int) $lockedAgent->balance,
                 $plan,
                 $period,
-                ['plan_name' => $plan->name]
+                [
+                    'plan_name' => $plan->name,
+                    'base_amount' => $baseAmount,
+                    'bonus_days' => $bonusDays,
+                    'bonus_day_price' => $bonusDayPrice,
+                    'bonus_amount' => $bonusAmount,
+                ]
             );
 
             $ownership->setRelation('subordinate', $subordinate->fresh(['plan:id,name']) ?: $subordinate);
@@ -536,9 +585,42 @@ class AgentCenterService
 
         $baseAmount = OrderService::amountToCents($price);
         $discountPercent = max(0, min(100, (float) admin_setting('agent_center_discount_percent', 100)));
-        $amount = (int) round($baseAmount * ($discountPercent / 100));
+        $discountedAmount = (int) round($baseAmount * ($discountPercent / 100));
+        $bonusDays = $this->bonusDays($payload);
+        $bonusDayPrice = $this->bonusDayPrice();
+        if ($bonusDays > 0 && $period === Plan::PERIOD_ONETIME) {
+            throw new ApiException('Bonus days are not available for one-time plans');
+        }
+        if ($bonusDays > 0 && $bonusDayPrice <= 0) {
+            throw new ApiException('Agent bonus day price is not configured');
+        }
 
-        return [$plan, $period, $amount];
+        $bonusAmount = $bonusDays * $bonusDayPrice;
+        $amount = $discountedAmount + $bonusAmount;
+
+        return [$plan, $period, $discountedAmount, $bonusDays, $bonusDayPrice, $bonusAmount, $amount];
+    }
+
+    private function resolveOptionalPlanPrice(array $payload): ?array
+    {
+        if (!array_key_exists('plan_id', $payload) || $payload['plan_id'] === null || $payload['plan_id'] === '') {
+            return null;
+        }
+        if (!array_key_exists('period', $payload) || trim((string) $payload['period']) === '') {
+            throw new ApiException('Plan period is required');
+        }
+
+        return $this->resolvePlanPrice($payload);
+    }
+
+    private function bonusDays(array $payload): int
+    {
+        return max(0, min(365, (int) ($payload['bonus_days'] ?? 0)));
+    }
+
+    private function bonusDayPrice(): int
+    {
+        return max(0, (int) admin_setting('agent_center_bonus_day_price', 0));
     }
 
     private function resetPrice(Plan $plan): int
@@ -568,7 +650,7 @@ class AgentCenterService
         return in_array((int) $plan->id, $ids, true);
     }
 
-    private function applyPlan(User $user, Plan $plan, string $period): void
+    private function applyPlan(User $user, Plan $plan, string $period, int $bonusDays = 0): void
     {
         $user->plan_id = $plan->id;
         $user->group_id = $plan->group_id;
@@ -581,7 +663,7 @@ class AgentCenterService
         if ($period === Plan::PERIOD_ONETIME) {
             $user->expired_at = null;
         } else {
-            $days = $this->periodDays($period);
+            $days = $this->periodDays($period) + max(0, $bonusDays);
             if ($days > 0) {
                 $base = max((int) ($user->expired_at ?: 0), time());
                 $user->expired_at = $base + ($days * 86400);
@@ -657,6 +739,7 @@ class AgentCenterService
             'daily_create_limit' => $this->agentUserLimit(),
             'allow_traffic_reset' => $this->boolSetting('agent_center_allow_traffic_reset', true),
             'allowed_plan_ids' => trim((string) admin_setting('agent_center_allowed_plan_ids', '')),
+            'bonus_day_price' => $this->bonusDayPrice(),
         ];
     }
 

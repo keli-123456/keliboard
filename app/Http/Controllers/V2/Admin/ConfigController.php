@@ -203,6 +203,7 @@ class ConfigController extends Controller
                 'agent_center_reset_price_mode' => $this->normalizeAgentCenterResetPriceMode(
                     admin_setting('agent_center_reset_price_mode', 'plan_reset_price')
                 ),
+                'agent_center_bonus_day_price' => max(0, (int) admin_setting('agent_center_bonus_day_price', 0)),
             ],
             'ticket' => [
                 'ticket_must_wait_reply' => (bool) admin_setting('ticket_must_wait_reply', 1),

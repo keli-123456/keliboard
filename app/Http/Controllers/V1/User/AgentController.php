@@ -30,6 +30,9 @@ class AgentController extends Controller
             'email' => 'required|email|max:255',
             'password' => 'required|string|min:6|max:128',
             'remark' => 'nullable|string|max:255',
+            'plan_id' => 'nullable|integer|min:1',
+            'period' => 'nullable|string|max:64',
+            'bonus_days' => 'nullable|integer|min:0|max:365',
         ]);
 
         return $this->success($this->service()->createSubordinate($request->user(), $params));
@@ -55,6 +58,7 @@ class AgentController extends Controller
         $params = $request->validate([
             'plan_id' => 'required|integer|min:1',
             'period' => 'required|string|max:64',
+            'bonus_days' => 'nullable|integer|min:0|max:365',
         ]);
 
         return $this->success($this->service()->previewAssignPlan($request->user(), $id, $params));
@@ -65,6 +69,7 @@ class AgentController extends Controller
         $params = $request->validate([
             'plan_id' => 'required|integer|min:1',
             'period' => 'required|string|max:64',
+            'bonus_days' => 'nullable|integer|min:0|max:365',
         ]);
 
         return $this->success($this->service()->assignPlan($request->user(), $id, $params));
