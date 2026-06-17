@@ -8,6 +8,7 @@ use App\Exceptions\ApiException;
 use App\Models\Plan;
 use App\Models\User;
 use App\Services\AgentCenterService;
+use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use App\Support\Setting;
 use Illuminate\Database\Schema\Blueprint;
 use Tests\Support\InteractsWithInMemoryDatabase;
@@ -170,6 +171,31 @@ final class AgentCenterServiceTest extends TestCase
 
         $this->assertArrayHasKey('subscribe_url', $result);
         $this->assertStringContainsString('/s/buyer-token-123', $result['subscribe_url']);
+    }
+
+    public function test_subscribe_link_returns_accelerated_subscription_proxy_url_when_available(): void
+    {
+        app()->instance(SubscriptionProxyProbeService::class, new class extends SubscriptionProxyProbeService {
+            public function userPayload(string $token): array
+            {
+                return [
+                    'available' => true,
+                    'subscribe_url' => 'https://proxy.example.test/sub/' . $token,
+                    'machine_id' => 3,
+                ];
+            }
+        });
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $subordinate = $this->createOwnedSubordinate($agent, 'buyer@example.test', [
+            'token' => 'buyer-token-123',
+        ]);
+
+        $result = app(AgentCenterService::class)->subscribeLink($agent, $subordinate->id);
+
+        $this->assertStringContainsString('/s/buyer-token-123', $result['subscribe_url']);
+        $this->assertSame('https://proxy.example.test/sub/buyer-token-123', $result['accelerated_subscribe_url']);
+        $this->assertTrue($result['subscription_proxy']['available']);
+        $this->assertSame(3, $result['subscription_proxy']['machine_id']);
     }
 
     public function test_subscribe_link_rejects_unowned_subordinate(): void

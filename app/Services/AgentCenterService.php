@@ -8,6 +8,7 @@ use App\Models\AgentProfile;
 use App\Models\AgentUser;
 use App\Models\Plan;
 use App\Models\User;
+use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use App\Utils\Helper;
 use Illuminate\Support\Facades\DB;
 
@@ -121,9 +122,7 @@ class AgentCenterService
             throw new ApiException('Subscription token is unavailable');
         }
 
-        return [
-            'subscribe_url' => Helper::getSubscribeUrl($token),
-        ];
+        return $this->subscriptionLinkPayload($token);
     }
 
     public function resetSubscription(User $agent, int $subUserId): array
@@ -161,12 +160,11 @@ class AgentCenterService
 
             $ownership->setRelation('subordinate', $subordinate->fresh(['plan:id,name']) ?: $subordinate);
 
-            return [
-                'subscribe_url' => Helper::getSubscribeUrl((string) $subordinate->token),
+            return array_merge($this->subscriptionLinkPayload((string) $subordinate->token), [
                 'summary' => $this->summary($lockedAgent),
                 'user' => $this->ownedUserSnapshot($ownership),
                 'ledger' => $this->ledgerSnapshot($ledger),
-            ];
+            ]);
         });
     }
 
@@ -684,6 +682,20 @@ class AgentCenterService
     {
         $period = trim($period);
         return Plan::LEGACY_PERIOD_MAPPING[$period] ?? $period;
+    }
+
+    private function subscriptionLinkPayload(string $token): array
+    {
+        $payload = [
+            'subscribe_url' => Helper::getSubscribeUrl($token),
+        ];
+        $subscriptionProxy = app(SubscriptionProxyProbeService::class)->userPayload($token);
+        $payload['subscription_proxy'] = $subscriptionProxy;
+        if (!empty($subscriptionProxy['subscribe_url'])) {
+            $payload['accelerated_subscribe_url'] = $subscriptionProxy['subscribe_url'];
+        }
+
+        return $payload;
     }
 
     private function ledgerEntry(
