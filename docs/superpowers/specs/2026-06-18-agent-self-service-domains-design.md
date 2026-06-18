@@ -68,7 +68,7 @@ Existing fields remain:
 Add an admin setting:
 
 - `agent_center_domain_limit`
-- Default: `3`
+- Default: `1`
 - `0` means agents cannot self-add domains.
 
 Admin-created domains count toward the limit because the limit is about total domains owned by the agent. Admins can still override by editing the database only, but the UI/API should enforce the configured limit for normal operations.
