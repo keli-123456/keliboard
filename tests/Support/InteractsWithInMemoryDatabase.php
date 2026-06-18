@@ -232,6 +232,92 @@ trait InteractsWithInMemoryDatabase
         });
     }
 
+    protected function createPaymentTable(): void
+    {
+        $this->database->schema()->create('v2_payment', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->string('owner_type', 20)->default('platform');
+            $table->integer('owner_id')->nullable()->index();
+            $table->integer('owner_domain_id')->nullable();
+            $table->string('uuid', 32);
+            $table->string('payment', 32);
+            $table->string('name');
+            $table->string('icon')->nullable();
+            $table->text('config')->nullable();
+            $table->string('notify_domain', 128)->nullable();
+            $table->integer('handling_fee_fixed')->nullable();
+            $table->decimal('handling_fee_percent', 5, 2)->nullable();
+            $table->boolean('enable')->default(false);
+            $table->integer('sort')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+            $table->index(['owner_type', 'owner_id']);
+        });
+    }
+
+    protected function createAgentCommerceTables(): void
+    {
+        $this->database->schema()->create('v2_agent_domain', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('agent_user_id')->index();
+            $table->string('domain', 255)->unique();
+            $table->string('status', 20)->default('active');
+            $table->boolean('is_primary')->default(false);
+            $table->string('remark')->nullable();
+            $table->integer('created_by_admin_id')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+            $table->index(['agent_user_id', 'status']);
+        });
+
+        $this->database->schema()->create('v2_agent_plan_price', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('agent_user_id')->index();
+            $table->integer('plan_id')->index();
+            $table->string('period', 32);
+            $table->integer('sale_price')->default(0);
+            $table->boolean('enabled')->default(true);
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+            $table->unique(['agent_user_id', 'plan_id', 'period'], 'uniq_agent_plan_period');
+        });
+
+        $this->database->schema()->create('v2_agent_balance_hold', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('agent_user_id')->index();
+            $table->integer('order_id')->unique();
+            $table->string('trade_no', 64)->unique();
+            $table->integer('amount')->default(0);
+            $table->string('status', 20)->default('pending');
+            $table->integer('expires_at')->nullable();
+            $table->integer('captured_at')->nullable();
+            $table->integer('released_at')->nullable();
+            $table->json('metadata')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+            $table->index(['agent_user_id', 'status']);
+        });
+
+        $this->database->schema()->create('v2_agent_order_context', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('order_id')->unique();
+            $table->string('trade_no', 64)->unique();
+            $table->integer('agent_user_id')->index();
+            $table->integer('agent_domain_id')->nullable()->index();
+            $table->integer('payment_id')->nullable();
+            $table->integer('sale_amount')->default(0);
+            $table->integer('cost_amount')->default(0);
+            $table->integer('hold_id')->nullable();
+            $table->string('status', 20)->default('pending');
+            $table->json('pricing_snapshot')->nullable();
+            $table->json('domain_snapshot')->nullable();
+            $table->json('payment_snapshot')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+            $table->index(['agent_user_id', 'status']);
+        });
+    }
+
     protected function createTicketTables(): void
     {
         $this->database->schema()->create('v2_ticket', function (Blueprint $table): void {
