@@ -18,6 +18,7 @@ use App\Http\Controllers\V2\Admin\GiftCardController;
 use App\Http\Controllers\V2\Admin\KnowledgeController;
 use App\Http\Controllers\V2\Admin\PaymentController;
 use App\Http\Controllers\V2\Admin\BackupController;
+use App\Http\Controllers\V2\Admin\AgentCommerceController;
 use App\Http\Controllers\V2\Admin\SystemController;
 use App\Http\Controllers\V2\Admin\ThemeController;
 use App\Http\Controllers\V2\Admin\TrafficResetController;
@@ -257,6 +258,17 @@ class AdminRoute
                 $router->post('/drop', [PaymentController::class, 'drop']);
                 $router->post('/show', [PaymentController::class, 'show']);
                 $router->post('/sort', [PaymentController::class, 'sort']);
+            });
+
+            // Agent Commerce
+            $router->group([
+                'prefix' => 'agent-commerce'
+            ], function ($router) {
+                $router->get('/domains', [AgentCommerceController::class, 'domains']);
+                $router->post('/domains', [AgentCommerceController::class, 'saveDomain']);
+                $router->post('/domains/{id}/enable', [AgentCommerceController::class, 'enableDomain']);
+                $router->post('/domains/{id}/disable', [AgentCommerceController::class, 'disableDomain']);
+                $router->post('/domains/{id}/delete', [AgentCommerceController::class, 'deleteDomain']);
             });
 
             // System
