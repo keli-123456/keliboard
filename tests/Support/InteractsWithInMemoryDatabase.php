@@ -159,6 +159,37 @@ trait InteractsWithInMemoryDatabase
         });
     }
 
+    protected function bindTestUrlGenerator(string $baseUrl = 'https://example.test'): void
+    {
+        $generator = new class($baseUrl) {
+            public function __construct(private string $baseUrl) {}
+
+            public function route($name, $parameters = [], $absolute = true): string
+            {
+                if ($name === 'client.subscribe') {
+                    $token = is_array($parameters) ? (string) ($parameters['token'] ?? '') : (string) $parameters;
+                    $path = '/s/' . rawurlencode($token);
+
+                    return $absolute ? $this->to($path) : $path;
+                }
+
+                $path = '/' . trim((string) $name, '/');
+
+                return $absolute ? $this->to($path) : $path;
+            }
+
+            public function to($path, $extra = [], $secure = null): string
+            {
+                $path = '/' . ltrim((string) $path, '/');
+
+                return rtrim($this->baseUrl, '/') . $path;
+            }
+        };
+
+        app()->instance('url', $generator);
+        app()->instance(\Illuminate\Contracts\Routing\UrlGenerator::class, $generator);
+    }
+
     protected function createUserTable(): void
     {
         $this->database->schema()->create('v2_user', function (Blueprint $table): void {

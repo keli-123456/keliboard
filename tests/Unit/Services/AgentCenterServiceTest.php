@@ -30,6 +30,7 @@ final class AgentCenterServiceTest extends TestCase
         $this->createTicketTables();
         $this->createPlanTable();
         $this->createAgentTables();
+        $this->bindTestUrlGenerator();
         $this->bindAgentSettings();
     }
 
