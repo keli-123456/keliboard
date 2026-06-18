@@ -50,51 +50,5 @@ return new class extends Migration
 
     public function down(): void
     {
-        if ($this->ownsAgentSiteSettingTable()) {
-            Schema::dropIfExists('v2_agent_site_setting');
-        }
-    }
-
-    private function ownsAgentSiteSettingTable(): bool
-    {
-        if (!Schema::hasTable('v2_agent_site_setting')) {
-            return false;
-        }
-
-        $expectedColumns = [
-            'id',
-            'agent_user_id',
-            'agent_domain_id',
-            'setting_scope',
-            'setting_key',
-            'site_name',
-            'logo_url',
-            'landing_theme',
-            'accent_color',
-            'support_name',
-            'support_url',
-            'announcement',
-            'seo_title',
-            'seo_description',
-            'enabled',
-            'created_at',
-            'updated_at',
-        ];
-        $actualColumns = Schema::getColumnListing('v2_agent_site_setting');
-        sort($expectedColumns);
-        sort($actualColumns);
-
-        if ($actualColumns !== $expectedColumns) {
-            return false;
-        }
-
-        return Schema::hasIndex('v2_agent_site_setting', ['agent_user_id'])
-            && Schema::hasIndex('v2_agent_site_setting', ['agent_domain_id'])
-            && Schema::hasIndex('v2_agent_site_setting', ['enabled'])
-            && Schema::hasIndex(
-                'v2_agent_site_setting',
-                ['agent_user_id', 'setting_scope', 'setting_key'],
-                'unique'
-            );
     }
 };

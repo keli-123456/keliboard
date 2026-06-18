@@ -163,14 +163,22 @@ final class AgentSiteSettingServiceTest extends TestCase
         $this->assertSame('partial-kept', DB::table('v2_agent_site_setting')->value('legacy_marker'));
     }
 
-    public function test_migration_rollback_drops_migration_owned_site_setting_table(): void
+    public function test_migration_rollback_preserves_migration_shaped_site_setting_table(): void
     {
         $this->replaceTicketTableWithLegacyAgentColumns();
+        DB::table('v2_agent_site_setting')->insert([
+            'agent_user_id' => 1,
+            'agent_domain_id' => 2,
+            'setting_scope' => 'default',
+            'setting_key' => 'default',
+            'site_name' => 'Migration Shaped',
+        ]);
         $migration = $this->agentSiteSettingMigration();
 
         $migration->down();
 
-        $this->assertFalse(Schema::hasTable('v2_agent_site_setting'));
+        $this->assertTrue(Schema::hasTable('v2_agent_site_setting'));
+        $this->assertSame('Migration Shaped', DB::table('v2_agent_site_setting')->value('site_name'));
     }
 
     private function agentSiteSettingMigration(): object
