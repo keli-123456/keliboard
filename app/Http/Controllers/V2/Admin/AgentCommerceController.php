@@ -4,8 +4,12 @@ namespace App\Http\Controllers\V2\Admin;
 
 use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
+use App\Models\AgentBalanceHold;
 use App\Models\AgentDomain;
+use App\Models\AgentOrderContext;
 use App\Models\AgentProfile;
+use App\Models\Payment;
+use App\Models\User;
 use App\Services\AgentCenterService;
 use App\Services\AgentDomainResolver;
 use Illuminate\Http\Request;
@@ -105,6 +109,95 @@ class AgentCommerceController extends Controller
         return $this->success(true);
     }
 
+    public function payments(Request $request)
+    {
+        $payments = Payment::query()
+            ->where('owner_type', Payment::OWNER_AGENT)
+            ->orderBy('id', 'desc')
+            ->limit($this->limitFromRequest($request))
+            ->get();
+
+        $agentEmails = $this->userEmailMap($payments->pluck('owner_id')->filter()->unique()->all());
+        $domainNames = $this->domainNameMap($payments->pluck('owner_domain_id')->filter()->unique()->all());
+
+        return $this->success($payments->map(fn (Payment $payment): array => [
+            'id' => (int) $payment->id,
+            'agent_user_id' => $this->nullableInt($payment->owner_id),
+            'agent_email' => $agentEmails[(int) $payment->owner_id] ?? '',
+            'owner_domain_id' => $this->nullableInt($payment->owner_domain_id),
+            'owner_domain' => $domainNames[(int) $payment->owner_domain_id] ?? '',
+            'payment' => (string) $payment->payment,
+            'name' => (string) $payment->name,
+            'icon' => $payment->icon,
+            'enable' => (bool) $payment->enable,
+            'notify_domain' => $payment->notify_domain,
+            'sort' => $this->nullableInt($payment->sort),
+            'created_at' => $this->timestampValue($payment->created_at),
+            'updated_at' => $this->timestampValue($payment->updated_at),
+        ])->values());
+    }
+
+    public function holds(Request $request)
+    {
+        $holds = AgentBalanceHold::query()
+            ->with(['agent:id,email', 'order.user:id,email'])
+            ->orderBy('id', 'desc')
+            ->limit($this->limitFromRequest($request))
+            ->get();
+
+        return $this->success($holds->map(fn (AgentBalanceHold $hold): array => [
+            'id' => (int) $hold->id,
+            'agent_user_id' => (int) $hold->agent_user_id,
+            'agent_email' => (string) ($hold->agent?->email ?? ''),
+            'order_id' => (int) $hold->order_id,
+            'trade_no' => (string) $hold->trade_no,
+            'amount' => (int) $hold->amount,
+            'status' => (string) $hold->status,
+            'expires_at' => $this->timestampValue($hold->expires_at),
+            'captured_at' => $this->timestampValue($hold->captured_at),
+            'released_at' => $this->timestampValue($hold->released_at),
+            'order_status' => $this->nullableInt($hold->order?->status),
+            'order_total_amount' => $this->nullableInt($hold->order?->total_amount),
+            'buyer_user_id' => $this->nullableInt($hold->order?->user_id),
+            'buyer_email' => (string) ($hold->order?->user?->email ?? ''),
+            'created_at' => $this->timestampValue($hold->created_at),
+            'updated_at' => $this->timestampValue($hold->updated_at),
+        ])->values());
+    }
+
+    public function orders(Request $request)
+    {
+        $contexts = AgentOrderContext::query()
+            ->with(['agent:id,email', 'domain:id,domain', 'hold:id,status', 'payment:id,name,payment', 'order.user:id,email'])
+            ->orderBy('id', 'desc')
+            ->limit($this->limitFromRequest($request))
+            ->get();
+
+        return $this->success($contexts->map(fn (AgentOrderContext $context): array => [
+            'id' => (int) $context->id,
+            'order_id' => (int) $context->order_id,
+            'trade_no' => (string) $context->trade_no,
+            'agent_user_id' => (int) $context->agent_user_id,
+            'agent_email' => (string) ($context->agent?->email ?? ''),
+            'agent_domain_id' => $this->nullableInt($context->agent_domain_id),
+            'agent_domain' => (string) ($context->domain?->domain ?? ''),
+            'payment_id' => $this->nullableInt($context->payment_id),
+            'payment_name' => (string) ($context->payment?->name ?? ''),
+            'payment_code' => (string) ($context->payment?->payment ?? ''),
+            'buyer_user_id' => $this->nullableInt($context->order?->user_id),
+            'buyer_email' => (string) ($context->order?->user?->email ?? ''),
+            'sale_amount' => (int) $context->sale_amount,
+            'cost_amount' => (int) $context->cost_amount,
+            'hold_id' => $this->nullableInt($context->hold_id),
+            'hold_status' => (string) ($context->hold?->status ?? ''),
+            'order_status' => $this->nullableInt($context->order?->status),
+            'order_total_amount' => $this->nullableInt($context->order?->total_amount),
+            'status' => (string) $context->status,
+            'created_at' => $this->timestampValue($context->created_at),
+            'updated_at' => $this->timestampValue($context->updated_at),
+        ])->values());
+    }
+
     private function setDomainStatus(int $id, string $status)
     {
         $domain = AgentDomain::query()->find($id);
@@ -145,5 +238,66 @@ class AgentCommerceController extends Controller
             'created_at' => $domain->created_at ? (int) $domain->created_at : null,
             'updated_at' => $domain->updated_at ? (int) $domain->updated_at : null,
         ];
+    }
+
+    private function limitFromRequest(Request $request): int
+    {
+        $limit = (int) $request->input('limit', 100);
+
+        return max(1, min(200, $limit));
+    }
+
+    /**
+     * @param array<int|string|null> $ids
+     * @return array<int, string>
+     */
+    private function userEmailMap(array $ids): array
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+        if ($ids === []) {
+            return [];
+        }
+
+        return User::query()
+            ->whereIn('id', $ids)
+            ->pluck('email', 'id')
+            ->map(fn ($email): string => (string) $email)
+            ->all();
+    }
+
+    /**
+     * @param array<int|string|null> $ids
+     * @return array<int, string>
+     */
+    private function domainNameMap(array $ids): array
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+        if ($ids === []) {
+            return [];
+        }
+
+        return AgentDomain::query()
+            ->whereIn('id', $ids)
+            ->pluck('domain', 'id')
+            ->map(fn ($domain): string => (string) $domain)
+            ->all();
+    }
+
+    private function nullableInt($value): ?int
+    {
+        return $value === null ? null : (int) $value;
+    }
+
+    private function timestampValue($value): ?int
+    {
+        if (!$value) {
+            return null;
+        }
+
+        if ($value instanceof \DateTimeInterface) {
+            return $value->getTimestamp();
+        }
+
+        return (int) $value;
     }
 }

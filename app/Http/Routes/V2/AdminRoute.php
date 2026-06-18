@@ -269,6 +269,9 @@ class AdminRoute
                 $router->post('/domains/{id}/enable', [AgentCommerceController::class, 'enableDomain']);
                 $router->post('/domains/{id}/disable', [AgentCommerceController::class, 'disableDomain']);
                 $router->post('/domains/{id}/delete', [AgentCommerceController::class, 'deleteDomain']);
+                $router->get('/payments', [AgentCommerceController::class, 'payments']);
+                $router->get('/holds', [AgentCommerceController::class, 'holds']);
+                $router->get('/orders', [AgentCommerceController::class, 'orders']);
             });
 
             // System
