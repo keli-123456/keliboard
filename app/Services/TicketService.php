@@ -198,7 +198,7 @@ class TicketService
         $this->sendEmailNotify($ticket, $ticketMessage);
     }
 
-    public function createTicket($userId, $subject, $level, $message, array $images = [])
+    public function createTicket($userId, $subject, $level, $message, array $images = [], array $options = [])
     {
         $stored = [];
         try {
@@ -207,8 +207,15 @@ class TicketService
                 DB::rollBack();
                 throw new ApiException('存在未关闭的工单');
             }
+            $agentContext = isset($options['agent_context']) && is_array($options['agent_context'])
+                ? $options['agent_context']
+                : [];
+            $agentUserId = $agentContext['agent_user_id'] ?? null;
+            $agentDomainId = $agentContext['agent_domain_id'] ?? null;
             $ticket = Ticket::create([
                 'user_id' => $userId,
+                'agent_user_id' => $agentUserId !== null && $agentUserId !== '' ? (int) $agentUserId : null,
+                'agent_domain_id' => $agentDomainId !== null && $agentDomainId !== '' ? (int) $agentDomainId : null,
                 'subject' => $subject,
                 'level' => $level,
                 'status' => Ticket::STATUS_OPENING,

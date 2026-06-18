@@ -10,6 +10,7 @@ use App\Models\Ticket;
 use App\Models\TicketMessage;
 use App\Models\TicketMessageAttachment;
 use App\Models\User;
+use App\Services\AgentCommerceContextResolver;
 use App\Services\TicketService;
 use App\Utils\Dict;
 use Illuminate\Http\Request;
@@ -54,7 +55,11 @@ class TicketController extends Controller
             $request->input('subject'),
             $request->input('level'),
             (string) $request->input('message', ''),
-            $images
+            $images,
+            [
+                'agent_context' => app(AgentCommerceContextResolver::class)
+                    ->resolveRequest($request, $request->user()),
+            ]
         );
         HookManager::call('ticket.create.after', $ticket);
         return $this->success(true);

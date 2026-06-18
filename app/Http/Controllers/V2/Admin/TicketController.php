@@ -22,6 +22,8 @@ class TicketController extends Controller
     private const TICKET_FILTER_FIELDS = [
         'id' => 'id',
         'user_id' => 'user_id',
+        'agent_user_id' => 'agent_user_id',
+        'agent_domain_id' => 'agent_domain_id',
         'subject' => 'subject',
         'level' => 'level',
         'status' => 'status',
@@ -33,6 +35,8 @@ class TicketController extends Controller
     private const TICKET_SORT_FIELDS = [
         'id' => 'id',
         'user_id' => 'user_id',
+        'agent_user_id' => 'agent_user_id',
+        'agent_domain_id' => 'agent_domain_id',
         'subject' => 'subject',
         'level' => 'level',
         'status' => 'status',
@@ -90,6 +94,10 @@ class TicketController extends Controller
 
                     if (is_array($value)) {
                         $query->whereIn($column, $value);
+                    } elseif (in_array($key, ['agent_user_id', 'agent_domain_id'], true)) {
+                        if ($value !== null && $value !== '') {
+                            $query->where($column, (int) $value);
+                        }
                     } else {
                         $query->where($column, 'like', "%{$value}%");
                     }
@@ -147,13 +155,21 @@ class TicketController extends Controller
      */
     private function fetchTicketById(Request $request)
     {
-        $ticket = Ticket::with(['messages.ticket', 'messages.attachments', 'user'])->find($request->input('id'));
+        $ticket = Ticket::with([
+            'messages.ticket',
+            'messages.attachments',
+            'user',
+            'agent:id,email',
+            'agentDomain:id,domain',
+        ])->find($request->input('id'));
 
         if (!$ticket) {
             return $this->fail([400202, '工单不存在']);
         }
         $result = $ticket->toArray();
         $result['user'] = UserController::transformUserData($ticket->user);
+        $result['agent'] = $this->formatAgentPayload($ticket->agent);
+        $result['agent_domain'] = $this->formatAgentDomainPayload($ticket->agentDomain);
         $result['risk_context'] = $this->buildSubscriptionRiskContext(
             (int) $ticket->user_id,
             (string) ($ticket->user->email ?? '')
@@ -266,7 +282,7 @@ class TicketController extends Controller
      */
     private function fetchTickets(Request $request)
     {
-        $ticketModel = Ticket::with('user')
+        $ticketModel = Ticket::with(['user', 'agent:id,email', 'agentDomain:id,domain'])
             ->when($request->has('status'), function ($query) use ($request) {
                 $status = $request->input('status');
                 if (is_scalar($status) && $status !== '') {
@@ -330,6 +346,8 @@ class TicketController extends Controller
         $items = collect($tickets->items())->map(function ($ticket) use ($latestAiByTicket) {
             $ticketData = $ticket->toArray();
             $ticketData['user'] = UserController::transformUserData($ticket->user);
+            $ticketData['agent'] = $this->formatAgentPayload($ticket->agent);
+            $ticketData['agent_domain'] = $this->formatAgentDomainPayload($ticket->agentDomain);
             $latestAi = $latestAiByTicket->get((int) $ticket->id);
             if ($latestAi) {
                 $ticketData['ai_category'] = $latestAi->category;
@@ -340,6 +358,30 @@ class TicketController extends Controller
         })->all();
 
         return $this->paginate($tickets, $items);
+    }
+
+    private function formatAgentPayload($agent): ?array
+    {
+        if (!$agent) {
+            return null;
+        }
+
+        return [
+            'id' => (int) $agent->id,
+            'email' => (string) $agent->email,
+        ];
+    }
+
+    private function formatAgentDomainPayload($domain): ?array
+    {
+        if (!$domain) {
+            return null;
+        }
+
+        return [
+            'id' => (int) $domain->id,
+            'domain' => (string) $domain->domain,
+        ];
     }
 
     public function reply(Request $request)
