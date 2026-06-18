@@ -111,22 +111,46 @@ final class AgentSiteSettingServiceTest extends TestCase
         $this->assertSame('agent.example.test', $ticket->agentDomain->domain);
     }
 
-    public function test_migration_rollback_preserves_pre_existing_site_setting_table(): void
+    public function test_migration_rollback_preserves_pre_existing_ticket_agent_columns(): void
+    {
+        $this->replaceTicketTableWithLegacyAgentColumns();
+        DB::table('v2_ticket')->insert([
+            'user_id' => 1,
+            'agent_user_id' => 2,
+            'agent_domain_id' => 3,
+            'legacy_marker' => 'ticket-kept',
+        ]);
+        $migration = $this->agentSiteSettingMigration();
+
+        $migration->up();
+        $migration->down();
+
+        $this->assertTrue(Schema::hasTable('v2_ticket'));
+        $this->assertTrue(Schema::hasColumn('v2_ticket', 'agent_user_id'));
+        $this->assertTrue(Schema::hasColumn('v2_ticket', 'agent_domain_id'));
+        $this->assertSame(2, DB::table('v2_ticket')->value('agent_user_id'));
+        $this->assertSame(3, DB::table('v2_ticket')->value('agent_domain_id'));
+        $this->assertSame('ticket-kept', DB::table('v2_ticket')->value('legacy_marker'));
+    }
+
+    public function test_migration_rollback_preserves_partial_overlap_site_setting_table(): void
     {
         Schema::drop('v2_agent_site_setting');
-        Schema::drop('v2_ticket_message_attachment');
-        Schema::drop('v2_ticket_message');
-        Schema::drop('v2_ticket');
         Schema::create('v2_agent_site_setting', function (Blueprint $table): void {
             $table->increments('id');
             $table->unsignedInteger('agent_user_id')->index();
-            $table->unsignedInteger('agent_domain_id')->nullable()->index();
+            $table->string('setting_scope', 16)->default('default');
+            $table->string('setting_key', 64)->default('default');
+            $table->string('site_name', 80)->nullable();
+            $table->boolean('enabled')->default(true)->index();
             $table->string('legacy_marker', 32)->nullable();
+            $table->unique(['agent_user_id', 'setting_scope', 'setting_key'], 'uniq_agent_site_setting_scope');
         });
         DB::table('v2_agent_site_setting')->insert([
             'agent_user_id' => 1,
-            'agent_domain_id' => null,
-            'legacy_marker' => 'kept',
+            'setting_scope' => 'default',
+            'setting_key' => 'default',
+            'legacy_marker' => 'partial-kept',
         ]);
         $migration = $this->agentSiteSettingMigration();
 
@@ -135,14 +159,37 @@ final class AgentSiteSettingServiceTest extends TestCase
 
         $this->assertTrue(Schema::hasTable('v2_agent_site_setting'));
         $this->assertTrue(Schema::hasColumn('v2_agent_site_setting', 'legacy_marker'));
-        $this->assertFalse(Schema::hasColumn('v2_agent_site_setting', 'setting_scope'));
-        $this->assertFalse(Schema::hasColumn('v2_agent_site_setting', 'setting_key'));
-        $this->assertSame('kept', DB::table('v2_agent_site_setting')->value('legacy_marker'));
+        $this->assertFalse(Schema::hasColumn('v2_agent_site_setting', 'logo_url'));
+        $this->assertSame('partial-kept', DB::table('v2_agent_site_setting')->value('legacy_marker'));
+    }
+
+    public function test_migration_rollback_drops_migration_owned_site_setting_table(): void
+    {
+        $this->replaceTicketTableWithLegacyAgentColumns();
+        $migration = $this->agentSiteSettingMigration();
+
+        $migration->down();
+
+        $this->assertFalse(Schema::hasTable('v2_agent_site_setting'));
     }
 
     private function agentSiteSettingMigration(): object
     {
         return require dirname(__DIR__, 3) . '/database/migrations/2026_06_18_000003_create_agent_site_setting_table.php';
+    }
+
+    private function replaceTicketTableWithLegacyAgentColumns(): void
+    {
+        Schema::drop('v2_ticket_message_attachment');
+        Schema::drop('v2_ticket_message');
+        Schema::drop('v2_ticket');
+        Schema::create('v2_ticket', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('user_id');
+            $table->integer('agent_user_id')->nullable()->index();
+            $table->integer('agent_domain_id')->nullable()->index();
+            $table->string('legacy_marker', 32)->nullable();
+        });
     }
 
     private function createActiveAgent(string $email): User
