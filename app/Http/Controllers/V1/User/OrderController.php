@@ -202,24 +202,19 @@ class OrderController extends Controller
             return $this->fail([400, __('Payment method is not available')]);
         }
         $agentCommerce = app(AgentCommerceService::class);
-        try {
-            $agentCommerce->assertPaymentAvailableForOrder($order, $payment);
-            $agentCommerce->assertCheckoutBalanceAvailable($order);
-        } catch (ApiException $exception) {
-            return $this->fail([400, $exception->getMessage()]);
-        }
         if ((int) $order->plan_id === 0 && $payment->payment === 'balance') {
             return $this->fail([400, __('Balance payment is not available for recharge orders')]);
         }
-        $paymentService = new PaymentService($payment->payment, $payment->id);
-        $order->handling_amount = NULL;
+        $handlingAmount = null;
         if ($payment->handling_fee_fixed || $payment->handling_fee_percent) {
-            $order->handling_amount = (int) round(($order->total_amount * ($payment->handling_fee_percent / 100)) + $payment->handling_fee_fixed);
+            $handlingAmount = (int) round(($order->total_amount * ($payment->handling_fee_percent / 100)) + $payment->handling_fee_fixed);
         }
-        $order->payment_id = $method;
-        if (!$order->save())
-            return $this->fail([400, __('Request failed, please try again later')]);
-        $agentCommerce->attachPayment($order, $payment);
+        try {
+            $order = $agentCommerce->assignPaymentForCheckout($order, $payment, $handlingAmount);
+        } catch (ApiException $exception) {
+            return $this->fail([400, $exception->getMessage()]);
+        }
+        $paymentService = new PaymentService($payment->payment, $payment->id);
         $result = $paymentService->pay([
             'trade_no' => $tradeNo,
             'total_amount' => isset($order->handling_amount) ? ($order->total_amount + $order->handling_amount) : $order->total_amount,

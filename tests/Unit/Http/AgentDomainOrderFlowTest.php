@@ -157,6 +157,29 @@ final class AgentDomainOrderFlowTest extends TestCase
         $this->assertSame($payment->id, (int) $order->fresh()->payment_id);
     }
 
+    public function test_agent_checkout_does_not_double_count_current_hold(): void
+    {
+        [$agent, $buyer, $order] = $this->createAgentOrderFixture();
+        $payment = $this->createPayment(Payment::OWNER_AGENT, $agent->id);
+        $hold = AgentBalanceHold::query()->where('order_id', $order->id)->first();
+        $agent->balance = (int) $hold->amount;
+        $agent->save();
+
+        $request = BaseRequest::create('/api/v1/user/order/checkout', 'POST', [
+            'trade_no' => $order->trade_no,
+            'method' => $payment->id,
+        ]);
+        $request->setUserResolver(static fn (): User => $buyer);
+        app()->instance('request', $request);
+
+        $response = app(OrderController::class)->checkout($request);
+        $payload = $this->responsePayload($response);
+
+        $this->assertSame(0, $payload['type']);
+        $this->assertSame($payment->id, (int) $order->fresh()->payment_id);
+        $this->assertSame($payment->id, (int) AgentOrderContext::query()->where('order_id', $order->id)->first()->payment_id);
+    }
+
     public function test_agent_checkout_rejects_when_hold_is_not_pending(): void
     {
         [$agent, $buyer, $order] = $this->createAgentOrderFixture();

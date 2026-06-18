@@ -241,47 +241,78 @@ class AgentCommerceService
         }
     }
 
-    public function assertCheckoutBalanceAvailable(Order $order): void
+    public function assignPaymentForCheckout(Order $order, Payment $payment, ?int $handlingAmount): Order
     {
-        $context = $this->contextForOrder($order);
-        if (!$context) {
-            return;
-        }
-
-        DB::transaction(function () use ($context): void {
-            $lockedContext = AgentOrderContext::query()
-                ->whereKey($context->id)
+        return DB::transaction(function () use ($order, $payment, $handlingAmount): Order {
+            $lockedOrder = Order::query()
+                ->whereKey($order->id)
                 ->lockForUpdate()
                 ->first();
-            if (!$lockedContext) {
-                throw new ApiException('Agent order context is unavailable');
+            if (!$lockedOrder || (int) $lockedOrder->status !== 0) {
+                throw new ApiException(__('Order does not exist or has been paid'));
             }
 
-            $hold = AgentBalanceHold::query()
-                ->whereKey($lockedContext->hold_id)
+            $context = AgentOrderContext::query()
+                ->where('order_id', $lockedOrder->id)
                 ->lockForUpdate()
                 ->first();
-            if (!$hold || $hold->status !== AgentBalanceHold::STATUS_PENDING) {
-                throw new ApiException('Agent balance hold is unavailable');
+            if (!$context) {
+                if ($payment->owner_type !== Payment::OWNER_PLATFORM) {
+                    throw new ApiException('This payment method is unavailable.');
+                }
+            } else {
+                if (
+                    $payment->owner_type !== Payment::OWNER_AGENT
+                    || (int) $payment->owner_id !== (int) $context->agent_user_id
+                ) {
+                    throw new ApiException('This payment method is unavailable.');
+                }
+
+                $hold = AgentBalanceHold::query()
+                    ->whereKey($context->hold_id)
+                    ->lockForUpdate()
+                    ->first();
+                if (!$hold || $hold->status !== AgentBalanceHold::STATUS_PENDING) {
+                    throw new ApiException('Agent balance hold is unavailable');
+                }
+
+                $agent = User::query()
+                    ->whereKey($context->agent_user_id)
+                    ->lockForUpdate()
+                    ->first();
+                if (!$agent) {
+                    throw new ApiException('Agent user does not exist');
+                }
+
+                $pendingOther = AgentBalanceHold::query()
+                    ->where('agent_user_id', $agent->id)
+                    ->where('status', AgentBalanceHold::STATUS_PENDING)
+                    ->where('id', '<>', $hold->id)
+                    ->sum('amount');
+
+                if (((int) $agent->balance - (int) $pendingOther) < (int) $hold->amount) {
+                    throw new ApiException(self::INSUFFICIENT_SITE_BALANCE_MESSAGE);
+                }
+
+                $context->payment_id = $payment->id;
+                $context->payment_snapshot = [
+                    'id' => (int) $payment->id,
+                    'name' => (string) $payment->name,
+                    'payment' => (string) $payment->payment,
+                    'owner_type' => (string) $payment->owner_type,
+                    'owner_id' => $payment->owner_id ? (int) $payment->owner_id : null,
+                ];
+                $context->updated_at = time();
+                $context->save();
             }
 
-            $agent = User::query()
-                ->whereKey($lockedContext->agent_user_id)
-                ->lockForUpdate()
-                ->first();
-            if (!$agent) {
-                throw new ApiException('Agent user does not exist');
+            $lockedOrder->handling_amount = $handlingAmount;
+            $lockedOrder->payment_id = $payment->id;
+            if (!$lockedOrder->save()) {
+                throw new ApiException(__('Request failed, please try again later'));
             }
 
-            $pendingOther = AgentBalanceHold::query()
-                ->where('agent_user_id', $agent->id)
-                ->where('status', AgentBalanceHold::STATUS_PENDING)
-                ->where('id', '<>', $hold->id)
-                ->sum('amount');
-
-            if (((int) $agent->balance - (int) $pendingOther) < (int) $hold->amount) {
-                throw new ApiException(self::INSUFFICIENT_SITE_BALANCE_MESSAGE);
-            }
+            return $lockedOrder;
         });
     }
 
