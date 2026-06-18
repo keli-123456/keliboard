@@ -332,6 +332,45 @@ class AgentCommerceService
         });
     }
 
+    public function releaseForOrder(Order $order, string $status = AgentBalanceHold::STATUS_RELEASED): void
+    {
+        if (!DB::connection()->getSchemaBuilder()->hasTable('v2_agent_order_context')) {
+            return;
+        }
+
+        DB::transaction(function () use ($order, $status): void {
+            $context = AgentOrderContext::query()
+                ->where('order_id', $order->id)
+                ->lockForUpdate()
+                ->first();
+            if (!$context) {
+                return;
+            }
+
+            $hold = AgentBalanceHold::query()
+                ->whereKey($context->hold_id)
+                ->lockForUpdate()
+                ->first();
+            if (!$hold || $hold->status !== AgentBalanceHold::STATUS_PENDING) {
+                return;
+            }
+
+            $now = time();
+            $hold->status = $status;
+            if ($status === AgentBalanceHold::STATUS_RELEASED) {
+                $hold->released_at = $now;
+            }
+            $hold->updated_at = $now;
+            $hold->save();
+
+            $context->status = $status === AgentBalanceHold::STATUS_RELEASED
+                ? AgentOrderContext::STATUS_CANCELLED
+                : AgentOrderContext::STATUS_FAILED;
+            $context->updated_at = $now;
+            $context->save();
+        });
+    }
+
     private function activeProfile(User $agent): AgentProfile
     {
         $profile = AgentProfile::query()

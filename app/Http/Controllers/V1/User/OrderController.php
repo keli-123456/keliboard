@@ -285,6 +285,7 @@ class OrderController extends Controller
         if (!$orderService->cancel()) {
             return $this->fail([400, __('Cancel failed')]);
         }
+        app(AgentCommerceService::class)->releaseForOrder($order);
         return $this->success(true);
     }
 }

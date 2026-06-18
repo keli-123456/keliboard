@@ -226,6 +226,27 @@ final class AgentDomainOrderFlowTest extends TestCase
         $this->assertSame('gateway-1', $order->fresh()->callback_no);
     }
 
+    public function test_cancel_agent_order_releases_pending_hold(): void
+    {
+        [$agent, $buyer, $order] = $this->createAgentOrderFixture();
+        $request = BaseRequest::create('/api/v1/user/order/cancel', 'POST', [
+            'trade_no' => $order->trade_no,
+        ]);
+        $request->setUserResolver(static fn (): User => $buyer);
+
+        $response = app(OrderController::class)->cancel($request);
+        $payload = $this->responsePayload($response);
+
+        $hold = AgentBalanceHold::query()->where('order_id', $order->id)->first();
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->first();
+        $this->assertSame('success', $payload['status']);
+        $this->assertTrue($payload['data']);
+        $this->assertSame(AgentBalanceHold::STATUS_RELEASED, $hold->fresh()->status);
+        $this->assertNotNull($hold->fresh()->released_at);
+        $this->assertSame(AgentOrderContext::STATUS_CANCELLED, $context->fresh()->status);
+        $this->assertSame(10000, (int) $agent->fresh()->balance);
+    }
+
     public function test_registration_through_agent_domain_binds_user_to_agent(): void
     {
         $agent = $this->createActiveAgent('agent@example.test');
