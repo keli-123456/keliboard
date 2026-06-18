@@ -72,6 +72,31 @@ final class AgentDomainSelfServiceTest extends TestCase
         app(AgentDomainSelfService::class)->createPending($agent, 'https://agent.example.test', null);
     }
 
+    public function test_insert_time_unique_conflict_maps_to_domain_already_assigned(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $service = new class extends AgentDomainSelfService {
+            private bool $conflictInserted = false;
+
+            protected function createDomainRow(array $attributes): AgentDomain
+            {
+                if (!$this->conflictInserted) {
+                    $this->conflictInserted = true;
+                    AgentDomain::query()->create(array_merge($attributes, [
+                        'remark' => 'conflicting insert',
+                    ]));
+                }
+
+                return parent::createDomainRow($attributes);
+            }
+        };
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Domain already assigned');
+
+        $service->createPending($agent, 'agent.example.test', null);
+    }
+
     public function test_domain_limit_defaults_to_one(): void
     {
         $agent = $this->createActiveAgent('agent@example.test');
@@ -212,6 +237,41 @@ final class AgentDomainSelfServiceTest extends TestCase
         $service->verify($agent, $pending['id']);
     }
 
+    public function test_verify_rechecks_active_agent_profile_before_activating(): void
+    {
+        $txtRecords = [];
+        $agent = $this->createActiveAgent('agent@example.test');
+        $service = new AgentDomainSelfService(
+            static function (string $name) use (&$txtRecords, $agent): array {
+                AgentProfile::query()
+                    ->where('user_id', $agent->id)
+                    ->update([
+                        'status' => AgentCenterService::STATUS_DISABLED,
+                        'disabled_at' => time(),
+                        'updated_at' => time(),
+                    ]);
+
+                return $txtRecords[$name] ?? [];
+            }
+        );
+        $pending = $service->createPending($agent, 'agent.example.test', null);
+        $txtRecords[$pending['verification']['record_name']] = [
+            $pending['verification']['record_value'],
+        ];
+
+        try {
+            $service->verify($agent, $pending['id']);
+            $this->fail('Expected inactive agent exception.');
+        } catch (ApiException $exception) {
+            $this->assertSame('Agent permission is not active', $exception->getMessage());
+        }
+
+        $domain = AgentDomain::query()->find($pending['id']);
+        $this->assertNotNull($domain);
+        $this->assertSame(AgentDomain::STATUS_PENDING, $domain->status);
+        $this->assertNull($domain->verified_at);
+    }
+
     public function test_verify_rechecks_locked_proof_snapshot_before_activating(): void
     {
         $domainId = null;
@@ -246,6 +306,43 @@ final class AgentDomainSelfServiceTest extends TestCase
         $this->assertNotNull($domain);
         $this->assertSame(AgentDomain::STATUS_PENDING, $domain->status);
         $this->assertSame('changed-token', $domain->verification_token);
+        $this->assertNull($domain->verified_at);
+    }
+
+    public function test_verify_rechecks_locked_domain_snapshot_before_activating(): void
+    {
+        $domainId = null;
+        $oldRecordValue = null;
+        $service = new AgentDomainSelfService(
+            static function (string $name) use (&$domainId, &$oldRecordValue): array {
+                if ($domainId !== null) {
+                    AgentDomain::query()
+                        ->where('id', $domainId)
+                        ->update([
+                            'domain' => 'changed.example.test',
+                            'updated_at' => time(),
+                        ]);
+                }
+
+                return [$oldRecordValue];
+            }
+        );
+        $agent = $this->createActiveAgent('agent@example.test');
+        $pending = $service->createPending($agent, 'agent.example.test', null);
+        $domainId = $pending['id'];
+        $oldRecordValue = $pending['verification']['record_value'];
+
+        try {
+            $service->verify($agent, $pending['id']);
+            $this->fail('Expected verification unavailable exception for stale domain proof.');
+        } catch (ApiException $exception) {
+            $this->assertSame('Domain verification is unavailable', $exception->getMessage());
+        }
+
+        $domain = AgentDomain::query()->find($pending['id']);
+        $this->assertNotNull($domain);
+        $this->assertSame(AgentDomain::STATUS_PENDING, $domain->status);
+        $this->assertSame('changed.example.test', $domain->domain);
         $this->assertNull($domain->verified_at);
     }
 
@@ -287,6 +384,20 @@ final class AgentDomainSelfServiceTest extends TestCase
     {
         $agent = $this->createActiveAgent('agent@example.test');
         $domain = $this->createDomain($agent, 'agent.example.test');
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Domain verification is unavailable');
+
+        app(AgentDomainSelfService::class)->verify($agent, $domain->id);
+    }
+
+    public function test_pending_admin_created_domain_with_token_cannot_be_verified(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $domain = $this->createDomain($agent, 'agent.example.test', AgentDomain::STATUS_PENDING, [
+            'verification_type' => AgentDomainSelfService::VERIFICATION_TYPE_TXT,
+            'verification_token' => 'admin-token',
+        ]);
 
         $this->expectException(ApiException::class);
         $this->expectExceptionMessage('Domain verification is unavailable');
@@ -361,6 +472,32 @@ final class AgentDomainSelfServiceTest extends TestCase
         $this->expectExceptionMessage('Domain does not exist');
 
         app(AgentDomainSelfService::class)->delete($agent, $domain->id);
+    }
+
+    public function test_delete_rechecks_active_agent_profile_before_deleting(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $domain = $this->createDomain($agent, 'agent.example.test', AgentDomain::STATUS_ACTIVE, [
+            'created_by_agent_id' => $agent->id,
+            'verification_type' => AgentDomainSelfService::VERIFICATION_TYPE_TXT,
+            'verification_token' => 'agent-token',
+        ]);
+        AgentProfile::query()
+            ->where('user_id', $agent->id)
+            ->update([
+                'status' => AgentCenterService::STATUS_DISABLED,
+                'disabled_at' => time(),
+                'updated_at' => time(),
+            ]);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Agent permission is not active');
+
+        try {
+            app(AgentDomainSelfService::class)->delete($agent, $domain->id);
+        } finally {
+            $this->assertSame(1, AgentDomain::query()->where('id', $domain->id)->count());
+        }
     }
 
     public function test_admin_created_owned_domain_cannot_be_deleted(): void

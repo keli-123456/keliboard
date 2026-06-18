@@ -45,7 +45,7 @@ class AgentDomainSelfService
 
             $now = time();
             try {
-                $domain = AgentDomain::query()->create([
+                $domain = $this->createDomainRow([
                     'agent_user_id' => (int) $agent->id,
                     'domain' => $domainName,
                     'status' => AgentDomain::STATUS_PENDING,
@@ -72,6 +72,11 @@ class AgentDomainSelfService
         });
     }
 
+    protected function createDomainRow(array $attributes): AgentDomain
+    {
+        return AgentDomain::query()->create($attributes);
+    }
+
     public function verify(User $agent, int $id): array
     {
         $this->activeProfile($agent);
@@ -93,6 +98,7 @@ class AgentDomainSelfService
         }
 
         return DB::transaction(function () use ($agent, $id, $proof): array {
+            $this->activeProfile($agent, true);
             $domain = $this->ownedDomain($agent, $id, true);
             $this->assertVerificationAvailable($domain, $agent);
             $this->assertVerificationProofCurrent($domain, $proof);
@@ -114,6 +120,7 @@ class AgentDomainSelfService
         $this->activeProfile($agent);
 
         return DB::transaction(function () use ($agent, $id): bool {
+            $this->activeProfile($agent, true);
             $domain = $this->ownedDomain($agent, $id, true);
             if (!$this->createdByAgent($domain, $agent)) {
                 throw new ApiException('Domain cannot be deleted');
