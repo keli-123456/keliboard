@@ -13,6 +13,7 @@ use App\Models\Payment;
 use App\Models\Plan;
 use App\Models\User;
 use App\Services\CouponService;
+use App\Services\AgentCommerceService;
 use App\Services\OrderService;
 use App\Services\PaymentService;
 use App\Services\PlanService;
@@ -76,6 +77,17 @@ class OrderController extends Controller
         $planService = new PlanService($plan);
 
         $planService->validatePurchase($user, $request->input('period'));
+
+        $agentOrder = app(AgentCommerceService::class)->createOrderFromRequest(
+            $user,
+            $plan,
+            $request->input('period'),
+            $request->input('coupon_code'),
+            $request
+        );
+        if ($agentOrder) {
+            return $this->success($agentOrder->trade_no);
+        }
 
         $order = OrderService::createFromRequest(
             $user,

@@ -129,7 +129,7 @@ class OrderService
         });
     }
 
-    private static function assertNoIncompleteOrder(int $userId): void
+    public static function assertNoIncompleteOrder(int $userId): void
     {
         $order = Order::whereIn('status', [Order::STATUS_PENDING, Order::STATUS_PROCESSING])
             ->where('user_id', $userId)
