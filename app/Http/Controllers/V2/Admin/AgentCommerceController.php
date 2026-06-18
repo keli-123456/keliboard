@@ -181,6 +181,11 @@ class AgentCommerceController extends Controller
             'agent_email' => (string) ($context->agent?->email ?? ''),
             'agent_domain_id' => $this->nullableInt($context->agent_domain_id),
             'agent_domain' => (string) ($context->domain?->domain ?? ''),
+            'source' => (string) data_get(
+                $context->domain_snapshot,
+                'source',
+                $context->agent_domain_id ? 'domain' : 'user_binding'
+            ),
             'payment_id' => $this->nullableInt($context->payment_id),
             'payment_name' => (string) ($context->payment?->name ?? ''),
             'payment_code' => (string) ($context->payment?->payment ?? ''),

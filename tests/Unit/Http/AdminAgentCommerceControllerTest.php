@@ -86,6 +86,12 @@ final class AdminAgentCommerceControllerTest extends TestCase
             'hold_id' => $hold->id,
             'status' => AgentOrderContext::STATUS_PENDING,
             'pricing_snapshot' => ['period' => 'monthly'],
+            'domain_snapshot' => [
+                'source' => 'user_binding',
+                'agent_domain_id' => null,
+                'domain' => '',
+                'is_primary' => false,
+            ],
             'created_at' => time(),
             'updated_at' => time(),
         ]);
@@ -107,6 +113,7 @@ final class AdminAgentCommerceControllerTest extends TestCase
         $this->assertSame('agent-order-1', $orders[0]['trade_no']);
         $this->assertSame('Agent Pay', $orders[0]['payment_name']);
         $this->assertSame(AgentBalanceHold::STATUS_PENDING, $orders[0]['hold_status']);
+        $this->assertSame('user_binding', $orders[0]['source']);
     }
 
     private function createUser(string $email, int $balance): User
