@@ -155,6 +155,7 @@ class AgentCommerceController extends Controller
             'trade_no' => (string) $hold->trade_no,
             'amount' => (int) $hold->amount,
             'status' => (string) $hold->status,
+            'failure_reason' => (string) data_get($hold->metadata, 'failure_reason', ''),
             'expires_at' => $this->timestampValue($hold->expires_at),
             'captured_at' => $this->timestampValue($hold->captured_at),
             'released_at' => $this->timestampValue($hold->released_at),
@@ -183,11 +184,7 @@ class AgentCommerceController extends Controller
             'agent_email' => (string) ($context->agent?->email ?? ''),
             'agent_domain_id' => $this->nullableInt($context->agent_domain_id),
             'agent_domain' => (string) ($context->domain?->domain ?? ''),
-            'source' => (string) data_get(
-                $context->domain_snapshot,
-                'source',
-                $context->agent_domain_id ? 'domain' : 'user_binding'
-            ),
+            'source' => (string) data_get($context->domain_snapshot, 'source', ''),
             'payment_id' => $this->nullableInt($context->payment_id),
             'payment_name' => (string) ($context->payment?->name ?? ''),
             'payment_code' => (string) ($context->payment?->payment ?? ''),
@@ -200,6 +197,7 @@ class AgentCommerceController extends Controller
             'order_status' => $this->nullableInt($context->order?->status),
             'order_total_amount' => $this->nullableInt($context->order?->total_amount),
             'status' => (string) $context->status,
+            'failure_reason' => (string) data_get($context->payment_snapshot, 'failure_reason', ''),
             'created_at' => $this->timestampValue($context->created_at),
             'updated_at' => $this->timestampValue($context->updated_at),
         ])->values());

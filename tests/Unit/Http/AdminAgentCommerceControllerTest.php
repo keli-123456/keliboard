@@ -121,6 +121,87 @@ final class AdminAgentCommerceControllerTest extends TestCase
         $this->assertSame('user_binding', $orders[0]['source']);
     }
 
+    public function test_admin_oversight_exposes_failed_order_and_hold_reasons(): void
+    {
+        $failureReason = 'The site balance is insufficient. Please contact site support.';
+        $agent = $this->createUser('failed-agent@example.test', 0);
+        $buyer = $this->createUser('failed-buyer@example.test', 0);
+        $domain = AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => 'failed-agent.example.test',
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $payment = Payment::query()->create([
+            'owner_type' => Payment::OWNER_AGENT,
+            'owner_id' => $agent->id,
+            'owner_domain_id' => $domain->id,
+            'uuid' => 'agentpay000000000000000000000002',
+            'payment' => 'FAKEPAY',
+            'name' => 'Failed Agent Pay',
+            'config' => ['secret' => 'do-not-leak'],
+            'enable' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $order = Order::query()->create([
+            'user_id' => $buyer->id,
+            'plan_id' => 1,
+            'payment_id' => $payment->id,
+            'period' => 'monthly',
+            'trade_no' => 'agent-order-failed-1',
+            'total_amount' => 1300,
+            'status' => Order::STATUS_PENDING,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $hold = AgentBalanceHold::query()->create([
+            'agent_user_id' => $agent->id,
+            'order_id' => $order->id,
+            'trade_no' => $order->trade_no,
+            'amount' => 500,
+            'status' => AgentBalanceHold::STATUS_FAILED,
+            'metadata' => ['failure_reason' => $failureReason],
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        AgentOrderContext::query()->create([
+            'order_id' => $order->id,
+            'trade_no' => $order->trade_no,
+            'agent_user_id' => $agent->id,
+            'agent_domain_id' => $domain->id,
+            'payment_id' => $payment->id,
+            'sale_amount' => 1300,
+            'cost_amount' => 500,
+            'hold_id' => $hold->id,
+            'status' => AgentOrderContext::STATUS_FAILED,
+            'pricing_snapshot' => ['period' => 'monthly'],
+            'domain_snapshot' => [
+                'source' => 'domain',
+                'agent_domain_id' => $domain->id,
+                'domain' => $domain->domain,
+                'is_primary' => true,
+            ],
+            'payment_snapshot' => ['failure_reason' => $failureReason],
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $controller = app(AgentCommerceController::class);
+        $request = Request::create('/admin/agent-commerce', 'GET');
+
+        $orders = $this->responsePayload($controller->orders($request))['data'];
+        $this->assertSame('failed', $orders[0]['status']);
+        $this->assertSame($failureReason, $orders[0]['failure_reason']);
+        $this->assertSame('domain', $orders[0]['source']);
+
+        $holds = $this->responsePayload($controller->holds($request))['data'];
+        $this->assertSame('failed', $holds[0]['status']);
+        $this->assertSame($failureReason, $holds[0]['failure_reason']);
+    }
+
     public function test_admin_domain_payload_exposes_verification_metadata_without_token(): void
     {
         $agent = $this->createUser('agent-domain@example.test', 0);
