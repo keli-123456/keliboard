@@ -1,0 +1,197 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Unit\Services;
+
+use App\Exceptions\ApiException;
+use App\Models\AgentProfile;
+use App\Models\Payment;
+use App\Models\User;
+use App\Services\AgentCenterService;
+use App\Services\AgentPaymentService;
+use App\Services\Plugin\HookManager;
+use App\Services\Plugin\PluginManager;
+use Tests\Support\InteractsWithInMemoryDatabase;
+use Tests\TestCase;
+
+final class AgentPaymentServiceTest extends TestCase
+{
+    use InteractsWithInMemoryDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->setUpInMemoryDatabase();
+        $this->createUserTable();
+        $this->createAgentCenterTables();
+        $this->createPaymentTable();
+        $this->bindTestUrlGenerator('https://panel.example.test');
+        $this->bindTestSettings(['agent_center_enable' => 1]);
+        HookManager::reset();
+        $this->bindEmptyPaymentGateway();
+    }
+
+    public function test_agent_can_create_payment_for_enabled_plugin(): void
+    {
+        $this->bindFakePaymentGateway();
+        $agent = $this->createActiveAgent('agent@example.test');
+
+        $payment = app(AgentPaymentService::class)->save($agent, [
+            'name' => 'Agent USDT',
+            'payment' => 'FAKEPAY',
+            'config' => ['merchant_id' => 'agent-merchant'],
+            'enable' => true,
+        ]);
+
+        $this->assertSame(Payment::OWNER_AGENT, $payment->owner_type);
+        $this->assertSame($agent->id, (int) $payment->owner_id);
+        $this->assertSame('FAKEPAY', $payment->payment);
+        $this->assertSame('agent-merchant', $payment->config['merchant_id']);
+        $this->assertTrue((bool) $payment->enable);
+    }
+
+    public function test_agent_cannot_edit_another_agent_payment(): void
+    {
+        $this->bindFakePaymentGateway();
+        $agent = $this->createActiveAgent('agent@example.test');
+        $otherAgent = $this->createActiveAgent('other-agent@example.test');
+        $payment = Payment::query()->create([
+            'owner_type' => Payment::OWNER_AGENT,
+            'owner_id' => $otherAgent->id,
+            'uuid' => 'other001',
+            'payment' => 'FAKEPAY',
+            'name' => 'Other Agent',
+            'config' => ['merchant_id' => 'other'],
+            'enable' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Payment method is unavailable');
+
+        app(AgentPaymentService::class)->save($agent, [
+            'id' => $payment->id,
+            'name' => 'Hijack',
+            'payment' => 'FAKEPAY',
+            'config' => ['merchant_id' => 'agent'],
+        ]);
+    }
+
+    public function test_agent_payment_requires_enabled_platform_plugin(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Payment plugin is not enabled');
+
+        app(AgentPaymentService::class)->save($agent, [
+            'name' => 'Agent USDT',
+            'payment' => 'MISSING',
+            'config' => ['merchant_id' => 'agent-merchant'],
+        ]);
+    }
+
+    public function test_agent_payment_notify_url_uses_payment_uuid(): void
+    {
+        $this->bindFakePaymentGateway();
+        $agent = $this->createActiveAgent('agent@example.test');
+        $payment = app(AgentPaymentService::class)->save($agent, [
+            'name' => 'Agent USDT',
+            'payment' => 'FAKEPAY',
+            'config' => ['merchant_id' => 'agent-merchant'],
+        ]);
+
+        $rows = app(AgentPaymentService::class)->list($agent);
+
+        $this->assertSame(
+            "https://panel.example.test/api/v1/guest/payment/notify/FAKEPAY/{$payment->uuid}",
+            $rows[0]['notify_url']
+        );
+    }
+
+    private function bindFakePaymentGateway(): void
+    {
+        HookManager::registerFilter('available_payment_methods', static function (array $methods): array {
+            $methods['FAKEPAY'] = [
+                'name' => 'Fake Pay',
+                'icon' => 'fake',
+                'plugin_code' => 'fakepay',
+                'type' => 'plugin',
+            ];
+
+            return $methods;
+        });
+
+        app()->instance(PluginManager::class, new class {
+            public function initializeEnabledPlugins(): void {}
+
+            public function getEnabledPaymentPlugins(): array
+            {
+                return [new class {
+                    private array $config = [];
+
+                    public function getPluginCode(): string
+                    {
+                        return 'fakepay';
+                    }
+
+                    public function setConfig(array $config): void
+                    {
+                        $this->config = $config;
+                    }
+
+                    public function form(): array
+                    {
+                        return [
+                            'merchant_id' => [
+                                'type' => 'string',
+                                'label' => 'Merchant ID',
+                                'default' => $this->config['merchant_id'] ?? '',
+                            ],
+                        ];
+                    }
+                }];
+            }
+        });
+    }
+
+    private function bindEmptyPaymentGateway(): void
+    {
+        app()->instance(PluginManager::class, new class {
+            public function initializeEnabledPlugins(): void {}
+
+            public function getEnabledPaymentPlugins(): array
+            {
+                return [];
+            }
+        });
+    }
+
+    private function createActiveAgent(string $email): User
+    {
+        $agent = User::query()->create([
+            'email' => $email,
+            'password' => password_hash('secret123', PASSWORD_BCRYPT),
+            'uuid' => $email . '-uuid',
+            'token' => $email . '-token',
+            'balance' => 10000,
+            'commission_balance' => 0,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        AgentProfile::query()->create([
+            'user_id' => $agent->id,
+            'status' => AgentCenterService::STATUS_ACTIVE,
+            'level' => 'default',
+            'enabled_at' => time(),
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        return $agent;
+    }
+}

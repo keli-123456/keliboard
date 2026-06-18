@@ -2,6 +2,7 @@
 namespace App\Http\Routes\V1;
 
 use App\Http\Controllers\V1\User\CommController;
+use App\Http\Controllers\V1\User\AgentCommerceController;
 use App\Http\Controllers\V1\User\AgentController;
 use App\Http\Controllers\V1\User\CouponController;
 use App\Http\Controllers\V1\User\GiftCardController;
@@ -53,6 +54,14 @@ class UserRoute
             $router->post('/agent/users/{id}/bonus-days/preview', [AgentController::class, 'bonusDaysPreview']);
             $router->post('/agent/users/{id}/bonus-days', [AgentController::class, 'grantBonusDays']);
             $router->get('/agent/ledger', [AgentController::class, 'ledger']);
+            $router->get('/agent/domains', [AgentCommerceController::class, 'domains']);
+            $router->get('/agent/payment-methods/available', [AgentCommerceController::class, 'availablePaymentMethods']);
+            $router->get('/agent/payments', [AgentCommerceController::class, 'payments']);
+            $router->post('/agent/payments/form', [AgentCommerceController::class, 'paymentForm']);
+            $router->post('/agent/payments', [AgentCommerceController::class, 'savePayment']);
+            $router->post('/agent/payments/{id}', [AgentCommerceController::class, 'savePayment']);
+            $router->post('/agent/payments/{id}/toggle', [AgentCommerceController::class, 'togglePayment']);
+            $router->post('/agent/payments/{id}/delete', [AgentCommerceController::class, 'deletePayment']);
             // Order
             $router->post('/order/save', [OrderController::class, 'save']);
             $router->post('/order/recharge', [OrderController::class, 'recharge']);
