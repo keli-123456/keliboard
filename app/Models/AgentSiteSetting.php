@@ -21,11 +21,17 @@ class AgentSiteSetting extends Model
         'updated_at' => 'timestamp',
     ];
 
-    protected static function booted(): void
+    public function setAgentDomainIdAttribute($value): void
     {
-        static::saving(static function (self $setting): void {
-            $setting->syncSettingScope();
-        });
+        $this->attributes['agent_domain_id'] = $value;
+        $this->syncSettingScope($value);
+    }
+
+    public function save(array $options = []): bool
+    {
+        $this->syncSettingScope($this->attributes['agent_domain_id'] ?? null);
+
+        return parent::save($options);
     }
 
     public function agent(): BelongsTo
@@ -38,9 +44,9 @@ class AgentSiteSetting extends Model
         return $this->belongsTo(AgentDomain::class, 'agent_domain_id', 'id');
     }
 
-    private function syncSettingScope(): void
+    private function syncSettingScope($agentDomainId): void
     {
-        if ($this->agent_domain_id === null) {
+        if ($agentDomainId === null || $agentDomainId === '') {
             $this->setting_scope = self::SCOPE_DEFAULT;
             $this->setting_key = self::KEY_DEFAULT;
 
@@ -48,6 +54,6 @@ class AgentSiteSetting extends Model
         }
 
         $this->setting_scope = self::SCOPE_DOMAIN;
-        $this->setting_key = (string) $this->agent_domain_id;
+        $this->setting_key = (string) $agentDomainId;
     }
 }

@@ -48,7 +48,7 @@ final class AgentSiteSettingServiceTest extends TestCase
         $this->assertSame('agent.example.test', $setting->domain->domain);
     }
 
-    public function test_agent_can_have_one_default_site_setting_and_one_per_domain(): void
+    public function test_query_create_persists_one_default_setting_and_one_domain_setting_with_events_disabled(): void
     {
         $agent = $this->createActiveAgent('agent@example.test');
         $domain = $this->createActiveDomain($agent, 'agent.example.test');
@@ -60,6 +60,16 @@ final class AgentSiteSettingServiceTest extends TestCase
         $this->assertSame('default', $defaultSetting->setting_key);
         $this->assertSame('domain', $domainSetting->setting_scope);
         $this->assertSame((string) $domain->id, $domainSetting->setting_key);
+        $this->assertSame(1, AgentSiteSetting::query()
+            ->where('agent_user_id', $agent->id)
+            ->where('setting_scope', AgentSiteSetting::SCOPE_DEFAULT)
+            ->where('setting_key', AgentSiteSetting::KEY_DEFAULT)
+            ->count());
+        $this->assertSame(1, AgentSiteSetting::query()
+            ->where('agent_user_id', $agent->id)
+            ->where('setting_scope', AgentSiteSetting::SCOPE_DOMAIN)
+            ->where('setting_key', (string) $domain->id)
+            ->count());
 
         $this->expectException(QueryException::class);
 
