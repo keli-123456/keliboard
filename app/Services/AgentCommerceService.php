@@ -439,6 +439,41 @@ class AgentCommerceService
         });
     }
 
+    public function failForOrderIfBalanceInsufficient(Order $order): void
+    {
+        if (!DB::connection()->getSchemaBuilder()->hasTable('v2_agent_order_context')) {
+            return;
+        }
+
+        DB::transaction(function () use ($order): void {
+            $context = AgentOrderContext::query()
+                ->where('order_id', $order->id)
+                ->lockForUpdate()
+                ->first();
+            if (!$context || $context->status === AgentOrderContext::STATUS_PAID || !$context->hold_id) {
+                return;
+            }
+
+            $hold = AgentBalanceHold::query()
+                ->whereKey($context->hold_id)
+                ->lockForUpdate()
+                ->first();
+            if (!$hold || $hold->status !== AgentBalanceHold::STATUS_PENDING) {
+                return;
+            }
+
+            $agent = User::query()
+                ->whereKey($context->agent_user_id)
+                ->lockForUpdate()
+                ->first();
+            if (!$agent || (int) $agent->balance >= (int) $hold->amount) {
+                return;
+            }
+
+            $this->markAgentOrderFailed($context, $hold, self::INSUFFICIENT_SITE_BALANCE_MESSAGE);
+        });
+    }
+
     private function markAgentOrderFailed(AgentOrderContext $context, ?AgentBalanceHold $hold, string $reason): void
     {
         $now = time();

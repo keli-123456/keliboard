@@ -3,9 +3,7 @@
 namespace App\Http\Controllers\V1\Guest;
 
 use App\Http\Controllers\Controller;
-use App\Models\AgentBalanceHold;
 use App\Models\Order;
-use App\Models\User;
 use App\Services\AgentCommerceService;
 use App\Services\OrderService;
 use App\Services\PaymentService;
@@ -72,7 +70,7 @@ class PaymentController extends Controller
         $orderService = new OrderService($order);
         try {
             if (!$orderService->paid($callbackNo)) {
-                $this->failAgentOrderIfBalanceInsufficient($order);
+                $this->markAgentOrderFailedIfBalanceInsufficient($order, $callbackNo);
                 return false;
             }
         } catch (\Throwable $e) {
@@ -81,7 +79,7 @@ class PaymentController extends Controller
                 'callback_no' => $callbackNo,
                 'message' => $e->getMessage(),
             ]);
-            $this->failAgentOrderIfBalanceInsufficient($order);
+            $this->markAgentOrderFailedIfBalanceInsufficient($order, $callbackNo);
             return false;
         }
 
@@ -126,24 +124,16 @@ class PaymentController extends Controller
         return false;
     }
 
-    private function failAgentOrderIfBalanceInsufficient(Order $order): void
+    private function markAgentOrderFailedIfBalanceInsufficient(Order $order, string $callbackNo): void
     {
-        $commerce = app(AgentCommerceService::class);
-        $context = $commerce->contextForOrder($order);
-        if (!$context || !$context->hold_id) {
-            return;
+        try {
+            app(AgentCommerceService::class)->failForOrderIfBalanceInsufficient($order);
+        } catch (\Throwable $e) {
+            Log::warning('Payment notify agent failure marking failed', [
+                'trade_no' => $order->trade_no,
+                'callback_no' => $callbackNo,
+                'message' => $e->getMessage(),
+            ]);
         }
-
-        $hold = AgentBalanceHold::query()->whereKey($context->hold_id)->first();
-        if (!$hold || $hold->status !== AgentBalanceHold::STATUS_PENDING) {
-            return;
-        }
-
-        $agent = User::query()->whereKey($context->agent_user_id)->first();
-        if (!$agent || (int) $agent->balance >= (int) $hold->amount) {
-            return;
-        }
-
-        $commerce->failForOrder($order, AgentCommerceService::INSUFFICIENT_SITE_BALANCE_MESSAGE);
     }
 }
