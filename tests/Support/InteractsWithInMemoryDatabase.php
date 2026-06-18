@@ -416,7 +416,13 @@ trait InteractsWithInMemoryDatabase
             $table->string('status', 20)->default('active');
             $table->boolean('is_primary')->default(false);
             $table->string('remark')->nullable();
+            $table->string('verification_token', 128)->nullable();
+            $table->string('verification_type', 16)->nullable();
+            $table->integer('verified_at')->nullable();
+            $table->integer('last_checked_at')->nullable();
+            $table->string('verification_error', 255)->nullable();
             $table->integer('created_by_admin_id')->nullable();
+            $table->integer('created_by_agent_id')->nullable()->index();
             $table->integer('created_at')->nullable();
             $table->integer('updated_at')->nullable();
             $table->index(['agent_user_id', 'status']);

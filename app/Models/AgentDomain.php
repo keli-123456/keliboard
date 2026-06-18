@@ -11,11 +11,14 @@ class AgentDomain extends Model
     protected $dateFormat = 'U';
     protected $guarded = ['id'];
 
+    public const STATUS_PENDING = 'pending';
     public const STATUS_ACTIVE = 'active';
     public const STATUS_DISABLED = 'disabled';
 
     protected $casts = [
         'is_primary' => 'boolean',
+        'verified_at' => 'timestamp',
+        'last_checked_at' => 'timestamp',
         'created_at' => 'timestamp',
         'updated_at' => 'timestamp',
     ];
