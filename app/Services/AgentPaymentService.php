@@ -83,7 +83,7 @@ class AgentPaymentService
         $payment->payment = $paymentName;
         $payment->name = trim((string) ($payload['name'] ?? $paymentName));
         $payment->icon = $payload['icon'] ?? null;
-        $payment->config = (array) ($payload['config'] ?? []);
+        $payment->config = $this->mergedConfig($payment, (array) ($payload['config'] ?? []));
         $payment->notify_domain = $payload['notify_domain'] ?? null;
         $payment->handling_fee_fixed = isset($payload['handling_fee_fixed']) && $payload['handling_fee_fixed'] !== ''
             ? (int) $payload['handling_fee_fixed']
@@ -172,6 +172,15 @@ class AgentPaymentService
     private function normalizePaymentName(string $payment): string
     {
         return trim($payment);
+    }
+
+    private function mergedConfig(Payment $payment, array $config): array
+    {
+        if (!$payment->exists) {
+            return $config;
+        }
+
+        return array_replace((array) ($payment->config ?? []), $config);
     }
 
     private function paymentPayload(Payment $payment): array

@@ -112,6 +112,33 @@ final class AgentPaymentServiceTest extends TestCase
         );
     }
 
+    public function test_agent_payment_edit_preserves_existing_config_keys_when_missing(): void
+    {
+        $this->bindFakePaymentGateway();
+        $agent = $this->createActiveAgent('agent@example.test');
+        $payment = Payment::query()->create([
+            'owner_type' => Payment::OWNER_AGENT,
+            'owner_id' => $agent->id,
+            'uuid' => 'agent001',
+            'payment' => 'FAKEPAY',
+            'name' => 'Agent USDT',
+            'config' => ['merchant_id' => 'old-merchant', 'secret' => 'keep-secret'],
+            'enable' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $updated = app(AgentPaymentService::class)->save($agent, [
+            'id' => $payment->id,
+            'name' => 'Agent USDT Updated',
+            'payment' => 'FAKEPAY',
+            'config' => ['merchant_id' => 'new-merchant'],
+        ]);
+
+        $this->assertSame('new-merchant', $updated->config['merchant_id']);
+        $this->assertSame('keep-secret', $updated->config['secret']);
+    }
+
     private function bindFakePaymentGateway(): void
     {
         HookManager::registerFilter('available_payment_methods', static function (array $methods): array {
