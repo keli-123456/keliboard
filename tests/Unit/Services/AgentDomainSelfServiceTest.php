@@ -204,6 +204,42 @@ final class AgentDomainSelfServiceTest extends TestCase
         app(AgentDomainSelfService::class)->verify($agent, $domain->id);
     }
 
+    public function test_pending_self_service_domain_with_wrong_verification_type_cannot_be_verified(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $domain = $this->createDomain($agent, 'agent.example.test', AgentDomain::STATUS_PENDING, [
+            'created_by_agent_id' => $agent->id,
+            'verification_type' => 'cname',
+            'verification_token' => 'agent-token',
+        ]);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Domain verification is unavailable');
+
+        app(AgentDomainSelfService::class)->verify($agent, $domain->id);
+    }
+
+    public function test_pending_self_service_domain_without_token_cannot_be_verified(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $service = app(AgentDomainSelfService::class);
+
+        foreach (['blank' => '', 'null' => null] as $label => $token) {
+            $domain = $this->createDomain($agent, "{$label}.example.test", AgentDomain::STATUS_PENDING, [
+                'created_by_agent_id' => $agent->id,
+                'verification_type' => AgentDomainSelfService::VERIFICATION_TYPE_TXT,
+                'verification_token' => $token,
+            ]);
+
+            try {
+                $service->verify($agent, $domain->id);
+                $this->fail("Expected verification unavailable exception for {$label} token.");
+            } catch (ApiException $exception) {
+                $this->assertSame('Domain verification is unavailable', $exception->getMessage());
+            }
+        }
+    }
+
     public function test_non_pending_self_service_domain_cannot_be_verified(): void
     {
         $agent = $this->createActiveAgent('agent@example.test');
