@@ -77,25 +77,25 @@ class AgentDomainSelfService
         $this->activeProfile($agent);
         $domain = $this->ownedDomain($agent, $id);
         $this->assertVerificationAvailable($domain, $agent);
-        $recordName = $this->recordName($domain);
-        $expectedValue = self::VALUE_PREFIX . (string) $domain->verification_token;
+        $proof = $this->verificationProof($domain);
 
         try {
-            $records = $this->resolveTxt($recordName);
+            $records = $this->resolveTxt($proof['record_name']);
         } catch (\Throwable) {
             $this->markVerificationFailure($agent, $id, 'DNS lookup failed, try again');
             throw new ApiException('DNS lookup failed, try again');
         }
 
         $records = array_map(static fn ($value): string => trim((string) $value), $records);
-        if (!in_array($expectedValue, $records, true)) {
+        if (!in_array($proof['record_value'], $records, true)) {
             $this->markVerificationFailure($agent, $id, 'Domain verification record not found');
             throw new ApiException('Domain verification record not found');
         }
 
-        return DB::transaction(function () use ($agent, $id): array {
+        return DB::transaction(function () use ($agent, $id, $proof): array {
             $domain = $this->ownedDomain($agent, $id, true);
             $this->assertVerificationAvailable($domain, $agent);
+            $this->assertVerificationProofCurrent($domain, $proof);
 
             $now = time();
             $domain->status = AgentDomain::STATUS_ACTIVE;
@@ -209,6 +209,34 @@ class AgentDomainSelfService
     {
         return $domain->created_by_agent_id !== null
             && (int) $domain->created_by_agent_id === (int) $agent->id;
+    }
+
+    private function verificationProof(AgentDomain $domain): array
+    {
+        $token = (string) $domain->verification_token;
+
+        return [
+            'id' => (int) $domain->id,
+            'domain' => (string) $domain->domain,
+            'verification_token' => $token,
+            'verification_type' => (string) $domain->verification_type,
+            'record_name' => $this->recordName($domain),
+            'record_value' => self::VALUE_PREFIX . $token,
+        ];
+    }
+
+    private function assertVerificationProofCurrent(AgentDomain $domain, array $proof): void
+    {
+        if (
+            (int) $domain->id !== (int) $proof['id']
+            || (string) $domain->domain !== (string) $proof['domain']
+            || (string) $domain->verification_token !== (string) $proof['verification_token']
+            || (string) $domain->verification_type !== (string) $proof['verification_type']
+            || $this->recordName($domain) !== (string) $proof['record_name']
+            || self::VALUE_PREFIX . (string) $domain->verification_token !== (string) $proof['record_value']
+        ) {
+            throw new ApiException('Domain verification is unavailable');
+        }
     }
 
     private function enabledAgentPaymentUsesDomain(AgentDomain $domain): bool

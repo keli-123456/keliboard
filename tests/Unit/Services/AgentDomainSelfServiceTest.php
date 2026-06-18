@@ -190,6 +190,43 @@ final class AgentDomainSelfServiceTest extends TestCase
         $service->verify($agent, $pending['id']);
     }
 
+    public function test_verify_rechecks_locked_proof_snapshot_before_activating(): void
+    {
+        $domainId = null;
+        $oldRecordValue = null;
+        $service = new AgentDomainSelfService(
+            static function (string $name) use (&$domainId, &$oldRecordValue): array {
+                if ($domainId !== null) {
+                    AgentDomain::query()
+                        ->where('id', $domainId)
+                        ->update([
+                            'verification_token' => 'changed-token',
+                            'updated_at' => time(),
+                        ]);
+                }
+
+                return [$oldRecordValue];
+            }
+        );
+        $agent = $this->createActiveAgent('agent@example.test');
+        $pending = $service->createPending($agent, 'agent.example.test', null);
+        $domainId = $pending['id'];
+        $oldRecordValue = $pending['verification']['record_value'];
+
+        try {
+            $service->verify($agent, $pending['id']);
+            $this->fail('Expected verification unavailable exception for stale TXT proof.');
+        } catch (ApiException $exception) {
+            $this->assertSame('Domain verification is unavailable', $exception->getMessage());
+        }
+
+        $domain = AgentDomain::query()->find($pending['id']);
+        $this->assertNotNull($domain);
+        $this->assertSame(AgentDomain::STATUS_PENDING, $domain->status);
+        $this->assertSame('changed-token', $domain->verification_token);
+        $this->assertNull($domain->verified_at);
+    }
+
     public function test_verify_fails_safely_when_txt_missing_or_wrong(): void
     {
         $txtRecords = [];
