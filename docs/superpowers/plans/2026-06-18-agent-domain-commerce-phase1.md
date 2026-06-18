@@ -28,7 +28,7 @@
 - Modify: `app/Models/Payment.php`
   - Adds owner constants and casts for agent-owned payment rows.
 - Create: `app/Services/AgentDomainResolver.php`
-  - Resolves request host to an active agent domain.
+  - Resolves request host to an active agent domain. Phase 1 uses the HTTP `Host` header as the source of truth; reverse proxies must preserve it.
 - Create: `app/Services/AgentStorefrontService.php`
   - Returns agent-priced plans and validates agent sale price availability.
 - Create: `app/Services/AgentPaymentService.php`
@@ -67,6 +67,8 @@
 
 - Create: `src/services/agentCommerce.ts`
   - Agent domains, payment methods, price settings, and commerce summary API wrapper.
+- Create: `src/lib/agentReverseProxy.ts`
+  - Generates copyable Nginx reverse proxy snippets that preserve `Host`.
 - Modify: `src/services/plan.ts`
   - Accepts agent price metadata from backend responses.
 - Modify: `src/services/order.ts`
@@ -74,7 +76,7 @@
 - Modify: `src/services/user.ts`
   - Keeps normal register request shape; backend handles host attribution.
 - Modify: `src/pages/AgentCenterPage.tsx`
-  - Adds tabs for domains, storefront prices, and agent payment methods.
+  - Adds tabs for domains, storefront prices, and agent payment methods. The domains tab shows an Nginx reverse proxy example with `proxy_set_header Host $host;`.
 - Modify: `src/pages/StorePage.tsx`
   - Shows agent sale prices under agent domain context.
 - Modify: `src/pages/PurchasePage.tsx`
@@ -338,6 +340,8 @@ public function resolveHost(string $host): ?array
     ];
 }
 ```
+
+Do not trust arbitrary `X-Forwarded-Host` in phase 1. If a future deployment needs that fallback, add a separate trusted-proxy setting first so public clients cannot spoof an agent domain by sending their own forwarded host header.
 
 - [ ] **Step 3: Add admin domain APIs**
 
@@ -828,6 +832,7 @@ git commit -m "Release agent holds on order cancel"
 
 **Files:**
 - Create: `keli-user/src/services/agentCommerce.ts`
+- Create: `keli-user/src/lib/agentReverseProxy.ts`
 - Modify: `keli-user/src/pages/AgentCenterPage.tsx`
 - Modify: `keli-user/src/locales/zh/translation.json`
 - Modify: `keli-user/src/locales/en/translation.json`
@@ -865,13 +870,35 @@ Add tabs:
 
 Keep existing subordinate user management unchanged.
 
-- [ ] **Step 3: Build payment form dialog**
+- [ ] **Step 3: Add reverse proxy helper**
+
+Create `src/lib/agentReverseProxy.ts`:
+
+```ts
+export const buildAgentNginxProxySnippet = (domain: string, targetOrigin: string) => `server {
+    listen 80;
+    server_name ${domain};
+
+    location / {
+        proxy_pass ${targetOrigin};
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}`;
+```
+
+Show the snippet in the domains tab with a copy button. The explanatory copy should say that the platform identifies the agent by the original `Host`, so `proxy_set_header Host $host;` must remain unchanged.
+
+- [ ] **Step 4: Build payment form dialog**
 
 Use backend form schema returned by `paymentForm`. Render string, password, select, and textarea fields. Save values back through `savePayment`.
 
 Mask existing secret values as `********` and only send a secret field when the agent typed a non-empty replacement.
 
-- [ ] **Step 4: Build price editor**
+- [ ] **Step 5: Build price editor**
 
 List allowed plans and periods. Store agent sale price in yuan in the input, convert to cents before saving:
 
@@ -881,7 +908,7 @@ const cents = Math.round(Number(value || 0) * 100);
 
 Disable saving when `cents < 0`.
 
-- [ ] **Step 5: Run tests and build**
+- [ ] **Step 6: Run tests and build**
 
 Run:
 
@@ -892,10 +919,10 @@ npm run build
 
 Expected: tests and production build pass.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```powershell
-git add src/services/agentCommerce.ts src/pages/AgentCenterPage.tsx src/locales/zh/translation.json src/locales/en/translation.json src/lib/agentCommerce.test.ts
+git add src/services/agentCommerce.ts src/lib/agentReverseProxy.ts src/pages/AgentCenterPage.tsx src/locales/zh/translation.json src/locales/en/translation.json src/lib/agentCommerce.test.ts
 git commit -m "Add agent commerce controls"
 ```
 
