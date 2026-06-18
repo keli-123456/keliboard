@@ -376,6 +376,7 @@ class AgentCommerceService
             $before = (int) $agent->balance;
             $amount = (int) $hold->amount;
             if ($before < $amount) {
+                $this->markAgentOrderFailed($context, $hold, self::INSUFFICIENT_SITE_BALANCE_MESSAGE);
                 throw new ApiException(self::INSUFFICIENT_SITE_BALANCE_MESSAGE);
             }
 
@@ -412,6 +413,50 @@ class AgentCommerceService
                 'created_at' => $now,
             ]);
         });
+    }
+
+    public function failForOrder(Order $order, string $reason): void
+    {
+        if (!DB::connection()->getSchemaBuilder()->hasTable('v2_agent_order_context')) {
+            return;
+        }
+
+        DB::transaction(function () use ($order, $reason): void {
+            $context = AgentOrderContext::query()
+                ->where('order_id', $order->id)
+                ->lockForUpdate()
+                ->first();
+            if (!$context || $context->status === AgentOrderContext::STATUS_PAID) {
+                return;
+            }
+
+            $hold = $context->hold_id ? AgentBalanceHold::query()
+                ->whereKey($context->hold_id)
+                ->lockForUpdate()
+                ->first() : null;
+
+            $this->markAgentOrderFailed($context, $hold, $reason);
+        });
+    }
+
+    private function markAgentOrderFailed(AgentOrderContext $context, ?AgentBalanceHold $hold, string $reason): void
+    {
+        $now = time();
+        if ($hold && $hold->status === AgentBalanceHold::STATUS_PENDING) {
+            $metadata = is_array($hold->metadata) ? $hold->metadata : [];
+            $metadata['failure_reason'] = $reason;
+            $hold->metadata = $metadata;
+            $hold->status = AgentBalanceHold::STATUS_FAILED;
+            $hold->updated_at = $now;
+            $hold->save();
+        }
+
+        $snapshot = is_array($context->payment_snapshot) ? $context->payment_snapshot : [];
+        $snapshot['failure_reason'] = $reason;
+        $context->payment_snapshot = $snapshot;
+        $context->status = AgentOrderContext::STATUS_FAILED;
+        $context->updated_at = $now;
+        $context->save();
     }
 
     public function releaseForOrder(Order $order, string $status = AgentBalanceHold::STATUS_RELEASED): void

@@ -294,6 +294,35 @@ final class AgentDomainOrderFlowTest extends TestCase
         $this->assertSame('gateway-1', $order->fresh()->callback_no);
     }
 
+    public function test_payment_callback_marks_agent_context_failed_when_agent_balance_is_insufficient(): void
+    {
+        [$agent, , $order] = $this->createAgentOrderFixture();
+        $payment = $this->createPayment(Payment::OWNER_AGENT, $agent->id);
+        $order->payment_id = $payment->id;
+        $order->save();
+        $agent->balance = 100;
+        $agent->save();
+
+        $handled = $this->invokePaymentHandle([
+            'trade_no' => $order->trade_no,
+            'callback_no' => 'gateway-low-balance',
+            'paid_amount' => 1300,
+        ], $this->paymentServiceWithId($payment->id));
+
+        $hold = AgentBalanceHold::query()->where('order_id', $order->id)->first();
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->first();
+
+        $this->assertFalse($handled);
+        $this->assertSame(Order::STATUS_PENDING, (int) $order->fresh()->status);
+        $this->assertSame(100, (int) $agent->fresh()->balance);
+        $this->assertSame(AgentBalanceHold::STATUS_FAILED, $hold->fresh()->status);
+        $this->assertSame(AgentOrderContext::STATUS_FAILED, $context->fresh()->status);
+        $this->assertSame(
+            AgentCommerceService::INSUFFICIENT_SITE_BALANCE_MESSAGE,
+            $context->fresh()->payment_snapshot['failure_reason'] ?? null
+        );
+    }
+
     public function test_cancel_agent_order_releases_pending_hold(): void
     {
         [$agent, $buyer, $order] = $this->createAgentOrderFixture();

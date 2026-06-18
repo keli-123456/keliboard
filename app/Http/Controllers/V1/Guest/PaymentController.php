@@ -3,7 +3,10 @@
 namespace App\Http\Controllers\V1\Guest;
 
 use App\Http\Controllers\Controller;
+use App\Models\AgentBalanceHold;
 use App\Models\Order;
+use App\Models\User;
+use App\Services\AgentCommerceService;
 use App\Services\OrderService;
 use App\Services\PaymentService;
 use Illuminate\Http\Request;
@@ -67,7 +70,18 @@ class PaymentController extends Controller
         }
 
         $orderService = new OrderService($order);
-        if (!$orderService->paid($callbackNo)) {
+        try {
+            if (!$orderService->paid($callbackNo)) {
+                $this->failAgentOrderIfBalanceInsufficient($order);
+                return false;
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Payment notify order paid handling failed', [
+                'trade_no' => $tradeNo,
+                'callback_no' => $callbackNo,
+                'message' => $e->getMessage(),
+            ]);
+            $this->failAgentOrderIfBalanceInsufficient($order);
             return false;
         }
 
@@ -110,5 +124,26 @@ class PaymentController extends Controller
             'expected_amount' => $expectedAmount,
         ]);
         return false;
+    }
+
+    private function failAgentOrderIfBalanceInsufficient(Order $order): void
+    {
+        $commerce = app(AgentCommerceService::class);
+        $context = $commerce->contextForOrder($order);
+        if (!$context || !$context->hold_id) {
+            return;
+        }
+
+        $hold = AgentBalanceHold::query()->whereKey($context->hold_id)->first();
+        if (!$hold || $hold->status !== AgentBalanceHold::STATUS_PENDING) {
+            return;
+        }
+
+        $agent = User::query()->whereKey($context->agent_user_id)->first();
+        if (!$agent || (int) $agent->balance >= (int) $hold->amount) {
+            return;
+        }
+
+        $commerce->failForOrder($order, AgentCommerceService::INSUFFICIENT_SITE_BALANCE_MESSAGE);
     }
 }
