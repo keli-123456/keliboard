@@ -204,6 +204,7 @@ class OrderController extends Controller
         $agentCommerce = app(AgentCommerceService::class);
         try {
             $agentCommerce->assertPaymentAvailableForOrder($order, $payment);
+            $agentCommerce->assertCheckoutBalanceAvailable($order);
         } catch (ApiException $exception) {
             return $this->fail([400, $exception->getMessage()]);
         }

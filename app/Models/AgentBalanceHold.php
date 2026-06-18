@@ -15,6 +15,7 @@ class AgentBalanceHold extends Model
     public const STATUS_CAPTURED = 'captured';
     public const STATUS_RELEASED = 'released';
     public const STATUS_EXPIRED = 'expired';
+    public const STATUS_FAILED = 'failed';
 
     protected $casts = [
         'metadata' => 'array',

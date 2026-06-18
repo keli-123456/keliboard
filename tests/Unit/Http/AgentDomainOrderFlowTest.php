@@ -157,6 +157,51 @@ final class AgentDomainOrderFlowTest extends TestCase
         $this->assertSame($payment->id, (int) $order->fresh()->payment_id);
     }
 
+    public function test_agent_checkout_rejects_when_hold_is_not_pending(): void
+    {
+        [$agent, $buyer, $order] = $this->createAgentOrderFixture();
+        $payment = $this->createPayment(Payment::OWNER_AGENT, $agent->id);
+        $hold = AgentBalanceHold::query()->where('order_id', $order->id)->first();
+        $hold->status = AgentBalanceHold::STATUS_RELEASED;
+        $hold->save();
+
+        $request = BaseRequest::create('/api/v1/user/order/checkout', 'POST', [
+            'trade_no' => $order->trade_no,
+            'method' => $payment->id,
+        ]);
+        $request->setUserResolver(static fn (): User => $buyer);
+        app()->instance('request', $request);
+
+        $response = app(OrderController::class)->checkout($request);
+        $payload = $this->responsePayload($response);
+
+        $this->assertSame('fail', $payload['status']);
+        $this->assertSame('Agent balance hold is unavailable', $payload['message']);
+        $this->assertNull($order->fresh()->payment_id);
+    }
+
+    public function test_agent_checkout_rejects_when_available_balance_no_longer_covers_hold(): void
+    {
+        [$agent, $buyer, $order] = $this->createAgentOrderFixture();
+        $payment = $this->createPayment(Payment::OWNER_AGENT, $agent->id);
+        $agent->balance = 100;
+        $agent->save();
+
+        $request = BaseRequest::create('/api/v1/user/order/checkout', 'POST', [
+            'trade_no' => $order->trade_no,
+            'method' => $payment->id,
+        ]);
+        $request->setUserResolver(static fn (): User => $buyer);
+        app()->instance('request', $request);
+
+        $response = app(OrderController::class)->checkout($request);
+        $payload = $this->responsePayload($response);
+
+        $this->assertSame('fail', $payload['status']);
+        $this->assertSame(AgentCommerceService::INSUFFICIENT_SITE_BALANCE_MESSAGE, $payload['message']);
+        $this->assertNull($order->fresh()->payment_id);
+    }
+
     public function test_agent_domain_payment_methods_only_include_owned_agent_methods(): void
     {
         $agent = $this->createActiveAgent('agent@example.test');

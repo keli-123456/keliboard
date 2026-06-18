@@ -241,6 +241,50 @@ class AgentCommerceService
         }
     }
 
+    public function assertCheckoutBalanceAvailable(Order $order): void
+    {
+        $context = $this->contextForOrder($order);
+        if (!$context) {
+            return;
+        }
+
+        DB::transaction(function () use ($context): void {
+            $lockedContext = AgentOrderContext::query()
+                ->whereKey($context->id)
+                ->lockForUpdate()
+                ->first();
+            if (!$lockedContext) {
+                throw new ApiException('Agent order context is unavailable');
+            }
+
+            $hold = AgentBalanceHold::query()
+                ->whereKey($lockedContext->hold_id)
+                ->lockForUpdate()
+                ->first();
+            if (!$hold || $hold->status !== AgentBalanceHold::STATUS_PENDING) {
+                throw new ApiException('Agent balance hold is unavailable');
+            }
+
+            $agent = User::query()
+                ->whereKey($lockedContext->agent_user_id)
+                ->lockForUpdate()
+                ->first();
+            if (!$agent) {
+                throw new ApiException('Agent user does not exist');
+            }
+
+            $pendingOther = AgentBalanceHold::query()
+                ->where('agent_user_id', $agent->id)
+                ->where('status', AgentBalanceHold::STATUS_PENDING)
+                ->where('id', '<>', $hold->id)
+                ->sum('amount');
+
+            if (((int) $agent->balance - (int) $pendingOther) < (int) $hold->amount) {
+                throw new ApiException(self::INSUFFICIENT_SITE_BALANCE_MESSAGE);
+            }
+        });
+    }
+
     public function attachPayment(Order $order, Payment $payment): void
     {
         $context = $this->contextForOrder($order);
