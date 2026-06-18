@@ -4,9 +4,8 @@ namespace App\Http\Controllers\V1\Guest;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\PlanResource;
-use App\Models\Plan;
+use App\Services\AgentStorefrontService;
 use App\Services\PlanService;
-use Auth;
 use Illuminate\Http\Request;
 
 class PlanController extends Controller
@@ -20,6 +19,7 @@ class PlanController extends Controller
     public function fetch(Request $request)
     {
         $plan = $this->planService->getAvailablePlans();
+        $plan = app(AgentStorefrontService::class)->plansForRequest($request, $plan);
         return $this->success(PlanResource::collection($plan));
     }
 }

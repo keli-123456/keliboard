@@ -316,6 +316,30 @@ trait InteractsWithInMemoryDatabase
         });
     }
 
+    protected function createPlanTable(): void
+    {
+        $this->database->schema()->create('v2_plan', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('group_id')->nullable();
+            $table->integer('transfer_enable')->default(0);
+            $table->string('name');
+            $table->integer('speed_limit')->nullable();
+            $table->integer('device_limit')->nullable();
+            $table->boolean('show')->default(true);
+            $table->boolean('renew')->default(true);
+            $table->boolean('sell')->default(true);
+            $table->integer('sort')->default(0);
+            $table->text('content')->nullable();
+            $table->json('prices')->nullable();
+            $table->json('tags')->nullable();
+            $table->json('upgrade_to_plan_ids')->nullable();
+            $table->integer('reset_traffic_method')->nullable();
+            $table->integer('capacity_limit')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+    }
+
     protected function createPersonalAccessTokenTable(): void
     {
         $this->database->schema()->create('personal_access_tokens', function (Blueprint $table): void {

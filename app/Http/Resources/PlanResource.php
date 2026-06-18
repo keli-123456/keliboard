@@ -44,6 +44,8 @@ class PlanResource extends JsonResource
             'has_recurring_price' => !empty($recurringPeriods),
             'has_onetime_price' => array_key_exists(Plan::PERIOD_ONETIME, $normalizedPrices),
             'has_reset_price' => array_key_exists(Plan::PERIOD_RESET_TRAFFIC, $normalizedPrices),
+            'agent_context' => $this->getResourceValue('agent_context'),
+            'agent_sale_periods' => $this->getResourceValue('agent_sale_periods'),
             ...$legacyPrices,
             'capacity_limit' => $this->getFormattedCapacityLimit(),
             'transfer_enable' => $this->getResourceValue('transfer_enable'),
