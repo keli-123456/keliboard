@@ -1,0 +1,262 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Unit\Services;
+
+use App\Exceptions\ApiException;
+use App\Models\AgentDomain;
+use App\Models\AgentProfile;
+use App\Models\Payment;
+use App\Models\User;
+use App\Services\AgentCenterService;
+use App\Services\AgentDomainResolver;
+use App\Services\AgentDomainSelfService;
+use Tests\Support\InteractsWithInMemoryDatabase;
+use Tests\TestCase;
+
+final class AgentDomainSelfServiceTest extends TestCase
+{
+    use InteractsWithInMemoryDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->setUpInMemoryDatabase();
+        $this->createUserTable();
+        $this->createPaymentTable();
+        $this->createAgentCenterTables();
+        $this->createAgentCommerceTables();
+        $this->bindTestSettings([
+            'agent_center_domain_limit' => 1,
+            'app_url' => 'https://sp.huhu.icu',
+        ]);
+    }
+
+    public function test_active_agent_can_create_pending_domain_under_limit(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+
+        $payload = app(AgentDomainSelfService::class)->createPending(
+            $agent,
+            'https://Agent.Example.Test/path',
+            'Primary storefront'
+        );
+
+        $this->assertSame('agent.example.test', $payload['domain']);
+        $this->assertSame(AgentDomain::STATUS_PENDING, $payload['status']);
+        $this->assertFalse($payload['is_primary']);
+        $this->assertSame('Primary storefront', $payload['remark']);
+        $this->assertSame('agent', $payload['source']);
+        $this->assertSame('txt', $payload['verification']['type']);
+        $this->assertSame('_keli-agent.agent.example.test', $payload['verification']['record_name']);
+        $this->assertStringStartsWith('keli-agent-verification=', $payload['verification']['record_value']);
+
+        $domain = AgentDomain::query()->first();
+        $this->assertNotNull($domain);
+        $this->assertSame($agent->id, (int) $domain->agent_user_id);
+        $this->assertSame('agent.example.test', $domain->domain);
+        $this->assertSame(AgentDomain::STATUS_PENDING, $domain->status);
+    }
+
+    public function test_duplicate_domain_fails(): void
+    {
+        $owner = $this->createActiveAgent('owner@example.test');
+        $agent = $this->createActiveAgent('agent@example.test');
+        $this->createDomain($owner, 'agent.example.test');
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Domain already assigned');
+
+        app(AgentDomainSelfService::class)->createPending($agent, 'https://agent.example.test', null);
+    }
+
+    public function test_domain_limit_defaults_to_one(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $service = app(AgentDomainSelfService::class);
+
+        $service->createPending($agent, 'first.example.test', null);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Domain limit reached');
+
+        $service->createPending($agent, 'second.example.test', null);
+    }
+
+    public function test_invalid_hosts_fail(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $service = app(AgentDomainSelfService::class);
+
+        foreach (['127.0.0.1', 'localhost', '*.example.test', 'https:///bad'] as $host) {
+            try {
+                $service->createPending($agent, $host, null);
+                $this->fail("Expected invalid domain exception for {$host}.");
+            } catch (ApiException $exception) {
+                $this->assertSame('Invalid domain', $exception->getMessage());
+            }
+        }
+
+        $this->assertSame(0, AgentDomain::query()->count());
+    }
+
+    public function test_reserved_platform_host_from_app_url_fails(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Invalid domain');
+
+        app(AgentDomainSelfService::class)->createPending($agent, 'https://sp.huhu.icu', null);
+    }
+
+    public function test_pending_domain_does_not_resolve_until_verified(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+
+        app(AgentDomainSelfService::class)->createPending($agent, 'agent.example.test', null);
+
+        $this->assertNull(app(AgentDomainResolver::class)->resolveHost('agent.example.test'));
+    }
+
+    public function test_verify_activates_domain_when_txt_matches(): void
+    {
+        $txtRecords = [];
+        $service = $this->serviceWithTxtRecords($txtRecords);
+        $agent = $this->createActiveAgent('agent@example.test');
+        $pending = $service->createPending($agent, 'agent.example.test', null);
+        $txtRecords[$pending['verification']['record_name']] = [
+            $pending['verification']['record_value'],
+        ];
+
+        $verified = $service->verify($agent, $pending['id']);
+
+        $this->assertSame(AgentDomain::STATUS_ACTIVE, $verified['status']);
+        $this->assertNull($verified['verification_error']);
+        $this->assertNotNull($verified['verified_at']);
+        $context = app(AgentDomainResolver::class)->resolveHost('agent.example.test');
+        $this->assertNotNull($context);
+        $this->assertSame($agent->id, $context['agent_user_id']);
+        $this->assertSame('agent.example.test', $context['domain']);
+    }
+
+    public function test_verify_fails_safely_when_txt_missing_or_wrong(): void
+    {
+        $txtRecords = [];
+        $service = $this->serviceWithTxtRecords($txtRecords);
+        $agent = $this->createActiveAgent('agent@example.test');
+        $pending = $service->createPending($agent, 'agent.example.test', null);
+
+        try {
+            $service->verify($agent, $pending['id']);
+            $this->fail('Expected missing TXT verification exception.');
+        } catch (ApiException $exception) {
+            $this->assertSame('Domain verification record not found', $exception->getMessage());
+        }
+
+        $domain = AgentDomain::query()->find($pending['id']);
+        $this->assertNotNull($domain);
+        $this->assertSame(AgentDomain::STATUS_PENDING, $domain->status);
+        $this->assertNotNull($domain->last_checked_at);
+        $this->assertSame('Domain verification record not found', $domain->verification_error);
+
+        $txtRecords[$pending['verification']['record_name']] = ['keli-agent-verification=wrong'];
+
+        try {
+            $service->verify($agent, $pending['id']);
+            $this->fail('Expected wrong TXT verification exception.');
+        } catch (ApiException $exception) {
+            $this->assertSame('Domain verification record not found', $exception->getMessage());
+        }
+
+        $domain->refresh();
+        $this->assertSame(AgentDomain::STATUS_PENDING, $domain->status);
+        $this->assertSame('Domain verification record not found', $domain->verification_error);
+    }
+
+    public function test_agent_cannot_delete_another_agents_domain(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $otherAgent = $this->createActiveAgent('other-agent@example.test');
+        $domain = $this->createDomain($otherAgent, 'other.example.test');
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Domain does not exist');
+
+        app(AgentDomainSelfService::class)->delete($agent, $domain->id);
+    }
+
+    public function test_active_domain_bound_to_enabled_agent_payment_cannot_be_deleted(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $domain = $this->createDomain($agent, 'agent.example.test', AgentDomain::STATUS_ACTIVE);
+        Payment::query()->create([
+            'owner_type' => Payment::OWNER_AGENT,
+            'owner_id' => $agent->id,
+            'owner_domain_id' => $domain->id,
+            'uuid' => 'agentpay1',
+            'payment' => 'FAKEPAY',
+            'name' => 'Agent Pay',
+            'config' => [],
+            'enable' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Domain is used by an enabled payment method');
+
+        app(AgentDomainSelfService::class)->delete($agent, $domain->id);
+    }
+
+    private function serviceWithTxtRecords(array &$txtRecords): AgentDomainSelfService
+    {
+        return new AgentDomainSelfService(
+            static function (string $name) use (&$txtRecords): array {
+                return $txtRecords[$name] ?? [];
+            }
+        );
+    }
+
+    private function createActiveAgent(string $email): User
+    {
+        $agent = User::query()->create([
+            'email' => $email,
+            'password' => password_hash('secret123', PASSWORD_BCRYPT),
+            'uuid' => $email . '-uuid',
+            'token' => $email . '-token',
+            'balance' => 10000,
+            'commission_balance' => 0,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        AgentProfile::query()->create([
+            'user_id' => $agent->id,
+            'status' => AgentCenterService::STATUS_ACTIVE,
+            'level' => 'default',
+            'enabled_at' => time(),
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        return $agent;
+    }
+
+    private function createDomain(
+        User $agent,
+        string $domain,
+        string $status = AgentDomain::STATUS_PENDING
+    ): AgentDomain {
+        return AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => $domain,
+            'status' => $status,
+            'is_primary' => false,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+    }
+}
