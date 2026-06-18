@@ -319,6 +319,10 @@ final class AgentDomainOrderFlowTest extends TestCase
         $this->assertSame(AgentOrderContext::STATUS_FAILED, $context->fresh()->status);
         $this->assertSame(
             AgentCommerceService::INSUFFICIENT_SITE_BALANCE_MESSAGE,
+            $hold->fresh()->metadata['failure_reason'] ?? null
+        );
+        $this->assertSame(
+            AgentCommerceService::INSUFFICIENT_SITE_BALANCE_MESSAGE,
             $context->fresh()->payment_snapshot['failure_reason'] ?? null
         );
     }
