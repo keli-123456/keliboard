@@ -185,6 +185,39 @@ final class AgentTicketContextTest extends TestCase
         $this->assertSame('Visible despite malformed filter', $items[0]['subject']);
     }
 
+    public function test_admin_fetch_ignores_malformed_agent_domain_filter(): void
+    {
+        $agent = $this->createActiveAgent('domain-filter-agent@example.test');
+        $buyer = $this->createUser('domain-filter-buyer@example.test');
+        $domain = $this->assignDomain($agent, 'domain-filter.example.test');
+
+        Ticket::query()->create([
+            'user_id' => $buyer->id,
+            'agent_user_id' => $agent->id,
+            'agent_domain_id' => $domain->id,
+            'subject' => 'Visible despite malformed domain filter',
+            'level' => 1,
+            'status' => Ticket::STATUS_OPENING,
+            'reply_status' => Ticket::REPLY_STATUS_WAITING_ADMIN,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $request = Request::create('/api/v2/admin/ticket/fetch', 'GET', [
+            'filter' => [
+                ['id' => 'agent_domain_id', 'value' => 'abc'],
+            ],
+            'pageSize' => 10,
+            'current' => 1,
+        ]);
+
+        $payload = (new AdminTicketController())->fetch($request)->getData(true);
+        $items = $payload['data']['items'];
+
+        $this->assertCount(1, $items);
+        $this->assertSame('Visible despite malformed domain filter', $items[0]['subject']);
+    }
+
     public function test_resource_includes_agent_and_agent_domain_when_loaded(): void
     {
         config(['hidden_features.enable_exposed_user_count_fix' => true]);
@@ -234,6 +267,36 @@ final class AgentTicketContextTest extends TestCase
 
         $this->assertSame(['id' => 7, 'email' => 'array-agent@example.test'], $data['agent']);
         $this->assertSame(['id' => 8, 'domain' => 'array.example.test'], $data['agent_domain']);
+    }
+
+    public function test_resource_handles_stdclass_ticket_without_array_access(): void
+    {
+        $ticket = (object) [
+            'id' => 199,
+            'user_id' => 321,
+            'level' => 2,
+            'reply_status' => Ticket::REPLY_STATUS_WAITING_ADMIN,
+            'status' => Ticket::STATUS_OPENING,
+            'subject' => 'Object ticket',
+            'message' => null,
+            'agent' => (object) [
+                'id' => 17,
+                'email' => 'object-agent@example.test',
+            ],
+            'agent_domain' => [
+                'id' => 18,
+                'domain' => 'object.example.test',
+            ],
+            'created_at' => 333,
+            'updated_at' => 444,
+        ];
+
+        $data = TicketResource::make($ticket)->toArray(Request::create('/ticket', 'GET'));
+
+        $this->assertSame(199, $data['id']);
+        $this->assertSame('Object ticket', $data['subject']);
+        $this->assertSame(['id' => 17, 'email' => 'object-agent@example.test'], $data['agent']);
+        $this->assertSame(['id' => 18, 'domain' => 'object.example.test'], $data['agent_domain']);
     }
 
     private function addTicketTestColumns(): void
