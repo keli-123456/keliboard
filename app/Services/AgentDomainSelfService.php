@@ -133,7 +133,7 @@ class AgentDomainSelfService
 
     public function domainLimit(): int
     {
-        return (int) admin_setting('agent_center_domain_limit', 1);
+        return max(0, (int) admin_setting('agent_center_domain_limit', 1));
     }
 
     private function activeProfile(User $agent): AgentProfile

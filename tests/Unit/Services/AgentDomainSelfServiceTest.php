@@ -85,6 +85,23 @@ final class AgentDomainSelfServiceTest extends TestCase
         $service->createPending($agent, 'second.example.test', null);
     }
 
+    public function test_negative_domain_limit_clamps_to_zero_and_blocks_create(): void
+    {
+        $this->bindTestSettings([
+            'agent_center_domain_limit' => -5,
+            'app_url' => 'https://sp.huhu.icu',
+        ]);
+        $agent = $this->createActiveAgent('agent@example.test');
+        $service = app(AgentDomainSelfService::class);
+
+        $this->assertSame(0, $service->domainLimit());
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Domain limit reached');
+
+        $service->createPending($agent, 'agent.example.test', null);
+    }
+
     public function test_invalid_hosts_fail(): void
     {
         $agent = $this->createActiveAgent('agent@example.test');
