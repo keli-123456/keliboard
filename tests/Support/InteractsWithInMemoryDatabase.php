@@ -190,6 +190,58 @@ trait InteractsWithInMemoryDatabase
         app()->instance(\Illuminate\Contracts\Routing\UrlGenerator::class, $generator);
     }
 
+    protected function bindTestSettings(array $settings = []): void
+    {
+        app()->instance(\App\Support\Setting::class, new class($settings) {
+            public function __construct(private array $settings) {}
+
+            public function get(string $key): mixed
+            {
+                return $this->settings[$key] ?? null;
+            }
+
+            public function save(array $settings): void
+            {
+                $this->settings = array_merge($this->settings, $settings);
+            }
+
+            public function toArray(): array
+            {
+                return $this->settings;
+            }
+
+            public function getBatch(array $keys): array
+            {
+                $result = [];
+                foreach ($keys as $key) {
+                    $result[$key] = $this->get($key);
+                }
+
+                return $result;
+            }
+        });
+    }
+
+    protected function bindTestHasher(): void
+    {
+        app()->instance('hash', new class {
+            public function make($value, array $options = []): string
+            {
+                return password_hash((string) $value, PASSWORD_BCRYPT);
+            }
+
+            public function check($value, $hashedValue, array $options = []): bool
+            {
+                return password_verify((string) $value, (string) $hashedValue);
+            }
+
+            public function needsRehash($hashedValue, array $options = []): bool
+            {
+                return false;
+            }
+        });
+    }
+
     protected function createUserTable(): void
     {
         $this->database->schema()->create('v2_user', function (Blueprint $table): void {
@@ -212,6 +264,10 @@ trait InteractsWithInMemoryDatabase
             $table->boolean('banned')->default(false);
             $table->boolean('is_admin')->default(false);
             $table->boolean('is_staff')->default(false);
+            $table->boolean('remind_expire')->nullable()->default(true);
+            $table->boolean('remind_traffic')->nullable()->default(true);
+            $table->integer('last_login_at')->nullable();
+            $table->integer('last_login_ip')->nullable();
             $table->integer('balance')->default(0);
             $table->integer('commission_balance')->default(0);
             $table->integer('commission_rate')->default(0);
@@ -219,6 +275,44 @@ trait InteractsWithInMemoryDatabase
             $table->integer('discount')->nullable();
             $table->integer('created_at')->nullable();
             $table->integer('updated_at')->nullable();
+        });
+    }
+
+    protected function createAgentCenterTables(): void
+    {
+        $this->database->schema()->create('v2_agent_profile', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('user_id')->unique();
+            $table->string('status', 32)->default('pending');
+            $table->string('level', 64)->default('default');
+            $table->string('remark')->nullable();
+            $table->integer('enabled_at')->nullable();
+            $table->integer('disabled_at')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+
+        $this->database->schema()->create('v2_agent_user', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('agent_user_id')->index();
+            $table->integer('sub_user_id')->unique();
+            $table->string('remark')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+
+        $this->database->schema()->create('v2_agent_ledger', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('agent_user_id')->index();
+            $table->integer('target_user_id')->nullable()->index();
+            $table->string('type', 64)->index();
+            $table->integer('amount')->default(0);
+            $table->integer('balance_before')->default(0);
+            $table->integer('balance_after')->default(0);
+            $table->integer('plan_id')->nullable();
+            $table->string('period', 64)->nullable();
+            $table->json('metadata')->nullable();
+            $table->integer('created_at')->nullable();
         });
     }
 

@@ -3,9 +3,11 @@
 namespace App\Services\Auth;
 
 use App\Exceptions\ApiException;
+use App\Models\AgentUser;
 use App\Models\InviteCode;
 use App\Models\Plan;
 use App\Models\User;
+use App\Services\AgentDomainResolver;
 use App\Services\CaptchaService;
 use App\Services\Plugin\HookManager;
 use App\Services\UserService;
@@ -154,10 +156,14 @@ class RegisterService
         $password = $request->input('password');
         $inviteCode = $request->input('invite_code');
 
-        $user = DB::transaction(function () use ($email, $password, $inviteCode) {
+        $user = DB::transaction(function () use ($request, $email, $password, $inviteCode) {
+            $agentDomainContext = app(AgentDomainResolver::class)->resolveRequest($request);
+
             // 处理邀请码获取邀请人ID
             $inviteUserId = null;
-            if ($inviteCode) {
+            if ($agentDomainContext) {
+                $inviteUserId = (int) $agentDomainContext['agent_user_id'];
+            } elseif ($inviteCode) {
                 $inviteUserId = $this->handleInviteCode($inviteCode);
             }
 
@@ -172,6 +178,18 @@ class RegisterService
             // 保存用户
             if (!$user->save()) {
                 throw new ApiException(__('Register failed'));
+            }
+
+            if ($agentDomainContext) {
+                AgentUser::query()->firstOrCreate(
+                    ['sub_user_id' => $user->id],
+                    [
+                        'agent_user_id' => (int) $agentDomainContext['agent_user_id'],
+                        'remark' => null,
+                        'created_at' => time(),
+                        'updated_at' => time(),
+                    ]
+                );
             }
 
             return $user;
