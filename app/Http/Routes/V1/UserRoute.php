@@ -50,6 +50,8 @@ class UserRoute
             $router->post('/agent/users/{id}/assign-plan', [AgentController::class, 'assignPlan']);
             $router->post('/agent/users/{id}/reset-traffic/preview', [AgentController::class, 'resetTrafficPreview']);
             $router->post('/agent/users/{id}/reset-traffic', [AgentController::class, 'resetTraffic']);
+            $router->post('/agent/users/{id}/bonus-days/preview', [AgentController::class, 'bonusDaysPreview']);
+            $router->post('/agent/users/{id}/bonus-days', [AgentController::class, 'grantBonusDays']);
             $router->get('/agent/ledger', [AgentController::class, 'ledger']);
             // Order
             $router->post('/order/save', [OrderController::class, 'save']);

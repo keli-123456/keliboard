@@ -85,6 +85,24 @@ class AgentController extends Controller
         return $this->success($this->service()->resetTraffic($request->user(), $id));
     }
 
+    public function bonusDaysPreview(Request $request, int $id)
+    {
+        $params = $request->validate([
+            'bonus_days' => 'required|integer|min:1|max:365',
+        ]);
+
+        return $this->success($this->service()->previewBonusDays($request->user(), $id, $params));
+    }
+
+    public function grantBonusDays(Request $request, int $id)
+    {
+        $params = $request->validate([
+            'bonus_days' => 'required|integer|min:1|max:365',
+        ]);
+
+        return $this->success($this->service()->grantBonusDays($request->user(), $id, $params));
+    }
+
     public function ledger(Request $request)
     {
         $limit = (int) $request->input('limit', 50);

@@ -363,6 +363,99 @@ final class AgentCenterServiceTest extends TestCase
         ]);
     }
 
+    public function test_grant_bonus_days_extends_owned_subordinate_and_charges_agent_balance(): void
+    {
+        $this->bindAgentSettings(['agent_center_bonus_day_price' => 200]);
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $plan = $this->createPlan('Starter', ['monthly' => 20.00], 128, 2);
+        $currentExpiry = time() + 10 * 86400;
+        $subordinate = $this->createOwnedSubordinate($agent, 'buyer@example.test', [
+            'plan_id' => $plan->id,
+            'expired_at' => $currentExpiry,
+            'u' => 1024,
+            'd' => 2048,
+        ]);
+
+        $preview = app(AgentCenterService::class)->previewBonusDays($agent, $subordinate->id, [
+            'bonus_days' => 3,
+        ]);
+        $result = app(AgentCenterService::class)->grantBonusDays($agent, $subordinate->id, [
+            'bonus_days' => 3,
+        ]);
+
+        $agent->refresh();
+        $subordinate->refresh();
+
+        $this->assertSame(3, $preview['bonus_days']);
+        $this->assertSame(200, $preview['bonus_day_price']);
+        $this->assertSame(600, $preview['amount']);
+        $this->assertSame($currentExpiry + 3 * 86400, $preview['new_expired_at']);
+        $this->assertSame(9400, (int) $agent->balance);
+        $this->assertSame($currentExpiry + 3 * 86400, (int) $subordinate->expired_at);
+        $this->assertSame(1024, (int) $subordinate->u);
+        $this->assertSame(2048, (int) $subordinate->d);
+        $this->assertSame(-600, (int) $result['ledger']['amount']);
+        $this->assertSame(1, $this->ledgerCount('grant_bonus_days'));
+        $this->assertSame([
+            'plan_name' => 'Starter',
+            'bonus_days' => 3,
+            'bonus_day_price' => 200,
+            'bonus_amount' => 600,
+            'previous_expired_at' => $currentExpiry,
+            'new_expired_at' => $currentExpiry + 3 * 86400,
+        ], $result['ledger']['metadata']);
+    }
+
+    public function test_grant_bonus_days_starts_from_now_when_subordinate_is_expired(): void
+    {
+        $this->bindAgentSettings(['agent_center_bonus_day_price' => 100]);
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $plan = $this->createPlan('Starter', ['monthly' => 20.00], 128, 2);
+        $subordinate = $this->createOwnedSubordinate($agent, 'buyer@example.test', [
+            'plan_id' => $plan->id,
+            'expired_at' => time() - 5 * 86400,
+        ]);
+        $before = time();
+
+        app(AgentCenterService::class)->grantBonusDays($agent, $subordinate->id, [
+            'bonus_days' => 2,
+        ]);
+
+        $subordinate->refresh();
+
+        $this->assertGreaterThanOrEqual($before + 2 * 86400 - 2, (int) $subordinate->expired_at);
+        $this->assertLessThanOrEqual(time() + 2 * 86400 + 2, (int) $subordinate->expired_at);
+    }
+
+    public function test_grant_bonus_days_rejects_permanent_or_planless_subordinate(): void
+    {
+        $this->bindAgentSettings(['agent_center_bonus_day_price' => 100]);
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $planless = $this->createOwnedSubordinate($agent, 'planless@example.test');
+
+        try {
+            app(AgentCenterService::class)->grantBonusDays($agent, $planless->id, [
+                'bonus_days' => 1,
+            ]);
+            $this->fail('Expected planless subordinate exception.');
+        } catch (ApiException $exception) {
+            $this->assertSame('Target user has no active plan', $exception->getMessage());
+        }
+
+        $plan = $this->createPlan('Starter', ['monthly' => 20.00], 128, 2);
+        $permanent = $this->createOwnedSubordinate($agent, 'permanent@example.test', [
+            'plan_id' => $plan->id,
+            'expired_at' => null,
+        ]);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Permanent plans do not need bonus days');
+
+        app(AgentCenterService::class)->grantBonusDays($agent, $permanent->id, [
+            'bonus_days' => 1,
+        ]);
+    }
+
     public function test_assign_plan_rolls_back_when_balance_is_insufficient(): void
     {
         $agent = $this->createActiveAgent('agent@example.test', 100);

@@ -23,6 +23,7 @@ class AgentCenterService
     public const LEDGER_RESET_TRAFFIC = 'reset_traffic';
     public const LEDGER_RESET_SUBSCRIPTION = 'reset_subscription';
     public const LEDGER_DELETE_SUBORDINATE = 'delete_subordinate';
+    public const LEDGER_GRANT_BONUS_DAYS = 'grant_bonus_days';
     public const LEDGER_REFUND = 'refund';
     public const LEDGER_ADMIN_ADJUST = 'admin_adjust';
 
@@ -478,6 +479,92 @@ class AgentCenterService
         });
     }
 
+    public function previewBonusDays(User $agent, int $subUserId, array $payload): array
+    {
+        $this->activeProfile($agent);
+        $ownership = $this->ownership($agent, $subUserId);
+        $subordinate = $ownership->subordinate ?: User::query()->find($subUserId);
+        if (!$subordinate) {
+            throw new ApiException('Target user does not exist');
+        }
+
+        [$plan, $bonusDays, $bonusDayPrice, $amount, $previousExpiredAt, $newExpiredAt] = $this->resolveBonusDayGrant($subordinate, $payload);
+
+        return [
+            'target_user' => $this->ownedUserSnapshot($ownership),
+            'plan' => $this->planSnapshot($plan),
+            'bonus_days' => $bonusDays,
+            'bonus_day_price' => $bonusDayPrice,
+            'amount' => $amount,
+            'balance_after' => max(0, (int) $agent->balance - $amount),
+            'previous_expired_at' => $previousExpiredAt,
+            'new_expired_at' => $newExpiredAt,
+        ];
+    }
+
+    public function grantBonusDays(User $agent, int $subUserId, array $payload): array
+    {
+        $this->activeProfile($agent);
+
+        return DB::transaction(function () use ($agent, $subUserId, $payload): array {
+            $lockedAgent = User::query()->lockForUpdate()->find($agent->id);
+            if (!$lockedAgent) {
+                throw new ApiException('Agent user does not exist');
+            }
+
+            $ownership = $this->ownership($lockedAgent, $subUserId);
+            $subordinate = User::query()->lockForUpdate()->find($ownership->sub_user_id);
+            if (!$subordinate) {
+                throw new ApiException('Target user does not exist');
+            }
+
+            [$plan, $bonusDays, $bonusDayPrice, $amount, $previousExpiredAt, $newExpiredAt] = $this->resolveBonusDayGrant($subordinate, $payload);
+            $before = (int) $lockedAgent->balance;
+            if ($before < $amount) {
+                throw new ApiException('Insufficient balance');
+            }
+
+            $lockedAgent->balance = $before - $amount;
+            $lockedAgent->updated_at = time();
+            $lockedAgent->save();
+
+            $subordinate->expired_at = $newExpiredAt;
+            $subordinate->updated_at = time();
+            $subordinate->save();
+
+            $ledger = $this->ledgerEntry(
+                $lockedAgent,
+                $subordinate,
+                self::LEDGER_GRANT_BONUS_DAYS,
+                -$amount,
+                $before,
+                (int) $lockedAgent->balance,
+                $plan,
+                null,
+                [
+                    'plan_name' => $plan->name,
+                    'bonus_days' => $bonusDays,
+                    'bonus_day_price' => $bonusDayPrice,
+                    'bonus_amount' => $amount,
+                    'previous_expired_at' => $previousExpiredAt,
+                    'new_expired_at' => $newExpiredAt,
+                ]
+            );
+
+            $ownership->setRelation('subordinate', $subordinate->fresh(['plan:id,name']) ?: $subordinate);
+
+            return [
+                'summary' => $this->summary($lockedAgent),
+                'user' => $this->ownedUserSnapshot($ownership),
+                'bonus_days' => $bonusDays,
+                'bonus_day_price' => $bonusDayPrice,
+                'amount' => $amount,
+                'new_expired_at' => $newExpiredAt,
+                'ledger' => $this->ledgerSnapshot($ledger),
+            ];
+        });
+    }
+
     public function ledger(User $agent, int $limit = 50): array
     {
         $this->activeProfile($agent);
@@ -619,6 +706,36 @@ class AgentCenterService
     private function bonusDayPrice(): int
     {
         return max(0, (int) admin_setting('agent_center_bonus_day_price', 0));
+    }
+
+    private function resolveBonusDayGrant(User $subordinate, array $payload): array
+    {
+        $bonusDays = $this->bonusDays($payload);
+        if ($bonusDays <= 0) {
+            throw new ApiException('Bonus days are required');
+        }
+        if (!$subordinate->plan_id) {
+            throw new ApiException('Target user has no active plan');
+        }
+        if ($subordinate->expired_at === null || (int) $subordinate->expired_at >= 4102444800) {
+            throw new ApiException('Permanent plans do not need bonus days');
+        }
+
+        $plan = Plan::query()->find($subordinate->plan_id);
+        if (!$plan) {
+            throw new ApiException('Target user has no active plan');
+        }
+
+        $bonusDayPrice = $this->bonusDayPrice();
+        if ($bonusDayPrice <= 0) {
+            throw new ApiException('Agent bonus day price is not configured');
+        }
+
+        $previousExpiredAt = (int) ($subordinate->expired_at ?: 0);
+        $base = max($previousExpiredAt, time());
+        $newExpiredAt = $base + ($bonusDays * 86400);
+
+        return [$plan, $bonusDays, $bonusDayPrice, $bonusDays * $bonusDayPrice, $previousExpiredAt, $newExpiredAt];
     }
 
     private function resetPrice(Plan $plan): int
