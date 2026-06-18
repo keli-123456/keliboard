@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Services;
 
+use App\Exceptions\ApiException;
 use App\Models\AgentDomain;
 use App\Models\AgentProfile;
 use App\Models\AgentSiteSetting;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Services\AgentCenterService;
+use App\Services\AgentSiteSettingService;
 use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -144,6 +146,82 @@ final class AgentSiteSettingServiceTest extends TestCase
 
         $this->assertSame($setting->id, $domain->siteSetting->id);
         $this->assertSame('Agent Site', $domain->siteSetting->site_name);
+    }
+
+    public function test_save_rejects_unowned_domain(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $otherAgent = $this->createActiveAgent('other-agent@example.test');
+        $domain = $this->createActiveDomain($otherAgent, 'other.example.test');
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Agent domain is not available');
+
+        app(AgentSiteSettingService::class)->save($agent, [
+            'agent_domain_id' => $domain->id,
+            'site_name' => 'Agent Site',
+            'enabled' => true,
+        ]);
+    }
+
+    public function test_resolve_prefers_domain_setting_then_default_setting(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $domain = $this->createActiveDomain($agent, 'agent.example.test');
+        $this->createSiteSetting($agent, null, [
+            'site_name' => 'Default Site',
+            'logo_url' => 'https://example.test/default-logo.png',
+            'announcement' => 'Default announcement',
+        ]);
+        $this->createSiteSetting($agent, $domain, [
+            'site_name' => 'Domain Site',
+            'logo_url' => 'https://example.test/domain-logo.png',
+        ]);
+
+        $payload = app(AgentSiteSettingService::class)->resolve([
+            'agent_user_id' => $agent->id,
+            'agent_domain_id' => $domain->id,
+        ]);
+
+        $this->assertSame('Domain Site', $payload['site_name']);
+        $this->assertSame('https://example.test/domain-logo.png', $payload['logo_url']);
+        $this->assertSame('Default announcement', $payload['announcement']);
+    }
+
+    public function test_resolve_returns_empty_when_default_setting_is_disabled(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $this->createSiteSetting($agent, null, [
+            'site_name' => 'Disabled Site',
+            'enabled' => false,
+        ]);
+
+        $this->assertSame([], app(AgentSiteSettingService::class)->resolve([
+            'agent_user_id' => $agent->id,
+        ]));
+    }
+
+    public function test_resolve_uses_default_when_domain_setting_is_disabled(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $domain = $this->createActiveDomain($agent, 'agent.example.test');
+        $this->createSiteSetting($agent, null, [
+            'site_name' => 'Default Site',
+            'announcement' => 'Default announcement',
+        ]);
+        $this->createSiteSetting($agent, $domain, [
+            'site_name' => 'Disabled Domain Site',
+            'enabled' => false,
+        ]);
+
+        $payload = app(AgentSiteSettingService::class)->resolve([
+            'agent_user_id' => $agent->id,
+            'agent_domain_id' => $domain->id,
+        ]);
+
+        $this->assertSame('Default Site', $payload['site_name']);
+        $this->assertSame('Default announcement', $payload['announcement']);
+        $this->assertNull($payload['agent_domain_id']);
     }
 
     public function test_ticket_resolves_agent_and_agent_domain(): void
@@ -297,15 +375,15 @@ final class AgentSiteSettingServiceTest extends TestCase
         ]);
     }
 
-    private function createSiteSetting(User $agent, ?AgentDomain $domain = null): AgentSiteSetting
+    private function createSiteSetting(User $agent, ?AgentDomain $domain = null, array $attributes = []): AgentSiteSetting
     {
-        return AgentSiteSetting::query()->create([
+        return AgentSiteSetting::query()->create(array_merge([
             'agent_user_id' => $agent->id,
             'agent_domain_id' => $domain?->id,
             'site_name' => 'Agent Site',
             'enabled' => true,
             'created_at' => time(),
             'updated_at' => time(),
-        ]);
+        ], $attributes));
     }
 }
