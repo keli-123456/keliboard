@@ -33,6 +33,22 @@ class TicketResource extends JsonResource
 
     private function formatAgent(): ?array
     {
+        if (is_array($this->resource)) {
+            $agent = $this->resource['agent'] ?? null;
+            if (!is_array($agent)) {
+                return null;
+            }
+
+            return [
+                'id' => (int) ($agent['id'] ?? 0),
+                'email' => (string) ($agent['email'] ?? ''),
+            ];
+        }
+
+        if (!is_object($this->resource) || !method_exists($this->resource, 'relationLoaded')) {
+            return null;
+        }
+
         if (!$this->resource->relationLoaded('agent')) {
             return null;
         }
@@ -50,6 +66,22 @@ class TicketResource extends JsonResource
 
     private function formatAgentDomain(): ?array
     {
+        if (is_array($this->resource)) {
+            $domain = $this->resource['agent_domain'] ?? null;
+            if (!is_array($domain)) {
+                return null;
+            }
+
+            return [
+                'id' => (int) ($domain['id'] ?? 0),
+                'domain' => (string) ($domain['domain'] ?? ''),
+            ];
+        }
+
+        if (!is_object($this->resource) || !method_exists($this->resource, 'relationLoaded')) {
+            return null;
+        }
+
         if (!$this->resource->relationLoaded('agentDomain')) {
             return null;
         }

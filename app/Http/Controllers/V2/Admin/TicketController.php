@@ -92,12 +92,21 @@ class TicketController extends Controller
                         return;
                     }
 
-                    if (is_array($value)) {
-                        $query->whereIn($column, $value);
-                    } elseif (in_array($key, ['agent_user_id', 'agent_domain_id'], true)) {
-                        if ($value !== null && $value !== '') {
-                            $query->where($column, (int) $value);
+                    if (in_array($key, ['agent_user_id', 'agent_domain_id'], true)) {
+                        if (is_array($value)) {
+                            $ids = $this->normalizePositiveIntegerFilterValues($value);
+                            if ($ids !== []) {
+                                $query->whereIn($column, $ids);
+                            }
+                            return;
                         }
+
+                        $id = $this->normalizePositiveIntegerFilterValue($value);
+                        if ($id !== null) {
+                            $query->where($column, $id);
+                        }
+                    } elseif (is_array($value)) {
+                        $query->whereIn($column, $value);
                     } else {
                         $query->where($column, 'like', "%{$value}%");
                     }
@@ -137,6 +146,35 @@ class TicketController extends Controller
     private function resolveTicketSortField(string $field): ?string
     {
         return self::TICKET_SORT_FIELDS[$field] ?? null;
+    }
+
+    private function normalizePositiveIntegerFilterValue(mixed $value): ?int
+    {
+        if (is_int($value)) {
+            return $value > 0 ? $value : null;
+        }
+
+        if (is_string($value)) {
+            $value = trim($value);
+            if ($value !== '' && ctype_digit($value) && (int) $value > 0) {
+                return (int) $value;
+            }
+        }
+
+        return null;
+    }
+
+    private function normalizePositiveIntegerFilterValues(array $values): array
+    {
+        $ids = [];
+        foreach ($values as $value) {
+            $id = $this->normalizePositiveIntegerFilterValue($value);
+            if ($id !== null) {
+                $ids[] = $id;
+            }
+        }
+
+        return array_values(array_unique($ids));
     }
 
     public function fetch(Request $request)

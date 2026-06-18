@@ -210,12 +210,12 @@ class TicketService
             $agentContext = isset($options['agent_context']) && is_array($options['agent_context'])
                 ? $options['agent_context']
                 : [];
-            $agentUserId = $agentContext['agent_user_id'] ?? null;
-            $agentDomainId = $agentContext['agent_domain_id'] ?? null;
+            $agentUserId = $this->normalizePositiveInteger($agentContext['agent_user_id'] ?? null);
+            $agentDomainId = $this->normalizePositiveInteger($agentContext['agent_domain_id'] ?? null);
             $ticket = Ticket::create([
                 'user_id' => $userId,
-                'agent_user_id' => $agentUserId !== null && $agentUserId !== '' ? (int) $agentUserId : null,
-                'agent_domain_id' => $agentDomainId !== null && $agentDomainId !== '' ? (int) $agentDomainId : null,
+                'agent_user_id' => $agentUserId,
+                'agent_domain_id' => $agentDomainId,
                 'subject' => $subject,
                 'level' => $level,
                 'status' => Ticket::STATUS_OPENING,
@@ -282,6 +282,22 @@ class TicketService
             }
             throw $e;
         }
+    }
+
+    private function normalizePositiveInteger(mixed $value): ?int
+    {
+        if (is_int($value)) {
+            return $value > 0 ? $value : null;
+        }
+
+        if (is_string($value)) {
+            $value = trim($value);
+            if ($value !== '' && ctype_digit($value) && (int) $value > 0) {
+                return (int) $value;
+            }
+        }
+
+        return null;
     }
 
     /**

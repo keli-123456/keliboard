@@ -86,12 +86,31 @@ final class AgentTicketContextTest extends TestCase
         $this->assertSame($domain->id, (int) $ticket->agent_domain_id);
     }
 
+    public function test_malformed_agent_context_does_not_store_zero_ids(): void
+    {
+        $buyer = $this->createUser('malformed-buyer@example.test');
+
+        $ticket = app(TicketService::class)->createTicket(
+            $buyer->id,
+            'Malformed context',
+            1,
+            'Context values should be ignored',
+            [],
+            [
+                'agent_context' => [
+                    'agent_user_id' => 'abc',
+                    'agent_domain_id' => false,
+                ],
+            ]
+        );
+
+        $this->assertNull($ticket->agent_user_id);
+        $this->assertNull($ticket->agent_domain_id);
+    }
+
     public function test_admin_fetch_filter_agent_user_id_returns_only_matching_tickets(): void
     {
         $firstAgent = $this->createActiveAgent('first-agent@example.test');
-        for ($i = 0; $i < 8; $i++) {
-            $this->createUser('filler-' . $i . '@example.test');
-        }
         $secondAgent = $this->createActiveAgent('second-agent@example.test');
         $firstBuyer = $this->createUser('first-buyer@example.test');
         $secondBuyer = $this->createUser('second-buyer@example.test');
@@ -135,6 +154,37 @@ final class AgentTicketContextTest extends TestCase
         $this->assertNull($items[0]['agent_domain']);
     }
 
+    public function test_admin_fetch_ignores_malformed_agent_user_filter(): void
+    {
+        $agent = $this->createActiveAgent('filter-agent@example.test');
+        $buyer = $this->createUser('filter-buyer@example.test');
+
+        Ticket::query()->create([
+            'user_id' => $buyer->id,
+            'agent_user_id' => $agent->id,
+            'subject' => 'Visible despite malformed filter',
+            'level' => 1,
+            'status' => Ticket::STATUS_OPENING,
+            'reply_status' => Ticket::REPLY_STATUS_WAITING_ADMIN,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $request = Request::create('/api/v2/admin/ticket/fetch', 'GET', [
+            'filter' => [
+                ['id' => 'agent_user_id', 'value' => 'abc'],
+            ],
+            'pageSize' => 10,
+            'current' => 1,
+        ]);
+
+        $payload = (new AdminTicketController())->fetch($request)->getData(true);
+        $items = $payload['data']['items'];
+
+        $this->assertCount(1, $items);
+        $this->assertSame('Visible despite malformed filter', $items[0]['subject']);
+    }
+
     public function test_resource_includes_agent_and_agent_domain_when_loaded(): void
     {
         config(['hidden_features.enable_exposed_user_count_fix' => true]);
@@ -159,6 +209,31 @@ final class AgentTicketContextTest extends TestCase
         $this->assertArrayNotHasKey('user_id', $data);
         $this->assertSame(['id' => $agent->id, 'email' => $agent->email], $data['agent']);
         $this->assertSame(['id' => $domain->id, 'domain' => $domain->domain], $data['agent_domain']);
+    }
+
+    public function test_resource_handles_array_backed_ticket_without_loaded_relations(): void
+    {
+        $data = TicketResource::make([
+            'id' => 99,
+            'user_id' => 123,
+            'level' => 1,
+            'reply_status' => Ticket::REPLY_STATUS_WAITING_ADMIN,
+            'status' => Ticket::STATUS_OPENING,
+            'subject' => 'Array ticket',
+            'agent' => [
+                'id' => 7,
+                'email' => 'array-agent@example.test',
+            ],
+            'agent_domain' => [
+                'id' => 8,
+                'domain' => 'array.example.test',
+            ],
+            'created_at' => 111,
+            'updated_at' => 222,
+        ])->toArray(Request::create('/ticket', 'GET'));
+
+        $this->assertSame(['id' => 7, 'email' => 'array-agent@example.test'], $data['agent']);
+        $this->assertSame(['id' => 8, 'domain' => 'array.example.test'], $data['agent_domain']);
     }
 
     private function addTicketTestColumns(): void
