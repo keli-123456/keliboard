@@ -164,6 +164,106 @@ final class AgentSiteSettingServiceTest extends TestCase
         ]);
     }
 
+    public function test_save_rejects_malformed_non_empty_domain_ids(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $service = app(AgentSiteSettingService::class);
+
+        foreach (['abc', 'undefined', 0, -1] as $domainId) {
+            try {
+                $service->save($agent, [
+                    'agent_domain_id' => $domainId,
+                    'site_name' => 'Agent Site',
+                ]);
+                $this->fail('Expected unavailable domain exception.');
+            } catch (ApiException $exception) {
+                $this->assertSame('Agent domain is not available', $exception->getMessage());
+            }
+        }
+
+        $this->assertSame(0, AgentSiteSetting::query()->count());
+    }
+
+    public function test_save_rejects_existing_setting_domain_scope_change(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $domain = $this->createActiveDomain($agent, 'agent.example.test');
+        $setting = $this->createSiteSetting($agent);
+
+        try {
+            app(AgentSiteSettingService::class)->save($agent, [
+                'id' => $setting->id,
+                'agent_domain_id' => $domain->id,
+                'site_name' => 'Moved Site',
+            ]);
+            $this->fail('Expected domain change exception.');
+        } catch (ApiException $exception) {
+            $this->assertSame('Agent site setting domain cannot be changed', $exception->getMessage());
+        }
+
+        $setting->refresh();
+        $this->assertNull($setting->agent_domain_id);
+        $this->assertSame('Agent Site', $setting->site_name);
+        $this->assertSame(0, AgentSiteSetting::query()
+            ->where('agent_user_id', $agent->id)
+            ->where('agent_domain_id', $domain->id)
+            ->count());
+    }
+
+    public function test_save_rejects_unknown_setting_id_for_agent(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $otherAgent = $this->createActiveAgent('other-agent@example.test');
+        $setting = $this->createSiteSetting($otherAgent);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Agent site setting is not available');
+
+        app(AgentSiteSettingService::class)->save($agent, [
+            'id' => $setting->id,
+            'site_name' => 'Updated Site',
+        ]);
+    }
+
+    public function test_save_partial_update_preserves_legacy_invalid_omitted_url(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $setting = $this->createSiteSetting($agent, null, [
+            'support_url' => 'legacy invalid url',
+        ]);
+
+        $payload = app(AgentSiteSettingService::class)->save($agent, [
+            'id' => $setting->id,
+            'site_name' => 'Updated Site',
+        ]);
+        $setting->refresh();
+
+        $this->assertSame('Updated Site', $payload['site_name']);
+        $this->assertSame('legacy invalid url', $payload['support_url']);
+        $this->assertSame('legacy invalid url', $setting->support_url);
+    }
+
+    public function test_save_creates_default_setting_when_domain_is_missing(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+
+        $payload = app(AgentSiteSettingService::class)->save($agent, [
+            'site_name' => 'New Agent Site',
+            'logo_url' => 'https://example.test/logo.png',
+            'landing_theme' => 'spark',
+            'accent_color' => '#AABBCC',
+            'enabled' => true,
+        ]);
+
+        $this->assertSame('New Agent Site', $payload['site_name']);
+        $this->assertSame('https://example.test/logo.png', $payload['logo_url']);
+        $this->assertSame('spark', $payload['landing_theme']);
+        $this->assertSame('#aabbcc', $payload['accent_color']);
+        $this->assertNull($payload['agent_domain_id']);
+        $this->assertSame(AgentSiteSetting::SCOPE_DEFAULT, $payload['setting_scope']);
+        $this->assertSame(AgentSiteSetting::KEY_DEFAULT, $payload['setting_key']);
+    }
+
     public function test_resolve_prefers_domain_setting_then_default_setting(): void
     {
         $agent = $this->createActiveAgent('agent@example.test');

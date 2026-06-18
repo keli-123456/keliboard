@@ -45,26 +45,46 @@ class AgentSiteSettingService
     {
         return DB::transaction(function () use ($agent, $payload): array {
             $this->activeProfile($agent, true);
-            $domainId = $this->agentDomainId($agent, $payload['agent_domain_id'] ?? null, true);
+
+            $id = (int) ($payload['id'] ?? 0);
+            $setting = null;
+            if (array_key_exists('id', $payload)) {
+                $setting = AgentSiteSetting::query()
+                    ->where('agent_user_id', $agent->id)
+                    ->where('id', $id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (!$setting) {
+                    throw new ApiException('Agent site setting is not available');
+                }
+            }
+
+            $domainId = $this->destinationDomainId($agent, $payload, $setting);
             $scope = $domainId === null ? AgentSiteSetting::SCOPE_DEFAULT : AgentSiteSetting::SCOPE_DOMAIN;
             $key = $domainId === null ? AgentSiteSetting::KEY_DEFAULT : (string) $domainId;
 
-            $setting = AgentSiteSetting::query()
-                ->where('agent_user_id', $agent->id)
-                ->where('setting_scope', $scope)
-                ->where('setting_key', $key)
-                ->lockForUpdate()
-                ->first() ?? new AgentSiteSetting();
+            if ($setting) {
+                if ((string) $setting->setting_scope !== $scope || (string) $setting->setting_key !== $key) {
+                    throw new ApiException('Agent site setting domain cannot be changed');
+                }
+            } else {
+                $setting = AgentSiteSetting::query()
+                    ->where('agent_user_id', $agent->id)
+                    ->where('setting_scope', $scope)
+                    ->where('setting_key', $key)
+                    ->lockForUpdate()
+                    ->first() ?? new AgentSiteSetting();
+            }
 
             $values = $this->cleanPayload($payload, $setting);
             $now = time();
 
             $setting->agent_user_id = (int) $agent->id;
             $setting->agent_domain_id = $domainId;
-            foreach (self::CONFIG_FIELDS as $field) {
-                $setting->{$field} = $values[$field];
+            foreach ($values as $field => $value) {
+                $setting->{$field} = $value;
             }
-            $setting->enabled = $values['enabled'];
             if (!$setting->exists) {
                 $setting->created_at = $now;
             }
@@ -155,43 +175,62 @@ class AgentSiteSettingService
 
     private function cleanPayload(array $payload, AgentSiteSetting $setting): array
     {
-        return [
-            'site_name' => $this->payloadField($payload, $setting, 'site_name', 'string', 80),
-            'logo_url' => $this->payloadField($payload, $setting, 'logo_url', 'url', 500),
-            'landing_theme' => $this->cleanLandingTheme($this->rawField($payload, $setting, 'landing_theme')),
-            'accent_color' => $this->cleanColor($this->rawField($payload, $setting, 'accent_color')),
-            'support_name' => $this->payloadField($payload, $setting, 'support_name', 'string', 80),
-            'support_url' => $this->payloadField($payload, $setting, 'support_url', 'url', 500),
-            'announcement' => $this->payloadField($payload, $setting, 'announcement', 'string', 500),
-            'seo_title' => $this->payloadField($payload, $setting, 'seo_title', 'string', 120),
-            'seo_description' => $this->payloadField($payload, $setting, 'seo_description', 'string', 255),
-            'enabled' => array_key_exists('enabled', $payload)
-                ? (bool) $payload['enabled']
-                : ($setting->exists ? (bool) $setting->enabled : true),
+        $values = [];
+        $fields = [
+            'site_name' => ['string', 80],
+            'logo_url' => ['url', 500],
+            'landing_theme' => ['theme', 32],
+            'accent_color' => ['color', 16],
+            'support_name' => ['string', 80],
+            'support_url' => ['url', 500],
+            'announcement' => ['string', 500],
+            'seo_title' => ['string', 120],
+            'seo_description' => ['string', 255],
         ];
-    }
 
-    private function payloadField(
-        array $payload,
-        AgentSiteSetting $setting,
-        string $field,
-        string $type,
-        int $max
-    ): string {
-        $value = $this->rawField($payload, $setting, $field);
-
-        return $type === 'url'
-            ? $this->cleanUrl($value)
-            : $this->cleanString($value, $max);
-    }
-
-    private function rawField(array $payload, AgentSiteSetting $setting, string $field): mixed
-    {
-        if (array_key_exists($field, $payload)) {
-            return $payload[$field];
+        foreach ($fields as $field => [$type, $max]) {
+            if (!$setting->exists || array_key_exists($field, $payload)) {
+                $values[$field] = $this->cleanField($payload[$field] ?? '', $type, $max);
+            }
         }
 
-        return $setting->exists ? $setting->{$field} : '';
+        if (!$setting->exists || array_key_exists('enabled', $payload)) {
+            $values['enabled'] = array_key_exists('enabled', $payload) ? (bool) $payload['enabled'] : true;
+        }
+
+        return $values;
+    }
+
+    private function cleanField(mixed $value, string $type, int $max): string
+    {
+        if ($type === 'url') {
+            return $this->cleanUrl($value);
+        }
+
+        if ($type === 'theme') {
+            return $this->cleanLandingTheme($value);
+        }
+
+        if ($type === 'color') {
+            return $this->cleanColor($value);
+        }
+
+        return $this->cleanString($value, $max);
+    }
+
+    private function destinationDomainId(User $agent, array $payload, ?AgentSiteSetting $setting): ?int
+    {
+        if (array_key_exists('agent_domain_id', $payload)) {
+            return $this->agentDomainId($agent, $payload['agent_domain_id'], true);
+        }
+
+        if ($setting) {
+            return $setting->agent_domain_id !== null
+                ? $this->agentDomainId($agent, $setting->agent_domain_id, true)
+                : null;
+        }
+
+        return null;
     }
 
     private function agentDomainId(User $agent, mixed $value, bool $lock = false): ?int
@@ -200,9 +239,16 @@ class AgentSiteSettingService
             return null;
         }
 
-        $domainId = (int) $value;
+        if (is_int($value)) {
+            $domainId = $value;
+        } elseif (is_string($value) && preg_match('/^[1-9][0-9]*$/', trim($value))) {
+            $domainId = (int) trim($value);
+        } else {
+            throw new ApiException('Agent domain is not available');
+        }
+
         if ($domainId <= 0) {
-            return null;
+            throw new ApiException('Agent domain is not available');
         }
 
         $query = AgentDomain::query()->where('id', $domainId);
