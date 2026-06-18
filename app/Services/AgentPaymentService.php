@@ -9,6 +9,7 @@ use App\Models\Payment;
 use App\Models\User;
 use App\Services\Plugin\PluginManager;
 use App\Utils\Helper;
+use Illuminate\Support\Facades\DB;
 
 class AgentPaymentService
 {
@@ -62,63 +63,75 @@ class AgentPaymentService
 
     public function save(User $agent, array $payload): Payment
     {
-        $this->activeProfile($agent);
-
         $paymentName = $this->normalizePaymentName((string) ($payload['payment'] ?? ''));
         $this->assertPaymentPluginEnabled($paymentName);
 
         $id = (int) ($payload['id'] ?? 0);
-        $payment = $id > 0 ? Payment::query()->find($id) : new Payment();
-        if (!$payment) {
-            throw new ApiException('Payment method does not exist');
-        }
-        if ($payment->exists) {
-            $this->assertOwnedByAgent($payment, (int) $agent->id);
-        }
-        $ownerDomainId = $this->ownerDomainId($agent, $payload['owner_domain_id'] ?? null);
 
-        $payment->owner_type = Payment::OWNER_AGENT;
-        $payment->owner_id = (int) $agent->id;
-        $payment->owner_domain_id = $ownerDomainId;
-        $payment->payment = $paymentName;
-        $payment->name = trim((string) ($payload['name'] ?? $paymentName));
-        $payment->icon = $payload['icon'] ?? null;
-        $payment->config = $this->mergedConfig($payment, (array) ($payload['config'] ?? []));
-        $payment->notify_domain = $payload['notify_domain'] ?? null;
-        $payment->handling_fee_fixed = isset($payload['handling_fee_fixed']) && $payload['handling_fee_fixed'] !== ''
-            ? (int) $payload['handling_fee_fixed']
-            : null;
-        $payment->handling_fee_percent = isset($payload['handling_fee_percent']) && $payload['handling_fee_percent'] !== ''
-            ? (float) $payload['handling_fee_percent']
-            : null;
-        $payment->enable = (bool) ($payload['enable'] ?? $payment->enable ?? false);
-        $payment->sort = isset($payload['sort']) && $payload['sort'] !== ''
-            ? (int) $payload['sort']
-            : ($payment->sort ?? 0);
-        if (!$payment->exists) {
-            $payment->uuid = Helper::randomChar(8);
-            $payment->created_at = time();
-        }
-        $payment->updated_at = time();
-        $payment->save();
+        return DB::transaction(function () use ($agent, $payload, $paymentName, $id): Payment {
+            $this->activeProfile($agent, true);
 
-        return $payment->fresh() ?: $payment;
+            $payment = $id > 0
+                ? Payment::query()->where('id', $id)->lockForUpdate()->first()
+                : new Payment();
+            if (!$payment) {
+                throw new ApiException('Payment method does not exist');
+            }
+            if ($payment->exists) {
+                $this->assertOwnedByAgent($payment, (int) $agent->id);
+            }
+            $ownerDomainId = $this->ownerDomainId($agent, $payload['owner_domain_id'] ?? null, true);
+
+            $payment->owner_type = Payment::OWNER_AGENT;
+            $payment->owner_id = (int) $agent->id;
+            $payment->owner_domain_id = $ownerDomainId;
+            $payment->payment = $paymentName;
+            $payment->name = trim((string) ($payload['name'] ?? $paymentName));
+            $payment->icon = $payload['icon'] ?? null;
+            $payment->config = $this->mergedConfig($payment, (array) ($payload['config'] ?? []));
+            $payment->notify_domain = $payload['notify_domain'] ?? null;
+            $payment->handling_fee_fixed = isset($payload['handling_fee_fixed']) && $payload['handling_fee_fixed'] !== ''
+                ? (int) $payload['handling_fee_fixed']
+                : null;
+            $payment->handling_fee_percent = isset($payload['handling_fee_percent']) && $payload['handling_fee_percent'] !== ''
+                ? (float) $payload['handling_fee_percent']
+                : null;
+            $payment->enable = (bool) ($payload['enable'] ?? $payment->enable ?? false);
+            $payment->sort = isset($payload['sort']) && $payload['sort'] !== ''
+                ? (int) $payload['sort']
+                : ($payment->sort ?? 0);
+            if (!$payment->exists) {
+                $payment->uuid = Helper::randomChar(8);
+                $payment->created_at = time();
+            }
+            $payment->updated_at = time();
+            $payment->save();
+
+            return $payment->fresh() ?: $payment;
+        });
     }
 
     public function toggle(User $agent, int $id): Payment
     {
-        $this->activeProfile($agent);
-        $payment = Payment::query()->find($id);
-        if (!$payment) {
-            throw new ApiException('Payment method does not exist');
-        }
-        $this->assertOwnedByAgent($payment, (int) $agent->id);
+        return DB::transaction(function () use ($agent, $id): Payment {
+            $this->activeProfile($agent);
+            $payment = Payment::query()->where('id', $id)->lockForUpdate()->first();
+            if (!$payment) {
+                throw new ApiException('Payment method does not exist');
+            }
+            $this->assertOwnedByAgent($payment, (int) $agent->id);
 
-        $payment->enable = !$payment->enable;
-        $payment->updated_at = time();
-        $payment->save();
+            $enabled = !(bool) $payment->enable;
+            if ($enabled && $payment->owner_domain_id !== null) {
+                $this->ownerDomainId($agent, $payment->owner_domain_id, true);
+            }
 
-        return $payment->fresh() ?: $payment;
+            $payment->enable = $enabled;
+            $payment->updated_at = time();
+            $payment->save();
+
+            return $payment->fresh() ?: $payment;
+        });
     }
 
     public function delete(User $agent, int $id): bool
@@ -143,12 +156,17 @@ class AgentPaymentService
         }
     }
 
-    private function activeProfile(User $agent): AgentProfile
+    private function activeProfile(User $agent, bool $lock = false): AgentProfile
     {
-        $profile = AgentProfile::query()
+        $query = AgentProfile::query()
             ->where('user_id', $agent->id)
-            ->where('status', AgentCenterService::STATUS_ACTIVE)
-            ->first();
+            ->where('status', AgentCenterService::STATUS_ACTIVE);
+
+        if ($lock) {
+            $query->lockForUpdate();
+        }
+
+        $profile = $query->first();
         if (!$profile) {
             throw new ApiException('Agent permission is not active');
         }
@@ -156,20 +174,26 @@ class AgentPaymentService
         return $profile;
     }
 
-    private function ownerDomainId(User $agent, mixed $ownerDomainId): ?int
+    private function ownerDomainId(User $agent, mixed $ownerDomainId, bool $lock = false): ?int
     {
         if ($ownerDomainId === null || $ownerDomainId === '') {
             return null;
         }
 
         $domainId = (int) $ownerDomainId;
-        $domain = AgentDomain::query()
-            ->where('id', $domainId)
-            ->where('agent_user_id', $agent->id)
-            ->where('status', AgentDomain::STATUS_ACTIVE)
-            ->first();
+        $query = AgentDomain::query()->where('id', $domainId);
 
-        if (!$domain) {
+        if ($lock) {
+            $query->lockForUpdate();
+        }
+
+        $domain = $query->first();
+
+        if (
+            !$domain
+            || (int) $domain->agent_user_id !== (int) $agent->id
+            || (string) $domain->status !== AgentDomain::STATUS_ACTIVE
+        ) {
             throw new ApiException('Domain is unavailable');
         }
 

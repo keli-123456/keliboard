@@ -192,6 +192,41 @@ final class AgentPaymentServiceTest extends TestCase
         $this->assertSame($domain->id, (int) $payment->owner_domain_id);
     }
 
+    public function test_toggle_rejects_deleted_bound_domain_when_enabling_payment(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $domain = $this->createDomain($agent, 'deleted.example.test', AgentDomain::STATUS_ACTIVE);
+        $payment = $this->createPayment($agent, $domain, false);
+        $domain->delete();
+
+        try {
+            app(AgentPaymentService::class)->toggle($agent, $payment->id);
+            $this->fail('Expected unavailable domain exception.');
+        } catch (ApiException $exception) {
+            $this->assertSame('Domain is unavailable', $exception->getMessage());
+        }
+
+        $this->assertFalse((bool) $payment->fresh()->enable);
+    }
+
+    public function test_toggle_rejects_disabled_bound_domain_when_enabling_payment(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $domain = $this->createDomain($agent, 'disabled.example.test', AgentDomain::STATUS_ACTIVE);
+        $payment = $this->createPayment($agent, $domain, false);
+        $domain->status = AgentDomain::STATUS_DISABLED;
+        $domain->save();
+
+        try {
+            app(AgentPaymentService::class)->toggle($agent, $payment->id);
+            $this->fail('Expected unavailable domain exception.');
+        } catch (ApiException $exception) {
+            $this->assertSame('Domain is unavailable', $exception->getMessage());
+        }
+
+        $this->assertFalse((bool) $payment->fresh()->enable);
+    }
+
     private function bindFakePaymentGateway(): void
     {
         HookManager::registerFilter('available_payment_methods', static function (array $methods): array {
@@ -282,6 +317,22 @@ final class AgentPaymentServiceTest extends TestCase
             'domain' => $domain,
             'status' => $status,
             'is_primary' => false,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+    }
+
+    private function createPayment(User $agent, AgentDomain $domain, bool $enable): Payment
+    {
+        return Payment::query()->create([
+            'owner_type' => Payment::OWNER_AGENT,
+            'owner_id' => $agent->id,
+            'owner_domain_id' => $domain->id,
+            'uuid' => substr(md5($agent->email . ':' . $domain->domain), 0, 8),
+            'payment' => 'FAKEPAY',
+            'name' => 'Agent Pay',
+            'config' => [],
+            'enable' => $enable,
             'created_at' => time(),
             'updated_at' => time(),
         ]);
