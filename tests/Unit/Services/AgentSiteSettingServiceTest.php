@@ -11,6 +11,9 @@ use App\Models\Ticket;
 use App\Models\User;
 use App\Services\AgentCenterService;
 use Illuminate\Database\QueryException;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
 
@@ -23,6 +26,7 @@ final class AgentSiteSettingServiceTest extends TestCase
         parent::setUp();
 
         $this->setUpInMemoryDatabase();
+        app()->instance('db.schema', $this->database->getConnection()->getSchemaBuilder());
         $this->createUserTable();
         $this->createAgentCenterTables();
         $this->createAgentCommerceTables();
@@ -105,6 +109,40 @@ final class AgentSiteSettingServiceTest extends TestCase
 
         $this->assertSame($agent->id, $ticket->agent->id);
         $this->assertSame('agent.example.test', $ticket->agentDomain->domain);
+    }
+
+    public function test_migration_rollback_preserves_pre_existing_site_setting_table(): void
+    {
+        Schema::drop('v2_agent_site_setting');
+        Schema::drop('v2_ticket_message_attachment');
+        Schema::drop('v2_ticket_message');
+        Schema::drop('v2_ticket');
+        Schema::create('v2_agent_site_setting', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->unsignedInteger('agent_user_id')->index();
+            $table->unsignedInteger('agent_domain_id')->nullable()->index();
+            $table->string('legacy_marker', 32)->nullable();
+        });
+        DB::table('v2_agent_site_setting')->insert([
+            'agent_user_id' => 1,
+            'agent_domain_id' => null,
+            'legacy_marker' => 'kept',
+        ]);
+        $migration = $this->agentSiteSettingMigration();
+
+        $migration->up();
+        $migration->down();
+
+        $this->assertTrue(Schema::hasTable('v2_agent_site_setting'));
+        $this->assertTrue(Schema::hasColumn('v2_agent_site_setting', 'legacy_marker'));
+        $this->assertFalse(Schema::hasColumn('v2_agent_site_setting', 'setting_scope'));
+        $this->assertFalse(Schema::hasColumn('v2_agent_site_setting', 'setting_key'));
+        $this->assertSame('kept', DB::table('v2_agent_site_setting')->value('legacy_marker'));
+    }
+
+    private function agentSiteSettingMigration(): object
+    {
+        return require dirname(__DIR__, 3) . '/database/migrations/2026_06_18_000003_create_agent_site_setting_table.php';
     }
 
     private function createActiveAgent(string $email): User

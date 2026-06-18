@@ -2,7 +2,6 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
@@ -30,51 +29,6 @@ return new class extends Migration
                 $table->integer('updated_at')->nullable();
                 $table->unique(['agent_user_id', 'setting_scope', 'setting_key'], 'uniq_agent_site_setting_scope');
             });
-        } else {
-            if (!Schema::hasColumn('v2_agent_site_setting', 'setting_scope')) {
-                Schema::table('v2_agent_site_setting', function (Blueprint $table): void {
-                    $table->string('setting_scope', 16)->default('default')->after('agent_domain_id');
-                });
-            }
-
-            if (!Schema::hasColumn('v2_agent_site_setting', 'setting_key')) {
-                Schema::table('v2_agent_site_setting', function (Blueprint $table): void {
-                    $table->string('setting_key', 64)->default('default')->after('setting_scope');
-                });
-            }
-
-            DB::table('v2_agent_site_setting')
-                ->whereNull('agent_domain_id')
-                ->update([
-                    'setting_scope' => 'default',
-                    'setting_key' => 'default',
-                ]);
-
-            DB::table('v2_agent_site_setting')
-                ->whereNotNull('agent_domain_id')
-                ->orderBy('id')
-                ->select(['id', 'agent_domain_id'])
-                ->get()
-                ->each(function ($setting): void {
-                    DB::table('v2_agent_site_setting')
-                        ->where('id', $setting->id)
-                        ->update([
-                            'setting_scope' => 'domain',
-                            'setting_key' => (string) $setting->agent_domain_id,
-                        ]);
-                });
-
-            if (Schema::hasIndex('v2_agent_site_setting', ['agent_user_id', 'agent_domain_id'], 'unique')) {
-                Schema::table('v2_agent_site_setting', function (Blueprint $table): void {
-                    $table->dropIndex('uniq_agent_site_setting_domain');
-                });
-            }
-
-            if (!Schema::hasIndex('v2_agent_site_setting', ['agent_user_id', 'setting_scope', 'setting_key'], 'unique')) {
-                Schema::table('v2_agent_site_setting', function (Blueprint $table): void {
-                    $table->unique(['agent_user_id', 'setting_scope', 'setting_key'], 'uniq_agent_site_setting_scope');
-                });
-            }
         }
 
         if (!Schema::hasTable('v2_ticket')) {
@@ -127,6 +81,27 @@ return new class extends Migration
             });
         }
 
-        Schema::dropIfExists('v2_agent_site_setting');
+        if ($this->ownsAgentSiteSettingTable()) {
+            Schema::dropIfExists('v2_agent_site_setting');
+        }
+    }
+
+    private function ownsAgentSiteSettingTable(): bool
+    {
+        if (!Schema::hasTable('v2_agent_site_setting')) {
+            return false;
+        }
+
+        foreach (['setting_scope', 'setting_key', 'site_name', 'enabled'] as $column) {
+            if (!Schema::hasColumn('v2_agent_site_setting', $column)) {
+                return false;
+            }
+        }
+
+        return Schema::hasIndex(
+            'v2_agent_site_setting',
+            ['agent_user_id', 'setting_scope', 'setting_key'],
+            'unique'
+        );
     }
 };
