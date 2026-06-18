@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Http;
 
+use App\Exceptions\ApiException;
 use App\Http\Controllers\V1\User\AgentCommerceController;
 use App\Models\AgentDomain;
 use App\Models\AgentProfile;
@@ -69,6 +70,73 @@ final class UserAgentCommerceControllerTest extends TestCase
         );
         $this->assertSame(3, $summary['domain_limit']);
         $this->assertSame($domains, $summary['domains']);
+    }
+
+    public function test_domains_rejects_inactive_agent_before_exposing_verification_payload(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => 'pending.example.test',
+            'status' => AgentDomain::STATUS_PENDING,
+            'is_primary' => false,
+            'verification_token' => 'pending-token',
+            'verification_type' => AgentDomainSelfService::VERIFICATION_TYPE_TXT,
+            'created_by_agent_id' => $agent->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        AgentProfile::query()
+            ->where('user_id', $agent->id)
+            ->update([
+                'status' => AgentCenterService::STATUS_DISABLED,
+                'disabled_at' => time(),
+                'updated_at' => time(),
+            ]);
+        $request = $this->userRequest($agent, '/api/v1/user/agent/domains', 'GET');
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Agent permission is not active');
+
+        app(AgentCommerceController::class)->domains($request);
+    }
+
+    public function test_commerce_summary_includes_active_only_payment_domains(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => 'active.example.test',
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+            'created_by_agent_id' => $agent->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => 'pending.example.test',
+            'status' => AgentDomain::STATUS_PENDING,
+            'is_primary' => false,
+            'verification_token' => 'pending-token',
+            'verification_type' => AgentDomainSelfService::VERIFICATION_TYPE_TXT,
+            'created_by_agent_id' => $agent->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $request = $this->userRequest($agent, '/api/v1/user/agent/commerce/summary', 'GET');
+
+        $summary = $this->responsePayload(app(AgentCommerceController::class)->commerceSummary($request))['data'];
+
+        $this->assertSame(
+            ['active.example.test', 'pending.example.test'],
+            array_column($summary['domains'], 'domain')
+        );
+        $this->assertSame(
+            ['active.example.test'],
+            array_column($summary['payment_domains'], 'domain')
+        );
+        $this->assertSame(AgentDomain::STATUS_ACTIVE, $summary['payment_domains'][0]['status']);
     }
 
     public function test_save_domain_returns_pending_self_service_payload(): void

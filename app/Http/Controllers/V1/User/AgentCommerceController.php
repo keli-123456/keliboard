@@ -2,8 +2,11 @@
 
 namespace App\Http\Controllers\V1\User;
 
+use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
 use App\Models\AgentDomain;
+use App\Models\AgentProfile;
+use App\Services\AgentCenterService;
 use App\Services\AgentDomainSelfService;
 use App\Services\AgentPaymentService;
 use App\Services\AgentStorefrontService;
@@ -117,8 +120,11 @@ class AgentCommerceController extends Controller
 
     public function commerceSummary(Request $request)
     {
+        $domains = $this->domainList((int) $request->user()->id);
+
         return $this->success([
-            'domains' => $this->domainList((int) $request->user()->id),
+            'domains' => $domains,
+            'payment_domains' => $this->paymentDomainList($domains),
             'domain_limit' => $this->domainService()->domainLimit(),
             'payments' => $this->paymentService()->list($request->user()),
             'prices' => $this->storefrontService()->listPrices($request->user()),
@@ -142,6 +148,7 @@ class AgentCommerceController extends Controller
 
     private function domainList(int $agentUserId): array
     {
+        $this->assertActiveAgent($agentUserId);
         $domainService = $this->domainService();
 
         return AgentDomain::query()
@@ -152,5 +159,25 @@ class AgentCommerceController extends Controller
             ->map(fn (AgentDomain $domain): array => $domainService->payload($domain))
             ->values()
             ->all();
+    }
+
+    private function paymentDomainList(array $domains): array
+    {
+        return collect($domains)
+            ->filter(fn (array $domain): bool => ($domain['status'] ?? null) === AgentDomain::STATUS_ACTIVE)
+            ->values()
+            ->all();
+    }
+
+    private function assertActiveAgent(int $agentUserId): void
+    {
+        $active = AgentProfile::query()
+            ->where('user_id', $agentUserId)
+            ->where('status', AgentCenterService::STATUS_ACTIVE)
+            ->exists();
+
+        if (!$active) {
+            throw new ApiException('Agent permission is not active');
+        }
     }
 }

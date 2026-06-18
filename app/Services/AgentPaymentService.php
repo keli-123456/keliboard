@@ -114,7 +114,7 @@ class AgentPaymentService
     public function toggle(User $agent, int $id): Payment
     {
         return DB::transaction(function () use ($agent, $id): Payment {
-            $this->activeProfile($agent);
+            $this->activeProfile($agent, true);
             $payment = Payment::query()->where('id', $id)->lockForUpdate()->first();
             if (!$payment) {
                 throw new ApiException('Payment method does not exist');
