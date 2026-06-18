@@ -55,6 +55,9 @@ class UserRoute
             $router->post('/agent/users/{id}/bonus-days', [AgentController::class, 'grantBonusDays']);
             $router->get('/agent/ledger', [AgentController::class, 'ledger']);
             $router->get('/agent/domains', [AgentCommerceController::class, 'domains']);
+            $router->post('/agent/domains', [AgentCommerceController::class, 'saveDomain']);
+            $router->post('/agent/domains/{id}/verify', [AgentCommerceController::class, 'verifyDomain']);
+            $router->post('/agent/domains/{id}/delete', [AgentCommerceController::class, 'deleteDomain']);
             $router->get('/agent/payment-methods/available', [AgentCommerceController::class, 'availablePaymentMethods']);
             $router->get('/agent/payments', [AgentCommerceController::class, 'payments']);
             $router->post('/agent/payments/form', [AgentCommerceController::class, 'paymentForm']);

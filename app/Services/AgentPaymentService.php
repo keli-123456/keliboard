@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Exceptions\ApiException;
+use App\Models\AgentDomain;
 use App\Models\AgentProfile;
 use App\Models\Payment;
 use App\Models\User;
@@ -74,12 +75,11 @@ class AgentPaymentService
         if ($payment->exists) {
             $this->assertOwnedByAgent($payment, (int) $agent->id);
         }
+        $ownerDomainId = $this->ownerDomainId($agent, $payload['owner_domain_id'] ?? null);
 
         $payment->owner_type = Payment::OWNER_AGENT;
         $payment->owner_id = (int) $agent->id;
-        $payment->owner_domain_id = isset($payload['owner_domain_id']) && $payload['owner_domain_id'] !== ''
-            ? (int) $payload['owner_domain_id']
-            : null;
+        $payment->owner_domain_id = $ownerDomainId;
         $payment->payment = $paymentName;
         $payment->name = trim((string) ($payload['name'] ?? $paymentName));
         $payment->icon = $payload['icon'] ?? null;
@@ -154,6 +154,26 @@ class AgentPaymentService
         }
 
         return $profile;
+    }
+
+    private function ownerDomainId(User $agent, mixed $ownerDomainId): ?int
+    {
+        if ($ownerDomainId === null || $ownerDomainId === '') {
+            return null;
+        }
+
+        $domainId = (int) $ownerDomainId;
+        $domain = AgentDomain::query()
+            ->where('id', $domainId)
+            ->where('agent_user_id', $agent->id)
+            ->where('status', AgentDomain::STATUS_ACTIVE)
+            ->first();
+
+        if (!$domain) {
+            throw new ApiException('Domain is unavailable');
+        }
+
+        return $domainId;
     }
 
     private function assertPaymentPluginEnabled(string $payment): void

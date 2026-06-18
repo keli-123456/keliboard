@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Services;
 
 use App\Exceptions\ApiException;
+use App\Models\AgentDomain;
 use App\Models\AgentProfile;
 use App\Models\Payment;
 use App\Models\User;
@@ -27,6 +28,7 @@ final class AgentPaymentServiceTest extends TestCase
         $this->createUserTable();
         $this->createAgentCenterTables();
         $this->createPaymentTable();
+        $this->createAgentCommerceTables();
         $this->bindTestUrlGenerator('https://panel.example.test');
         $this->bindTestSettings(['agent_center_enable' => 1]);
         HookManager::reset();
@@ -139,6 +141,57 @@ final class AgentPaymentServiceTest extends TestCase
         $this->assertSame('keep-secret', $updated->config['secret']);
     }
 
+    public function test_agent_payment_rejects_pending_domain_for_current_agent(): void
+    {
+        $this->bindFakePaymentGateway();
+        $agent = $this->createActiveAgent('agent@example.test');
+        $domain = $this->createDomain($agent, 'pending.example.test', AgentDomain::STATUS_PENDING);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Domain is unavailable');
+
+        app(AgentPaymentService::class)->save($agent, [
+            'name' => 'Agent USDT',
+            'payment' => 'FAKEPAY',
+            'owner_domain_id' => $domain->id,
+            'config' => ['merchant_id' => 'agent-merchant'],
+        ]);
+    }
+
+    public function test_agent_payment_rejects_another_agents_active_domain(): void
+    {
+        $this->bindFakePaymentGateway();
+        $agent = $this->createActiveAgent('agent@example.test');
+        $otherAgent = $this->createActiveAgent('other-agent@example.test');
+        $domain = $this->createDomain($otherAgent, 'other.example.test', AgentDomain::STATUS_ACTIVE);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Domain is unavailable');
+
+        app(AgentPaymentService::class)->save($agent, [
+            'name' => 'Agent USDT',
+            'payment' => 'FAKEPAY',
+            'owner_domain_id' => $domain->id,
+            'config' => ['merchant_id' => 'agent-merchant'],
+        ]);
+    }
+
+    public function test_agent_payment_accepts_current_agent_active_domain(): void
+    {
+        $this->bindFakePaymentGateway();
+        $agent = $this->createActiveAgent('agent@example.test');
+        $domain = $this->createDomain($agent, 'active.example.test', AgentDomain::STATUS_ACTIVE);
+
+        $payment = app(AgentPaymentService::class)->save($agent, [
+            'name' => 'Agent USDT',
+            'payment' => 'FAKEPAY',
+            'owner_domain_id' => $domain->id,
+            'config' => ['merchant_id' => 'agent-merchant'],
+        ]);
+
+        $this->assertSame($domain->id, (int) $payment->owner_domain_id);
+    }
+
     private function bindFakePaymentGateway(): void
     {
         HookManager::registerFilter('available_payment_methods', static function (array $methods): array {
@@ -220,5 +273,17 @@ final class AgentPaymentServiceTest extends TestCase
         ]);
 
         return $agent;
+    }
+
+    private function createDomain(User $agent, string $domain, string $status): AgentDomain
+    {
+        return AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => $domain,
+            'status' => $status,
+            'is_primary' => false,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
     }
 }

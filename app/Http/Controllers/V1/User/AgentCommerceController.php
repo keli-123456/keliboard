@@ -4,6 +4,7 @@ namespace App\Http\Controllers\V1\User;
 
 use App\Http\Controllers\Controller;
 use App\Models\AgentDomain;
+use App\Services\AgentDomainSelfService;
 use App\Services\AgentPaymentService;
 use App\Services\AgentStorefrontService;
 use Illuminate\Http\Request;
@@ -18,6 +19,30 @@ class AgentCommerceController extends Controller
     public function availablePaymentMethods(Request $request)
     {
         return $this->success($this->paymentService()->availableMethods());
+    }
+
+    public function saveDomain(Request $request)
+    {
+        $params = $request->validate([
+            'domain' => 'required|string|max:255',
+            'remark' => 'nullable|string|max:255',
+        ]);
+
+        return $this->success($this->domainService()->createPending(
+            $request->user(),
+            (string) $params['domain'],
+            $params['remark'] ?? null
+        ));
+    }
+
+    public function verifyDomain(Request $request, int $id)
+    {
+        return $this->success($this->domainService()->verify($request->user(), $id));
+    }
+
+    public function deleteDomain(Request $request, int $id)
+    {
+        return $this->success($this->domainService()->delete($request->user(), $id));
     }
 
     public function payments(Request $request)
@@ -94,6 +119,7 @@ class AgentCommerceController extends Controller
     {
         return $this->success([
             'domains' => $this->domainList((int) $request->user()->id),
+            'domain_limit' => $this->domainService()->domainLimit(),
             'payments' => $this->paymentService()->list($request->user()),
             'prices' => $this->storefrontService()->listPrices($request->user()),
         ]);
@@ -109,20 +135,21 @@ class AgentCommerceController extends Controller
         return app(AgentStorefrontService::class);
     }
 
+    private function domainService(): AgentDomainSelfService
+    {
+        return app(AgentDomainSelfService::class);
+    }
+
     private function domainList(int $agentUserId): array
     {
+        $domainService = $this->domainService();
+
         return AgentDomain::query()
             ->where('agent_user_id', $agentUserId)
             ->orderByDesc('is_primary')
             ->orderBy('domain')
             ->get()
-            ->map(fn (AgentDomain $domain): array => [
-                'id' => (int) $domain->id,
-                'domain' => (string) $domain->domain,
-                'status' => (string) $domain->status,
-                'is_primary' => (bool) $domain->is_primary,
-                'remark' => $domain->remark,
-            ])
+            ->map(fn (AgentDomain $domain): array => $domainService->payload($domain))
             ->values()
             ->all();
     }
