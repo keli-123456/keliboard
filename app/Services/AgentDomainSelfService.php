@@ -83,47 +83,48 @@ class AgentDomainSelfService
         try {
             $records = $this->resolveTxt($recordName);
         } catch (\Throwable) {
-            $this->markVerificationFailure($domain, 'DNS lookup failed, try again');
+            $this->markVerificationFailure($agent, $id, 'DNS lookup failed, try again');
             throw new ApiException('DNS lookup failed, try again');
         }
 
         $records = array_map(static fn ($value): string => trim((string) $value), $records);
         if (!in_array($expectedValue, $records, true)) {
-            $this->markVerificationFailure($domain, 'Domain verification record not found');
+            $this->markVerificationFailure($agent, $id, 'Domain verification record not found');
             throw new ApiException('Domain verification record not found');
         }
 
-        $now = time();
-        $domain->status = AgentDomain::STATUS_ACTIVE;
-        $domain->verified_at = $now;
-        $domain->last_checked_at = $now;
-        $domain->verification_error = null;
-        $domain->updated_at = $now;
-        $domain->save();
+        return DB::transaction(function () use ($agent, $id): array {
+            $domain = $this->ownedDomain($agent, $id, true);
+            $this->assertVerificationAvailable($domain, $agent);
 
-        return $this->payload($domain->fresh() ?: $domain);
+            $now = time();
+            $domain->status = AgentDomain::STATUS_ACTIVE;
+            $domain->verified_at = $now;
+            $domain->last_checked_at = $now;
+            $domain->verification_error = null;
+            $domain->updated_at = $now;
+            $domain->save();
+
+            return $this->payload($domain->fresh() ?: $domain);
+        });
     }
 
     public function delete(User $agent, int $id): bool
     {
         $this->activeProfile($agent);
-        $domain = $this->ownedDomain($agent, $id);
-        if (!$this->createdByAgent($domain, $agent)) {
-            throw new ApiException('Domain cannot be deleted');
-        }
 
-        $usedByPayment = Payment::query()
-            ->where('owner_type', Payment::OWNER_AGENT)
-            ->where('owner_id', $agent->id)
-            ->where('owner_domain_id', $domain->id)
-            ->where('enable', true)
-            ->exists();
+        return DB::transaction(function () use ($agent, $id): bool {
+            $domain = $this->ownedDomain($agent, $id, true);
+            if (!$this->createdByAgent($domain, $agent)) {
+                throw new ApiException('Domain cannot be deleted');
+            }
 
-        if ($usedByPayment) {
-            throw new ApiException('Domain is used by an enabled payment method');
-        }
+            if ($this->enabledAgentPaymentUsesDomain($domain)) {
+                throw new ApiException('Domain is used by an enabled payment method');
+            }
 
-        return (bool) $domain->delete();
+            return (bool) $domain->delete();
+        });
     }
 
     public function payload(AgentDomain $domain): array
@@ -135,7 +136,7 @@ class AgentDomainSelfService
             'status' => (string) $domain->status,
             'is_primary' => (bool) $domain->is_primary,
             'remark' => $domain->remark,
-            'source' => $domain->created_by_agent_id ? 'agent' : 'admin',
+            'source' => $domain->created_by_agent_id !== null ? 'agent' : 'admin',
             'verified_at' => $this->timestampValue($domain->verified_at),
             'last_checked_at' => $this->timestampValue($domain->last_checked_at),
             'verification_error' => $domain->verification_error,
@@ -173,12 +174,17 @@ class AgentDomainSelfService
         return $profile;
     }
 
-    private function ownedDomain(User $agent, int $id): AgentDomain
+    private function ownedDomain(User $agent, int $id, bool $lock = false): AgentDomain
     {
-        $domain = AgentDomain::query()
+        $query = AgentDomain::query()
             ->where('agent_user_id', $agent->id)
-            ->where('id', $id)
-            ->first();
+            ->where('id', $id);
+
+        if ($lock) {
+            $query->lockForUpdate();
+        }
+
+        $domain = $query->first();
 
         if (!$domain) {
             throw new ApiException('Domain does not exist');
@@ -203,6 +209,15 @@ class AgentDomainSelfService
     {
         return $domain->created_by_agent_id !== null
             && (int) $domain->created_by_agent_id === (int) $agent->id;
+    }
+
+    private function enabledAgentPaymentUsesDomain(AgentDomain $domain): bool
+    {
+        return Payment::query()
+            ->where('owner_type', Payment::OWNER_AGENT)
+            ->where('owner_domain_id', $domain->id)
+            ->where('enable', true)
+            ->exists();
     }
 
     private function showVerificationProof(AgentDomain $domain): bool
@@ -289,12 +304,18 @@ class AgentDomainSelfService
         )));
     }
 
-    private function markVerificationFailure(AgentDomain $domain, string $message): void
+    private function markVerificationFailure(User $agent, int $id, string $message): void
     {
-        $domain->last_checked_at = time();
-        $domain->verification_error = $message;
-        $domain->updated_at = time();
-        $domain->save();
+        DB::transaction(function () use ($agent, $id, $message): void {
+            $domain = $this->ownedDomain($agent, $id, true);
+            $this->assertVerificationAvailable($domain, $agent);
+
+            $now = time();
+            $domain->last_checked_at = $now;
+            $domain->verification_error = $message;
+            $domain->updated_at = $now;
+            $domain->save();
+        });
     }
 
     private function verificationToken(): string

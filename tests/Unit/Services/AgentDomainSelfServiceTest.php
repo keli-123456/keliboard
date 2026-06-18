@@ -159,6 +159,37 @@ final class AgentDomainSelfServiceTest extends TestCase
         $this->assertSame('agent.example.test', $context['domain']);
     }
 
+    public function test_verify_rechecks_locked_domain_state_before_activating(): void
+    {
+        $txtRecords = [];
+        $domainId = null;
+        $service = new AgentDomainSelfService(
+            static function (string $name) use (&$txtRecords, &$domainId): array {
+                if ($domainId !== null) {
+                    AgentDomain::query()
+                        ->where('id', $domainId)
+                        ->update([
+                            'status' => AgentDomain::STATUS_ACTIVE,
+                            'updated_at' => time(),
+                        ]);
+                }
+
+                return $txtRecords[$name] ?? [];
+            }
+        );
+        $agent = $this->createActiveAgent('agent@example.test');
+        $pending = $service->createPending($agent, 'agent.example.test', null);
+        $domainId = $pending['id'];
+        $txtRecords[$pending['verification']['record_name']] = [
+            $pending['verification']['record_value'],
+        ];
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Domain verification is unavailable');
+
+        $service->verify($agent, $pending['id']);
+    }
+
     public function test_verify_fails_safely_when_txt_missing_or_wrong(): void
     {
         $txtRecords = [];
@@ -282,6 +313,62 @@ final class AgentDomainSelfServiceTest extends TestCase
         $this->expectExceptionMessage('Domain cannot be deleted');
 
         app(AgentDomainSelfService::class)->delete($agent, $domain->id);
+    }
+
+    public function test_enabled_agent_payment_from_another_owner_blocks_domain_delete(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $otherAgent = $this->createActiveAgent('other-agent@example.test');
+        $domain = $this->createDomain($agent, 'agent.example.test', AgentDomain::STATUS_ACTIVE, [
+            'created_by_agent_id' => $agent->id,
+            'verification_type' => AgentDomainSelfService::VERIFICATION_TYPE_TXT,
+            'verification_token' => 'agent-token',
+        ]);
+        Payment::query()->create([
+            'owner_type' => Payment::OWNER_AGENT,
+            'owner_id' => $otherAgent->id,
+            'owner_domain_id' => $domain->id,
+            'uuid' => 'dirtyref',
+            'payment' => 'FAKEPAY',
+            'name' => 'Dirty Ref Pay',
+            'config' => [],
+            'enable' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Domain is used by an enabled payment method');
+
+        app(AgentDomainSelfService::class)->delete($agent, $domain->id);
+    }
+
+    public function test_payload_source_uses_non_null_agent_creator_and_hides_stale_proof_values(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $service = app(AgentDomainSelfService::class);
+        $zeroSource = $this->createDomain($agent, 'zero.example.test', AgentDomain::STATUS_PENDING, [
+            'created_by_agent_id' => 0,
+            'verification_type' => AgentDomainSelfService::VERIFICATION_TYPE_TXT,
+            'verification_token' => 'zero-token',
+        ]);
+        $active = $this->createDomain($agent, 'active.example.test', AgentDomain::STATUS_ACTIVE, [
+            'created_by_agent_id' => $agent->id,
+            'verification_type' => AgentDomainSelfService::VERIFICATION_TYPE_TXT,
+            'verification_token' => 'active-token',
+        ]);
+        $admin = $this->createDomain($agent, 'admin.example.test', AgentDomain::STATUS_PENDING, [
+            'verification_type' => AgentDomainSelfService::VERIFICATION_TYPE_TXT,
+            'verification_token' => 'admin-token',
+        ]);
+
+        $this->assertSame('agent', $service->payload($zeroSource)['source']);
+        $this->assertSame(
+            AgentDomainSelfService::VALUE_PREFIX . 'zero-token',
+            $service->payload($zeroSource)['verification']['record_value']
+        );
+        $this->assertSame('', $service->payload($active)['verification']['record_value']);
+        $this->assertSame('', $service->payload($admin)['verification']['record_value']);
     }
 
     public function test_active_domain_bound_to_enabled_agent_payment_cannot_be_deleted(): void
