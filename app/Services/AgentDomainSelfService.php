@@ -7,6 +7,8 @@ use App\Models\AgentDomain;
 use App\Models\AgentProfile;
 use App\Models\Payment;
 use App\Models\User;
+use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\DB;
 
 class AgentDomainSelfService
 {
@@ -24,46 +26,57 @@ class AgentDomainSelfService
 
     public function createPending(User $agent, string $rawDomain, ?string $remark): array
     {
-        $this->activeProfile($agent);
-
         $domainName = $this->normalizeDomain($rawDomain);
         if (!$this->validDomain($domainName)) {
             throw new ApiException('Invalid domain');
         }
 
-        if (AgentDomain::query()->where('domain', $domainName)->exists()) {
-            throw new ApiException('Domain already assigned');
-        }
+        return DB::transaction(function () use ($agent, $domainName, $remark): array {
+            $this->activeProfile($agent, true);
 
-        $limit = $this->domainLimit();
-        if ($limit <= 0 || AgentDomain::query()->where('agent_user_id', $agent->id)->count() >= $limit) {
-            throw new ApiException('Domain limit reached');
-        }
+            if (AgentDomain::query()->where('domain', $domainName)->exists()) {
+                throw new ApiException('Domain already assigned');
+            }
 
-        $now = time();
-        $domain = AgentDomain::query()->create([
-            'agent_user_id' => (int) $agent->id,
-            'domain' => $domainName,
-            'status' => AgentDomain::STATUS_PENDING,
-            'is_primary' => false,
-            'remark' => $this->cleanNullableString($remark, 255),
-            'verification_token' => $this->verificationToken(),
-            'verification_type' => self::VERIFICATION_TYPE_TXT,
-            'verified_at' => null,
-            'last_checked_at' => null,
-            'verification_error' => null,
-            'created_by_agent_id' => (int) $agent->id,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
+            $limit = $this->domainLimit();
+            if ($limit <= 0 || AgentDomain::query()->where('agent_user_id', $agent->id)->count() >= $limit) {
+                throw new ApiException('Domain limit reached');
+            }
 
-        return $this->payload($domain->fresh() ?: $domain);
+            $now = time();
+            try {
+                $domain = AgentDomain::query()->create([
+                    'agent_user_id' => (int) $agent->id,
+                    'domain' => $domainName,
+                    'status' => AgentDomain::STATUS_PENDING,
+                    'is_primary' => false,
+                    'remark' => $this->cleanNullableString($remark, 255),
+                    'verification_token' => $this->verificationToken(),
+                    'verification_type' => self::VERIFICATION_TYPE_TXT,
+                    'verified_at' => null,
+                    'last_checked_at' => null,
+                    'verification_error' => null,
+                    'created_by_agent_id' => (int) $agent->id,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+            } catch (QueryException $exception) {
+                if (AgentDomain::query()->where('domain', $domainName)->exists()) {
+                    throw new ApiException('Domain already assigned');
+                }
+
+                throw $exception;
+            }
+
+            return $this->payload($domain->fresh() ?: $domain);
+        });
     }
 
     public function verify(User $agent, int $id): array
     {
         $this->activeProfile($agent);
         $domain = $this->ownedDomain($agent, $id);
+        $this->assertVerificationAvailable($domain, $agent);
         $recordName = $this->recordName($domain);
         $expectedValue = self::VALUE_PREFIX . (string) $domain->verification_token;
 
@@ -95,6 +108,9 @@ class AgentDomainSelfService
     {
         $this->activeProfile($agent);
         $domain = $this->ownedDomain($agent, $id);
+        if (!$this->createdByAgent($domain, $agent)) {
+            throw new ApiException('Domain cannot be deleted');
+        }
 
         $usedByPayment = Payment::query()
             ->where('owner_type', Payment::OWNER_AGENT)
@@ -126,7 +142,9 @@ class AgentDomainSelfService
             'verification' => [
                 'type' => (string) $domain->verification_type,
                 'record_name' => $this->recordName($domain),
-                'record_value' => self::VALUE_PREFIX . (string) $domain->verification_token,
+                'record_value' => $this->showVerificationProof($domain)
+                    ? self::VALUE_PREFIX . (string) $domain->verification_token
+                    : '',
             ],
         ];
     }
@@ -136,12 +154,17 @@ class AgentDomainSelfService
         return max(0, (int) admin_setting('agent_center_domain_limit', 1));
     }
 
-    private function activeProfile(User $agent): AgentProfile
+    private function activeProfile(User $agent, bool $lock = false): AgentProfile
     {
-        $profile = AgentProfile::query()
+        $query = AgentProfile::query()
             ->where('user_id', $agent->id)
-            ->where('status', AgentCenterService::STATUS_ACTIVE)
-            ->first();
+            ->where('status', AgentCenterService::STATUS_ACTIVE);
+
+        if ($lock) {
+            $query->lockForUpdate();
+        }
+
+        $profile = $query->first();
 
         if (!$profile) {
             throw new ApiException('Agent permission is not active');
@@ -162,6 +185,32 @@ class AgentDomainSelfService
         }
 
         return $domain;
+    }
+
+    private function assertVerificationAvailable(AgentDomain $domain, User $agent): void
+    {
+        if (
+            !$this->createdByAgent($domain, $agent)
+            || (string) $domain->status !== AgentDomain::STATUS_PENDING
+            || (string) $domain->verification_type !== self::VERIFICATION_TYPE_TXT
+            || trim((string) $domain->verification_token) === ''
+        ) {
+            throw new ApiException('Domain verification is unavailable');
+        }
+    }
+
+    private function createdByAgent(AgentDomain $domain, User $agent): bool
+    {
+        return $domain->created_by_agent_id !== null
+            && (int) $domain->created_by_agent_id === (int) $agent->id;
+    }
+
+    private function showVerificationProof(AgentDomain $domain): bool
+    {
+        return $domain->created_by_agent_id !== null
+            && (string) $domain->status === AgentDomain::STATUS_PENDING
+            && (string) $domain->verification_type === self::VERIFICATION_TYPE_TXT
+            && trim((string) $domain->verification_token) !== '';
     }
 
     private function normalizeDomain(string $rawDomain): string

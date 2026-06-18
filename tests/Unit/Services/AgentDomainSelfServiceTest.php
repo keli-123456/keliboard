@@ -193,6 +193,38 @@ final class AgentDomainSelfServiceTest extends TestCase
         $this->assertSame('Domain verification record not found', $domain->verification_error);
     }
 
+    public function test_admin_created_domain_without_token_cannot_be_verified(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $domain = $this->createDomain($agent, 'agent.example.test');
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Domain verification is unavailable');
+
+        app(AgentDomainSelfService::class)->verify($agent, $domain->id);
+    }
+
+    public function test_non_pending_self_service_domain_cannot_be_verified(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $service = app(AgentDomainSelfService::class);
+
+        foreach ([AgentDomain::STATUS_ACTIVE, AgentDomain::STATUS_DISABLED] as $status) {
+            $domain = $this->createDomain($agent, "{$status}.example.test", $status, [
+                'created_by_agent_id' => $agent->id,
+                'verification_type' => AgentDomainSelfService::VERIFICATION_TYPE_TXT,
+                'verification_token' => "{$status}-token",
+            ]);
+
+            try {
+                $service->verify($agent, $domain->id);
+                $this->fail("Expected verification unavailable exception for {$status} domain.");
+            } catch (ApiException $exception) {
+                $this->assertSame('Domain verification is unavailable', $exception->getMessage());
+            }
+        }
+    }
+
     public function test_agent_cannot_delete_another_agents_domain(): void
     {
         $agent = $this->createActiveAgent('agent@example.test');
@@ -205,10 +237,25 @@ final class AgentDomainSelfServiceTest extends TestCase
         app(AgentDomainSelfService::class)->delete($agent, $domain->id);
     }
 
+    public function test_admin_created_owned_domain_cannot_be_deleted(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $domain = $this->createDomain($agent, 'agent.example.test');
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Domain cannot be deleted');
+
+        app(AgentDomainSelfService::class)->delete($agent, $domain->id);
+    }
+
     public function test_active_domain_bound_to_enabled_agent_payment_cannot_be_deleted(): void
     {
         $agent = $this->createActiveAgent('agent@example.test');
-        $domain = $this->createDomain($agent, 'agent.example.test', AgentDomain::STATUS_ACTIVE);
+        $domain = $this->createDomain($agent, 'agent.example.test', AgentDomain::STATUS_ACTIVE, [
+            'created_by_agent_id' => $agent->id,
+            'verification_type' => AgentDomainSelfService::VERIFICATION_TYPE_TXT,
+            'verification_token' => 'agent-token',
+        ]);
         Payment::query()->create([
             'owner_type' => Payment::OWNER_AGENT,
             'owner_id' => $agent->id,
@@ -265,15 +312,16 @@ final class AgentDomainSelfServiceTest extends TestCase
     private function createDomain(
         User $agent,
         string $domain,
-        string $status = AgentDomain::STATUS_PENDING
+        string $status = AgentDomain::STATUS_PENDING,
+        array $attributes = []
     ): AgentDomain {
-        return AgentDomain::query()->create([
+        return AgentDomain::query()->create(array_merge([
             'agent_user_id' => $agent->id,
             'domain' => $domain,
             'status' => $status,
             'is_primary' => false,
             'created_at' => time(),
             'updated_at' => time(),
-        ]);
+        ], $attributes));
     }
 }
