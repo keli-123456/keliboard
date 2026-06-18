@@ -4,10 +4,12 @@ namespace App\Services;
 
 use App\Exceptions\ApiException;
 use App\Models\AgentBalanceHold;
+use App\Models\AgentLedger;
 use App\Models\AgentOrderContext;
 use App\Models\AgentProfile;
 use App\Models\AgentUser;
 use App\Models\Order;
+use App\Models\Payment;
 use App\Models\Plan;
 use App\Models\User;
 use App\Services\Plugin\HookManager;
@@ -18,6 +20,7 @@ use Illuminate\Support\Facades\DB;
 class AgentCommerceService
 {
     public const INSUFFICIENT_SITE_BALANCE_MESSAGE = 'The site balance is insufficient. Please contact site support.';
+    public const LEDGER_AGENT_ORDER_COST = 'agent_order_cost';
 
     public function availableBalance(User $agent): int
     {
@@ -182,6 +185,150 @@ class AgentCommerceService
             HookManager::call('order.after_create', $order);
 
             return $order;
+        });
+    }
+
+    public function agentUserIdForPaymentMethods(Request $request): ?int
+    {
+        $tradeNo = trim((string) $request->input('trade_no', ''));
+        if ($tradeNo !== '' && $request->user()) {
+            $order = Order::query()
+                ->where('trade_no', $tradeNo)
+                ->where('user_id', $request->user()->id)
+                ->first();
+            if ($order) {
+                $context = $this->contextForOrder($order);
+                if ($context) {
+                    return (int) $context->agent_user_id;
+                }
+            }
+        }
+
+        $context = app(AgentDomainResolver::class)->resolveRequest($request);
+
+        return $context ? (int) $context['agent_user_id'] : null;
+    }
+
+    public function contextForOrder(Order $order): ?AgentOrderContext
+    {
+        return AgentOrderContext::query()
+            ->where('order_id', $order->id)
+            ->first();
+    }
+
+    public function assertPaymentAvailableForOrder(Order $order, Payment $payment): void
+    {
+        $context = $this->contextForOrder($order);
+        if (!$context) {
+            if ($payment->owner_type !== Payment::OWNER_PLATFORM) {
+                throw new ApiException('This payment method is unavailable.');
+            }
+            return;
+        }
+
+        if (
+            $payment->owner_type !== Payment::OWNER_AGENT
+            || (int) $payment->owner_id !== (int) $context->agent_user_id
+        ) {
+            throw new ApiException('This payment method is unavailable.');
+        }
+    }
+
+    public function attachPayment(Order $order, Payment $payment): void
+    {
+        $context = $this->contextForOrder($order);
+        if (!$context) {
+            return;
+        }
+
+        $context->payment_id = $payment->id;
+        $context->payment_snapshot = [
+            'id' => (int) $payment->id,
+            'name' => (string) $payment->name,
+            'payment' => (string) $payment->payment,
+            'owner_type' => (string) $payment->owner_type,
+            'owner_id' => $payment->owner_id ? (int) $payment->owner_id : null,
+        ];
+        $context->updated_at = time();
+        $context->save();
+    }
+
+    public function captureForPaidOrder(Order $order): void
+    {
+        if (!DB::connection()->getSchemaBuilder()->hasTable('v2_agent_order_context')) {
+            return;
+        }
+
+        DB::transaction(function () use ($order): void {
+            $context = AgentOrderContext::query()
+                ->where('order_id', $order->id)
+                ->lockForUpdate()
+                ->first();
+            if (!$context) {
+                return;
+            }
+
+            $hold = AgentBalanceHold::query()
+                ->whereKey($context->hold_id)
+                ->lockForUpdate()
+                ->first();
+            if (
+                $context->status === AgentOrderContext::STATUS_PAID
+                && $hold
+                && $hold->status === AgentBalanceHold::STATUS_CAPTURED
+            ) {
+                return;
+            }
+            if (!$hold || $hold->status !== AgentBalanceHold::STATUS_PENDING) {
+                throw new ApiException('Agent balance hold is unavailable');
+            }
+
+            $agent = User::query()
+                ->whereKey($context->agent_user_id)
+                ->lockForUpdate()
+                ->first();
+            if (!$agent) {
+                throw new ApiException('Agent user does not exist');
+            }
+
+            $before = (int) $agent->balance;
+            $amount = (int) $hold->amount;
+            if ($before < $amount) {
+                throw new ApiException(self::INSUFFICIENT_SITE_BALANCE_MESSAGE);
+            }
+
+            $now = time();
+            $agent->balance = $before - $amount;
+            $agent->updated_at = $now;
+            $agent->save();
+
+            $hold->status = AgentBalanceHold::STATUS_CAPTURED;
+            $hold->captured_at = $now;
+            $hold->updated_at = $now;
+            $hold->save();
+
+            $context->status = AgentOrderContext::STATUS_PAID;
+            $context->updated_at = $now;
+            $context->save();
+
+            AgentLedger::query()->create([
+                'agent_user_id' => $agent->id,
+                'target_user_id' => $order->user_id,
+                'type' => self::LEDGER_AGENT_ORDER_COST,
+                'amount' => -$amount,
+                'balance_before' => $before,
+                'balance_after' => (int) $agent->balance,
+                'plan_id' => $order->plan_id,
+                'period' => $order->period,
+                'metadata' => [
+                    'trade_no' => $order->trade_no,
+                    'hold_id' => (int) $hold->id,
+                    'context_id' => (int) $context->id,
+                    'sale_amount' => (int) $context->sale_amount,
+                    'cost_amount' => (int) $context->cost_amount,
+                ],
+                'created_at' => $now,
+            ]);
         });
     }
 

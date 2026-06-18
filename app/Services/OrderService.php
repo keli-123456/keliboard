@@ -327,6 +327,8 @@ class OrderService
                     return null;
                 }
 
+                app(AgentCommerceService::class)->captureForPaidOrder($order);
+
                 $order->status = Order::STATUS_PROCESSING;
                 $order->paid_at = time();
                 $order->callback_no = $callbackNo;

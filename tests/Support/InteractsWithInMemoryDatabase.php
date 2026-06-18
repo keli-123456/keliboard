@@ -268,6 +268,9 @@ trait InteractsWithInMemoryDatabase
             $table->boolean('remind_traffic')->nullable()->default(true);
             $table->integer('last_login_at')->nullable();
             $table->integer('last_login_ip')->nullable();
+            $table->integer('next_reset_at')->nullable();
+            $table->integer('last_reset_at')->nullable();
+            $table->integer('reset_count')->default(0);
             $table->integer('balance')->default(0);
             $table->integer('commission_balance')->default(0);
             $table->integer('commission_rate')->default(0);

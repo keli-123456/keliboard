@@ -201,6 +201,12 @@ class OrderController extends Controller
         if (!$payment || !$payment->enable) {
             return $this->fail([400, __('Payment method is not available')]);
         }
+        $agentCommerce = app(AgentCommerceService::class);
+        try {
+            $agentCommerce->assertPaymentAvailableForOrder($order, $payment);
+        } catch (ApiException $exception) {
+            return $this->fail([400, $exception->getMessage()]);
+        }
         if ((int) $order->plan_id === 0 && $payment->payment === 'balance') {
             return $this->fail([400, __('Balance payment is not available for recharge orders')]);
         }
@@ -212,6 +218,7 @@ class OrderController extends Controller
         $order->payment_id = $method;
         if (!$order->save())
             return $this->fail([400, __('Request failed, please try again later')]);
+        $agentCommerce->attachPayment($order, $payment);
         $result = $paymentService->pay([
             'trade_no' => $tradeNo,
             'total_amount' => isset($order->handling_amount) ? ($order->total_amount + $order->handling_amount) : $order->total_amount,
@@ -236,8 +243,9 @@ class OrderController extends Controller
         return $this->success($order->status);
     }
 
-    public function getPaymentMethod()
+    public function getPaymentMethod(Request $request)
     {
+        $agentUserId = app(AgentCommerceService::class)->agentUserIdForPaymentMethods($request);
         $methods = Payment::select([
             'id',
             'name',
@@ -247,6 +255,12 @@ class OrderController extends Controller
             'handling_fee_percent'
         ])
             ->where('enable', 1)
+            ->when($agentUserId, function ($query) use ($agentUserId) {
+                $query->where('owner_type', Payment::OWNER_AGENT)
+                    ->where('owner_id', $agentUserId);
+            }, function ($query) {
+                $query->where('owner_type', Payment::OWNER_PLATFORM);
+            })
             ->orderBy('sort', 'ASC')
             ->get();
 
