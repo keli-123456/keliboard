@@ -188,6 +188,27 @@ final class UserAgentCommerceControllerTest extends TestCase
         $this->assertSame([$savedPayload['data']], $summary['site_settings']);
     }
 
+    public function test_save_site_setting_with_null_id_creates_default_setting(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $request = $this->userRequest($agent, '/api/v1/user/agent/site-settings', 'POST', [
+            'id' => null,
+            'site_name' => 'Default Agent Site',
+        ]);
+
+        $payload = $this->responsePayload(app(AgentCommerceController::class)->saveSiteSetting($request));
+
+        $this->assertSame('success', $payload['status']);
+        $this->assertSame('Default Agent Site', $payload['data']['site_name']);
+        $this->assertNull($payload['data']['agent_domain_id']);
+
+        $listRequest = $this->userRequest($agent, '/api/v1/user/agent/site-settings', 'GET');
+        $settings = $this->responsePayload(app(AgentCommerceController::class)->siteSettings($listRequest))['data']['settings'];
+
+        $this->assertCount(1, $settings);
+        $this->assertSame($payload['data']['id'], $settings[0]['id']);
+    }
+
     public function test_save_domain_returns_pending_self_service_payload(): void
     {
         $agent = $this->createActiveAgent('agent@example.test');

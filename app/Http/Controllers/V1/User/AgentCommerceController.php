@@ -142,6 +142,7 @@ class AgentCommerceController extends Controller
             'seo_description' => 'nullable|string|max:255',
             'enabled' => 'boolean',
         ]);
+        $params = $this->normalizeSiteSettingParams($params);
 
         return $this->success($this->siteSettingService()->save($request->user(), $params));
     }
@@ -178,6 +179,15 @@ class AgentCommerceController extends Controller
     private function siteSettingService(): AgentSiteSettingService
     {
         return app(AgentSiteSettingService::class);
+    }
+
+    private function normalizeSiteSettingParams(array $params): array
+    {
+        if (array_key_exists('id', $params) && ($params['id'] === null || $params['id'] === '')) {
+            unset($params['id']);
+        }
+
+        return $params;
     }
 
     private function domainList(int $agentUserId): array
