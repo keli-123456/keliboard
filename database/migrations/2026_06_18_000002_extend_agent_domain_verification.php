@@ -44,7 +44,7 @@ return new class extends Migration
 
         if (!Schema::hasColumn('v2_agent_domain', 'created_by_agent_id')) {
             Schema::table('v2_agent_domain', function (Blueprint $table): void {
-                $table->integer('created_by_agent_id')->nullable()->after('created_by_admin_id')->index();
+                $table->unsignedInteger('created_by_agent_id')->nullable()->after('created_by_admin_id')->index();
             });
         }
     }
@@ -53,6 +53,15 @@ return new class extends Migration
     {
         if (!Schema::hasTable('v2_agent_domain')) {
             return;
+        }
+
+        if (
+            Schema::hasColumn('v2_agent_domain', 'created_by_agent_id')
+            && Schema::hasIndex('v2_agent_domain', ['created_by_agent_id'])
+        ) {
+            Schema::table('v2_agent_domain', function (Blueprint $table): void {
+                $table->dropIndex('v2_agent_domain_created_by_agent_id_index');
+            });
         }
 
         $columns = array_values(array_filter([
