@@ -31,6 +31,7 @@ final class UserAgentCommerceControllerTest extends TestCase
         $this->createAgentCenterTables();
         $this->createPaymentTable();
         $this->createAgentCommerceTables();
+        $this->createAgentSiteSettingTable();
         $this->createPlanTable();
         $this->bindTestSettings([
             'agent_center_domain_limit' => 3,
@@ -70,6 +71,7 @@ final class UserAgentCommerceControllerTest extends TestCase
         );
         $this->assertSame(3, $summary['domain_limit']);
         $this->assertSame($domains, $summary['domains']);
+        $this->assertSame([], $summary['site_settings']);
     }
 
     public function test_domains_rejects_inactive_agent_before_exposing_verification_payload(): void
@@ -137,6 +139,53 @@ final class UserAgentCommerceControllerTest extends TestCase
             array_column($summary['payment_domains'], 'domain')
         );
         $this->assertSame(AgentDomain::STATUS_ACTIVE, $summary['payment_domains'][0]['status']);
+    }
+
+    public function test_site_settings_lists_and_saves_default_setting(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $controller = app(AgentCommerceController::class);
+        $listRequest = $this->userRequest($agent, '/api/v1/user/agent/site-settings', 'GET');
+
+        $initialPayload = $this->responsePayload($controller->siteSettings($listRequest));
+
+        $this->assertSame('success', $initialPayload['status']);
+        $this->assertSame([], $initialPayload['data']['settings']);
+
+        $saveRequest = $this->userRequest($agent, '/api/v1/user/agent/site-settings', 'POST', [
+            'site_name' => 'Agent Storefront',
+            'logo_url' => 'https://assets.example.test/logo.png',
+            'landing_theme' => 'spark',
+            'accent_color' => '#AABBCC',
+            'support_name' => 'Agent Support',
+            'support_url' => 'https://support.example.test',
+            'announcement' => 'Welcome to the agent storefront.',
+            'enabled' => true,
+        ]);
+
+        $savedPayload = $this->responsePayload($controller->saveSiteSetting($saveRequest));
+
+        $this->assertSame('success', $savedPayload['status']);
+        $this->assertSame('Agent Storefront', $savedPayload['data']['site_name']);
+        $this->assertSame('https://assets.example.test/logo.png', $savedPayload['data']['logo_url']);
+        $this->assertSame('spark', $savedPayload['data']['landing_theme']);
+        $this->assertSame('#aabbcc', $savedPayload['data']['accent_color']);
+        $this->assertSame('Agent Support', $savedPayload['data']['support_name']);
+        $this->assertSame('https://support.example.test', $savedPayload['data']['support_url']);
+        $this->assertSame('Welcome to the agent storefront.', $savedPayload['data']['announcement']);
+        $this->assertTrue($savedPayload['data']['enabled']);
+        $this->assertNull($savedPayload['data']['agent_domain_id']);
+
+        $listedPayload = $this->responsePayload($controller->siteSettings($listRequest));
+
+        $this->assertSame('success', $listedPayload['status']);
+        $this->assertCount(1, $listedPayload['data']['settings']);
+        $this->assertSame($savedPayload['data'], $listedPayload['data']['settings'][0]);
+
+        $summaryRequest = $this->userRequest($agent, '/api/v1/user/agent/commerce/summary', 'GET');
+        $summary = $this->responsePayload($controller->commerceSummary($summaryRequest))['data'];
+
+        $this->assertSame([$savedPayload['data']], $summary['site_settings']);
     }
 
     public function test_save_domain_returns_pending_self_service_payload(): void

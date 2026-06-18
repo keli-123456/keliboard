@@ -67,6 +67,8 @@ class UserRoute
             $router->post('/agent/payments/{id}/delete', [AgentCommerceController::class, 'deletePayment']);
             $router->get('/agent/prices', [AgentCommerceController::class, 'prices']);
             $router->post('/agent/prices', [AgentCommerceController::class, 'savePrices']);
+            $router->get('/agent/site-settings', [AgentCommerceController::class, 'siteSettings']);
+            $router->post('/agent/site-settings', [AgentCommerceController::class, 'saveSiteSetting']);
             $router->get('/agent/commerce/summary', [AgentCommerceController::class, 'commerceSummary']);
             // Order
             $router->post('/order/save', [OrderController::class, 'save']);

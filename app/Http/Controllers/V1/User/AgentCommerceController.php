@@ -9,6 +9,7 @@ use App\Models\AgentProfile;
 use App\Services\AgentCenterService;
 use App\Services\AgentDomainSelfService;
 use App\Services\AgentPaymentService;
+use App\Services\AgentSiteSettingService;
 use App\Services\AgentStorefrontService;
 use Illuminate\Http\Request;
 
@@ -118,6 +119,33 @@ class AgentCommerceController extends Controller
         return $this->success($this->storefrontService()->savePrices($request->user(), $params['items']));
     }
 
+    public function siteSettings(Request $request)
+    {
+        return $this->success([
+            'settings' => $this->siteSettingService()->list($request->user()),
+        ]);
+    }
+
+    public function saveSiteSetting(Request $request)
+    {
+        $params = $request->validate([
+            'id' => 'nullable|integer',
+            'agent_domain_id' => 'nullable|integer',
+            'site_name' => 'nullable|string|max:80',
+            'logo_url' => 'nullable|string|max:500',
+            'landing_theme' => 'nullable|string|max:32',
+            'accent_color' => 'nullable|string|max:16',
+            'support_name' => 'nullable|string|max:80',
+            'support_url' => 'nullable|string|max:500',
+            'announcement' => 'nullable|string|max:500',
+            'seo_title' => 'nullable|string|max:120',
+            'seo_description' => 'nullable|string|max:255',
+            'enabled' => 'boolean',
+        ]);
+
+        return $this->success($this->siteSettingService()->save($request->user(), $params));
+    }
+
     public function commerceSummary(Request $request)
     {
         $domains = $this->domainList((int) $request->user()->id);
@@ -128,6 +156,7 @@ class AgentCommerceController extends Controller
             'domain_limit' => $this->domainService()->domainLimit(),
             'payments' => $this->paymentService()->list($request->user()),
             'prices' => $this->storefrontService()->listPrices($request->user()),
+            'site_settings' => $this->siteSettingService()->list($request->user()),
         ]);
     }
 
@@ -144,6 +173,11 @@ class AgentCommerceController extends Controller
     private function domainService(): AgentDomainSelfService
     {
         return app(AgentDomainSelfService::class);
+    }
+
+    private function siteSettingService(): AgentSiteSettingService
+    {
+        return app(AgentSiteSettingService::class);
     }
 
     private function domainList(int $agentUserId): array
