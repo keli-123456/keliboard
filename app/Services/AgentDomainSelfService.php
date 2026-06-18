@@ -295,13 +295,32 @@ class AgentDomainSelfService
     private function reservedHost(string $domain): bool
     {
         foreach (['app_url', 'subscribe_url'] as $key) {
-            $host = $this->normalizeDomain((string) admin_setting($key, ''));
-            if ($host !== '' && $host === $domain) {
-                return true;
+            foreach ($this->reservedHostEntries(admin_setting($key, '')) as $entry) {
+                $host = $this->normalizeDomain($entry);
+                if ($host !== '' && $host === $domain) {
+                    return true;
+                }
             }
         }
 
         return false;
+    }
+
+    private function reservedHostEntries($value): array
+    {
+        $items = is_array($value) ? $value : [$value];
+        $entries = [];
+
+        foreach ($items as $item) {
+            foreach (explode(',', (string) $item) as $entry) {
+                $entry = trim($entry);
+                if ($entry !== '') {
+                    $entries[] = $entry;
+                }
+            }
+        }
+
+        return $entries;
     }
 
     private function recordName(AgentDomain $domain): string

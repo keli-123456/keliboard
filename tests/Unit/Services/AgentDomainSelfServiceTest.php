@@ -129,6 +129,28 @@ final class AgentDomainSelfServiceTest extends TestCase
         app(AgentDomainSelfService::class)->createPending($agent, 'https://sp.huhu.icu', null);
     }
 
+    public function test_reserved_subscribe_hosts_from_comma_separated_urls_fail(): void
+    {
+        $this->bindTestSettings([
+            'agent_center_domain_limit' => 1,
+            'app_url' => 'https://sp.huhu.icu',
+            'subscribe_url' => 'https://sub1.example.test,https://sub2.example.test/path',
+        ]);
+        $agent = $this->createActiveAgent('agent@example.test');
+        $service = app(AgentDomainSelfService::class);
+
+        foreach (['sub1.example.test', 'https://sub2.example.test'] as $host) {
+            try {
+                $service->createPending($agent, $host, null);
+                $this->fail("Expected invalid domain exception for {$host}.");
+            } catch (ApiException $exception) {
+                $this->assertSame('Invalid domain', $exception->getMessage());
+            }
+        }
+
+        $this->assertSame(0, AgentDomain::query()->count());
+    }
+
     public function test_pending_domain_does_not_resolve_until_verified(): void
     {
         $agent = $this->createActiveAgent('agent@example.test');
