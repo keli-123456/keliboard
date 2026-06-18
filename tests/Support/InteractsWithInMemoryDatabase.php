@@ -476,11 +476,37 @@ trait InteractsWithInMemoryDatabase
         });
     }
 
+    protected function createAgentSiteSettingTable(): void
+    {
+        $this->database->schema()->create('v2_agent_site_setting', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->unsignedInteger('agent_user_id')->index();
+            $table->unsignedInteger('agent_domain_id')->nullable()->index();
+            $table->string('setting_scope', 16)->default('default');
+            $table->string('setting_key', 64)->default('default');
+            $table->string('site_name', 80)->nullable();
+            $table->string('logo_url', 500)->nullable();
+            $table->string('landing_theme', 32)->nullable();
+            $table->string('accent_color', 16)->nullable();
+            $table->string('support_name', 80)->nullable();
+            $table->string('support_url', 500)->nullable();
+            $table->string('announcement', 500)->nullable();
+            $table->string('seo_title', 120)->nullable();
+            $table->string('seo_description', 255)->nullable();
+            $table->boolean('enabled')->default(true)->index();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+            $table->unique(['agent_user_id', 'setting_scope', 'setting_key'], 'uniq_agent_site_setting_scope');
+        });
+    }
+
     protected function createTicketTables(): void
     {
         $this->database->schema()->create('v2_ticket', function (Blueprint $table): void {
             $table->increments('id');
             $table->integer('user_id');
+            $table->integer('agent_user_id')->nullable()->index();
+            $table->integer('agent_domain_id')->nullable()->index();
             $table->string('subject')->nullable();
             $table->integer('level')->default(0);
             $table->integer('status')->default(0);

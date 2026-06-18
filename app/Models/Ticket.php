@@ -49,6 +49,16 @@ class Ticket extends Model
     {
         return $this->belongsTo(User::class, 'user_id', 'id');
     }
+
+    public function agent(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'agent_user_id', 'id');
+    }
+
+    public function agentDomain(): BelongsTo
+    {
+        return $this->belongsTo(AgentDomain::class, 'agent_domain_id', 'id');
+    }
     
     /**
      * 关联的工单消息

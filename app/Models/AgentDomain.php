@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class AgentDomain extends Model
 {
@@ -26,5 +27,10 @@ class AgentDomain extends Model
     public function agent(): BelongsTo
     {
         return $this->belongsTo(User::class, 'agent_user_id', 'id');
+    }
+
+    public function siteSetting(): HasOne
+    {
+        return $this->hasOne(AgentSiteSetting::class, 'agent_domain_id', 'id');
     }
 }
