@@ -80,6 +80,24 @@ final class AgentSiteSettingServiceTest extends TestCase
         $this->createSiteSetting($agent);
     }
 
+    public function test_create_with_empty_agent_domain_id_stores_default_scope_with_null_domain(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+
+        $setting = AgentSiteSetting::query()->create([
+            'agent_user_id' => $agent->id,
+            'agent_domain_id' => '',
+            'site_name' => 'Agent Site',
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ])->fresh();
+
+        $this->assertNull($setting->agent_domain_id);
+        $this->assertSame(AgentSiteSetting::SCOPE_DEFAULT, $setting->setting_scope);
+        $this->assertSame(AgentSiteSetting::KEY_DEFAULT, $setting->setting_key);
+    }
+
     public function test_domain_resolves_its_site_setting(): void
     {
         $agent = $this->createActiveAgent('agent@example.test');

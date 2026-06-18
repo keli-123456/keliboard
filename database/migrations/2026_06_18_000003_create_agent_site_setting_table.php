@@ -50,5 +50,6 @@ return new class extends Migration
 
     public function down(): void
     {
+        // Rollback is intentionally conservative: this migration cannot prove ownership of pre-existing tables or columns.
     }
 };

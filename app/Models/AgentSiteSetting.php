@@ -23,13 +23,18 @@ class AgentSiteSetting extends Model
 
     public function setAgentDomainIdAttribute($value): void
     {
-        $this->attributes['agent_domain_id'] = $value;
-        $this->syncSettingScope($value);
+        $agentDomainId = $this->normalizeAgentDomainId($value);
+
+        $this->attributes['agent_domain_id'] = $agentDomainId;
+        $this->syncSettingScope($agentDomainId);
     }
 
     public function save(array $options = []): bool
     {
-        $this->syncSettingScope($this->attributes['agent_domain_id'] ?? null);
+        $agentDomainId = $this->normalizeAgentDomainId($this->attributes['agent_domain_id'] ?? null);
+
+        $this->attributes['agent_domain_id'] = $agentDomainId;
+        $this->syncSettingScope($agentDomainId);
 
         return parent::save($options);
     }
@@ -55,5 +60,16 @@ class AgentSiteSetting extends Model
 
         $this->setting_scope = self::SCOPE_DOMAIN;
         $this->setting_key = (string) $agentDomainId;
+    }
+
+    private function normalizeAgentDomainId($value): ?int
+    {
+        if (!is_numeric($value)) {
+            return null;
+        }
+
+        $agentDomainId = (int) $value;
+
+        return $agentDomainId > 0 ? $agentDomainId : null;
     }
 }
