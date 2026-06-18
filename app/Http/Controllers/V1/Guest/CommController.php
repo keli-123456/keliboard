@@ -3,16 +3,18 @@
 namespace App\Http\Controllers\V1\Guest;
 
 use App\Http\Controllers\Controller;
+use App\Services\AgentPublicConfigService;
 use App\Services\Plugin\HookManager;
 use App\Services\RechargeBonusService;
 use App\Services\ThemeService;
 use App\Utils\Dict;
 use App\Utils\Helper;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 
 class CommController extends Controller
 {
-    public function config()
+    public function config(Request $request)
     {
         $themeConfig = $this->getCurrentThemeConfig();
 
@@ -43,6 +45,7 @@ class CommController extends Controller
         ];
         $data = array_merge($data, app(RechargeBonusService::class)->getConfig());
 
+        $data = app(AgentPublicConfigService::class)->apply($data, $request);
         $data = HookManager::filter('guest_comm_config', $data);
 
         return $this->success($data);
