@@ -33,6 +33,7 @@ class ConfigSave extends FormRequest
         'agent_center_allow_traffic_reset' => 'boolean',
         'agent_center_reset_price_mode' => 'nullable|in:plan_reset_price,free',
         'agent_center_bonus_day_price' => 'integer|min:0|max:100000000',
+        'agent_center_domain_limit' => 'integer|min:0|max:1000',
         // ticket auto-reply
         'ticket_must_wait_reply' => 'boolean',
         'ticket_auto_reply_enable' => 'boolean',

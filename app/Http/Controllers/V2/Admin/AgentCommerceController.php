@@ -104,6 +104,8 @@ class AgentCommerceController extends Controller
             throw new ApiException('Domain does not exist');
         }
 
+        $this->assertDomainNotUsedByEnabledPayment((int) $domain->id);
+
         $domain->delete();
 
         return $this->success(true);
@@ -210,6 +212,10 @@ class AgentCommerceController extends Controller
             throw new ApiException('Domain does not exist');
         }
 
+        if ($status === AgentDomain::STATUS_DISABLED) {
+            $this->assertDomainNotUsedByEnabledPayment((int) $domain->id);
+        }
+
         $domain->status = $status;
         $domain->updated_at = time();
         $domain->save();
@@ -239,10 +245,42 @@ class AgentCommerceController extends Controller
             'status' => (string) $domain->status,
             'is_primary' => (bool) $domain->is_primary,
             'remark' => $domain->remark,
-            'created_by_admin_id' => $domain->created_by_admin_id ? (int) $domain->created_by_admin_id : null,
+            'source' => $this->domainSource($domain),
+            'verification_type' => $domain->verification_type,
+            'verified_at' => $this->timestampValue($domain->verified_at),
+            'last_checked_at' => $this->timestampValue($domain->last_checked_at),
+            'verification_error' => $domain->verification_error,
+            'created_by_admin_id' => $domain->created_by_admin_id !== null ? (int) $domain->created_by_admin_id : null,
+            'created_by_agent_id' => $domain->created_by_agent_id !== null ? (int) $domain->created_by_agent_id : null,
             'created_at' => $domain->created_at ? (int) $domain->created_at : null,
             'updated_at' => $domain->updated_at ? (int) $domain->updated_at : null,
         ];
+    }
+
+    private function domainSource(AgentDomain $domain): string
+    {
+        if ($domain->created_by_agent_id !== null) {
+            return 'agent';
+        }
+
+        if ($domain->created_by_admin_id !== null) {
+            return 'admin';
+        }
+
+        return 'unknown';
+    }
+
+    private function assertDomainNotUsedByEnabledPayment(int $domainId): void
+    {
+        $used = Payment::query()
+            ->where('owner_type', Payment::OWNER_AGENT)
+            ->where('owner_domain_id', $domainId)
+            ->where('enable', true)
+            ->exists();
+
+        if ($used) {
+            throw new ApiException('Domain is used by an enabled payment method');
+        }
     }
 
     private function limitFromRequest(Request $request): int

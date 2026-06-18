@@ -142,6 +142,10 @@ class ConfigController extends Controller
     public function fetch(Request $request)
     {
         $key = $request->input('key');
+        if ($key === 'agent') {
+            return $this->success(['agent' => $this->agentConfigMappings()]);
+        }
+
         $configMappings = $this->getConfigMappings();
         if ($key && isset($configMappings[$key])) {
             return $this->success([$key => $configMappings[$key]]);
@@ -180,31 +184,7 @@ class ConfigController extends Controller
                 'commission_distribution_l2' => admin_setting('commission_distribution_l2'),
                 'commission_distribution_l3' => admin_setting('commission_distribution_l3')
             ],
-            'agent' => [
-                'agent_center_enable' => (bool) admin_setting('agent_center_enable', false),
-                'agent_center_unlock_mode' => $this->normalizeAgentCenterUnlockMode(
-                    admin_setting('agent_center_unlock_mode', 'balance_threshold')
-                ),
-                'agent_center_unlock_balance' => max(0, (int) admin_setting('agent_center_unlock_balance', 0)),
-                'agent_center_auto_activate' => (bool) admin_setting('agent_center_auto_activate', true),
-                'agent_center_allowed_plan_ids' => $this->normalizeAgentCenterAllowedPlanIds(
-                    admin_setting('agent_center_allowed_plan_ids', '')
-                ),
-                'agent_center_discount_percent' => max(0, min(100, (float) admin_setting('agent_center_discount_percent', 100))),
-                'agent_center_user_limit' => max(0, (int) admin_setting(
-                    'agent_center_user_limit',
-                    admin_setting('agent_center_daily_create_limit', 20)
-                )),
-                'agent_center_daily_create_limit' => max(0, (int) admin_setting(
-                    'agent_center_user_limit',
-                    admin_setting('agent_center_daily_create_limit', 20)
-                )),
-                'agent_center_allow_traffic_reset' => (bool) admin_setting('agent_center_allow_traffic_reset', true),
-                'agent_center_reset_price_mode' => $this->normalizeAgentCenterResetPriceMode(
-                    admin_setting('agent_center_reset_price_mode', 'plan_reset_price')
-                ),
-                'agent_center_bonus_day_price' => max(0, (int) admin_setting('agent_center_bonus_day_price', 0)),
-            ],
+            'agent' => $this->agentConfigMappings(),
             'ticket' => [
                 'ticket_must_wait_reply' => (bool) admin_setting('ticket_must_wait_reply', 1),
                 'ticket_auto_reply_enable' => (bool) admin_setting('ticket_auto_reply_enable', 0),
@@ -384,6 +364,36 @@ class ConfigController extends Controller
                 'subscribe_template_surge' => subscribe_template('surge', $this->getDefaultTemplate('surge')),
                 'subscribe_template_surfboard' => subscribe_template('surfboard', $this->getDefaultTemplate('surfboard'))
             ]
+        ];
+    }
+
+    private function agentConfigMappings(): array
+    {
+        return [
+            'agent_center_enable' => (bool) admin_setting('agent_center_enable', false),
+            'agent_center_unlock_mode' => $this->normalizeAgentCenterUnlockMode(
+                admin_setting('agent_center_unlock_mode', 'balance_threshold')
+            ),
+            'agent_center_unlock_balance' => max(0, (int) admin_setting('agent_center_unlock_balance', 0)),
+            'agent_center_auto_activate' => (bool) admin_setting('agent_center_auto_activate', true),
+            'agent_center_allowed_plan_ids' => $this->normalizeAgentCenterAllowedPlanIds(
+                admin_setting('agent_center_allowed_plan_ids', '')
+            ),
+            'agent_center_discount_percent' => max(0, min(100, (float) admin_setting('agent_center_discount_percent', 100))),
+            'agent_center_user_limit' => max(0, (int) admin_setting(
+                'agent_center_user_limit',
+                admin_setting('agent_center_daily_create_limit', 20)
+            )),
+            'agent_center_daily_create_limit' => max(0, (int) admin_setting(
+                'agent_center_user_limit',
+                admin_setting('agent_center_daily_create_limit', 20)
+            )),
+            'agent_center_allow_traffic_reset' => (bool) admin_setting('agent_center_allow_traffic_reset', true),
+            'agent_center_reset_price_mode' => $this->normalizeAgentCenterResetPriceMode(
+                admin_setting('agent_center_reset_price_mode', 'plan_reset_price')
+            ),
+            'agent_center_bonus_day_price' => max(0, (int) admin_setting('agent_center_bonus_day_price', 0)),
+            'agent_center_domain_limit' => max(0, (int) admin_setting('agent_center_domain_limit', 1)),
         ];
     }
 
