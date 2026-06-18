@@ -89,6 +89,26 @@ final class GuestCommControllerAgentConfigTest extends TestCase
         $this->assertArrayNotHasKey('agent_announcement', $data);
     }
 
+    public function test_agent_context_without_site_setting_rows_does_not_override_base_branding(): void
+    {
+        $agent = $this->createActiveAgent('empty-setting-agent@example.test');
+        $domain = $this->createActiveDomain($agent, 'empty.example.test');
+
+        $data = $this->configForHost('empty.example.test');
+
+        $this->assertSame('Main Site', $data['app_name']);
+        $this->assertSame('https://assets.example.test/main-logo.png', $data['logo']);
+        $this->assertSame('base-theme', $data['landing_theme']);
+        $this->assertSame('base-theme', $data['theme_config']['landing_theme']);
+        $this->assertSame('base-value', $data['theme_config']['existing_key']);
+        $this->assertArrayNotHasKey('agent_announcement', $data);
+        $this->assertSame($agent->id, $data['agent_context']['agent_user_id']);
+        $this->assertSame($domain->id, $data['agent_context']['agent_domain_id']);
+        $this->assertSame('empty.example.test', $data['agent_context']['domain']);
+        $this->assertFalse($data['agent_context']['is_primary']);
+        $this->assertSame(AgentCommerceContextResolver::SOURCE_DOMAIN, $data['agent_context']['source']);
+    }
+
     public function test_agent_context_with_disabled_setting_does_not_override_base_branding(): void
     {
         $agent = $this->createActiveAgent('disabled-setting-agent@example.test');
