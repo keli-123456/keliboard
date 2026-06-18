@@ -31,10 +31,12 @@ class AgentSiteSetting extends Model
 
     public function save(array $options = []): bool
     {
-        $agentDomainId = $this->normalizeAgentDomainId($this->attributes['agent_domain_id'] ?? null);
+        if (!$this->exists || array_key_exists('agent_domain_id', $this->attributes)) {
+            $agentDomainId = $this->normalizeAgentDomainId($this->attributes['agent_domain_id'] ?? null);
 
-        $this->attributes['agent_domain_id'] = $agentDomainId;
-        $this->syncSettingScope($agentDomainId);
+            $this->attributes['agent_domain_id'] = $agentDomainId;
+            $this->syncSettingScope($agentDomainId);
+        }
 
         return parent::save($options);
     }
