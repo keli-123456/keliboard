@@ -91,7 +91,7 @@ class AgentStorefrontService
 
     public function plansForRequest(Request $request, iterable $platformPlans): array
     {
-        $context = app(AgentDomainResolver::class)->resolveRequest($request);
+        $context = app(AgentCommerceContextResolver::class)->resolveRequest($request);
         if (!$context) {
             return collect($platformPlans)->values()->all();
         }
@@ -126,8 +126,9 @@ class AgentStorefrontService
                 $plan->setAttribute('prices', $salePricesForResource);
                 $plan->setAttribute('agent_context', [
                     'agent_user_id' => (int) $context['agent_user_id'],
-                    'agent_domain_id' => (int) $context['agent_domain_id'],
-                    'domain' => (string) $context['domain'],
+                    'agent_domain_id' => $context['agent_domain_id'] !== null ? (int) $context['agent_domain_id'] : null,
+                    'domain' => (string) ($context['domain'] ?? ''),
+                    'source' => (string) ($context['source'] ?? AgentCommerceContextResolver::SOURCE_DOMAIN),
                 ]);
                 $plan->setAttribute('agent_sale_periods', $salePricesInCents);
 

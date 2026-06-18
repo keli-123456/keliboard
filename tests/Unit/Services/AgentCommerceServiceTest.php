@@ -172,22 +172,112 @@ final class AgentCommerceServiceTest extends TestCase
             'updated_at' => time(),
         ]);
         $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 10.00]);
+        $this->setAgentPrice($firstAgent, $plan, Plan::PERIOD_MONTHLY, 1200);
         $this->setAgentPrice($secondAgent, $plan, Plan::PERIOD_MONTHLY, 1300);
 
-        app(AgentCommerceService::class)->createOrderFromRequest(
+        $order = app(AgentCommerceService::class)->createOrderFromRequest(
             $buyer,
             $plan,
             Plan::PERIOD_MONTHLY,
             null,
-            $this->requestForHost('second.example.test')
+            $this->requestForHost('second.example.test', $buyer)
         );
 
         $this->assertSame($firstAgent->id, (int) $buyer->fresh()->invite_user_id);
+        $this->assertSame(1200, (int) $order->total_amount);
         $this->assertSame(1, AgentUser::query()->where('sub_user_id', $buyer->id)->count());
         $this->assertSame(1, AgentUser::query()
             ->where('agent_user_id', $firstAgent->id)
             ->where('sub_user_id', $buyer->id)
             ->count());
+    }
+
+    public function test_bound_user_on_main_domain_creates_agent_order_from_user_binding(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 5000);
+        $buyer = $this->createUser('buyer@example.test');
+        AgentUser::query()->create([
+            'agent_user_id' => $agent->id,
+            'sub_user_id' => $buyer->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $buyer->invite_user_id = $agent->id;
+        $buyer->save();
+
+        $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 10.00]);
+        $price = $this->setAgentPrice($agent, $plan, Plan::PERIOD_MONTHLY, 1300);
+
+        $order = app(AgentCommerceService::class)->createOrderFromRequest(
+            $buyer,
+            $plan,
+            Plan::PERIOD_MONTHLY,
+            null,
+            $this->requestForHost('platform.example.test', $buyer)
+        );
+
+        $this->assertInstanceOf(Order::class, $order);
+        $this->assertSame(1300, (int) $order->total_amount);
+        $this->assertSame($agent->id, (int) $order->invite_user_id);
+
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->first();
+        $this->assertNotNull($context);
+        $this->assertSame($agent->id, (int) $context->agent_user_id);
+        $this->assertNull($context->agent_domain_id);
+        $this->assertSame('user_binding', $context->domain_snapshot['source']);
+        $this->assertSame('', $context->domain_snapshot['domain']);
+        $this->assertSame($price->id, (int) $context->pricing_snapshot['agent_plan_price_id']);
+    }
+
+    public function test_bound_user_on_main_domain_uses_agent_for_payment_methods(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 5000);
+        $buyer = $this->createUser('buyer@example.test');
+        AgentUser::query()->create([
+            'agent_user_id' => $agent->id,
+            'sub_user_id' => $buyer->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $agentUserId = app(AgentCommerceService::class)->agentUserIdForPaymentMethods(
+            $this->requestForHost('platform.example.test', $buyer)
+        );
+
+        $this->assertSame($agent->id, $agentUserId);
+    }
+
+    public function test_bound_user_on_another_agent_domain_keeps_original_agent(): void
+    {
+        $firstAgent = $this->createActiveAgent('first@example.test', 5000);
+        $secondAgent = $this->createActiveAgent('second@example.test', 5000);
+        $this->assignDomain($secondAgent, 'second.example.test');
+        $buyer = $this->createUser('buyer@example.test');
+        AgentUser::query()->create([
+            'agent_user_id' => $firstAgent->id,
+            'sub_user_id' => $buyer->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $buyer->invite_user_id = $firstAgent->id;
+        $buyer->save();
+
+        $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 10.00]);
+        $this->setAgentPrice($firstAgent, $plan, Plan::PERIOD_MONTHLY, 1200);
+        $this->setAgentPrice($secondAgent, $plan, Plan::PERIOD_MONTHLY, 1800);
+
+        $order = app(AgentCommerceService::class)->createOrderFromRequest(
+            $buyer,
+            $plan,
+            Plan::PERIOD_MONTHLY,
+            null,
+            $this->requestForHost('second.example.test', $buyer)
+        );
+
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->first();
+        $this->assertSame($firstAgent->id, (int) $context->agent_user_id);
+        $this->assertSame(1200, (int) $order->total_amount);
+        $this->assertSame(1, AgentUser::query()->where('sub_user_id', $buyer->id)->count());
     }
 
     private function createActiveAgent(string $email, int $balance): User
@@ -261,10 +351,15 @@ final class AgentCommerceServiceTest extends TestCase
         ]);
     }
 
-    private function requestForHost(string $host): Request
+    private function requestForHost(string $host, ?User $user = null): Request
     {
-        return Request::create('/api/v1/user/order/save', 'POST', [], [], [], [
+        $request = Request::create('/api/v1/user/order/save', 'POST', [], [], [], [
             'HTTP_HOST' => $host,
         ]);
+        if ($user) {
+            $request->setUserResolver(fn () => $user);
+        }
+
+        return $request;
     }
 }

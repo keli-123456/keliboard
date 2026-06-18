@@ -60,7 +60,7 @@ class AgentCommerceService
         ?string $couponCode,
         Request $request
     ): ?Order {
-        $context = app(AgentDomainResolver::class)->resolveRequest($request);
+        $context = app(AgentCommerceContextResolver::class)->resolveRequest($request, $user);
         if (!$context) {
             return null;
         }
@@ -129,6 +129,10 @@ class AgentCommerceService
                 $lockedUser->invite_user_id = $lockedAgent->id;
                 $lockedUser->updated_at = $now;
                 $lockedUser->save();
+            } elseif ((int) $lockedUser->invite_user_id !== (int) $ownership->agent_user_id) {
+                $lockedUser->invite_user_id = (int) $ownership->agent_user_id;
+                $lockedUser->updated_at = $now;
+                $lockedUser->save();
             }
 
             $order->invite_user_id = $lockedUser->invite_user_id;
@@ -141,9 +145,12 @@ class AgentCommerceService
                 'cost_amount' => (int) $cost['amount'],
                 'discount_percent' => (float) $cost['discount_percent'],
             ]);
+            $contextSource = (string) ($context['source'] ?? AgentCommerceContextResolver::SOURCE_DOMAIN);
+            $agentDomainId = $context['agent_domain_id'] ?? null;
             $domainSnapshot = [
-                'agent_domain_id' => (int) $context['agent_domain_id'],
-                'domain' => (string) $context['domain'],
+                'source' => $contextSource,
+                'agent_domain_id' => $agentDomainId !== null ? (int) $agentDomainId : null,
+                'domain' => (string) ($context['domain'] ?? ''),
                 'is_primary' => (bool) ($context['is_primary'] ?? false),
             ];
 
@@ -168,7 +175,7 @@ class AgentCommerceService
                 'order_id' => $order->id,
                 'trade_no' => $order->trade_no,
                 'agent_user_id' => $lockedAgent->id,
-                'agent_domain_id' => (int) $context['agent_domain_id'],
+                'agent_domain_id' => $agentDomainId !== null ? (int) $agentDomainId : null,
                 'payment_id' => null,
                 'sale_amount' => (int) $sale['sale_amount'],
                 'cost_amount' => (int) $cost['amount'],
@@ -204,7 +211,7 @@ class AgentCommerceService
             }
         }
 
-        $context = app(AgentDomainResolver::class)->resolveRequest($request);
+        $context = app(AgentCommerceContextResolver::class)->resolveRequest($request);
 
         return $context ? (int) $context['agent_user_id'] : null;
     }
