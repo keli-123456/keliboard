@@ -77,6 +77,7 @@ class PaymentController extends Controller
             Log::warning('Payment notify order paid handling failed', [
                 'trade_no' => $tradeNo,
                 'callback_no' => $callbackNo,
+                'exception' => get_class($e),
                 'message' => $e->getMessage(),
             ]);
             $this->markAgentOrderFailedIfBalanceInsufficient($order, $callbackNo);
@@ -132,6 +133,7 @@ class PaymentController extends Controller
             Log::warning('Payment notify agent failure marking failed', [
                 'trade_no' => $order->trade_no,
                 'callback_no' => $callbackNo,
+                'exception' => get_class($e),
                 'message' => $e->getMessage(),
             ]);
         }

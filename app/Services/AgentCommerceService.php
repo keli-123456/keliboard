@@ -376,7 +376,6 @@ class AgentCommerceService
             $before = (int) $agent->balance;
             $amount = (int) $hold->amount;
             if ($before < $amount) {
-                $this->markAgentOrderFailed($context, $hold, self::INSUFFICIENT_SITE_BALANCE_MESSAGE);
                 throw new ApiException(self::INSUFFICIENT_SITE_BALANCE_MESSAGE);
             }
 
@@ -426,7 +425,7 @@ class AgentCommerceService
                 ->where('order_id', $order->id)
                 ->lockForUpdate()
                 ->first();
-            if (!$context || $context->status === AgentOrderContext::STATUS_PAID) {
+            if (!$context || !$this->canMarkAgentOrderFailed($context)) {
                 return;
             }
 
@@ -450,7 +449,7 @@ class AgentCommerceService
                 ->where('order_id', $order->id)
                 ->lockForUpdate()
                 ->first();
-            if (!$context || $context->status === AgentOrderContext::STATUS_PAID || !$context->hold_id) {
+            if (!$context || !$this->canMarkAgentOrderFailed($context) || !$context->hold_id) {
                 return;
             }
 
@@ -477,6 +476,11 @@ class AgentCommerceService
     private function markAgentOrderFailed(AgentOrderContext $context, ?AgentBalanceHold $hold, string $reason): void
     {
         $now = time();
+        $snapshot = is_array($context->payment_snapshot) ? $context->payment_snapshot : [];
+        if ($context->status === AgentOrderContext::STATUS_FAILED && array_key_exists('failure_reason', $snapshot)) {
+            return;
+        }
+
         if ($hold && $hold->status === AgentBalanceHold::STATUS_PENDING) {
             $metadata = is_array($hold->metadata) ? $hold->metadata : [];
             $metadata['failure_reason'] = $reason;
@@ -486,12 +490,19 @@ class AgentCommerceService
             $hold->save();
         }
 
-        $snapshot = is_array($context->payment_snapshot) ? $context->payment_snapshot : [];
         $snapshot['failure_reason'] = $reason;
         $context->payment_snapshot = $snapshot;
         $context->status = AgentOrderContext::STATUS_FAILED;
         $context->updated_at = $now;
         $context->save();
+    }
+
+    private function canMarkAgentOrderFailed(AgentOrderContext $context): bool
+    {
+        return in_array($context->status, [
+            AgentOrderContext::STATUS_PENDING,
+            AgentOrderContext::STATUS_FAILED,
+        ], true);
     }
 
     public function releaseForOrder(Order $order, string $status = AgentBalanceHold::STATUS_RELEASED): void

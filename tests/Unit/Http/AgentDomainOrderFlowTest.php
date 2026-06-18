@@ -325,6 +325,22 @@ final class AgentDomainOrderFlowTest extends TestCase
             AgentCommerceService::INSUFFICIENT_SITE_BALANCE_MESSAGE,
             $context->fresh()->payment_snapshot['failure_reason'] ?? null
         );
+
+        $this->assertFalse($this->invokePaymentHandle([
+            'trade_no' => $order->trade_no,
+            'callback_no' => 'gateway-low-balance-retry',
+            'paid_amount' => 1300,
+        ], $this->paymentServiceWithId($payment->id)));
+        $this->assertSame(AgentBalanceHold::STATUS_FAILED, $hold->fresh()->status);
+        $this->assertSame(AgentOrderContext::STATUS_FAILED, $context->fresh()->status);
+        $this->assertSame(
+            AgentCommerceService::INSUFFICIENT_SITE_BALANCE_MESSAGE,
+            $hold->fresh()->metadata['failure_reason'] ?? null
+        );
+        $this->assertSame(
+            AgentCommerceService::INSUFFICIENT_SITE_BALANCE_MESSAGE,
+            $context->fresh()->payment_snapshot['failure_reason'] ?? null
+        );
     }
 
     public function test_cancel_agent_order_releases_pending_hold(): void
@@ -346,6 +362,41 @@ final class AgentDomainOrderFlowTest extends TestCase
         $this->assertNotNull($hold->fresh()->released_at);
         $this->assertSame(AgentOrderContext::STATUS_CANCELLED, $context->fresh()->status);
         $this->assertSame(10000, (int) $agent->fresh()->balance);
+    }
+
+    public function test_fail_for_order_does_not_mutate_cancelled_agent_context(): void
+    {
+        [, $buyer, $order] = $this->createAgentOrderFixture();
+        $request = BaseRequest::create('/api/v1/user/order/cancel', 'POST', [
+            'trade_no' => $order->trade_no,
+        ]);
+        $request->setUserResolver(static fn (): User => $buyer);
+        app(OrderController::class)->cancel($request);
+
+        $hold = AgentBalanceHold::query()->where('order_id', $order->id)->first();
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->first();
+
+        app(AgentCommerceService::class)->failForOrder($order, 'should not overwrite terminal state');
+
+        $this->assertSame(AgentBalanceHold::STATUS_RELEASED, $hold->fresh()->status);
+        $this->assertNull($hold->fresh()->metadata['failure_reason'] ?? null);
+        $this->assertSame(AgentOrderContext::STATUS_CANCELLED, $context->fresh()->status);
+        $this->assertNull($context->fresh()->payment_snapshot['failure_reason'] ?? null);
+    }
+
+    public function test_fail_for_order_is_idempotent_for_failed_agent_context(): void
+    {
+        [, , $order] = $this->createAgentOrderFixture();
+        $hold = AgentBalanceHold::query()->where('order_id', $order->id)->first();
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->first();
+
+        app(AgentCommerceService::class)->failForOrder($order, 'first failure');
+        app(AgentCommerceService::class)->failForOrder($order, 'second failure');
+
+        $this->assertSame(AgentBalanceHold::STATUS_FAILED, $hold->fresh()->status);
+        $this->assertSame('first failure', $hold->fresh()->metadata['failure_reason'] ?? null);
+        $this->assertSame(AgentOrderContext::STATUS_FAILED, $context->fresh()->status);
+        $this->assertSame('first failure', $context->fresh()->payment_snapshot['failure_reason'] ?? null);
     }
 
     public function test_registration_through_agent_domain_binds_user_to_agent(): void
