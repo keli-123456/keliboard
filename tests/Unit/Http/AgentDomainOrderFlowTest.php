@@ -249,6 +249,42 @@ final class AgentDomainOrderFlowTest extends TestCase
         $this->assertSame([$ownedPayment->id], array_column($payload['data'], 'id'));
     }
 
+    public function test_platform_order_trade_no_does_not_fall_back_to_agent_domain_payments(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => 'agent.example.test',
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $buyer = $this->createUser('buyer@example.test');
+        Order::query()->create([
+            'user_id' => $buyer->id,
+            'plan_id' => 0,
+            'period' => Plan::PERIOD_MONTHLY,
+            'trade_no' => 'platform-order',
+            'total_amount' => 1000,
+            'status' => Order::STATUS_PENDING,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $platformPayment = $this->createPayment(Payment::OWNER_PLATFORM, null);
+        $this->createPayment(Payment::OWNER_AGENT, $agent->id);
+        $request = BaseRequest::create('/api/v1/user/order/getPaymentMethod', 'GET', [
+            'trade_no' => 'platform-order',
+        ], [], [], [
+            'HTTP_HOST' => 'agent.example.test',
+        ]);
+        $request->setUserResolver(static fn (): User => $buyer);
+
+        $response = app(OrderController::class)->getPaymentMethod($request);
+        $payload = $this->responsePayload($response);
+
+        $this->assertSame([$platformPayment->id], array_column($payload['data'], 'id'));
+    }
+
     public function test_agent_domain_payment_methods_exclude_payments_bound_to_another_agent_domain(): void
     {
         $agent = $this->createActiveAgent('agent@example.test');

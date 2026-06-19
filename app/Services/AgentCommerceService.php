@@ -353,12 +353,11 @@ class AgentCommerceService
                 ->first();
             if ($order) {
                 $context = $this->contextForOrder($order);
-                if ($context) {
-                    return [
-                        'agent_user_id' => (int) $context->agent_user_id,
-                        'agent_domain_id' => $context->agent_domain_id !== null ? (int) $context->agent_domain_id : null,
-                    ];
-                }
+
+                return $context ? [
+                    'agent_user_id' => (int) $context->agent_user_id,
+                    'agent_domain_id' => $context->agent_domain_id !== null ? (int) $context->agent_domain_id : null,
+                ] : null;
             }
         }
 
