@@ -379,11 +379,13 @@ final class AgentDomainOrderFlowTest extends TestCase
             'paid_amount' => 1300,
         ], $this->paymentServiceWithId($payment->id)));
 
-        $ledger = AgentLedger::query()
+        $ledgers = AgentLedger::query()
             ->where('agent_user_id', $agent->id)
             ->where('type', AgentCommerceService::LEDGER_AGENT_ORDER_COST)
-            ->first();
+            ->get();
+        $ledger = $ledgers->firstWhere('metadata.trade_no', $order->trade_no);
 
+        $this->assertCount(1, $ledgers);
         $this->assertNotNull($ledger);
         $this->assertSame(-500, (int) $ledger->amount);
         $this->assertSame(10000, (int) $ledger->balance_before);
@@ -486,6 +488,12 @@ final class AgentDomainOrderFlowTest extends TestCase
         $this->assertSame(10000, (int) $agent->fresh()->balance);
         $this->assertSame(AgentBalanceHold::STATUS_PENDING, $hold->fresh()->status);
         $this->assertSame(AgentOrderContext::STATUS_PENDING, $context->fresh()->status);
+        $this->assertSame(0, AgentLedger::query()
+            ->where('agent_user_id', $agent->id)
+            ->where('type', AgentCommerceService::LEDGER_AGENT_ORDER_COST)
+            ->count());
+        $this->assertNull($hold->fresh()->metadata['failure_reason'] ?? null);
+        $this->assertNull($context->fresh()->payment_snapshot['failure_reason'] ?? null);
     }
 
     public function test_cancel_agent_order_releases_pending_hold(): void
