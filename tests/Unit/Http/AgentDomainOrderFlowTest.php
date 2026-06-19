@@ -10,6 +10,7 @@ use App\Http\Requests\Passport\AuthRegister;
 use App\Http\Requests\User\OrderSave;
 use App\Models\AgentBalanceHold;
 use App\Models\AgentDomain;
+use App\Models\AgentLedger;
 use App\Models\AgentOrderContext;
 use App\Models\AgentPlanPrice;
 use App\Models\AgentProfile;
@@ -365,6 +366,33 @@ final class AgentDomainOrderFlowTest extends TestCase
         $this->assertSame(Order::STATUS_COMPLETED, (int) $order->fresh()->status);
     }
 
+    public function test_payment_callback_writes_agent_cost_ledger_with_snapshot_amounts(): void
+    {
+        [$agent, , $order] = $this->createAgentOrderFixture();
+        $payment = $this->createPayment(Payment::OWNER_AGENT, $agent->id);
+        $order->payment_id = $payment->id;
+        $order->save();
+
+        $this->assertTrue($this->invokePaymentHandle([
+            'trade_no' => $order->trade_no,
+            'callback_no' => 'gateway-ledger',
+            'paid_amount' => 1300,
+        ], $this->paymentServiceWithId($payment->id)));
+
+        $ledger = AgentLedger::query()
+            ->where('agent_user_id', $agent->id)
+            ->where('type', AgentCommerceService::LEDGER_AGENT_ORDER_COST)
+            ->first();
+
+        $this->assertNotNull($ledger);
+        $this->assertSame(-500, (int) $ledger->amount);
+        $this->assertSame(10000, (int) $ledger->balance_before);
+        $this->assertSame(9500, (int) $ledger->balance_after);
+        $this->assertSame($order->trade_no, $ledger->metadata['trade_no']);
+        $this->assertSame(1300, (int) $ledger->metadata['sale_amount']);
+        $this->assertSame(500, (int) $ledger->metadata['cost_amount']);
+    }
+
     public function test_duplicate_payment_callback_does_not_double_deduct_agent_balance(): void
     {
         [$agent, , $order] = $this->createAgentOrderFixture();
@@ -435,6 +463,29 @@ final class AgentDomainOrderFlowTest extends TestCase
             AgentCommerceService::INSUFFICIENT_SITE_BALANCE_MESSAGE,
             $context->fresh()->payment_snapshot['failure_reason'] ?? null
         );
+    }
+
+    public function test_payment_callback_amount_mismatch_does_not_capture_or_fail_hold(): void
+    {
+        [$agent, , $order] = $this->createAgentOrderFixture();
+        $payment = $this->createPayment(Payment::OWNER_AGENT, $agent->id);
+        $order->payment_id = $payment->id;
+        $order->save();
+
+        $handled = $this->invokePaymentHandle([
+            'trade_no' => $order->trade_no,
+            'callback_no' => 'gateway-wrong-amount',
+            'paid_amount' => 1299,
+        ], $this->paymentServiceWithId($payment->id));
+
+        $hold = AgentBalanceHold::query()->where('order_id', $order->id)->first();
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->first();
+
+        $this->assertFalse($handled);
+        $this->assertSame(Order::STATUS_PENDING, (int) $order->fresh()->status);
+        $this->assertSame(10000, (int) $agent->fresh()->balance);
+        $this->assertSame(AgentBalanceHold::STATUS_PENDING, $hold->fresh()->status);
+        $this->assertSame(AgentOrderContext::STATUS_PENDING, $context->fresh()->status);
     }
 
     public function test_cancel_agent_order_releases_pending_hold(): void
