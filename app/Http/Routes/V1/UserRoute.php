@@ -70,6 +70,7 @@ class UserRoute
             $router->get('/agent/site-settings', [AgentCommerceController::class, 'siteSettings']);
             $router->post('/agent/site-settings', [AgentCommerceController::class, 'saveSiteSetting']);
             $router->get('/agent/commerce/summary', [AgentCommerceController::class, 'commerceSummary']);
+            $router->get('/agent/commerce/diagnostics', [AgentCommerceController::class, 'diagnostics']);
             // Order
             $router->post('/order/save', [OrderController::class, 'save']);
             $router->post('/order/recharge', [OrderController::class, 'recharge']);

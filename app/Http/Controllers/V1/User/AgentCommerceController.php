@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AgentDomain;
 use App\Models\AgentProfile;
 use App\Services\AgentCenterService;
+use App\Services\AgentCommerceDiagnosticsService;
 use App\Services\AgentDomainSelfService;
 use App\Services\AgentPaymentService;
 use App\Services\AgentSiteSettingService;
@@ -159,6 +160,11 @@ class AgentCommerceController extends Controller
             'prices' => $this->storefrontService()->listPrices($request->user()),
             'site_settings' => $this->siteSettingService()->list($request->user()),
         ]);
+    }
+
+    public function diagnostics(Request $request)
+    {
+        return $this->success(app(AgentCommerceDiagnosticsService::class)->diagnose($request->user()));
     }
 
     private function paymentService(): AgentPaymentService

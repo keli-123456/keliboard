@@ -6,11 +6,13 @@ namespace Tests\Unit\Http;
 
 use App\Exceptions\ApiException;
 use App\Http\Controllers\V1\User\AgentCommerceController;
+use App\Http\Routes\V1\UserRoute;
 use App\Models\AgentDomain;
 use App\Models\AgentProfile;
 use App\Models\User;
 use App\Services\AgentCenterService;
 use App\Services\AgentDomainSelfService;
+use Illuminate\Contracts\Routing\Registrar;
 use Illuminate\Http\Request as BaseRequest;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
@@ -139,6 +141,42 @@ final class UserAgentCommerceControllerTest extends TestCase
             array_column($summary['payment_domains'], 'domain')
         );
         $this->assertSame(AgentDomain::STATUS_ACTIVE, $summary['payment_domains'][0]['status']);
+    }
+
+    public function test_commerce_diagnostics_endpoint_returns_agent_readiness(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => 'ready.example.test',
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+            'created_by_agent_id' => $agent->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $request = $this->userRequest($agent, '/api/v1/user/agent/commerce/diagnostics', 'GET');
+
+        $payload = $this->responsePayload(app(AgentCommerceController::class)->diagnostics($request));
+
+        $this->assertSame('success', $payload['status']);
+        $this->assertArrayHasKey('overall_status', $payload['data']);
+        $this->assertArrayHasKey('checks', $payload['data']);
+        $this->assertArrayHasKey('summary', $payload['data']);
+        $this->assertArrayHasKey('payment_contexts', $payload['data']);
+    }
+
+    public function test_user_route_registers_commerce_diagnostics_endpoint(): void
+    {
+        $registrar = new UserAgentCommerceRouteRegistrar();
+
+        (new UserRoute())->map($registrar);
+
+        $this->assertContains([
+            'method' => 'GET',
+            'uri' => '/user/agent/commerce/diagnostics',
+            'action' => [AgentCommerceController::class, 'diagnostics'],
+        ], $registrar->routes);
     }
 
     public function test_site_settings_lists_and_saves_default_setting(): void
@@ -323,5 +361,86 @@ final class UserAgentCommerceControllerTest extends TestCase
     private function responsePayload($response): array
     {
         return $response->getData(true);
+    }
+}
+
+final class UserAgentCommerceRouteRegistrar implements Registrar
+{
+    /**
+     * @var array<int, array{method: string, uri: string, action: mixed}>
+     */
+    public array $routes = [];
+
+    /**
+     * @var list<string>
+     */
+    private array $prefixes = [];
+
+    public function get($uri, $action)
+    {
+        return $this->record('GET', $uri, $action);
+    }
+
+    public function post($uri, $action)
+    {
+        return $this->record('POST', $uri, $action);
+    }
+
+    public function put($uri, $action)
+    {
+        return $this->record('PUT', $uri, $action);
+    }
+
+    public function delete($uri, $action)
+    {
+        return $this->record('DELETE', $uri, $action);
+    }
+
+    public function patch($uri, $action)
+    {
+        return $this->record('PATCH', $uri, $action);
+    }
+
+    public function options($uri, $action)
+    {
+        return $this->record('OPTIONS', $uri, $action);
+    }
+
+    public function match($methods, $uri, $action)
+    {
+        foreach ((array) $methods as $method) {
+            $this->record(strtoupper((string) $method), $uri, $action);
+        }
+    }
+
+    public function resource($name, $controller, array $options = [])
+    {
+        return null;
+    }
+
+    public function group(array $attributes, $routes)
+    {
+        $this->prefixes[] = (string) ($attributes['prefix'] ?? '');
+        $routes($this);
+        array_pop($this->prefixes);
+    }
+
+    public function substituteBindings($route)
+    {
+        return $route;
+    }
+
+    public function substituteImplicitBindings($route)
+    {
+        return null;
+    }
+
+    private function record(string $method, string $uri, $action): void
+    {
+        $this->routes[] = [
+            'method' => $method,
+            'uri' => '/' . trim(implode('/', array_filter($this->prefixes)) . '/' . ltrim($uri, '/'), '/'),
+            'action' => $action,
+        ];
     }
 }
