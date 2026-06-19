@@ -241,26 +241,7 @@ class OrderController extends Controller
 
     public function getPaymentMethod(Request $request)
     {
-        $agentUserId = app(AgentCommerceService::class)->agentUserIdForPaymentMethods($request);
-        $methods = Payment::select([
-            'id',
-            'name',
-            'payment',
-            'icon',
-            'handling_fee_fixed',
-            'handling_fee_percent'
-        ])
-            ->where('enable', 1)
-            ->when($agentUserId, function ($query) use ($agentUserId) {
-                $query->where('owner_type', Payment::OWNER_AGENT)
-                    ->where('owner_id', $agentUserId);
-            }, function ($query) {
-                $query->where('owner_type', Payment::OWNER_PLATFORM);
-            })
-            ->orderBy('sort', 'ASC')
-            ->get();
-
-        return $this->success($methods);
+        return $this->success(app(AgentCommerceService::class)->availablePaymentMethodsForRequest($request));
     }
 
     public function cancel(Request $request)

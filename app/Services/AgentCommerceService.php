@@ -197,23 +197,43 @@ class AgentCommerceService
 
     public function agentUserIdForPaymentMethods(Request $request): ?int
     {
-        $tradeNo = trim((string) $request->input('trade_no', ''));
-        if ($tradeNo !== '' && $request->user()) {
-            $order = Order::query()
-                ->where('trade_no', $tradeNo)
-                ->where('user_id', $request->user()->id)
-                ->first();
-            if ($order) {
-                $context = $this->contextForOrder($order);
-                if ($context) {
-                    return (int) $context->agent_user_id;
-                }
-            }
-        }
-
-        $context = app(AgentCommerceContextResolver::class)->resolveRequest($request);
+        $context = $this->effectivePaymentContext($request);
 
         return $context ? (int) $context['agent_user_id'] : null;
+    }
+
+    public function availablePaymentMethodsForRequest(Request $request)
+    {
+        $context = $this->effectivePaymentContext($request);
+
+        return Payment::select([
+            'id',
+            'name',
+            'payment',
+            'icon',
+            'handling_fee_fixed',
+            'handling_fee_percent',
+            'owner_type',
+            'owner_id',
+            'owner_domain_id',
+        ])
+            ->where('enable', 1)
+            ->when($context, function ($query) use ($context): void {
+                $agentDomainId = $context['agent_domain_id'] ?? null;
+
+                $query->where('owner_type', Payment::OWNER_AGENT)
+                    ->where('owner_id', (int) $context['agent_user_id'])
+                    ->where(function ($query) use ($agentDomainId): void {
+                        $query->whereNull('owner_domain_id');
+                        if ($agentDomainId !== null) {
+                            $query->orWhere('owner_domain_id', (int) $agentDomainId);
+                        }
+                    });
+            }, function ($query): void {
+                $query->where('owner_type', Payment::OWNER_PLATFORM);
+            })
+            ->orderBy('sort', 'ASC')
+            ->get();
     }
 
     public function contextForOrder(Order $order): ?AgentOrderContext
@@ -237,6 +257,10 @@ class AgentCommerceService
             $payment->owner_type !== Payment::OWNER_AGENT
             || (int) $payment->owner_id !== (int) $context->agent_user_id
         ) {
+            throw new ApiException('This payment method is unavailable.');
+        }
+
+        if ($payment->owner_domain_id !== null && (int) $payment->owner_domain_id !== (int) $context->agent_domain_id) {
             throw new ApiException('This payment method is unavailable.');
         }
     }
@@ -265,6 +289,9 @@ class AgentCommerceService
                     $payment->owner_type !== Payment::OWNER_AGENT
                     || (int) $payment->owner_id !== (int) $context->agent_user_id
                 ) {
+                    throw new ApiException('This payment method is unavailable.');
+                }
+                if ($payment->owner_domain_id !== null && (int) $payment->owner_domain_id !== (int) $context->agent_domain_id) {
                     throw new ApiException('This payment method is unavailable.');
                 }
 
@@ -314,6 +341,38 @@ class AgentCommerceService
 
             return $lockedOrder;
         });
+    }
+
+    private function effectivePaymentContext(Request $request): ?array
+    {
+        $tradeNo = trim((string) $request->input('trade_no', ''));
+        if ($tradeNo !== '' && $request->user()) {
+            $order = Order::query()
+                ->where('trade_no', $tradeNo)
+                ->where('user_id', $request->user()->id)
+                ->first();
+            if ($order) {
+                $context = $this->contextForOrder($order);
+                if ($context) {
+                    return [
+                        'agent_user_id' => (int) $context->agent_user_id,
+                        'agent_domain_id' => $context->agent_domain_id !== null ? (int) $context->agent_domain_id : null,
+                    ];
+                }
+            }
+        }
+
+        $context = app(AgentCommerceContextResolver::class)->resolveRequest($request);
+        if (!$context) {
+            return null;
+        }
+
+        return [
+            'agent_user_id' => (int) $context['agent_user_id'],
+            'agent_domain_id' => isset($context['agent_domain_id']) && $context['agent_domain_id'] !== null
+                ? (int) $context['agent_domain_id']
+                : null,
+        ];
     }
 
     public function attachPayment(Order $order, Payment $payment): void

@@ -249,6 +249,64 @@ final class AgentDomainOrderFlowTest extends TestCase
         $this->assertSame([$ownedPayment->id], array_column($payload['data'], 'id'));
     }
 
+    public function test_agent_domain_payment_methods_exclude_payments_bound_to_another_agent_domain(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $currentDomain = AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => 'shop-a.example.test',
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $otherDomain = AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => 'shop-b.example.test',
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $globalPayment = $this->createPayment(Payment::OWNER_AGENT, $agent->id);
+        $currentPayment = $this->createPayment(Payment::OWNER_AGENT, $agent->id, $currentDomain->id);
+        $this->createPayment(Payment::OWNER_AGENT, $agent->id, $otherDomain->id);
+        $request = BaseRequest::create('/api/v1/user/order/getPaymentMethod', 'GET', [], [], [], [
+            'HTTP_HOST' => 'shop-a.example.test',
+        ]);
+
+        $response = app(OrderController::class)->getPaymentMethod($request);
+        $payload = $this->responsePayload($response);
+
+        $this->assertSame([$globalPayment->id, $currentPayment->id], array_column($payload['data'], 'id'));
+    }
+
+    public function test_checkout_rejects_agent_payment_bound_to_another_domain(): void
+    {
+        [$agent, $buyer, $order] = $this->createAgentOrderFixture('shop-a.example.test');
+        $otherDomain = AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => 'shop-b.example.test',
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $payment = $this->createPayment(Payment::OWNER_AGENT, $agent->id, $otherDomain->id);
+        $request = BaseRequest::create('/api/v1/user/order/checkout', 'POST', [
+            'trade_no' => $order->trade_no,
+            'method' => $payment->id,
+        ], [], [], [
+            'HTTP_HOST' => 'shop-a.example.test',
+        ]);
+        $request->setUserResolver(static fn (): User => $buyer);
+        app()->instance('request', $request);
+
+        $response = app(OrderController::class)->checkout($request);
+        $payload = $this->responsePayload($response);
+
+        $this->assertSame('fail', $payload['status']);
+        $this->assertSame('This payment method is unavailable.', $payload['message']);
+        $this->assertNull($order->fresh()->payment_id);
+    }
+
     public function test_payment_callback_captures_hold_and_deducts_agent_once(): void
     {
         [$agent, , $order] = $this->createAgentOrderFixture();
@@ -498,12 +556,12 @@ final class AgentDomainOrderFlowTest extends TestCase
     /**
      * @return array{0: User, 1: User, 2: Order}
      */
-    private function createAgentOrderFixture(): array
+    private function createAgentOrderFixture(string $domain = 'agent.example.test'): array
     {
         $agent = $this->createActiveAgent('agent@example.test');
         AgentDomain::query()->create([
             'agent_user_id' => $agent->id,
-            'domain' => 'agent.example.test',
+            'domain' => $domain,
             'status' => AgentDomain::STATUS_ACTIVE,
             'created_at' => time(),
             'updated_at' => time(),
@@ -526,18 +584,19 @@ final class AgentDomainOrderFlowTest extends TestCase
             Plan::PERIOD_MONTHLY,
             null,
             BaseRequest::create('/api/v1/user/order/save', 'POST', [], [], [], [
-                'HTTP_HOST' => 'agent.example.test',
+                'HTTP_HOST' => $domain,
             ])
         );
 
         return [$agent, $buyer, $order];
     }
 
-    private function createPayment(string $ownerType, ?int $ownerId): Payment
+    private function createPayment(string $ownerType, ?int $ownerId, ?int $ownerDomainId = null): Payment
     {
         return Payment::query()->create([
             'owner_type' => $ownerType,
             'owner_id' => $ownerId,
+            'owner_domain_id' => $ownerDomainId,
             'uuid' => substr(md5($ownerType . ':' . (string) $ownerId . ':' . uniqid('', true)), 0, 32),
             'payment' => 'FAKEPAY',
             'name' => $ownerType === Payment::OWNER_AGENT ? 'Agent Pay' : 'Platform Pay',
