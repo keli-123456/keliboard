@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Exceptions\ApiException;
+use App\Models\AgentBalanceHold;
 use App\Models\AgentDomain;
 use App\Models\AgentPlanPrice;
 use App\Models\AgentProfile;
@@ -61,6 +62,10 @@ class AgentCommerceDiagnosticsService
         $minimumCost = $this->minimumCost($planDiagnostics);
         $maximumCost = $this->maximumCost($planDiagnostics);
         $hasConfiguredCost = $this->hasConfiguredCost($planDiagnostics);
+        $pendingHoldTotal = (int) AgentBalanceHold::query()
+            ->where('agent_user_id', $agent->id)
+            ->where('status', AgentBalanceHold::STATUS_PENDING)
+            ->sum('amount');
         $availableBalance = app(AgentCommerceService::class)->availableBalance($agent);
 
         $checks = [
@@ -92,6 +97,7 @@ class AgentCommerceDiagnosticsService
                     $planDiagnostics
                 )),
                 'balance' => (int) $agent->balance,
+                'pending_hold_total' => $pendingHoldTotal,
                 'available_balance' => $availableBalance,
                 'minimum_cost' => $minimumCost,
                 'maximum_cost' => $maximumCost,

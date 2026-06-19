@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Services;
 
 use App\Exceptions\ApiException;
+use App\Models\AgentBalanceHold;
 use App\Models\AgentDomain;
 use App\Models\AgentPlanPrice;
 use App\Models\AgentProfile;
@@ -236,6 +237,33 @@ final class AgentCommerceDiagnosticsServiceTest extends TestCase
         $this->assertSame('warning', $diagnostics['checks']['balance']['status']);
         $this->assertSame(500, $diagnostics['summary']['minimum_cost']);
         $this->assertSame(5000, $diagnostics['summary']['maximum_cost']);
+    }
+
+    public function test_diagnostics_summary_reports_pending_holds_and_available_balance(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 2000);
+        $this->createDomain($agent, 'shop.example.test', AgentDomain::STATUS_ACTIVE);
+        $this->createPayment($agent, null, true);
+        $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 10.00]);
+        $this->createAgentPrice($agent, $plan->id, Plan::PERIOD_MONTHLY, 1300);
+
+        AgentBalanceHold::query()->create([
+            'agent_user_id' => $agent->id,
+            'order_id' => 123,
+            'trade_no' => 'pending-hold',
+            'amount' => 700,
+            'status' => AgentBalanceHold::STATUS_PENDING,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $diagnostics = app(AgentCommerceDiagnosticsService::class)->diagnose($agent);
+
+        $this->assertSame(2000, $diagnostics['summary']['balance']);
+        $this->assertSame(700, $diagnostics['summary']['pending_hold_total']);
+        $this->assertSame(1300, $diagnostics['summary']['available_balance']);
+        $this->assertSame(500, $diagnostics['summary']['minimum_cost']);
+        $this->assertSame(500, $diagnostics['summary']['maximum_cost']);
     }
 
     public function test_healthy_configuration_is_ok(): void
