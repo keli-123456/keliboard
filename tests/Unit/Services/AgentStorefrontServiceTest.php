@@ -8,6 +8,7 @@ use App\Exceptions\ApiException;
 use App\Models\AgentDomain;
 use App\Models\AgentPlanPrice;
 use App\Models\AgentProfile;
+use App\Models\AgentUser;
 use App\Models\Plan;
 use App\Models\User;
 use App\Services\AgentCenterService;
@@ -78,6 +79,42 @@ final class AgentStorefrontServiceTest extends TestCase
         $this->assertCount(0, $plans);
     }
 
+    public function test_bound_user_on_platform_request_gets_agent_sale_prices(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $buyer = $this->createUser('buyer@example.test');
+        AgentUser::query()->create([
+            'agent_user_id' => $agent->id,
+            'sub_user_id' => $buyer->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $plan = $this->createPlan('Starter', [
+            Plan::PERIOD_MONTHLY => 20.00,
+            Plan::PERIOD_YEARLY => 120.00,
+        ]);
+        AgentPlanPrice::query()->create([
+            'agent_user_id' => $agent->id,
+            'plan_id' => $plan->id,
+            'period' => Plan::PERIOD_MONTHLY,
+            'sale_price' => 1300,
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $plans = app(AgentStorefrontService::class)->plansForRequest(
+            $this->requestForHost('platform.example.test', $buyer),
+            collect([$plan])
+        );
+
+        $this->assertCount(1, $plans);
+        $this->assertSame($agent->id, $plans[0]->agent_context['agent_user_id']);
+        $this->assertSame('user_binding', $plans[0]->agent_context['source']);
+        $this->assertEquals(13.0, $plans[0]->prices[Plan::PERIOD_MONTHLY]);
+        $this->assertArrayNotHasKey(Plan::PERIOD_YEARLY, $plans[0]->prices);
+    }
+
     public function test_price_save_rejects_plan_not_allowed_for_agents(): void
     {
         $this->bindTestSettings(['agent_center_allowed_plan_ids' => '999']);
@@ -113,16 +150,7 @@ final class AgentStorefrontServiceTest extends TestCase
 
     private function createActiveAgent(string $email): User
     {
-        $agent = User::query()->create([
-            'email' => $email,
-            'password' => password_hash('secret123', PASSWORD_BCRYPT),
-            'uuid' => $email . '-uuid',
-            'token' => $email . '-token',
-            'balance' => 10000,
-            'commission_balance' => 0,
-            'created_at' => time(),
-            'updated_at' => time(),
-        ]);
+        $agent = $this->createUser($email, 10000);
 
         AgentProfile::query()->create([
             'user_id' => $agent->id,
@@ -134,6 +162,20 @@ final class AgentStorefrontServiceTest extends TestCase
         ]);
 
         return $agent;
+    }
+
+    private function createUser(string $email, int $balance = 0): User
+    {
+        return User::query()->create([
+            'email' => $email,
+            'password' => password_hash('secret123', PASSWORD_BCRYPT),
+            'uuid' => $email . '-uuid',
+            'token' => $email . '-token',
+            'balance' => $balance,
+            'commission_balance' => 0,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
     }
 
     private function assignDomain(User $agent, string $domain): void
@@ -164,10 +206,15 @@ final class AgentStorefrontServiceTest extends TestCase
         ]);
     }
 
-    private function requestForHost(string $host): Request
+    private function requestForHost(string $host, ?User $user = null): Request
     {
-        return Request::create('/api/v1/guest/plan/fetch', 'GET', [], [], [], [
+        $request = Request::create('/api/v1/guest/plan/fetch', 'GET', [], [], [], [
             'HTTP_HOST' => $host,
         ]);
+        if ($user) {
+            $request->setUserResolver(fn () => $user);
+        }
+
+        return $request;
     }
 }

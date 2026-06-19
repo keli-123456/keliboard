@@ -157,6 +157,29 @@ final class AgentCommerceServiceTest extends TestCase
         $this->assertNull($order);
     }
 
+    public function test_agent_order_creation_rejects_unconfigured_sale_period(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 5000);
+        $this->assignDomain($agent, 'agent.example.test');
+        $buyer = $this->createUser('buyer@example.test');
+        $plan = $this->createPlan('Starter', [
+            Plan::PERIOD_MONTHLY => 10.00,
+            Plan::PERIOD_YEARLY => 100.00,
+        ]);
+        $this->setAgentPrice($agent, $plan, Plan::PERIOD_MONTHLY, 1300);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Agent price is not available');
+
+        app(AgentCommerceService::class)->createOrderFromRequest(
+            $buyer,
+            $plan,
+            Plan::PERIOD_YEARLY,
+            null,
+            $this->requestForHost('agent.example.test')
+        );
+    }
+
     public function test_existing_owned_user_is_not_reassigned_by_another_agent_domain(): void
     {
         $firstAgent = $this->createActiveAgent('first@example.test', 5000);

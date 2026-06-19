@@ -91,7 +91,7 @@ class AgentStorefrontService
 
     public function plansForRequest(Request $request, iterable $platformPlans): array
     {
-        $context = app(AgentCommerceContextResolver::class)->resolveRequest($request);
+        $context = app(AgentCommerceContextResolver::class)->resolveRequest($request, $request->user());
         if (!$context) {
             return collect($platformPlans)->values()->all();
         }
