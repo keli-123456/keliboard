@@ -65,6 +65,8 @@ final class UserNoticeAgentAnnouncementTest extends TestCase
         $this->assertSame('Welcome buyers', $payload['data'][0]['content']);
         $this->assertTrue($payload['data'][0]['show']);
         $this->assertTrue($payload['data'][0]['agent_context']);
+        $this->assertSame(1710000100, $payload['data'][0]['created_at']);
+        $this->assertSame(1710000100, $payload['data'][0]['updated_at']);
         $this->assertSame($global->id, $payload['data'][1]['id']);
         $this->assertSame('Global Notice', $payload['data'][1]['title']);
         $this->assertSame(1, Notice::query()->count());
