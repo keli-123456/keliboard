@@ -32,6 +32,26 @@ final class AgentTicketContextTest extends TestCase
         $this->bindTestSettings([
             'ticket_auto_reply_enable' => 0,
         ]);
+        $urlGenerator = new class {
+            public function route($name, $parameters = [], $absolute = true): string
+            {
+                $token = is_array($parameters) ? (string) ($parameters['token'] ?? '') : '';
+                $path = $name === 'client.subscribe'
+                    ? '/api/v1/client/subscribe?token=' . $token
+                    : '/' . trim((string) $name, '/');
+
+                return $absolute ? 'https://example.test' . $path : $path;
+            }
+
+            public function to($path, $extra = [], $secure = null): string
+            {
+                $path = '/' . ltrim((string) $path, '/');
+
+                return 'https://example.test' . $path;
+            }
+        };
+        app()->instance('url', $urlGenerator);
+        app()->instance(\Illuminate\Contracts\Routing\UrlGenerator::class, $urlGenerator);
         $this->createUserTable();
         $this->createAgentCenterTables();
         $this->createAgentCommerceTables();

@@ -210,6 +210,6 @@ final class UserNoticeAgentAnnouncementTest extends TestCase
 
     private function responsePayload($response): array
     {
-        return $response->getData(true);
+        return json_decode($response->getContent(), true);
     }
 }
