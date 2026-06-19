@@ -163,6 +163,7 @@ class AgentStorefrontService
             'sale_amount' => (int) $price->sale_price,
             'pricing_snapshot' => [
                 'agent_plan_price_id' => (int) $price->id,
+                'plan_id' => (int) $planId,
                 'sale_price' => (int) $price->sale_price,
                 'period' => $period,
             ],

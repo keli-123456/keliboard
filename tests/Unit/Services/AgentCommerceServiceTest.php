@@ -303,6 +303,75 @@ final class AgentCommerceServiceTest extends TestCase
         $this->assertSame(1, AgentUser::query()->where('sub_user_id', $buyer->id)->count());
     }
 
+    public function test_agent_order_pricing_snapshot_contains_sale_and_platform_cost_contract(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 5000);
+        $this->assignDomain($agent, 'agent.example.test');
+        $buyer = $this->createUser('buyer@example.test');
+        $plan = $this->createPlan('Starter', [
+            Plan::PERIOD_MONTHLY => 10.00,
+            Plan::PERIOD_YEARLY => 100.00,
+        ]);
+        $price = $this->setAgentPrice($agent, $plan, Plan::PERIOD_MONTHLY, 1300);
+
+        $order = app(AgentCommerceService::class)->createOrderFromRequest(
+            $buyer,
+            $plan,
+            Plan::PERIOD_MONTHLY,
+            null,
+            $this->requestForHost('agent.example.test')
+        );
+
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->first();
+        $this->assertNotNull($context);
+        $snapshot = $context->pricing_snapshot;
+
+        $this->assertSame(1300, (int) $order->total_amount);
+        $this->assertSame(1300, (int) $context->sale_amount);
+        $this->assertSame(500, (int) $context->cost_amount);
+        $this->assertSame($price->id, (int) $snapshot['agent_plan_price_id']);
+        $this->assertSame($plan->id, (int) $snapshot['plan_id']);
+        $this->assertSame(Plan::PERIOD_MONTHLY, $snapshot['period']);
+        $this->assertSame(1300, (int) $snapshot['sale_price']);
+        $this->assertSame(1000, (int) $snapshot['platform_base_amount']);
+        $this->assertSame(500, (int) $snapshot['cost_amount']);
+        $this->assertSame(50.0, (float) $snapshot['discount_percent']);
+    }
+
+    public function test_zero_discount_agent_order_creates_zero_amount_hold_without_requiring_balance(): void
+    {
+        $this->bindTestSettings([
+            'agent_center_discount_percent' => 0,
+            'invite_commission' => 10,
+            'commission_first_time_enable' => 1,
+            'plan_change_enable' => 1,
+        ]);
+
+        $agent = $this->createActiveAgent('agent@example.test', 0);
+        $this->assignDomain($agent, 'agent.example.test');
+        $buyer = $this->createUser('buyer@example.test');
+        $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 10.00]);
+        $this->setAgentPrice($agent, $plan, Plan::PERIOD_MONTHLY, 1300);
+
+        $order = app(AgentCommerceService::class)->createOrderFromRequest(
+            $buyer,
+            $plan,
+            Plan::PERIOD_MONTHLY,
+            null,
+            $this->requestForHost('agent.example.test')
+        );
+
+        $hold = AgentBalanceHold::query()->where('order_id', $order->id)->first();
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->first();
+
+        $this->assertNotNull($hold);
+        $this->assertNotNull($context);
+        $this->assertSame(0, (int) $hold->amount);
+        $this->assertSame(0, (int) $context->cost_amount);
+        $this->assertSame(1300, (int) $context->sale_amount);
+        $this->assertSame(0, (int) $context->pricing_snapshot['cost_amount']);
+    }
+
     private function createActiveAgent(string $email, int $balance): User
     {
         $agent = $this->createUser($email, $balance);
