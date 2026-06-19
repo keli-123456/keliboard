@@ -29,15 +29,14 @@ class NoticeController extends Controller
             ->take($globalLimit)
             ->get();
         if ($includeAgentAnnouncement) {
-            $timestamp = $siteContext['updated_at'] ?? time();
             $res->prepend([
                 'id' => 'agent-announcement',
                 'title' => (string) ($siteContext['site_name'] ?? ''),
                 'content' => $announcement,
                 'show' => true,
                 'agent_context' => true,
-                'created_at' => $timestamp,
-                'updated_at' => $timestamp,
+                'created_at' => time(),
+                'updated_at' => $siteContext['updated_at'] ?? time(),
             ]);
         }
         return response([

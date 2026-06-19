@@ -35,6 +35,7 @@ final class UserNoticeAgentAnnouncementTest extends TestCase
 
     public function test_bound_subordinate_with_agent_site_announcement_gets_synthetic_notice_first(): void
     {
+        $startedAt = time();
         $agent = $this->createActiveAgent('agent@example.test');
         $buyer = $this->createUser('buyer@example.test');
         AgentUser::query()->create([
@@ -65,7 +66,7 @@ final class UserNoticeAgentAnnouncementTest extends TestCase
         $this->assertSame('Welcome buyers', $payload['data'][0]['content']);
         $this->assertTrue($payload['data'][0]['show']);
         $this->assertTrue($payload['data'][0]['agent_context']);
-        $this->assertSame(1710000100, $payload['data'][0]['created_at']);
+        $this->assertGreaterThanOrEqual($startedAt, $payload['data'][0]['created_at']);
         $this->assertSame(1710000100, $payload['data'][0]['updated_at']);
         $this->assertSame($global->id, $payload['data'][1]['id']);
         $this->assertSame('Global Notice', $payload['data'][1]['title']);
