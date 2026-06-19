@@ -15,13 +15,18 @@ class NoticeController extends Controller
         $pageSize = 5;
         $siteContext = app(AgentSiteContextService::class)->resolve($request, $request->user());
         $announcement = trim((string) ($siteContext['announcement'] ?? ''));
-        $includeAgentAnnouncement = $current === 1 && $announcement !== '';
-        $globalPageSize = $includeAgentAnnouncement ? $pageSize - 1 : $pageSize;
+        $hasAgentAnnouncement = $announcement !== '';
+        $includeAgentAnnouncement = $current === 1 && $hasAgentAnnouncement;
+        $globalLimit = $includeAgentAnnouncement ? $pageSize - 1 : $pageSize;
+        $globalOffset = $hasAgentAnnouncement && $current > 1
+            ? (($current - 1) * $pageSize) - 1
+            : ($current - 1) * $pageSize;
         $model = Notice::orderBy('sort', 'ASC')
             ->orderBy('id', 'DESC')
             ->where('show', true);
-        $total = $model->count() + ($includeAgentAnnouncement ? 1 : 0);
-        $res = $model->forPage($current, $globalPageSize)
+        $total = $model->count() + ($hasAgentAnnouncement ? 1 : 0);
+        $res = $model->skip($globalOffset)
+            ->take($globalLimit)
             ->get();
         if ($includeAgentAnnouncement) {
             $res->prepend([

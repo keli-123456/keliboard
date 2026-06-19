@@ -89,6 +89,35 @@ final class UserNoticeAgentAnnouncementTest extends TestCase
         $this->assertArrayNotHasKey('agent_context', $payload['data'][0]);
     }
 
+    public function test_agent_announcement_pagination_does_not_drop_global_notice_between_pages(): void
+    {
+        $buyer = $this->createBoundSubordinateWithAnnouncement();
+        for ($i = 1; $i <= 6; $i++) {
+            $this->createNotice('Global ' . $i, 'Global content ' . $i, [
+                'sort' => $i,
+                'show' => true,
+            ]);
+        }
+
+        $pageOne = $this->responsePayload(app(NoticeController::class)->fetch($this->noticeRequest($buyer, 1)));
+        $pageTwo = $this->responsePayload(app(NoticeController::class)->fetch($this->noticeRequest($buyer, 2)));
+
+        $this->assertSame(7, $pageOne['total']);
+        $this->assertSame(7, $pageTwo['total']);
+        $this->assertSame('agent-announcement', $pageOne['data'][0]['id']);
+        $this->assertSame([
+            'Agent Storefront',
+            'Global 1',
+            'Global 2',
+            'Global 3',
+            'Global 4',
+        ], array_column($pageOne['data'], 'title'));
+        $this->assertSame([
+            'Global 5',
+            'Global 6',
+        ], array_column($pageTwo['data'], 'title'));
+    }
+
     private function createNoticeTable(): void
     {
         $this->database->schema()->create('v2_notice', function (Blueprint $table): void {
@@ -130,6 +159,28 @@ final class UserNoticeAgentAnnouncementTest extends TestCase
         ]);
 
         return $agent;
+    }
+
+    private function createBoundSubordinateWithAnnouncement(): User
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $buyer = $this->createUser('buyer@example.test');
+        AgentUser::query()->create([
+            'agent_user_id' => $agent->id,
+            'sub_user_id' => $buyer->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        AgentSiteSetting::query()->create([
+            'agent_user_id' => $agent->id,
+            'site_name' => 'Agent Storefront',
+            'announcement' => 'Welcome buyers',
+            'enabled' => true,
+            'created_at' => 1710000000,
+            'updated_at' => 1710000100,
+        ]);
+
+        return $buyer;
     }
 
     private function createUser(string $email): User
