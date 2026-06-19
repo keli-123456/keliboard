@@ -4,20 +4,35 @@ namespace App\Http\Controllers\V1\User;
 
 use App\Http\Controllers\Controller;
 use App\Models\Notice;
+use App\Services\AgentSiteContextService;
 use Illuminate\Http\Request;
 
 class NoticeController extends Controller
 {
     public function fetch(Request $request)
     {
-        $current = $request->input('current') ? $request->input('current') : 1;
+        $current = (int) ($request->input('current') ? $request->input('current') : 1);
         $pageSize = 5;
+        $siteContext = app(AgentSiteContextService::class)->resolve($request, $request->user());
+        $announcement = trim((string) ($siteContext['announcement'] ?? ''));
+        $includeAgentAnnouncement = $current === 1 && $announcement !== '';
+        $globalPageSize = $includeAgentAnnouncement ? $pageSize - 1 : $pageSize;
         $model = Notice::orderBy('sort', 'ASC')
             ->orderBy('id', 'DESC')
             ->where('show', true);
-        $total = $model->count();
-        $res = $model->forPage($current, $pageSize)
+        $total = $model->count() + ($includeAgentAnnouncement ? 1 : 0);
+        $res = $model->forPage($current, $globalPageSize)
             ->get();
+        if ($includeAgentAnnouncement) {
+            $res->prepend([
+                'id' => 'agent-announcement',
+                'title' => (string) ($siteContext['site_name'] ?? ''),
+                'content' => $announcement,
+                'show' => true,
+                'agent_context' => true,
+                'updated_at' => $siteContext['updated_at'] ?? null,
+            ]);
+        }
         return response([
             'data' => $res,
             'total' => $total
