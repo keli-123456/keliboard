@@ -4,6 +4,7 @@ namespace App\Http\Routes\V1;
 use App\Http\Controllers\V1\User\CommController;
 use App\Http\Controllers\V1\User\AgentCommerceController;
 use App\Http\Controllers\V1\User\AgentController;
+use App\Http\Controllers\V1\User\AgentOperationsController;
 use App\Http\Controllers\V1\User\AgentSiteContextController;
 use App\Http\Controllers\V1\User\CouponController;
 use App\Http\Controllers\V1\User\GiftCardController;
@@ -72,6 +73,9 @@ class UserRoute
             $router->post('/agent/site-settings', [AgentCommerceController::class, 'saveSiteSetting']);
             $router->get('/agent/commerce/summary', [AgentCommerceController::class, 'commerceSummary']);
             $router->get('/agent/commerce/diagnostics', [AgentCommerceController::class, 'diagnostics']);
+            $router->get('/agent/operations/summary', [AgentOperationsController::class, 'summary']);
+            $router->get('/agent/operations/orders', [AgentOperationsController::class, 'orders']);
+            $router->get('/agent/operations/orders/{tradeNo}', [AgentOperationsController::class, 'order']);
             $router->get('/agent/site-context', [AgentSiteContextController::class, 'show']);
             // Order
             $router->post('/order/save', [OrderController::class, 'save']);

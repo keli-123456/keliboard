@@ -19,6 +19,7 @@ use App\Http\Controllers\V2\Admin\KnowledgeController;
 use App\Http\Controllers\V2\Admin\PaymentController;
 use App\Http\Controllers\V2\Admin\BackupController;
 use App\Http\Controllers\V2\Admin\AgentCommerceController;
+use App\Http\Controllers\V2\Admin\AgentOperationsController;
 use App\Http\Controllers\V2\Admin\SystemController;
 use App\Http\Controllers\V2\Admin\ThemeController;
 use App\Http\Controllers\V2\Admin\TrafficResetController;
@@ -272,6 +273,19 @@ class AdminRoute
                 $router->get('/payments', [AgentCommerceController::class, 'payments']);
                 $router->get('/holds', [AgentCommerceController::class, 'holds']);
                 $router->get('/orders', [AgentCommerceController::class, 'orders']);
+            });
+
+            // Agent Operations
+            $router->group([
+                'prefix' => 'agent-operations'
+            ], function ($router) {
+                $router->get('/summary', [AgentOperationsController::class, 'summary']);
+                $router->get('/agents', [AgentOperationsController::class, 'agents']);
+                $router->get('/agents/{agentUserId}', [AgentOperationsController::class, 'agent']);
+                $router->get('/agents/{agentUserId}/orders', [AgentOperationsController::class, 'agentOrders']);
+                $router->post('/payments/{paymentId}/disable', [AgentOperationsController::class, 'disablePayment']);
+                $router->post('/payments/{paymentId}/enable', [AgentOperationsController::class, 'enablePayment']);
+                $router->post('/domains/{domainId}/disable', [AgentOperationsController::class, 'disableDomain']);
             });
 
             // System
