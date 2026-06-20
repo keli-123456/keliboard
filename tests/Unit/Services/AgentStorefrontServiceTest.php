@@ -148,6 +148,63 @@ final class AgentStorefrontServiceTest extends TestCase
         ]]);
     }
 
+    public function test_agent_storefront_hides_agent_price_when_plan_is_no_longer_allowed(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $this->assignDomain($agent, 'agent.example.test');
+        $blockedPlan = $this->createPlan('Blocked', [Plan::PERIOD_MONTHLY => 20.00]);
+        $allowedPlan = $this->createPlan('Allowed', [Plan::PERIOD_MONTHLY => 30.00]);
+        AgentPlanPrice::query()->create([
+            'agent_user_id' => $agent->id,
+            'plan_id' => $blockedPlan->id,
+            'period' => Plan::PERIOD_MONTHLY,
+            'sale_price' => 1500,
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        AgentPlanPrice::query()->create([
+            'agent_user_id' => $agent->id,
+            'plan_id' => $allowedPlan->id,
+            'period' => Plan::PERIOD_MONTHLY,
+            'sale_price' => 2500,
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $this->bindTestSettings(['agent_center_allowed_plan_ids' => (string) $allowedPlan->id]);
+
+        $plans = app(AgentStorefrontService::class)->plansForRequest(
+            $this->requestForHost('agent.example.test'),
+            collect([$blockedPlan, $allowedPlan])
+        );
+
+        $this->assertCount(1, $plans);
+        $this->assertSame($allowedPlan->id, (int) $plans[0]->id);
+        $this->assertEquals(25.0, $plans[0]->prices[Plan::PERIOD_MONTHLY]);
+    }
+
+    public function test_agent_order_rejects_stale_agent_price_when_plan_is_no_longer_allowed(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $plan = $this->createPlan('Blocked', [Plan::PERIOD_MONTHLY => 20.00]);
+        AgentPlanPrice::query()->create([
+            'agent_user_id' => $agent->id,
+            'plan_id' => $plan->id,
+            'period' => Plan::PERIOD_MONTHLY,
+            'sale_price' => 1500,
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $this->bindTestSettings(['agent_center_allowed_plan_ids' => '999']);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Plan is not allowed for agents');
+
+        app(AgentStorefrontService::class)->resolveSalePrice($agent->id, $plan->id, Plan::PERIOD_MONTHLY);
+    }
+
     private function createActiveAgent(string $email): User
     {
         $agent = $this->createUser($email, 10000);

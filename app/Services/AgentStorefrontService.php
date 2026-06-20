@@ -107,6 +107,10 @@ class AgentStorefrontService
 
         return collect($platformPlans)
             ->map(function (Plan $plan) use ($context, $prices): ?Plan {
+                if (!$this->planAllowed($plan)) {
+                    return null;
+                }
+
                 $agentPrices = $prices->get((int) $plan->id, collect());
                 $salePricesForResource = [];
                 $salePricesInCents = [];
@@ -145,6 +149,9 @@ class AgentStorefrontService
         $plan = Plan::query()->find($planId);
         if (!$plan || !$this->periodAvailable($plan, $period)) {
             throw new ApiException('Period is not available');
+        }
+        if (!$this->planAllowed($plan)) {
+            throw new ApiException('Plan is not allowed for agents');
         }
 
         $price = AgentPlanPrice::query()
