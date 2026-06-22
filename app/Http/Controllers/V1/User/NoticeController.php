@@ -5,6 +5,7 @@ namespace App\Http\Controllers\V1\User;
 use App\Http\Controllers\Controller;
 use App\Models\Notice;
 use App\Services\AgentSiteContextService;
+use App\Services\SiteDataScopeService;
 use Illuminate\Http\Request;
 
 class NoticeController extends Controller
@@ -24,6 +25,12 @@ class NoticeController extends Controller
         $model = Notice::orderBy('sort', 'ASC')
             ->orderBy('id', 'DESC')
             ->where('show', true);
+        $siteScope = app(SiteDataScopeService::class);
+        $siteScope->applyNullableSiteScope(
+            $model,
+            $siteScope->siteIdForRequest($request, $request->user()),
+            'v2_notice'
+        );
         $total = $model->count() + ($hasAgentAnnouncement ? 1 : 0);
         $res = $model->skip($globalOffset)
             ->take($globalLimit)

@@ -21,6 +21,7 @@ class TicketController extends Controller
 {
     private const TICKET_FILTER_FIELDS = [
         'id' => 'id',
+        'site_id' => 'site_id',
         'user_id' => 'user_id',
         'agent_user_id' => 'agent_user_id',
         'agent_domain_id' => 'agent_domain_id',
@@ -34,6 +35,7 @@ class TicketController extends Controller
 
     private const TICKET_SORT_FIELDS = [
         'id' => 'id',
+        'site_id' => 'site_id',
         'user_id' => 'user_id',
         'agent_user_id' => 'agent_user_id',
         'agent_domain_id' => 'agent_domain_id',
@@ -92,7 +94,7 @@ class TicketController extends Controller
                         return;
                     }
 
-                    if (in_array($key, ['agent_user_id', 'agent_domain_id'], true)) {
+                    if (in_array($key, ['site_id', 'agent_user_id', 'agent_domain_id'], true)) {
                         if (is_array($value)) {
                             $ids = $this->normalizePositiveIntegerFilterValues($value);
                             if ($ids !== []) {
@@ -346,7 +348,7 @@ class TicketController extends Controller
                     $q->where('email', $request->input('email'));
                 });
             })
-            ->when($request->filled('ai_category') && $request->input('ai_category') !== 'all', function ($query) use ($request) {
+            ->when($request->filled('ai_category') && $request->input('ai_category') !== 'all' && $this->hasTicketAiSuggestionTable(), function ($query) use ($request) {
                 $category = trim((string) $request->input('ai_category'));
                 $query->whereExists(function ($sub) use ($category) {
                     $sub->selectRaw('1')
@@ -355,7 +357,7 @@ class TicketController extends Controller
                         ->where('v2_ticket_ai_suggestion.category', $category);
                 });
             })
-            ->when($request->boolean('ai_needs_human'), function ($query) {
+            ->when($request->boolean('ai_needs_human') && $this->hasTicketAiSuggestionTable(), function ($query) {
                 $query->whereExists(function ($sub) {
                     $sub->selectRaw('1')
                         ->from('v2_ticket_ai_suggestion')
@@ -373,12 +375,15 @@ class TicketController extends Controller
             );
 
         $ticketIds = collect($tickets->items())->pluck('id')->map(fn ($id) => (int) $id)->all();
-        $latestAiByTicket = TicketAiSuggestion::query()
-            ->whereIn('ticket_id', $ticketIds)
-            ->orderByDesc('id')
-            ->get()
-            ->unique('ticket_id')
-            ->keyBy('ticket_id');
+        $latestAiByTicket = collect();
+        if ($ticketIds !== [] && $this->hasTicketAiSuggestionTable()) {
+            $latestAiByTicket = TicketAiSuggestion::query()
+                ->whereIn('ticket_id', $ticketIds)
+                ->orderByDesc('id')
+                ->get()
+                ->unique('ticket_id')
+                ->keyBy('ticket_id');
+        }
 
         // 获取items然后映射转换
         $items = collect($tickets->items())->map(function ($ticket) use ($latestAiByTicket) {
@@ -396,6 +401,15 @@ class TicketController extends Controller
         })->all();
 
         return $this->paginate($tickets, $items);
+    }
+
+    private function hasTicketAiSuggestionTable(): bool
+    {
+        try {
+            return app('db')->connection()->getSchemaBuilder()->hasTable('v2_ticket_ai_suggestion');
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     private function formatAgentPayload($agent): ?array

@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Notice extends Model
 {
@@ -15,4 +16,9 @@ class Notice extends Model
         'tags' => 'array',
         'show' => 'boolean',
     ];
+
+    public function site(): BelongsTo
+    {
+        return $this->belongsTo(Site::class, 'site_id', 'id');
+    }
 }

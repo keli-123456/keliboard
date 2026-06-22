@@ -190,6 +190,31 @@ trait InteractsWithInMemoryDatabase
         app()->instance(\Illuminate\Contracts\Routing\UrlGenerator::class, $generator);
     }
 
+    protected function bindTestRouter(string $baseUrl = 'https://example.test'): void
+    {
+        $router = new \Illuminate\Routing\Router(new \Illuminate\Events\Dispatcher(app()), app());
+        $request = \Illuminate\Http\Request::create($baseUrl);
+        $router->get('/api/v2/ticket/attachment/{id}/preview', fn () => response('ok'))
+            ->whereNumber('id')
+            ->name('api.v2.ticket.attachment.preview');
+        $router->getRoutes()->refreshNameLookups();
+        $url = new \Illuminate\Routing\UrlGenerator(
+            $router->getRoutes(),
+            $request
+        );
+        $url->setKeyResolver(fn (): string => 'unit-test-signing-key');
+
+        app()->instance('request', $request);
+        app()->instance(\Illuminate\Http\Request::class, $request);
+        app()->instance('router', $router);
+        app()->instance(\Illuminate\Routing\Router::class, $router);
+        app()->instance(\Illuminate\Contracts\Routing\Registrar::class, $router);
+        app()->instance('url', $url);
+        app()->instance(\Illuminate\Contracts\Routing\UrlGenerator::class, $url);
+        \Illuminate\Support\Facades\Facade::clearResolvedInstance('router');
+        \Illuminate\Support\Facades\Facade::clearResolvedInstance('url');
+    }
+
     protected function bindTestSettings(array $settings = []): void
     {
         app()->instance(\App\Support\Setting::class, new class($settings) {
@@ -586,6 +611,7 @@ trait InteractsWithInMemoryDatabase
     {
         $this->database->schema()->create('v2_ticket', function (Blueprint $table): void {
             $table->increments('id');
+            $table->integer('site_id')->nullable()->index();
             $table->integer('user_id');
             $table->integer('agent_user_id')->nullable()->index();
             $table->integer('agent_domain_id')->nullable()->index();

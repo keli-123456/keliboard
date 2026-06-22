@@ -212,7 +212,10 @@ class TicketService
                 : [];
             $agentUserId = $this->normalizePositiveInteger($agentContext['agent_user_id'] ?? null);
             $agentDomainId = $this->normalizePositiveInteger($agentContext['agent_domain_id'] ?? null);
-            $ticket = Ticket::create([
+            $siteContext = isset($options['site_context']) && is_array($options['site_context'])
+                ? $options['site_context']
+                : [];
+            $ticketPayload = [
                 'user_id' => $userId,
                 'agent_user_id' => $agentUserId,
                 'agent_domain_id' => $agentDomainId,
@@ -220,7 +223,16 @@ class TicketService
                 'level' => $level,
                 'status' => Ticket::STATUS_OPENING,
                 'reply_status' => Ticket::REPLY_STATUS_WAITING_ADMIN,
-            ]);
+            ];
+            $siteScope = app(SiteDataScopeService::class);
+            if ($siteScope->hasColumn('v2_ticket', 'site_id')) {
+                $siteId = $siteScope->siteIdFromContext($siteContext);
+                if ($siteId === null) {
+                    $siteId = $this->normalizePositiveInteger(User::query()->where('id', $userId)->value('site_id'));
+                }
+                $ticketPayload['site_id'] = $siteId;
+            }
+            $ticket = Ticket::create($ticketPayload);
             if (!$ticket) {
                 throw new ApiException('工单创建失败');
             }

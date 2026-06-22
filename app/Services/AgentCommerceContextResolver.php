@@ -33,6 +33,10 @@ class AgentCommerceContextResolver
 
     public function resolveUser(User $user): ?array
     {
+        if (!$this->hasTable('v2_agent_user')) {
+            return null;
+        }
+
         $ownership = AgentUser::query()
             ->where('sub_user_id', $user->id)
             ->first();
@@ -48,5 +52,14 @@ class AgentCommerceContextResolver
             'is_primary' => false,
             'source' => self::SOURCE_USER_BINDING,
         ];
+    }
+
+    private function hasTable(string $table): bool
+    {
+        try {
+            return app('db')->connection()->getSchemaBuilder()->hasTable($table);
+        } catch (\Throwable) {
+            return false;
+        }
     }
 }

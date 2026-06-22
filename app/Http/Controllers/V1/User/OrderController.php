@@ -19,6 +19,7 @@ use App\Services\PaymentService;
 use App\Services\PlanService;
 use App\Services\RechargeBonusService;
 use App\Services\SiteCommerceService;
+use App\Services\SiteDataScopeService;
 use App\Services\OrderUpgradeService;
 use App\Services\UserService;
 use Illuminate\Http\Request;
@@ -30,11 +31,13 @@ class OrderController extends Controller
         $request->validate([
             'status' => 'nullable|integer|in:0,1,2,3',
         ]);
-        $orders = Order::with('plan')
+        $query = Order::with('plan')
             ->where('user_id', $request->user()->id)
             ->when($request->input('status') !== null, function ($query) use ($request) {
                 $query->where('status', $request->input('status'));
-            })
+            });
+        $this->applyUserSiteScope($request, $query);
+        $orders = $query
             ->orderBy('created_at', 'DESC')
             ->get();
 
@@ -46,9 +49,11 @@ class OrderController extends Controller
         $request->validate([
             'trade_no' => 'required|string',
         ]);
-        $order = Order::with(['payment', 'plan'])
+        $query = Order::with(['payment', 'plan'])
             ->where('user_id', $request->user()->id)
-            ->where('trade_no', $request->input('trade_no'))
+            ->where('trade_no', $request->input('trade_no'));
+        $this->applyUserSiteScope($request, $query);
+        $order = $query
             ->first();
         if (!$order) {
             return $this->fail([400, __('Order does not exist or has been paid')]);
@@ -182,9 +187,11 @@ class OrderController extends Controller
     {
         $tradeNo = $request->input('trade_no');
         $method = $request->input('method');
-        $order = Order::where('trade_no', $tradeNo)
+        $query = Order::where('trade_no', $tradeNo)
             ->where('user_id', $request->user()->id)
-            ->where('status', 0)
+            ->where('status', 0);
+        $this->applyUserSiteScope($request, $query);
+        $order = $query
             ->first();
         if (!$order) {
             return $this->fail([400, __('Order does not exist or has been paid')]);
@@ -233,8 +240,10 @@ class OrderController extends Controller
     public function check(Request $request)
     {
         $tradeNo = $request->input('trade_no');
-        $order = Order::where('trade_no', $tradeNo)
-            ->where('user_id', $request->user()->id)
+        $query = Order::where('trade_no', $tradeNo)
+            ->where('user_id', $request->user()->id);
+        $this->applyUserSiteScope($request, $query);
+        $order = $query
             ->first();
         if (!$order) {
             return $this->fail([400, __('Order does not exist')]);
@@ -257,8 +266,10 @@ class OrderController extends Controller
         if (empty($request->input('trade_no'))) {
             return $this->fail([422, __('Invalid parameter')]);
         }
-        $order = Order::where('trade_no', $request->input('trade_no'))
-            ->where('user_id', $request->user()->id)
+        $query = Order::where('trade_no', $request->input('trade_no'))
+            ->where('user_id', $request->user()->id);
+        $this->applyUserSiteScope($request, $query);
+        $order = $query
             ->first();
         if (!$order) {
             return $this->fail([400, __('Order does not exist')]);
@@ -272,5 +283,15 @@ class OrderController extends Controller
         }
         app(AgentCommerceService::class)->releaseForOrder($order);
         return $this->success(true);
+    }
+
+    private function applyUserSiteScope(Request $request, $query): void
+    {
+        $siteScope = app(SiteDataScopeService::class);
+        $siteScope->applyNullableSiteScope(
+            $query,
+            $siteScope->siteIdForRequest($request, $request->user()),
+            'v2_order'
+        );
     }
 }

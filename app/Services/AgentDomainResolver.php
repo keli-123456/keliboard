@@ -16,6 +16,10 @@ class AgentDomainResolver
 
     public function resolveHost(string $host): ?array
     {
+        if (!$this->hasTable('v2_agent_domain')) {
+            return null;
+        }
+
         $domain = $this->normalizeHost($host);
         if ($domain === '') {
             return null;
@@ -78,5 +82,14 @@ class AgentDomainResolver
         }
 
         return $host;
+    }
+
+    private function hasTable(string $table): bool
+    {
+        try {
+            return app('db')->connection()->getSchemaBuilder()->hasTable($table);
+        } catch (\Throwable) {
+            return false;
+        }
     }
 }

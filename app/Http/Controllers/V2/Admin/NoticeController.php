@@ -6,6 +6,7 @@ use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\NoticeSave;
 use App\Models\Notice;
+use App\Services\SiteDataScopeService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -30,6 +31,12 @@ class NoticeController extends Controller
             'show',
             'popup'
         ]);
+        if (app(SiteDataScopeService::class)->hasColumn('v2_notice', 'site_id')) {
+            $siteId = $request->input('site_id');
+            $data['site_id'] = is_scalar($siteId) && trim((string) $siteId) !== '' && (int) $siteId > 0
+                ? (int) $siteId
+                : null;
+        }
         if (!$request->input('id')) {
             if (!Notice::create($data)) {
                 return $this->fail([500, '保存失败']);
