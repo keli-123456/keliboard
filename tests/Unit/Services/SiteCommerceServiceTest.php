@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Services;
 
-use App\Exceptions\ApiException;
 use App\Models\Order;
 use App\Models\Payment;
 use App\Models\Plan;
@@ -65,15 +64,15 @@ final class SiteCommerceServiceTest extends TestCase
         $this->assertSame('cheap.example.test', $context->domain_snapshot['domain']);
     }
 
-    public function test_site_payment_methods_use_enabled_site_allow_list(): void
+    public function test_site_payment_methods_inherit_enabled_platform_methods(): void
     {
         $site = $this->siteWithDomain('cheap', 'cheap.example.test', false);
         $user = $this->createUser('buyer@example.test', $site);
-        $allowed = $this->createPayment('Allowed Pay');
-        $blocked = $this->createPayment('Blocked Pay');
+        $first = $this->createPayment('First Pay');
+        $second = $this->createPayment('Second Pay');
         SitePayment::query()->create([
             'site_id' => $site->id,
-            'payment_id' => $allowed->id,
+            'payment_id' => $first->id,
             'enabled' => true,
             'sort' => 1,
             'created_at' => time(),
@@ -81,7 +80,7 @@ final class SiteCommerceServiceTest extends TestCase
         ]);
         SitePayment::query()->create([
             'site_id' => $site->id,
-            'payment_id' => $blocked->id,
+            'payment_id' => $second->id,
             'enabled' => false,
             'sort' => 2,
             'created_at' => time(),
@@ -92,21 +91,20 @@ final class SiteCommerceServiceTest extends TestCase
             $this->requestForUser($user, 'cheap.example.test')
         );
 
-        $this->assertSame([$allowed->id], $methods->pluck('id')->all());
+        $this->assertSame([$first->id, $second->id], $methods->pluck('id')->all());
     }
 
-    public function test_site_order_rejects_unmapped_payment_method(): void
+    public function test_site_order_allows_enabled_platform_payment_even_when_site_mapping_disables_it(): void
     {
         $site = $this->siteWithDomain('cheap', 'cheap.example.test', false);
         $user = $this->createUser('buyer@example.test', $site);
         $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 20.00]);
         $this->sitePrice($site, $plan, Plan::PERIOD_MONTHLY, 1300);
-        $allowed = $this->createPayment('Allowed Pay');
-        $blocked = $this->createPayment('Blocked Pay');
+        $payment = $this->createPayment('Platform Pay');
         SitePayment::query()->create([
             'site_id' => $site->id,
-            'payment_id' => $allowed->id,
-            'enabled' => true,
+            'payment_id' => $payment->id,
+            'enabled' => false,
             'sort' => 1,
             'created_at' => time(),
             'updated_at' => time(),
@@ -119,12 +117,8 @@ final class SiteCommerceServiceTest extends TestCase
             $this->requestForUser($user, 'cheap.example.test')
         );
 
-        app(SiteCommerceService::class)->assertPaymentAvailableForOrder($order, $allowed);
-
-        $this->expectException(ApiException::class);
-        $this->expectExceptionMessage('This payment method is unavailable.');
-
-        app(SiteCommerceService::class)->assertPaymentAvailableForOrder($order, $blocked);
+        app(SiteCommerceService::class)->assertPaymentAvailableForOrder($order, $payment);
+        $this->assertTrue(true);
     }
 
     private function siteWithDomain(string $code, string $host, bool $default): Site

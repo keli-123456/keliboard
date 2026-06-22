@@ -7,7 +7,6 @@ use App\Http\Controllers\Controller;
 use App\Models\Payment;
 use App\Models\Site;
 use App\Models\SiteDomain;
-use App\Models\SitePayment;
 use App\Models\SiteSetting;
 use App\Services\SiteStorefrontService;
 use App\Services\SiteResolver;
@@ -171,9 +170,6 @@ class SiteController extends Controller
             'prices.*.sale_price' => 'required|integer|min:0',
             'prices.*.enabled' => 'nullable|boolean',
             'payments' => 'nullable|array',
-            'payments.*.payment_id' => 'required|integer|min:1',
-            'payments.*.enabled' => 'nullable|boolean',
-            'payments.*.sort' => 'nullable|integer',
         ]);
 
         $site = $this->site((int) $params['site_id']);
@@ -187,12 +183,9 @@ class SiteController extends Controller
                 app(SiteStorefrontService::class)->savePrices($site, $params['prices']);
             }
 
-            if (array_key_exists('payments', $params) && is_array($params['payments'])) {
-                $this->savePayments($site, $params['payments']);
-            }
         });
 
-        return $this->success($this->commercePayload($site->fresh(['setting', 'payments.payment']) ?: $site));
+        return $this->success($this->commercePayload($site->fresh(['setting']) ?: $site));
     }
 
     private function normalizeDomains(array $domains, int $siteId): array
@@ -281,7 +274,7 @@ class SiteController extends Controller
 
     private function commercePayload(Site $site): array
     {
-        $site->loadMissing(['setting', 'payments.payment']);
+        $site->loadMissing(['setting']);
 
         return [
             'site' => $this->sitePayload($site->loadMissing('domains')),
@@ -300,18 +293,11 @@ class SiteController extends Controller
                 'updated_at' => $this->timestampValue($site->setting->updated_at),
             ] : null,
             'prices' => app(SiteStorefrontService::class)->listPrices($site),
-            'payments' => $site->payments
-                ->sortBy(fn (SitePayment $payment): array => [$payment->sort ?? 999999, $payment->payment_id])
-                ->map(fn (SitePayment $payment): array => [
-                    'site_id' => (int) $payment->site_id,
-                    'payment_id' => (int) $payment->payment_id,
-                    'name' => (string) ($payment->payment?->name ?? ''),
-                    'payment' => (string) ($payment->payment?->payment ?? ''),
-                    'enabled' => (bool) $payment->enabled,
-                    'sort' => $payment->sort,
-                ])
-                ->values()
-                ->all(),
+            'payment_policy' => [
+                'mode' => 'platform_inherited',
+                'description' => 'Site storefronts inherit enabled platform payment methods.',
+            ],
+            'payments' => [],
             'available_payments' => Payment::query()
                 ->select(['id', 'name', 'payment', 'icon', 'enable', 'owner_type'])
                 ->where('owner_type', Payment::OWNER_PLATFORM)
@@ -332,7 +318,7 @@ class SiteController extends Controller
 
     private function site(int $siteId): Site
     {
-        $site = Site::query()->with(['domains', 'setting', 'payments.payment'])->find($siteId);
+        $site = Site::query()->with(['domains', 'setting'])->find($siteId);
         if (!$site) {
             throw new ApiException('Site does not exist');
         }
@@ -360,34 +346,6 @@ class SiteController extends Controller
                 'updated_at' => $now,
             ]
         );
-    }
-
-    private function savePayments(Site $site, array $items): void
-    {
-        $now = time();
-        foreach ($items as $item) {
-            $paymentId = (int) ($item['payment_id'] ?? 0);
-            $payment = Payment::query()
-                ->where('id', $paymentId)
-                ->where('owner_type', Payment::OWNER_PLATFORM)
-                ->first();
-            if (!$payment) {
-                throw new ApiException('Payment method is not available');
-            }
-
-            SitePayment::query()->updateOrCreate(
-                [
-                    'site_id' => $site->id,
-                    'payment_id' => $payment->id,
-                ],
-                [
-                    'enabled' => (bool) ($item['enabled'] ?? true),
-                    'sort' => isset($item['sort']) ? (int) $item['sort'] : null,
-                    'created_at' => $now,
-                    'updated_at' => $now,
-                ]
-            );
-        }
     }
 
     private function nullableString(mixed $value): ?string

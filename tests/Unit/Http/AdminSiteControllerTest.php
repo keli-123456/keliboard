@@ -98,7 +98,7 @@ final class AdminSiteControllerTest extends TestCase
         app(SiteController::class)->save($request);
     }
 
-    public function test_admin_can_save_site_commerce_settings_prices_and_payments(): void
+    public function test_admin_can_save_site_commerce_settings_prices_and_inherits_platform_payments(): void
     {
         $site = Site::query()->create([
             'code' => 'cheap',
@@ -163,9 +163,11 @@ final class AdminSiteControllerTest extends TestCase
         $this->assertSame('Cheap Brand', $payload['data']['setting']['site_name']);
         $this->assertSame('sakura', SiteSetting::query()->where('site_id', $site->id)->value('landing_theme'));
         $this->assertSame(1300, SitePlanPrice::query()->where('site_id', $site->id)->where('plan_id', $plan->id)->value('sale_price'));
-        $this->assertSame(3, SitePayment::query()->where('site_id', $site->id)->where('payment_id', $payment->id)->value('sort'));
+        $this->assertSame(0, SitePayment::query()->where('site_id', $site->id)->count());
         $this->assertSame(1300, $payload['data']['prices'][0]['periods'][0]['sale_price']);
-        $this->assertSame($payment->id, $payload['data']['payments'][0]['payment_id']);
+        $this->assertSame([], $payload['data']['payments']);
+        $this->assertSame($payment->id, $payload['data']['available_payments'][0]['id']);
+        $this->assertSame('platform_inherited', $payload['data']['payment_policy']['mode']);
     }
 
     public function test_admin_route_registers_site_endpoints(): void

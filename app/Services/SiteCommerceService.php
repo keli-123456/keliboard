@@ -8,10 +8,8 @@ use App\Models\Order;
 use App\Models\Payment;
 use App\Models\Plan;
 use App\Models\SiteOrderContext;
-use App\Models\SitePayment;
 use App\Models\User;
 use Illuminate\Http\Request;
-use Illuminate\Support\Collection;
 
 class SiteCommerceService
 {
@@ -50,8 +48,7 @@ class SiteCommerceService
 
     public function availablePaymentMethodsForRequest(Request $request)
     {
-        $context = $this->paymentContext($request);
-        $query = Payment::select([
+        return Payment::select([
             'id',
             'name',
             'payment',
@@ -64,36 +61,8 @@ class SiteCommerceService
         ])
             ->where('enable', 1)
             ->where('owner_type', Payment::OWNER_PLATFORM)
-            ->orderBy('sort', 'ASC');
-
-        if (!$context || !$this->hasSitePaymentTable()) {
-            return $query->get();
-        }
-
-        $siteId = (int) $context['site_id'];
-        $sitePayments = SitePayment::query()
-            ->where('site_id', $siteId)
-            ->get()
-            ->keyBy('payment_id');
-
-        if ($sitePayments->isEmpty()) {
-            return !empty($context['is_default']) ? $query->get() : collect();
-        }
-
-        $enabledIds = $sitePayments
-            ->filter(fn (SitePayment $row): bool => (bool) $row->enabled)
-            ->keys()
-            ->map(fn ($id): int => (int) $id)
-            ->values()
-            ->all();
-
-        if (empty($enabledIds)) {
-            return collect();
-        }
-
-        $payments = $query->whereIn('id', $enabledIds)->get();
-
-        return $this->sortPaymentsBySiteMapping($payments, $sitePayments);
+            ->orderBy('sort', 'ASC')
+            ->get();
     }
 
     public function assertPaymentAvailableForOrder(Order $order, Payment $payment): void
@@ -106,28 +75,7 @@ class SiteCommerceService
             throw new ApiException('This payment method is unavailable.');
         }
 
-        $context = $this->contextForOrder($order);
-        if (!$context || !$this->hasSitePaymentTable()) {
-            return;
-        }
-
-        $sitePayments = SitePayment::query()
-            ->where('site_id', (int) $context['site_id'])
-            ->get()
-            ->keyBy('payment_id');
-
-        if ($sitePayments->isEmpty()) {
-            if ((bool) ($context['is_default'] ?? false)) {
-                return;
-            }
-
-            throw new ApiException('This payment method is unavailable.');
-        }
-
-        $mapping = $sitePayments->get((int) $payment->id);
-        if (!$mapping || !$mapping->enabled) {
-            throw new ApiException('This payment method is unavailable.');
-        }
+        return;
     }
 
     public function recordOrderContext(
@@ -223,42 +171,6 @@ class SiteCommerceService
         return null;
     }
 
-    private function paymentContext(Request $request): ?array
-    {
-        $tradeNo = trim((string) $request->input('trade_no', ''));
-        if ($tradeNo !== '' && $request->user()) {
-            $order = Order::query()
-                ->where('trade_no', $tradeNo)
-                ->where('user_id', $request->user()->id)
-                ->first();
-            if ($order) {
-                return $this->contextForOrder($order);
-            }
-        }
-
-        return $this->contextForRequest($request, $request->user());
-    }
-
-    /**
-     * @param Collection<int, Payment> $payments
-     * @param Collection<int, SitePayment> $sitePayments
-     * @return Collection<int, Payment>
-     */
-    private function sortPaymentsBySiteMapping(Collection $payments, Collection $sitePayments): Collection
-    {
-        return $payments
-            ->sortBy(function (Payment $payment) use ($sitePayments): array {
-                $mapping = $sitePayments->get((int) $payment->id);
-
-                return [
-                    $mapping?->sort ?? 999999,
-                    $payment->sort ?? 999999,
-                    $payment->id,
-                ];
-            })
-            ->values();
-    }
-
     private function hasAgentOrderContext(Order $order): bool
     {
         try {
@@ -287,11 +199,6 @@ class SiteCommerceService
     private function hasSiteTenantTables(): bool
     {
         return $this->hasTable('v2_site') && $this->hasTable('v2_site_domain');
-    }
-
-    private function hasSitePaymentTable(): bool
-    {
-        return $this->hasTable('v2_site_payment');
     }
 
     private function hasSiteOrderContextTable(): bool
