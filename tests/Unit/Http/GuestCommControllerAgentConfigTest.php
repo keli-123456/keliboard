@@ -55,6 +55,8 @@ final class GuestCommControllerAgentConfigTest extends TestCase
             'accent_color' => '#12abef',
             'support_name' => 'Agent Support',
             'support_url' => 'https://support.example.test/help',
+            'customer_service_type' => 'crisp',
+            'customer_service_id' => 'agent-crisp-id',
             'announcement' => 'Agent announcement',
         ]);
 
@@ -69,6 +71,8 @@ final class GuestCommControllerAgentConfigTest extends TestCase
         $this->assertSame('#12abef', $data['theme_config']['agent_accent_color']);
         $this->assertSame('Agent Support', $data['theme_config']['customer_service_name']);
         $this->assertSame('https://support.example.test/help', $data['theme_config']['customer_service_url']);
+        $this->assertSame('crisp', $data['theme_config']['customer_service_type']);
+        $this->assertSame('agent-crisp-id', $data['theme_config']['customer_service_id']);
         $this->assertSame($agent->id, $data['agent_context']['agent_user_id']);
         $this->assertSame($domain->id, $data['agent_context']['agent_domain_id']);
         $this->assertSame('shop.example.test', $data['agent_context']['domain']);

@@ -138,6 +138,8 @@ class AgentCommerceController extends Controller
             'accent_color' => 'nullable|string|max:16',
             'support_name' => 'nullable|string|max:80',
             'support_url' => 'nullable|string|max:500',
+            'customer_service_type' => 'nullable|string|max:32',
+            'customer_service_id' => 'nullable|string|max:255',
             'announcement' => 'nullable|string|max:500',
             'seo_title' => 'nullable|string|max:120',
             'seo_description' => 'nullable|string|max:255',
