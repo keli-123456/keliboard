@@ -9,7 +9,9 @@ class AgentDomainResolver
 {
     public function resolveRequest(Request $request): ?array
     {
-        return $this->resolveHost((string) $request->headers->get('host', ''));
+        $host = (string) ($request->headers->get('x-forwarded-host') ?: $request->headers->get('host', ''));
+
+        return $this->resolveHost($host);
     }
 
     public function resolveHost(string $host): ?array
@@ -42,6 +44,7 @@ class AgentDomainResolver
         if ($host === '') {
             return '';
         }
+        $host = trim(explode(',', $host, 2)[0]);
 
         if (str_contains($host, '://')) {
             $parsedHost = parse_url($host, PHP_URL_HOST);
