@@ -52,6 +52,28 @@ final class AgentCommerceContextResolverTest extends TestCase
         $this->assertNotSame($domain->id, $context['agent_domain_id']);
     }
 
+    public function test_same_agent_domain_takes_priority_over_user_binding_for_domain_context(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $buyer = $this->createUser('buyer@example.test');
+        $domain = $this->assignDomain($agent, 'shop.example.test');
+        AgentUser::query()->create([
+            'agent_user_id' => $agent->id,
+            'sub_user_id' => $buyer->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $context = app(AgentCommerceContextResolver::class)->resolveRequest(
+            $this->requestForHost('shop.example.test', $buyer)
+        );
+
+        $this->assertSame($agent->id, $context['agent_user_id']);
+        $this->assertSame($domain->id, $context['agent_domain_id']);
+        $this->assertSame('shop.example.test', $context['domain']);
+        $this->assertSame(AgentCommerceContextResolver::SOURCE_DOMAIN, $context['source']);
+    }
+
     public function test_guest_request_uses_agent_domain(): void
     {
         $agent = $this->createActiveAgent('agent@example.test');
