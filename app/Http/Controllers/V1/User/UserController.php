@@ -22,6 +22,7 @@ use App\Utils\Helper;
 use Illuminate\Contracts\Support\Arrayable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 class UserController extends Controller
 {
@@ -266,19 +267,59 @@ class UserController extends Controller
 
     public function transfer(UserTransfer $request)
     {
-        $user = User::find($request->user()->id);
-        if (!$user) {
+        $transferAmount = (int) $request->input('transfer_amount');
+        $requestUserId = (int) $request->user()->id;
+
+        $result = DB::transaction(function () use ($requestUserId, $transferAmount) {
+            $user = User::where('id', $requestUserId)->lockForUpdate()->first();
+            if (!$user) {
+                return [
+                    'status' => 'missing',
+                ];
+            }
+
+            $commissionBalance = (int) $user->commission_balance;
+            $balance = (int) $user->balance;
+
+            if ($transferAmount > $commissionBalance) {
+                return [
+                    'status' => 'insufficient',
+                    'data' => [
+                        'commission_balance' => $commissionBalance,
+                        'balance' => $balance,
+                    ],
+                ];
+            }
+
+            $user->commission_balance = $commissionBalance - $transferAmount;
+            $user->balance = $balance + $transferAmount;
+            if (!$user->save()) {
+                return [
+                    'status' => 'failed',
+                ];
+            }
+
+            return [
+                'status' => 'success',
+                'data' => [
+                    'transferred_amount' => $transferAmount,
+                    'commission_balance' => (int) $user->commission_balance,
+                    'balance' => (int) $user->balance,
+                ],
+            ];
+        });
+
+        if ($result['status'] === 'missing') {
             return $this->fail([400, __('The user does not exist')]);
         }
-        if ($request->input('transfer_amount') > $user->commission_balance) {
-            return $this->fail([400, __('Insufficient commission balance')]);
+        if ($result['status'] === 'insufficient') {
+            return $this->fail([400, __('Insufficient commission balance')], $result['data']);
         }
-        $user->commission_balance = $user->commission_balance - $request->input('transfer_amount');
-        $user->balance = $user->balance + $request->input('transfer_amount');
-        if (!$user->save()) {
+        if ($result['status'] === 'failed') {
             return $this->fail([400, __('Transfer failed')]);
         }
-        return $this->success(true);
+
+        return $this->success($result['data']);
     }
 
     public function getQuickLoginUrl(Request $request)
