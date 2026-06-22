@@ -18,6 +18,7 @@ use App\Services\OrderService;
 use App\Services\PaymentService;
 use App\Services\PlanService;
 use App\Services\RechargeBonusService;
+use App\Services\SiteCommerceService;
 use App\Services\OrderUpgradeService;
 use App\Services\UserService;
 use Illuminate\Http\Request;
@@ -89,11 +90,12 @@ class OrderController extends Controller
             return $this->success($agentOrder->trade_no);
         }
 
-        $order = OrderService::createFromRequest(
+        $order = app(SiteCommerceService::class)->createOrderFromRequest(
             $user,
             $plan,
             $request->input('period'),
-            $request->input('coupon_code')
+            $request->input('coupon_code'),
+            $request
         );
 
         return $this->success($order->trade_no);
@@ -118,7 +120,7 @@ class OrderController extends Controller
         }
 
         $bonusAmount = app(RechargeBonusService::class)->calculateBonus($amount);
-        $order = OrderService::createRechargeOrder($user, $amount, $bonusAmount);
+        $order = app(SiteCommerceService::class)->createRechargeOrderFromRequest($user, $amount, $bonusAmount, $request);
         return $this->success($order->trade_no);
     }
 
@@ -210,6 +212,7 @@ class OrderController extends Controller
             $handlingAmount = (int) round(($order->total_amount * ($payment->handling_fee_percent / 100)) + $payment->handling_fee_fixed);
         }
         try {
+            app(SiteCommerceService::class)->assertPaymentAvailableForOrder($order, $payment);
             $order = $agentCommerce->assignPaymentForCheckout($order, $payment, $handlingAmount);
         } catch (ApiException $exception) {
             return $this->fail([400, $exception->getMessage()]);
@@ -241,7 +244,12 @@ class OrderController extends Controller
 
     public function getPaymentMethod(Request $request)
     {
-        return $this->success(app(AgentCommerceService::class)->availablePaymentMethodsForRequest($request));
+        $agentCommerce = app(AgentCommerceService::class);
+        if ($agentCommerce->agentUserIdForPaymentMethods($request)) {
+            return $this->success($agentCommerce->availablePaymentMethodsForRequest($request));
+        }
+
+        return $this->success(app(SiteCommerceService::class)->availablePaymentMethodsForRequest($request));
     }
 
     public function cancel(Request $request)

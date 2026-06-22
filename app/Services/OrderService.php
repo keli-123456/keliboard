@@ -48,6 +48,8 @@ class OrderService
         Plan $plan,
         string $period,
         ?string $couponCode = null,
+        ?array $pricing = null,
+        ?array $siteContext = null,
     ): Order {
         $userService = app(UserService::class);
         $planService = new PlanService($plan);
@@ -55,7 +57,7 @@ class OrderService
         $planService->validatePurchase($user, $period);
         HookManager::call('order.create.before', [$user, $plan, $period, $couponCode]);
 
-        return DB::transaction(function () use ($user, $plan, $period, $couponCode, $userService) {
+        return DB::transaction(function () use ($user, $plan, $period, $couponCode, $userService, $pricing, $siteContext) {
             $user = User::whereKey($user->id)
                 ->lockForUpdate()
                 ->first();
@@ -68,10 +70,13 @@ class OrderService
 
             $order = new Order([
                 'user_id' => $user->id,
+                'site_id' => $siteContext['site_id'] ?? $user->site_id,
                 'plan_id' => $plan->id,
                 'period' => $newPeriod,
                 'trade_no' => Helper::generateOrderNo(),
-                'total_amount' => self::amountToCents($plan->prices[$newPeriod] ?? 0),
+                'total_amount' => $pricing !== null
+                    ? (int) ($pricing['sale_amount'] ?? 0)
+                    : self::amountToCents($plan->prices[$newPeriod] ?? 0),
             ]);
 
             $orderService = new self($order);
@@ -92,6 +97,10 @@ class OrderService
                 throw new ApiException(__('Failed to create order'));
             }
 
+            if ($siteContext !== null) {
+                app(SiteCommerceService::class)->recordOrderContext($order, $siteContext, $pricing ?? [], $plan, $newPeriod);
+            }
+
             HookManager::call('order.create.after', $order);
             // 兼容旧钩子
             HookManager::call('order.after_create', $order);
@@ -100,9 +109,9 @@ class OrderService
         });
     }
 
-    public static function createRechargeOrder(User $user, int $amount, int $bonusAmount = 0): Order
+    public static function createRechargeOrder(User $user, int $amount, int $bonusAmount = 0, ?array $siteContext = null): Order
     {
-        return DB::transaction(function () use ($user, $amount, $bonusAmount) {
+        return DB::transaction(function () use ($user, $amount, $bonusAmount, $siteContext) {
             $user = User::whereKey($user->id)
                 ->lockForUpdate()
                 ->first();
@@ -113,6 +122,7 @@ class OrderService
 
             $order = new Order([
                 'user_id' => $user->id,
+                'site_id' => $siteContext['site_id'] ?? $user->site_id,
                 'plan_id' => 0,
                 'period' => 'recharge',
                 'trade_no' => Helper::generateOrderNo(),
@@ -123,6 +133,24 @@ class OrderService
 
             if (!$order->save()) {
                 throw new ApiException(__('Failed to create order'));
+            }
+
+            if ($siteContext !== null) {
+                app(SiteCommerceService::class)->recordOrderContext(
+                    $order,
+                    $siteContext,
+                    [
+                        'sale_amount' => $amount,
+                        'platform_plan_price' => $amount,
+                        'pricing_snapshot' => [
+                            'type' => 'recharge',
+                            'sale_amount' => $amount,
+                            'bonus_amount' => max(0, $bonusAmount),
+                        ],
+                    ],
+                    null,
+                    'recharge'
+                );
             }
 
             return $order;
