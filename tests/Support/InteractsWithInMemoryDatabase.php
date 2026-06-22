@@ -246,6 +246,7 @@ trait InteractsWithInMemoryDatabase
     {
         $this->database->schema()->create('v2_user', function (Blueprint $table): void {
             $table->increments('id');
+            $table->integer('site_id')->nullable();
             $table->string('email')->nullable();
             $table->string('password')->nullable();
             $table->string('password_algo')->nullable();
@@ -276,6 +277,29 @@ trait InteractsWithInMemoryDatabase
             $table->integer('commission_rate')->default(0);
             $table->integer('commission_type')->default(0);
             $table->integer('discount')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+    }
+
+    protected function createSiteTenantTables(): void
+    {
+        $this->database->schema()->create('v2_site', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->string('code', 64)->unique();
+            $table->string('name', 120);
+            $table->string('status', 20)->default('active');
+            $table->boolean('is_default')->default(false);
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+
+        $this->database->schema()->create('v2_site_domain', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->unsignedInteger('site_id')->index();
+            $table->string('domain', 255)->unique();
+            $table->string('status', 20)->default('active');
+            $table->boolean('is_primary')->default(false);
             $table->integer('created_at')->nullable();
             $table->integer('updated_at')->nullable();
         });
@@ -363,6 +387,7 @@ trait InteractsWithInMemoryDatabase
     {
         $this->database->schema()->create('v2_order', function (Blueprint $table): void {
             $table->increments('id');
+            $table->integer('site_id')->nullable();
             $table->integer('invite_user_id')->nullable();
             $table->integer('user_id');
             $table->integer('plan_id')->default(0);
