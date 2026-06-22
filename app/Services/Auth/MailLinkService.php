@@ -4,8 +4,10 @@ namespace App\Services\Auth;
 
 use App\Jobs\SendEmailJob;
 use App\Models\User;
+use App\Services\SiteUserScopeService;
 use App\Utils\CacheKey;
 use App\Utils\Helper;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 
 class MailLinkService
@@ -17,17 +19,19 @@ class MailLinkService
      * @param string|null $redirect 重定向地址
      * @return array 返回处理结果
      */
-    public function handleMailLink(string $email, ?string $redirect = null): array
+    public function handleMailLink(string $email, ?string $redirect = null, ?Request $request = null): array
     {
         if (!(int) admin_setting('login_with_mail_link_enable')) {
             return [false, [404, null]];
         }
 
-        if (Cache::get(CacheKey::get('LAST_SEND_LOGIN_WITH_MAIL_LINK_TIMESTAMP', $email))) {
+        $siteScope = app(SiteUserScopeService::class);
+        $lastSendKey = $siteScope->cacheKey('LAST_SEND_LOGIN_WITH_MAIL_LINK_TIMESTAMP', $email, $request);
+        if (Cache::get($lastSendKey)) {
             return [false, [429, __('Sending frequently, please try again later')]];
         }
 
-        $user = User::where('email', $email)->first();
+        $user = $siteScope->findUserByEmail($email, $request);
         if (!$user) {
             return [true, true]; // 成功但用户不存在，保护用户隐私
         }
@@ -35,7 +39,7 @@ class MailLinkService
         $code = Helper::guid();
         $key = CacheKey::get('TEMP_TOKEN', $code);
         Cache::put($key, $user->id, 300);
-        Cache::put(CacheKey::get('LAST_SEND_LOGIN_WITH_MAIL_LINK_TIMESTAMP', $email), time(), 60);
+        Cache::put($lastSendKey, time(), 60);
 
         $redirectUrl = app(LoginRedirectService::class)->buildLoginFragment($code, $redirect);
         if (admin_setting('app_url')) {

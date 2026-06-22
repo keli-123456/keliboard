@@ -5,8 +5,10 @@ namespace App\Services\Auth;
 use App\Models\User;
 use App\Services\Plugin\HookManager;
 use App\Services\RiskEventService;
+use App\Services\SiteUserScopeService;
 use App\Utils\CacheKey;
 use App\Utils\Helper;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 
 class LoginService
@@ -18,13 +20,15 @@ class LoginService
      * @param string $password 用户密码
      * @return array [成功状态, 用户对象或错误信息]
      */
-    public function login(string $email, string $password): array
+    public function login(string $email, string $password, ?Request $request = null): array
     {
         $requestIp = null;
         $requestUa = null;
         $baseMeta = [];
+        $siteScope = app(SiteUserScopeService::class);
+        $req = $request;
         try {
-            $req = request();
+            $req = $req ?: request();
             $requestIp = $req->getClientIp();
             $requestUa = $req->userAgent();
 
@@ -43,9 +47,18 @@ class LoginService
             // ignore
         }
 
+        $siteContext = $siteScope->context($req);
+        if (!empty($siteContext['enabled'])) {
+            $baseMeta['site'] = [
+                'site_id' => $siteContext['site_id'] ?? null,
+                'source' => $siteContext['source'] ?? null,
+            ];
+        }
+        $passwordErrorLimitKey = $siteScope->cacheKey('PASSWORD_ERROR_LIMIT', $email, $req);
+
         // 检查密码错误限制
         if ((int) admin_setting('password_limit_enable', true)) {
-            $passwordErrorCount = (int) Cache::get(CacheKey::get('PASSWORD_ERROR_LIMIT', $email), 0);
+            $passwordErrorCount = (int) Cache::get($passwordErrorLimitKey, 0);
             if ($passwordErrorCount >= (int) admin_setting('password_limit_count', 5)) {
                 RiskEventService::record('login_failed', [
                     'ip' => $requestIp,
@@ -70,7 +83,7 @@ class LoginService
         }
 
         // 查找用户
-        $user = User::where('email', $email)->first();
+        $user = $siteScope->findUserByEmail($email, $req);
         if (!$user) {
             RiskEventService::record('login_failed', [
                 'ip' => $requestIp,
@@ -105,9 +118,9 @@ class LoginService
             ]);
             // 增加密码错误计数
             if ((int) admin_setting('password_limit_enable', true)) {
-                $passwordErrorCount = (int) Cache::get(CacheKey::get('PASSWORD_ERROR_LIMIT', $email), 0);
+                $passwordErrorCount = (int) Cache::get($passwordErrorLimitKey, 0);
                 Cache::put(
-                    CacheKey::get('PASSWORD_ERROR_LIMIT', $email),
+                    $passwordErrorLimitKey,
                     (int) $passwordErrorCount + 1,
                     60 * (int) admin_setting('password_limit_expire', 60)
                 );
@@ -157,17 +170,20 @@ class LoginService
      * @param string $password 新密码
      * @return array [成功状态, 结果或错误信息]
      */
-    public function resetPassword(string $email, string $emailCode, string $password): array
+    public function resetPassword(string $email, string $emailCode, string $password, ?Request $request = null): array
     {
+        $siteScope = app(SiteUserScopeService::class);
+        $req = $request ?: $this->currentRequest();
+
         // 检查重置请求限制
-        $forgetRequestLimitKey = CacheKey::get('FORGET_REQUEST_LIMIT', $email);
+        $forgetRequestLimitKey = $siteScope->cacheKey('FORGET_REQUEST_LIMIT', $email, $req);
         $forgetRequestLimit = (int) Cache::get($forgetRequestLimitKey);
         if ($forgetRequestLimit >= 3) {
             return [false, [429, __('Reset failed, Please try again later')]];
         }
 
         // 验证邮箱验证码
-        $cachedEmailCode = Cache::get(CacheKey::get('EMAIL_VERIFY_CODE', $email));
+        $cachedEmailCode = Cache::get($siteScope->cacheKey('EMAIL_VERIFY_CODE', $email, $req));
         if (
             preg_match('/^\d{6}$/', $emailCode) !== 1
             || !is_scalar($cachedEmailCode)
@@ -178,7 +194,7 @@ class LoginService
         }
 
         // 查找用户
-        $user = User::where('email', $email)->first();
+        $user = $siteScope->findUserByEmail($email, $req);
         if (!$user) {
             return [false, [400, __('This email is not registered in the system')]];
         }
@@ -195,9 +211,19 @@ class LoginService
         HookManager::call('user.password.reset.after', $user);
 
         // 清除邮箱验证码
-        Cache::forget(CacheKey::get('EMAIL_VERIFY_CODE', $email));
+        Cache::forget($siteScope->cacheKey('EMAIL_VERIFY_CODE', $email, $req));
 
         return [true, true];
+    }
+
+    private function currentRequest(): ?Request
+    {
+        try {
+            $request = request();
+            return $request instanceof Request ? $request : null;
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
 
