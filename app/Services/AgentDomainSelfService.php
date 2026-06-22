@@ -9,6 +9,7 @@ use App\Models\Payment;
 use App\Models\User;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 
 class AgentDomainSelfService
 {
@@ -341,6 +342,14 @@ class AgentDomainSelfService
             return (array) call_user_func($this->txtResolver, $recordName);
         }
 
+        return array_values(array_unique(array_merge(
+            $this->resolveSystemTxt($recordName),
+            $this->resolveDnsOverHttpsTxt($recordName)
+        )));
+    }
+
+    protected function resolveSystemTxt(string $recordName): array
+    {
         if (!function_exists('dns_get_record')) {
             return [];
         }
@@ -356,6 +365,57 @@ class AgentDomainSelfService
                 : null,
             $records
         )));
+    }
+
+    private function resolveDnsOverHttpsTxt(string $recordName): array
+    {
+        try {
+            $response = Http::timeout(5)
+                ->withHeaders(['Accept' => 'application/dns-json'])
+                ->get('https://cloudflare-dns.com/dns-query', [
+                    'name' => $recordName,
+                    'type' => 'TXT',
+                ]);
+        } catch (\Throwable) {
+            return [];
+        }
+
+        if (!$response->ok()) {
+            return [];
+        }
+
+        $answers = $response->json('Answer');
+        if (!is_array($answers)) {
+            return [];
+        }
+
+        $records = [];
+        foreach ($answers as $answer) {
+            if (!is_array($answer) || (int) ($answer['type'] ?? 0) !== 16) {
+                continue;
+            }
+
+            $value = $this->normalizeDohTxtData((string) ($answer['data'] ?? ''));
+            if ($value !== '') {
+                $records[] = $value;
+            }
+        }
+
+        return $records;
+    }
+
+    private function normalizeDohTxtData(string $data): string
+    {
+        $data = trim($data);
+        if ($data === '') {
+            return '';
+        }
+
+        if (preg_match_all('/"((?:\\\\.|[^"\\\\])*)"/', $data, $matches)) {
+            return implode('', array_map(static fn (string $part): string => stripcslashes($part), $matches[1]));
+        }
+
+        return $data;
     }
 
     private function markVerificationFailure(User $agent, int $id, string $message): void

@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Services\AgentCenterService;
 use App\Services\AgentDomainResolver;
 use App\Services\AgentDomainSelfService;
+use Illuminate\Support\Facades\Http;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
 
@@ -204,6 +205,72 @@ final class AgentDomainSelfServiceTest extends TestCase
         $this->assertNotNull($context);
         $this->assertSame($agent->id, $context['agent_user_id']);
         $this->assertSame('agent.example.test', $context['domain']);
+    }
+
+    public function test_verify_uses_dns_over_https_when_system_txt_lookup_is_empty(): void
+    {
+        $recordName = null;
+        $recordValue = null;
+        Http::fake(function ($request) use (&$recordName, &$recordValue) {
+            $this->assertSame('cloudflare-dns.com', $request->toPsrRequest()->getUri()->getHost());
+            $this->assertSame($recordName, $request['name']);
+            $this->assertSame('TXT', $request['type']);
+
+            return Http::response([
+                'Status' => 0,
+                'Answer' => [
+                    ['type' => 16, 'data' => '"' . $recordValue . '"'],
+                ],
+            ]);
+        });
+        $service = new class extends AgentDomainSelfService {
+            protected function resolveSystemTxt(string $recordName): array
+            {
+                return [];
+            }
+        };
+        $agent = $this->createActiveAgent('agent@example.test');
+        $pending = $service->createPending($agent, 'agent.example.test', null);
+        $recordName = $pending['verification']['record_name'];
+        $recordValue = $pending['verification']['record_value'];
+
+        $verified = $service->verify($agent, $pending['id']);
+
+        $this->assertSame(AgentDomain::STATUS_ACTIVE, $verified['status']);
+        $this->assertNull($verified['verification_error']);
+        Http::assertSentCount(1);
+    }
+
+    public function test_verify_uses_dns_over_https_when_system_txt_lookup_is_stale(): void
+    {
+        $recordName = null;
+        $recordValue = null;
+        Http::fake(function ($request) use (&$recordName, &$recordValue) {
+            $this->assertSame($recordName, $request['name']);
+
+            return Http::response([
+                'Status' => 0,
+                'Answer' => [
+                    ['type' => 16, 'data' => '"' . $recordValue . '"'],
+                ],
+            ]);
+        });
+        $service = new class extends AgentDomainSelfService {
+            protected function resolveSystemTxt(string $recordName): array
+            {
+                return ['keli-agent-verification=old-token'];
+            }
+        };
+        $agent = $this->createActiveAgent('agent@example.test');
+        $pending = $service->createPending($agent, 'agent.example.test', null);
+        $recordName = $pending['verification']['record_name'];
+        $recordValue = $pending['verification']['record_value'];
+
+        $verified = $service->verify($agent, $pending['id']);
+
+        $this->assertSame(AgentDomain::STATUS_ACTIVE, $verified['status']);
+        $this->assertNull($verified['verification_error']);
+        Http::assertSentCount(1);
     }
 
     public function test_verify_rechecks_locked_domain_state_before_activating(): void
