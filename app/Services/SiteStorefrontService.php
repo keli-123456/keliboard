@@ -10,6 +10,83 @@ use Illuminate\Http\Request;
 
 class SiteStorefrontService
 {
+    public function listPrices(Site $site): array
+    {
+        $prices = SitePlanPrice::query()
+            ->where('site_id', $site->id)
+            ->get()
+            ->keyBy(fn (SitePlanPrice $price): string => $price->plan_id . ':' . $price->period);
+
+        return Plan::query()
+            ->where('sell', true)
+            ->orderBy('sort')
+            ->orderBy('id')
+            ->get()
+            ->map(function (Plan $plan) use ($prices): array {
+                $periods = [];
+                foreach ((array) $plan->prices as $period => $platformPrice) {
+                    if ((float) $platformPrice <= 0) {
+                        continue;
+                    }
+
+                    $key = $plan->id . ':' . $period;
+                    $sitePrice = $prices->get($key);
+                    $periods[] = [
+                        'period' => (string) $period,
+                        'platform_price' => OrderService::amountToCents($platformPrice),
+                        'sale_price' => $sitePrice ? (int) $sitePrice->sale_price : null,
+                        'enabled' => $sitePrice ? (bool) $sitePrice->enabled : false,
+                    ];
+                }
+
+                return [
+                    'plan_id' => (int) $plan->id,
+                    'plan_name' => (string) $plan->name,
+                    'periods' => $periods,
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    public function savePrices(Site $site, array $items): array
+    {
+        if ($site->status !== Site::STATUS_ACTIVE) {
+            throw new ApiException('Site is not available');
+        }
+
+        $now = time();
+        foreach ($items as $item) {
+            $planId = (int) ($item['plan_id'] ?? 0);
+            $period = PlanService::getPeriodKey((string) ($item['period'] ?? ''));
+            $salePrice = max(0, (int) ($item['sale_price'] ?? 0));
+
+            $plan = Plan::query()->find($planId);
+            if (!$plan || !$plan->sell) {
+                throw new ApiException('Plan is not available');
+            }
+            if (!$this->periodAvailable($plan, $period)) {
+                throw new ApiException('Period is not available');
+            }
+
+            SitePlanPrice::query()->updateOrCreate(
+                [
+                    'site_id' => $site->id,
+                    'plan_id' => $plan->id,
+                    'period' => $period,
+                ],
+                [
+                    'sale_price' => $salePrice,
+                    'enabled' => (bool) ($item['enabled'] ?? true),
+                    'updated_at' => $now,
+                    'created_at' => $now,
+                ]
+            );
+        }
+
+        return $this->listPrices($site);
+    }
+
     public function plansForRequest(Request $request, iterable $platformPlans): array
     {
         $context = app(SiteContextService::class)->resolve($request, $request->user());

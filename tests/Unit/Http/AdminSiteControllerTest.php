@@ -7,8 +7,13 @@ namespace Tests\Unit\Http;
 use App\Exceptions\ApiException;
 use App\Http\Controllers\V2\Admin\SiteController;
 use App\Http\Routes\V2\AdminRoute;
+use App\Models\Payment;
+use App\Models\Plan;
 use App\Models\Site;
 use App\Models\SiteDomain;
+use App\Models\SitePayment;
+use App\Models\SitePlanPrice;
+use App\Models\SiteSetting;
 use Illuminate\Contracts\Routing\Registrar;
 use Illuminate\Http\Request;
 use Tests\Support\InteractsWithInMemoryDatabase;
@@ -29,7 +34,10 @@ final class AdminSiteControllerTest extends TestCase
         config(['app.key' => 'testing-site-key']);
         $this->createUserTable();
         $this->createOrderTable();
+        $this->createPlanTable();
+        $this->createPaymentTable();
         $this->createSiteTenantTables();
+        $this->createSiteCommerceTables();
     }
 
     public function test_admin_can_create_site_and_primary_domain(): void
@@ -90,6 +98,76 @@ final class AdminSiteControllerTest extends TestCase
         app(SiteController::class)->save($request);
     }
 
+    public function test_admin_can_save_site_commerce_settings_prices_and_payments(): void
+    {
+        $site = Site::query()->create([
+            'code' => 'cheap',
+            'name' => 'Cheap Site',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $plan = Plan::query()->create([
+            'name' => 'Starter',
+            'prices' => ['monthly' => 20.00],
+            'transfer_enable' => 100,
+            'group_id' => 1,
+            'sell' => true,
+            'show' => true,
+            'renew' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $payment = Payment::query()->create([
+            'uuid' => 'platform-pay-uuid',
+            'payment' => 'dummy',
+            'name' => 'Platform Pay',
+            'icon' => '',
+            'config' => [],
+            'enable' => true,
+            'owner_type' => Payment::OWNER_PLATFORM,
+            'owner_id' => null,
+            'owner_domain_id' => null,
+            'sort' => 0,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $request = Request::create('/admin/site/commerce/save', 'POST', [
+            'site_id' => $site->id,
+            'setting' => [
+                'site_name' => 'Cheap Brand',
+                'landing_theme' => 'sakura',
+                'enabled' => true,
+            ],
+            'prices' => [
+                [
+                    'plan_id' => $plan->id,
+                    'period' => 'monthly',
+                    'sale_price' => 1300,
+                    'enabled' => true,
+                ],
+            ],
+            'payments' => [
+                [
+                    'payment_id' => $payment->id,
+                    'enabled' => true,
+                    'sort' => 3,
+                ],
+            ],
+        ]);
+
+        $payload = $this->responsePayload(app(SiteController::class)->saveCommerce($request));
+
+        $this->assertSame('Cheap Brand', $payload['data']['setting']['site_name']);
+        $this->assertSame('sakura', SiteSetting::query()->where('site_id', $site->id)->value('landing_theme'));
+        $this->assertSame(1300, SitePlanPrice::query()->where('site_id', $site->id)->where('plan_id', $plan->id)->value('sale_price'));
+        $this->assertSame(3, SitePayment::query()->where('site_id', $site->id)->where('payment_id', $payment->id)->value('sort'));
+        $this->assertSame(1300, $payload['data']['prices'][0]['periods'][0]['sale_price']);
+        $this->assertSame($payment->id, $payload['data']['payments'][0]['payment_id']);
+    }
+
     public function test_admin_route_registers_site_endpoints(): void
     {
         $registrar = new AdminSiteRouteRegistrar();
@@ -105,6 +183,16 @@ final class AdminSiteControllerTest extends TestCase
             'method' => 'POST',
             'uri' => '/admin/site/save',
             'action' => [SiteController::class, 'save'],
+        ], $registrar->routes);
+        $this->assertContains([
+            'method' => 'GET',
+            'uri' => '/admin/site/commerce',
+            'action' => [SiteController::class, 'commerce'],
+        ], $registrar->routes);
+        $this->assertContains([
+            'method' => 'POST',
+            'uri' => '/admin/site/commerce/save',
+            'action' => [SiteController::class, 'saveCommerce'],
         ], $registrar->routes);
     }
 

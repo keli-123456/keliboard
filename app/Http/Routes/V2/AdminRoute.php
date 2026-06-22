@@ -74,6 +74,8 @@ class AdminRoute
             ], function ($router) {
                 $router->get('/fetch', [SiteController::class, 'fetch']);
                 $router->post('/save', [SiteController::class, 'save']);
+                $router->get('/commerce', [SiteController::class, 'commerce']);
+                $router->post('/commerce/save', [SiteController::class, 'saveCommerce']);
             });
 
             // Server

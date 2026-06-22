@@ -4,8 +4,12 @@ namespace App\Http\Controllers\V2\Admin;
 
 use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
+use App\Models\Payment;
 use App\Models\Site;
 use App\Models\SiteDomain;
+use App\Models\SitePayment;
+use App\Models\SiteSetting;
+use App\Services\SiteStorefrontService;
 use App\Services\SiteResolver;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -137,6 +141,60 @@ class SiteController extends Controller
         return $this->success($this->sitePayload($site));
     }
 
+    public function commerce(Request $request)
+    {
+        $params = $request->validate([
+            'site_id' => 'required|integer',
+        ]);
+
+        return $this->success($this->commercePayload($this->site((int) $params['site_id'])));
+    }
+
+    public function saveCommerce(Request $request)
+    {
+        $params = $request->validate([
+            'site_id' => 'required|integer',
+            'setting' => 'nullable|array',
+            'setting.site_name' => 'nullable|string|max:120',
+            'setting.logo_url' => 'nullable|string|max:500',
+            'setting.landing_theme' => 'nullable|string|max:64',
+            'setting.accent_color' => 'nullable|string|max:16',
+            'setting.support_name' => 'nullable|string|max:120',
+            'setting.support_url' => 'nullable|string|max:500',
+            'setting.announcement' => 'nullable|string|max:1000',
+            'setting.seo_title' => 'nullable|string|max:160',
+            'setting.seo_description' => 'nullable|string|max:255',
+            'setting.enabled' => 'nullable|boolean',
+            'prices' => 'nullable|array',
+            'prices.*.plan_id' => 'required|integer|min:1',
+            'prices.*.period' => 'required|string|max:64',
+            'prices.*.sale_price' => 'required|integer|min:0',
+            'prices.*.enabled' => 'nullable|boolean',
+            'payments' => 'nullable|array',
+            'payments.*.payment_id' => 'required|integer|min:1',
+            'payments.*.enabled' => 'nullable|boolean',
+            'payments.*.sort' => 'nullable|integer',
+        ]);
+
+        $site = $this->site((int) $params['site_id']);
+
+        DB::transaction(function () use ($site, $params): void {
+            if (array_key_exists('setting', $params) && is_array($params['setting'])) {
+                $this->saveSetting($site, $params['setting']);
+            }
+
+            if (!empty($params['prices']) && is_array($params['prices'])) {
+                app(SiteStorefrontService::class)->savePrices($site, $params['prices']);
+            }
+
+            if (array_key_exists('payments', $params) && is_array($params['payments'])) {
+                $this->savePayments($site, $params['payments']);
+            }
+        });
+
+        return $this->success($this->commercePayload($site->fresh(['setting', 'payments.payment']) ?: $site));
+    }
+
     private function normalizeDomains(array $domains, int $siteId): array
     {
         $result = [];
@@ -219,6 +277,124 @@ class SiteController extends Controller
             'created_at' => $this->timestampValue($site->created_at),
             'updated_at' => $this->timestampValue($site->updated_at),
         ];
+    }
+
+    private function commercePayload(Site $site): array
+    {
+        $site->loadMissing(['setting', 'payments.payment']);
+
+        return [
+            'site' => $this->sitePayload($site->loadMissing('domains')),
+            'setting' => $site->setting ? [
+                'site_id' => (int) $site->setting->site_id,
+                'site_name' => (string) ($site->setting->site_name ?? ''),
+                'logo_url' => (string) ($site->setting->logo_url ?? ''),
+                'landing_theme' => (string) ($site->setting->landing_theme ?? ''),
+                'accent_color' => (string) ($site->setting->accent_color ?? ''),
+                'support_name' => (string) ($site->setting->support_name ?? ''),
+                'support_url' => (string) ($site->setting->support_url ?? ''),
+                'announcement' => (string) ($site->setting->announcement ?? ''),
+                'seo_title' => (string) ($site->setting->seo_title ?? ''),
+                'seo_description' => (string) ($site->setting->seo_description ?? ''),
+                'enabled' => (bool) $site->setting->enabled,
+                'updated_at' => $this->timestampValue($site->setting->updated_at),
+            ] : null,
+            'prices' => app(SiteStorefrontService::class)->listPrices($site),
+            'payments' => $site->payments
+                ->sortBy(fn (SitePayment $payment): array => [$payment->sort ?? 999999, $payment->payment_id])
+                ->map(fn (SitePayment $payment): array => [
+                    'site_id' => (int) $payment->site_id,
+                    'payment_id' => (int) $payment->payment_id,
+                    'name' => (string) ($payment->payment?->name ?? ''),
+                    'payment' => (string) ($payment->payment?->payment ?? ''),
+                    'enabled' => (bool) $payment->enabled,
+                    'sort' => $payment->sort,
+                ])
+                ->values()
+                ->all(),
+            'available_payments' => Payment::query()
+                ->select(['id', 'name', 'payment', 'icon', 'enable', 'owner_type'])
+                ->where('owner_type', Payment::OWNER_PLATFORM)
+                ->orderBy('sort')
+                ->orderBy('id')
+                ->get()
+                ->map(fn (Payment $payment): array => [
+                    'id' => (int) $payment->id,
+                    'name' => (string) $payment->name,
+                    'payment' => (string) $payment->payment,
+                    'icon' => (string) ($payment->icon ?? ''),
+                    'enable' => (bool) $payment->enable,
+                ])
+                ->values()
+                ->all(),
+        ];
+    }
+
+    private function site(int $siteId): Site
+    {
+        $site = Site::query()->with(['domains', 'setting', 'payments.payment'])->find($siteId);
+        if (!$site) {
+            throw new ApiException('Site does not exist');
+        }
+
+        return $site;
+    }
+
+    private function saveSetting(Site $site, array $setting): void
+    {
+        $now = time();
+        SiteSetting::query()->updateOrCreate(
+            ['site_id' => $site->id],
+            [
+                'site_name' => $this->nullableString($setting['site_name'] ?? null),
+                'logo_url' => $this->nullableString($setting['logo_url'] ?? null),
+                'landing_theme' => $this->nullableString($setting['landing_theme'] ?? null),
+                'accent_color' => $this->nullableString($setting['accent_color'] ?? null),
+                'support_name' => $this->nullableString($setting['support_name'] ?? null),
+                'support_url' => $this->nullableString($setting['support_url'] ?? null),
+                'announcement' => $this->nullableString($setting['announcement'] ?? null),
+                'seo_title' => $this->nullableString($setting['seo_title'] ?? null),
+                'seo_description' => $this->nullableString($setting['seo_description'] ?? null),
+                'enabled' => (bool) ($setting['enabled'] ?? true),
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]
+        );
+    }
+
+    private function savePayments(Site $site, array $items): void
+    {
+        $now = time();
+        foreach ($items as $item) {
+            $paymentId = (int) ($item['payment_id'] ?? 0);
+            $payment = Payment::query()
+                ->where('id', $paymentId)
+                ->where('owner_type', Payment::OWNER_PLATFORM)
+                ->first();
+            if (!$payment) {
+                throw new ApiException('Payment method is not available');
+            }
+
+            SitePayment::query()->updateOrCreate(
+                [
+                    'site_id' => $site->id,
+                    'payment_id' => $payment->id,
+                ],
+                [
+                    'enabled' => (bool) ($item['enabled'] ?? true),
+                    'sort' => isset($item['sort']) ? (int) $item['sort'] : null,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]
+            );
+        }
+    }
+
+    private function nullableString(mixed $value): ?string
+    {
+        $value = trim((string) $value);
+
+        return $value === '' ? null : $value;
     }
 
     private function normalizeCode(string $code): string
