@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Http;
 
 use App\Http\Controllers\V1\User\NoticeController;
+use App\Http\Controllers\V2\Admin\NoticeController as AdminNoticeController;
 use App\Http\Controllers\V2\Admin\OrderController as AdminOrderController;
 use App\Http\Controllers\V2\Admin\TicketController as AdminTicketController;
 use App\Models\Notice;
@@ -63,6 +64,34 @@ final class SiteScopedUserDataTest extends TestCase
         $this->assertSame(2, $payload['total']);
         $this->assertEqualsCanonicalizing([$global->id, $first->id], array_column($payload['data'], 'id'));
         $this->assertEqualsCanonicalizing(['Global Notice', 'First Site Notice'], array_column($payload['data'], 'title'));
+    }
+
+    public function test_admin_notice_fetch_can_filter_by_site_scope_and_include_site(): void
+    {
+        $firstSite = $this->siteWithDomain('notice-a', 'notice-a.example.test', false);
+        $secondSite = $this->siteWithDomain('notice-b', 'notice-b.example.test', false);
+
+        $global = $this->createNotice('Global Notice', null);
+        $first = $this->createNotice('First Site Notice', $firstSite->id);
+        $this->createNotice('Second Site Notice', $secondSite->id);
+
+        $sitePayload = (new AdminNoticeController())->fetch(Request::create('/api/v2/admin/notice/fetch', 'GET', [
+            'site_id' => $firstSite->id,
+        ]))->getData(true);
+
+        $this->assertCount(1, $sitePayload['data']);
+        $this->assertSame($first->id, (int) $sitePayload['data'][0]['id']);
+        $this->assertSame($firstSite->id, (int) $sitePayload['data'][0]['site_id']);
+        $this->assertSame('Notice-a', $sitePayload['data'][0]['site']['name']);
+
+        $globalPayload = (new AdminNoticeController())->fetch(Request::create('/api/v2/admin/notice/fetch', 'GET', [
+            'site_id' => 'global',
+        ]))->getData(true);
+
+        $this->assertCount(1, $globalPayload['data']);
+        $this->assertSame($global->id, (int) $globalPayload['data'][0]['id']);
+        $this->assertNull($globalPayload['data'][0]['site_id']);
+        $this->assertNull($globalPayload['data'][0]['site']);
     }
 
     public function test_ticket_creation_records_site_context(): void

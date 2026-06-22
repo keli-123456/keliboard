@@ -14,11 +14,24 @@ class NoticeController extends Controller
 {
     public function fetch(Request $request)
     {
-        return $this->success(
-            Notice::orderBy('sort', 'ASC')
-                ->orderBy('id', 'DESC')
-                ->get()
-        );
+        $query = Notice::query()
+            ->orderBy('sort', 'ASC')
+            ->orderBy('id', 'DESC');
+
+        if (app(SiteDataScopeService::class)->hasColumn('v2_notice', 'site_id')) {
+            $query->with('site:id,code,name,status,is_default');
+            $siteId = $request->input('site_id');
+            if (is_scalar($siteId) && trim((string) $siteId) !== '') {
+                $normalized = strtolower(trim((string) $siteId));
+                if (in_array($normalized, ['0', 'global', 'null'], true)) {
+                    $query->whereNull('site_id');
+                } elseif ((int) $normalized > 0) {
+                    $query->where('site_id', (int) $normalized);
+                }
+            }
+        }
+
+        return $this->success($query->get());
     }
 
     public function save(NoticeSave $request)
