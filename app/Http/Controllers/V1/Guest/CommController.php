@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Services\AgentPublicConfigService;
 use App\Services\Plugin\HookManager;
 use App\Services\RechargeBonusService;
+use App\Services\SiteContextService;
 use App\Services\ThemeService;
 use App\Utils\Dict;
 use App\Utils\Helper;
@@ -45,6 +46,7 @@ class CommController extends Controller
         ];
         $data = array_merge($data, app(RechargeBonusService::class)->getConfig());
 
+        $data = app(SiteContextService::class)->applyToConfig($data, $request);
         $data = app(AgentPublicConfigService::class)->apply($data, $request);
         $data = HookManager::filter('guest_comm_config', $data);
 

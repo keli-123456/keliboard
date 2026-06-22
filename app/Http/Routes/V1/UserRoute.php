@@ -14,6 +14,7 @@ use App\Http\Controllers\V1\User\NoticeController;
 use App\Http\Controllers\V1\User\OrderController;
 use App\Http\Controllers\V1\User\PlanController;
 use App\Http\Controllers\V1\User\ServerController;
+use App\Http\Controllers\V1\User\SiteContextController;
 use App\Http\Controllers\V1\User\StatController;
 use App\Http\Controllers\V1\User\TelegramController;
 use App\Http\Controllers\V1\User\TicketController;
@@ -77,6 +78,7 @@ class UserRoute
             $router->get('/agent/operations/orders', [AgentOperationsController::class, 'orders']);
             $router->get('/agent/operations/orders/{tradeNo}', [AgentOperationsController::class, 'order']);
             $router->get('/agent/site-context', [AgentSiteContextController::class, 'show']);
+            $router->get('/site-context', [SiteContextController::class, 'show']);
             // Order
             $router->post('/order/save', [OrderController::class, 'save']);
             $router->post('/order/recharge', [OrderController::class, 'recharge']);
