@@ -116,6 +116,36 @@ final class AgentSiteContextServiceTest extends TestCase
         $this->assertSame('https://example.test/domain-logo.png', $payload['logo_url']);
     }
 
+    public function test_bound_subordinate_gets_same_agent_domain_setting_when_visiting_agent_domain(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $buyer = $this->createUser('buyer@example.test');
+        $domain = $this->createActiveDomain($agent, 'agent.example.test');
+        AgentUser::query()->create([
+            'agent_user_id' => $agent->id,
+            'sub_user_id' => $buyer->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $this->createSiteSetting($agent, null, [
+            'site_name' => 'Default Site',
+        ]);
+        $this->createSiteSetting($agent, $domain, [
+            'site_name' => 'Domain Site',
+            'logo_url' => 'https://example.test/domain-logo.png',
+        ]);
+
+        $payload = app(AgentSiteContextService::class)->resolve(
+            $this->requestForHost('agent.example.test', $buyer)
+        );
+
+        $this->assertSame($domain->id, $payload['agent_domain_id']);
+        $this->assertSame(AgentCommerceContextResolver::SOURCE_DOMAIN, $payload['source']);
+        $this->assertSame('agent.example.test', $payload['domain']);
+        $this->assertSame('Domain Site', $payload['site_name']);
+        $this->assertSame('https://example.test/domain-logo.png', $payload['logo_url']);
+    }
+
     public function test_disabled_domain_setting_falls_back_to_default_setting_while_preserving_context_source_and_domain(): void
     {
         $agent = $this->createActiveAgent('agent@example.test');

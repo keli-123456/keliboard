@@ -14,21 +14,21 @@ class AgentCommerceContextResolver
     public function resolveRequest(Request $request, ?User $user = null): ?array
     {
         $resolvedUser = $user ?: $request->user();
+        $userContext = null;
         if ($resolvedUser instanceof User) {
-            $context = $this->resolveUser($resolvedUser);
-            if ($context) {
-                return $context;
-            }
+            $userContext = $this->resolveUser($resolvedUser);
         }
 
         $domainContext = app(AgentDomainResolver::class)->resolveRequest($request);
-        if (!$domainContext) {
-            return null;
+        if ($domainContext) {
+            if (!$userContext || (int) $userContext['agent_user_id'] === (int) $domainContext['agent_user_id']) {
+                return array_merge($domainContext, [
+                    'source' => self::SOURCE_DOMAIN,
+                ]);
+            }
         }
 
-        return array_merge($domainContext, [
-            'source' => self::SOURCE_DOMAIN,
-        ]);
+        return $userContext;
     }
 
     public function resolveUser(User $user): ?array
