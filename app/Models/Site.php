@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Site extends Model
 {
@@ -23,5 +24,25 @@ class Site extends Model
     public function domains(): HasMany
     {
         return $this->hasMany(SiteDomain::class, 'site_id', 'id');
+    }
+
+    public function setting(): HasOne
+    {
+        return $this->hasOne(SiteSetting::class, 'site_id', 'id');
+    }
+
+    public function prices(): HasMany
+    {
+        return $this->hasMany(SitePlanPrice::class, 'site_id', 'id');
+    }
+
+    public function payments(): HasMany
+    {
+        return $this->hasMany(SitePayment::class, 'site_id', 'id');
+    }
+
+    public function orderContexts(): HasMany
+    {
+        return $this->hasMany(SiteOrderContext::class, 'site_id', 'id');
     }
 }

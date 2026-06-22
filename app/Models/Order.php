@@ -5,11 +5,13 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * App\Models\Order
  *
  * @property int $id
+ * @property int|null $site_id
  * @property int $user_id
  * @property int $plan_id
  * @property int|null $payment_id
@@ -130,5 +132,15 @@ class Order extends Model
     public function commission_log(): HasMany
     {
         return $this->hasMany(CommissionLog::class, 'trade_no', 'trade_no');
+    }
+
+    public function site(): BelongsTo
+    {
+        return $this->belongsTo(Site::class, 'site_id', 'id');
+    }
+
+    public function siteOrderContext(): HasOne
+    {
+        return $this->hasOne(SiteOrderContext::class, 'order_id', 'id');
     }
 }

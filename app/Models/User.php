@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * App\Models\User
  *
  * @property int $id 用户ID
+ * @property int|null $site_id 站点ID
  * @property string $email 邮箱
  * @property string $password 密码
  * @property string|null $password_algo 加密方式
@@ -116,6 +117,11 @@ class User extends Authenticatable
     public function plan(): BelongsTo
     {
         return $this->belongsTo(Plan::class, 'plan_id', 'id');
+    }
+
+    public function site(): BelongsTo
+    {
+        return $this->belongsTo(Site::class, 'site_id', 'id');
     }
 
     public function group(): BelongsTo
