@@ -365,11 +365,12 @@ class MarketingAutomationService
     {
         $now = time();
         $queued = false;
+        $notificationContext = app(NotificationSiteContextService::class)->forUser($user);
         $baseContext = array_merge($context, [
             'rule_code' => $rule->code,
             'scene' => $rule->scene,
             'user_email' => $user->email,
-        ]);
+        ], app(NotificationSiteContextService::class)->dispatchContext($notificationContext));
 
         if (
             $rule->email_enabled &&
@@ -481,8 +482,9 @@ class MarketingAutomationService
 
     private function buildTemplateVariables(User $user, array $context): array
     {
-        $appUrl = (string) admin_setting('app_url', '');
-        $appName = (string) admin_setting('app_name', 'XBoard');
+        $notificationContext = app(NotificationSiteContextService::class)->forUser($user);
+        $appUrl = (string) ($context['app_url'] ?? $notificationContext['app_url'] ?? admin_setting('app_url', ''));
+        $appName = (string) ($context['app_name'] ?? $notificationContext['app_name'] ?? admin_setting('app_name', 'XBoard'));
         $planName = (string) ($context['plan_name'] ?? $user->plan?->name ?? '当前套餐');
         $orderAmount = isset($context['order_total_amount'])
             ? $this->formatAmount((int) $context['order_total_amount'])

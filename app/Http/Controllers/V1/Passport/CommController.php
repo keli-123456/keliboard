@@ -8,6 +8,7 @@ use App\Jobs\SendEmailJob;
 use App\Models\InviteCode;
 use App\Models\User;
 use App\Services\CaptchaService;
+use App\Services\NotificationSiteContextService;
 use App\Services\SiteUserScopeService;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
@@ -49,17 +50,17 @@ class CommController extends Controller
             return $this->fail([400, __('Email verification code has been sent, please request again later')]);
         }
         $code = random_int(100000, 999999);
-        $subject = admin_setting('app_name', 'XBoard') . __('Email verification code');
+        $notificationContext = app(NotificationSiteContextService::class)->forRequest($request);
+        $subject = $notificationContext['app_name'] . __('Email verification code');
 
         SendEmailJob::dispatch([
             'email' => $email,
             'subject' => $subject,
             'template_name' => 'verify',
-            'template_value' => [
-                'name' => admin_setting('app_name', 'XBoard'),
+            'template_value' => app(NotificationSiteContextService::class)->templateValues($notificationContext, [
                 'code' => $code,
-                'url' => admin_setting('app_url')
-            ]
+            ]),
+            'dispatch_context' => app(NotificationSiteContextService::class)->dispatchContext($notificationContext),
         ]);
 
         Cache::put($siteScope->cacheKey('EMAIL_VERIFY_CODE', $email, $request), $code, 300);

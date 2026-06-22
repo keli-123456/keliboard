@@ -644,15 +644,15 @@ class TicketService
         $cacheKey = 'ticket_sendEmailNotify_' . $ticket->user_id;
         if (!Cache::get($cacheKey)) {
             Cache::put($cacheKey, 1, 1800);
+            $notificationContext = app(NotificationSiteContextService::class)->forTicket($ticket, $user);
             SendEmailJob::dispatch([
                 'email' => $user->email,
-                'subject' => '您在' . admin_setting('app_name', 'XBoard') . '的工单得到了回复',
+                'subject' => '您在' . $notificationContext['app_name'] . '的工单得到了回复',
                 'template_name' => 'notify',
-                'template_value' => [
-                    'name' => admin_setting('app_name', 'XBoard'),
-                    'url' => admin_setting('app_url'),
+                'template_value' => app(NotificationSiteContextService::class)->templateValues($notificationContext, [
                     'content' => "主题：{$ticket->subject}\r\n回复内容：{$ticketMessage->message}"
-                ]
+                ]),
+                'dispatch_context' => app(NotificationSiteContextService::class)->dispatchContext($notificationContext),
             ]);
         }
     }

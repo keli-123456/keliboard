@@ -4,6 +4,7 @@ namespace App\Services\Auth;
 
 use App\Jobs\SendEmailJob;
 use App\Models\User;
+use App\Services\NotificationSiteContextService;
 use App\Services\SiteUserScopeService;
 use App\Utils\CacheKey;
 use App\Utils\Helper;
@@ -41,14 +42,12 @@ class MailLinkService
         Cache::put($key, $user->id, 300);
         Cache::put($lastSendKey, time(), 60);
 
+        $notificationContext = app(NotificationSiteContextService::class)->forUser($user, $request);
         $redirectUrl = app(LoginRedirectService::class)->buildLoginFragment($code, $redirect);
-        if (admin_setting('app_url')) {
-            $link = admin_setting('app_url') . $redirectUrl;
-        } else {
-            $link = url($redirectUrl);
-        }
+        $baseUrl = rtrim((string) ($notificationContext['app_url'] ?: admin_setting('app_url')), '/');
+        $link = $baseUrl !== '' ? $baseUrl . $redirectUrl : url($redirectUrl);
 
-        $this->sendMailLinkEmail($user, $link);
+        $this->sendMailLinkEmail($user, $link, $notificationContext);
 
         return [true, true];
     }
@@ -60,19 +59,18 @@ class MailLinkService
      * @param string $link 登录链接
      * @return void
      */
-    private function sendMailLinkEmail(User $user, string $link): void
+    private function sendMailLinkEmail(User $user, string $link, array $notificationContext): void
     {
         SendEmailJob::dispatch([
             'email' => $user->email,
             'subject' => __('Login to :name', [
-                'name' => admin_setting('app_name', 'XBoard')
+                'name' => $notificationContext['app_name']
             ]),
             'template_name' => 'login',
-            'template_value' => [
-                'name' => admin_setting('app_name', 'XBoard'),
+            'template_value' => app(NotificationSiteContextService::class)->templateValues($notificationContext, [
                 'link' => $link,
-                'url' => admin_setting('app_url')
-            ]
+            ]),
+            'dispatch_context' => app(NotificationSiteContextService::class)->dispatchContext($notificationContext),
         ]);
     }
 

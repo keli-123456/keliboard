@@ -42,7 +42,7 @@ class MailService
             'skipped' => 0,
         ];
 
-        User::select('id', 'email', 'expired_at', 'transfer_enable', 'u', 'd', 'remind_expire', 'remind_traffic')
+        User::select('id', 'site_id', 'email', 'expired_at', 'transfer_enable', 'u', 'd', 'remind_expire', 'remind_traffic')
             ->where(function ($query) {
                 $query->where('remind_expire', true)
                     ->orWhere('remind_traffic', true);
@@ -149,17 +149,17 @@ class MailService
         if (!Cache::put($flag, 1, 24 * 3600))
             return;
 
+        $notificationContext = app(NotificationSiteContextService::class)->forUser($user);
+
         SendEmailJob::dispatch([
             'email' => $user->email,
             'subject' => __('The traffic usage in :app_name has reached 80%', [
-                'app_name' => admin_setting('app_name', 'XBoard')
+                'app_name' => $notificationContext['app_name']
             ]),
             'message_type' => MarketingRule::TYPE_LIFECYCLE,
             'template_name' => 'remindTraffic',
-            'template_value' => [
-                'name' => admin_setting('app_name', 'XBoard'),
-                'url' => admin_setting('app_url')
-            ]
+            'template_value' => app(NotificationSiteContextService::class)->templateValues($notificationContext),
+            'dispatch_context' => app(NotificationSiteContextService::class)->dispatchContext($notificationContext),
         ]);
     }
 
@@ -169,17 +169,17 @@ class MailService
             return;
         }
 
+        $notificationContext = app(NotificationSiteContextService::class)->forUser($user);
+
         SendEmailJob::dispatch([
             'email' => $user->email,
             'subject' => __('The service in :app_name is about to expire', [
-                'app_name' => admin_setting('app_name', 'XBoard')
+                'app_name' => $notificationContext['app_name']
             ]),
             'message_type' => MarketingRule::TYPE_LIFECYCLE,
             'template_name' => 'remindExpire',
-            'template_value' => [
-                'name' => admin_setting('app_name', 'XBoard'),
-                'url' => admin_setting('app_url')
-            ]
+            'template_value' => app(NotificationSiteContextService::class)->templateValues($notificationContext),
+            'dispatch_context' => app(NotificationSiteContextService::class)->dispatchContext($notificationContext),
         ]);
     }
 
@@ -224,6 +224,11 @@ class MailService
         $email = (string) $params['email'];
         $subject = (string) $params['subject'];
         $templateName = (string) ($params['template_name'] ?? 'notify');
+        $baseDispatchContext = self::mergeDispatchContext(
+            $meta['context'] ?? null,
+            is_array($params['dispatch_context'] ?? null) ? $params['dispatch_context'] : []
+        );
+        $fromName = trim((string) ($params['from_name'] ?? $baseDispatchContext['app_name'] ?? admin_setting('app_name', 'XBoard')));
         if (!str_starts_with($templateName, 'mail.')) {
             $templateName = 'mail.' . admin_setting('email_template', 'default') . '.' . $templateName;
         }
@@ -262,10 +267,14 @@ class MailService
                 $providerResponse = $quota['reason'];
             } else {
                 try {
+                    $fromAddress = trim((string) config('mail.from.address', ''));
                     Mail::send(
                         $templateName,
                         $params['template_value'],
-                        function ($message) use ($email, $subject) {
+                        function ($message) use ($email, $subject, $fromName, $fromAddress) {
+                            if ($fromName !== '' && $fromAddress !== '') {
+                                $message->from($fromAddress, $fromName);
+                            }
                             $message->to($email)->subject($subject);
                         }
                     );
@@ -303,9 +312,12 @@ class MailService
             'provider_health_status' => $providerHealth,
             'error_message' => $error,
             'provider_response' => $providerResponse,
-            'context' => self::mergeDispatchContext($meta['context'] ?? null, [
+            'context' => self::mergeDispatchContext(
+                $baseDispatchContext,
+                [
                 'mailer_profile' => $mailerProfile,
-            ]),
+                ]
+            ),
         ]);
 
         return [
