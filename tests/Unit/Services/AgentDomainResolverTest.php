@@ -7,6 +7,7 @@ namespace Tests\Unit\Services;
 use App\Models\AgentDomain;
 use App\Models\User;
 use App\Services\AgentDomainResolver;
+use Illuminate\Http\Request;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
 
@@ -55,12 +56,36 @@ final class AgentDomainResolverTest extends TestCase
         $this->assertNull(app(AgentDomainResolver::class)->resolveHost('shop.example.com'));
     }
 
+    public function test_resolve_request_prefers_forwarded_host_for_agent_proxy_domains(): void
+    {
+        $agent = $this->createUser('agent@example.test');
+        AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => 'agent.example.com',
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $request = Request::create('/', 'GET', [], [], [], [
+            'HTTP_HOST' => 'sp.huhu.icu',
+            'HTTP_X_FORWARDED_HOST' => 'Agent.Example.COM:443, proxy.local',
+        ]);
+
+        $context = app(AgentDomainResolver::class)->resolveRequest($request);
+
+        $this->assertNotNull($context);
+        $this->assertSame($agent->id, $context['agent_user_id']);
+        $this->assertSame('agent.example.com', $context['domain']);
+    }
+
     public function test_normalize_host_strips_scheme_path_and_trailing_dot(): void
     {
         $resolver = app(AgentDomainResolver::class);
 
         $this->assertSame('agent.example.com', $resolver->normalizeHost('https://Agent.Example.COM:8443/path?x=1'));
         $this->assertSame('agent.example.com', $resolver->normalizeHost('agent.example.com.'));
+        $this->assertSame('agent.example.com', $resolver->normalizeHost('agent.example.com, proxy.local'));
     }
 
     private function createUser(string $email): User
