@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Tests\Unit\Services;
 
 use App\Exceptions\ApiException;
+use App\Http\Resources\PlanResource;
 use App\Models\AgentDomain;
+use App\Models\AgentPlanOverride;
 use App\Models\AgentPlanPrice;
 use App\Models\AgentProfile;
 use App\Models\AgentUser;
@@ -113,6 +115,75 @@ final class AgentStorefrontServiceTest extends TestCase
         $this->assertSame('user_binding', $plans[0]->agent_context['source']);
         $this->assertEquals(13.0, $plans[0]->prices[Plan::PERIOD_MONTHLY]);
         $this->assertArrayNotHasKey(Plan::PERIOD_YEARLY, $plans[0]->prices);
+    }
+
+    public function test_agent_display_name_overrides_site_display_name(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $this->assignDomain($agent, 'agent.example.test');
+        $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 20.00]);
+        $plan->setAttribute('display_name', '光喵入门版');
+        $plan->setAttribute('site_display_name', '光喵入门版');
+        $plan->setAttribute('platform_name', 'Starter');
+        AgentPlanPrice::query()->create([
+            'agent_user_id' => $agent->id,
+            'plan_id' => $plan->id,
+            'period' => Plan::PERIOD_MONTHLY,
+            'sale_price' => 1500,
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        AgentPlanOverride::query()->create([
+            'agent_user_id' => $agent->id,
+            'plan_id' => $plan->id,
+            'display_name' => '代理畅享版',
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $plans = app(AgentStorefrontService::class)->plansForRequest(
+            $this->requestForHost('agent.example.test'),
+            collect([$plan])
+        );
+        $resource = PlanResource::make($plans[0])->toArray($this->requestForHost('agent.example.test'));
+
+        $this->assertSame('代理畅享版', $resource['name']);
+        $this->assertSame('代理畅享版', $resource['display_name']);
+        $this->assertSame('代理畅享版', $resource['agent_display_name']);
+        $this->assertSame('光喵入门版', $resource['site_display_name']);
+        $this->assertSame('Starter', $resource['platform_name']);
+    }
+
+    public function test_agent_display_name_falls_back_to_site_display_name(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $this->assignDomain($agent, 'agent.example.test');
+        $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 20.00]);
+        $plan->setAttribute('display_name', '光喵入门版');
+        $plan->setAttribute('site_display_name', '光喵入门版');
+        $plan->setAttribute('platform_name', 'Starter');
+        AgentPlanPrice::query()->create([
+            'agent_user_id' => $agent->id,
+            'plan_id' => $plan->id,
+            'period' => Plan::PERIOD_MONTHLY,
+            'sale_price' => 1500,
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $plans = app(AgentStorefrontService::class)->plansForRequest(
+            $this->requestForHost('agent.example.test'),
+            collect([$plan])
+        );
+        $resource = PlanResource::make($plans[0])->toArray($this->requestForHost('agent.example.test'));
+
+        $this->assertSame('光喵入门版', $resource['name']);
+        $this->assertSame('光喵入门版', $resource['display_name']);
+        $this->assertNull($resource['agent_display_name']);
+        $this->assertSame('光喵入门版', $resource['site_display_name']);
+        $this->assertSame('Starter', $resource['platform_name']);
     }
 
     public function test_price_save_rejects_plan_not_allowed_for_agents(): void

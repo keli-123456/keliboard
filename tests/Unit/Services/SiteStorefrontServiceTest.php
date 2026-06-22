@@ -9,6 +9,7 @@ use App\Http\Resources\PlanResource;
 use App\Models\Plan;
 use App\Models\Site;
 use App\Models\SiteDomain;
+use App\Models\SitePlanOverride;
 use App\Models\SitePlanPrice;
 use App\Services\SiteStorefrontService;
 use Illuminate\Http\Request;
@@ -79,6 +80,39 @@ final class SiteStorefrontServiceTest extends TestCase
         $this->assertCount(1, $plans);
         $this->assertEquals(20.00, $plans[0]->prices[Plan::PERIOD_MONTHLY]);
         $this->assertSame(2000, $plans[0]->site_sale_periods[Plan::PERIOD_MONTHLY]);
+    }
+
+    public function test_site_display_name_overrides_platform_plan_name(): void
+    {
+        [$site] = $this->siteWithDomain('cheap', 'Cheap Site', 'cheap.example.test');
+        $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 20.00]);
+        SitePlanPrice::query()->create([
+            'site_id' => $site->id,
+            'plan_id' => $plan->id,
+            'period' => Plan::PERIOD_MONTHLY,
+            'sale_price' => 1300,
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        SitePlanOverride::query()->create([
+            'site_id' => $site->id,
+            'plan_id' => $plan->id,
+            'display_name' => '光喵入门版',
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $plans = app(SiteStorefrontService::class)->plansForRequest(
+            $this->requestForHost('cheap.example.test'),
+            collect([$plan])
+        );
+        $resource = PlanResource::make($plans[0])->toArray($this->requestForHost('cheap.example.test'));
+
+        $this->assertSame('光喵入门版', $resource['name']);
+        $this->assertSame('光喵入门版', $resource['display_name']);
+        $this->assertSame('光喵入门版', $resource['site_display_name']);
+        $this->assertSame('Starter', $resource['platform_name']);
     }
 
     public function test_non_default_site_rejects_missing_price_for_checkout(): void

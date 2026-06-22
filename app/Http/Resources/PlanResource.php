@@ -34,7 +34,11 @@ class PlanResource extends JsonResource
         return [
             'id' => $this->getResourceValue('id'),
             'group_id' => $this->getResourceValue('group_id'),
-            'name' => $this->getResourceValue('name'),
+            'name' => $this->getResourceValue('display_name', $this->getResourceValue('name')),
+            'display_name' => $this->getResourceValue('display_name', $this->getResourceValue('name')),
+            'platform_name' => $this->getResourceValue('platform_name', $this->getResourceValue('name')),
+            'site_display_name' => $this->getResourceValue('site_display_name'),
+            'agent_display_name' => $this->getResourceValue('agent_display_name'),
             'tags' => $this->getResourceValue('tags'),
             'content' => $this->formatContent(),
             'upgrade_to_plan_ids' => $this->getUpgradeTargetPlanIds(),

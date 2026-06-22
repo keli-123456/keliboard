@@ -361,6 +361,16 @@ trait InteractsWithInMemoryDatabase
             $table->unique(['site_id', 'plan_id', 'period'], 'uniq_site_plan_period');
         });
 
+        $this->database->schema()->create('v2_site_plan_override', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->unsignedInteger('site_id')->index();
+            $table->unsignedInteger('plan_id')->index();
+            $table->string('display_name', 120)->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+            $table->unique(['site_id', 'plan_id'], 'uniq_site_plan_override');
+        });
+
         $this->database->schema()->create('v2_site_payment', function (Blueprint $table): void {
             $table->increments('id');
             $table->unsignedInteger('site_id')->index();
@@ -545,6 +555,16 @@ trait InteractsWithInMemoryDatabase
             $table->integer('created_at')->nullable();
             $table->integer('updated_at')->nullable();
             $table->unique(['agent_user_id', 'plan_id', 'period'], 'uniq_agent_plan_period');
+        });
+
+        $this->database->schema()->create('v2_agent_plan_override', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('agent_user_id')->index();
+            $table->integer('plan_id')->index();
+            $table->string('display_name', 120)->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+            $table->unique(['agent_user_id', 'plan_id'], 'uniq_agent_plan_override');
         });
 
         $this->database->schema()->create('v2_agent_balance_hold', function (Blueprint $table): void {

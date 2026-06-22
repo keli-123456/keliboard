@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Exceptions\ApiException;
 use App\Models\Plan;
 use App\Models\Site;
+use App\Models\SitePlanOverride;
 use App\Models\SitePlanPrice;
 use Illuminate\Http\Request;
 
@@ -16,13 +17,17 @@ class SiteStorefrontService
             ->where('site_id', $site->id)
             ->get()
             ->keyBy(fn (SitePlanPrice $price): string => $price->plan_id . ':' . $price->period);
+        $overrides = SitePlanOverride::query()
+            ->where('site_id', $site->id)
+            ->get()
+            ->keyBy('plan_id');
 
         return Plan::query()
             ->where('sell', true)
             ->orderBy('sort')
             ->orderBy('id')
             ->get()
-            ->map(function (Plan $plan) use ($prices): array {
+            ->map(function (Plan $plan) use ($prices, $overrides): array {
                 $periods = [];
                 foreach ((array) $plan->prices as $period => $platformPrice) {
                     if ((float) $platformPrice <= 0) {
@@ -42,6 +47,7 @@ class SiteStorefrontService
                 return [
                     'plan_id' => (int) $plan->id,
                     'plan_name' => (string) $plan->name,
+                    'display_name' => $this->overrideDisplayName($overrides->get((int) $plan->id), (string) $plan->name),
                     'periods' => $periods,
                 ];
             })
@@ -87,6 +93,43 @@ class SiteStorefrontService
         return $this->listPrices($site);
     }
 
+    public function saveOverrides(Site $site, array $items): void
+    {
+        if ($site->status !== Site::STATUS_ACTIVE) {
+            throw new ApiException('Site is not available');
+        }
+
+        $now = time();
+        foreach ($items as $item) {
+            $planId = (int) ($item['plan_id'] ?? 0);
+            $plan = Plan::query()->find($planId);
+            if (!$plan || !$plan->sell) {
+                throw new ApiException('Plan is not available');
+            }
+
+            $displayName = $this->normalizeDisplayName($item['display_name'] ?? null);
+            if ($displayName === null) {
+                SitePlanOverride::query()
+                    ->where('site_id', $site->id)
+                    ->where('plan_id', $plan->id)
+                    ->delete();
+                continue;
+            }
+
+            SitePlanOverride::query()->updateOrCreate(
+                [
+                    'site_id' => $site->id,
+                    'plan_id' => $plan->id,
+                ],
+                [
+                    'display_name' => $displayName,
+                    'updated_at' => $now,
+                    'created_at' => $now,
+                ]
+            );
+        }
+    }
+
     public function plansForRequest(Request $request, iterable $platformPlans): array
     {
         $context = app(SiteContextService::class)->resolve($request, $request->user());
@@ -108,9 +151,14 @@ class SiteStorefrontService
             ->where('enabled', true)
             ->get()
             ->groupBy('plan_id');
+        $overrides = SitePlanOverride::query()
+            ->where('site_id', $site->id)
+            ->whereIn('plan_id', $planIds)
+            ->get()
+            ->keyBy('plan_id');
 
         return $plans
-            ->map(function (Plan $plan) use ($site, $context, $prices): ?Plan {
+            ->map(function (Plan $plan) use ($site, $context, $prices, $overrides): ?Plan {
                 $sitePrices = $prices->get((int) $plan->id, collect());
                 $salePricesForResource = [];
                 $salePricesInCents = [];
@@ -139,7 +187,12 @@ class SiteStorefrontService
                     return null;
                 }
 
+                $displayName = $this->overrideDisplayName($overrides->get((int) $plan->id), (string) $plan->name);
+
                 $plan->setAttribute('prices', $salePricesForResource);
+                $plan->setAttribute('platform_name', (string) $plan->name);
+                $plan->setAttribute('display_name', $displayName);
+                $plan->setAttribute('site_display_name', $displayName);
                 $plan->setAttribute('site_context', [
                     'site_id' => (int) $site->id,
                     'site_code' => (string) $site->code,
@@ -171,6 +224,7 @@ class SiteStorefrontService
         }
 
         $platformAmount = OrderService::amountToCents($plan->prices[$period] ?? 0);
+        $displayName = $this->siteDisplayName($siteId, $plan);
         $price = SitePlanPrice::query()
             ->where('site_id', $siteId)
             ->where('plan_id', $planId)
@@ -188,6 +242,8 @@ class SiteStorefrontService
                     'site_plan_price_id' => (int) $price->id,
                     'site_id' => $siteId,
                     'plan_id' => $planId,
+                    'display_name' => $displayName,
+                    'platform_plan_name' => (string) $plan->name,
                     'sale_price' => (int) $price->sale_price,
                     'platform_plan_price' => $platformAmount,
                     'period' => $period,
@@ -205,6 +261,8 @@ class SiteStorefrontService
                     'site_plan_price_id' => null,
                     'site_id' => $siteId,
                     'plan_id' => $planId,
+                    'display_name' => $displayName,
+                    'platform_plan_name' => (string) $plan->name,
                     'sale_price' => $platformAmount,
                     'platform_plan_price' => $platformAmount,
                     'period' => $period,
@@ -221,5 +279,27 @@ class SiteStorefrontService
         $price = $plan->prices[$period] ?? null;
 
         return $price !== null && $price !== '' && (float) $price > 0;
+    }
+
+    private function siteDisplayName(int $siteId, Plan $plan): string
+    {
+        $override = SitePlanOverride::query()
+            ->where('site_id', $siteId)
+            ->where('plan_id', $plan->id)
+            ->first();
+
+        return $this->overrideDisplayName($override, (string) $plan->name);
+    }
+
+    private function overrideDisplayName(?SitePlanOverride $override, string $fallback): string
+    {
+        return $this->normalizeDisplayName($override?->display_name) ?? $fallback;
+    }
+
+    private function normalizeDisplayName(mixed $value): ?string
+    {
+        $value = trim((string) ($value ?? ''));
+
+        return $value === '' ? null : mb_substr($value, 0, 120);
     }
 }

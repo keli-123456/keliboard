@@ -12,6 +12,7 @@ use App\Models\Plan;
 use App\Models\Site;
 use App\Models\SiteDomain;
 use App\Models\SitePayment;
+use App\Models\SitePlanOverride;
 use App\Models\SitePlanPrice;
 use App\Models\SiteSetting;
 use Illuminate\Contracts\Routing\Registrar;
@@ -149,6 +150,12 @@ final class AdminSiteControllerTest extends TestCase
                     'enabled' => true,
                 ],
             ],
+            'overrides' => [
+                [
+                    'plan_id' => $plan->id,
+                    'display_name' => '光喵入门版',
+                ],
+            ],
             'payments' => [
                 [
                     'payment_id' => $payment->id,
@@ -163,7 +170,9 @@ final class AdminSiteControllerTest extends TestCase
         $this->assertSame('Cheap Brand', $payload['data']['setting']['site_name']);
         $this->assertSame('sakura', SiteSetting::query()->where('site_id', $site->id)->value('landing_theme'));
         $this->assertSame(1300, SitePlanPrice::query()->where('site_id', $site->id)->where('plan_id', $plan->id)->value('sale_price'));
+        $this->assertSame('光喵入门版', SitePlanOverride::query()->where('site_id', $site->id)->where('plan_id', $plan->id)->value('display_name'));
         $this->assertSame(0, SitePayment::query()->where('site_id', $site->id)->count());
+        $this->assertSame('光喵入门版', $payload['data']['prices'][0]['display_name']);
         $this->assertSame(1300, $payload['data']['prices'][0]['periods'][0]['sale_price']);
         $this->assertSame([], $payload['data']['payments']);
         $this->assertSame($payment->id, $payload['data']['available_payments'][0]['id']);

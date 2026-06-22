@@ -169,6 +169,9 @@ class SiteController extends Controller
             'prices.*.period' => 'required|string|max:64',
             'prices.*.sale_price' => 'required|integer|min:0',
             'prices.*.enabled' => 'nullable|boolean',
+            'overrides' => 'nullable|array',
+            'overrides.*.plan_id' => 'required|integer|min:1',
+            'overrides.*.display_name' => 'nullable|string|max:120',
             'payments' => 'nullable|array',
         ]);
 
@@ -181,6 +184,10 @@ class SiteController extends Controller
 
             if (!empty($params['prices']) && is_array($params['prices'])) {
                 app(SiteStorefrontService::class)->savePrices($site, $params['prices']);
+            }
+
+            if (array_key_exists('overrides', $params) && is_array($params['overrides'])) {
+                app(SiteStorefrontService::class)->saveOverrides($site, $params['overrides']);
             }
 
         });

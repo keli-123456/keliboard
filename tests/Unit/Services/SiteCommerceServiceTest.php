@@ -11,6 +11,7 @@ use App\Models\Site;
 use App\Models\SiteDomain;
 use App\Models\SiteOrderContext;
 use App\Models\SitePayment;
+use App\Models\SitePlanOverride;
 use App\Models\SitePlanPrice;
 use App\Models\User;
 use App\Services\SiteCommerceService;
@@ -46,6 +47,13 @@ final class SiteCommerceServiceTest extends TestCase
         $user = $this->createUser('buyer@example.test', $site);
         $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 20.00]);
         $this->sitePrice($site, $plan, Plan::PERIOD_MONTHLY, 1300);
+        SitePlanOverride::query()->create([
+            'site_id' => $site->id,
+            'plan_id' => $plan->id,
+            'display_name' => '光喵入门版',
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
 
         $order = app(SiteCommerceService::class)->createOrderFromRequest(
             $user,
@@ -62,6 +70,8 @@ final class SiteCommerceServiceTest extends TestCase
         $this->assertSame(1300, $context->sale_amount);
         $this->assertSame(2000, $context->platform_plan_price);
         $this->assertSame('cheap.example.test', $context->domain_snapshot['domain']);
+        $this->assertSame('光喵入门版', $context->pricing_snapshot['display_name']);
+        $this->assertSame('Starter', $context->pricing_snapshot['platform_plan_name']);
     }
 
     public function test_site_payment_methods_inherit_enabled_platform_methods(): void

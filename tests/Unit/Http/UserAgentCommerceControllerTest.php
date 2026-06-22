@@ -8,7 +8,10 @@ use App\Exceptions\ApiException;
 use App\Http\Controllers\V1\User\AgentCommerceController;
 use App\Http\Routes\V1\UserRoute;
 use App\Models\AgentDomain;
+use App\Models\AgentPlanOverride;
+use App\Models\AgentPlanPrice;
 use App\Models\AgentProfile;
+use App\Models\Plan;
 use App\Models\User;
 use App\Services\AgentCenterService;
 use App\Services\AgentDomainSelfService;
@@ -224,6 +227,45 @@ final class UserAgentCommerceControllerTest extends TestCase
         $summary = $this->responsePayload($controller->commerceSummary($summaryRequest))['data'];
 
         $this->assertSame([$savedPayload['data']], $summary['site_settings']);
+    }
+
+    public function test_agent_can_save_plan_display_name_with_prices(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $plan = Plan::query()->create([
+            'name' => 'Starter',
+            'prices' => ['monthly' => 20.00],
+            'transfer_enable' => 100,
+            'group_id' => 1,
+            'sell' => true,
+            'show' => true,
+            'renew' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $request = $this->userRequest($agent, '/api/v1/user/agent/prices', 'POST', [
+            'items' => [
+                [
+                    'plan_id' => $plan->id,
+                    'period' => Plan::PERIOD_MONTHLY,
+                    'sale_price' => 1500,
+                    'enabled' => true,
+                ],
+            ],
+            'overrides' => [
+                [
+                    'plan_id' => $plan->id,
+                    'display_name' => '代理畅享版',
+                ],
+            ],
+        ]);
+
+        $payload = $this->responsePayload(app(AgentCommerceController::class)->savePrices($request));
+
+        $this->assertSame('success', $payload['status']);
+        $this->assertSame(1500, AgentPlanPrice::query()->where('agent_user_id', $agent->id)->where('plan_id', $plan->id)->value('sale_price'));
+        $this->assertSame('代理畅享版', AgentPlanOverride::query()->where('agent_user_id', $agent->id)->where('plan_id', $plan->id)->value('display_name'));
+        $this->assertSame('代理畅享版', $payload['data'][0]['display_name']);
     }
 
     public function test_save_site_setting_with_null_id_creates_default_setting(): void

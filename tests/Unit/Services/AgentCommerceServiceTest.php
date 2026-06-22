@@ -8,6 +8,7 @@ use App\Exceptions\ApiException;
 use App\Models\AgentBalanceHold;
 use App\Models\AgentDomain;
 use App\Models\AgentOrderContext;
+use App\Models\AgentPlanOverride;
 use App\Models\AgentPlanPrice;
 use App\Models\AgentProfile;
 use App\Models\AgentUser;
@@ -79,6 +80,13 @@ final class AgentCommerceServiceTest extends TestCase
         $buyer = $this->createUser('buyer@example.test');
         $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 10.00]);
         $price = $this->setAgentPrice($agent, $plan, Plan::PERIOD_MONTHLY, 1300);
+        AgentPlanOverride::query()->create([
+            'agent_user_id' => $agent->id,
+            'plan_id' => $plan->id,
+            'display_name' => '代理畅享版',
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
 
         $order = app(AgentCommerceService::class)->createOrderFromRequest(
             $buyer,
@@ -107,6 +115,8 @@ final class AgentCommerceServiceTest extends TestCase
         $this->assertSame(500, (int) $context->cost_amount);
         $this->assertSame($hold->id, (int) $context->hold_id);
         $this->assertSame($price->id, (int) $context->pricing_snapshot['agent_plan_price_id']);
+        $this->assertSame('代理畅享版', $context->pricing_snapshot['display_name']);
+        $this->assertSame('Starter', $context->pricing_snapshot['platform_plan_name']);
         $this->assertSame('agent.example.test', $context->domain_snapshot['domain']);
 
         $this->assertSame(1, DB::table('v2_agent_user')
