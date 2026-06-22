@@ -44,6 +44,8 @@ class PlanResource extends JsonResource
             'has_recurring_price' => !empty($recurringPeriods),
             'has_onetime_price' => array_key_exists(Plan::PERIOD_ONETIME, $normalizedPrices),
             'has_reset_price' => array_key_exists(Plan::PERIOD_RESET_TRAFFIC, $normalizedPrices),
+            'site_context' => $this->getResourceValue('site_context'),
+            'site_sale_periods' => $this->getResourceValue('site_sale_periods'),
             'agent_context' => $this->getResourceValue('agent_context'),
             'agent_sale_periods' => $this->getResourceValue('agent_sale_periods'),
             ...$legacyPrices,
@@ -90,7 +92,7 @@ class PlanResource extends JsonResource
     protected function getPeriodPrices(array $normalizedPrices): array
     {
         return collect(Plan::LEGACY_PERIOD_MAPPING)
-            ->mapWithKeys(function (string $newPeriod, string $legacyPeriod): array {
+            ->mapWithKeys(function (string $newPeriod, string $legacyPeriod) use ($normalizedPrices): array {
                 return [
                     $legacyPeriod => $normalizedPrices[$newPeriod] ?? null
                 ];
