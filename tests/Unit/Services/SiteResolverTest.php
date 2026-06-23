@@ -55,30 +55,41 @@ final class SiteResolverTest extends TestCase
         $this->assertSame('domain', $context['source']);
     }
 
-    public function test_disabled_domain_falls_back_to_default_site(): void
+    public function test_disabled_domain_falls_back_to_platform_context(): void
     {
-        $default = $this->createSite('default', 'Default Site', isDefault: true);
         $site = $this->createSite('disabled', 'Disabled Site');
         $this->createDomain($site, 'disabled.example.test', SiteDomain::STATUS_DISABLED);
 
         $context = app(SiteResolver::class)->resolveHost('disabled.example.test');
 
-        $this->assertSame($default->id, $context['site_id']);
-        $this->assertSame('default', $context['site_code']);
+        $this->assertNull($context['site_id']);
+        $this->assertSame('platform', $context['site_code']);
         $this->assertNull($context['site_domain_id']);
-        $this->assertSame('default', $context['source']);
+        $this->assertSame('platform', $context['source']);
     }
 
-    public function test_default_site_is_created_when_missing(): void
+    public function test_unmatched_host_does_not_create_default_site(): void
     {
         $context = app(SiteResolver::class)->resolveHost('missing.example.test');
 
-        $site = Site::query()->where('code', 'default')->first();
+        $this->assertNull(Site::query()->where('code', 'default')->first());
+        $this->assertNull($context['site_id']);
+        $this->assertSame('platform', $context['site_code']);
+        $this->assertSame('', $context['site_name']);
+        $this->assertFalse($context['is_default']);
+        $this->assertSame('platform', $context['source']);
+    }
 
-        $this->assertNotNull($site);
-        $this->assertSame($site->id, $context['site_id']);
-        $this->assertSame('Default Site', $context['site_name']);
-        $this->assertTrue($context['is_default']);
+    public function test_legacy_default_site_domain_is_ignored(): void
+    {
+        $legacyDefault = $this->createSite('default', 'Default Site', Site::STATUS_ACTIVE, true);
+        $this->createDomain($legacyDefault, 'main.example.test');
+
+        $context = app(SiteResolver::class)->resolveHost('main.example.test');
+
+        $this->assertNull($context['site_id']);
+        $this->assertSame('platform', $context['site_code']);
+        $this->assertSame('platform', $context['source']);
     }
 
     public function test_normalize_host_strips_scheme_path_ipv6_brackets_port_and_dot(): void

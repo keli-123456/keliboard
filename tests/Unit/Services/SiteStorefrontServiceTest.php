@@ -67,19 +67,20 @@ final class SiteStorefrontServiceTest extends TestCase
         $this->assertSame(1300, $resource['site_sale_periods'][Plan::PERIOD_MONTHLY]);
     }
 
-    public function test_default_site_falls_back_to_platform_prices(): void
+    public function test_platform_host_uses_platform_prices_without_site_context(): void
     {
         $this->siteWithDomain('default', 'Default Site', 'main.example.test', true);
         $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 20.00]);
 
         $plans = app(SiteStorefrontService::class)->plansForRequest(
-            $this->requestForHost('main.example.test'),
+            $this->requestForHost('platform.example.test'),
             collect([$plan])
         );
 
         $this->assertCount(1, $plans);
         $this->assertEquals(20.00, $plans[0]->prices[Plan::PERIOD_MONTHLY]);
-        $this->assertSame(2000, $plans[0]->site_sale_periods[Plan::PERIOD_MONTHLY]);
+        $this->assertNull($plans[0]->getAttribute('site_context'));
+        $this->assertNull($plans[0]->getAttribute('site_sale_periods'));
     }
 
     public function test_site_display_name_overrides_platform_plan_name(): void

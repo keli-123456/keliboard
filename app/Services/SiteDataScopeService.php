@@ -38,11 +38,17 @@ class SiteDataScopeService
 
     public function applyNullableSiteScope(Builder $query, ?int $siteId, string $table, string $column = 'site_id'): void
     {
-        if ($siteId === null || !$this->hasColumn($table, $column)) {
+        if (!$this->hasColumn($table, $column)) {
             return;
         }
 
         $qualifiedColumn = $table . '.' . $column;
+        if ($siteId === null) {
+            $query->whereNull($qualifiedColumn);
+
+            return;
+        }
+
         $query->where(function (Builder $builder) use ($qualifiedColumn, $siteId): void {
             $builder->whereNull($qualifiedColumn)
                 ->orWhere($qualifiedColumn, $siteId);

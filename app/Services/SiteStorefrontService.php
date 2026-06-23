@@ -138,7 +138,9 @@ class SiteStorefrontService
             return collect($platformPlans)->values()->all();
         }
 
-        $site = Site::query()->find($siteId);
+        $site = Site::query()
+            ->where('is_default', false)
+            ->find($siteId);
         if (!$site || $site->status !== Site::STATUS_ACTIVE) {
             return [];
         }
@@ -172,17 +174,6 @@ class SiteStorefrontService
                     $salePricesInCents[(string) $price->period] = (int) $price->sale_price;
                 }
 
-                if (empty($salePricesForResource) && (bool) $site->is_default) {
-                    foreach ((array) $plan->prices as $period => $platformPrice) {
-                        if ($platformPrice === null || $platformPrice === '' || (float) $platformPrice <= 0) {
-                            continue;
-                        }
-
-                        $salePricesForResource[(string) $period] = (float) $platformPrice;
-                        $salePricesInCents[(string) $period] = OrderService::amountToCents($platformPrice);
-                    }
-                }
-
                 if (empty($salePricesForResource)) {
                     return null;
                 }
@@ -198,8 +189,8 @@ class SiteStorefrontService
                     'site_code' => (string) $site->code,
                     'site_domain_id' => $context['site_domain_id'] !== null ? (int) $context['site_domain_id'] : null,
                     'domain' => (string) ($context['domain'] ?? ''),
-                    'source' => (string) ($context['source'] ?? 'default'),
-                    'is_default' => (bool) $site->is_default,
+                    'source' => (string) ($context['source'] ?? 'site'),
+                    'is_default' => false,
                 ]);
                 $plan->setAttribute('site_sale_periods', $salePricesInCents);
 
@@ -218,7 +209,9 @@ class SiteStorefrontService
             return $plan;
         }
 
-        $site = Site::query()->find($siteId);
+        $site = Site::query()
+            ->where('is_default', false)
+            ->find($siteId);
         if (!$site || $site->status !== Site::STATUS_ACTIVE) {
             return $plan;
         }
@@ -233,8 +226,8 @@ class SiteStorefrontService
             'site_code' => (string) $site->code,
             'site_domain_id' => ($context['site_domain_id'] ?? null) !== null ? (int) $context['site_domain_id'] : null,
             'domain' => (string) ($context['domain'] ?? ''),
-            'source' => (string) ($context['source'] ?? 'default'),
-            'is_default' => (bool) $site->is_default,
+            'source' => (string) ($context['source'] ?? 'site'),
+            'is_default' => false,
         ]);
 
         return $decorated;
@@ -243,7 +236,9 @@ class SiteStorefrontService
     public function resolveSalePrice(int $siteId, int $planId, string $period): array
     {
         $period = PlanService::getPeriodKey($period);
-        $site = Site::query()->find($siteId);
+        $site = Site::query()
+            ->where('is_default', false)
+            ->find($siteId);
         if (!$site || $site->status !== Site::STATUS_ACTIVE) {
             throw new ApiException('Site is not available');
         }
@@ -277,26 +272,6 @@ class SiteStorefrontService
                     'sale_price' => (int) $price->sale_price,
                     'platform_plan_price' => $platformAmount,
                     'period' => $period,
-                ],
-            ];
-        }
-
-        if ((bool) $site->is_default) {
-            return [
-                'plan_id' => $planId,
-                'period' => $period,
-                'sale_amount' => $platformAmount,
-                'platform_plan_price' => $platformAmount,
-                'pricing_snapshot' => [
-                    'site_plan_price_id' => null,
-                    'site_id' => $siteId,
-                    'plan_id' => $planId,
-                    'display_name' => $displayName,
-                    'platform_plan_name' => (string) $plan->name,
-                    'sale_price' => $platformAmount,
-                    'platform_plan_price' => $platformAmount,
-                    'period' => $period,
-                    'source' => 'platform_fallback',
                 ],
             ];
         }

@@ -121,7 +121,9 @@ class NotificationSiteContextService
         }
 
         if ($request && $this->hasTable('v2_site') && $this->hasTable('v2_site_domain')) {
-            return app(SiteContextService::class)->resolve($request, $user);
+            $context = app(SiteContextService::class)->resolve($request, $user);
+
+            return empty($context['site_id']) ? null : $context;
         }
 
         return null;
@@ -137,6 +139,7 @@ class NotificationSiteContextService
             ->with($this->hasTable('v2_site_setting') ? ['setting'] : [])
             ->where('id', $siteId)
             ->where('status', Site::STATUS_ACTIVE)
+            ->where('is_default', false)
             ->first();
 
         if (!$site) {
@@ -154,7 +157,7 @@ class NotificationSiteContextService
             'domain' => $domain ? (string) $domain->domain : '',
             'support_name' => (string) ($setting?->support_name ?? ''),
             'support_url' => (string) ($setting?->support_url ?? ''),
-            'source' => $site->is_default ? 'default' : 'site',
+            'source' => 'site',
         ];
     }
 

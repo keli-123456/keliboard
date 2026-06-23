@@ -18,13 +18,11 @@ class SiteController extends Controller
 {
     public function fetch()
     {
-        app(SiteResolver::class)->defaultSite();
-
         $sites = Site::query()
             ->with(['domains' => function ($query): void {
                 $query->orderByDesc('is_primary')->orderBy('id');
             }])
-            ->orderByDesc('is_default')
+            ->where('is_default', false)
             ->orderBy('id')
             ->get()
             ->map(fn (Site $site): array => $this->sitePayload($site))
@@ -40,7 +38,6 @@ class SiteController extends Controller
             'code' => 'required|string|max:64',
             'name' => 'required|string|max:120',
             'status' => 'nullable|string|in:active,disabled',
-            'is_default' => 'nullable|boolean',
             'domains' => 'nullable|array',
             'domains.*.id' => 'nullable|integer',
             'domains.*.domain' => 'required|string|max:255',
@@ -73,10 +70,11 @@ class SiteController extends Controller
         }
 
         $domains = $this->normalizeDomains((array) ($params['domains'] ?? []), $id);
-        $isDefault = (bool) ($params['is_default'] ?? false);
 
-        $site = DB::transaction(function () use ($id, $code, $name, $status, $isDefault, $domains): Site {
-            $site = $id > 0 ? Site::query()->find($id) : new Site();
+        $site = DB::transaction(function () use ($id, $code, $name, $status, $domains): Site {
+            $site = $id > 0
+                ? Site::query()->where('is_default', false)->find($id)
+                : new Site();
             if (!$site) {
                 throw new ApiException('Site does not exist');
             }
@@ -88,19 +86,9 @@ class SiteController extends Controller
             $site->code = $code;
             $site->name = $name;
             $site->status = $status;
-            $site->is_default = $isDefault;
+            $site->is_default = false;
             $site->updated_at = $now;
             $site->save();
-
-            if ($isDefault) {
-                Site::query()
-                    ->where('id', '<>', $site->id)
-                    ->where('is_default', true)
-                    ->update([
-                        'is_default' => false,
-                        'updated_at' => $now,
-                    ]);
-            }
 
             $savedDomainIds = [];
             foreach ($domains as $domainData) {
@@ -262,7 +250,7 @@ class SiteController extends Controller
             'code' => (string) $site->code,
             'name' => (string) $site->name,
             'status' => (string) $site->status,
-            'is_default' => (bool) $site->is_default,
+            'is_default' => false,
             'domains' => $site->domains
                 ->map(fn (SiteDomain $domain): array => [
                     'id' => (int) $domain->id,
@@ -326,7 +314,10 @@ class SiteController extends Controller
 
     private function site(int $siteId): Site
     {
-        $site = Site::query()->with(['domains', 'setting'])->find($siteId);
+        $site = Site::query()
+            ->with(['domains', 'setting'])
+            ->where('is_default', false)
+            ->find($siteId);
         if (!$site) {
             throw new ApiException('Site does not exist');
         }

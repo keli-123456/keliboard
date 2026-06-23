@@ -19,7 +19,6 @@ final class SiteAuthFlowTest extends TestCase
 {
     use InteractsWithInMemoryDatabase;
 
-    private Site $defaultSite;
     private Site $secondSite;
 
     protected function setUp(): void
@@ -43,13 +42,12 @@ final class SiteAuthFlowTest extends TestCase
         $this->createSiteTenantTables();
         $this->createAgentCommerceTables();
 
-        $this->defaultSite = $this->siteWithDomain('default', 'main.example.test', true);
         $this->secondSite = $this->siteWithDomain('second', 'second.example.test', false);
     }
 
     public function test_register_allows_same_email_on_different_sites(): void
     {
-        $this->createUser('shared@example.test', 'secret-one', $this->defaultSite);
+        $this->createUser('shared@example.test', 'secret-one', null);
 
         [$success, $result] = app(RegisterService::class)->register(
             $this->authRequest('second.example.test', 'register', [
@@ -66,7 +64,7 @@ final class SiteAuthFlowTest extends TestCase
 
     public function test_login_selects_user_from_current_site(): void
     {
-        $this->createUser('shared@example.test', 'secret-one', $this->defaultSite);
+        $this->createUser('shared@example.test', 'secret-one', null);
         $expected = $this->createUser('shared@example.test', 'secret-two', $this->secondSite);
         app()->instance('request', $this->authRequest('second.example.test', 'login'));
 
@@ -77,9 +75,22 @@ final class SiteAuthFlowTest extends TestCase
         $this->assertSame($this->secondSite->id, $result->site_id);
     }
 
+    public function test_login_on_platform_host_selects_platform_user(): void
+    {
+        $expected = $this->createUser('shared@example.test', 'secret-one', null);
+        $this->createUser('shared@example.test', 'secret-two', $this->secondSite);
+        app()->instance('request', $this->authRequest('main.example.test', 'login'));
+
+        [$success, $result] = app(LoginService::class)->login('shared@example.test', 'secret-one');
+
+        $this->assertTrue($success);
+        $this->assertSame($expected->id, $result->id);
+        $this->assertNull($result->site_id);
+    }
+
     public function test_reset_password_updates_only_current_site_user(): void
     {
-        $defaultUser = $this->createUser('shared@example.test', 'secret-one', $this->defaultSite);
+        $defaultUser = $this->createUser('shared@example.test', 'secret-one', null);
         $secondUser = $this->createUser('shared@example.test', 'secret-two', $this->secondSite);
         app()->instance('request', $this->authRequest('second.example.test', 'forget'));
 
@@ -120,14 +131,14 @@ final class SiteAuthFlowTest extends TestCase
         return $site;
     }
 
-    private function createUser(string $email, string $password, Site $site): User
+    private function createUser(string $email, string $password, ?Site $site): User
     {
         return User::query()->create([
             'email' => $email,
             'password' => password_hash($password, PASSWORD_DEFAULT),
-            'site_id' => $site->id,
-            'uuid' => $site->code . '-uuid-' . str_replace('@', '-', $email),
-            'token' => $site->code . '-token-' . str_replace('@', '-', $email),
+            'site_id' => $site?->id,
+            'uuid' => ($site?->code ?: 'platform') . '-uuid-' . str_replace('@', '-', $email),
+            'token' => ($site?->code ?: 'platform') . '-token-' . str_replace('@', '-', $email),
             'created_at' => time(),
             'updated_at' => time(),
         ]);

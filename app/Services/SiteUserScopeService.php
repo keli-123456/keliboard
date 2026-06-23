@@ -2,7 +2,6 @@
 
 namespace App\Services;
 
-use App\Models\Site;
 use App\Models\User;
 use App\Utils\CacheKey;
 use Illuminate\Database\Eloquent\Builder;
@@ -16,7 +15,7 @@ class SiteUserScopeService
             return [
                 'enabled' => false,
                 'site_id' => null,
-                'is_default' => true,
+                'is_default' => false,
                 'source' => 'legacy',
             ];
         }
@@ -26,7 +25,7 @@ class SiteUserScopeService
             return [
                 'enabled' => false,
                 'site_id' => null,
-                'is_default' => true,
+                'is_default' => false,
                 'source' => 'missing_request',
             ];
         }
@@ -34,10 +33,10 @@ class SiteUserScopeService
         $context = app(SiteContextService::class)->resolve($request);
         if (empty($context['site_id'])) {
             return [
-                'enabled' => false,
+                'enabled' => true,
                 'site_id' => null,
-                'is_default' => true,
-                'source' => $context['source'] ?? 'legacy',
+                'is_default' => false,
+                'source' => $context['source'] ?? 'platform',
             ];
         }
 
@@ -52,34 +51,26 @@ class SiteUserScopeService
     public function scopeUserQuery(Builder $query, ?Request $request = null): Builder
     {
         $context = $this->context($request);
-        if (empty($context['enabled']) || empty($context['site_id'])) {
+        if (empty($context['enabled'])) {
             return $query;
         }
 
-        return $this->scopeUserQueryForSiteId(
-            $query,
-            (int) $context['site_id'],
-            (bool) ($context['is_default'] ?? false)
-        );
+        $siteId = $context['site_id'] ?? null;
+
+        return $this->scopeUserQueryForSiteId($query, $siteId !== null ? (int) $siteId : null);
     }
 
     public function scopeUserQueryForSiteId(Builder $query, ?int $siteId, ?bool $isDefault = null): Builder
     {
-        if (!$this->canScopeUsers() || !$siteId) {
+        if (!$this->canScopeUsers()) {
             return $query;
         }
 
-        $isDefault ??= Site::query()
-            ->where('id', $siteId)
-            ->where('is_default', true)
-            ->exists();
+        if (!$siteId) {
+            return $query->whereNull('site_id');
+        }
 
-        return $query->where(function (Builder $builder) use ($siteId, $isDefault): void {
-            $builder->where('site_id', $siteId);
-            if ($isDefault) {
-                $builder->orWhereNull('site_id');
-            }
-        });
+        return $query->where('site_id', $siteId);
     }
 
     public function findUserByEmail(string $email, ?Request $request = null): ?User
@@ -92,11 +83,11 @@ class SiteUserScopeService
     public function userAttributes(?Request $request = null): array
     {
         $context = $this->context($request);
-        if (empty($context['enabled']) || empty($context['site_id'])) {
+        if (empty($context['enabled'])) {
             return [];
         }
 
-        return ['site_id' => (int) $context['site_id']];
+        return ['site_id' => empty($context['site_id']) ? null : (int) $context['site_id']];
     }
 
     public function cacheKey(string $key, string $email, ?Request $request = null): string
@@ -107,8 +98,12 @@ class SiteUserScopeService
     public function cacheIdentity(string $email, ?Request $request = null): string
     {
         $context = $this->context($request);
-        if (empty($context['enabled']) || empty($context['site_id'])) {
+        if (empty($context['enabled'])) {
             return $email;
+        }
+
+        if (empty($context['site_id'])) {
+            return 'site:platform:' . $email;
         }
 
         return 'site:' . (int) $context['site_id'] . ':' . $email;

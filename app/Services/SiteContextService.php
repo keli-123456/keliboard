@@ -21,6 +21,7 @@ class SiteContextService
             $site = $this->siteQuery()
                 ->where('id', (int) $user->site_id)
                 ->where('status', Site::STATUS_ACTIVE)
+                ->where('is_default', false)
                 ->first();
 
             if ($site) {
@@ -29,12 +30,14 @@ class SiteContextService
         }
 
         $context = app(SiteResolver::class)->resolveRequest($request);
+        if (empty($context['site_id'])) {
+            return $this->platformPayload((string) ($context['source'] ?? 'platform'));
+        }
+
         $site = $this->siteQuery()->find((int) $context['site_id']);
 
         if (!$site) {
-            $site = app(SiteResolver::class)->defaultSite()->load('setting');
-
-            return $this->payload($site, null, 'default');
+            return $this->platformPayload('platform');
         }
 
         $domain = !empty($context['site_domain_id'])
@@ -51,7 +54,8 @@ class SiteContextService
         }
 
         $site = $this->resolve($request, $user);
-        $shouldOverrideBrand = !empty($site['has_setting']) || empty($site['is_default']);
+        $shouldOverrideBrand = !empty($site['site_id'])
+            && (!empty($site['has_setting']) || empty($site['is_default']));
 
         if ($shouldOverrideBrand && !empty($site['site_name'])) {
             $config['app_name'] = $site['site_name'];
@@ -89,7 +93,7 @@ class SiteContextService
             'source' => $source,
             'domain' => $domain ? (string) $domain->domain : null,
             'site_domain_id' => $domain ? (int) $domain->id : null,
-            'is_default' => (bool) $site->is_default,
+            'is_default' => false,
             'logo_url' => (string) ($setting?->logo_url ?? ''),
             'landing_theme' => (string) ($setting?->landing_theme ?? ''),
             'accent_color' => (string) ($setting?->accent_color ?? ''),
@@ -139,12 +143,38 @@ class SiteContextService
         return [
             'id' => null,
             'site_id' => null,
-            'site_code' => 'default',
+            'site_code' => 'platform',
             'site_name' => '',
             'source' => 'legacy',
             'domain' => null,
             'site_domain_id' => null,
-            'is_default' => true,
+            'is_default' => false,
+            'logo_url' => '',
+            'landing_theme' => '',
+            'accent_color' => '',
+            'support_name' => '',
+            'support_url' => '',
+            'announcement' => '',
+            'seo_title' => '',
+            'seo_description' => '',
+            'enabled' => true,
+            'has_setting' => false,
+            'created_at' => null,
+            'updated_at' => null,
+        ];
+    }
+
+    private function platformPayload(string $source = 'platform'): array
+    {
+        return [
+            'id' => null,
+            'site_id' => null,
+            'site_code' => 'platform',
+            'site_name' => '',
+            'source' => $source ?: 'platform',
+            'domain' => null,
+            'site_domain_id' => null,
+            'is_default' => false,
             'logo_url' => '',
             'landing_theme' => '',
             'accent_color' => '',

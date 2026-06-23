@@ -5,7 +5,6 @@ namespace App\Services;
 use App\Models\Site;
 use App\Models\SiteDomain;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 class SiteResolver
 {
@@ -25,7 +24,8 @@ class SiteResolver
                 ->where('domain', $domain)
                 ->where('status', SiteDomain::STATUS_ACTIVE)
                 ->whereHas('site', function ($query): void {
-                    $query->where('status', Site::STATUS_ACTIVE);
+                    $query->where('status', Site::STATUS_ACTIVE)
+                        ->where('is_default', false);
                 })
                 ->first();
 
@@ -34,60 +34,7 @@ class SiteResolver
             }
         }
 
-        return $this->context($this->defaultSite(), null, 'default');
-    }
-
-    public function defaultSite(): Site
-    {
-        $site = Site::query()
-            ->where('is_default', true)
-            ->where('status', Site::STATUS_ACTIVE)
-            ->first();
-
-        if ($site) {
-            return $site;
-        }
-
-        return DB::transaction(function (): Site {
-            $site = Site::query()
-                ->where('is_default', true)
-                ->where('status', Site::STATUS_ACTIVE)
-                ->first();
-
-            if ($site) {
-                return $site;
-            }
-
-            $now = time();
-            $site = Site::query()->where('code', 'default')->first();
-            if ($site) {
-                $site->fill([
-                    'name' => $site->name ?: 'Default Site',
-                    'status' => Site::STATUS_ACTIVE,
-                    'is_default' => true,
-                    'updated_at' => $now,
-                ])->save();
-            } else {
-                $site = Site::query()->create([
-                    'code' => 'default',
-                    'name' => 'Default Site',
-                    'status' => Site::STATUS_ACTIVE,
-                    'is_default' => true,
-                    'created_at' => $now,
-                    'updated_at' => $now,
-                ]);
-            }
-
-            Site::query()
-                ->where('id', '!=', $site->id)
-                ->where('is_default', true)
-                ->update([
-                    'is_default' => false,
-                    'updated_at' => $now,
-                ]);
-
-            return $site->refresh();
-        });
+        return $this->platformContext();
     }
 
     public function normalizeHost(string $host): string
@@ -141,8 +88,21 @@ class SiteResolver
             'site_name' => (string) $site->name,
             'site_domain_id' => $domain ? (int) $domain->id : null,
             'domain' => $domain ? (string) $domain->domain : null,
-            'is_default' => (bool) $site->is_default,
+            'is_default' => false,
             'source' => $source,
+        ];
+    }
+
+    public function platformContext(): array
+    {
+        return [
+            'site_id' => null,
+            'site_code' => 'platform',
+            'site_name' => '',
+            'site_domain_id' => null,
+            'domain' => null,
+            'is_default' => false,
+            'source' => 'platform',
         ];
     }
 }

@@ -195,7 +195,9 @@ class SiteCommerceService
             return null;
         }
 
-        $site = Site::query()->find((int) $user->site_id);
+        $site = Site::query()
+            ->where('is_default', false)
+            ->find((int) $user->site_id);
         if (!$site) {
             return null;
         }
@@ -204,7 +206,7 @@ class SiteCommerceService
             'site_id' => (int) $site->id,
             'site_domain_id' => null,
             'domain' => '',
-            'is_default' => (bool) $site->is_default,
+            'is_default' => false,
             'source' => 'user',
         ];
     }
@@ -230,7 +232,7 @@ class SiteCommerceService
                 ? (int) $context['site_domain_id']
                 : null,
             'domain' => (string) ($context['domain'] ?? ''),
-            'is_default' => (bool) ($context['is_default'] ?? false),
+            'is_default' => false,
         ];
     }
 

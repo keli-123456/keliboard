@@ -111,6 +111,36 @@ final class SiteContextServiceTest extends TestCase
         $this->assertSame('cheap', $context['site_code']);
     }
 
+    public function test_unmatched_host_uses_platform_context_instead_of_default_site(): void
+    {
+        [$defaultSite] = $this->siteWithDomain('default', 'Default Site', 'main.example.test', true);
+        SiteSetting::query()->create([
+            'site_id' => $defaultSite->id,
+            'site_name' => 'Default Branch',
+            'logo_url' => 'https://cdn.example.test/default.png',
+            'landing_theme' => 'sakura',
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $request = Request::create('/api/v1/guest/comm/config', 'GET', [], [], [], ['HTTP_HOST' => 'platform.example.test']);
+        $context = app(SiteContextService::class)->resolve($request);
+        $config = app(SiteContextService::class)->applyToConfig([
+            'app_name' => 'Platform Cloud',
+            'website_name' => 'Platform Cloud',
+            'logo' => 'https://cdn.example.test/platform.png',
+        ], $request);
+
+        $this->assertNull($context['site_id']);
+        $this->assertSame('platform', $context['site_code']);
+        $this->assertSame('platform', $context['source']);
+        $this->assertSame('Platform Cloud', $config['app_name']);
+        $this->assertSame('Platform Cloud', $config['website_name']);
+        $this->assertSame('https://cdn.example.test/platform.png', $config['logo']);
+        $this->assertNull($config['site_context']['site_id']);
+    }
+
     private function siteWithDomain(string $code, string $name, string $domain, bool $default = false): array
     {
         $site = Site::query()->create([

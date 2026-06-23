@@ -42,7 +42,7 @@ final class AdminSiteControllerTest extends TestCase
         $this->createSiteCommerceTables();
     }
 
-    public function test_admin_can_create_site_and_primary_domain(): void
+    public function test_admin_can_create_site_and_primary_domain_without_default_site_role(): void
     {
         $request = Request::create('/admin/site/save', 'POST', [
             'code' => 'cheap-main',
@@ -62,10 +62,10 @@ final class AdminSiteControllerTest extends TestCase
 
         $this->assertSame('success', $payload['status']);
         $this->assertSame('cheap-main', $payload['data']['code']);
-        $this->assertTrue($payload['data']['is_default']);
+        $this->assertFalse($payload['data']['is_default']);
         $this->assertSame('cheap.example.test', $payload['data']['domains'][0]['domain']);
         $this->assertTrue($payload['data']['domains'][0]['is_primary']);
-        $this->assertSame(1, Site::query()->where('is_default', true)->count());
+        $this->assertSame(0, Site::query()->where('is_default', true)->count());
     }
 
     public function test_duplicate_site_domain_is_rejected(): void
@@ -74,7 +74,7 @@ final class AdminSiteControllerTest extends TestCase
             'code' => 'first',
             'name' => 'First Site',
             'status' => Site::STATUS_ACTIVE,
-            'is_default' => true,
+            'is_default' => false,
             'created_at' => time(),
             'updated_at' => time(),
         ]);
@@ -98,6 +98,31 @@ final class AdminSiteControllerTest extends TestCase
         $this->expectExceptionMessage('Domain already assigned');
 
         app(SiteController::class)->save($request);
+    }
+
+    public function test_fetch_hides_legacy_default_site_placeholder(): void
+    {
+        Site::query()->create([
+            'code' => 'default',
+            'name' => 'Default Site',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        Site::query()->create([
+            'code' => 'branch',
+            'name' => 'Branch Site',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $payload = $this->responsePayload(app(SiteController::class)->fetch());
+
+        $this->assertSame('success', $payload['status']);
+        $this->assertSame(['branch'], array_column($payload['data'], 'code'));
     }
 
     public function test_site_domain_cannot_reuse_agent_domain(): void

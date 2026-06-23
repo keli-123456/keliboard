@@ -66,6 +66,25 @@ final class SiteScopedUserDataTest extends TestCase
         $this->assertEqualsCanonicalizing(['Global Notice', 'First Site Notice'], array_column($payload['data'], 'title'));
     }
 
+    public function test_platform_notices_include_global_only(): void
+    {
+        $site = $this->siteWithDomain('branch', 'branch.example.test', false);
+        $user = $this->createUser('platform-buyer@example.test', null);
+
+        $global = $this->createNotice('Global Notice', null);
+        $this->createNotice('Branch Site Notice', $site->id);
+
+        $payload = $this->responsePayload(app(NoticeController::class)->fetch($this->userRequest(
+            '/api/v1/user/notice/fetch',
+            $user,
+            'main.example.test'
+        )));
+
+        $this->assertSame(1, $payload['total']);
+        $this->assertSame([$global->id], array_column($payload['data'], 'id'));
+        $this->assertSame(['Global Notice'], array_column($payload['data'], 'title'));
+    }
+
     public function test_admin_notice_fetch_can_filter_by_site_scope_and_include_site(): void
     {
         $firstSite = $this->siteWithDomain('notice-a', 'notice-a.example.test', false);
@@ -219,12 +238,12 @@ final class SiteScopedUserDataTest extends TestCase
         return $site;
     }
 
-    private function createUser(string $email, Site $site): User
+    private function createUser(string $email, ?Site $site): User
     {
         return User::query()->create([
             'email' => $email,
             'password' => password_hash('secret123', PASSWORD_DEFAULT),
-            'site_id' => $site->id,
+            'site_id' => $site?->id,
             'uuid' => $email . '-uuid',
             'token' => $email . '-token',
             'balance' => 0,
