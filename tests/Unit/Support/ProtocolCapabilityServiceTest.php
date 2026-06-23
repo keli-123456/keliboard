@@ -333,7 +333,7 @@ final class ProtocolCapabilityServiceTest extends TestCase
         $this->assertTrue($result->supported);
     }
 
-    public function test_mihomo_wrapper_app_build_versions_do_not_block_xhttp_core_features(): void
+    public function test_mihomo_wrapper_app_build_versions_do_not_unlock_xhttp_core_features(): void
     {
         $server = $this->makeServer('vless', [
             'tls' => 1,
@@ -341,6 +341,54 @@ final class ProtocolCapabilityServiceTest extends TestCase
         ]);
 
         $result = $this->service->supportsClient('sparkle', '1.2.8.1103', $server);
+
+        $this->assertFalse($result->supported);
+    }
+
+    public function test_mihomo_app_style_version_drops_vless_xhttp_without_core_identity(): void
+    {
+        $server = $this->makeServer('vless', [
+            'tls' => 1,
+            'network' => 'xhttp',
+        ]);
+
+        $result = $this->service->supportsClient('clashmeta', '2.11.30', $server);
+
+        $this->assertFalse($result->supported);
+    }
+
+    public function test_mihomo_without_core_version_drops_mieru(): void
+    {
+        $server = $this->makeServer('mieru', [
+            'transport' => 'tcp',
+            'multiplexing' => 'MULTIPLEXING_LOW',
+        ]);
+
+        $result = $this->service->supportsClient('clashmeta', '2.11.30', $server);
+
+        $this->assertFalse($result->supported);
+    }
+
+    public function test_mihomo_before_1_19_22_drops_mieru(): void
+    {
+        $server = $this->makeServer('mieru', [
+            'transport' => 'tcp',
+            'multiplexing' => 'MULTIPLEXING_LOW',
+        ]);
+
+        $result = $this->service->supportsClient('mihomo', '1.19.21', $server);
+
+        $this->assertFalse($result->supported);
+    }
+
+    public function test_mihomo_1_19_22_keeps_mieru(): void
+    {
+        $server = $this->makeServer('mieru', [
+            'transport' => 'tcp',
+            'multiplexing' => 'MULTIPLEXING_LOW',
+        ]);
+
+        $result = $this->service->supportsClient('mihomo', '1.19.22', $server);
 
         $this->assertTrue($result->supported);
     }

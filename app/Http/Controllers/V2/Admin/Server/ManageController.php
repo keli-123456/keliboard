@@ -234,11 +234,29 @@ class ManageController extends Controller
                     'message' => 'Mihomo 不支持 AnyTLS + Reality',
                 ],
                 [
-                    'id' => 'vless_xhttp_general_warn',
+                    'id' => 'vless_xhttp_core_version_warn',
                     'type' => 'warn',
                     'when' => [
                         'server_type' => Server::TYPE_VLESS,
-                        'protocol_settings.network' => ['xhttp', 'splithttp'],
+                        'protocol_settings.network' => 'xhttp',
+                    ],
+                    'runtime' => [
+                        'v2node' => 'allow',
+                    ],
+                    'clients' => [
+                        'mihomo' => 'partial',
+                        'stash' => 'block',
+                        'sing-box' => 'partial',
+                        'shadowrocket' => 'partial',
+                    ],
+                    'message' => 'VLESS XHTTP 对 Mihomo/Clash 需要 mihomo core 1.19.22+；无法确认核心版本时订阅会自动过滤',
+                ],
+                [
+                    'id' => 'vless_splithttp_general_warn',
+                    'type' => 'warn',
+                    'when' => [
+                        'server_type' => Server::TYPE_VLESS,
+                        'protocol_settings.network' => 'splithttp',
                     ],
                     'runtime' => [
                         'v2node' => 'allow',
@@ -249,7 +267,7 @@ class ManageController extends Controller
                         'sing-box' => 'partial',
                         'shadowrocket' => 'partial',
                     ],
-                    'message' => '该网络类型当前不应标记为通用客户端可用',
+                    'message' => 'VLESS SplitHTTP 当前不应标记为通用客户端可用',
                 ],
                 [
                     'id' => 'vless_splithttp_shadowrocket_block',
@@ -669,9 +687,10 @@ class ManageController extends Controller
                         'v2node' => 'allow',
                     ],
                     'clients' => [
+                        'mihomo' => 'partial',
                         'shadowrocket' => 'partial',
                     ],
-                    'message' => 'Shadowrocket 的 Mieru 订阅导入按较新版本处理，旧版客户端不会下发',
+                    'message' => 'Mieru 对 Mihomo/Clash 需要 mihomo core 1.19.22+，Shadowrocket 也需要较新版本；旧版客户端不会下发',
                 ],
             ],
         ]);

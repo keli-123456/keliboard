@@ -162,7 +162,7 @@ return [
             'supports' => [
                 'vless' => [
                     ['when' => ['network' => ['tcp', 'ws', 'grpc', 'http', 'h2']], 'support' => 'yes'],
-                    ['when' => ['network' => 'xhttp'], 'min_version' => '1.19.22', 'support' => 'yes'],
+                    ['when' => ['network' => 'xhttp'], 'min_version' => '1.19.22', 'requires_core_version' => true, 'support' => 'yes'],
                     ['when' => ['network' => ['httpupgrade', 'splithttp']], 'support' => 'no', 'reason' => 'network unsupported by mihomo docs'],
                     ['when' => ['tls_mode' => 2], 'support' => 'yes'],
                     ['when' => ['flow' => 'xtls-rprx-vision'], 'support' => 'yes'],
@@ -189,6 +189,9 @@ return [
                     ['when' => ['feature' => 'alpn'], 'support' => 'yes'],
                     ['when' => ['feature' => 'congestion_control'], 'support' => 'yes'],
                     ['when' => ['feature' => 'udp_relay_mode'], 'support' => 'yes'],
+                ],
+                'mieru' => [
+                    ['when' => ['network' => ['tcp', 'udp']], 'min_version' => '1.19.22', 'requires_core_version' => true, 'support' => 'yes'],
                 ],
             ],
         ],
