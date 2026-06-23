@@ -14,6 +14,7 @@ use App\Models\Site;
 use App\Models\SiteDomain;
 use App\Models\SiteOrderContext;
 use App\Models\User;
+use App\Services\AgentCommerceService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Tests\Support\InteractsWithInMemoryDatabase;
@@ -86,6 +87,34 @@ final class AdminOrderTenantContextTest extends TestCase
         $this->assertSame('The site balance is insufficient.', $payload['data']['tenant_context']['failure_reason']);
         $this->assertSame(AgentOrderContext::STATUS_FAILED, $payload['data']['tenant_context']['status']);
         $this->assertSame(AgentBalanceHold::STATUS_FAILED, $payload['data']['tenant_context']['hold_status']);
+    }
+
+    public function test_admin_manual_paid_marks_agent_order_failed_when_balance_is_insufficient(): void
+    {
+        $plan = $this->createPlan();
+        $order = $this->createAgentOrder($plan, null, 'manual-paid-low-balance');
+        $context = $order->agentOrderContext;
+        $context->agent->update(['balance' => 100]);
+
+        $payload = $this->responsePayload(app(OrderController::class)->paid(Request::create(
+            '/api/v2/admin/order/paid',
+            'POST',
+            ['trade_no' => $order->trade_no]
+        )));
+
+        $this->assertSame('fail', $payload['status']);
+        $this->assertSame(Order::STATUS_PENDING, (int) $order->fresh()->status);
+        $this->assertSame(100, (int) $context->agent->fresh()->balance);
+        $this->assertSame(AgentBalanceHold::STATUS_FAILED, $context->hold->fresh()->status);
+        $this->assertSame(AgentOrderContext::STATUS_FAILED, $context->fresh()->status);
+        $this->assertSame(
+            AgentCommerceService::INSUFFICIENT_SITE_BALANCE_MESSAGE,
+            $context->hold->fresh()->metadata['failure_reason'] ?? null
+        );
+        $this->assertSame(
+            AgentCommerceService::INSUFFICIENT_SITE_BALANCE_MESSAGE,
+            $context->fresh()->payment_snapshot['failure_reason'] ?? null
+        );
     }
 
     public function test_admin_order_detail_exposes_agent_diagnostics_for_stuck_pending_hold(): void

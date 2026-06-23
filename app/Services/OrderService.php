@@ -371,6 +371,16 @@ class OrderService
                 OrderHandleJob::dispatchSync($tradeNo);
             }
         } catch (\Exception $e) {
+            try {
+                app(AgentCommerceService::class)->failForOrderIfBalanceInsufficient($this->order);
+            } catch (\Throwable $markException) {
+                Log::warning('Failed to mark agent order as balance-insufficient after paid failure', [
+                    'order_id' => $this->order->id ?? null,
+                    'trade_no' => $this->order->trade_no ?? null,
+                    'exception' => get_class($markException),
+                    'message' => $markException->getMessage(),
+                ]);
+            }
             Log::error($e);
             return false;
         }
