@@ -24,6 +24,7 @@ final class TicketControllerRegressionTest extends TestCase
 
         $this->setUpInMemoryDatabase();
         $this->bindJsonResponseFactory();
+        $this->bindTestRouter();
         $this->createUserTable();
         $this->createTicketTables();
     }

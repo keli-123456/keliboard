@@ -45,7 +45,8 @@ class AuthController extends Controller
 
         [$success, $result] = $this->mailLinkService->handleMailLink(
             $params['email'],
-            $request->input('redirect')
+            $request->input('redirect'),
+            $request
         );
 
         if (!$success) {
@@ -78,7 +79,7 @@ class AuthController extends Controller
         $email = $request->input('email');
         $password = $request->input('password');
 
-        [$success, $result] = $this->loginService->login($email, $password);
+        [$success, $result] = $this->loginService->login($email, $password, $request);
 
         if (!$success) {
             return $this->fail($result);
@@ -170,7 +171,8 @@ class AuthController extends Controller
         [$success, $result] = $this->loginService->resetPassword(
             $request->input('email'),
             $request->input('email_code'),
-            $request->input('password')
+            $request->input('password'),
+            $request
         );
 
         if (!$success) {

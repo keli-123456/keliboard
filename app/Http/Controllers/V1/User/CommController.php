@@ -6,12 +6,13 @@ use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
 use App\Models\Payment;
 use App\Services\RechargeBonusService;
+use App\Services\SiteContextService;
 use App\Utils\Dict;
 use Illuminate\Http\Request;
 
 class CommController extends Controller
 {
-    public function config()
+    public function config(Request $request)
     {
         $data = [
             'is_telegram' => (int)admin_setting('telegram_bot_enable', 0),
@@ -32,6 +33,7 @@ class CommController extends Controller
             'upgrade_v2_enable' => (int)admin_setting('upgrade_v2_enable', 0),
         ];
         $data = array_merge($data, app(RechargeBonusService::class)->getConfig());
+        $data = app(SiteContextService::class)->applyToConfig($data, $request, $request->user());
         return $this->success($data);
     }
 

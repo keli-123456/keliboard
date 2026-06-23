@@ -6,6 +6,8 @@ namespace Tests\Unit\Services;
 
 use App\Exceptions\ApiException;
 use App\Models\Plan;
+use App\Models\Site;
+use App\Models\SiteDomain;
 use App\Models\User;
 use App\Services\AgentCenterService;
 use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
@@ -68,6 +70,26 @@ final class AgentCenterServiceTest extends TestCase
         $this->assertSame('buyer@example.test', $created['user']['email']);
         $this->assertSame('first customer', $created['user']['remark']);
         $this->assertSame(1, $this->tableCount('v2_agent_user'));
+    }
+
+    public function test_create_subordinate_scopes_duplicate_email_to_agent_site(): void
+    {
+        $this->createSiteTenantTables();
+        $defaultSite = $this->siteWithDomain('default', 'main.example.test', true);
+        $secondSite = $this->siteWithDomain('second', 'second.example.test', false);
+        $this->createUser('buyer@example.test', 0, ['site_id' => $defaultSite->id]);
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $agent->site_id = $secondSite->id;
+        $agent->save();
+
+        $created = app(AgentCenterService::class)->createSubordinate($agent, [
+            'email' => 'buyer@example.test',
+            'password' => 'secret123',
+        ]);
+
+        $subordinate = User::query()->findOrFail($created['user']['id']);
+        $this->assertSame($secondSite->id, $subordinate->site_id);
+        $this->assertSame(2, User::query()->where('email', 'buyer@example.test')->count());
     }
 
     public function test_create_subordinate_can_assign_plan_and_charge_agent_balance(): void
@@ -686,6 +708,29 @@ final class AgentCenterServiceTest extends TestCase
             'updated_at' => time(),
         ]);
         return $agent;
+    }
+
+    private function siteWithDomain(string $code, string $host, bool $default): Site
+    {
+        $site = Site::query()->create([
+            'code' => $code,
+            'name' => ucfirst($code),
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => $default,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        SiteDomain::query()->create([
+            'site_id' => $site->id,
+            'domain' => $host,
+            'status' => SiteDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        return $site;
     }
 
     private function createOwnedSubordinate(User $agent, string $email, array $attributes = []): User

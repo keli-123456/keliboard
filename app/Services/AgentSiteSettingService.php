@@ -20,6 +20,9 @@ class AgentSiteSettingService
         'accent_color',
         'support_name',
         'support_url',
+        'customer_service_type',
+        'customer_service_id',
+        'announcement_title',
         'announcement',
         'seo_title',
         'seo_description',
@@ -155,6 +158,9 @@ class AgentSiteSettingService
             'accent_color' => $this->payloadValue($setting->accent_color),
             'support_name' => $this->payloadValue($setting->support_name),
             'support_url' => $this->payloadValue($setting->support_url),
+            'customer_service_type' => $this->payloadValue($setting->customer_service_type),
+            'customer_service_id' => $this->payloadValue($setting->customer_service_id),
+            'announcement_title' => $this->payloadValue($setting->announcement_title),
             'announcement' => $this->payloadValue($setting->announcement),
             'seo_title' => $this->payloadValue($setting->seo_title),
             'seo_description' => $this->payloadValue($setting->seo_description),
@@ -183,6 +189,9 @@ class AgentSiteSettingService
             'accent_color' => ['color', 16],
             'support_name' => ['string', 80],
             'support_url' => ['url', 500],
+            'customer_service_type' => ['customer_service_type', 32],
+            'customer_service_id' => ['string', 255],
+            'announcement_title' => ['string', 120],
             'announcement' => ['string', 500],
             'seo_title' => ['string', 120],
             'seo_description' => ['string', 255],
@@ -213,6 +222,10 @@ class AgentSiteSettingService
 
         if ($type === 'color') {
             return $this->cleanColor($value);
+        }
+
+        if ($type === 'customer_service_type') {
+            return $this->cleanCustomerServiceType($value);
         }
 
         return $this->cleanString($value, $max);
@@ -340,6 +353,20 @@ class AgentSiteSettingService
         }
 
         return $theme;
+    }
+
+    private function cleanCustomerServiceType(mixed $value): string
+    {
+        $type = strtolower($this->cleanString($value, 32));
+        if ($type === '') {
+            return '';
+        }
+
+        if (!in_array($type, ['none', 'link', 'crisp', 'chatra'], true)) {
+            throw new ApiException('Customer service type is invalid');
+        }
+
+        return $type;
     }
 
     private function isEmptyValue(mixed $value): bool

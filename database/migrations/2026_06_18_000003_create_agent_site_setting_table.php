@@ -21,6 +21,9 @@ return new class extends Migration
                 $table->string('accent_color', 16)->nullable();
                 $table->string('support_name', 80)->nullable();
                 $table->string('support_url', 500)->nullable();
+                $table->string('customer_service_type', 32)->nullable();
+                $table->string('customer_service_id', 255)->nullable();
+                $table->string('announcement_title', 120)->nullable();
                 $table->string('announcement', 500)->nullable();
                 $table->string('seo_title', 120)->nullable();
                 $table->string('seo_description', 255)->nullable();

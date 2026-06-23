@@ -424,14 +424,14 @@ final class AgentDomainSelfServiceTest extends TestCase
             $service->verify($agent, $pending['id']);
             $this->fail('Expected missing TXT verification exception.');
         } catch (ApiException $exception) {
-            $this->assertSame('Domain verification record not found', $exception->getMessage());
+            $this->assertStringContainsString('Domain verification record not found', $exception->getMessage());
         }
 
         $domain = AgentDomain::query()->find($pending['id']);
         $this->assertNotNull($domain);
         $this->assertSame(AgentDomain::STATUS_PENDING, $domain->status);
         $this->assertNotNull($domain->last_checked_at);
-        $this->assertSame('Domain verification record not found', $domain->verification_error);
+        $this->assertStringContainsString('Domain verification record not found', (string) $domain->verification_error);
 
         $txtRecords[$pending['verification']['record_name']] = ['keli-agent-verification=wrong'];
 
@@ -439,12 +439,42 @@ final class AgentDomainSelfServiceTest extends TestCase
             $service->verify($agent, $pending['id']);
             $this->fail('Expected wrong TXT verification exception.');
         } catch (ApiException $exception) {
-            $this->assertSame('Domain verification record not found', $exception->getMessage());
+            $this->assertStringContainsString('Domain verification record not found', $exception->getMessage());
         }
 
         $domain->refresh();
         $this->assertSame(AgentDomain::STATUS_PENDING, $domain->status);
-        $this->assertSame('Domain verification record not found', $domain->verification_error);
+        $this->assertStringContainsString('Domain verification record not found', (string) $domain->verification_error);
+    }
+
+    public function test_verify_failure_reports_expected_and_observed_txt_records(): void
+    {
+        $txtRecords = [];
+        $service = $this->serviceWithTxtRecords($txtRecords);
+        $agent = $this->createActiveAgent('agent@example.test');
+        $pending = $service->createPending($agent, 'agent.example.test', null);
+        $txtRecords[$pending['verification']['record_name']] = [
+            'keli-agent-verification=wrong-token',
+            'unrelated-record',
+        ];
+
+        try {
+            $service->verify($agent, $pending['id']);
+            $this->fail('Expected wrong TXT verification exception.');
+        } catch (ApiException $exception) {
+            $message = $exception->getMessage();
+            $this->assertStringContainsString('Domain verification record not found', $message);
+            $this->assertStringContainsString($pending['verification']['record_name'], $message);
+            $this->assertStringContainsString($pending['verification']['record_value'], $message);
+            $this->assertStringContainsString('keli-agent-verification=wrong-token', $message);
+            $this->assertStringContainsString('unrelated-record', $message);
+        }
+
+        $domain = AgentDomain::query()->find($pending['id']);
+        $this->assertNotNull($domain);
+        $this->assertSame(AgentDomain::STATUS_PENDING, $domain->status);
+        $this->assertStringContainsString($pending['verification']['record_name'], (string) $domain->verification_error);
+        $this->assertStringContainsString('keli-agent-verification=wrong-token', (string) $domain->verification_error);
     }
 
     public function test_admin_created_domain_without_token_cannot_be_verified(): void

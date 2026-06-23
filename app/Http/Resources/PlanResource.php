@@ -34,7 +34,11 @@ class PlanResource extends JsonResource
         return [
             'id' => $this->getResourceValue('id'),
             'group_id' => $this->getResourceValue('group_id'),
-            'name' => $this->getResourceValue('name'),
+            'name' => $this->getResourceValue('display_name', $this->getResourceValue('name')),
+            'display_name' => $this->getResourceValue('display_name', $this->getResourceValue('name')),
+            'platform_name' => $this->getResourceValue('platform_name', $this->getResourceValue('name')),
+            'site_display_name' => $this->getResourceValue('site_display_name'),
+            'agent_display_name' => $this->getResourceValue('agent_display_name'),
             'tags' => $this->getResourceValue('tags'),
             'content' => $this->formatContent(),
             'upgrade_to_plan_ids' => $this->getUpgradeTargetPlanIds(),
@@ -44,6 +48,8 @@ class PlanResource extends JsonResource
             'has_recurring_price' => !empty($recurringPeriods),
             'has_onetime_price' => array_key_exists(Plan::PERIOD_ONETIME, $normalizedPrices),
             'has_reset_price' => array_key_exists(Plan::PERIOD_RESET_TRAFFIC, $normalizedPrices),
+            'site_context' => $this->getResourceValue('site_context'),
+            'site_sale_periods' => $this->getResourceValue('site_sale_periods'),
             'agent_context' => $this->getResourceValue('agent_context'),
             'agent_sale_periods' => $this->getResourceValue('agent_sale_periods'),
             ...$legacyPrices,
@@ -90,7 +96,7 @@ class PlanResource extends JsonResource
     protected function getPeriodPrices(array $normalizedPrices): array
     {
         return collect(Plan::LEGACY_PERIOD_MAPPING)
-            ->mapWithKeys(function (string $newPeriod, string $legacyPeriod): array {
+            ->mapWithKeys(function (string $newPeriod, string $legacyPeriod) use ($normalizedPrices): array {
                 return [
                     $legacyPeriod => $normalizedPrices[$newPeriod] ?? null
                 ];

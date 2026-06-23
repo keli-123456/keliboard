@@ -6,10 +6,10 @@ use App\Exceptions\ApiException;
 use App\Models\AgentUser;
 use App\Models\InviteCode;
 use App\Models\Plan;
-use App\Models\User;
 use App\Services\AgentDomainResolver;
 use App\Services\CaptchaService;
 use App\Services\Plugin\HookManager;
+use App\Services\SiteUserScopeService;
 use App\Services\UserService;
 use App\Utils\CacheKey;
 use App\Utils\Dict;
@@ -90,7 +90,9 @@ class RegisterService
                 return [false, [422, __('Email verification code cannot be empty')]];
             }
 
-            $cachedEmailCode = Cache::get(CacheKey::get('EMAIL_VERIFY_CODE', $request->input('email')));
+            $cachedEmailCode = Cache::get(
+                app(SiteUserScopeService::class)->cacheKey('EMAIL_VERIFY_CODE', $request->input('email'), $request)
+            );
             if (!is_scalar($cachedEmailCode) || !hash_equals((string) $cachedEmailCode, $emailCode)) {
                 return [false, [400, __('Incorrect email verification code')]];
             }
@@ -98,7 +100,7 @@ class RegisterService
 
         // 检查邮箱是否存在
         $email = $request->input('email');
-        $exist = User::where('email', $email)->first();
+        $exist = app(SiteUserScopeService::class)->findUserByEmail($email, $request);
         if ($exist) {
             return [false, [400201, __('Email already exists')]];
         }
@@ -173,6 +175,7 @@ class RegisterService
                 'email' => $email,
                 'password' => $password,
                 'invite_user_id' => $inviteUserId,
+                ...app(SiteUserScopeService::class)->userAttributes($request),
             ]);
 
             // 保存用户
@@ -199,7 +202,7 @@ class RegisterService
 
         // 清除邮箱验证码
         if ((int) admin_setting('email_verify', 0)) {
-            Cache::forget(CacheKey::get('EMAIL_VERIFY_CODE', $email));
+            Cache::forget(app(SiteUserScopeService::class)->cacheKey('EMAIL_VERIFY_CODE', $email, $request));
         }
 
         // 更新最近登录时间

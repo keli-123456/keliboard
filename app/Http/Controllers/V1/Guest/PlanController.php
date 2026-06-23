@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\PlanResource;
 use App\Services\AgentStorefrontService;
 use App\Services\PlanService;
+use App\Services\SiteStorefrontService;
 use Illuminate\Http\Request;
 
 class PlanController extends Controller
@@ -19,6 +20,7 @@ class PlanController extends Controller
     public function fetch(Request $request)
     {
         $plan = $this->planService->getAvailablePlans();
+        $plan = app(SiteStorefrontService::class)->plansForRequest($request, $plan);
         $plan = app(AgentStorefrontService::class)->plansForRequest($request, $plan);
         return $this->success(PlanResource::collection($plan));
     }

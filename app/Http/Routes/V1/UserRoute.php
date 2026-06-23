@@ -6,6 +6,7 @@ use App\Http\Controllers\V1\User\AgentCommerceController;
 use App\Http\Controllers\V1\User\AgentController;
 use App\Http\Controllers\V1\User\AgentOperationsController;
 use App\Http\Controllers\V1\User\AgentSiteContextController;
+use App\Http\Controllers\V1\User\AgentTicketController;
 use App\Http\Controllers\V1\User\CouponController;
 use App\Http\Controllers\V1\User\GiftCardController;
 use App\Http\Controllers\V1\User\InviteController;
@@ -14,6 +15,7 @@ use App\Http\Controllers\V1\User\NoticeController;
 use App\Http\Controllers\V1\User\OrderController;
 use App\Http\Controllers\V1\User\PlanController;
 use App\Http\Controllers\V1\User\ServerController;
+use App\Http\Controllers\V1\User\SiteContextController;
 use App\Http\Controllers\V1\User\StatController;
 use App\Http\Controllers\V1\User\TelegramController;
 use App\Http\Controllers\V1\User\TicketController;
@@ -76,7 +78,12 @@ class UserRoute
             $router->get('/agent/operations/summary', [AgentOperationsController::class, 'summary']);
             $router->get('/agent/operations/orders', [AgentOperationsController::class, 'orders']);
             $router->get('/agent/operations/orders/{tradeNo}', [AgentOperationsController::class, 'order']);
+            $router->get('/agent/tickets', [AgentTicketController::class, 'index']);
+            $router->get('/agent/tickets/{id}', [AgentTicketController::class, 'show']);
+            $router->post('/agent/tickets/{id}/reply', [AgentTicketController::class, 'reply']);
+            $router->post('/agent/tickets/{id}/close', [AgentTicketController::class, 'close']);
             $router->get('/agent/site-context', [AgentSiteContextController::class, 'show']);
+            $router->get('/site-context', [SiteContextController::class, 'show']);
             // Order
             $router->post('/order/save', [OrderController::class, 'save']);
             $router->post('/order/recharge', [OrderController::class, 'recharge']);

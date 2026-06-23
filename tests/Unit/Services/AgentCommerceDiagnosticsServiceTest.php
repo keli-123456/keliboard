@@ -9,6 +9,7 @@ use App\Models\AgentBalanceHold;
 use App\Models\AgentDomain;
 use App\Models\AgentPlanPrice;
 use App\Models\AgentProfile;
+use App\Models\AgentSiteSetting;
 use App\Models\Payment;
 use App\Models\Plan;
 use App\Models\User;
@@ -273,6 +274,7 @@ final class AgentCommerceDiagnosticsServiceTest extends TestCase
         $this->createPayment($agent, null, true);
         $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 10.00]);
         $this->createAgentPrice($agent, $plan->id, Plan::PERIOD_MONTHLY, 1300);
+        $this->createDefaultSiteSetting($agent, 'Agent Shop');
 
         $diagnostics = app(AgentCommerceDiagnosticsService::class)->diagnose($agent);
 
@@ -281,6 +283,26 @@ final class AgentCommerceDiagnosticsServiceTest extends TestCase
         $this->assertSame('ok', $diagnostics['checks']['payments']['status']);
         $this->assertSame('ok', $diagnostics['checks']['prices']['status']);
         $this->assertSame('ok', $diagnostics['checks']['balance']['status']);
+        $this->assertSame('ok', $diagnostics['checks']['site_settings']['status']);
+        $this->assertSame(1, $diagnostics['summary']['enabled_site_settings']);
+        $this->assertTrue($diagnostics['summary']['default_site_setting_enabled']);
+    }
+
+    public function test_missing_default_site_setting_warns_without_blocking_orders(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $this->createDomain($agent, 'shop.example.test', AgentDomain::STATUS_ACTIVE);
+        $this->createPayment($agent, null, true);
+        $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 10.00]);
+        $this->createAgentPrice($agent, $plan->id, Plan::PERIOD_MONTHLY, 1300);
+
+        $diagnostics = app(AgentCommerceDiagnosticsService::class)->diagnose($agent);
+
+        $this->assertSame('warning', $diagnostics['overall_status']);
+        $this->assertSame('warning', $diagnostics['checks']['site_settings']['status']);
+        $this->assertSame('site_settings', $diagnostics['checks']['site_settings']['action']);
+        $this->assertSame(0, $diagnostics['summary']['enabled_site_settings']);
+        $this->assertFalse($diagnostics['summary']['default_site_setting_enabled']);
     }
 
     public function test_zero_discount_cost_is_treated_as_estimated_cost(): void
@@ -295,6 +317,7 @@ final class AgentCommerceDiagnosticsServiceTest extends TestCase
         $this->createPayment($agent, null, true);
         $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 10.00]);
         $this->createAgentPrice($agent, $plan->id, Plan::PERIOD_MONTHLY, 1300);
+        $this->createDefaultSiteSetting($agent, 'Agent Shop');
 
         $diagnostics = app(AgentCommerceDiagnosticsService::class)->diagnose($agent);
 
@@ -390,6 +413,18 @@ final class AgentCommerceDiagnosticsServiceTest extends TestCase
             'plan_id' => $planId,
             'period' => $period,
             'sale_price' => $salePrice,
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+    }
+
+    private function createDefaultSiteSetting(User $agent, string $siteName): AgentSiteSetting
+    {
+        return AgentSiteSetting::query()->create([
+            'agent_user_id' => $agent->id,
+            'agent_domain_id' => null,
+            'site_name' => $siteName,
             'enabled' => true,
             'created_at' => time(),
             'updated_at' => time(),

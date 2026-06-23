@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * App\Models\Ticket
  *
  * @property int $id
+ * @property int|null $site_id
  * @property int $user_id 用户ID
  * @property string $subject 工单主题
  * @property string|null $level 工单等级
@@ -58,6 +59,11 @@ class Ticket extends Model
     public function agentDomain(): BelongsTo
     {
         return $this->belongsTo(AgentDomain::class, 'agent_domain_id', 'id');
+    }
+
+    public function site(): BelongsTo
+    {
+        return $this->belongsTo(Site::class, 'site_id', 'id');
     }
     
     /**

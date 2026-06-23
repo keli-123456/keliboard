@@ -1,0 +1,135 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Unit\Services;
+
+use App\Models\Site;
+use App\Models\SiteDomain;
+use App\Models\SiteSetting;
+use App\Models\User;
+use App\Services\SiteContextService;
+use Illuminate\Http\Request;
+use Tests\Support\InteractsWithInMemoryDatabase;
+use Tests\TestCase;
+
+final class SiteContextServiceTest extends TestCase
+{
+    use InteractsWithInMemoryDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->setUpInMemoryDatabase();
+        $this->createUserTable();
+        $this->createOrderTable();
+        $this->createSiteTenantTables();
+        $this->createSiteCommerceTables();
+    }
+
+    public function test_site_setting_belongs_to_site(): void
+    {
+        $site = Site::query()->create([
+            'code' => 'cheap',
+            'name' => 'Cheap Site',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $setting = SiteSetting::query()->create([
+            'site_id' => $site->id,
+            'site_name' => 'Cheap Cloud',
+            'logo_url' => 'https://cdn.example.test/logo.png',
+            'landing_theme' => 'sakura',
+            'accent_color' => '#f43f5e',
+            'support_name' => 'Cheap Support',
+            'support_url' => 'https://t.me/support',
+            'announcement' => 'Welcome',
+            'seo_title' => 'Cheap Cloud',
+            'seo_description' => 'Fast access',
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $this->assertSame($site->id, (int) $setting->site->id);
+        $this->assertSame('Cheap Cloud', $site->fresh(['setting'])->setting->site_name);
+    }
+
+    public function test_guest_context_uses_request_host_settings(): void
+    {
+        [$site] = $this->siteWithDomain('cheap', 'Cheap Site', 'cheap.example.test');
+        SiteSetting::query()->create([
+            'site_id' => $site->id,
+            'site_name' => 'Cheap Cloud',
+            'logo_url' => 'https://cdn.example.test/logo.png',
+            'landing_theme' => 'sakura',
+            'accent_color' => '#f43f5e',
+            'support_name' => 'Cheap Support',
+            'support_url' => 'https://t.me/cheap',
+            'announcement' => 'Cheap announcement',
+            'seo_title' => 'Cheap SEO',
+            'seo_description' => 'Cheap description',
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $context = app(SiteContextService::class)->resolve(
+            Request::create('/api/v1/guest/site-context', 'GET', [], [], [], ['HTTP_HOST' => 'cheap.example.test'])
+        );
+
+        $this->assertSame($site->id, $context['id']);
+        $this->assertSame('cheap', $context['site_code']);
+        $this->assertSame('Cheap Cloud', $context['site_name']);
+        $this->assertSame('sakura', $context['landing_theme']);
+        $this->assertSame('cheap.example.test', $context['domain']);
+    }
+
+    public function test_authenticated_context_prefers_user_site_over_request_host(): void
+    {
+        [$cheap] = $this->siteWithDomain('cheap', 'Cheap Site', 'cheap.example.test');
+        $this->siteWithDomain('default', 'Default Site', 'main.example.test', true);
+        $user = User::query()->create([
+            'site_id' => $cheap->id,
+            'email' => 'buyer@example.test',
+            'password' => password_hash('secret123', PASSWORD_BCRYPT),
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $request = Request::create('/api/v1/user/site-context', 'GET', [], [], [], ['HTTP_HOST' => 'main.example.test']);
+        $request->setUserResolver(fn () => $user);
+
+        $context = app(SiteContextService::class)->resolve($request, $user);
+
+        $this->assertSame($cheap->id, $context['id']);
+        $this->assertSame('user', $context['source']);
+        $this->assertSame('cheap', $context['site_code']);
+    }
+
+    private function siteWithDomain(string $code, string $name, string $domain, bool $default = false): array
+    {
+        $site = Site::query()->create([
+            'code' => $code,
+            'name' => $name,
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => $default,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $domainRow = SiteDomain::query()->create([
+            'site_id' => $site->id,
+            'domain' => $domain,
+            'status' => SiteDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        return [$site, $domainRow];
+    }
+}

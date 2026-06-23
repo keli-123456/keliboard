@@ -264,12 +264,35 @@ final class AgentSiteSettingServiceTest extends TestCase
         $this->assertSame(AgentSiteSetting::KEY_DEFAULT, $payload['setting_key']);
     }
 
+    public function test_save_and_resolve_agent_announcement_title(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+
+        $payload = app(AgentSiteSettingService::class)->save($agent, [
+            'site_name' => 'Agent Site',
+            'announcement_title' => '  维护通知  ',
+            'announcement' => '今晚节点维护。',
+            'enabled' => true,
+        ]);
+
+        $this->assertSame('维护通知', $payload['announcement_title']);
+        $this->assertSame('今晚节点维护。', $payload['announcement']);
+
+        $resolved = app(AgentSiteSettingService::class)->resolve([
+            'agent_user_id' => $agent->id,
+        ]);
+
+        $this->assertSame('维护通知', $resolved['announcement_title']);
+        $this->assertSame('今晚节点维护。', $resolved['announcement']);
+    }
+
     public function test_resolve_prefers_domain_setting_then_default_setting(): void
     {
         $agent = $this->createActiveAgent('agent@example.test');
         $domain = $this->createActiveDomain($agent, 'agent.example.test');
         $this->createSiteSetting($agent, null, [
             'site_name' => 'Default Site',
+            'announcement_title' => 'Default notice',
             'logo_url' => 'https://example.test/default-logo.png',
             'announcement' => 'Default announcement',
         ]);
@@ -285,6 +308,7 @@ final class AgentSiteSettingServiceTest extends TestCase
 
         $this->assertSame('Domain Site', $payload['site_name']);
         $this->assertSame('https://example.test/domain-logo.png', $payload['logo_url']);
+        $this->assertSame('Default notice', $payload['announcement_title']);
         $this->assertSame('Default announcement', $payload['announcement']);
     }
 

@@ -9,6 +9,7 @@ use App\Models\Plan;
 use App\Models\User;
 use App\Services\AgentStorefrontService;
 use App\Services\PlanService;
+use App\Services\SiteStorefrontService;
 use Illuminate\Http\Request;
 
 class PlanController extends Controller
@@ -33,7 +34,8 @@ class PlanController extends Controller
             if (!$this->planService->isPlanAvailableForUser($plan, $user)) {
                 return $this->fail([400, __('Subscription plan does not exist')]);
             }
-            $plans = app(AgentStorefrontService::class)->plansForRequest($request, collect([$plan]));
+            $plans = app(SiteStorefrontService::class)->plansForRequest($request, collect([$plan]));
+            $plans = app(AgentStorefrontService::class)->plansForRequest($request, $plans);
             if (empty($plans)) {
                 return $this->fail([400, __('Subscription plan does not exist')]);
             }
@@ -41,6 +43,7 @@ class PlanController extends Controller
         }
 
         $plans = $this->planService->getAvailablePlans();
+        $plans = app(SiteStorefrontService::class)->plansForRequest($request, $plans);
         $plans = app(AgentStorefrontService::class)->plansForRequest($request, $plans);
         return $this->success(PlanResource::collection($plans));
     }

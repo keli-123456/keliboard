@@ -11,9 +11,11 @@ use App\Models\Order;
 use App\Models\Plan;
 use App\Models\Ticket;
 use App\Models\User;
+use App\Services\AgentStorefrontService;
 use App\Services\Auth\LoginService;
 use App\Services\AuthService;
 use App\Services\Plugin\HookManager;
+use App\Services\SiteStorefrontService;
 use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use App\Services\UserOnlineService;
 use App\Services\UserService;
@@ -156,10 +158,13 @@ class UserController extends Controller
             return $this->fail([400, __('The user does not exist')]);
         }
         if ($user->plan_id) {
-            $user['plan'] = Plan::find($user->plan_id);
-            if (!$user['plan']) {
+            $plan = Plan::find($user->plan_id);
+            if (!$plan) {
                 return $this->fail([400, __('Subscription plan does not exist')]);
             }
+            $plan = app(SiteStorefrontService::class)->applyDisplayNameForRequest($request, $plan);
+            $plan = app(AgentStorefrontService::class)->applyDisplayNameForRequest($request, $plan);
+            $user['plan'] = $plan;
         }
         $user['subscribe_url'] = Helper::getSubscribeUrl($user['token']);
         $subscriptionProxy = app(SubscriptionProxyProbeService::class)->userPayload((string) $user['token']);

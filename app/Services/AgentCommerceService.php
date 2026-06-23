@@ -106,6 +106,7 @@ class AgentCommerceService
             $now = time();
             $order = new Order([
                 'user_id' => $lockedUser->id,
+                'site_id' => $lockedUser->site_id,
                 'plan_id' => $plan->id,
                 'period' => $period,
                 'trade_no' => Helper::generateOrderNo(),

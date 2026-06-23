@@ -21,6 +21,7 @@ class OrderController extends Controller
 {
     private const ORDER_FILTER_FIELDS = [
         'id' => 'id',
+        'site_id' => 'site_id',
         'trade_no' => 'trade_no',
         'callback_no' => 'callback_no',
         'user_id' => 'user_id',
@@ -49,6 +50,7 @@ class OrderController extends Controller
 
     private const ORDER_SORT_FIELDS = [
         'id' => 'id',
+        'site_id' => 'site_id',
         'trade_no' => 'trade_no',
         'user_id' => 'user_id',
         'plan_id' => 'plan_id',
@@ -137,6 +139,24 @@ class OrderController extends Controller
 
     private function buildFilterQuery(Builder $query, string $field, mixed $value): void
     {
+        if ($field === 'site_id') {
+            if (is_array($value)) {
+                $siteIds = array_values(array_filter(
+                    array_map(fn ($item) => is_scalar($item) && trim((string) $item) !== '' ? (int) $item : null, $value),
+                    fn ($item) => $item !== null && $item > 0
+                ));
+                if ($siteIds !== []) {
+                    $query->whereIn($field, array_values(array_unique($siteIds)));
+                }
+                return;
+            }
+
+            if (is_scalar($value) && trim((string) $value) !== '') {
+                $query->where($field, (int) $value);
+            }
+            return;
+        }
+
         // Handle array values for 'in' operations
         if (is_array($value)) {
             $query->whereIn($field, $value);

@@ -8,6 +8,7 @@ use App\Models\AgentProfile;
 use App\Models\AgentUser;
 use App\Models\Plan;
 use App\Models\User;
+use App\Services\SiteUserScopeService;
 use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use App\Utils\Helper;
 use Illuminate\Support\Facades\DB;
@@ -183,7 +184,10 @@ class AgentCenterService
         if (strlen($password) < 6) {
             throw new ApiException('Password must be at least 6 characters');
         }
-        if (User::query()->where('email', $email)->exists()) {
+        if (app(SiteUserScopeService::class)
+            ->scopeUserQueryForSiteId(User::query(), $agent->site_id ? (int) $agent->site_id : null)
+            ->where('email', $email)
+            ->exists()) {
             throw new ApiException('Email already exists');
         }
         $assignment = $this->resolveOptionalPlanPrice($payload);
@@ -199,6 +203,7 @@ class AgentCenterService
             $user = User::query()->create([
                 'email' => $email,
                 'password' => password_hash($password, PASSWORD_BCRYPT),
+                'site_id' => $lockedAgent->site_id ? (int) $lockedAgent->site_id : null,
                 'uuid' => $this->randomToken(32),
                 'token' => $this->randomToken(32),
                 'invite_user_id' => null,

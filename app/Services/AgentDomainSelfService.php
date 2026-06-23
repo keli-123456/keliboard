@@ -94,8 +94,9 @@ class AgentDomainSelfService
 
         $records = array_map(static fn ($value): string => trim((string) $value), $records);
         if (!in_array($proof['record_value'], $records, true)) {
-            $this->markVerificationFailure($agent, $id, 'Domain verification record not found');
-            throw new ApiException('Domain verification record not found');
+            $message = $this->verificationRecordNotFoundMessage($proof, $records);
+            $this->markVerificationFailure($agent, $id, $message);
+            throw new ApiException($message);
         }
 
         return DB::transaction(function () use ($agent, $id, $proof): array {
@@ -416,6 +417,36 @@ class AgentDomainSelfService
         }
 
         return $data;
+    }
+
+    private function verificationRecordNotFoundMessage(array $proof, array $records): string
+    {
+        $observed = $this->verificationObservedRecords($records);
+        $message = sprintf(
+            'Domain verification record not found. Queried: %s Expected: %s Observed: %s',
+            (string) ($proof['record_name'] ?? ''),
+            (string) ($proof['record_value'] ?? ''),
+            $observed
+        );
+
+        return mb_substr($message, 0, 255);
+    }
+
+    private function verificationObservedRecords(array $records): string
+    {
+        $records = array_values(array_filter(array_map(
+            fn ($record): string => mb_substr(trim((string) $record), 0, 80),
+            $records
+        ), static fn (string $record): bool => $record !== ''));
+
+        if ($records === []) {
+            return 'none';
+        }
+
+        $visible = array_slice($records, 0, 3);
+        $suffix = count($records) > count($visible) ? '; ...' : '';
+
+        return implode('; ', $visible) . $suffix;
     }
 
     private function markVerificationFailure(User $agent, int $id, string $message): void

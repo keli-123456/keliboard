@@ -3,6 +3,7 @@ namespace App\Http\Routes\V2;
 
 use App\Http\Controllers\V2\Admin\ConfigController;
 use App\Http\Controllers\V2\Admin\PlanController;
+use App\Http\Controllers\V2\Admin\SiteController;
 use App\Http\Controllers\V2\Admin\Server\GroupController;
 use App\Http\Controllers\V2\Admin\Server\MachineController;
 use App\Http\Controllers\V2\Admin\Server\MachineReleaseManagementController;
@@ -65,6 +66,16 @@ class AdminRoute
                 $router->post('/drop', [PlanController::class, 'drop']);
                 $router->post('/update', [PlanController::class, 'update']);
                 $router->post('/sort', [PlanController::class, 'sort']);
+            });
+
+            // Site
+            $router->group([
+                'prefix' => 'site'
+            ], function ($router) {
+                $router->get('/fetch', [SiteController::class, 'fetch']);
+                $router->post('/save', [SiteController::class, 'save']);
+                $router->get('/commerce', [SiteController::class, 'commerce']);
+                $router->post('/commerce/save', [SiteController::class, 'saveCommerce']);
             });
 
             // Server

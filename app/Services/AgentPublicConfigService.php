@@ -37,6 +37,7 @@ class AgentPublicConfigService
             $data['landing_theme'] = $data['landing_theme'] ?? null;
         }
 
+        $data['agent_announcement_title'] = $this->stringValue($setting['announcement_title'] ?? '');
         $data['agent_announcement'] = $this->stringValue($setting['announcement'] ?? '');
         $data['theme_config'] = $this->themeConfig($data['theme_config'] ?? [], $setting);
         $data['agent_context'] = $this->contextPayload($context);
@@ -65,6 +66,8 @@ class AgentPublicConfigService
             'accent_color' => 'agent_accent_color',
             'support_name' => 'customer_service_name',
             'support_url' => 'customer_service_url',
+            'customer_service_type' => 'customer_service_type',
+            'customer_service_id' => 'customer_service_id',
         ];
 
         foreach ($fieldMap as $settingKey => $configKey) {

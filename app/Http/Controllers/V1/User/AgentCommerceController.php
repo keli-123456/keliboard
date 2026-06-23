@@ -115,9 +115,18 @@ class AgentCommerceController extends Controller
             'items.*.period' => 'required|string|max:64',
             'items.*.sale_price' => 'required|integer|min:0',
             'items.*.enabled' => 'boolean',
+            'overrides' => 'nullable|array',
+            'overrides.*.plan_id' => 'required|integer|min:1',
+            'overrides.*.display_name' => 'nullable|string|max:120',
         ]);
 
-        return $this->success($this->storefrontService()->savePrices($request->user(), $params['items']));
+        $storefront = $this->storefrontService();
+        $storefront->savePrices($request->user(), $params['items']);
+        if (array_key_exists('overrides', $params) && is_array($params['overrides'])) {
+            $storefront->saveOverrides($request->user(), $params['overrides']);
+        }
+
+        return $this->success($storefront->listPrices($request->user()));
     }
 
     public function siteSettings(Request $request)
@@ -138,6 +147,9 @@ class AgentCommerceController extends Controller
             'accent_color' => 'nullable|string|max:16',
             'support_name' => 'nullable|string|max:80',
             'support_url' => 'nullable|string|max:500',
+            'customer_service_type' => 'nullable|string|max:32',
+            'customer_service_id' => 'nullable|string|max:255',
+            'announcement_title' => 'nullable|string|max:120',
             'announcement' => 'nullable|string|max:500',
             'seo_title' => 'nullable|string|max:120',
             'seo_description' => 'nullable|string|max:255',

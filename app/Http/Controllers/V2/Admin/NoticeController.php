@@ -6,6 +6,7 @@ use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\NoticeSave;
 use App\Models\Notice;
+use App\Services\SiteDataScopeService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -13,11 +14,24 @@ class NoticeController extends Controller
 {
     public function fetch(Request $request)
     {
-        return $this->success(
-            Notice::orderBy('sort', 'ASC')
-                ->orderBy('id', 'DESC')
-                ->get()
-        );
+        $query = Notice::query()
+            ->orderBy('sort', 'ASC')
+            ->orderBy('id', 'DESC');
+
+        if (app(SiteDataScopeService::class)->hasColumn('v2_notice', 'site_id')) {
+            $query->with('site:id,code,name,status,is_default');
+            $siteId = $request->input('site_id');
+            if (is_scalar($siteId) && trim((string) $siteId) !== '') {
+                $normalized = strtolower(trim((string) $siteId));
+                if (in_array($normalized, ['0', 'global', 'null'], true)) {
+                    $query->whereNull('site_id');
+                } elseif ((int) $normalized > 0) {
+                    $query->where('site_id', (int) $normalized);
+                }
+            }
+        }
+
+        return $this->success($query->get());
     }
 
     public function save(NoticeSave $request)
@@ -30,6 +44,12 @@ class NoticeController extends Controller
             'show',
             'popup'
         ]);
+        if (app(SiteDataScopeService::class)->hasColumn('v2_notice', 'site_id')) {
+            $siteId = $request->input('site_id');
+            $data['site_id'] = is_scalar($siteId) && trim((string) $siteId) !== '' && (int) $siteId > 0
+                ? (int) $siteId
+                : null;
+        }
         if (!$request->input('id')) {
             if (!Notice::create($data)) {
                 return $this->fail([500, '保存失败']);

@@ -11,6 +11,7 @@ use App\Models\TicketMessage;
 use App\Models\TicketMessageAttachment;
 use App\Models\User;
 use App\Services\AgentCommerceContextResolver;
+use App\Services\SiteCommerceService;
 use App\Services\TicketService;
 use App\Utils\Dict;
 use Illuminate\Http\Request;
@@ -59,6 +60,8 @@ class TicketController extends Controller
             [
                 'agent_context' => app(AgentCommerceContextResolver::class)
                     ->resolveRequest($request, $request->user()),
+                'site_context' => app(SiteCommerceService::class)
+                    ->contextForRequest($request, $request->user()),
             ]
         );
         HookManager::call('ticket.create.after', $ticket);
@@ -228,7 +231,14 @@ class TicketController extends Controller
                 $request->user()->id,
                 $subject,
                 2,
-                $message
+                $message,
+                [],
+                [
+                    'agent_context' => app(AgentCommerceContextResolver::class)
+                        ->resolveRequest($request, $request->user()),
+                    'site_context' => app(SiteCommerceService::class)
+                        ->contextForRequest($request, $request->user()),
+                ]
             );
         } catch (\Exception $e) {
             throw $e;

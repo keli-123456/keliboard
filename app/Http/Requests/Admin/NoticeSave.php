@@ -17,7 +17,8 @@ class NoticeSave extends FormRequest
             'title' => 'required',
             'content' => 'required',
             'img_url' => 'nullable|url',
-            'tags' => 'nullable|array'
+            'tags' => 'nullable|array',
+            'site_id' => 'nullable|integer'
         ];
     }
 
@@ -27,7 +28,8 @@ class NoticeSave extends FormRequest
             'title.required' => '标题不能为空',
             'content.required' => '内容不能为空',
             'img_url.url' => '图片URL格式不正确',
-            'tags.array' => '标签格式不正确'
+            'tags.array' => '标签格式不正确',
+            'site_id.integer' => '站点格式不正确'
         ];
     }
 }

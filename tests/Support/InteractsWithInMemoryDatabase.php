@@ -190,6 +190,31 @@ trait InteractsWithInMemoryDatabase
         app()->instance(\Illuminate\Contracts\Routing\UrlGenerator::class, $generator);
     }
 
+    protected function bindTestRouter(string $baseUrl = 'https://example.test'): void
+    {
+        $router = new \Illuminate\Routing\Router(new \Illuminate\Events\Dispatcher(app()), app());
+        $request = \Illuminate\Http\Request::create($baseUrl);
+        $router->get('/api/v2/ticket/attachment/{id}/preview', fn () => response('ok'))
+            ->whereNumber('id')
+            ->name('api.v2.ticket.attachment.preview');
+        $router->getRoutes()->refreshNameLookups();
+        $url = new \Illuminate\Routing\UrlGenerator(
+            $router->getRoutes(),
+            $request
+        );
+        $url->setKeyResolver(fn (): string => 'unit-test-signing-key');
+
+        app()->instance('request', $request);
+        app()->instance(\Illuminate\Http\Request::class, $request);
+        app()->instance('router', $router);
+        app()->instance(\Illuminate\Routing\Router::class, $router);
+        app()->instance(\Illuminate\Contracts\Routing\Registrar::class, $router);
+        app()->instance('url', $url);
+        app()->instance(\Illuminate\Contracts\Routing\UrlGenerator::class, $url);
+        \Illuminate\Support\Facades\Facade::clearResolvedInstance('router');
+        \Illuminate\Support\Facades\Facade::clearResolvedInstance('url');
+    }
+
     protected function bindTestSettings(array $settings = []): void
     {
         app()->instance(\App\Support\Setting::class, new class($settings) {
@@ -246,6 +271,7 @@ trait InteractsWithInMemoryDatabase
     {
         $this->database->schema()->create('v2_user', function (Blueprint $table): void {
             $table->increments('id');
+            $table->integer('site_id')->nullable()->index();
             $table->string('email')->nullable();
             $table->string('password')->nullable();
             $table->string('password_algo')->nullable();
@@ -276,6 +302,96 @@ trait InteractsWithInMemoryDatabase
             $table->integer('commission_rate')->default(0);
             $table->integer('commission_type')->default(0);
             $table->integer('discount')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+    }
+
+    protected function createSiteTenantTables(): void
+    {
+        $this->database->schema()->create('v2_site', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->string('code', 64)->unique();
+            $table->string('name', 120);
+            $table->string('status', 20)->default('active');
+            $table->boolean('is_default')->default(false);
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+
+        $this->database->schema()->create('v2_site_domain', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->unsignedInteger('site_id')->index();
+            $table->string('domain', 255)->unique();
+            $table->string('status', 20)->default('active');
+            $table->boolean('is_primary')->default(false);
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+    }
+
+    protected function createSiteCommerceTables(): void
+    {
+        $this->database->schema()->create('v2_site_setting', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->unsignedInteger('site_id')->unique();
+            $table->string('site_name', 120)->nullable();
+            $table->string('logo_url', 500)->nullable();
+            $table->string('landing_theme', 64)->nullable();
+            $table->string('accent_color', 16)->nullable();
+            $table->string('support_name', 120)->nullable();
+            $table->string('support_url', 500)->nullable();
+            $table->string('announcement', 1000)->nullable();
+            $table->string('seo_title', 160)->nullable();
+            $table->string('seo_description', 255)->nullable();
+            $table->boolean('enabled')->default(true)->index();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+
+        $this->database->schema()->create('v2_site_plan_price', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->unsignedInteger('site_id')->index();
+            $table->unsignedInteger('plan_id')->index();
+            $table->string('period', 32);
+            $table->integer('sale_price')->default(0);
+            $table->boolean('enabled')->default(true)->index();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+            $table->unique(['site_id', 'plan_id', 'period'], 'uniq_site_plan_period');
+        });
+
+        $this->database->schema()->create('v2_site_plan_override', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->unsignedInteger('site_id')->index();
+            $table->unsignedInteger('plan_id')->index();
+            $table->string('display_name', 120)->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+            $table->unique(['site_id', 'plan_id'], 'uniq_site_plan_override');
+        });
+
+        $this->database->schema()->create('v2_site_payment', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->unsignedInteger('site_id')->index();
+            $table->unsignedInteger('payment_id')->index();
+            $table->boolean('enabled')->default(true)->index();
+            $table->integer('sort')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+            $table->unique(['site_id', 'payment_id'], 'uniq_site_payment');
+        });
+
+        $this->database->schema()->create('v2_site_order_context', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->unsignedInteger('order_id')->unique();
+            $table->string('trade_no', 64)->unique();
+            $table->unsignedInteger('site_id')->index();
+            $table->unsignedInteger('site_domain_id')->nullable()->index();
+            $table->integer('sale_amount')->default(0);
+            $table->integer('platform_plan_price')->default(0);
+            $table->json('pricing_snapshot')->nullable();
+            $table->json('domain_snapshot')->nullable();
             $table->integer('created_at')->nullable();
             $table->integer('updated_at')->nullable();
         });
@@ -363,6 +479,7 @@ trait InteractsWithInMemoryDatabase
     {
         $this->database->schema()->create('v2_order', function (Blueprint $table): void {
             $table->increments('id');
+            $table->integer('site_id')->nullable()->index();
             $table->integer('invite_user_id')->nullable();
             $table->integer('user_id');
             $table->integer('plan_id')->default(0);
@@ -440,6 +557,16 @@ trait InteractsWithInMemoryDatabase
             $table->unique(['agent_user_id', 'plan_id', 'period'], 'uniq_agent_plan_period');
         });
 
+        $this->database->schema()->create('v2_agent_plan_override', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('agent_user_id')->index();
+            $table->integer('plan_id')->index();
+            $table->string('display_name', 120)->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+            $table->unique(['agent_user_id', 'plan_id'], 'uniq_agent_plan_override');
+        });
+
         $this->database->schema()->create('v2_agent_balance_hold', function (Blueprint $table): void {
             $table->increments('id');
             $table->integer('agent_user_id')->index();
@@ -490,6 +617,9 @@ trait InteractsWithInMemoryDatabase
             $table->string('accent_color', 16)->nullable();
             $table->string('support_name', 80)->nullable();
             $table->string('support_url', 500)->nullable();
+            $table->string('customer_service_type', 32)->nullable();
+            $table->string('customer_service_id', 255)->nullable();
+            $table->string('announcement_title', 120)->nullable();
             $table->string('announcement', 500)->nullable();
             $table->string('seo_title', 120)->nullable();
             $table->string('seo_description', 255)->nullable();
@@ -504,6 +634,7 @@ trait InteractsWithInMemoryDatabase
     {
         $this->database->schema()->create('v2_ticket', function (Blueprint $table): void {
             $table->increments('id');
+            $table->integer('site_id')->nullable()->index();
             $table->integer('user_id');
             $table->integer('agent_user_id')->nullable()->index();
             $table->integer('agent_domain_id')->nullable()->index();
