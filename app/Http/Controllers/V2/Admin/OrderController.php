@@ -10,6 +10,8 @@ use App\Models\AgentOrderContext;
 use App\Models\Order;
 use App\Models\Plan;
 use App\Models\User;
+use App\Services\AgentCommerceService;
+use App\Services\AgentOrderStatusResolver;
 use App\Services\OrderService;
 use App\Services\PlanService;
 use App\Services\UserService;
@@ -382,6 +384,38 @@ class OrderController extends Controller
         return $this->success(true);
     }
 
+    public function releaseAgentHold(Request $request)
+    {
+        $tradeNo = trim((string) $request->input('trade_no', ''));
+        if ($tradeNo === '') {
+            return $this->fail([400, '订单号不能为空']);
+        }
+
+        $order = Order::with($this->detailRelations())->where('trade_no', $tradeNo)->first();
+        if (!$order) {
+            return $this->fail([400202, '订单不存在']);
+        }
+
+        $context = $order->agentOrderContext;
+        if (!$context) {
+            return $this->fail([400, '该订单不是代理订单']);
+        }
+
+        if ((int) $order->status !== Order::STATUS_CANCELLED) {
+            return $this->fail([400, '只能释放已取消订单的代理余额预占']);
+        }
+
+        $hold = $context->hold;
+        if (!$hold || $hold->status !== AgentBalanceHold::STATUS_PENDING) {
+            return $this->fail([400, '当前订单没有可释放的代理余额预占']);
+        }
+
+        app(AgentCommerceService::class)->releaseForOrder($order);
+
+        $freshOrder = Order::with($this->detailRelations())->find($order->id);
+        return $this->success($this->orderPayload($freshOrder ?: $order->fresh($this->detailRelations())));
+    }
+
     public function update(OrderUpdate $request)
     {
         $params = $request->only([
@@ -498,8 +532,8 @@ class OrderController extends Controller
         if ($this->hasTable('v2_agent_order_context')) {
             $relations[] = 'agentOrderContext.agent:id,email';
             $relations[] = 'agentOrderContext.domain:id,domain';
-            $relations[] = 'agentOrderContext.hold:id,status';
-            $relations[] = 'agentOrderContext.payment:id,name,payment';
+            $relations[] = 'agentOrderContext.hold:id,status,amount,expires_at';
+            $relations[] = 'agentOrderContext.payment:id,name,payment,enable';
         }
 
         return $relations;
@@ -519,6 +553,10 @@ class OrderController extends Controller
     {
         $agentContext = $order->relationLoaded('agentOrderContext') ? $order->agentOrderContext : null;
         if ($agentContext) {
+            $diagnostics = app(AgentOrderStatusResolver::class)->resolve($agentContext);
+            $canReleaseHold = in_array('cancelled_with_pending_hold', $diagnostics['abnormal_flags'], true)
+                && (string) ($agentContext->hold?->status ?? '') === AgentBalanceHold::STATUS_PENDING;
+
             return [
                 'source' => 'agent',
                 'agent_user_id' => (int) $agentContext->agent_user_id,
@@ -535,6 +573,11 @@ class OrderController extends Controller
                 'hold_status' => (string) ($agentContext->hold?->status ?? ''),
                 'status' => (string) $agentContext->status,
                 'failure_reason' => $this->snapshotStringValue($agentContext->payment_snapshot, 'failure_reason'),
+                'capture_status' => (string) $diagnostics['capture_status'],
+                'margin_amount' => (int) $diagnostics['margin_amount'],
+                'abnormal_flags' => $diagnostics['abnormal_flags'],
+                'can_release_hold' => $canReleaseHold,
+                'recommended_action' => $canReleaseHold ? 'release_agent_hold' : '',
             ];
         }
 

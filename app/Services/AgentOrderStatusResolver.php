@@ -39,6 +39,14 @@ class AgentOrderStatusResolver
             if ((int) $hold->amount !== (int) $context->cost_amount) {
                 $flags[] = 'hold_amount_mismatch';
             }
+
+            if (
+                $order !== null
+                && (int) $order->status === Order::STATUS_CANCELLED
+                && $hold->status === AgentBalanceHold::STATUS_PENDING
+            ) {
+                $flags[] = 'cancelled_with_pending_hold';
+            }
         }
 
         if ($payment !== null && $payment->enable === false) {

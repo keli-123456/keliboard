@@ -88,6 +88,70 @@ final class AdminOrderTenantContextTest extends TestCase
         $this->assertSame(AgentBalanceHold::STATUS_FAILED, $payload['data']['tenant_context']['hold_status']);
     }
 
+    public function test_admin_order_detail_exposes_agent_diagnostics_for_stuck_pending_hold(): void
+    {
+        $plan = $this->createPlan();
+        $order = $this->createAgentOrder($plan, null, 'diagnostics');
+        $order->update(['status' => Order::STATUS_CANCELLED]);
+
+        $payload = $this->responsePayload(app(OrderController::class)->detail(Request::create(
+            '/api/v2/admin/order/detail',
+            'POST',
+            ['id' => $order->id]
+        )));
+
+        $context = $payload['data']['tenant_context'];
+        $this->assertSame('agent', $context['source']);
+        $this->assertSame(AgentBalanceHold::STATUS_PENDING, $context['hold_status']);
+        $this->assertSame('not_captured', $context['capture_status']);
+        $this->assertContains('cancelled_with_pending_hold', $context['abnormal_flags']);
+        $this->assertTrue($context['can_release_hold']);
+        $this->assertSame('release_agent_hold', $context['recommended_action']);
+    }
+
+    public function test_admin_can_release_cancelled_agent_order_pending_hold(): void
+    {
+        $plan = $this->createPlan();
+        $order = $this->createAgentOrder($plan, null, 'release');
+        $order->update(['status' => Order::STATUS_CANCELLED]);
+
+        $payload = $this->responsePayload(app(OrderController::class)->releaseAgentHold(Request::create(
+            '/api/v2/admin/order/release-agent-hold',
+            'POST',
+            ['trade_no' => $order->trade_no]
+        )));
+
+        $this->assertSame('success', $payload['status']);
+        $context = $payload['data']['tenant_context'];
+        $this->assertSame(AgentBalanceHold::STATUS_RELEASED, $context['hold_status']);
+        $this->assertSame(AgentOrderContext::STATUS_CANCELLED, $context['status']);
+        $this->assertFalse($context['can_release_hold']);
+        $this->assertSame('', $context['recommended_action']);
+        $this->assertSame(
+            AgentBalanceHold::STATUS_RELEASED,
+            $order->agentOrderContext->hold->fresh()->status
+        );
+    }
+
+    public function test_admin_cannot_release_active_agent_order_pending_hold(): void
+    {
+        $plan = $this->createPlan();
+        $order = $this->createAgentOrder($plan, null, 'active-release');
+
+        $payload = $this->responsePayload(app(OrderController::class)->releaseAgentHold(Request::create(
+            '/api/v2/admin/order/release-agent-hold',
+            'POST',
+            ['trade_no' => $order->trade_no]
+        )));
+
+        $this->assertSame('fail', $payload['status']);
+        $this->assertStringContainsString('只能释放已取消订单', $payload['message']);
+        $this->assertSame(
+            AgentBalanceHold::STATUS_PENDING,
+            $order->agentOrderContext->hold->fresh()->status
+        );
+    }
+
     public function test_admin_order_fetch_filters_by_tenant_source(): void
     {
         $plan = $this->createPlan();

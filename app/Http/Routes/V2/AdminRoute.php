@@ -145,6 +145,7 @@ class AdminRoute
                 $router->post('/assign', [OrderController::class, 'assign']);
                 $router->post('/paid', [OrderController::class, 'paid']);
                 $router->post('/cancel', [OrderController::class, 'cancel']);
+                $router->post('/release-agent-hold', [OrderController::class, 'releaseAgentHold']);
                 $router->post('/detail', [OrderController::class, 'detail']);
                 $router->any('/upgrade-quote/fetch', [OrderUpgradeQuoteController::class, 'fetch']);
                 $router->post('/upgrade-quote/detail', [OrderUpgradeQuoteController::class, 'detail']);
