@@ -7,10 +7,13 @@ use App\Http\Requests\Admin\UserGenerate;
 use App\Http\Requests\Admin\UserSendMail;
 use App\Http\Requests\Admin\UserUpdate;
 use App\Jobs\SendEmailJob;
+use App\Models\AgentProfile;
 use App\Models\AgentUser;
 use App\Models\MarketingRule;
 use App\Models\Plan;
+use App\Models\Site;
 use App\Models\User;
+use App\Services\AgentCenterService;
 use App\Services\AuthService;
 use App\Services\TicketCleanupService;
 use App\Services\UserService;
@@ -24,6 +27,7 @@ use Illuminate\Http\JsonResponse;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Laravel\Sanctum\PersonalAccessToken;
 
 class UserController extends Controller
@@ -320,9 +324,24 @@ class UserController extends Controller
 
         $userIds = $users->getCollection()->pluck('id')->all();
         $onlineCounts = app(UserOnlineService::class)->getOnlineCounts($userIds);
+        $agentOwnerships = Schema::hasTable('v2_agent_user')
+            ? AgentUser::with('agent:id,email')
+                ->whereIn('sub_user_id', $userIds)
+                ->get()
+                ->keyBy('sub_user_id')
+            : collect();
+        $agentProfiles = Schema::hasTable('v2_agent_profile')
+            ? AgentProfile::whereIn('user_id', $userIds)
+                ->get()
+                ->keyBy('user_id')
+            : collect();
 
-        $users->getCollection()->transform(function ($user) use ($onlineCounts): array {
-            $data = self::transformUserData($user);
+        $users->getCollection()->transform(function ($user) use ($onlineCounts, $agentOwnerships, $agentProfiles): array {
+            $data = self::transformUserData(
+                $user,
+                $agentOwnerships->get($user->id),
+                $agentProfiles->get($user->id)
+            );
             $data['online_ip_count'] = $onlineCounts[$user->id] ?? 0;
             return $data;
         });
@@ -336,12 +355,29 @@ class UserController extends Controller
      * @param User $user
      * @return array<string, mixed>
      */
-    public static function transformUserData(User $user): array
+    public static function transformUserData(User $user, ?AgentUser $ownership = null, ?AgentProfile $profile = null): array
     {
         $user = $user->toArray();
         $user['balance'] = $user['balance'] / 100;
         $user['commission_balance'] = $user['commission_balance'] / 100;
         $user['subscribe_url'] = Helper::getSubscribeUrl($user['token']);
+        $user['agent_ownership'] = $ownership ? [
+            'agent_user_id' => (int) $ownership->agent_user_id,
+            'agent_email' => $ownership->agent?->email,
+            'sub_user_id' => (int) $ownership->sub_user_id,
+            'remark' => $ownership->remark,
+        ] : null;
+        $user['agent_user_id'] = $ownership ? (int) $ownership->agent_user_id : null;
+        $user['agent_user_email'] = $ownership?->agent?->email;
+        $user['agent_profile'] = $profile ? [
+            'id' => (int) $profile->id,
+            'status' => (string) $profile->status,
+            'level' => (string) $profile->level,
+            'remark' => $profile->remark,
+            'enabled_at' => $profile->enabled_at ? (int) $profile->enabled_at : null,
+            'disabled_at' => $profile->disabled_at ? (int) $profile->disabled_at : null,
+        ] : null;
+        $user['agent_profile_status'] = $profile?->status;
         return $user;
     }
 
@@ -358,7 +394,32 @@ class UserController extends Controller
         }
 
         $user->load('invite_user');
-        return $this->success($user);
+        $data = $user->toArray();
+        $ownership = Schema::hasTable('v2_agent_user')
+            ? AgentUser::with('agent:id,email')->where('sub_user_id', $user->id)->first()
+            : null;
+        $profile = Schema::hasTable('v2_agent_profile')
+            ? AgentProfile::where('user_id', $user->id)->first()
+            : null;
+        $data['agent_ownership'] = $ownership ? [
+            'agent_user_id' => (int) $ownership->agent_user_id,
+            'agent_email' => $ownership->agent?->email,
+            'sub_user_id' => (int) $ownership->sub_user_id,
+            'remark' => $ownership->remark,
+        ] : null;
+        $data['agent_user_id'] = $ownership ? (int) $ownership->agent_user_id : null;
+        $data['agent_user_email'] = $ownership?->agent?->email;
+        $data['agent_profile'] = $profile ? [
+            'id' => (int) $profile->id,
+            'status' => (string) $profile->status,
+            'level' => (string) $profile->level,
+            'remark' => $profile->remark,
+            'enabled_at' => $profile->enabled_at ? (int) $profile->enabled_at : null,
+            'disabled_at' => $profile->disabled_at ? (int) $profile->disabled_at : null,
+        ] : null;
+        $data['agent_profile_status'] = $profile?->status;
+
+        return $this->success($data);
     }
 
     public function getOnlineDevices(Request $request): JsonResponse
@@ -380,6 +441,14 @@ class UserController extends Controller
     public function update(UserUpdate $request)
     {
         $params = $request->validated();
+        $input = $request->all();
+        $agentRelationInputPresent = array_key_exists('agent_user_id', $input)
+            || array_key_exists('agent_user_email', $input);
+        $agentProfileStatusInputPresent = array_key_exists('agent_profile_status', $input);
+        $agentUserId = $params['agent_user_id'] ?? null;
+        $agentUserEmail = trim((string) ($params['agent_user_email'] ?? ''));
+        $agentProfileStatus = $params['agent_profile_status'] ?? null;
+        unset($params['agent_user_id'], $params['agent_user_email'], $params['agent_profile_status']);
 
         $user = User::find($request->input('id'));
         if (!$user) {
@@ -425,6 +494,35 @@ class UserController extends Controller
                 $params['invite_user_id'] = null;
             }
         }
+        unset($params['invite_user_email']);
+
+        if (array_key_exists('site_id', $params) && $params['site_id'] !== null) {
+            if (!Site::whereKey((int) $params['site_id'])->exists()) {
+                return $this->fail([400202, '站点不存在']);
+            }
+            $params['site_id'] = (int) $params['site_id'];
+        }
+
+        $agentOwner = null;
+        if ($agentRelationInputPresent) {
+            if ($agentUserEmail !== '') {
+                $agentOwner = User::where('email', $agentUserEmail)->first();
+            } elseif ($agentUserId) {
+                $agentOwner = User::find((int) $agentUserId);
+            }
+
+            if (!$agentOwner && ($agentUserEmail !== '' || $agentUserId)) {
+                return $this->fail([400202, '代理用户不存在']);
+            }
+            if ($agentOwner && (int) $agentOwner->id === (int) $user->id) {
+                return $this->fail([400, '不能将自己设置为归属代理']);
+            }
+            if ($agentOwner && !AgentProfile::where('user_id', $agentOwner->id)->where('status', AgentCenterService::STATUS_ACTIVE)->exists()) {
+                return $this->fail([400, '代理用户未启用']);
+            }
+
+            $params['invite_user_id'] = $agentOwner ? (int) $agentOwner->id : null;
+        }
 
         if (isset($params['banned']) && (int) $params['banned'] === 1) {
             $authService = new AuthService($user);
@@ -438,12 +536,81 @@ class UserController extends Controller
         }
 
         try {
-            $user->update($params);
+            DB::transaction(function () use (
+                $user,
+                $params,
+                $agentRelationInputPresent,
+                $agentOwner,
+                $agentProfileStatusInputPresent,
+                $agentProfileStatus
+            ): void {
+                $user->update($params);
+
+                if ($agentRelationInputPresent) {
+                    $this->syncAgentOwnership($user, $agentOwner);
+                }
+
+                if ($agentProfileStatusInputPresent) {
+                    $this->syncAgentProfileStatus($user, $agentProfileStatus);
+                }
+            });
         } catch (\Exception $e) {
             Log::error($e);
             return $this->fail([500, '保存失败']);
         }
         return $this->success(true);
+    }
+
+    private function syncAgentOwnership(User $user, ?User $agentOwner): void
+    {
+        if (!$agentOwner) {
+            AgentUser::where('sub_user_id', $user->id)->delete();
+            return;
+        }
+
+        AgentUser::updateOrCreate(
+            ['sub_user_id' => $user->id],
+            [
+                'agent_user_id' => $agentOwner->id,
+                'updated_at' => time(),
+            ]
+        );
+    }
+
+    private function syncAgentProfileStatus(User $user, mixed $status): void
+    {
+        $status = trim((string) $status);
+        if ($status === '') {
+            return;
+        }
+
+        if ($status === 'none') {
+            AgentProfile::where('user_id', $user->id)->delete();
+            return;
+        }
+
+        $now = time();
+        $profile = AgentProfile::where('user_id', $user->id)->first();
+        $payload = [
+            'status' => $status,
+            'level' => $profile?->level ?: 'default',
+            'updated_at' => $now,
+        ];
+
+        if ($status === AgentCenterService::STATUS_ACTIVE) {
+            $payload['enabled_at'] = $profile?->enabled_at ?: $now;
+            $payload['disabled_at'] = null;
+        } elseif ($status === AgentCenterService::STATUS_PENDING) {
+            $payload['enabled_at'] = null;
+            $payload['disabled_at'] = null;
+        } elseif ($status === AgentCenterService::STATUS_DISABLED) {
+            $payload['disabled_at'] = $profile?->disabled_at ?: $now;
+        }
+
+        AgentProfile::updateOrCreate(
+            ['user_id' => $user->id],
+            $payload
+        );
     }
 
     /**

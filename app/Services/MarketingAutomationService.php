@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\AgentUser;
 use App\Models\MarketingRule;
 use App\Models\MarketingTemplate;
 use App\Models\MessageDispatchLog;
@@ -196,7 +197,7 @@ class MarketingAutomationService
         $queued = 0;
         $skipped = 0;
 
-        User::query()
+        $this->withoutAgentSubordinates(User::query())
             ->with('plan:id,name')
             ->whereBetween('created_at', [$start, $end])
             ->where('banned', false)
@@ -237,6 +238,9 @@ class MarketingAutomationService
                     if (!$user || $user->banned || !$user->email) {
                         continue;
                     }
+                    if ($this->isAgentSubordinate((int) $user->id)) {
+                        continue;
+                    }
 
                     $matched++;
                     $result = $this->queueForUserRule(
@@ -267,7 +271,7 @@ class MarketingAutomationService
         $queued = 0;
         $skipped = 0;
 
-        User::query()
+        $this->withoutAgentSubordinates(User::query())
             ->with('plan:id,name')
             ->where('banned', false)
             ->whereNotNull('email')
@@ -302,7 +306,7 @@ class MarketingAutomationService
         $queued = 0;
         $skipped = 0;
 
-        User::query()
+        $this->withoutAgentSubordinates(User::query())
             ->with('plan:id,name')
             ->where('banned', false)
             ->whereNotNull('email')
@@ -337,7 +341,7 @@ class MarketingAutomationService
         $queued = 0;
         $skipped = 0;
 
-        User::query()
+        $this->withoutAgentSubordinates(User::query())
             ->with('plan:id,name')
             ->where('banned', false)
             ->whereNotNull('email')
@@ -642,6 +646,33 @@ class MarketingAutomationService
         $value = (int) $value;
 
         return $value > 0 ? $value : null;
+    }
+
+    private function withoutAgentSubordinates(Builder $query): Builder
+    {
+        if (!$this->hasTable('v2_agent_user')) {
+            return $query;
+        }
+
+        return $query->whereNotIn('id', AgentUser::query()->select('sub_user_id'));
+    }
+
+    private function isAgentSubordinate(int $userId): bool
+    {
+        if ($userId <= 0 || !$this->hasTable('v2_agent_user')) {
+            return false;
+        }
+
+        return AgentUser::query()->where('sub_user_id', $userId)->exists();
+    }
+
+    private function hasTable(string $table): bool
+    {
+        try {
+            return app('db')->connection()->getSchemaBuilder()->hasTable($table);
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     private function hasColumn(string $table, string $column): bool

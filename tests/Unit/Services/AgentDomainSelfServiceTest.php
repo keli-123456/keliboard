@@ -8,6 +8,8 @@ use App\Exceptions\ApiException;
 use App\Models\AgentDomain;
 use App\Models\AgentProfile;
 use App\Models\Payment;
+use App\Models\Site;
+use App\Models\SiteDomain;
 use App\Models\User;
 use App\Services\AgentCenterService;
 use App\Services\AgentDomainResolver;
@@ -71,6 +73,33 @@ final class AgentDomainSelfServiceTest extends TestCase
         $this->expectExceptionMessage('Domain already assigned');
 
         app(AgentDomainSelfService::class)->createPending($agent, 'https://agent.example.test', null);
+    }
+
+    public function test_agent_domain_cannot_reuse_site_domain(): void
+    {
+        $this->createSiteTenantTables();
+        $site = Site::query()->create([
+            'code' => 'main',
+            'name' => 'Main Site',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        SiteDomain::query()->create([
+            'site_id' => $site->id,
+            'domain' => 'taken.example.test',
+            'status' => SiteDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $agent = $this->createActiveAgent('agent@example.test');
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Domain already assigned');
+
+        app(AgentDomainSelfService::class)->createPending($agent, 'taken.example.test', null);
     }
 
     public function test_insert_time_unique_conflict_maps_to_domain_already_assigned(): void

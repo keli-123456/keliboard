@@ -31,6 +31,10 @@ class UserUpdate extends FormRequest
             'commission_type' => 'integer',
             'commission_balance' => 'numeric',
             'invite_user_email' => 'nullable|email:strict',
+            'site_id' => 'nullable|integer|min:1',
+            'agent_user_id' => 'nullable|integer|min:1',
+            'agent_user_email' => 'nullable|email:strict',
+            'agent_profile_status' => 'nullable|in:active,pending,disabled,none',
             'remarks' => 'nullable',
             'speed_limit' => 'nullable|integer',
             'device_limit' => 'nullable|integer'
@@ -63,6 +67,12 @@ class UserUpdate extends FormRequest
             'balance.integer' => '余额格式不正确',
             'commission_balance.integer' => '佣金格式不正确',
             'invite_user_email.email' => '邀请用户邮箱格式不正确',
+            'site_id.integer' => '站点格式不正确',
+            'site_id.min' => '站点格式不正确',
+            'agent_user_id.integer' => '代理用户格式不正确',
+            'agent_user_id.min' => '代理用户格式不正确',
+            'agent_user_email.email' => '代理用户邮箱格式不正确',
+            'agent_profile_status.in' => '代理身份状态格式不正确',
             'password.min' => '密码长度最小8位',
             'speed_limit.integer' => '限速格式不正确',
             'device_limit.integer' => '设备数量格式不正确'

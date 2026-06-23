@@ -9,6 +9,7 @@ use App\Models\AgentDomain;
 use App\Models\AgentOrderContext;
 use App\Models\AgentProfile;
 use App\Models\Payment;
+use App\Models\SiteDomain;
 use App\Models\User;
 use App\Services\AgentCenterService;
 use App\Services\AgentDomainResolver;
@@ -51,7 +52,7 @@ class AgentCommerceController extends Controller
             ->where('domain', $normalizedDomain)
             ->when($id > 0, fn ($query) => $query->where('id', '<>', $id))
             ->exists();
-        if ($exists) {
+        if ($exists || $this->siteDomainExists($normalizedDomain)) {
             throw new ApiException('Domain already assigned');
         }
 
@@ -362,5 +363,18 @@ class AgentCommerceController extends Controller
         }
 
         return (int) $value;
+    }
+
+    private function siteDomainExists(string $domain): bool
+    {
+        try {
+            if (!app('db')->connection()->getSchemaBuilder()->hasTable('v2_site_domain')) {
+                return false;
+            }
+
+            return SiteDomain::query()->where('domain', $domain)->exists();
+        } catch (\Throwable) {
+            return false;
+        }
     }
 }

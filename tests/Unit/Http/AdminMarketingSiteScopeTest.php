@@ -15,6 +15,7 @@ use App\Models\Site;
 use App\Models\SiteDomain;
 use App\Models\User;
 use App\Services\MarketingAutomationService;
+use Carbon\CarbonImmutable;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use ReflectionMethod;
@@ -135,6 +136,49 @@ final class AdminMarketingSiteScopeTest extends TestCase
         $this->assertSame($site->id, (int) $task->site_id);
         $this->assertNull($task->agent_user_id);
         $this->assertSame($site->id, (int) ($task->context['site_id'] ?? 0));
+    }
+
+    public function test_marketing_scan_excludes_agent_subordinate_users(): void
+    {
+        $this->createOrderTable();
+        $agent = $this->createUser('agent@example.test');
+        $subordinate = $this->createUser('subordinate@example.test', [
+            'created_at' => CarbonImmutable::today()->subDay()->timestamp + 60,
+        ]);
+        AgentUser::query()->create([
+            'agent_user_id' => $agent->id,
+            'sub_user_id' => $subordinate->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $template = $this->createTemplate('registered_no_purchase_1d_email', 'Registered No Purchase');
+        $rule = MarketingRule::query()->create([
+            'code' => 'registered_no_purchase_1d',
+            'scene' => MarketingRule::SCENE_REGISTERED_NO_PURCHASE_1D,
+            'name' => 'Registered No Purchase',
+            'message_type' => MarketingRule::TYPE_MARKETING,
+            'description' => 'Registered but not purchased',
+            'enabled' => true,
+            'email_enabled' => true,
+            'telegram_enabled' => false,
+            'email_template_id' => $template->id,
+            'telegram_template_id' => null,
+            'priority' => 100,
+            'cooldown_hours' => 24,
+            'daily_user_limit' => 1,
+            'trigger_config' => ['delay_days' => 1],
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $rule->load('emailTemplate');
+
+        $method = new ReflectionMethod(MarketingAutomationService::class, 'scanRegisteredNoPurchaseRule');
+        $method->setAccessible(true);
+        $result = $method->invoke(app(MarketingAutomationService::class), $rule);
+
+        $this->assertSame(0, $result['matched']);
+        $this->assertSame(0, $result['queued']);
+        $this->assertSame(0, MessageDispatchTask::query()->count());
     }
 
     public function test_marketing_task_uses_matching_site_template_over_global_template(): void

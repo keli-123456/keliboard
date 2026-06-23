@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace Tests\Unit\Services;
 
 use App\Exceptions\ApiException;
+use App\Models\AgentProfile;
 use App\Models\Plan;
 use App\Models\Site;
 use App\Models\SiteDomain;
+use App\Models\Ticket;
+use App\Models\TicketMessage;
 use App\Models\User;
 use App\Services\AgentCenterService;
 use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
@@ -30,6 +33,7 @@ final class AgentCenterServiceTest extends TestCase
         $this->createInviteCodeTable();
         $this->createStatUserTable();
         $this->createTicketTables();
+        $this->addTicketRuntimeColumns();
         $this->createPlanTable();
         $this->createAgentTables();
         $this->bindTestUrlGenerator();
@@ -55,6 +59,66 @@ final class AgentCenterServiceTest extends TestCase
         $this->expectExceptionMessage('Agent unlock threshold has not been reached');
 
         app(AgentCenterService::class)->unlock($agent);
+    }
+
+    public function test_agent_subordinate_apply_creates_pending_profile_and_platform_ticket(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $subordinate = $this->createOwnedSubordinate($agent, 'buyer@example.test');
+
+        $result = app(AgentCenterService::class)->apply($subordinate, '我想申请代理');
+
+        $profile = AgentProfile::query()->where('user_id', $subordinate->id)->first();
+        $ticket = Ticket::query()->where('user_id', $subordinate->id)->first();
+        $message = TicketMessage::query()->where('ticket_id', $ticket?->id)->first();
+
+        $this->assertNotNull($profile);
+        $this->assertSame(AgentCenterService::STATUS_PENDING, $profile->status);
+        $this->assertSame(AgentCenterService::STATUS_PENDING, $result['profile']['status']);
+        $this->assertTrue($result['application']['requires_platform_review']);
+        $this->assertSame($agent->id, $result['ownership']['agent_user_id']);
+        $this->assertNotNull($ticket);
+        $this->assertNull($ticket->agent_user_id);
+        $this->assertNull($ticket->agent_domain_id);
+        $this->assertSame($ticket->id, $result['application']['ticket_id']);
+        $this->assertStringContainsString('代理开通申请', (string) $ticket->subject);
+        $this->assertStringContainsString($agent->email, (string) $message?->message);
+        $this->assertStringContainsString('我想申请代理', (string) $message?->message);
+    }
+
+    public function test_agent_subordinate_cannot_unlock_without_platform_review(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $subordinate = $this->createOwnedSubordinate($agent, 'buyer@example.test', [
+            'balance' => 10000,
+        ]);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Agent application requires platform review');
+
+        app(AgentCenterService::class)->unlock($subordinate);
+    }
+
+    public function test_agent_application_does_not_create_profile_when_ticket_creation_fails(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $subordinate = $this->createOwnedSubordinate($agent, 'buyer@example.test');
+        Ticket::query()->create([
+            'user_id' => $subordinate->id,
+            'subject' => 'existing',
+            'level' => 1,
+            'status' => Ticket::STATUS_OPENING,
+            'reply_status' => Ticket::REPLY_STATUS_WAITING_ADMIN,
+        ]);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('存在未关闭的工单');
+
+        try {
+            app(AgentCenterService::class)->apply($subordinate);
+        } finally {
+            $this->assertSame(0, AgentProfile::query()->where('user_id', $subordinate->id)->count());
+        }
     }
 
     public function test_create_subordinate_assigns_unique_agent_ownership(): void
@@ -632,6 +696,15 @@ final class AgentCenterServiceTest extends TestCase
             $table->json('metadata')->nullable();
             $table->integer('created_at')->nullable();
         });
+    }
+
+    private function addTicketRuntimeColumns(): void
+    {
+        if (!$this->database->schema()->hasColumn('v2_ticket', 'reply_status')) {
+            $this->database->schema()->table('v2_ticket', function (Blueprint $table): void {
+                $table->integer('reply_status')->default(0);
+            });
+        }
     }
 
     private function bindAgentSettings(array $overrides = []): void

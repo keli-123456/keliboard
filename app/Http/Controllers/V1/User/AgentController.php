@@ -18,6 +18,15 @@ class AgentController extends Controller
         return $this->success($this->service()->unlock($request->user()));
     }
 
+    public function apply(Request $request)
+    {
+        $params = $request->validate([
+            'message' => 'nullable|string|max:1000',
+        ]);
+
+        return $this->success($this->service()->apply($request->user(), $params['message'] ?? null));
+    }
+
     public function users(Request $request)
     {
         $keyword = trim((string) $request->query('keyword', ''));

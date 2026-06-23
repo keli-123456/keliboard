@@ -7,6 +7,7 @@ namespace Tests\Unit\Http;
 use App\Exceptions\ApiException;
 use App\Http\Controllers\V2\Admin\SiteController;
 use App\Http\Routes\V2\AdminRoute;
+use App\Models\AgentDomain;
 use App\Models\Payment;
 use App\Models\Plan;
 use App\Models\Site;
@@ -90,6 +91,31 @@ final class AdminSiteControllerTest extends TestCase
             'name' => 'Second Site',
             'domains' => [
                 ['domain' => 'taken.example.test'],
+            ],
+        ]);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Domain already assigned');
+
+        app(SiteController::class)->save($request);
+    }
+
+    public function test_site_domain_cannot_reuse_agent_domain(): void
+    {
+        $this->createAgentCommerceTables();
+        AgentDomain::query()->create([
+            'agent_user_id' => 1001,
+            'domain' => 'agent-owned.example.test',
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $request = Request::create('/admin/site/save', 'POST', [
+            'code' => 'second',
+            'name' => 'Second Site',
+            'domains' => [
+                ['domain' => 'agent-owned.example.test'],
             ],
         ]);
 

@@ -33,12 +33,15 @@ class AgentCenterService
         $this->assertEnabled();
 
         $profile = $this->profileFor($agent);
+        $ownership = $this->subordinateOwnership($agent);
         $agent->refresh();
 
         return [
             'enabled' => true,
             'eligible' => $this->isEligible($agent),
             'profile' => $profile ? $this->profileSnapshot($profile) : null,
+            'ownership' => $ownership ? $this->ownershipSnapshot($ownership) : null,
+            'application' => $this->applicationSnapshot($profile, $ownership),
             'summary' => $this->summary($agent),
             'rules' => $this->rules(),
         ];
@@ -51,6 +54,10 @@ class AgentCenterService
         $profile = $this->profileFor($agent);
         if ($profile && $profile->status === self::STATUS_ACTIVE) {
             return $this->overview($agent);
+        }
+
+        if ($this->subordinateOwnership($agent)) {
+            throw new ApiException('Agent application requires platform review');
         }
 
         if (!$this->isEligible($agent)) {
@@ -74,6 +81,46 @@ class AgentCenterService
         );
 
         return $this->overview($agent->fresh() ?: $agent);
+    }
+
+    public function apply(User $user, ?string $message = null): array
+    {
+        $this->assertEnabled();
+
+        $profile = $this->profileFor($user);
+        if ($profile && $profile->status === self::STATUS_ACTIVE) {
+            return $this->overview($user);
+        }
+
+        $ownership = $this->subordinateOwnership($user);
+        $ticket = app(TicketService::class)->createTicket(
+            $user->id,
+            '代理开通申请',
+            1,
+            $this->applicationTicketMessage($user, $ownership, $message),
+            [],
+            [
+                'agent_context' => [],
+                'site_context' => [],
+            ]
+        );
+
+        $now = time();
+        AgentProfile::query()->updateOrCreate(
+            ['user_id' => $user->id],
+            [
+                'status' => self::STATUS_PENDING,
+                'level' => $profile?->level ?: 'default',
+                'enabled_at' => null,
+                'disabled_at' => null,
+                'updated_at' => $now,
+            ]
+        );
+
+        $overview = $this->overview($user->fresh() ?: $user);
+        $overview['application']['ticket_id'] = (int) $ticket->id;
+
+        return $overview;
     }
 
     public function listUsers(User $agent, ?string $keyword = null): array
@@ -604,6 +651,57 @@ class AgentCenterService
     private function profileFor(User $agent): ?AgentProfile
     {
         return AgentProfile::query()->where('user_id', $agent->id)->first();
+    }
+
+    private function subordinateOwnership(User $user): ?AgentUser
+    {
+        return AgentUser::query()
+            ->with('agent:id,email')
+            ->where('sub_user_id', $user->id)
+            ->first();
+    }
+
+    private function applicationSnapshot(?AgentProfile $profile, ?AgentUser $ownership): array
+    {
+        $status = $profile?->status ?: 'not_applied';
+
+        return [
+            'status' => $status,
+            'can_apply' => !in_array($status, [self::STATUS_ACTIVE, self::STATUS_PENDING], true),
+            'requires_platform_review' => (bool) $ownership,
+            'review_channel' => 'platform_ticket',
+        ];
+    }
+
+    private function ownershipSnapshot(AgentUser $ownership): array
+    {
+        return [
+            'agent_user_id' => (int) $ownership->agent_user_id,
+            'agent_email' => $ownership->agent?->email,
+            'sub_user_id' => (int) $ownership->sub_user_id,
+            'remark' => $ownership->remark,
+            'created_at' => $ownership->created_at ? (int) $ownership->created_at : null,
+        ];
+    }
+
+    private function applicationTicketMessage(User $user, ?AgentUser $ownership, ?string $message): string
+    {
+        $lines = [
+            '用户提交代理开通申请，请主站审核。',
+            '申请用户：' . (string) $user->email . ' (#' . (int) $user->id . ')',
+        ];
+
+        if ($ownership) {
+            $lines[] = '当前归属代理：' . (string) ($ownership->agent?->email ?: '-') . ' (#' . (int) $ownership->agent_user_id . ')';
+            $lines[] = '说明：该用户当前是代理下级，不能自动开通代理，需要主站审核是否调整归属。';
+        }
+
+        $message = trim((string) $message);
+        if ($message !== '') {
+            $lines[] = '用户留言：' . $message;
+        }
+
+        return implode("\n", $lines);
     }
 
     private function isEligible(User $agent): bool

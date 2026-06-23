@@ -6,6 +6,7 @@ use App\Exceptions\ApiException;
 use App\Models\AgentDomain;
 use App\Models\AgentProfile;
 use App\Models\Payment;
+use App\Models\SiteDomain;
 use App\Models\User;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
@@ -35,7 +36,7 @@ class AgentDomainSelfService
         return DB::transaction(function () use ($agent, $domainName, $remark): array {
             $this->activeProfile($agent, true);
 
-            if (AgentDomain::query()->where('domain', $domainName)->exists()) {
+            if (AgentDomain::query()->where('domain', $domainName)->exists() || $this->siteDomainExists($domainName)) {
                 throw new ApiException('Domain already assigned');
             }
 
@@ -62,7 +63,7 @@ class AgentDomainSelfService
                     'updated_at' => $now,
                 ]);
             } catch (QueryException $exception) {
-                if (AgentDomain::query()->where('domain', $domainName)->exists()) {
+                if (AgentDomain::query()->where('domain', $domainName)->exists() || $this->siteDomainExists($domainName)) {
                     throw new ApiException('Domain already assigned');
                 }
 
@@ -76,6 +77,19 @@ class AgentDomainSelfService
     protected function createDomainRow(array $attributes): AgentDomain
     {
         return AgentDomain::query()->create($attributes);
+    }
+
+    private function siteDomainExists(string $domain): bool
+    {
+        try {
+            if (!app('db')->connection()->getSchemaBuilder()->hasTable('v2_site_domain')) {
+                return false;
+            }
+
+            return SiteDomain::query()->where('domain', $domain)->exists();
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     public function verify(User $agent, int $id): array

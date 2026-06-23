@@ -4,6 +4,7 @@ namespace App\Http\Controllers\V2\Admin;
 
 use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
+use App\Models\AgentDomain;
 use App\Models\Payment;
 use App\Models\Site;
 use App\Models\SiteDomain;
@@ -224,7 +225,7 @@ class SiteController extends Controller
                 ->when($domainId === 0 && $siteId > 0, fn ($query) => $query->where('site_id', '<>', $siteId))
                 ->exists();
 
-            if ($exists) {
+            if ($exists || $this->agentDomainExists($normalized)) {
                 throw new ApiException('Domain already assigned');
             }
 
@@ -378,5 +379,18 @@ class SiteController extends Controller
         }
 
         return (int) $value;
+    }
+
+    private function agentDomainExists(string $domain): bool
+    {
+        try {
+            if (!app('db')->connection()->getSchemaBuilder()->hasTable('v2_agent_domain')) {
+                return false;
+            }
+
+            return AgentDomain::query()->where('domain', $domain)->exists();
+        } catch (\Throwable) {
+            return false;
+        }
     }
 }

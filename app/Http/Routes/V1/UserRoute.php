@@ -46,6 +46,7 @@ class UserRoute
             // Agent Center
             $router->get('/agent/overview', [AgentController::class, 'overview']);
             $router->post('/agent/unlock', [AgentController::class, 'unlock']);
+            $router->post('/agent/apply', [AgentController::class, 'apply']);
             $router->get('/agent/users', [AgentController::class, 'users']);
             $router->post('/agent/users', [AgentController::class, 'createUser']);
             $router->post('/agent/users/{id}/delete', [AgentController::class, 'deleteUser']);

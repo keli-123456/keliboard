@@ -12,6 +12,8 @@ use App\Models\AgentOrderContext;
 use App\Models\AgentProfile;
 use App\Models\Order;
 use App\Models\Payment;
+use App\Models\Site;
+use App\Models\SiteDomain;
 use App\Models\User;
 use App\Services\AgentCenterService;
 use Illuminate\Http\Request;
@@ -398,6 +400,39 @@ final class AdminAgentCommerceControllerTest extends TestCase
         $this->assertSame('Still pending', $updated['verification_error']);
         $this->assertSame($agent->id, $updated['created_by_agent_id']);
         $this->assertArrayNotHasKey('verification_token', $updated);
+    }
+
+    public function test_admin_agent_domain_cannot_reuse_site_domain(): void
+    {
+        $this->createSiteTenantTables();
+        $site = Site::query()->create([
+            'code' => 'main',
+            'name' => 'Main Site',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        SiteDomain::query()->create([
+            'site_id' => $site->id,
+            'domain' => 'taken.example.test',
+            'status' => SiteDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $agent = $this->createUser('agent-domain-conflict@example.test', 0);
+        $this->createActiveAgentProfile($agent);
+
+        $request = Request::create('/admin/agent-commerce/domains', 'POST', [
+            'agent_user_id' => $agent->id,
+            'domain' => 'taken.example.test',
+        ]);
+
+        $this->expectException(ApiException::class);
+        $this->expectExceptionMessage('Domain already assigned');
+
+        app(AgentCommerceController::class)->saveDomain($request);
     }
 
     public function test_admin_domain_status_payload_preserves_verification_metadata(): void

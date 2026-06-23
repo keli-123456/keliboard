@@ -60,6 +60,103 @@ final class AdminUserControllerRegressionTest extends TestCase
         $this->assertSame(500, (int) $user->fresh()->balance);
     }
 
+    public function test_update_can_assign_site_agent_owner_and_activate_agent_profile(): void
+    {
+        $this->createSiteTenantTables();
+        $this->createAgentProfileTable();
+        $site = DB::table('v2_site')->insertGetId([
+            'code' => 'gm',
+            'name' => '光喵',
+            'status' => 'active',
+            'is_default' => false,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $agent = User::create([
+            'email' => 'agent@example.com',
+            'password' => 'secret',
+            'token' => 'agent-token',
+            'uuid' => 'agent-uuid',
+        ]);
+        DB::table('v2_agent_profile')->insert([
+            'user_id' => $agent->id,
+            'status' => 'active',
+            'level' => 'default',
+            'enabled_at' => time(),
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $user = User::create([
+            'email' => 'customer@example.com',
+            'password' => 'secret',
+            'token' => 'customer-token',
+            'uuid' => 'customer-uuid',
+        ]);
+
+        $response = (new UserController())->update($this->userUpdateRequest([
+            'id' => $user->id,
+            'site_id' => $site,
+            'agent_user_id' => $agent->id,
+            'agent_profile_status' => 'active',
+        ]));
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame($site, (int) $user->fresh()->site_id);
+        $this->assertSame($agent->id, (int) $user->fresh()->invite_user_id);
+        $this->assertSame($agent->id, (int) DB::table('v2_agent_user')->where('sub_user_id', $user->id)->value('agent_user_id'));
+        $this->assertSame('active', DB::table('v2_agent_profile')->where('user_id', $user->id)->value('status'));
+    }
+
+    public function test_update_can_clear_agent_owner_and_agent_profile(): void
+    {
+        $this->createAgentProfileTable();
+        $agent = User::create([
+            'email' => 'agent@example.com',
+            'password' => 'secret',
+            'token' => 'agent-token',
+            'uuid' => 'agent-uuid',
+        ]);
+        DB::table('v2_agent_profile')->insert([
+            'user_id' => $agent->id,
+            'status' => 'active',
+            'level' => 'default',
+            'enabled_at' => time(),
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $user = User::create([
+            'email' => 'customer@example.com',
+            'password' => 'secret',
+            'token' => 'customer-token',
+            'uuid' => 'customer-uuid',
+            'invite_user_id' => $agent->id,
+        ]);
+        DB::table('v2_agent_user')->insert([
+            'agent_user_id' => $agent->id,
+            'sub_user_id' => $user->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        DB::table('v2_agent_profile')->insert([
+            'user_id' => $user->id,
+            'status' => 'pending',
+            'level' => 'default',
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $response = (new UserController())->update($this->userUpdateRequest([
+            'id' => $user->id,
+            'agent_user_id' => null,
+            'agent_profile_status' => 'none',
+        ]));
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertNull($user->fresh()->invite_user_id);
+        $this->assertSame(0, DB::table('v2_agent_user')->where('sub_user_id', $user->id)->count());
+        $this->assertSame(0, DB::table('v2_agent_profile')->where('user_id', $user->id)->count());
+    }
+
     public function test_batch_ban_without_filters_or_confirmation_is_rejected(): void
     {
         $response = (new UserController())->ban(Request::create('/admin/user/ban', 'POST'));
@@ -203,6 +300,21 @@ final class AdminUserControllerRegressionTest extends TestCase
             $table->integer('agent_user_id')->index();
             $table->integer('sub_user_id')->unique();
             $table->string('remark')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+    }
+
+    private function createAgentProfileTable(): void
+    {
+        $this->database->schema()->create('v2_agent_profile', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('user_id')->unique();
+            $table->string('status', 32)->default('pending');
+            $table->string('level', 32)->default('default');
+            $table->string('remark')->nullable();
+            $table->integer('enabled_at')->nullable();
+            $table->integer('disabled_at')->nullable();
             $table->integer('created_at')->nullable();
             $table->integer('updated_at')->nullable();
         });
