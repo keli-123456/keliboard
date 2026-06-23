@@ -24,12 +24,31 @@ class AgentCommerceService
 
     public function availableBalance(User $agent): int
     {
-        $pending = AgentBalanceHold::query()
-            ->where('agent_user_id', $agent->id)
-            ->where('status', AgentBalanceHold::STATUS_PENDING)
-            ->sum('amount');
+        $pending = $this->activePendingHoldTotal((int) $agent->id);
 
         return max(0, (int) $agent->balance - (int) $pending);
+    }
+
+    public function activePendingHoldTotal(int $agentUserId): int
+    {
+        if (!$this->hasTable('v2_agent_balance_hold')) {
+            return 0;
+        }
+
+        $query = AgentBalanceHold::query()
+            ->where('agent_user_id', $agentUserId)
+            ->where('status', AgentBalanceHold::STATUS_PENDING);
+
+        if ($this->hasTable('v2_order')) {
+            $query->whereHas('order', function ($orderQuery): void {
+                $orderQuery->whereIn('status', [
+                    Order::STATUS_PENDING,
+                    Order::STATUS_PROCESSING,
+                ]);
+            });
+        }
+
+        return (int) $query->sum('amount');
     }
 
     public function calculatePlatformCost(User $agent, Plan $plan, string $period): array
@@ -350,11 +369,7 @@ class AgentCommerceService
                     throw new ApiException('Agent user does not exist');
                 }
 
-                $pendingOther = AgentBalanceHold::query()
-                    ->where('agent_user_id', $agent->id)
-                    ->where('status', AgentBalanceHold::STATUS_PENDING)
-                    ->where('id', '<>', $hold->id)
-                    ->sum('amount');
+                $pendingOther = max(0, $this->activePendingHoldTotal((int) $agent->id) - (int) $hold->amount);
 
                 if (((int) $agent->balance - (int) $pendingOther) < (int) $hold->amount) {
                     throw new ApiException(self::INSUFFICIENT_SITE_BALANCE_MESSAGE);
@@ -606,24 +621,22 @@ class AgentCommerceService
 
     public function releaseForOrder(Order $order, string $status = AgentBalanceHold::STATUS_RELEASED): void
     {
-        if (!DB::connection()->getSchemaBuilder()->hasTable('v2_agent_order_context')) {
+        if (!$this->hasTable('v2_agent_balance_hold')) {
             return;
         }
 
-        DB::transaction(function () use ($order, $status): void {
-            $context = AgentOrderContext::query()
-                ->where('order_id', $order->id)
-                ->lockForUpdate()
-                ->first();
-            if (!$context) {
-                return;
-            }
+        $hasContextTable = $this->hasTable('v2_agent_order_context');
 
-            $hold = AgentBalanceHold::query()
-                ->whereKey($context->hold_id)
-                ->lockForUpdate()
-                ->first();
-            if (!$hold || $hold->status !== AgentBalanceHold::STATUS_PENDING) {
+        DB::transaction(function () use ($order, $status, $hasContextTable): void {
+            $context = $hasContextTable
+                ? AgentOrderContext::query()
+                    ->where('order_id', $order->id)
+                    ->lockForUpdate()
+                    ->first()
+                : null;
+
+            $hold = $this->pendingHoldForOrder($order, $context);
+            if (!$hold) {
                 return;
             }
 
@@ -635,12 +648,81 @@ class AgentCommerceService
             $hold->updated_at = $now;
             $hold->save();
 
-            $context->status = $status === AgentBalanceHold::STATUS_RELEASED
-                ? AgentOrderContext::STATUS_CANCELLED
-                : AgentOrderContext::STATUS_FAILED;
-            $context->updated_at = $now;
-            $context->save();
+            if ($context) {
+                if ((int) ($context->hold_id ?? 0) !== (int) $hold->id) {
+                    $context->hold_id = $hold->id;
+                }
+                $context->status = $status === AgentBalanceHold::STATUS_RELEASED
+                    ? AgentOrderContext::STATUS_CANCELLED
+                    : AgentOrderContext::STATUS_FAILED;
+                $context->updated_at = $now;
+                $context->save();
+            }
         });
+    }
+
+    public function releaseCancelledPendingHolds(?int $agentUserId = null, int $limit = 500): int
+    {
+        if (!$this->hasTable('v2_agent_balance_hold') || !$this->hasTable('v2_order')) {
+            return 0;
+        }
+
+        $limit = max(1, min(5000, $limit));
+        $holds = AgentBalanceHold::query()
+            ->where('status', AgentBalanceHold::STATUS_PENDING)
+            ->when($agentUserId !== null, fn ($query) => $query->where('agent_user_id', $agentUserId))
+            ->whereHas('order', fn ($query) => $query->where('status', Order::STATUS_CANCELLED))
+            ->orderBy('id')
+            ->limit($limit)
+            ->get(['id', 'order_id']);
+
+        $released = 0;
+        foreach ($holds as $hold) {
+            $order = Order::query()->find($hold->order_id);
+            if (!$order) {
+                continue;
+            }
+
+            $this->releaseForOrder($order);
+
+            $releasedHold = AgentBalanceHold::query()->find($hold->id);
+            if ($releasedHold && $releasedHold->status === AgentBalanceHold::STATUS_RELEASED) {
+                $released++;
+            }
+        }
+
+        return $released;
+    }
+
+    private function pendingHoldForOrder(Order $order, ?AgentOrderContext $context): ?AgentBalanceHold
+    {
+        $hold = AgentBalanceHold::query()
+            ->where('status', AgentBalanceHold::STATUS_PENDING)
+            ->where(function ($query) use ($order): void {
+                $query->where('order_id', (int) $order->id)
+                    ->orWhere('trade_no', (string) $order->trade_no);
+            })
+            ->lockForUpdate()
+            ->first();
+
+        if ($hold || !$context || !$context->hold_id) {
+            return $hold;
+        }
+
+        return AgentBalanceHold::query()
+            ->whereKey((int) $context->hold_id)
+            ->where('status', AgentBalanceHold::STATUS_PENDING)
+            ->lockForUpdate()
+            ->first();
+    }
+
+    private function hasTable(string $table): bool
+    {
+        try {
+            return DB::connection()->getSchemaBuilder()->hasTable($table);
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     private function activeProfile(User $agent): AgentProfile

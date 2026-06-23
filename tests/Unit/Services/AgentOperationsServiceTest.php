@@ -68,6 +68,26 @@ final class AgentOperationsServiceTest extends TestCase
         $this->assertSame(0, $summary['abnormal_order_count']);
     }
 
+    public function test_agent_summary_ignores_cancelled_orders_with_stale_pending_holds(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $this->createAgentOrder($agent, [
+            'trade_no' => 'cancelled-stale-hold',
+            'sale_amount' => 1500,
+            'cost_amount' => 900,
+            'context_status' => AgentOrderContext::STATUS_PENDING,
+            'order_status' => Order::STATUS_CANCELLED,
+            'hold_status' => AgentBalanceHold::STATUS_PENDING,
+        ]);
+
+        $summary = app(AgentOperationsService::class)->agentSummary($agent);
+
+        $this->assertSame(10000, $summary['available_balance']);
+        $this->assertSame(0, $summary['pending_hold_total']);
+        $this->assertSame(0, $summary['pending_order_count']);
+        $this->assertSame(1, $summary['abnormal_order_count']);
+    }
+
     public function test_agent_orders_are_scoped_to_current_agent(): void
     {
         $agent = $this->createActiveAgent('agent@example.test', 10000);

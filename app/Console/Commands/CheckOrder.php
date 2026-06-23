@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Jobs\OrderHandleJob;
 use Illuminate\Console\Command;
 use App\Models\Order;
+use App\Services\AgentCommerceService;
 
 class CheckOrder extends Command
 {
@@ -39,6 +40,8 @@ class CheckOrder extends Command
      */
     public function handle(): int
     {
+        app(AgentCommerceService::class)->releaseCancelledPendingHolds();
+
         Order::query()
             ->whereIn('status', [Order::STATUS_PENDING, Order::STATUS_PROCESSING])
             ->select(['id', 'trade_no'])

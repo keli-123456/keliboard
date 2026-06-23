@@ -5,14 +5,12 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Exceptions\ApiException;
-use App\Models\AgentBalanceHold;
 use App\Models\AgentDomain;
 use App\Models\AgentOrderContext;
 use App\Models\Order;
 use App\Models\Payment;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Collection;
 
 class AgentOperationsService
 {
@@ -60,9 +58,10 @@ class AgentOperationsService
 
         return [
             'active_agent_count' => count($agents),
-            'pending_hold_total' => (int) AgentBalanceHold::query()
-                ->where('status', AgentBalanceHold::STATUS_PENDING)
-                ->sum('amount'),
+            'pending_hold_total' => array_sum(array_map(
+                static fn (array $row): int => (int) $row['pending_hold_total'],
+                $agents
+            )),
             'abnormal_order_count' => array_sum(array_map(
                 static fn (array $row): int => (int) $row['abnormal_order_count'],
                 $agents
@@ -153,10 +152,7 @@ class AgentOperationsService
     private function summaryForAgent(User $agent): array
     {
         $agentUserId = (int) $agent->id;
-        $pendingHoldTotal = (int) AgentBalanceHold::query()
-            ->where('agent_user_id', $agentUserId)
-            ->where('status', AgentBalanceHold::STATUS_PENDING)
-            ->sum('amount');
+        $pendingHoldTotal = app(AgentCommerceService::class)->activePendingHoldTotal($agentUserId);
 
         $paidContexts = $this->contextsForMonth($agentUserId)->get();
         $monthSalesTotal = 0;
@@ -180,6 +176,12 @@ class AgentOperationsService
             'pending_order_count' => (int) AgentOrderContext::query()
                 ->where('agent_user_id', $agentUserId)
                 ->where('status', AgentOrderContext::STATUS_PENDING)
+                ->whereHas('order', function (Builder $query): void {
+                    $query->whereIn('status', [
+                        Order::STATUS_PENDING,
+                        Order::STATUS_PROCESSING,
+                    ]);
+                })
                 ->count(),
             'abnormal_order_count' => $this->abnormalOrderCount($agentUserId),
         ];

@@ -130,9 +130,13 @@ final class AgentCommerceServiceTest extends TestCase
     public function test_pending_holds_reduce_available_agent_balance(): void
     {
         $agent = $this->createActiveAgent('agent@example.test', 1000);
+        $buyer = $this->createUser('buyer@example.test');
+        $pendingOrder = $this->createOrder($buyer, 'pending-hold', Order::STATUS_PENDING);
+        $capturedOrder = $this->createOrder($buyer, 'captured-hold', Order::STATUS_COMPLETED);
+
         AgentBalanceHold::query()->create([
             'agent_user_id' => $agent->id,
-            'order_id' => 1,
+            'order_id' => $pendingOrder->id,
             'trade_no' => 'pending-hold',
             'amount' => 700,
             'status' => AgentBalanceHold::STATUS_PENDING,
@@ -141,7 +145,7 @@ final class AgentCommerceServiceTest extends TestCase
         ]);
         AgentBalanceHold::query()->create([
             'agent_user_id' => $agent->id,
-            'order_id' => 2,
+            'order_id' => $capturedOrder->id,
             'trade_no' => 'captured-hold',
             'amount' => 200,
             'status' => AgentBalanceHold::STATUS_CAPTURED,
@@ -180,6 +184,60 @@ final class AgentCommerceServiceTest extends TestCase
         $this->assertNotNull($hold->released_at);
         $this->assertSame(AgentOrderContext::STATUS_CANCELLED, $context->status);
         $this->assertSame(500, app(AgentCommerceService::class)->availableBalance($agent->fresh()));
+    }
+
+    public function test_cancelling_agent_order_releases_hold_when_context_hold_id_is_missing(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 500);
+        $this->assignDomain($agent, 'agent.example.test');
+        $buyer = $this->createUser('buyer@example.test');
+        $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 10.00]);
+        $this->setAgentPrice($agent, $plan, Plan::PERIOD_MONTHLY, 1300);
+
+        $order = app(AgentCommerceService::class)->createOrderFromRequest(
+            $buyer,
+            $plan,
+            Plan::PERIOD_MONTHLY,
+            null,
+            $this->requestForHost('agent.example.test')
+        );
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->firstOrFail();
+        $context->hold_id = null;
+        $context->save();
+
+        $this->assertTrue((new OrderService($order))->cancel());
+
+        $hold = AgentBalanceHold::query()->where('order_id', $order->id)->firstOrFail();
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->firstOrFail();
+        $this->assertSame(AgentBalanceHold::STATUS_RELEASED, $hold->status);
+        $this->assertSame($hold->id, (int) $context->hold_id);
+        $this->assertSame(500, app(AgentCommerceService::class)->availableBalance($agent->fresh()));
+    }
+
+    public function test_cancelled_orders_do_not_reduce_available_balance_when_hold_is_still_pending(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 500);
+        $this->assignDomain($agent, 'agent.example.test');
+        $buyer = $this->createUser('buyer@example.test');
+        $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 10.00]);
+        $this->setAgentPrice($agent, $plan, Plan::PERIOD_MONTHLY, 1300);
+
+        $order = app(AgentCommerceService::class)->createOrderFromRequest(
+            $buyer,
+            $plan,
+            Plan::PERIOD_MONTHLY,
+            null,
+            $this->requestForHost('agent.example.test')
+        );
+        $order->status = Order::STATUS_CANCELLED;
+        $order->save();
+
+        $hold = AgentBalanceHold::query()->where('order_id', $order->id)->firstOrFail();
+        $this->assertSame(AgentBalanceHold::STATUS_PENDING, $hold->status);
+        $this->assertSame(500, app(AgentCommerceService::class)->availableBalance($agent->fresh()));
+
+        $this->assertSame(1, app(AgentCommerceService::class)->releaseCancelledPendingHolds($agent->id));
+        $this->assertSame(AgentBalanceHold::STATUS_RELEASED, $hold->fresh()->status);
     }
 
     public function test_non_agent_request_returns_null(): void
@@ -466,6 +524,20 @@ final class AgentCommerceServiceTest extends TestCase
             'sell' => true,
             'show' => true,
             'renew' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+    }
+
+    private function createOrder(User $user, string $tradeNo, int $status): Order
+    {
+        return Order::query()->create([
+            'user_id' => $user->id,
+            'plan_id' => 0,
+            'period' => Plan::PERIOD_MONTHLY,
+            'trade_no' => $tradeNo,
+            'total_amount' => 0,
+            'status' => $status,
             'created_at' => time(),
             'updated_at' => time(),
         ]);
