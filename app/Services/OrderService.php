@@ -404,6 +404,7 @@ class OrderService
                         throw new \Exception('Failed to add balance.');
                     }
                 }
+                app(AgentCommerceService::class)->releaseForOrder($order);
 
                 return true;
             });

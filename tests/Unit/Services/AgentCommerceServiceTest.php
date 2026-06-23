@@ -17,6 +17,7 @@ use App\Models\Plan;
 use App\Models\User;
 use App\Services\AgentCenterService;
 use App\Services\AgentCommerceService;
+use App\Services\OrderService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Tests\Support\InteractsWithInMemoryDatabase;
@@ -149,6 +150,36 @@ final class AgentCommerceServiceTest extends TestCase
         ]);
 
         $this->assertSame(300, app(AgentCommerceService::class)->availableBalance($agent));
+    }
+
+    public function test_cancelling_agent_order_releases_balance_hold(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 500);
+        $this->assignDomain($agent, 'agent.example.test');
+        $buyer = $this->createUser('buyer@example.test');
+        $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 10.00]);
+        $this->setAgentPrice($agent, $plan, Plan::PERIOD_MONTHLY, 1300);
+
+        $order = app(AgentCommerceService::class)->createOrderFromRequest(
+            $buyer,
+            $plan,
+            Plan::PERIOD_MONTHLY,
+            null,
+            $this->requestForHost('agent.example.test')
+        );
+
+        $this->assertSame(0, app(AgentCommerceService::class)->availableBalance($agent));
+
+        $this->assertTrue((new OrderService($order))->cancel());
+
+        $hold = AgentBalanceHold::query()->where('order_id', $order->id)->first();
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->first();
+
+        $this->assertSame(Order::STATUS_CANCELLED, (int) $order->fresh()->status);
+        $this->assertSame(AgentBalanceHold::STATUS_RELEASED, $hold->status);
+        $this->assertNotNull($hold->released_at);
+        $this->assertSame(AgentOrderContext::STATUS_CANCELLED, $context->status);
+        $this->assertSame(500, app(AgentCommerceService::class)->availableBalance($agent->fresh()));
     }
 
     public function test_non_agent_request_returns_null(): void

@@ -143,4 +143,9 @@ class Order extends Model
     {
         return $this->hasOne(SiteOrderContext::class, 'order_id', 'id');
     }
+
+    public function agentOrderContext(): HasOne
+    {
+        return $this->hasOne(AgentOrderContext::class, 'order_id', 'id');
+    }
 }

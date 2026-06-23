@@ -68,18 +68,17 @@ class OrderController extends Controller
 
     public function detail(Request $request)
     {
-        $order = Order::with(['user', 'plan', 'commission_log', 'invite_user'])->find($request->input('id'));
+        $order = Order::with($this->detailRelations())->find($request->input('id'));
         if (!$order)
             return $this->fail([400202, '订单不存在']);
-        $order['period'] = PlanService::getLegacyPeriod((string) $order->period);
-        return $this->success($order);
+        return $this->success($this->orderPayload($order));
     }
 
     public function fetch(Request $request)
     {
         $current = $request->input('current', 1);
         $pageSize = $request->input('pageSize', 10);
-        $orderModel = Order::with('plan:id,name');
+        $orderModel = Order::with($this->fetchRelations());
 
         if ($request->boolean('is_commission')) {
             $orderModel->whereNotNull('invite_user_id')
@@ -98,9 +97,7 @@ class OrderController extends Controller
             );
 
         $paginatedResults->getCollection()->transform(function ($order) {
-            $orderArray = $order->toArray();
-            $orderArray['period'] = PlanService::getLegacyPeriod((string) $order->period);
-            return $orderArray;
+            return $this->orderPayload($order);
         });
 
         return $this->paginate($paginatedResults);
@@ -355,5 +352,114 @@ class OrderController extends Controller
         }
 
         return $this->success($order->trade_no);
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function fetchRelations(): array
+    {
+        return array_merge(['plan:id,name'], $this->tenantContextRelations());
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function detailRelations(): array
+    {
+        return array_merge(['user', 'plan', 'commission_log', 'invite_user'], $this->tenantContextRelations());
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function tenantContextRelations(): array
+    {
+        $relations = [];
+        if ($this->hasTable('v2_site_order_context')) {
+            $relations[] = 'siteOrderContext.site:id,name,code';
+            $relations[] = 'siteOrderContext.domain:id,domain';
+        }
+        if ($this->hasTable('v2_agent_order_context')) {
+            $relations[] = 'agentOrderContext.agent:id,email';
+            $relations[] = 'agentOrderContext.domain:id,domain';
+            $relations[] = 'agentOrderContext.hold:id,status';
+            $relations[] = 'agentOrderContext.payment:id,name,payment';
+        }
+
+        return $relations;
+    }
+
+    private function orderPayload(Order $order): array
+    {
+        $orderArray = $order->toArray();
+        $orderArray['period'] = PlanService::getLegacyPeriod((string) $order->period);
+        $orderArray['tenant_context'] = $this->tenantContextPayload($order);
+        unset($orderArray['site_order_context'], $orderArray['agent_order_context']);
+
+        return $orderArray;
+    }
+
+    private function tenantContextPayload(Order $order): array
+    {
+        $agentContext = $order->relationLoaded('agentOrderContext') ? $order->agentOrderContext : null;
+        if ($agentContext) {
+            return [
+                'source' => 'agent',
+                'agent_user_id' => (int) $agentContext->agent_user_id,
+                'agent_email' => (string) ($agentContext->agent?->email ?? ''),
+                'agent_domain_id' => $agentContext->agent_domain_id !== null ? (int) $agentContext->agent_domain_id : null,
+                'agent_domain' => (string) ($agentContext->domain?->domain ?? $this->snapshotStringValue($agentContext->domain_snapshot, 'domain')),
+                'source_detail' => $this->snapshotStringValue($agentContext->domain_snapshot, 'source'),
+                'payment_id' => $agentContext->payment_id !== null ? (int) $agentContext->payment_id : null,
+                'payment_name' => (string) ($agentContext->payment?->name ?? ''),
+                'payment_code' => (string) ($agentContext->payment?->payment ?? ''),
+                'sale_amount' => (int) $agentContext->sale_amount,
+                'cost_amount' => (int) $agentContext->cost_amount,
+                'hold_id' => $agentContext->hold_id !== null ? (int) $agentContext->hold_id : null,
+                'hold_status' => (string) ($agentContext->hold?->status ?? ''),
+                'status' => (string) $agentContext->status,
+                'failure_reason' => $this->snapshotStringValue($agentContext->payment_snapshot, 'failure_reason'),
+            ];
+        }
+
+        $siteContext = $order->relationLoaded('siteOrderContext') ? $order->siteOrderContext : null;
+        if ($siteContext) {
+            return [
+                'source' => 'site',
+                'site_id' => (int) $siteContext->site_id,
+                'site_name' => (string) ($siteContext->site?->name ?? ''),
+                'site_code' => (string) ($siteContext->site?->code ?? ''),
+                'site_domain_id' => $siteContext->site_domain_id !== null ? (int) $siteContext->site_domain_id : null,
+                'domain' => (string) ($siteContext->domain?->domain ?? $this->snapshotStringValue($siteContext->domain_snapshot, 'domain')),
+                'source_detail' => $this->snapshotStringValue($siteContext->domain_snapshot, 'source'),
+                'sale_amount' => (int) $siteContext->sale_amount,
+                'platform_plan_price' => (int) $siteContext->platform_plan_price,
+            ];
+        }
+
+        return [
+            'source' => $order->site_id ? 'site' : 'platform',
+            'site_id' => $order->site_id ? (int) $order->site_id : null,
+        ];
+    }
+
+    private function snapshotStringValue($snapshot, string $key): string
+    {
+        $value = data_get($snapshot, $key, '');
+        if ($value === null) {
+            return '';
+        }
+
+        return is_scalar($value) ? (string) $value : '';
+    }
+
+    private function hasTable(string $table): bool
+    {
+        try {
+            return app('db')->connection()->getSchemaBuilder()->hasTable($table);
+        } catch (\Throwable) {
+            return false;
+        }
     }
 }
