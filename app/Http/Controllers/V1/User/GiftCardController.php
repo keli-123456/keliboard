@@ -30,6 +30,17 @@ class GiftCardController extends Controller
 
             // 3. 获取卡片信息和奖励预览
             $codeInfo = $giftCardService->getCodeInfo();
+            if (!$eligibility['can_redeem']) {
+                return $this->success([
+                    'code_info' => $codeInfo,
+                    'reward_preview' => null,
+                    'can_redeem' => false,
+                    'reason' => $eligibility['reason'],
+                    'reason_code' => $eligibility['reason_code'] ?? null,
+                    'plan_operation' => null,
+                ]);
+            }
+
             $rewardPreview = $giftCardService->previewRewards();
             
             // 4. 预判套餐操作（仅套餐礼品卡）

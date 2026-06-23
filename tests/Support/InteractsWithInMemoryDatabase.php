@@ -461,6 +461,74 @@ trait InteractsWithInMemoryDatabase
         });
     }
 
+    protected function createGiftCardTables(): void
+    {
+        $this->database->schema()->create('v2_gift_card_template', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->string('name');
+            $table->text('description')->nullable();
+            $table->tinyInteger('type');
+            $table->tinyInteger('status')->default(1);
+            $table->string('scope_type', 16)->default(\App\Models\GiftCardTemplate::SCOPE_GLOBAL)->index();
+            $table->integer('site_id')->nullable()->index();
+            $table->integer('agent_user_id')->nullable()->index();
+            $table->integer('agent_domain_id')->nullable()->index();
+            $table->json('conditions')->nullable();
+            $table->json('rewards');
+            $table->json('limits')->nullable();
+            $table->json('special_config')->nullable();
+            $table->string('icon')->nullable();
+            $table->string('background_image')->nullable();
+            $table->string('theme_color', 7)->default('#1890ff');
+            $table->integer('sort')->default(0);
+            $table->integer('admin_id');
+            $table->integer('created_at');
+            $table->integer('updated_at');
+        });
+
+        $this->database->schema()->create('v2_gift_card_code', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('template_id')->index();
+            $table->string('code', 32)->unique();
+            $table->string('batch_id', 32)->nullable();
+            $table->tinyInteger('status')->default(\App\Models\GiftCardCode::STATUS_UNUSED);
+            $table->integer('user_id')->nullable();
+            $table->integer('used_at')->nullable();
+            $table->integer('expires_at')->nullable();
+            $table->json('actual_rewards')->nullable();
+            $table->integer('usage_count')->default(0);
+            $table->integer('max_usage')->default(1);
+            $table->json('metadata')->nullable();
+            $table->string('scope_type', 16)->default(\App\Models\GiftCardTemplate::SCOPE_GLOBAL)->index();
+            $table->integer('site_id')->nullable()->index();
+            $table->integer('agent_user_id')->nullable()->index();
+            $table->integer('agent_domain_id')->nullable()->index();
+            $table->integer('created_at');
+            $table->integer('updated_at');
+        });
+
+        $this->database->schema()->create('v2_gift_card_usage', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('code_id')->index();
+            $table->integer('template_id')->index();
+            $table->integer('user_id')->index();
+            $table->integer('invite_user_id')->nullable();
+            $table->json('rewards_given');
+            $table->json('invite_rewards')->nullable();
+            $table->integer('user_level_at_use')->nullable();
+            $table->integer('plan_id_at_use')->nullable();
+            $table->decimal('multiplier_applied', 3, 2)->default(1.00);
+            $table->string('ip_address', 45)->nullable();
+            $table->text('user_agent')->nullable();
+            $table->text('notes')->nullable();
+            $table->string('scope_type', 16)->default(\App\Models\GiftCardTemplate::SCOPE_GLOBAL)->index();
+            $table->integer('site_id')->nullable()->index();
+            $table->integer('agent_user_id')->nullable()->index();
+            $table->integer('agent_domain_id')->nullable()->index();
+            $table->integer('created_at');
+        });
+    }
+
     protected function createPersonalAccessTokenTable(): void
     {
         $this->database->schema()->create('personal_access_tokens', function (Blueprint $table): void {

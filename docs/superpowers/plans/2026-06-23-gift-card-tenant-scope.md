@@ -33,6 +33,7 @@
 - [x] Add scope eligibility checks before normal gift-card conditions.
 - [x] Add agent cost calculation and ledger creation.
 - [x] Ensure insufficient balance throws before rewards are granted.
+- [x] Keep user-side reward previews empty until the current user passes eligibility checks.
 
 ### Task 3: Admin API
 

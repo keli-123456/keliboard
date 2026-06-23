@@ -21,6 +21,8 @@ Global cards can be redeemed by any eligible user. Site cards require the user `
 
 The normal gift-card conditions and limits still run after scope validation.
 
+The user-side check API must not calculate or return reward previews when the user fails scope or condition validation. It should return the rejection reason and leave `reward_preview` and `plan_operation` empty so cross-site or cross-agent cards do not expose reward details before redemption eligibility is confirmed.
+
 ## Agent Cost Rules
 
 Agent-scoped gift cards charge the agent before rewards are issued:
@@ -53,3 +55,4 @@ Unit coverage focuses on the boundary:
 - Agent card rejects users not owned by that agent.
 - Agent card deducts balance, grants reward, writes scoped usage, and writes an agent ledger.
 - Agent card rolls back when the agent balance is insufficient.
+- User-side card checks do not expose reward previews when scope validation rejects the user.
