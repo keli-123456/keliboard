@@ -375,16 +375,19 @@ class MarketingAutomationService
         if (
             $rule->email_enabled &&
             $rule->emailTemplate &&
-            $rule->emailTemplate->enabled &&
             $user->email
         ) {
-            if ($this->canCreateRuleTask($rule, $user->id, MarketingTemplate::CHANNEL_EMAIL, $now)) {
+            $emailTemplate = $this->resolveEffectiveTemplate($rule->emailTemplate, $baseContext, MarketingTemplate::CHANNEL_EMAIL);
+            if (
+                $emailTemplate &&
+                $this->canCreateRuleTask($rule, $user->id, MarketingTemplate::CHANNEL_EMAIL, $now)
+            ) {
                 $variables = $this->buildTemplateVariables($user, $baseContext);
-                $rendered = $this->renderTemplate($rule->emailTemplate, $variables);
+                $rendered = $this->renderTemplate($emailTemplate, $variables);
                 $task = $this->dispatchService->enqueueTask([
                     'user_id' => $user->id,
                     'rule_id' => $rule->id,
-                    'template_id' => $rule->emailTemplate->id,
+                    'template_id' => $emailTemplate->id,
                     'channel' => MarketingTemplate::CHANNEL_EMAIL,
                     'message_type' => $rule->message_type,
                     'priority' => $rule->priority,
@@ -411,16 +414,19 @@ class MarketingAutomationService
         if (
             $rule->telegram_enabled &&
             $rule->telegramTemplate &&
-            $rule->telegramTemplate->enabled &&
             $user->telegram_id
         ) {
-            if ($this->canCreateRuleTask($rule, $user->id, MarketingTemplate::CHANNEL_TELEGRAM, $now)) {
+            $telegramTemplate = $this->resolveEffectiveTemplate($rule->telegramTemplate, $baseContext, MarketingTemplate::CHANNEL_TELEGRAM);
+            if (
+                $telegramTemplate &&
+                $this->canCreateRuleTask($rule, $user->id, MarketingTemplate::CHANNEL_TELEGRAM, $now)
+            ) {
                 $variables = $this->buildTemplateVariables($user, $baseContext);
-                $rendered = $this->renderTemplate($rule->telegramTemplate, $variables);
+                $rendered = $this->renderTemplate($telegramTemplate, $variables);
                 $task = $this->dispatchService->enqueueTask([
                     'user_id' => $user->id,
                     'rule_id' => $rule->id,
-                    'template_id' => $rule->telegramTemplate->id,
+                    'template_id' => $telegramTemplate->id,
                     'channel' => MarketingTemplate::CHANNEL_TELEGRAM,
                     'message_type' => $rule->message_type,
                     'priority' => $rule->priority,
@@ -441,6 +447,95 @@ class MarketingAutomationService
         }
 
         return $queued;
+    }
+
+    private function resolveEffectiveTemplate(?MarketingTemplate $baseTemplate, array $context, string $channel): ?MarketingTemplate
+    {
+        if (!$baseTemplate) {
+            return null;
+        }
+
+        if (!$this->hasColumn('v2_marketing_template', 'scope_type')) {
+            return $baseTemplate->enabled ? $baseTemplate : null;
+        }
+
+        $baseQuery = MarketingTemplate::query()
+            ->where('code', $baseTemplate->code)
+            ->where('channel', $channel)
+            ->where('message_type', $baseTemplate->message_type)
+            ->where('enabled', true)
+            ->orderByDesc('id');
+
+        $agentUserId = $this->positiveIntOrNull($context['agent_user_id'] ?? null);
+        if ($agentUserId) {
+            $agentQuery = (clone $baseQuery)
+                ->where('scope_type', MarketingTemplate::SCOPE_AGENT)
+                ->where('agent_user_id', $agentUserId);
+
+            $agentDomainId = $this->positiveIntOrNull($context['agent_domain_id'] ?? null);
+            if ($agentDomainId) {
+                $exactAgentTemplate = (clone $agentQuery)
+                    ->where('agent_domain_id', $agentDomainId)
+                    ->first();
+                if ($exactAgentTemplate) {
+                    return $exactAgentTemplate;
+                }
+            }
+
+            $genericAgentTemplate = (clone $agentQuery)
+                ->whereNull('agent_domain_id')
+                ->first();
+            if ($genericAgentTemplate) {
+                return $genericAgentTemplate;
+            }
+        }
+
+        $siteId = $this->positiveIntOrNull($context['site_id'] ?? null);
+        if ($siteId) {
+            $siteTemplate = (clone $baseQuery)
+                ->where('scope_type', MarketingTemplate::SCOPE_SITE)
+                ->where('site_id', $siteId)
+                ->first();
+            if ($siteTemplate) {
+                return $siteTemplate;
+            }
+        }
+
+        $globalTemplate = (clone $baseQuery)
+            ->where(function ($query): void {
+                $query->whereNull('scope_type')
+                    ->orWhere('scope_type', '')
+                    ->orWhere('scope_type', MarketingTemplate::SCOPE_GLOBAL);
+            })
+            ->first();
+        if ($globalTemplate) {
+            return $globalTemplate;
+        }
+
+        return $this->templateMatchesContext($baseTemplate, $context) && $baseTemplate->enabled
+            ? $baseTemplate
+            : null;
+    }
+
+    private function templateMatchesContext(MarketingTemplate $template, array $context): bool
+    {
+        $scope = $template->scopePayload();
+        if ($scope['scope_type'] === MarketingTemplate::SCOPE_GLOBAL) {
+            return true;
+        }
+
+        $siteId = $this->positiveIntOrNull($context['site_id'] ?? null);
+        if ($scope['scope_type'] === MarketingTemplate::SCOPE_SITE) {
+            return $siteId !== null && (int) $scope['site_id'] === $siteId;
+        }
+
+        $agentUserId = $this->positiveIntOrNull($context['agent_user_id'] ?? null);
+        if ($agentUserId === null || (int) $scope['agent_user_id'] !== $agentUserId) {
+            return false;
+        }
+
+        $agentDomainId = $this->positiveIntOrNull($context['agent_domain_id'] ?? null);
+        return empty($scope['agent_domain_id']) || $agentDomainId === (int) $scope['agent_domain_id'];
     }
 
     private function canCreateRuleTask(MarketingRule $rule, int $userId, string $channel, int $now): bool
@@ -533,5 +628,28 @@ class MarketingAutomationService
             $day->startOfDay()->timestamp,
             $day->endOfDay()->timestamp,
         ];
+    }
+
+    private function positiveIntOrNull(mixed $value): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+        if (!is_numeric($value)) {
+            return null;
+        }
+
+        $value = (int) $value;
+
+        return $value > 0 ? $value : null;
+    }
+
+    private function hasColumn(string $table, string $column): bool
+    {
+        try {
+            return app('db')->connection()->getSchemaBuilder()->hasColumn($table, $column);
+        } catch (\Throwable) {
+            return false;
+        }
     }
 }

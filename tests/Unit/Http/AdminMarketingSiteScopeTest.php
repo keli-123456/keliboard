@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Tests\Unit\Http;
 
 use App\Http\Controllers\V2\Admin\MarketingController;
+use App\Models\AgentDomain;
+use App\Models\AgentUser;
 use App\Models\MarketingRule;
 use App\Models\MarketingTemplate;
 use App\Models\MessageDispatchLog;
@@ -38,6 +40,8 @@ final class AdminMarketingSiteScopeTest extends TestCase
 
         $this->createUserTable();
         $this->createSiteTenantTables();
+        $this->createAgentCenterTables();
+        $this->createAgentCommerceTables();
         $this->createMarketingTables();
     }
 
@@ -133,11 +137,111 @@ final class AdminMarketingSiteScopeTest extends TestCase
         $this->assertSame($site->id, (int) ($task->context['site_id'] ?? 0));
     }
 
+    public function test_marketing_task_uses_matching_site_template_over_global_template(): void
+    {
+        $site = $this->createSite('first', 'First Site', 'first.example.test');
+        $user = $this->createUser('buyer@example.test', ['site_id' => $site->id]);
+        $globalTemplate = $this->createTemplate('renewal_reminder_email', 'Global Renewal', [
+            'subject' => 'Global renewal',
+            'content' => 'Global content for {{app_name}}',
+        ]);
+        $siteTemplate = $this->createTemplate('renewal_reminder_email', 'Site Renewal', [
+            'subject' => 'Site renewal',
+            'content' => 'Site content for {{app_name}}',
+            'scope_type' => 'site',
+            'site_id' => $site->id,
+        ]);
+        $rule = $this->createMarketingRule('renewal_site_override', $globalTemplate);
+        $rule->load('emailTemplate');
+
+        $queued = $this->queueRuleForUser($rule, $user, 'tenant-template:site:' . $user->id);
+
+        $this->assertTrue($queued);
+        $task = MessageDispatchTask::query()->firstOrFail();
+        $this->assertSame($siteTemplate->id, (int) $task->template_id);
+        $this->assertSame('Site renewal', $task->subject);
+        $this->assertSame('Site content for First Site', $task->payload['template_value']['content'] ?? null);
+        $this->assertSame('site', $task->scope_type);
+        $this->assertSame($site->id, (int) $task->site_id);
+    }
+
+    public function test_marketing_task_uses_agent_template_before_site_template(): void
+    {
+        $site = $this->createSite('first', 'First Site', 'first.example.test');
+        $agent = $this->createUser('agent@example.test', ['site_id' => $site->id]);
+        $user = $this->createUser('buyer@example.test', ['site_id' => $site->id]);
+        AgentUser::query()->create([
+            'agent_user_id' => $agent->id,
+            'sub_user_id' => $user->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $domain = AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => 'agent.example.test',
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $globalTemplate = $this->createTemplate('agent_notice_email', 'Global Agent Notice', [
+            'subject' => 'Global notice',
+        ]);
+        $this->createTemplate('agent_notice_email', 'Site Agent Notice', [
+            'subject' => 'Site notice',
+            'scope_type' => 'site',
+            'site_id' => $site->id,
+        ]);
+        $agentTemplate = $this->createTemplate('agent_notice_email', 'Agent Notice', [
+            'subject' => 'Agent notice',
+            'content' => 'Agent content for {{app_url}}',
+            'scope_type' => 'agent',
+            'site_id' => $site->id,
+            'agent_user_id' => $agent->id,
+            'agent_domain_id' => $domain->id,
+        ]);
+        $rule = $this->createMarketingRule('agent_template_override', $globalTemplate);
+        $rule->load('emailTemplate');
+
+        $queued = $this->queueRuleForUser($rule, $user, 'tenant-template:agent:' . $user->id);
+
+        $this->assertTrue($queued);
+        $task = MessageDispatchTask::query()->firstOrFail();
+        $this->assertSame($agentTemplate->id, (int) $task->template_id);
+        $this->assertSame('Agent notice', $task->subject);
+        $this->assertSame('Agent content for https://agent.example.test', $task->payload['template_value']['content'] ?? null);
+        $this->assertSame('agent', $task->scope_type);
+        $this->assertSame($agent->id, (int) $task->agent_user_id);
+        $this->assertSame($domain->id, (int) $task->agent_domain_id);
+    }
+
+    public function test_marketing_task_falls_back_to_global_template_without_tenant_override(): void
+    {
+        $site = $this->createSite('first', 'First Site', 'first.example.test');
+        $user = $this->createUser('buyer@example.test', ['site_id' => $site->id]);
+        $globalTemplate = $this->createTemplate('global_only_email', 'Global Only', [
+            'subject' => 'Global only',
+            'content' => 'Global only content for {{app_name}}',
+        ]);
+        $rule = $this->createMarketingRule('global_only_rule', $globalTemplate);
+        $rule->load('emailTemplate');
+
+        $queued = $this->queueRuleForUser($rule, $user, 'tenant-template:global:' . $user->id);
+
+        $this->assertTrue($queued);
+        $task = MessageDispatchTask::query()->firstOrFail();
+        $this->assertSame($globalTemplate->id, (int) $task->template_id);
+        $this->assertSame('Global only', $task->subject);
+        $this->assertSame('Global only content for First Site', $task->payload['template_value']['content'] ?? null);
+        $this->assertSame('site', $task->scope_type);
+        $this->assertSame($site->id, (int) $task->site_id);
+    }
+
     private function createMarketingTables(): void
     {
         $this->database->schema()->create('v2_marketing_template', function (Blueprint $table): void {
             $table->increments('id');
-            $table->string('code', 64)->unique();
+            $table->string('code', 64)->index();
             $table->string('name', 128);
             $table->string('channel', 32);
             $table->string('message_type', 32)->default(MarketingRule::TYPE_MARKETING);
@@ -276,6 +380,36 @@ final class AdminMarketingSiteScopeTest extends TestCase
             'created_at' => time(),
             'updated_at' => time(),
         ], $attributes));
+    }
+
+    private function createMarketingRule(string $code, MarketingTemplate $emailTemplate): MarketingRule
+    {
+        return MarketingRule::query()->create([
+            'code' => $code,
+            'scene' => $code,
+            'name' => $code,
+            'message_type' => MarketingRule::TYPE_MARKETING,
+            'description' => $code,
+            'enabled' => true,
+            'email_enabled' => true,
+            'telegram_enabled' => false,
+            'email_template_id' => $emailTemplate->id,
+            'telegram_template_id' => null,
+            'priority' => 100,
+            'cooldown_hours' => 24,
+            'daily_user_limit' => 1,
+            'trigger_config' => [],
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+    }
+
+    private function queueRuleForUser(MarketingRule $rule, User $user, string $dedupeKey): bool
+    {
+        $method = new ReflectionMethod(MarketingAutomationService::class, 'queueForUserRule');
+        $method->setAccessible(true);
+
+        return (bool) $method->invoke(app(MarketingAutomationService::class), $rule, $user, $dedupeKey, []);
     }
 
     private function createDispatchLog(string $target, array $attributes = []): MessageDispatchLog
