@@ -88,6 +88,59 @@ final class AdminOrderTenantContextTest extends TestCase
         $this->assertSame(AgentBalanceHold::STATUS_FAILED, $payload['data']['tenant_context']['hold_status']);
     }
 
+    public function test_admin_order_fetch_filters_by_tenant_source(): void
+    {
+        $plan = $this->createPlan();
+        $siteOrder = $this->createSiteOrder($plan);
+        $agentOrder = $this->createAgentOrder($plan);
+        $platformOrder = $this->createOrder(
+            $this->createUser('platform-buyer@example.test'),
+            $plan,
+            'platform-order-trade',
+            2000
+        );
+
+        $this->assertSame([$agentOrder->trade_no], $this->fetchTradeNos([
+            ['id' => 'tenant_source', 'value' => 'agent'],
+        ]));
+        $this->assertSame([$siteOrder->trade_no], $this->fetchTradeNos([
+            ['id' => 'tenant_source', 'value' => 'site'],
+        ]));
+        $this->assertSame([$platformOrder->trade_no], $this->fetchTradeNos([
+            ['id' => 'tenant_source', 'value' => 'platform'],
+        ]));
+    }
+
+    public function test_admin_order_fetch_filters_agent_order_issues(): void
+    {
+        $plan = $this->createPlan();
+        $pendingOrder = $this->createAgentOrder($plan, null, 'pending');
+        $failedOrder = $this->createAgentOrder($plan, 'The site balance is insufficient.', 'failed');
+        $cancelledOrder = $this->createAgentOrder($plan, null, 'cancelled');
+        $cancelledOrder->update(['status' => Order::STATUS_CANCELLED]);
+        $paidWithoutCompletedOrder = $this->createAgentOrder($plan, null, 'paid-without-completed');
+        $paidWithoutCompletedOrder->update(['status' => Order::STATUS_PROCESSING]);
+        $paidWithoutCompletedOrder->agentOrderContext()->update([
+            'status' => AgentOrderContext::STATUS_PAID,
+        ]);
+        $paidWithoutCompletedOrder->agentOrderContext->hold()->update([
+            'status' => AgentBalanceHold::STATUS_CAPTURED,
+        ]);
+
+        $this->assertSame([$failedOrder->trade_no], $this->fetchTradeNos([
+            ['id' => 'agent_order_issue', 'value' => 'failed'],
+        ]));
+        $this->assertSameCanonicalizing([$cancelledOrder->trade_no, $pendingOrder->trade_no], $this->fetchTradeNos([
+            ['id' => 'agent_order_issue', 'value' => 'pending_hold'],
+        ]));
+        $this->assertSame([$cancelledOrder->trade_no], $this->fetchTradeNos([
+            ['id' => 'agent_order_issue', 'value' => 'cancelled_with_hold'],
+        ]));
+        $this->assertSame([$paidWithoutCompletedOrder->trade_no], $this->fetchTradeNos([
+            ['id' => 'agent_order_issue', 'value' => 'paid_without_completed'],
+        ]));
+    }
+
     private function createPlan(): Plan
     {
         return Plan::query()->create([
@@ -153,19 +206,20 @@ final class AdminOrderTenantContextTest extends TestCase
         return $order;
     }
 
-    private function createAgentOrder(Plan $plan, ?string $failureReason = null): Order
+    private function createAgentOrder(Plan $plan, ?string $failureReason = null, string $suffix = ''): Order
     {
-        $agent = $this->createUser('agent@example.test', ['balance' => 5000]);
-        $buyer = $this->createUser('agent-buyer@example.test', ['invite_user_id' => $agent->id]);
+        $suffixPart = $suffix === '' ? '' : "-{$suffix}";
+        $agent = $this->createUser("agent{$suffixPart}@example.test", ['balance' => 5000]);
+        $buyer = $this->createUser("agent-buyer{$suffixPart}@example.test", ['invite_user_id' => $agent->id]);
         $domain = AgentDomain::query()->create([
             'agent_user_id' => $agent->id,
-            'domain' => 'agent.example.test',
+            'domain' => "agent{$suffixPart}.example.test",
             'status' => AgentDomain::STATUS_ACTIVE,
             'is_primary' => true,
             'created_at' => time(),
             'updated_at' => time(),
         ]);
-        $order = $this->createOrder($buyer, $plan, $failureReason ? 'agent-failed-order-trade' : 'agent-order-trade', 1500, [
+        $order = $this->createOrder($buyer, $plan, $failureReason ? "agent-failed-order-trade{$suffixPart}" : "agent-order-trade{$suffixPart}", 1500, [
             'invite_user_id' => $agent->id,
         ]);
         $hold = AgentBalanceHold::query()->create([
@@ -196,6 +250,24 @@ final class AdminOrderTenantContextTest extends TestCase
         ]);
 
         return $order;
+    }
+
+    /**
+     * @param array<int, array{id: string, value: mixed}> $filters
+     * @return array<int, string>
+     */
+    private function fetchTradeNos(array $filters): array
+    {
+        $payload = $this->responsePayload(app(OrderController::class)->fetch(Request::create(
+            '/api/v2/admin/order/fetch',
+            'GET',
+            ['pageSize' => 20, 'current' => 1, 'filter' => $filters]
+        )));
+
+        return array_values(array_map(
+            fn (array $item): string => (string) $item['trade_no'],
+            $payload['data']['items']
+        ));
     }
 
     /**

@@ -5,6 +5,8 @@ namespace App\Http\Controllers\V2\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\OrderAssign;
 use App\Http\Requests\Admin\OrderUpdate;
+use App\Models\AgentBalanceHold;
+use App\Models\AgentOrderContext;
 use App\Models\Order;
 use App\Models\Plan;
 use App\Models\User;
@@ -121,17 +123,130 @@ class OrderController extends Controller
                 return;
             }
 
+            $value = $filter['value'] ?? null;
+            if ($this->applySpecialFilter($builder, trim((string) $filter['id']), $value)) {
+                return;
+            }
+
             $field = $this->resolveOrderFilterField(trim((string) $filter['id']));
             if ($field === null) {
                 return;
             }
 
-            $value = $filter['value'] ?? null;
-
             $builder->where(function ($query) use ($field, $value) {
                 $this->buildFilterQuery($query, $field, $value);
             });
         });
+    }
+
+    private function applySpecialFilter(Builder $builder, string $field, mixed $value): bool
+    {
+        if ($field === 'tenant_source') {
+            if (is_scalar($value)) {
+                $this->applyTenantSourceFilter($builder, trim((string) $value));
+            }
+            return true;
+        }
+
+        if ($field === 'agent_order_issue') {
+            if (is_scalar($value)) {
+                $this->applyAgentOrderIssueFilter($builder, trim((string) $value));
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    private function applyTenantSourceFilter(Builder $builder, string $source): void
+    {
+        $hasAgentContext = $this->hasTable('v2_agent_order_context');
+        $hasSiteContext = $this->hasTable('v2_site_order_context');
+
+        if ($source === 'agent') {
+            if (!$hasAgentContext) {
+                $builder->whereRaw('1 = 0');
+                return;
+            }
+
+            $builder->whereHas('agentOrderContext');
+            return;
+        }
+
+        if ($source === 'site') {
+            if ($hasAgentContext) {
+                $builder->whereDoesntHave('agentOrderContext');
+            }
+
+            $builder->where(function (Builder $query) use ($hasSiteContext): void {
+                $query->whereNotNull('site_id');
+                if ($hasSiteContext) {
+                    $query->orWhereHas('siteOrderContext');
+                }
+            });
+            return;
+        }
+
+        if ($source === 'platform') {
+            if ($hasAgentContext) {
+                $builder->whereDoesntHave('agentOrderContext');
+            }
+            if ($hasSiteContext) {
+                $builder->whereDoesntHave('siteOrderContext');
+            }
+            $builder->whereNull('site_id');
+        }
+    }
+
+    private function applyAgentOrderIssueFilter(Builder $builder, string $issue): void
+    {
+        if (!$this->hasTable('v2_agent_order_context')) {
+            $builder->whereRaw('1 = 0');
+            return;
+        }
+        $hasAgentHold = $this->hasTable('v2_agent_balance_hold');
+
+        if ($issue === 'failed') {
+            $builder->whereHas('agentOrderContext', function (Builder $query) use ($hasAgentHold): void {
+                $query->where('status', AgentOrderContext::STATUS_FAILED);
+                if ($hasAgentHold) {
+                    $query->orWhereHas('hold', function (Builder $holdQuery): void {
+                        $holdQuery->where('status', AgentBalanceHold::STATUS_FAILED);
+                    });
+                }
+            });
+            return;
+        }
+
+        if ($issue === 'pending_hold') {
+            if (!$hasAgentHold) {
+                $builder->whereRaw('1 = 0');
+                return;
+            }
+            $builder->whereHas('agentOrderContext.hold', function (Builder $query): void {
+                $query->where('status', AgentBalanceHold::STATUS_PENDING);
+            });
+            return;
+        }
+
+        if ($issue === 'cancelled_with_hold') {
+            if (!$hasAgentHold) {
+                $builder->whereRaw('1 = 0');
+                return;
+            }
+            $builder->where('status', Order::STATUS_CANCELLED)
+                ->whereHas('agentOrderContext.hold', function (Builder $query): void {
+                    $query->where('status', AgentBalanceHold::STATUS_PENDING);
+                });
+            return;
+        }
+
+        if ($issue === 'paid_without_completed') {
+            $builder->where('status', '!=', Order::STATUS_COMPLETED)
+                ->whereHas('agentOrderContext', function (Builder $query): void {
+                    $query->where('status', AgentOrderContext::STATUS_PAID);
+                });
+        }
     }
 
     private function buildFilterQuery(Builder $query, string $field, mixed $value): void
