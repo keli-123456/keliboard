@@ -18,6 +18,7 @@ use App\Models\SiteOrderContext;
 use App\Models\SitePlanPrice;
 use App\Models\User;
 use App\Services\AgentCenterService;
+use App\Services\OrderService;
 use App\Services\OrderUpgradeService;
 use Illuminate\Http\Request;
 use Tests\Support\InteractsWithInMemoryDatabase;
@@ -40,6 +41,7 @@ final class OrderUpgradeServiceTenantPricingTest extends TestCase
         $this->createSiteCommerceTables();
         $this->createAgentCenterTables();
         $this->createAgentCommerceTables();
+        $this->bindSynchronousBusDispatcher();
         $this->bindTestSettings([
             'agent_center_discount_percent' => 50,
             'commission_first_time_enable' => 1,
@@ -61,6 +63,60 @@ final class OrderUpgradeServiceTenantPricingTest extends TestCase
             'upgrade_min_pay_ratio' => 0,
             'upgrade_max_credit_cap_ratio' => 1,
         ]);
+    }
+
+    public function test_paid_agent_discount_upgrade_captures_hold_and_deducts_agent_balance(): void
+    {
+        $agent = $this->createActiveAgent('paid-upgrade-agent@example.test', 5000);
+        $this->assignAgentDomain($agent, 'paid-upgrade-agent.example.test');
+        [$buyer, , $targetPlan] = $this->createUpgradeableSubscription();
+        $this->setAgentPrice($agent, $targetPlan, Plan::PERIOD_MONTHLY, 1300);
+
+        $preview = app(OrderUpgradeService::class)->previewUpgrade(
+            $buyer,
+            $targetPlan,
+            Plan::PERIOD_MONTHLY,
+            $this->requestForHost('paid-upgrade-agent.example.test')
+        );
+        $order = app(OrderUpgradeService::class)->confirmUpgrade($buyer, (string) $preview['quote_token']);
+        $hold = AgentBalanceHold::query()->where('order_id', $order->id)->first();
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->first();
+
+        $this->assertTrue((new OrderService($order))->paid('upgrade-gateway'));
+
+        $this->assertSame(Order::STATUS_COMPLETED, (int) $order->fresh()->status);
+        $this->assertSame(5000 - (int) $hold->amount, (int) $agent->fresh()->balance);
+        $this->assertSame(AgentBalanceHold::STATUS_CAPTURED, $hold->fresh()->status);
+        $this->assertNotNull($hold->fresh()->captured_at);
+        $this->assertSame(AgentOrderContext::STATUS_PAID, $context->fresh()->status);
+        $this->assertSame($targetPlan->id, (int) $buyer->fresh()->plan_id);
+    }
+
+    public function test_cancelled_agent_discount_upgrade_releases_pending_hold_without_deducting_agent_balance(): void
+    {
+        $agent = $this->createActiveAgent('cancel-upgrade-agent@example.test', 5000);
+        $this->assignAgentDomain($agent, 'cancel-upgrade-agent.example.test');
+        [$buyer, , $targetPlan] = $this->createUpgradeableSubscription();
+        $this->setAgentPrice($agent, $targetPlan, Plan::PERIOD_MONTHLY, 1300);
+
+        $preview = app(OrderUpgradeService::class)->previewUpgrade(
+            $buyer,
+            $targetPlan,
+            Plan::PERIOD_MONTHLY,
+            $this->requestForHost('cancel-upgrade-agent.example.test')
+        );
+        $order = app(OrderUpgradeService::class)->confirmUpgrade($buyer, (string) $preview['quote_token']);
+        $hold = AgentBalanceHold::query()->where('order_id', $order->id)->first();
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->first();
+
+        $this->assertTrue((new OrderService($order))->cancel());
+
+        $this->assertSame(Order::STATUS_CANCELLED, (int) $order->fresh()->status);
+        $this->assertSame(5000, (int) $agent->fresh()->balance);
+        $this->assertSame(AgentBalanceHold::STATUS_RELEASED, $hold->fresh()->status);
+        $this->assertNotNull($hold->fresh()->released_at);
+        $this->assertSame(AgentOrderContext::STATUS_CANCELLED, $context->fresh()->status);
+        $this->assertNotSame($targetPlan->id, (int) $buyer->fresh()->plan_id);
     }
 
     public function test_agent_domain_discount_upgrade_uses_agent_price_and_creates_agent_hold(): void

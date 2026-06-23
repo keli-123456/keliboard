@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Console;
 
 use App\Console\Commands\AutoRenewOrders;
+use App\Models\AgentBalanceHold;
 use App\Models\AgentOrderContext;
 use App\Models\AgentPlanPrice;
 use App\Models\AgentProfile;
@@ -80,6 +81,36 @@ final class AutoRenewOrdersTest extends TestCase
         $this->assertSame(1300, (int) $context->sale_amount);
         $this->assertSame(1000, (int) $context->cost_amount);
         $this->assertSame(1000, (int) $agent->fresh()->balance);
+    }
+
+    public function test_agent_bound_user_auto_renew_skips_when_agent_balance_cannot_cover_cost(): void
+    {
+        $agent = $this->createActiveAgent('low-balance-agent@example.test', 900);
+        $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 20.00]);
+        AgentPlanPrice::query()->create([
+            'agent_user_id' => $agent->id,
+            'plan_id' => $plan->id,
+            'period' => Plan::PERIOD_MONTHLY,
+            'sale_price' => 1300,
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $buyer = $this->createRenewingUser('low-balance-buyer@example.test', $plan, 1300);
+        AgentUser::query()->create([
+            'agent_user_id' => $agent->id,
+            'sub_user_id' => $buyer->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        app(AutoRenewOrders::class)->handle();
+
+        $this->assertSame(0, Order::query()->where('user_id', $buyer->id)->count());
+        $this->assertSame(0, AgentBalanceHold::query()->count());
+        $this->assertSame(0, AgentOrderContext::query()->count());
+        $this->assertSame(1300, (int) $buyer->fresh()->balance);
+        $this->assertSame(900, (int) $agent->fresh()->balance);
     }
 
     public function test_site_user_auto_renew_uses_site_sale_price_and_records_context(): void
