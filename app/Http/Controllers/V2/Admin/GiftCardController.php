@@ -21,11 +21,16 @@ class GiftCardController extends Controller
         $request->validate([
             'type' => 'integer|min:1|max:10',
             'status' => 'integer|in:0,1',
+            'scope_type' => 'nullable|string|in:all,global,site,agent',
+            'site_id' => 'nullable|integer|min:1',
+            'agent_user_id' => 'nullable|integer|min:1',
+            'agent_domain_id' => 'nullable|integer|min:1',
             'page' => 'integer|min:1',
             'per_page' => 'integer|min:1|max:1000',
         ]);
 
         $query = GiftCardTemplate::query();
+        $this->applyScopeFilter($query, $request);
 
         if ($request->has('type')) {
             $query->where('type', $request->input('type'));
@@ -48,6 +53,7 @@ class GiftCardController extends Controller
                 'type' => $template->type,
                 'type_name' => $template->type_name,
                 'status' => $template->status,
+                ...$this->scopeFields($template),
                 'conditions' => $template->conditions,
                 'rewards' => $template->rewards,
                 'limits' => $template->limits,
@@ -83,6 +89,10 @@ class GiftCardController extends Controller
                 Rule::in(array_keys(GiftCardTemplate::getTypeMap()))
             ],
             'status' => 'boolean',
+            'scope_type' => 'nullable|string|in:global,site,agent',
+            'site_id' => 'nullable|integer|min:1|required_if:scope_type,site',
+            'agent_user_id' => 'nullable|integer|min:1|required_if:scope_type,agent',
+            'agent_domain_id' => 'nullable|integer|min:1',
             'conditions' => 'nullable|array',
             'rewards' => 'required|array',
             'limits' => 'nullable|array',
@@ -101,11 +111,13 @@ class GiftCardController extends Controller
         ]);
 
         try {
+            $scopePayload = $this->buildScopePayload($request);
             $template = GiftCardTemplate::create([
                 'name' => $request->input('name'),
                 'description' => $request->input('description'),
                 'type' => $request->input('type'),
                 'status' => $request->input('status', true),
+                ...$scopePayload,
                 'conditions' => $request->input('conditions'),
                 'rewards' => $request->input('rewards'),
                 'limits' => $request->input('limits'),
@@ -146,6 +158,10 @@ class GiftCardController extends Controller
                 Rule::in(array_keys(GiftCardTemplate::getTypeMap()))
             ],
             'status' => 'sometimes|boolean',
+            'scope_type' => 'sometimes|nullable|string|in:global,site,agent',
+            'site_id' => 'sometimes|nullable|integer|min:1|required_if:scope_type,site',
+            'agent_user_id' => 'sometimes|nullable|integer|min:1|required_if:scope_type,agent',
+            'agent_domain_id' => 'sometimes|nullable|integer|min:1',
             'conditions' => 'sometimes|nullable|array',
             'rewards' => 'sometimes|required|array',
             'limits' => 'sometimes|nullable|array',
@@ -162,7 +178,11 @@ class GiftCardController extends Controller
         }
 
         try {
-            $updateData = collect($validatedData)->except('id')->all();
+            $scopePayload = $this->buildScopePayload($request, true);
+            $updateData = collect($validatedData)
+                ->except(['id', 'scope_type', 'site_id', 'agent_user_id', 'agent_domain_id'])
+                ->all();
+            $updateData = array_merge($updateData, $scopePayload);
 
             if (empty($updateData)) {
                 return $this->success($template);
@@ -283,6 +303,10 @@ class GiftCardController extends Controller
                         '状态',
                         '使用者',
                         '使用时间',
+                        '归属类型',
+                        '站点ID',
+                        '代理ID',
+                        '代理域名ID',
                         '备注'
                     ]);
                     
@@ -298,6 +322,7 @@ class GiftCardController extends Controller
                                 $status = $code->status_name;
                                 $usedBy = $code->user_id ?? '';
                                 $usedAt = $code->used_at ? date('Y-m-d H:i:s', $code->used_at) : '';
+                                $scope = $this->scopeFields($code);
                                 $remark = $code->remark ?? '';
                                 
                                 fputcsv($handle, [
@@ -313,6 +338,10 @@ class GiftCardController extends Controller
                                     $status,
                                     $usedBy,
                                     $usedAt,
+                                    $scope['scope_type'],
+                                    $scope['site_id'] ?? '',
+                                    $scope['agent_user_id'] ?? '',
+                                    $scope['agent_domain_id'] ?? '',
                                     $remark,
                                 ]);
                             }
@@ -356,11 +385,16 @@ class GiftCardController extends Controller
             'batch_id' => 'string',
             'keyword' => 'string|max:255',
             'status' => 'integer|in:0,1,2,3',
+            'scope_type' => 'nullable|string|in:all,global,site,agent',
+            'site_id' => 'nullable|integer|min:1',
+            'agent_user_id' => 'nullable|integer|min:1',
+            'agent_domain_id' => 'nullable|integer|min:1',
             'page' => 'integer|min:1',
             'per_page' => 'integer|min:1|max:500',
         ]);
 
         $query = GiftCardCode::with(['template', 'user']);
+        $this->applyScopeFilter($query, $request);
 
         if ($request->has('template_id')) {
             $query->where('template_id', $request->input('template_id'));
@@ -402,6 +436,7 @@ class GiftCardController extends Controller
                 'batch_id' => $code->batch_id,
                 'status' => $code->status,
                 'status_name' => $code->status_name,
+                ...$this->scopeFields($code),
                 'user_id' => $code->user_id,
                 'user_email' => $code->user ? (substr($code->user->email ?? '', 0, 3) . '***@***') : null,
                 'used_at' => $code->used_at,
@@ -477,11 +512,16 @@ class GiftCardController extends Controller
         $request->validate([
             'template_id' => 'integer|exists:v2_gift_card_template,id',
             'user_id' => 'integer|exists:v2_user,id',
+            'scope_type' => 'nullable|string|in:all,global,site,agent',
+            'site_id' => 'nullable|integer|min:1',
+            'agent_user_id' => 'nullable|integer|min:1',
+            'agent_domain_id' => 'nullable|integer|min:1',
             'page' => 'integer|min:1',
             'per_page' => 'integer|min:1|max:500',
         ]);
 
         $query = GiftCardUsage::with(['template', 'code', 'user', 'inviteUser']);
+        $this->applyScopeFilter($query, $request);
 
         if ($request->has('template_id')) {
             $query->where('template_id', $request->input('template_id'));
@@ -500,6 +540,7 @@ class GiftCardController extends Controller
                 'code' => $usage->code->code ?? '',
                 'template_name' => $usage->template->name ?? '',
                 'user_email' => $usage->user->email ?? '',
+                ...$this->scopeFields($usage),
                 'invite_user_email' => $usage->inviteUser ? (substr($usage->inviteUser->email ?? '', 0, 3) . '***@***') : null,
                 'rewards_given' => $usage->rewards_given,
                 'invite_rewards' => $usage->invite_rewards,
@@ -518,18 +559,31 @@ class GiftCardController extends Controller
         $request->validate([
             'start_date' => 'date_format:Y-m-d',
             'end_date' => 'date_format:Y-m-d',
+            'scope_type' => 'nullable|string|in:all,global,site,agent',
+            'site_id' => 'nullable|integer|min:1',
+            'agent_user_id' => 'nullable|integer|min:1',
+            'agent_domain_id' => 'nullable|integer|min:1',
         ]);
 
         $startDate = $request->input('start_date', date('Y-m-d', strtotime('-30 days')));
         $endDate = $request->input('end_date', date('Y-m-d'));
 
         // 总体统计
+        $templateStatsQuery = GiftCardTemplate::query();
+        $activeTemplateStatsQuery = GiftCardTemplate::where('status', 1);
+        $codeStatsQuery = GiftCardCode::query();
+        $usedCodeStatsQuery = GiftCardCode::where('status', GiftCardCode::STATUS_USED);
+        $usageStatsQuery = GiftCardUsage::query();
+        foreach ([$templateStatsQuery, $activeTemplateStatsQuery, $codeStatsQuery, $usedCodeStatsQuery, $usageStatsQuery] as $statsQuery) {
+            $this->applyScopeFilter($statsQuery, $request);
+        }
+
         $totalStats = [
-            'templates_count' => GiftCardTemplate::count(),
-            'active_templates_count' => GiftCardTemplate::where('status', 1)->count(),
-            'codes_count' => GiftCardCode::count(),
-            'used_codes_count' => GiftCardCode::where('status', GiftCardCode::STATUS_USED)->count(),
-            'usages_count' => GiftCardUsage::count(),
+            'templates_count' => $templateStatsQuery->count(),
+            'active_templates_count' => $activeTemplateStatsQuery->count(),
+            'codes_count' => $codeStatsQuery->count(),
+            'used_codes_count' => $usedCodeStatsQuery->count(),
+            'usages_count' => $usageStatsQuery->count(),
         ];
 
         // 每日使用统计
@@ -541,17 +595,17 @@ class GiftCardController extends Controller
             $dateExpression = 'date(to_timestamp(created_at))';
         }
 
-        $dailyUsages = GiftCardUsage::selectRaw("{$dateExpression} as date, COUNT(*) as count")
-            ->whereRaw("{$dateExpression} BETWEEN ? AND ?", [$startDate, $endDate])
-            ->groupBy('date')
-            ->orderBy('date')
-            ->get();
+        $dailyUsageQuery = GiftCardUsage::selectRaw("{$dateExpression} as date, COUNT(*) as count")
+            ->whereRaw("{$dateExpression} BETWEEN ? AND ?", [$startDate, $endDate]);
+        $this->applyScopeFilter($dailyUsageQuery, $request);
+        $dailyUsages = $dailyUsageQuery->groupBy('date')->orderBy('date')->get();
 
         // 类型统计
-        $typeStats = GiftCardUsage::with('template')
+        $typeStatsQuery = GiftCardUsage::with('template')
             ->selectRaw('template_id, COUNT(*) as count')
-            ->groupBy('template_id')
-            ->get()
+            ->groupBy('template_id');
+        $this->applyScopeFilter($typeStatsQuery, $request);
+        $typeStats = $typeStatsQuery->get()
             ->map(function ($item) {
                 return [
                     'template_name' => $item->template->name ?? '',
@@ -648,5 +702,108 @@ class GiftCardController extends Controller
             ]);
             return $this->fail([500, '删除失败']);
         }
+    }
+
+    private function buildScopePayload(Request $request, bool $partial = false): array
+    {
+        if ($partial && !$request->has('scope_type')) {
+            return [];
+        }
+
+        $scopeType = GiftCardTemplate::normalizeScopeType($request->input('scope_type', GiftCardTemplate::SCOPE_GLOBAL));
+        $siteId = $this->positiveIntOrNull($request->input('site_id'));
+        $agentUserId = $this->positiveIntOrNull($request->input('agent_user_id'));
+        $agentDomainId = $this->positiveIntOrNull($request->input('agent_domain_id'));
+
+        if ($scopeType === GiftCardTemplate::SCOPE_SITE && !$siteId) {
+            throw new \InvalidArgumentException('请选择站点');
+        }
+        if ($scopeType === GiftCardTemplate::SCOPE_AGENT && !$agentUserId) {
+            throw new \InvalidArgumentException('请选择代理用户');
+        }
+
+        return [
+            'scope_type' => $scopeType,
+            'site_id' => $scopeType === GiftCardTemplate::SCOPE_SITE ? $siteId : null,
+            'agent_user_id' => $scopeType === GiftCardTemplate::SCOPE_AGENT ? $agentUserId : null,
+            'agent_domain_id' => $scopeType === GiftCardTemplate::SCOPE_AGENT ? $agentDomainId : null,
+        ];
+    }
+
+    private function applyScopeFilter($query, Request $request): void
+    {
+        $scopeType = strtolower(trim((string) $request->input('scope_type', 'all')));
+        if ($scopeType === '' || $scopeType === 'all') {
+            return;
+        }
+
+        if ($scopeType === GiftCardTemplate::SCOPE_GLOBAL) {
+            $query->where(function ($builder): void {
+                $builder->whereNull('scope_type')
+                    ->orWhere('scope_type', '')
+                    ->orWhere('scope_type', GiftCardTemplate::SCOPE_GLOBAL);
+            });
+            return;
+        }
+
+        if ($scopeType === GiftCardTemplate::SCOPE_SITE) {
+            $siteId = $this->positiveIntOrNull($request->input('site_id'));
+            if (!$siteId) {
+                $query->where('scope_type', GiftCardTemplate::SCOPE_SITE);
+                return;
+            }
+            $query->where('scope_type', GiftCardTemplate::SCOPE_SITE)
+                ->where('site_id', $siteId);
+            return;
+        }
+
+        if ($scopeType === GiftCardTemplate::SCOPE_AGENT) {
+            $agentUserId = $this->positiveIntOrNull($request->input('agent_user_id'));
+            if (!$agentUserId) {
+                $query->where('scope_type', GiftCardTemplate::SCOPE_AGENT);
+                return;
+            }
+            $query->where('scope_type', GiftCardTemplate::SCOPE_AGENT)
+                ->where('agent_user_id', $agentUserId);
+
+            $agentDomainId = $this->positiveIntOrNull($request->input('agent_domain_id'));
+            if ($agentDomainId) {
+                $query->where(function ($builder) use ($agentDomainId): void {
+                    $builder->whereNull('agent_domain_id')
+                        ->orWhere('agent_domain_id', $agentDomainId);
+                });
+            }
+        }
+    }
+
+    private function scopeFields($model): array
+    {
+        $scopeType = GiftCardTemplate::normalizeScopeType($model->scope_type ?? GiftCardTemplate::SCOPE_GLOBAL);
+
+        return [
+            'scope_type' => $scopeType,
+            'site_id' => in_array($scopeType, [GiftCardTemplate::SCOPE_SITE, GiftCardTemplate::SCOPE_AGENT], true) && $model->site_id !== null
+                ? (int) $model->site_id
+                : null,
+            'agent_user_id' => $scopeType === GiftCardTemplate::SCOPE_AGENT && $model->agent_user_id !== null
+                ? (int) $model->agent_user_id
+                : null,
+            'agent_domain_id' => $scopeType === GiftCardTemplate::SCOPE_AGENT && $model->agent_domain_id !== null
+                ? (int) $model->agent_domain_id
+                : null,
+        ];
+    }
+
+    private function positiveIntOrNull(mixed $value): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+        if (!is_numeric($value)) {
+            return null;
+        }
+
+        $int = (int) $value;
+        return $int > 0 ? $int : null;
     }
 }

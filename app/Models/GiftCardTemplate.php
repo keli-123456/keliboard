@@ -30,6 +30,10 @@ class GiftCardTemplate extends Model
     protected $table = 'v2_gift_card_template';
     protected $dateFormat = 'U';
 
+    public const SCOPE_GLOBAL = 'global';
+    public const SCOPE_SITE = 'site';
+    public const SCOPE_AGENT = 'agent';
+
     // 卡片类型常量
     const TYPE_GENERAL = 1;         // 通用礼品卡
     const TYPE_PLAN = 2;            // 套餐礼品卡
@@ -40,6 +44,10 @@ class GiftCardTemplate extends Model
         'description',
         'type',
         'status',
+        'scope_type',
+        'site_id',
+        'agent_user_id',
+        'agent_domain_id',
         'conditions',
         'rewards',
         'limits',
@@ -58,7 +66,10 @@ class GiftCardTemplate extends Model
         'rewards' => 'array',
         'limits' => 'array',
         'special_config' => 'array',
-        'status' => 'boolean'
+        'status' => 'boolean',
+        'site_id' => 'integer',
+        'agent_user_id' => 'integer',
+        'agent_domain_id' => 'integer',
     ];
 
     /**
@@ -70,6 +81,26 @@ class GiftCardTemplate extends Model
             self::TYPE_GENERAL => '通用礼品卡',
             self::TYPE_PLAN => '套餐礼品卡',
             self::TYPE_MYSTERY => '盲盒礼品卡',
+        ];
+    }
+
+    public static function normalizeScopeType(?string $scopeType): string
+    {
+        $scopeType = strtolower(trim((string) $scopeType));
+        return in_array($scopeType, [self::SCOPE_GLOBAL, self::SCOPE_SITE, self::SCOPE_AGENT], true)
+            ? $scopeType
+            : self::SCOPE_GLOBAL;
+    }
+
+    public function scopePayload(): array
+    {
+        $scopeType = self::normalizeScopeType($this->scope_type ?? self::SCOPE_GLOBAL);
+
+        return [
+            'scope_type' => $scopeType,
+            'site_id' => $scopeType === self::SCOPE_SITE ? ($this->site_id ? (int) $this->site_id : null) : null,
+            'agent_user_id' => $scopeType === self::SCOPE_AGENT ? ($this->agent_user_id ? (int) $this->agent_user_id : null) : null,
+            'agent_domain_id' => $scopeType === self::SCOPE_AGENT ? ($this->agent_domain_id ? (int) $this->agent_domain_id : null) : null,
         ];
     }
 

@@ -4,6 +4,8 @@ namespace App\Services;
 
 use App\Exceptions\ApiException;
 use App\Http\Resources\PlanResource;
+use App\Models\AgentLedger;
+use App\Models\AgentUser;
 use App\Models\GiftCardCode;
 use App\Models\GiftCardTemplate;
 use App\Models\GiftCardUsage;
@@ -80,6 +82,15 @@ class GiftCardService
             ];
         }
 
+        $scopeCheck = $this->checkScopeEligibility();
+        if (!$scopeCheck['can_use']) {
+            return [
+                'can_redeem' => false,
+                'reason' => $scopeCheck['reason'],
+                'reason_code' => $scopeCheck['reason_code']
+            ];
+        }
+
         // 使用新的详细检查方法
         $conditionsCheck = $this->template->checkUserConditionsWithReason($this->user);
         if (!$conditionsCheck['can_use']) {
@@ -135,6 +146,8 @@ class GiftCardService
                 $this->code->setActualRewards($actualRewards);
             }
 
+            $agentCharge = $this->chargeAgentForScopedGiftCard($actualRewards);
+
             $rewardResult = $this->giveRewards($actualRewards);
 
             $inviteRewards = null;
@@ -160,8 +173,292 @@ class GiftCardService
                 'code' => $this->code->code,
                 'template_name' => $this->template->name,
                 'operation_info' => $rewardResult['operation_info'] ?? null,
+                'agent_charge' => $agentCharge,
             ];
         });
+    }
+
+    private function checkScopeEligibility(): array
+    {
+        $scope = $this->scopeContext();
+        if ($scope['scope_type'] === GiftCardTemplate::SCOPE_GLOBAL) {
+            return ['can_use' => true, 'reason' => null, 'reason_code' => null];
+        }
+
+        if ($scope['scope_type'] === GiftCardTemplate::SCOPE_SITE) {
+            $siteId = (int) ($scope['site_id'] ?? 0);
+            if ($siteId <= 0) {
+                return [
+                    'can_use' => false,
+                    'reason' => '礼品卡站点配置不完整',
+                    'reason_code' => 'site_scope_missing',
+                ];
+            }
+
+            if ((int) ($this->user?->site_id ?? 0) !== $siteId) {
+                return [
+                    'can_use' => false,
+                    'reason' => '此礼品卡不适用于当前站点',
+                    'reason_code' => 'site_scope_mismatch',
+                ];
+            }
+
+            return ['can_use' => true, 'reason' => null, 'reason_code' => null];
+        }
+
+        $agentUserId = (int) ($scope['agent_user_id'] ?? 0);
+        if ($agentUserId <= 0) {
+            return [
+                'can_use' => false,
+                'reason' => '礼品卡代理配置不完整',
+                'reason_code' => 'agent_scope_missing',
+            ];
+        }
+
+        $owned = AgentUser::query()
+            ->where('agent_user_id', $agentUserId)
+            ->where('sub_user_id', $this->user?->id)
+            ->exists();
+
+        if (!$owned) {
+            return [
+                'can_use' => false,
+                'reason' => '此礼品卡仅限指定代理的下级用户使用',
+                'reason_code' => 'agent_scope_mismatch',
+            ];
+        }
+
+        return ['can_use' => true, 'reason' => null, 'reason_code' => null];
+    }
+
+    private function scopeContext(): array
+    {
+        $templateScope = $this->template->scopePayload();
+        $scopeType = GiftCardTemplate::normalizeScopeType($this->code->scope_type ?? $templateScope['scope_type']);
+
+        if ($scopeType === GiftCardTemplate::SCOPE_SITE) {
+            return [
+                'scope_type' => $scopeType,
+                'site_id' => $this->code->site_id ?: $templateScope['site_id'],
+                'agent_user_id' => null,
+                'agent_domain_id' => null,
+            ];
+        }
+
+        if ($scopeType === GiftCardTemplate::SCOPE_AGENT) {
+            return [
+                'scope_type' => $scopeType,
+                'site_id' => $this->code->site_id ?: $templateScope['site_id'],
+                'agent_user_id' => $this->code->agent_user_id ?: $templateScope['agent_user_id'],
+                'agent_domain_id' => $this->code->agent_domain_id ?: $templateScope['agent_domain_id'],
+            ];
+        }
+
+        return [
+            'scope_type' => GiftCardTemplate::SCOPE_GLOBAL,
+            'site_id' => null,
+            'agent_user_id' => null,
+            'agent_domain_id' => null,
+        ];
+    }
+
+    private function chargeAgentForScopedGiftCard(array $rewards): ?array
+    {
+        $scope = $this->scopeContext();
+        if ($scope['scope_type'] !== GiftCardTemplate::SCOPE_AGENT) {
+            return null;
+        }
+
+        $agentUserId = (int) ($scope['agent_user_id'] ?? 0);
+        if ($agentUserId <= 0) {
+            throw new ApiException('礼品卡代理配置不完整');
+        }
+
+        if (!AgentUser::query()
+            ->where('agent_user_id', $agentUserId)
+            ->where('sub_user_id', $this->user->id)
+            ->exists()) {
+            throw new ApiException('此礼品卡仅限指定代理的下级用户使用');
+        }
+
+        [$amount, $breakdown] = $this->calculateAgentGiftCardCost($rewards);
+        $agent = User::query()->lockForUpdate()->find($agentUserId);
+        if (!$agent) {
+            throw new ApiException('Agent user does not exist');
+        }
+
+        $before = (int) $agent->balance;
+        if ($before < $amount) {
+            throw new ApiException('Insufficient balance');
+        }
+
+        if ($amount > 0) {
+            $agent->balance = $before - $amount;
+            $agent->updated_at = time();
+            $agent->save();
+        }
+
+        $ledger = AgentLedger::query()->create([
+            'agent_user_id' => $agent->id,
+            'target_user_id' => $this->user->id,
+            'type' => 'gift_card_redeem',
+            'amount' => -$amount,
+            'balance_before' => $before,
+            'balance_after' => (int) $agent->balance,
+            'plan_id' => isset($rewards['plan_id']) ? (int) $rewards['plan_id'] : null,
+            'period' => null,
+            'metadata' => [
+                'code' => $this->code->code,
+                'template_id' => $this->template->id,
+                'template_name' => $this->template->name,
+                'scope' => $scope,
+                'cost_breakdown' => $breakdown,
+            ],
+            'created_at' => time(),
+        ]);
+
+        return [
+            'amount' => $amount,
+            'balance_before' => $before,
+            'balance_after' => (int) $agent->balance,
+            'ledger_id' => (int) $ledger->id,
+            'breakdown' => $breakdown,
+        ];
+    }
+
+    private function calculateAgentGiftCardCost(array $rewards): array
+    {
+        $amount = 0;
+        $breakdown = [];
+        $inviteRate = $this->inviteRewardRate($rewards);
+        $hasInviter = (bool) $this->user?->invite_user_id;
+
+        $balance = $this->positiveInt($rewards['balance'] ?? 0);
+        if ($balance > 0) {
+            $amount += $balance;
+            $breakdown['balance'] = $balance;
+
+            if ($hasInviter && $inviteRate > 0) {
+                $inviteBalance = (int) floor($balance * $inviteRate);
+                if ($inviteBalance > 0) {
+                    $amount += $inviteBalance;
+                    $breakdown['invite_balance'] = $inviteBalance;
+                }
+            }
+        }
+
+        $transfer = $this->positiveInt($rewards['transfer_enable'] ?? 0);
+        if ($transfer > 0) {
+            $trafficAmount = $this->trafficRewardCost($transfer);
+            $amount += $trafficAmount;
+            $breakdown['traffic'] = $trafficAmount;
+
+            if ($hasInviter && $inviteRate > 0) {
+                $inviteTransfer = (int) floor($transfer * $inviteRate);
+                if ($inviteTransfer > 0) {
+                    $inviteTrafficAmount = $this->trafficRewardCost($inviteTransfer);
+                    $amount += $inviteTrafficAmount;
+                    $breakdown['invite_traffic'] = $inviteTrafficAmount;
+                }
+            }
+        }
+
+        $deviceLimit = $this->positiveInt($rewards['device_limit'] ?? 0);
+        if ($deviceLimit > 0) {
+            $devicePrice = max(0, (int) admin_setting('agent_center_gift_card_device_price', 0));
+            if ($devicePrice <= 0) {
+                throw new ApiException('Agent gift card device price is not configured');
+            }
+            $deviceAmount = $deviceLimit * $devicePrice;
+            $amount += $deviceAmount;
+            $breakdown['device_limit'] = $deviceAmount;
+        }
+
+        if (isset($rewards['plan_id']) && $this->positiveInt($rewards['plan_id']) > 0 && $this->positiveInt($rewards['plan_validity_days'] ?? 0) <= 0) {
+            throw new ApiException('Agent gift card plan validity days are required');
+        }
+
+        $expireDays = $this->positiveInt($rewards['expire_days'] ?? 0);
+        $planValidityDays = $this->positiveInt($rewards['plan_validity_days'] ?? 0);
+        $totalDays = $expireDays + $planValidityDays;
+        if ($totalDays > 0) {
+            $dayPrice = max(0, (int) admin_setting('agent_center_bonus_day_price', 0));
+            if ($dayPrice <= 0) {
+                throw new ApiException('Agent bonus day price is not configured');
+            }
+
+            if ($expireDays > 0) {
+                $expireAmount = $expireDays * $dayPrice;
+                $amount += $expireAmount;
+                $breakdown['expire_days'] = $expireAmount;
+            }
+            if ($planValidityDays > 0) {
+                $planDaysAmount = $planValidityDays * $dayPrice;
+                $amount += $planDaysAmount;
+                $breakdown['plan_validity_days'] = $planDaysAmount;
+            }
+        }
+
+        if (!empty($rewards['reset_package']) && $this->user?->plan_id) {
+            $plan = Plan::query()->find($this->user->plan_id);
+            if ($plan) {
+                $resetAmount = $this->agentResetTrafficCost($plan);
+                $amount += $resetAmount;
+                $breakdown['reset_package'] = $resetAmount;
+            }
+        }
+
+        return [$amount, $breakdown];
+    }
+
+    private function trafficRewardCost(int $bytes): int
+    {
+        $price = max(0, (int) admin_setting('agent_center_gift_card_traffic_gb_price', 0));
+        if ($price <= 0) {
+            throw new ApiException('Agent gift card traffic price is not configured');
+        }
+
+        return (int) ceil(($bytes / 1073741824) * $price);
+    }
+
+    private function agentResetTrafficCost(Plan $plan): int
+    {
+        if (!$this->boolSetting('agent_center_allow_traffic_reset', true)) {
+            throw new ApiException('Traffic reset is disabled');
+        }
+        if ((string) admin_setting('agent_center_reset_price_mode', 'plan_reset_price') === 'free') {
+            return 0;
+        }
+
+        $price = $plan->prices[Plan::PERIOD_RESET_TRAFFIC] ?? 0;
+        $baseAmount = OrderService::amountToCents($price);
+        $discountPercent = max(0, min(100, (float) admin_setting('agent_center_discount_percent', 100)));
+        return (int) round($baseAmount * ($discountPercent / 100));
+    }
+
+    private function inviteRewardRate(array $rewards): float
+    {
+        $rate = (float) ($rewards['invite_reward_rate'] ?? 0);
+        if (!is_finite($rate)) {
+            return 0.0;
+        }
+
+        return max(0.0, min(1.0, $rate));
+    }
+
+    private function positiveInt(mixed $value): int
+    {
+        if (!is_numeric($value)) {
+            return 0;
+        }
+
+        return max(0, (int) floor((float) $value));
+    }
+
+    private function boolSetting(string $key, bool $default): bool
+    {
+        $value = admin_setting($key, $default ? 1 : 0);
+        return $value === true || $value === 1 || $value === '1' || $value === 'true';
     }
 
     /**

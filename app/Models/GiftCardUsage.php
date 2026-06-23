@@ -34,6 +34,10 @@ class GiftCardUsage extends Model
         'template_id',
         'user_id',
         'invite_user_id',
+        'scope_type',
+        'site_id',
+        'agent_user_id',
+        'agent_domain_id',
         'rewards_given',
         'invite_rewards',
         'user_level_at_use',
@@ -49,7 +53,10 @@ class GiftCardUsage extends Model
         'created_at' => 'timestamp',
         'rewards_given' => 'array',
         'invite_rewards' => 'array',
-        'multiplier_applied' => 'float'
+        'multiplier_applied' => 'float',
+        'site_id' => 'integer',
+        'agent_user_id' => 'integer',
+        'agent_domain_id' => 'integer',
     ];
 
     /**
@@ -93,11 +100,23 @@ class GiftCardUsage extends Model
         array $rewards,
         array $options = []
     ): self {
+        $templateScope = $code->template ? $code->template->scopePayload() : [];
+        $scope = [
+            'scope_type' => $options['scope_type'] ?? $code->scope_type ?? $templateScope['scope_type'] ?? GiftCardTemplate::SCOPE_GLOBAL,
+            'site_id' => $options['site_id'] ?? $code->site_id ?? $templateScope['site_id'] ?? null,
+            'agent_user_id' => $options['agent_user_id'] ?? $code->agent_user_id ?? $templateScope['agent_user_id'] ?? null,
+            'agent_domain_id' => $options['agent_domain_id'] ?? $code->agent_domain_id ?? $templateScope['agent_domain_id'] ?? null,
+        ];
+
         return self::create([
             'code_id' => $code->id,
             'template_id' => $code->template_id,
             'user_id' => $user->id,
             'invite_user_id' => $user->invite_user_id,
+            'scope_type' => GiftCardTemplate::normalizeScopeType($scope['scope_type']),
+            'site_id' => $scope['site_id'],
+            'agent_user_id' => $scope['agent_user_id'],
+            'agent_domain_id' => $scope['agent_domain_id'],
             'rewards_given' => $rewards,
             'invite_rewards' => $options['invite_rewards'] ?? null,
             'user_level_at_use' => $user->plan ? $user->plan->sort : null,
@@ -109,4 +128,4 @@ class GiftCardUsage extends Model
             'created_at' => time(),
         ]);
     }
-} 
+}

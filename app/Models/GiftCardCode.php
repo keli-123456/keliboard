@@ -41,6 +41,10 @@ class GiftCardCode extends Model
         'code',
         'batch_id',
         'status',
+        'scope_type',
+        'site_id',
+        'agent_user_id',
+        'agent_domain_id',
         'user_id',
         'used_at',
         'expires_at',
@@ -56,7 +60,10 @@ class GiftCardCode extends Model
         'used_at' => 'timestamp',
         'expires_at' => 'timestamp',
         'actual_rewards' => 'array',
-        'metadata' => 'array'
+        'metadata' => 'array',
+        'site_id' => 'integer',
+        'agent_user_id' => 'integer',
+        'agent_domain_id' => 'integer',
     ];
 
     /**
@@ -188,6 +195,18 @@ class GiftCardCode extends Model
         $prefix = $options['prefix'] ?? 'GC';
         $expiresAt = $options['expires_at'] ?? null;
         $maxUsage = $options['max_usage'] ?? 1;
+        $template = GiftCardTemplate::query()->find($templateId);
+        $scope = array_merge([
+            'scope_type' => GiftCardTemplate::SCOPE_GLOBAL,
+            'site_id' => null,
+            'agent_user_id' => null,
+            'agent_domain_id' => null,
+        ], $template ? $template->scopePayload() : [], array_intersect_key($options, array_flip([
+            'scope_type',
+            'site_id',
+            'agent_user_id',
+            'agent_domain_id',
+        ])));
 
         $codes = [];
         for ($i = 0; $i < $count; $i++) {
@@ -196,6 +215,10 @@ class GiftCardCode extends Model
                 'code' => self::generateCode($prefix),
                 'batch_id' => $batchId,
                 'status' => self::STATUS_UNUSED,
+                'scope_type' => $scope['scope_type'],
+                'site_id' => $scope['site_id'],
+                'agent_user_id' => $scope['agent_user_id'],
+                'agent_domain_id' => $scope['agent_domain_id'],
                 'expires_at' => $expiresAt,
                 'max_usage' => $maxUsage,
                 'created_at' => time(),

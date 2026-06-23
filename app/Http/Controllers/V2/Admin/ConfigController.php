@@ -393,6 +393,8 @@ class ConfigController extends Controller
                 admin_setting('agent_center_reset_price_mode', 'plan_reset_price')
             ),
             'agent_center_bonus_day_price' => max(0, (int) admin_setting('agent_center_bonus_day_price', 0)),
+            'agent_center_gift_card_traffic_gb_price' => max(0, (int) admin_setting('agent_center_gift_card_traffic_gb_price', 0)),
+            'agent_center_gift_card_device_price' => max(0, (int) admin_setting('agent_center_gift_card_device_price', 0)),
             'agent_center_domain_limit' => max(0, (int) admin_setting('agent_center_domain_limit', 1)),
         ];
     }
