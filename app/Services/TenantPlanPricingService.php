@@ -42,6 +42,24 @@ class TenantPlanPricingService
         return $this->platformPrice($user, $plan, $periodKey);
     }
 
+    public function resolveForContext(User $user, Plan $plan, string $period, ?array $tenantContext): array
+    {
+        $periodKey = PlanService::getPeriodKey($period);
+        $tenantContext = is_array($tenantContext) ? $tenantContext : [];
+
+        $agentContext = $tenantContext['agent_context'] ?? null;
+        if (is_array($agentContext) && !empty($agentContext['agent_user_id'])) {
+            return $this->agentPrice($agentContext, $plan, $periodKey);
+        }
+
+        $siteContext = $tenantContext['site_context'] ?? null;
+        if (is_array($siteContext) && !empty($siteContext['site_id'])) {
+            return $this->sitePrice($user, $siteContext, $plan, $periodKey);
+        }
+
+        return $this->platformPrice($user, $plan, $periodKey);
+    }
+
     public function amountForUser(User $user, Plan $plan, string $period): int
     {
         return (int) $this->resolveForUser($user, $plan, $period)['sale_amount'];

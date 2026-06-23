@@ -261,8 +261,7 @@ class ClientController extends Controller
 
         // Wrapper clients such as Hiddify expose app build versions like
         // 1.2.8.1103 instead of sing-box core semver.
-        $family = app('protocols.capabilities')->resolveClientFamily($clientName);
-        return $clientName === 'sing-box' || $family === 'sing-box';
+        return in_array($clientName, ['sing-box', 'hiddify'], true);
     }
 
     private function setSubscribeInfoToServers(&$servers, $user, $rejectServerCount = 0)

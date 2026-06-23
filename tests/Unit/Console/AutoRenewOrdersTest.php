@@ -35,6 +35,7 @@ final class AutoRenewOrdersTest extends TestCase
         $this->createSiteCommerceTables();
         $this->createAgentCenterTables();
         $this->createAgentCommerceTables();
+        $this->bindSynchronousBusDispatcher();
         $this->bindTestSettings([
             'agent_center_discount_percent' => 50,
             'invite_commission' => 10,

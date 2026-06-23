@@ -92,6 +92,12 @@ class User extends Authenticatable
         'year_price',
         'two_year_price',
         'three_year_price',
+        Plan::PERIOD_MONTHLY,
+        Plan::PERIOD_QUARTERLY,
+        Plan::PERIOD_HALF_YEARLY,
+        Plan::PERIOD_YEARLY,
+        Plan::PERIOD_TWO_YEARLY,
+        Plan::PERIOD_THREE_YEARLY,
     ];
 
     public static function getAutoRenewPeriods(): array

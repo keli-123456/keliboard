@@ -138,7 +138,8 @@ class OrderController extends Controller
             $orderUpgradeService->previewUpgrade(
                 $user,
                 $targetPlan,
-                (string) $request->input('period')
+                (string) $request->input('period'),
+                $request
             )
         );
     }

@@ -3,12 +3,16 @@
 namespace App\Services;
 
 use App\Exceptions\ApiException;
+use App\Models\AgentBalanceHold;
+use App\Models\AgentOrderContext;
+use App\Models\AgentUser;
 use App\Models\Order;
 use App\Models\OrderUpgradeQuote;
 use App\Models\Plan;
 use App\Models\User;
 use App\Utils\Helper;
 use Carbon\Carbon;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class OrderUpgradeService
@@ -33,10 +37,10 @@ class OrderUpgradeService
         ['max_usage_percentage' => 100, 'coefficient' => 0.10],
     ];
 
-    public function previewUpgrade(User $user, Plan $targetPlan, string $period): array
+    public function previewUpgrade(User $user, Plan $targetPlan, string $period, ?Request $request = null): array
     {
         $periodKey = PlanService::getPeriodKey($period);
-        $preview = $this->buildPreview($user, $targetPlan, $periodKey);
+        $preview = $this->buildPreview($user, $targetPlan, $periodKey, null, $request);
 
         if (!$preview['allow_upgrade']) {
             return $preview;
@@ -65,11 +69,13 @@ class OrderUpgradeService
                 'target_plan' => $preview['target_plan'],
                 'pricing_detail' => $preview['pricing_detail'],
                 'payable_amount' => $preview['payable_amount'],
+                'tenant_context' => $preview['_tenant_context'],
+                'target_pricing' => $preview['_target_pricing'],
             ],
             'expires_at' => time() + $this->getQuoteTtlSeconds(),
         ]);
 
-        unset($preview['_source_order'], $preview['_source_plan']);
+        unset($preview['_source_order'], $preview['_source_plan'], $preview['_tenant_context'], $preview['_target_pricing']);
         $preview['quote_token'] = $quote->token;
         $preview['expires_at'] = (int) $quote->expires_at;
 
@@ -119,7 +125,8 @@ class OrderUpgradeService
                 throw new ApiException(__('Subscription plan does not exist'));
             }
 
-            $preview = $this->buildPreview($user, $targetPlan, (string) $quote->target_period, $sourceOrder);
+            $tenantContext = $this->tenantContextFromQuote($quote);
+            $preview = $this->buildPreview($user, $targetPlan, (string) $quote->target_period, $sourceOrder, null, $tenantContext);
             if (!$preview['allow_upgrade']) {
                 throw new ApiException($preview['reason'] ?? __('Upgrade is not available'));
             }
@@ -131,14 +138,18 @@ class OrderUpgradeService
                 throw new ApiException(__('Upgrade payable amount must be greater than 0'));
             }
 
-            $targetPrice = OrderService::amountToCents($targetPlan->prices[(string) $quote->target_period] ?? 0);
+            $targetPrice = (int) $preview['pricing_detail']['target_price'];
             $upgradeCreditAmount = max(0, $targetPrice - $payableAmount);
             $pricingSnapshot = $preview['pricing_detail'];
             $pricingSnapshot['upgrade_credit_amount'] = $upgradeCreditAmount;
             $pricingSnapshot['final_pay_amount'] = $payableAmount;
+            $tenantContext = $preview['_tenant_context'];
+            $targetPricing = $preview['_target_pricing'];
+            $tenantSource = (string) ($tenantContext['source'] ?? 'platform');
 
             $order = new Order([
                 'user_id' => $user->id,
+                'site_id' => $this->siteIdForOrder($user, $tenantContext),
                 'plan_id' => $targetPlan->id,
                 'period' => (string) $quote->target_period,
                 'trade_no' => Helper::generateOrderNo(),
@@ -153,14 +164,43 @@ class OrderUpgradeService
                     'pricing_detail' => $pricingSnapshot,
                     'quoted_payable_amount' => $quotedPayable,
                     'confirmed_payable_amount' => $payableAmount,
+                    'tenant_context' => $tenantContext,
+                    'target_pricing' => $targetPricing,
                 ],
             ]);
 
             $orderService = new OrderService($order);
-            $orderService->setInvite($user);
+            if ($tenantSource !== 'agent') {
+                $orderService->setInvite($user);
+            }
 
             if (!$order->save()) {
                 throw new ApiException(__('Failed to create order'));
+            }
+
+            if ($tenantSource === 'agent') {
+                $this->recordAgentUpgradeContext(
+                    $order,
+                    $user,
+                    $preview['_source_plan'],
+                    $sourceOrder,
+                    $targetPlan,
+                    (string) $quote->target_period,
+                    $tenantContext,
+                    $targetPricing,
+                    $payableAmount,
+                    $pricingSnapshot
+                );
+            } elseif ($tenantSource === 'site') {
+                $this->recordSiteUpgradeContext(
+                    $order,
+                    $targetPlan,
+                    (string) $quote->target_period,
+                    $tenantContext,
+                    $targetPricing,
+                    $targetPrice,
+                    $pricingSnapshot
+                );
             }
 
             $quote->status = OrderUpgradeQuote::STATUS_CONSUMED;
@@ -233,7 +273,14 @@ class OrderUpgradeService
         return $normalized;
     }
 
-    private function buildPreview(User $user, Plan $targetPlan, string $periodKey, ?Order $sourceOrder = null): array
+    private function buildPreview(
+        User $user,
+        Plan $targetPlan,
+        string $periodKey,
+        ?Order $sourceOrder = null,
+        ?Request $request = null,
+        ?array $tenantContext = null
+    ): array
     {
         if (!(bool) admin_setting('upgrade_v2_enable', false)) {
             return $this->deny(__('Upgrade is currently disabled'));
@@ -292,7 +339,18 @@ class OrderUpgradeService
             return $this->deny(__('This payment period cannot be purchased, please choose another period'));
         }
 
-        if (!$this->isHigherPricedTarget($sourceOrder, $targetPlan, $periodKey)) {
+        try {
+            $targetPricing = $this->resolveTargetPricing($user, $targetPlan, $periodKey, $request, $tenantContext);
+        } catch (ApiException $exception) {
+            return $this->deny($exception->getMessage());
+        }
+
+        $targetPrice = max(0, (int) ($targetPricing['sale_amount'] ?? 0));
+        if ($targetPrice <= 0) {
+            return $this->deny(__('This payment period cannot be purchased, please choose another period'));
+        }
+
+        if (!$this->isHigherPricedTarget($sourceOrder, $targetPrice, $periodKey)) {
             return $this->deny(__('Target subscription must be a higher priced recurring plan'));
         }
 
@@ -300,7 +358,10 @@ class OrderUpgradeService
             return $this->deny(__('Current subscription has already been used for discount upgrade'));
         }
 
-        $pricing = $this->calculatePricing($user, $sourcePlan, $sourceOrder, $targetPlan, $periodKey);
+        $pricing = $this->calculatePricing($user, $sourcePlan, $sourceOrder, $periodKey, $targetPrice);
+        $pricing['tenant_source'] = (string) ($targetPricing['source'] ?? 'platform');
+        $pricing['platform_plan_price'] = max(0, (int) ($targetPricing['platform_plan_price'] ?? $targetPrice));
+        $pricing['target_pricing_snapshot'] = $targetPricing['pricing_snapshot'] ?? [];
 
         return [
             'allow_upgrade' => true,
@@ -323,12 +384,23 @@ class OrderUpgradeService
             'payable_amount' => $pricing['final_pay_amount'],
             '_source_order' => $sourceOrder,
             '_source_plan' => $sourcePlan,
+            '_tenant_context' => $this->tenantContextFromPricing($targetPricing),
+            '_target_pricing' => $this->targetPricingSnapshot($targetPricing),
         ];
     }
 
-    private function calculatePricing(User $user, Plan $sourcePlan, Order $sourceOrder, Plan $targetPlan, string $targetPeriod): array
+    private function calculatePricing(
+        User $user,
+        Plan $sourcePlan,
+        Order $sourceOrder,
+        string $targetPeriod,
+        int $targetPrice,
+        ?int $sourcePaidBasisOverride = null
+    ): array
     {
-        $sourcePaidBasis = max(0, (int) $sourceOrder->total_amount + (int) $sourceOrder->balance_amount);
+        $sourcePaidBasis = $sourcePaidBasisOverride !== null
+            ? max(0, $sourcePaidBasisOverride)
+            : max(0, (int) $sourceOrder->total_amount + (int) $sourceOrder->balance_amount);
         $sourceMonths = OrderService::STR_TO_TIME[(string) $sourceOrder->period] ?? 0;
         $targetMonths = OrderService::STR_TO_TIME[$targetPeriod] ?? 0;
         if ($sourceMonths <= 0 || $targetMonths <= 0) {
@@ -355,7 +427,6 @@ class OrderUpgradeService
         $rawCredit = (int) floor($sourcePaidBasis * min($timeRatio, $effectiveTrafficRatio));
         $proposedCredit = (int) floor($rawCredit * $baseCreditCoeff * $effectiveUsagePenaltyCoeff);
 
-        $targetPrice = OrderService::amountToCents($targetPlan->prices[$targetPeriod] ?? 0);
         $minPayAmount = $this->getMinPayAmount($targetPrice);
         $creditCapAmount = $this->getCreditCapAmount($targetPrice, $minPayAmount);
         $upgradeCreditAmount = max(0, min($proposedCredit, $creditCapAmount));
@@ -376,6 +447,266 @@ class OrderUpgradeService
             'min_pay_amount' => $minPayAmount,
             'upgrade_credit_amount' => $upgradeCreditAmount,
             'final_pay_amount' => $finalPayAmount,
+        ];
+    }
+
+    private function resolveTargetPricing(
+        User $user,
+        Plan $targetPlan,
+        string $periodKey,
+        ?Request $request,
+        ?array $tenantContext
+    ): array
+    {
+        $pricing = app(TenantPlanPricingService::class);
+
+        if ($tenantContext !== null) {
+            return $pricing->resolveForContext($user, $targetPlan, $periodKey, $tenantContext);
+        }
+
+        if ($request !== null) {
+            return $pricing->resolveForRequest($user, $targetPlan, $periodKey, $request);
+        }
+
+        return $pricing->resolveForUser($user, $targetPlan, $periodKey);
+    }
+
+    private function tenantContextFromPricing(array $pricing): array
+    {
+        return [
+            'source' => (string) ($pricing['source'] ?? 'platform'),
+            'agent_context' => is_array($pricing['agent_context'] ?? null) ? $pricing['agent_context'] : null,
+            'site_context' => is_array($pricing['site_context'] ?? null) ? $pricing['site_context'] : null,
+        ];
+    }
+
+    private function targetPricingSnapshot(array $pricing): array
+    {
+        return [
+            'source' => (string) ($pricing['source'] ?? 'platform'),
+            'period' => (string) ($pricing['period'] ?? ''),
+            'sale_amount' => max(0, (int) ($pricing['sale_amount'] ?? 0)),
+            'platform_plan_price' => max(0, (int) ($pricing['platform_plan_price'] ?? 0)),
+            'pricing_snapshot' => is_array($pricing['pricing_snapshot'] ?? null) ? $pricing['pricing_snapshot'] : [],
+        ];
+    }
+
+    private function tenantContextFromQuote(OrderUpgradeQuote $quote): ?array
+    {
+        $snapshot = is_array($quote->snapshot) ? $quote->snapshot : [];
+        $context = $snapshot['tenant_context'] ?? null;
+
+        return is_array($context) ? $context : null;
+    }
+
+    private function siteIdForOrder(User $user, array $tenantContext): ?int
+    {
+        $siteContext = $tenantContext['site_context'] ?? null;
+        if (is_array($siteContext) && !empty($siteContext['site_id'])) {
+            return (int) $siteContext['site_id'];
+        }
+
+        return $user->site_id ? (int) $user->site_id : null;
+    }
+
+    private function recordSiteUpgradeContext(
+        Order $order,
+        Plan $targetPlan,
+        string $period,
+        array $tenantContext,
+        array $targetPricing,
+        int $targetPrice,
+        array $pricingSnapshot
+    ): void
+    {
+        $siteContext = $tenantContext['site_context'] ?? null;
+        if (!is_array($siteContext) || empty($siteContext['site_id'])) {
+            return;
+        }
+
+        $snapshot = array_merge(is_array($targetPricing['pricing_snapshot'] ?? null) ? $targetPricing['pricing_snapshot'] : [], [
+            'order_type' => 'discount_upgrade',
+            'target_sale_amount' => $targetPrice,
+            'upgrade_pricing_detail' => $pricingSnapshot,
+        ]);
+
+        app(SiteCommerceService::class)->recordOrderContext(
+            $order,
+            $siteContext,
+            [
+                'sale_amount' => $targetPrice,
+                'platform_plan_price' => max(0, (int) ($targetPricing['platform_plan_price'] ?? $targetPrice)),
+                'pricing_snapshot' => $snapshot,
+            ],
+            $targetPlan,
+            $period
+        );
+    }
+
+    private function recordAgentUpgradeContext(
+        Order $order,
+        User $user,
+        Plan $sourcePlan,
+        Order $sourceOrder,
+        Plan $targetPlan,
+        string $period,
+        array $tenantContext,
+        array $targetPricing,
+        int $payableAmount,
+        array $salePricingSnapshot
+    ): void
+    {
+        $agentContext = $tenantContext['agent_context'] ?? null;
+        if (!is_array($agentContext) || empty($agentContext['agent_user_id'])) {
+            throw new ApiException('Agent user does not exist');
+        }
+
+        $agent = User::query()
+            ->whereKey((int) $agentContext['agent_user_id'])
+            ->lockForUpdate()
+            ->first();
+        if (!$agent) {
+            throw new ApiException('Agent user does not exist');
+        }
+
+        $agentCommerce = app(AgentCommerceService::class);
+        $targetCost = $agentCommerce->calculatePlatformCost($agent, $targetPlan, $period);
+        $sourceCostBasis = $this->sourceCostBasisForAgent($sourceOrder, (int) $agent->id);
+        $costPricing = $this->calculatePricing(
+            $user,
+            $sourcePlan,
+            $sourceOrder,
+            $period,
+            max(0, (int) $targetCost['amount']),
+            $sourceCostBasis
+        );
+        $costAmount = max(0, (int) $costPricing['final_pay_amount']);
+
+        if ($agentCommerce->availableBalance($agent) < $costAmount) {
+            throw new ApiException(AgentCommerceService::INSUFFICIENT_SITE_BALANCE_MESSAGE);
+        }
+
+        $lockedUser = User::query()
+            ->whereKey($user->id)
+            ->lockForUpdate()
+            ->first();
+        if (!$lockedUser) {
+            throw new ApiException(__('User does not exist'));
+        }
+
+        $this->syncAgentOwnership($agent, $lockedUser);
+
+        $now = time();
+        $order->invite_user_id = $lockedUser->invite_user_id;
+        $order->commission_balance = 0;
+        $order->updated_at = $now;
+        if (!$order->save()) {
+            throw new ApiException(__('Failed to create order'));
+        }
+
+        $domainSnapshot = $this->agentDomainSnapshot($agentContext);
+        $pricingSnapshot = array_merge(is_array($targetPricing['pricing_snapshot'] ?? null) ? $targetPricing['pricing_snapshot'] : [], [
+            'order_type' => 'discount_upgrade',
+            'sale_amount' => $payableAmount,
+            'target_sale_amount' => max(0, (int) ($targetPricing['sale_amount'] ?? $payableAmount)),
+            'platform_base_amount' => max(0, (int) ($targetCost['base_amount'] ?? 0)),
+            'full_cost_amount' => max(0, (int) ($targetCost['amount'] ?? 0)),
+            'cost_amount' => $costAmount,
+            'discount_percent' => (float) ($targetCost['discount_percent'] ?? 100),
+            'source_cost_basis' => $sourceCostBasis,
+            'upgrade_pricing_detail' => $salePricingSnapshot,
+            'cost_pricing_detail' => $costPricing,
+        ]);
+
+        $hold = AgentBalanceHold::query()->create([
+            'agent_user_id' => $agent->id,
+            'order_id' => $order->id,
+            'trade_no' => $order->trade_no,
+            'amount' => $costAmount,
+            'status' => AgentBalanceHold::STATUS_PENDING,
+            'metadata' => [
+                'buyer_user_id' => (int) $lockedUser->id,
+                'plan_id' => (int) $targetPlan->id,
+                'period' => $period,
+                'source_order_id' => (int) $sourceOrder->id,
+                'pricing_snapshot' => $pricingSnapshot,
+                'domain_snapshot' => $domainSnapshot,
+            ],
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        AgentOrderContext::query()->create([
+            'order_id' => $order->id,
+            'trade_no' => $order->trade_no,
+            'agent_user_id' => $agent->id,
+            'agent_domain_id' => $domainSnapshot['agent_domain_id'],
+            'payment_id' => null,
+            'sale_amount' => $payableAmount,
+            'cost_amount' => $costAmount,
+            'hold_id' => $hold->id,
+            'status' => AgentOrderContext::STATUS_PENDING,
+            'pricing_snapshot' => $pricingSnapshot,
+            'domain_snapshot' => $domainSnapshot,
+            'payment_snapshot' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+    }
+
+    private function sourceCostBasisForAgent(Order $sourceOrder, int $agentUserId): int
+    {
+        try {
+            $context = AgentOrderContext::query()
+                ->where('order_id', $sourceOrder->id)
+                ->where('agent_user_id', $agentUserId)
+                ->first();
+            if ($context && (int) $context->cost_amount > 0) {
+                return (int) $context->cost_amount;
+            }
+        } catch (\Throwable) {
+            // Older installations may not have agent context rows for historical source orders.
+        }
+
+        return max(0, (int) $sourceOrder->total_amount + (int) $sourceOrder->balance_amount);
+    }
+
+    private function syncAgentOwnership(User $agent, User $user): void
+    {
+        $now = time();
+        $ownership = AgentUser::query()
+            ->where('sub_user_id', $user->id)
+            ->first();
+
+        if (!$ownership) {
+            AgentUser::query()->create([
+                'agent_user_id' => $agent->id,
+                'sub_user_id' => $user->id,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+            $user->invite_user_id = $agent->id;
+            $user->updated_at = $now;
+            $user->save();
+            return;
+        }
+
+        if ((int) $user->invite_user_id !== (int) $ownership->agent_user_id) {
+            $user->invite_user_id = (int) $ownership->agent_user_id;
+            $user->updated_at = $now;
+            $user->save();
+        }
+    }
+
+    private function agentDomainSnapshot(array $agentContext): array
+    {
+        $agentDomainId = $agentContext['agent_domain_id'] ?? null;
+
+        return [
+            'source' => (string) ($agentContext['source'] ?? AgentCommerceContextResolver::SOURCE_DOMAIN),
+            'agent_domain_id' => $agentDomainId !== null ? (int) $agentDomainId : null,
+            'domain' => (string) ($agentContext['domain'] ?? ''),
+            'is_primary' => (bool) ($agentContext['is_primary'] ?? false),
         ];
     }
 
@@ -439,7 +770,7 @@ class OrderUpgradeService
             });
     }
 
-    private function isHigherPricedTarget(Order $sourceOrder, Plan $targetPlan, string $targetPeriod): bool
+    private function isHigherPricedTarget(Order $sourceOrder, int $targetPrice, string $targetPeriod): bool
     {
         $sourceMonths = OrderService::STR_TO_TIME[(string) $sourceOrder->period] ?? 0;
         $targetMonths = OrderService::STR_TO_TIME[$targetPeriod] ?? 0;
@@ -455,7 +786,6 @@ class OrderUpgradeService
             }
             $sourcePaidBasis = OrderService::amountToCents($sourcePlan->prices[(string) $sourceOrder->period] ?? 0);
         }
-        $targetPrice = OrderService::amountToCents($targetPlan->prices[$targetPeriod] ?? 0);
         if ($sourcePaidBasis <= 0 || $targetPrice <= 0) {
             return false;
         }
