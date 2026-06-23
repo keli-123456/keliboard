@@ -16,6 +16,7 @@ class NoticeController extends Controller
         $pageSize = 5;
         $siteContext = app(AgentSiteContextService::class)->resolve($request, $request->user());
         $announcement = trim((string) ($siteContext['announcement'] ?? ''));
+        $announcementTitle = trim((string) ($siteContext['announcement_title'] ?? ''));
         $hasAgentAnnouncement = $announcement !== '';
         $includeAgentAnnouncement = $current === 1 && $hasAgentAnnouncement;
         $globalLimit = $includeAgentAnnouncement ? $pageSize - 1 : $pageSize;
@@ -38,7 +39,7 @@ class NoticeController extends Controller
         if ($includeAgentAnnouncement) {
             $res->prepend([
                 'id' => 'agent-announcement',
-                'title' => (string) ($siteContext['site_name'] ?? ''),
+                'title' => $announcementTitle !== '' ? $announcementTitle : (string) ($siteContext['site_name'] ?? ''),
                 'content' => $announcement,
                 'show' => true,
                 'agent_context' => true,

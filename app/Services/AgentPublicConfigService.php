@@ -37,6 +37,7 @@ class AgentPublicConfigService
             $data['landing_theme'] = $data['landing_theme'] ?? null;
         }
 
+        $data['agent_announcement_title'] = $this->stringValue($setting['announcement_title'] ?? '');
         $data['agent_announcement'] = $this->stringValue($setting['announcement'] ?? '');
         $data['theme_config'] = $this->themeConfig($data['theme_config'] ?? [], $setting);
         $data['agent_context'] = $this->contextPayload($context);

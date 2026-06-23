@@ -47,6 +47,7 @@ final class UserNoticeAgentAnnouncementTest extends TestCase
         AgentSiteSetting::query()->create([
             'agent_user_id' => $agent->id,
             'site_name' => 'Agent Storefront',
+            'announcement_title' => 'Maintenance notice',
             'announcement' => 'Welcome buyers',
             'enabled' => true,
             'created_at' => 1710000000,
@@ -62,7 +63,7 @@ final class UserNoticeAgentAnnouncementTest extends TestCase
         $this->assertSame(2, $payload['total']);
         $this->assertCount(2, $payload['data']);
         $this->assertSame('agent-announcement', $payload['data'][0]['id']);
-        $this->assertSame('Agent Storefront', $payload['data'][0]['title']);
+        $this->assertSame('Maintenance notice', $payload['data'][0]['title']);
         $this->assertSame('Welcome buyers', $payload['data'][0]['content']);
         $this->assertTrue($payload['data'][0]['show']);
         $this->assertTrue($payload['data'][0]['agent_context']);
@@ -109,7 +110,7 @@ final class UserNoticeAgentAnnouncementTest extends TestCase
         $this->assertSame(7, $pageTwo['total']);
         $this->assertSame('agent-announcement', $pageOne['data'][0]['id']);
         $this->assertSame([
-            'Agent Storefront',
+            'Agent notice',
             'Global 1',
             'Global 2',
             'Global 3',
@@ -177,6 +178,7 @@ final class UserNoticeAgentAnnouncementTest extends TestCase
         AgentSiteSetting::query()->create([
             'agent_user_id' => $agent->id,
             'site_name' => 'Agent Storefront',
+            'announcement_title' => 'Agent notice',
             'announcement' => 'Welcome buyers',
             'enabled' => true,
             'created_at' => 1710000000,
