@@ -33,7 +33,7 @@ final class UserNoticeAgentAnnouncementTest extends TestCase
         $this->createNoticeTable();
     }
 
-    public function test_bound_subordinate_with_agent_site_announcement_gets_synthetic_notice_first(): void
+    public function test_bound_subordinate_with_agent_site_announcement_only_gets_agent_notice(): void
     {
         $startedAt = time();
         $agent = $this->createActiveAgent('agent@example.test');
@@ -53,15 +53,15 @@ final class UserNoticeAgentAnnouncementTest extends TestCase
             'created_at' => 1710000000,
             'updated_at' => 1710000100,
         ]);
-        $global = $this->createNotice('Global Notice', 'Global content', [
+        $this->createNotice('Global Notice', 'Global content', [
             'sort' => 1,
             'show' => true,
         ]);
 
         $payload = $this->responsePayload(app(NoticeController::class)->fetch($this->noticeRequest($buyer)));
 
-        $this->assertSame(2, $payload['total']);
-        $this->assertCount(2, $payload['data']);
+        $this->assertSame(1, $payload['total']);
+        $this->assertCount(1, $payload['data']);
         $this->assertSame('agent-announcement', $payload['data'][0]['id']);
         $this->assertSame('Maintenance notice', $payload['data'][0]['title']);
         $this->assertSame('Welcome buyers', $payload['data'][0]['content']);
@@ -69,8 +69,6 @@ final class UserNoticeAgentAnnouncementTest extends TestCase
         $this->assertTrue($payload['data'][0]['agent_context']);
         $this->assertGreaterThanOrEqual($startedAt, $payload['data'][0]['created_at']);
         $this->assertSame(1710000100, $payload['data'][0]['updated_at']);
-        $this->assertSame($global->id, $payload['data'][1]['id']);
-        $this->assertSame('Global Notice', $payload['data'][1]['title']);
         $this->assertSame(1, Notice::query()->count());
     }
 
@@ -93,7 +91,7 @@ final class UserNoticeAgentAnnouncementTest extends TestCase
         $this->assertArrayNotHasKey('agent_context', $payload['data'][0]);
     }
 
-    public function test_agent_announcement_pagination_does_not_drop_global_notice_between_pages(): void
+    public function test_agent_announcement_hides_global_notices_on_all_pages(): void
     {
         $buyer = $this->createBoundSubordinateWithAnnouncement();
         for ($i = 1; $i <= 6; $i++) {
@@ -106,20 +104,41 @@ final class UserNoticeAgentAnnouncementTest extends TestCase
         $pageOne = $this->responsePayload(app(NoticeController::class)->fetch($this->noticeRequest($buyer, 1)));
         $pageTwo = $this->responsePayload(app(NoticeController::class)->fetch($this->noticeRequest($buyer, 2)));
 
-        $this->assertSame(7, $pageOne['total']);
-        $this->assertSame(7, $pageTwo['total']);
+        $this->assertSame(1, $pageOne['total']);
+        $this->assertSame(1, $pageTwo['total']);
         $this->assertSame('agent-announcement', $pageOne['data'][0]['id']);
         $this->assertSame([
             'Agent notice',
-            'Global 1',
-            'Global 2',
-            'Global 3',
-            'Global 4',
         ], array_column($pageOne['data'], 'title'));
-        $this->assertSame([
-            'Global 5',
-            'Global 6',
-        ], array_column($pageTwo['data'], 'title'));
+        $this->assertSame([], $pageTwo['data']);
+    }
+
+    public function test_bound_subordinate_without_agent_announcement_gets_no_global_notices(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $buyer = $this->createUser('buyer@example.test');
+        AgentUser::query()->create([
+            'agent_user_id' => $agent->id,
+            'sub_user_id' => $buyer->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        AgentSiteSetting::query()->create([
+            'agent_user_id' => $agent->id,
+            'site_name' => 'Agent Storefront',
+            'enabled' => true,
+            'created_at' => 1710000000,
+            'updated_at' => 1710000100,
+        ]);
+        $this->createNotice('Global Notice', 'Global content', [
+            'sort' => 1,
+            'show' => true,
+        ]);
+
+        $payload = $this->responsePayload(app(NoticeController::class)->fetch($this->noticeRequest($buyer)));
+
+        $this->assertSame(0, $payload['total']);
+        $this->assertSame([], $payload['data']);
     }
 
     private function createNoticeTable(): void
