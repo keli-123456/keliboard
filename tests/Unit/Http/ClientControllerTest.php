@@ -10,7 +10,6 @@ use App\Protocols\General;
 use App\Protocols\QuantumultX;
 use App\Protocols\Shadowrocket;
 use App\Protocols\SingBox;
-use App\Support\ProtocolCapabilityService;
 use App\Support\ProtocolManager;
 use Illuminate\Container\Container;
 use Illuminate\Http\Request;
@@ -124,36 +123,37 @@ final class ClientControllerTest extends TestCase
         }
     }
 
-    public function test_sing_box_wrapper_app_build_versions_bypass_core_semver_filter(): void
+    public function test_wrapper_app_build_versions_still_run_capability_filter(): void
     {
-        app()->instance('protocols.capabilities', new ProtocolCapabilityService(
-            require dirname(__DIR__, 3) . '/config/protocol_capabilities.php'
-        ));
+        $this->bindProtocolManager([
+            TestClientFilteredProtocol::class,
+        ]);
+
+        $filter = new TestClientCapabilityFilter();
+        app()->instance('protocols.capabilities', $filter);
 
         $controller = new ClientController();
-        $method = new \ReflectionMethod(ClientController::class, 'shouldBypassClientCapabilityFilter');
-        $method->setAccessible(true);
+        $request = Request::create('/', 'GET', ['flag' => 'Hiddify/1.2.8.1103']);
+        $user = [
+            'u' => 0,
+            'd' => 0,
+            'transfer_enable' => 1024,
+            'expired_at' => 0,
+        ];
 
-        $this->assertTrue($method->invoke($controller, [
-            'name' => 'sing-box',
-            'version' => '1.2.8.1103',
-        ]));
-        $this->assertFalse($method->invoke($controller, [
-            'name' => 'karing',
-            'version' => '1.2.8.1103',
-        ]));
-        $this->assertTrue($method->invoke($controller, [
-            'name' => 'hiddify',
-            'version' => '1.2.8.1103',
-        ]));
-        $this->assertFalse($method->invoke($controller, [
-            'name' => 'sparkle',
-            'version' => '1.2.8.1103',
-        ]));
-        $this->assertFalse($method->invoke($controller, [
-            'name' => 'sing-box',
-            'version' => '1.13.11',
-        ]));
+        $response = $controller->doSubscribe($request, $user, [[
+            'type' => 'anytls',
+            'name' => 'AnyTLS TCP',
+            'protocol_settings' => [
+                'tls_mode' => 1,
+                'tls' => ['server_name' => 'anytls.example.com'],
+            ],
+        ]]);
+
+        $this->assertTrue($filter->called);
+        $this->assertSame('hiddify', $filter->clientName);
+        $this->assertSame('1.2.8.1103', $filter->clientVersion);
+        $this->assertSame(['AnyTLS TCP'], json_decode($response->getContent(), true)['names']);
     }
 
     private function bindProtocolManager(array $classes): void
@@ -165,5 +165,33 @@ final class ClientControllerTest extends TestCase
         $reflection->setValue($manager, $classes);
 
         app()->instance('protocols.manager', $manager);
+    }
+}
+
+final class TestClientCapabilityFilter
+{
+    public bool $called = false;
+    public ?string $clientName = null;
+    public ?string $clientVersion = null;
+
+    public function filterServersForClient(array $servers, ?string $clientName, ?string $clientVersion): array
+    {
+        $this->called = true;
+        $this->clientName = $clientName;
+        $this->clientVersion = $clientVersion;
+
+        return $servers;
+    }
+}
+
+final class TestClientFilteredProtocol extends \App\Support\AbstractProtocol
+{
+    public $flags = ['hiddify'];
+
+    public function handle()
+    {
+        return response()->json([
+            'names' => array_column($this->servers, 'name'),
+        ]);
     }
 }

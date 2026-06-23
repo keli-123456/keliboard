@@ -89,13 +89,11 @@ class ClientController extends Controller
             allowedTypes: $requestedTypes,
             filterKeywords: $filterKeywords
         );
-        if (!$this->shouldBypassClientCapabilityFilter($clientInfo)) {
-            $serversFiltered = app('protocols.capabilities')->filterServersForClient(
-                $serversFiltered,
-                $clientInfo['name'] ?? null,
-                $clientInfo['version'] ?? null
-            );
-        }
+        $serversFiltered = app('protocols.capabilities')->filterServersForClient(
+            $serversFiltered,
+            $clientInfo['name'] ?? null,
+            $clientInfo['version'] ?? null
+        );
 
         $this->setSubscribeInfoToServers($serversFiltered, $user, count($servers) - count($serversFiltered));
         $serversFiltered = $this->addPrefixToServerName($serversFiltered);
@@ -241,27 +239,6 @@ class ClientController extends Controller
             'name' => $clientName,
             'version' => $clientVersion
         ];
-    }
-
-    private function shouldBypassClientCapabilityFilter(array $clientInfo): bool
-    {
-        $clientName = $clientInfo['name'] ?? null;
-        if (!is_string($clientName) || $clientName === '') {
-            return false;
-        }
-
-        $version = $clientInfo['version'] ?? null;
-        if (!is_string($version) || $version === '') {
-            return false;
-        }
-
-        if (preg_match('/^\d+(?:\.\d+){3,}$/', $version) !== 1) {
-            return false;
-        }
-
-        // Wrapper clients such as Hiddify expose app build versions like
-        // 1.2.8.1103 instead of sing-box core semver.
-        return in_array($clientName, ['sing-box', 'hiddify'], true);
     }
 
     private function setSubscribeInfoToServers(&$servers, $user, $rejectServerCount = 0)
