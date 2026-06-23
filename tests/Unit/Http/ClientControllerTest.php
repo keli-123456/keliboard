@@ -5,18 +5,77 @@ declare(strict_types=1);
 namespace Tests\Unit\Http;
 
 use App\Http\Controllers\V1\Client\ClientController;
+use App\Models\User;
 use App\Protocols\ClashMeta;
 use App\Protocols\General;
 use App\Protocols\QuantumultX;
 use App\Protocols\Shadowrocket;
 use App\Protocols\SingBox;
+use App\Services\Plugin\HookManager;
+use App\Services\Plugin\InterceptResponseException;
+use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use App\Support\ProtocolManager;
 use Illuminate\Container\Container;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
+use Illuminate\Translation\ArrayLoader;
+use Illuminate\Translation\Translator;
+use Illuminate\Validation\Factory as ValidatorFactory;
+use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
 
 final class ClientControllerTest extends TestCase
 {
+    use InteractsWithInMemoryDatabase;
+
+    public function test_subscribe_runs_access_hook_for_unavailable_user_before_availability_gate(): void
+    {
+        $this->bindJsonResponseFactory();
+        $this->bindValidatorFactory();
+        app()->instance(SubscriptionProxyProbeService::class, new class extends SubscriptionProxyProbeService {
+            public function isHealthToken(?string $token): bool
+            {
+                return false;
+            }
+        });
+
+        $user = new User([
+            'email' => 'expired@example.test',
+            'token' => 'expired-token',
+            'uuid' => 'expired-uuid',
+            'transfer_enable' => 0,
+            'expired_at' => time() - 3600,
+            'banned' => false,
+        ]);
+        $user->id = 123;
+
+        $called = false;
+        HookManager::registerFilter('client.subscribe.access', function (array $servers, User $resolvedUser, Request $resolvedRequest) use (&$called, $user): array {
+            $called = true;
+            $this->assertSame($user, $resolvedUser);
+            $this->assertSame('Mozilla/5.0 Chrome/138.0 Safari/537.36', $resolvedRequest->userAgent());
+
+            throw new InterceptResponseException(new Response('risk-blocked', 403));
+        }, 5);
+
+        $request = Request::create('/api/v1/client/subscribe/expired-token', 'GET', [], [], [], [
+            'REMOTE_ADDR' => '8.8.8.8',
+            'HTTP_USER_AGENT' => 'Mozilla/5.0 Chrome/138.0 Safari/537.36',
+        ]);
+        $request->setContainer(app());
+        $request->setUserResolver(fn (): User => $user);
+
+        try {
+            $response = (new ClientController())->subscribe($request);
+        } catch (InterceptResponseException $exception) {
+            $response = $exception->getResponse();
+        }
+
+        $this->assertTrue($called);
+        $this->assertSame(403, $response->getStatusCode());
+        $this->assertSame('risk-blocked', $response->getContent());
+    }
+
     public function test_get_client_info_maps_canonical_name_and_version_from_flag_variants(): void
     {
         $this->bindProtocolManager([
@@ -165,6 +224,11 @@ final class ClientControllerTest extends TestCase
         $reflection->setValue($manager, $classes);
 
         app()->instance('protocols.manager', $manager);
+    }
+
+    private function bindValidatorFactory(): void
+    {
+        app()->instance('validator', new ValidatorFactory(new Translator(new ArrayLoader(), 'en'), app()));
     }
 }
 

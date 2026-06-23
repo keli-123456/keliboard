@@ -58,6 +58,8 @@ class ClientController extends Controller
         ]);
 
         $user = $request->user();
+        HookManager::filter('client.subscribe.access', [], $user, $request);
+
         $userService = new UserService();
 
         if (!$userService->isAvailable($user)) {

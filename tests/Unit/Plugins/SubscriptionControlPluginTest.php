@@ -448,6 +448,38 @@ final class SubscriptionControlPluginTest extends TestCase
         $this->assertSame('block', $event['action']);
     }
 
+    public function test_subscription_control_applies_to_multisite_users(): void
+    {
+        $this->setUpInMemoryDatabase();
+        $this->bindJsonResponseFactory();
+        $this->createUserTable();
+        $this->createSiteTenantTables();
+
+        $site = $this->createSite('gm', '光喵', 'gm.example.test');
+        $user = $this->createUser('site-customer@example.test', $site->id);
+
+        $this->assertBrowserUaBlockedForUser($user);
+    }
+
+    public function test_subscription_control_applies_to_agent_sub_users(): void
+    {
+        $this->setUpInMemoryDatabase();
+        $this->bindJsonResponseFactory();
+        $this->createUserTable();
+        $this->createAgentCenterTables();
+
+        $agent = $this->createAgent('agent@example.test');
+        $user = $this->createUser('agent-sub@example.test', null);
+        AgentUser::query()->create([
+            'agent_user_id' => $agent->id,
+            'sub_user_id' => $user->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $this->assertBrowserUaBlockedForUser($user);
+    }
+
     public function test_default_browser_ua_block_only_matches_common_browsers(): void
     {
         $configPath = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
@@ -689,6 +721,44 @@ final class SubscriptionControlPluginTest extends TestCase
             'created_at' => time(),
             'updated_at' => time(),
         ]);
+    }
+
+    private function assertBrowserUaBlockedForUser(User $user): void
+    {
+        $oldToken = (string) $user->token;
+        $oldUuid = (string) $user->uuid;
+        $plugin = new Plugin('subscription_control');
+        $plugin->setConfig([
+            'enable_ua_blacklist' => false,
+            'enable_ua_block_only' => true,
+            'ua_block_only_keywords' => "Mozilla\nChrome\nSafari",
+            'enable_client_ua_whitelist' => false,
+            'enable_auto_trusted_node_ips' => false,
+            'enable_source_ip_denylist' => false,
+            'source_ip_deny_cidrs' => '',
+            'enable_email_notice' => false,
+            'enable_telegram_notice' => false,
+        ]);
+
+        $request = Request::create('/api/v1/client/subscribe', 'GET', [], [], [], [
+            'REMOTE_ADDR' => '8.8.8.8',
+            'HTTP_USER_AGENT' => 'Mozilla/5.0 Chrome/138.0 Safari/537.36',
+        ]);
+
+        try {
+            $plugin->checkSubscribeAccess([], $user, $request);
+            $this->fail('Expected browser subscription request to be intercepted.');
+        } catch (InterceptResponseException $exception) {
+            $this->assertSame(403, $exception->getResponse()->getStatusCode());
+        }
+
+        $user->refresh();
+        $this->assertSame($oldToken, $user->token);
+        $this->assertSame($oldUuid, $user->uuid);
+
+        $event = Cache::get("subscription_control:last_event:{$user->id}");
+        $this->assertSame('ua_block_only', $event['code']);
+        $this->assertSame('block', $event['action']);
     }
 
     private function bindCapturingDispatcher(): object

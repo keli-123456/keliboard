@@ -32,8 +32,8 @@ class Plugin extends AbstractPlugin
      */
     public function boot(): void
     {
-        // 使用 filter 钩子，在获取服务器列表前进行风控检查
-        $this->filter('client.subscribe.servers', [$this, 'checkSubscribeAccess'], 5);
+        // 用户解析后立即进行风控检查，确保过期、无流量、代理下级和多站点用户都适用同一安全层。
+        $this->filter('client.subscribe.access', [$this, 'checkSubscribeAccess'], 5);
 
         // 在用户侧获取订阅信息时，附带风控提示（用于前端展示）
         $this->filter('user.subscribe.response', [$this, 'attachSubscribeNotice'], 5);
