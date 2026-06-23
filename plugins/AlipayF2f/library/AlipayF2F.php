@@ -1,10 +1,15 @@
 <?php
 namespace Plugin\AlipayF2f\library;
 
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 
 class AlipayF2F
 {
+    private const GATEWAY_URL = 'https://openapi.alipay.com/gateway.do';
+    private const CONNECT_TIMEOUT_SECONDS = 5;
+    private const REQUEST_TIMEOUT_SECONDS = 15;
+
     private $appId;
     private $privateKey;
     private $alipayPublicKey;
@@ -23,20 +28,25 @@ class AlipayF2F
         if (is_string($data)) {
             parse_str($data, $data);
         }
+        if (!is_array($data) || empty($data['sign'])) {
+            return false;
+        }
         $sign = $data['sign'];
         unset($data['sign']);
         unset($data['sign_type']);
         ksort($data);
         $data = $this->buildQuery($data);
-        $res = "-----BEGIN PUBLIC KEY-----\n" .
-            wordwrap($this->alipayPublicKey, 64, "\n", true) .
-            "\n-----END PUBLIC KEY-----";
-        if ("RSA2" == $this->signType) {
-            $result = (openssl_verify($data, base64_decode($sign), $res, OPENSSL_ALGO_SHA256) === 1);
-        } else {
-            $result = (openssl_verify($data, base64_decode($sign), $res) === 1);
+        $res = $this->formatPublicKey($this->alipayPublicKey);
+        $publicKey = openssl_pkey_get_public($res);
+        if (!$publicKey) {
+            return false;
         }
-        openssl_free_key(openssl_get_publickey($res));
+        if ("RSA2" == $this->signType) {
+            $result = (openssl_verify($data, base64_decode($sign), $publicKey, OPENSSL_ALGO_SHA256) === 1);
+        } else {
+            $result = (openssl_verify($data, base64_decode($sign), $publicKey) === 1);
+        }
+        openssl_free_key($publicKey);
         return $result;
     }
 
@@ -72,13 +82,40 @@ class AlipayF2F
 
     public function send()
     {
-        $response = Http::get('https://openapi.alipay.com/gateway.do', $this->buildParam())->json();
+        try {
+            $httpResponse = Http::asForm()
+                ->connectTimeout(self::CONNECT_TIMEOUT_SECONDS)
+                ->timeout(self::REQUEST_TIMEOUT_SECONDS)
+                ->post(self::GATEWAY_URL, $this->buildParam());
+        } catch (ConnectionException $e) {
+            throw new \Exception('支付宝当面付请求超时或网络异常：' . $e->getMessage(), 0, $e);
+        }
+
+        if (!$httpResponse->successful()) {
+            throw new \Exception(sprintf(
+                '支付宝当面付请求失败：网关 HTTP %d %s',
+                $httpResponse->status(),
+                $this->summarizeBody($httpResponse->body())
+            ));
+        }
+
+        $response = $httpResponse->json();
+        if (!is_array($response)) {
+            throw new \Exception('支付宝当面付请求失败：网关返回空响应');
+        }
+
         $resKey = str_replace('.', '_', $this->method) . '_response';
-        if (!isset($response[$resKey]))
-            throw new \Exception('从支付宝请求失败');
+        if (!isset($response[$resKey])) {
+            if (isset($response['error_response']) && is_array($response['error_response'])) {
+                throw new \Exception($this->formatGatewayError($response['error_response']));
+            }
+            throw new \Exception('支付宝当面付请求失败：网关响应格式异常');
+        }
+
         $response = $response[$resKey];
-        if ($response['msg'] !== 'Success')
-            throw new \Exception($response['sub_msg']);
+        if (($response['code'] ?? null) !== '10000' && ($response['msg'] ?? null) !== 'Success') {
+            throw new \Exception($this->formatGatewayError($response));
+        }
         $this->response = $response;
     }
 
@@ -102,7 +139,7 @@ class AlipayF2F
             'method' => $this->method,
             'charset' => 'UTF-8',
             'sign_type' => $this->signType,
-            'timestamp' => date('Y-m-d H:m:s'),
+            'timestamp' => date('Y-m-d H:i:s'),
             'biz_content' => $this->bizContent,
             'version' => '1.0',
             '_input_charset' => 'UTF-8'
@@ -133,37 +170,77 @@ class AlipayF2F
 
     private function buildSign(string $signData): string
     {
-        $privateKey = $this->privateKey;
-        $p_key = array();
-        //如果私钥是 1行
-        if (!stripos($privateKey, "\n")) {
-            $i = 0;
-            while ($key_str = substr($privateKey, $i * 64, 64)) {
-                $p_key[] = $key_str;
-                $i++;
-            }
+        $privateId = openssl_pkey_get_private($this->formatPrivateKey($this->privateKey), '');
+        if (!$privateId) {
+            throw new \Exception('支付宝应用私钥格式错误');
         }
-        $privateKey = "-----BEGIN RSA PRIVATE KEY-----\n" . implode("\n", $p_key);
-        $privateKey = $privateKey . "\n-----END RSA PRIVATE KEY-----";
-
-        //私钥
-        $privateId = openssl_pkey_get_private($privateKey, '');
 
         // 签名
         $signature = '';
 
         if ("RSA2" == $this->signType) {
 
-            openssl_sign($signData, $signature, $privateId, OPENSSL_ALGO_SHA256);
+            $signed = openssl_sign($signData, $signature, $privateId, OPENSSL_ALGO_SHA256);
         } else {
 
-            openssl_sign($signData, $signature, $privateId, OPENSSL_ALGO_SHA1);
+            $signed = openssl_sign($signData, $signature, $privateId, OPENSSL_ALGO_SHA1);
         }
 
         openssl_free_key($privateId);
 
+        if (!$signed) {
+            throw new \Exception('支付宝应用私钥签名失败');
+        }
+
         //加密后的内容通常含有特殊字符，需要编码转换下
         $signature = base64_encode($signature);
         return $signature;
+    }
+
+    /**
+     * @param array<string, mixed> $response
+     */
+    private function formatGatewayError(array $response): string
+    {
+        $message = (string) ($response['sub_msg'] ?? $response['msg'] ?? '未知错误');
+        $code = (string) ($response['sub_code'] ?? $response['code'] ?? '');
+
+        return $code !== ''
+            ? "支付宝当面付请求失败：{$message}（{$code}）"
+            : "支付宝当面付请求失败：{$message}";
+    }
+
+    private function formatPrivateKey(string $privateKey): string
+    {
+        $privateKey = trim($privateKey);
+        if (str_contains($privateKey, '-----BEGIN')) {
+            return $privateKey;
+        }
+
+        $body = preg_replace('/\s+/', '', $privateKey) ?: '';
+        return "-----BEGIN RSA PRIVATE KEY-----\n" .
+            wordwrap($body, 64, "\n", true) .
+            "\n-----END RSA PRIVATE KEY-----";
+    }
+
+    private function formatPublicKey(string $publicKey): string
+    {
+        $publicKey = trim($publicKey);
+        if (str_contains($publicKey, '-----BEGIN')) {
+            return $publicKey;
+        }
+
+        $body = preg_replace('/\s+/', '', $publicKey) ?: '';
+        return "-----BEGIN PUBLIC KEY-----\n" .
+            wordwrap($body, 64, "\n", true) .
+            "\n-----END PUBLIC KEY-----";
+    }
+
+    private function summarizeBody(string $body): string
+    {
+        $summary = trim(strip_tags($body));
+        $summary = preg_replace('/\s+/', ' ', $summary) ?: '';
+
+        return $summary !== '' ? substr($summary, 0, 180) : '无响应内容';
     }
 }
