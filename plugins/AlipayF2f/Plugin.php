@@ -51,6 +51,21 @@ class Plugin extends AbstractPlugin implements PaymentInterface
                 'label' => '自定义商品名称',
                 'type' => 'string',
                 'description' => '将会体现在支付宝账单中'
+            ],
+            'product_code' => [
+                'label' => '销售产品码',
+                'type' => 'select',
+                'default' => 'FACE_TO_FACE_PAYMENT',
+                'description' => '普通当面付选择 FACE_TO_FACE_PAYMENT；当面付快捷版选择 OFFLINE_PAYMENT。若支付宝提示 ACQ.ACCESS_FORBIDDEN，请优先确认这里是否与签约产品一致。',
+                'select_options' => [
+                    'FACE_TO_FACE_PAYMENT' => 'FACE_TO_FACE_PAYMENT - 当面付产品',
+                    'OFFLINE_PAYMENT' => 'OFFLINE_PAYMENT - 当面付快捷版',
+                ],
+            ],
+            'seller_id' => [
+                'label' => '收款支付宝用户ID',
+                'type' => 'string',
+                'description' => '可选。需要指定收款账号时填写，不填则默认使用签约商户账号。'
             ]
         ];
     }
@@ -64,11 +79,17 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             $gateway->setPrivateKey($this->getConfig('private_key'));
             $gateway->setAlipayPublicKey($this->getConfig('public_key'));
             $gateway->setNotifyUrl($order['notify_url']);
-            $gateway->setBizContent([
+            $bizContent = [
                 'subject' => $this->getConfig('product_name') ?? (admin_setting('app_name', 'XBoard') . ' - 订阅'),
                 'out_trade_no' => $order['trade_no'],
-                'total_amount' => $order['total_amount'] / 100
-            ]);
+                'total_amount' => number_format($order['total_amount'] / 100, 2, '.', ''),
+                'product_code' => $this->normalizeProductCode($this->getConfig('product_code')),
+            ];
+            $sellerId = trim((string) $this->getConfig('seller_id', ''));
+            if ($sellerId !== '') {
+                $bizContent['seller_id'] = $sellerId;
+            }
+            $gateway->setBizContent($bizContent);
             $gateway->send();
             return [
                 'type' => 0,
@@ -107,5 +128,14 @@ class Plugin extends AbstractPlugin implements PaymentInterface
         } catch (\Exception $e) {
             return false;
         }
+    }
+
+    private function normalizeProductCode($value): string
+    {
+        $value = strtoupper(trim((string) $value));
+
+        return in_array($value, ['FACE_TO_FACE_PAYMENT', 'OFFLINE_PAYMENT'], true)
+            ? $value
+            : 'FACE_TO_FACE_PAYMENT';
     }
 }

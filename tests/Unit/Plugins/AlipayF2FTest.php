@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Plugins;
 
 use Illuminate\Support\Facades\Http;
+use Plugin\AlipayF2f\Plugin;
 use Plugin\AlipayF2f\library\AlipayF2F;
 use Tests\TestCase;
 
@@ -51,7 +52,7 @@ final class AlipayF2FTest extends TestCase
         ]);
 
         $this->expectException(\Exception::class);
-        $this->expectExceptionMessage('支付宝当面付请求失败：访问被禁止（ACQ.ACCESS_FORBIDDEN）');
+        $this->expectExceptionMessage('支付宝当面付请求失败：访问被禁止（ACQ.ACCESS_FORBIDDEN）。请确认支付宝商户已签约当面付，并在支付配置中选择正确的销售产品码：普通当面付使用 FACE_TO_FACE_PAYMENT，当面付快捷版使用 OFFLINE_PAYMENT。');
 
         $this->gateway()->send();
     }
@@ -66,6 +67,42 @@ final class AlipayF2FTest extends TestCase
         $this->expectExceptionMessage('支付宝当面付请求失败：网关 HTTP 403 访问被禁止');
 
         $this->gateway()->send();
+    }
+
+    public function test_plugin_pay_sends_configured_product_code(): void
+    {
+        $bizContent = [];
+
+        Http::fake(function ($request) use (&$bizContent) {
+            $bizContent = json_decode($request->data()['biz_content'] ?? '{}', true) ?: [];
+
+            return Http::response([
+                'alipay_trade_precreate_response' => [
+                    'code' => '10000',
+                    'msg' => 'Success',
+                    'qr_code' => 'https://qr.alipay.test/pay',
+                ],
+            ]);
+        });
+
+        $plugin = new Plugin('AlipayF2f');
+        $plugin->setConfig([
+            'app_id' => 'app-1',
+            'private_key' => $this->privateKey(),
+            'public_key' => 'public-key',
+            'product_name' => 'test product',
+            'product_code' => 'OFFLINE_PAYMENT',
+        ]);
+
+        $plugin->pay([
+            'notify_url' => 'https://panel.example.test/notify',
+            'trade_no' => 'trade-1',
+            'total_amount' => 123,
+            'user_id' => 1,
+            'stripe_token' => null,
+        ]);
+
+        $this->assertSame('OFFLINE_PAYMENT', $bizContent['product_code'] ?? null);
     }
 
     private function gateway(): AlipayF2F

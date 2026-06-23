@@ -205,9 +205,15 @@ class AlipayF2F
         $message = (string) ($response['sub_msg'] ?? $response['msg'] ?? '未知错误');
         $code = (string) ($response['sub_code'] ?? $response['code'] ?? '');
 
-        return $code !== ''
+        $formatted = $code !== ''
             ? "支付宝当面付请求失败：{$message}（{$code}）"
             : "支付宝当面付请求失败：{$message}";
+
+        if ($code === 'ACQ.ACCESS_FORBIDDEN') {
+            $formatted .= '。请确认支付宝商户已签约当面付，并在支付配置中选择正确的销售产品码：普通当面付使用 FACE_TO_FACE_PAYMENT，当面付快捷版使用 OFFLINE_PAYMENT。';
+        }
+
+        return $formatted;
     }
 
     private function formatPrivateKey(string $privateKey): string
