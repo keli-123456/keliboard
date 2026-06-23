@@ -9,9 +9,8 @@ use App\Models\Plan;
 use App\Models\User;
 use App\Services\Plugin\HookManager;
 use App\Services\ServerService;
-use App\Services\AgentStorefrontService;
-use App\Services\SiteStorefrontService;
 use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
+use App\Services\TenantPlanCatalogService;
 use App\Services\UserService;
 use App\Utils\Helper;
 use Illuminate\Contracts\Support\Arrayable;
@@ -93,8 +92,7 @@ class BootstrapController extends Controller
             if (!$plan) {
                 return $this->fail([400, __('Subscription plan does not exist')]);
             }
-            $plan = app(SiteStorefrontService::class)->applyDisplayNameForRequest($request, $plan);
-            $plan = app(AgentStorefrontService::class)->applyDisplayNameForRequest($request, $plan);
+            $plan = app(TenantPlanCatalogService::class)->decorateCurrentPlan($request, $plan, $user);
             $subscribe['plan'] = $plan;
         }
 

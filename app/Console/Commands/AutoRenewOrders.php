@@ -5,13 +5,11 @@ namespace App\Console\Commands;
 use App\Models\Order;
 use App\Models\Plan;
 use App\Models\User;
-use App\Services\AgentCommerceContextResolver;
 use App\Services\AgentCommerceService;
-use App\Services\AgentStorefrontService;
 use App\Services\OrderService;
 use App\Services\PlanService;
 use App\Services\SiteCommerceService;
-use App\Services\SiteStorefrontService;
+use App\Services\TenantPlanPricingService;
 use App\Services\UserService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -80,7 +78,7 @@ class AutoRenewOrders extends Command
                 }
 
                 $plan = Plan::find($user->plan_id);
-                if (!$plan || !$this->supportsAutoRenew($plan, $user->auto_renew_period)) {
+                if (!$plan || !$this->supportsAutoRenew($user, $plan, $user->auto_renew_period)) {
                     return;
                 }
 
@@ -131,7 +129,7 @@ class AutoRenewOrders extends Command
             && $user->expired_at <= ($now + self::LOOKAHEAD_SECONDS);
     }
 
-    private function supportsAutoRenew(Plan $plan, ?string $period): bool
+    private function supportsAutoRenew(User $user, Plan $plan, ?string $period): bool
     {
         if (!$plan->renew || !User::isAutoRenewPeriod($period)) {
             return false;
@@ -142,40 +140,16 @@ class AutoRenewOrders extends Command
             return false;
         }
 
-        $price = $plan->prices[$periodKey] ?? null;
-        return $price !== null && (float) $price > 0;
+        try {
+            return app(TenantPlanPricingService::class)->amountForUser($user, $plan, $periodKey) > 0;
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     private function getAutoRenewAmount(User $user, Plan $plan, string $period): int
     {
-        $periodKey = PlanService::getPeriodKey($period);
-
-        $agentContext = app(AgentCommerceContextResolver::class)->resolveUser($user);
-        if ($agentContext) {
-            $sale = app(AgentStorefrontService::class)->resolveSalePrice(
-                (int) $agentContext['agent_user_id'],
-                (int) $plan->id,
-                $periodKey
-            );
-
-            return max(0, (int) ($sale['sale_amount'] ?? 0));
-        }
-
-        $siteContext = app(SiteCommerceService::class)->contextForUser($user);
-        if ($siteContext) {
-            $pricing = app(SiteStorefrontService::class)->resolveSalePrice(
-                (int) $siteContext['site_id'],
-                (int) $plan->id,
-                $periodKey
-            );
-
-            return $this->applyUserDiscount($user, max(0, (int) ($pricing['sale_amount'] ?? 0)));
-        }
-
-        return $this->applyUserDiscount(
-            $user,
-            OrderService::amountToCents($plan->prices[$periodKey] ?? 0)
-        );
+        return app(TenantPlanPricingService::class)->amountForUser($user, $plan, $period);
     }
 
     private function createAutoRenewOrder(User $user, Plan $plan, string $period): Order
@@ -193,16 +167,4 @@ class AutoRenewOrders extends Command
         return OrderService::createFromRequest($user, $plan, $period);
     }
 
-    private function applyUserDiscount(User $user, int $baseAmount): int
-    {
-        if ($baseAmount <= 0) {
-            return 0;
-        }
-
-        $discountAmount = $user->discount
-            ? OrderService::percentageOfAmount($baseAmount, $user->discount)
-            : 0;
-
-        return max(0, $baseAmount - $discountAmount);
-    }
 }

@@ -11,19 +11,17 @@ use App\Models\Order;
 use App\Models\Plan;
 use App\Models\Ticket;
 use App\Models\User;
-use App\Services\AgentStorefrontService;
 use App\Services\Auth\LoginService;
 use App\Services\AuthService;
 use App\Services\Plugin\HookManager;
-use App\Services\SiteStorefrontService;
 use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
+use App\Services\TenantPlanCatalogService;
+use App\Services\TenantPlanPricingService;
 use App\Services\UserOnlineService;
 use App\Services\UserService;
-use App\Utils\CacheKey;
 use App\Utils\Helper;
 use Illuminate\Contracts\Support\Arrayable;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 class UserController extends Controller
@@ -162,8 +160,7 @@ class UserController extends Controller
             if (!$plan) {
                 return $this->fail([400, __('Subscription plan does not exist')]);
             }
-            $plan = app(SiteStorefrontService::class)->applyDisplayNameForRequest($request, $plan);
-            $plan = app(AgentStorefrontService::class)->applyDisplayNameForRequest($request, $plan);
+            $plan = $this->decorateSubscribePlan($request, $plan);
             $user['plan'] = $plan;
         }
         $user['subscribe_url'] = Helper::getSubscribeUrl($user['token']);
@@ -264,10 +261,20 @@ class UserController extends Controller
             throw new \RuntimeException(__('Current subscription does not support auto renewal'));
         }
 
-        $price = $plan->prices[$periodKey] ?? null;
-        if ($price === null || (float) $price <= 0) {
+        try {
+            $amount = app(TenantPlanPricingService::class)->amountForUser($user, $plan, $periodKey);
+        } catch (\Throwable) {
+            $amount = 0;
+        }
+
+        if ($amount <= 0) {
             throw new \RuntimeException(__('This payment period cannot be renewed automatically'));
         }
+    }
+
+    protected function decorateSubscribePlan(Request $request, Plan $plan): Plan
+    {
+        return app(TenantPlanCatalogService::class)->decorateCurrentPlan($request, $plan, $request->user());
     }
 
     public function transfer(UserTransfer $request)

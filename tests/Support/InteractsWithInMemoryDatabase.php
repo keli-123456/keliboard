@@ -292,6 +292,8 @@ trait InteractsWithInMemoryDatabase
             $table->boolean('is_staff')->default(false);
             $table->boolean('remind_expire')->nullable()->default(true);
             $table->boolean('remind_traffic')->nullable()->default(true);
+            $table->boolean('auto_renew_enable')->nullable()->default(false);
+            $table->string('auto_renew_period')->nullable();
             $table->integer('last_login_at')->nullable();
             $table->integer('last_login_ip')->nullable();
             $table->integer('next_reset_at')->nullable();
@@ -493,9 +495,41 @@ trait InteractsWithInMemoryDatabase
             $table->integer('discount_amount')->nullable();
             $table->integer('balance_amount')->nullable();
             $table->integer('bonus_amount')->default(0);
+            $table->integer('upgrade_quote_id')->nullable();
+            $table->integer('upgrade_credit_amount')->nullable();
+            $table->json('upgrade_source_order_ids')->nullable();
+            $table->json('upgrade_pricing_snapshot')->nullable();
             $table->integer('status')->default(0);
             $table->integer('commission_balance')->default(0);
             $table->integer('paid_at')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+    }
+
+    protected function createOrderUpgradeQuoteTable(): void
+    {
+        $this->database->schema()->create('v2_order_upgrade_quote', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('user_id');
+            $table->integer('source_order_id');
+            $table->integer('source_plan_id');
+            $table->integer('target_plan_id');
+            $table->string('target_period', 32);
+            $table->integer('target_price');
+            $table->integer('source_paid_basis');
+            $table->decimal('time_ratio', 8, 4);
+            $table->decimal('traffic_ratio', 8, 4);
+            $table->decimal('base_credit_coeff', 8, 4);
+            $table->decimal('usage_penalty_coeff', 8, 4);
+            $table->integer('credit_cap_amount');
+            $table->integer('min_pay_amount');
+            $table->integer('upgrade_credit_amount');
+            $table->integer('final_pay_amount');
+            $table->string('token', 64)->unique();
+            $table->string('status', 16)->default('pending');
+            $table->json('snapshot')->nullable();
+            $table->integer('expires_at');
             $table->integer('created_at')->nullable();
             $table->integer('updated_at')->nullable();
         });
