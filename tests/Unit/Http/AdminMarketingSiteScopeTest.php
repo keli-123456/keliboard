@@ -1,0 +1,327 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Unit\Http;
+
+use App\Http\Controllers\V2\Admin\MarketingController;
+use App\Models\MarketingRule;
+use App\Models\MarketingTemplate;
+use App\Models\MessageDispatchLog;
+use App\Models\MessageDispatchTask;
+use App\Models\Site;
+use App\Models\SiteDomain;
+use App\Models\User;
+use App\Services\MarketingAutomationService;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Http\Request;
+use ReflectionMethod;
+use Tests\Support\InteractsWithInMemoryDatabase;
+use Tests\TestCase;
+
+final class AdminMarketingSiteScopeTest extends TestCase
+{
+    use InteractsWithInMemoryDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->setUpInMemoryDatabase();
+        $this->bindJsonResponseFactory();
+        $this->bindRequestValidateMacro();
+        $this->bindTestSettings([
+            'app_name' => 'Main Site',
+            'app_url' => 'https://main.example.test',
+            'message_ops_enable' => true,
+        ]);
+
+        $this->createUserTable();
+        $this->createSiteTenantTables();
+        $this->createMarketingTables();
+    }
+
+    public function test_templates_scope_includes_global_and_selected_site_templates(): void
+    {
+        $firstSite = $this->createSite('first', 'First Site', 'first.example.test');
+        $secondSite = $this->createSite('second', 'Second Site', 'second.example.test');
+
+        $global = $this->createTemplate('global_custom', 'Global Custom');
+        $first = $this->createTemplate('first_custom', 'First Custom', ['scope_type' => 'site', 'site_id' => $firstSite->id]);
+        $second = $this->createTemplate('second_custom', 'Second Custom', ['scope_type' => 'site', 'site_id' => $secondSite->id]);
+
+        $payload = $this->responsePayload(app(MarketingController::class)->templates(Request::create('/admin/marketing/templates', 'GET', [
+            'scope_type' => 'site',
+            'site_id' => $firstSite->id,
+        ])));
+        $ids = collect($payload['data'])->pluck('id')->all();
+
+        $this->assertContains($global->id, $ids);
+        $this->assertContains($first->id, $ids);
+        $this->assertNotContains($second->id, $ids);
+
+        $globalPayload = $this->responsePayload(app(MarketingController::class)->templates(Request::create('/admin/marketing/templates', 'GET', [
+            'scope_type' => 'global',
+        ])));
+        $globalIds = collect($globalPayload['data'])->pluck('id')->all();
+
+        $this->assertContains($global->id, $globalIds);
+        $this->assertNotContains($first->id, $globalIds);
+    }
+
+    public function test_logs_can_be_filtered_by_global_or_site_scope(): void
+    {
+        $firstSite = $this->createSite('first', 'First Site', 'first.example.test');
+        $secondSite = $this->createSite('second', 'Second Site', 'second.example.test');
+
+        $globalLog = $this->createDispatchLog('global@example.test');
+        $firstLog = $this->createDispatchLog('first@example.test', ['scope_type' => 'site', 'site_id' => $firstSite->id]);
+        $secondLog = $this->createDispatchLog('second@example.test', ['scope_type' => 'site', 'site_id' => $secondSite->id]);
+
+        $sitePayload = $this->responsePayload(app(MarketingController::class)->logs(Request::create('/admin/marketing/logs', 'GET', [
+            'scope_type' => 'site',
+            'site_id' => $firstSite->id,
+        ])));
+        $siteIds = collect($sitePayload['data']['items'])->pluck('id')->all();
+
+        $this->assertSame([$firstLog->id], $siteIds);
+
+        $globalPayload = $this->responsePayload(app(MarketingController::class)->logs(Request::create('/admin/marketing/logs', 'GET', [
+            'scope_type' => 'global',
+        ])));
+        $globalIds = collect($globalPayload['data']['items'])->pluck('id')->all();
+
+        $this->assertContains($globalLog->id, $globalIds);
+        $this->assertNotContains($firstLog->id, $globalIds);
+        $this->assertNotContains($secondLog->id, $globalIds);
+    }
+
+    public function test_marketing_tasks_are_tagged_with_user_site_scope(): void
+    {
+        $site = $this->createSite('first', 'First Site', 'first.example.test');
+        $user = $this->createUser('buyer@example.test', ['site_id' => $site->id]);
+        $template = $this->createTemplate('welcome_site_scope', 'Welcome');
+        $rule = MarketingRule::query()->create([
+            'code' => 'welcome_site_scope',
+            'scene' => 'registered_no_purchase_1d',
+            'name' => 'Welcome',
+            'message_type' => MarketingRule::TYPE_MARKETING,
+            'description' => 'Welcome',
+            'enabled' => true,
+            'email_enabled' => true,
+            'telegram_enabled' => false,
+            'email_template_id' => $template->id,
+            'telegram_template_id' => null,
+            'priority' => 100,
+            'cooldown_hours' => 24,
+            'daily_user_limit' => 1,
+            'trigger_config' => [],
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $rule->load('emailTemplate');
+
+        $method = new ReflectionMethod(MarketingAutomationService::class, 'queueForUserRule');
+        $method->setAccessible(true);
+        $queued = $method->invoke(app(MarketingAutomationService::class), $rule, $user, 'scope-test:' . $user->id, []);
+
+        $this->assertTrue($queued);
+        $task = MessageDispatchTask::query()->first();
+        $this->assertSame('site', $task->scope_type);
+        $this->assertSame($site->id, (int) $task->site_id);
+        $this->assertNull($task->agent_user_id);
+        $this->assertSame($site->id, (int) ($task->context['site_id'] ?? 0));
+    }
+
+    private function createMarketingTables(): void
+    {
+        $this->database->schema()->create('v2_marketing_template', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->string('code', 64)->unique();
+            $table->string('name', 128);
+            $table->string('channel', 32);
+            $table->string('message_type', 32)->default(MarketingRule::TYPE_MARKETING);
+            $table->string('subject')->nullable();
+            $table->text('content');
+            $table->boolean('enabled')->default(true);
+            $table->boolean('is_system')->default(false);
+            $table->json('variables')->nullable();
+            $this->addScopeColumns($table);
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+
+        $this->database->schema()->create('v2_marketing_rule', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->string('code', 64)->unique();
+            $table->string('scene', 64)->unique();
+            $table->string('name', 128);
+            $table->string('message_type', 32)->default(MarketingRule::TYPE_MARKETING);
+            $table->string('description')->nullable();
+            $table->boolean('enabled')->default(true);
+            $table->boolean('email_enabled')->default(true);
+            $table->boolean('telegram_enabled')->default(false);
+            $table->unsignedInteger('email_template_id')->nullable();
+            $table->unsignedInteger('telegram_template_id')->nullable();
+            $table->integer('priority')->default(100);
+            $table->integer('cooldown_hours')->default(24);
+            $table->integer('daily_user_limit')->default(1);
+            $table->json('trigger_config')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+
+        $this->database->schema()->create('v2_message_dispatch_task', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->unsignedInteger('user_id')->nullable();
+            $table->unsignedInteger('rule_id')->nullable();
+            $table->unsignedInteger('template_id')->nullable();
+            $table->string('channel', 32);
+            $table->string('message_type', 32);
+            $table->integer('priority')->default(100);
+            $table->string('state', 32);
+            $table->string('dedupe_key', 191)->nullable()->unique();
+            $table->string('to_address')->nullable();
+            $table->string('subject')->nullable();
+            $table->json('payload')->nullable();
+            $table->json('context')->nullable();
+            $this->addScopeColumns($table);
+            $table->integer('scheduled_at')->nullable();
+            $table->integer('available_at')->nullable();
+            $table->integer('reserved_at')->nullable();
+            $table->integer('sent_at')->nullable();
+            $table->integer('attempt_count')->default(0);
+            $table->integer('max_attempts')->default(3);
+            $table->string('failure_classification')->nullable();
+            $table->text('last_error')->nullable();
+            $table->text('provider_response')->nullable();
+            $table->integer('last_recovered_at')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+
+        $this->database->schema()->create('v2_message_dispatch_log', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->unsignedInteger('task_id')->nullable();
+            $table->unsignedInteger('user_id')->nullable();
+            $table->unsignedInteger('rule_id')->nullable();
+            $table->unsignedInteger('template_id')->nullable();
+            $table->unsignedInteger('mail_log_id')->nullable();
+            $table->string('channel', 32);
+            $table->string('message_type', 32);
+            $table->string('status', 32);
+            $table->integer('attempt')->default(1);
+            $table->string('to_address')->nullable();
+            $table->string('subject')->nullable();
+            $table->string('failure_classification')->nullable();
+            $table->string('provider_health_status')->nullable();
+            $table->text('error_message')->nullable();
+            $table->text('provider_response')->nullable();
+            $table->json('context')->nullable();
+            $this->addScopeColumns($table);
+            $table->text('manual_note')->nullable();
+            $table->integer('noted_by_admin_id')->nullable();
+            $table->integer('noted_at')->nullable();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+    }
+
+    private function addScopeColumns(Blueprint $table): void
+    {
+        $table->string('scope_type', 32)->default('global')->index();
+        $table->unsignedInteger('site_id')->nullable()->index();
+        $table->unsignedInteger('agent_user_id')->nullable()->index();
+        $table->unsignedInteger('agent_domain_id')->nullable()->index();
+    }
+
+    private function createSite(string $code, string $name, string $domain): Site
+    {
+        $site = Site::query()->create([
+            'code' => $code,
+            'name' => $name,
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        SiteDomain::query()->create([
+            'site_id' => $site->id,
+            'domain' => $domain,
+            'status' => SiteDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        return $site;
+    }
+
+    private function createTemplate(string $code, string $name, array $attributes = []): MarketingTemplate
+    {
+        return MarketingTemplate::query()->create(array_merge([
+            'code' => $code,
+            'name' => $name,
+            'channel' => MarketingTemplate::CHANNEL_EMAIL,
+            'message_type' => MarketingRule::TYPE_MARKETING,
+            'subject' => 'Hello {{app_name}}',
+            'content' => 'Hello {{user_email}}',
+            'enabled' => true,
+            'is_system' => false,
+            'variables' => ['app_name', 'user_email'],
+            'scope_type' => 'global',
+            'site_id' => null,
+            'agent_user_id' => null,
+            'agent_domain_id' => null,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ], $attributes));
+    }
+
+    private function createDispatchLog(string $target, array $attributes = []): MessageDispatchLog
+    {
+        return MessageDispatchLog::query()->create(array_merge([
+            'channel' => MarketingTemplate::CHANNEL_EMAIL,
+            'message_type' => MarketingRule::TYPE_MARKETING,
+            'status' => MessageDispatchLog::STATUS_SUCCESS,
+            'attempt' => 1,
+            'to_address' => $target,
+            'scope_type' => 'global',
+            'site_id' => null,
+            'agent_user_id' => null,
+            'agent_domain_id' => null,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ], $attributes));
+    }
+
+    private function createUser(string $email, array $attributes = []): User
+    {
+        return User::query()->create(array_merge([
+            'email' => $email,
+            'password' => 'secret',
+            'token' => bin2hex(random_bytes(16)),
+            'uuid' => (string) \Illuminate\Support\Str::uuid(),
+            'banned' => false,
+            'is_admin' => false,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ], $attributes));
+    }
+
+    private function bindRequestValidateMacro(): void
+    {
+        if (Request::hasMacro('validate')) {
+            return;
+        }
+
+        Request::macro('validate', function (array $rules = [], ...$parameters): array {
+            return $this->all();
+        });
+    }
+
+    private function responsePayload($response): array
+    {
+        return $response->getData(true);
+    }
+}

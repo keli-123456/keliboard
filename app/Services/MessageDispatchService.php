@@ -35,7 +35,7 @@ class MessageDispatchService
             }
         }
 
-        return MessageDispatchTask::create([
+        $payload = [
             'user_id' => $attributes['user_id'] ?? null,
             'rule_id' => $attributes['rule_id'] ?? null,
             'template_id' => $attributes['template_id'] ?? null,
@@ -51,7 +51,12 @@ class MessageDispatchService
             'scheduled_at' => (int) ($attributes['scheduled_at'] ?? $now),
             'available_at' => (int) ($attributes['available_at'] ?? $now),
             'max_attempts' => max(1, (int) ($attributes['max_attempts'] ?? 3)),
-        ]);
+        ];
+
+        return MessageDispatchTask::create(array_merge(
+            $payload,
+            $this->tenantScopeAttributes('v2_message_dispatch_task', $attributes)
+        ));
     }
 
     public function releaseDueTasks(int $limit = 200): array
@@ -331,7 +336,7 @@ class MessageDispatchService
 
     public function logDispatchAttempt(array $attributes): MessageDispatchLog
     {
-        return MessageDispatchLog::create([
+        $payload = [
             'task_id' => $attributes['task_id'] ?? null,
             'user_id' => $attributes['user_id'] ?? null,
             'rule_id' => $attributes['rule_id'] ?? null,
@@ -351,7 +356,66 @@ class MessageDispatchService
             'manual_note' => $attributes['manual_note'] ?? null,
             'noted_by_admin_id' => $attributes['noted_by_admin_id'] ?? null,
             'noted_at' => $attributes['noted_at'] ?? null,
-        ]);
+        ];
+
+        return MessageDispatchLog::create(array_merge(
+            $payload,
+            $this->tenantScopeAttributes('v2_message_dispatch_log', $attributes)
+        ));
+    }
+
+    private function tenantScopeAttributes(string $table, array $attributes): array
+    {
+        if (!$this->hasColumn($table, 'scope_type')) {
+            return [];
+        }
+
+        $context = $attributes['context'] ?? [];
+        $context = is_array($context) ? $context : [];
+
+        $siteId = $this->positiveIntOrNull($attributes['site_id'] ?? $context['site_id'] ?? null);
+        $agentUserId = $this->positiveIntOrNull($attributes['agent_user_id'] ?? $context['agent_user_id'] ?? null);
+        $agentDomainId = $this->positiveIntOrNull($attributes['agent_domain_id'] ?? $context['agent_domain_id'] ?? null);
+        $scopeType = trim((string) ($attributes['scope_type'] ?? ''));
+        if (!in_array($scopeType, ['global', 'site', 'agent'], true)) {
+            $scopeType = $agentUserId ? 'agent' : ($siteId ? 'site' : 'global');
+        }
+
+        $payload = ['scope_type' => $scopeType];
+        if ($this->hasColumn($table, 'site_id')) {
+            $payload['site_id'] = $siteId;
+        }
+        if ($this->hasColumn($table, 'agent_user_id')) {
+            $payload['agent_user_id'] = $agentUserId;
+        }
+        if ($this->hasColumn($table, 'agent_domain_id')) {
+            $payload['agent_domain_id'] = $agentDomainId;
+        }
+
+        return $payload;
+    }
+
+    private function positiveIntOrNull(mixed $value): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+        if (!is_numeric($value)) {
+            return null;
+        }
+
+        $value = (int) $value;
+
+        return $value > 0 ? $value : null;
+    }
+
+    private function hasColumn(string $table, string $column): bool
+    {
+        try {
+            return app('db')->connection()->getSchemaBuilder()->hasColumn($table, $column);
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     public function saveLogNote(MessageDispatchLog $log, ?string $note, ?int $adminId = null): MessageDispatchLog
