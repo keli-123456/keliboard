@@ -316,6 +316,34 @@ final class AgentDomainOrderFlowTest extends TestCase
         $this->assertSame([$globalPayment->id, $currentPayment->id], array_column($payload['data'], 'id'));
     }
 
+    public function test_agent_order_payment_methods_use_order_domain_context_instead_of_current_host(): void
+    {
+        [$agent, $buyer, $order] = $this->createAgentOrderFixture('shop-a.example.test');
+        $orderDomain = AgentDomain::query()->where('domain', 'shop-a.example.test')->firstOrFail();
+        $otherDomain = AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => 'shop-b.example.test',
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $globalPayment = $this->createPayment(Payment::OWNER_AGENT, $agent->id);
+        $orderDomainPayment = $this->createPayment(Payment::OWNER_AGENT, $agent->id, $orderDomain->id);
+        $this->createPayment(Payment::OWNER_AGENT, $agent->id, $otherDomain->id);
+
+        $request = BaseRequest::create('/api/v1/user/order/getPaymentMethod', 'GET', [
+            'trade_no' => $order->trade_no,
+        ], [], [], [
+            'HTTP_HOST' => 'shop-b.example.test',
+        ]);
+        $request->setUserResolver(static fn (): User => $buyer);
+
+        $response = app(OrderController::class)->getPaymentMethod($request);
+        $payload = $this->responsePayload($response);
+
+        $this->assertSame([$globalPayment->id, $orderDomainPayment->id], array_column($payload['data'], 'id'));
+    }
+
     public function test_checkout_rejects_agent_payment_bound_to_another_domain(): void
     {
         [$agent, $buyer, $order] = $this->createAgentOrderFixture('shop-a.example.test');
@@ -344,6 +372,29 @@ final class AgentDomainOrderFlowTest extends TestCase
         $this->assertNull($order->fresh()->payment_id);
     }
 
+    public function test_checkout_stores_agent_domain_payment_ownership_snapshot(): void
+    {
+        [$agent, $buyer, $order] = $this->createAgentOrderFixture('shop-a.example.test');
+        $domain = AgentDomain::query()->where('domain', 'shop-a.example.test')->firstOrFail();
+        $payment = $this->createPayment(Payment::OWNER_AGENT, $agent->id, $domain->id);
+        $request = BaseRequest::create('/api/v1/user/order/checkout', 'POST', [
+            'trade_no' => $order->trade_no,
+            'method' => $payment->id,
+        ], [], [], [
+            'HTTP_HOST' => 'shop-a.example.test',
+        ]);
+        $request->setUserResolver(static fn (): User => $buyer);
+        app()->instance('request', $request);
+
+        $response = app(OrderController::class)->checkout($request);
+        $payload = $this->responsePayload($response);
+
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->firstOrFail();
+        $this->assertSame(0, $payload['type']);
+        $this->assertSame($payment->id, (int) $context->payment_id);
+        $this->assertSame($domain->id, (int) ($context->payment_snapshot['owner_domain_id'] ?? 0));
+    }
+
     public function test_payment_callback_captures_hold_and_deducts_agent_once(): void
     {
         [$agent, , $order] = $this->createAgentOrderFixture();
@@ -364,6 +415,29 @@ final class AgentDomainOrderFlowTest extends TestCase
         $this->assertSame(AgentBalanceHold::STATUS_CAPTURED, $hold->fresh()->status);
         $this->assertSame(AgentOrderContext::STATUS_PAID, $context->fresh()->status);
         $this->assertSame(Order::STATUS_COMPLETED, (int) $order->fresh()->status);
+    }
+
+    public function test_payment_callback_mismatch_does_not_capture_agent_hold(): void
+    {
+        [$agent, , $order] = $this->createAgentOrderFixture();
+        $boundPayment = $this->createPayment(Payment::OWNER_AGENT, $agent->id);
+        $callbackPayment = $this->createPayment(Payment::OWNER_AGENT, $agent->id);
+        $order->payment_id = $boundPayment->id;
+        $order->save();
+
+        $handled = $this->invokePaymentHandle([
+            'trade_no' => $order->trade_no,
+            'callback_no' => 'gateway-mismatch',
+            'paid_amount' => 1300,
+        ], $this->paymentServiceWithId($callbackPayment->id));
+
+        $hold = AgentBalanceHold::query()->where('order_id', $order->id)->firstOrFail();
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->firstOrFail();
+        $this->assertFalse($handled);
+        $this->assertSame(Order::STATUS_PENDING, (int) $order->fresh()->status);
+        $this->assertSame(10000, (int) $agent->fresh()->balance);
+        $this->assertSame(AgentBalanceHold::STATUS_PENDING, $hold->fresh()->status);
+        $this->assertSame(AgentOrderContext::STATUS_PENDING, $context->fresh()->status);
     }
 
     public function test_payment_callback_writes_agent_cost_ledger_with_snapshot_amounts(): void

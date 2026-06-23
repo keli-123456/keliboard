@@ -367,6 +367,7 @@ class AgentCommerceService
                     'payment' => (string) $payment->payment,
                     'owner_type' => (string) $payment->owner_type,
                     'owner_id' => $payment->owner_id ? (int) $payment->owner_id : null,
+                    'owner_domain_id' => $payment->owner_domain_id !== null ? (int) $payment->owner_domain_id : null,
                 ];
                 $context->updated_at = time();
                 $context->save();
@@ -427,6 +428,7 @@ class AgentCommerceService
             'payment' => (string) $payment->payment,
             'owner_type' => (string) $payment->owner_type,
             'owner_id' => $payment->owner_id ? (int) $payment->owner_id : null,
+            'owner_domain_id' => $payment->owner_domain_id !== null ? (int) $payment->owner_domain_id : null,
         ];
         $context->updated_at = time();
         $context->save();
