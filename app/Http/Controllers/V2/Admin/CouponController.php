@@ -18,6 +18,10 @@ class CouponController extends Controller
         'name' => 'name',
         'code' => 'code',
         'type' => 'type',
+        'scope_type' => 'scope_type',
+        'site_id' => 'site_id',
+        'agent_user_id' => 'agent_user_id',
+        'agent_domain_id' => 'agent_domain_id',
         'value' => 'value',
         'show' => 'show',
         'limit_use' => 'limit_use',
@@ -33,6 +37,9 @@ class CouponController extends Controller
         'name' => 'name',
         'code' => 'code',
         'type' => 'type',
+        'scope_type' => 'scope_type',
+        'site_id' => 'site_id',
+        'agent_user_id' => 'agent_user_id',
         'value' => 'value',
         'show' => 'show',
         'started_at' => 'started_at',
@@ -155,6 +162,7 @@ class CouponController extends Controller
         }
 
         $params = $request->validated();
+        $params = array_merge($params, $this->scopePayload($request));
         if (!$request->input('id')) {
             if (!isset($params['code'])) {
                 $params['code'] = Helper::randomChar(8);
@@ -181,7 +189,7 @@ class CouponController extends Controller
     private function multiGenerate(CouponGenerate $request)
     {
         $coupons = [];
-        $coupon = $request->validated();
+        $coupon = array_merge($request->validated(), $this->scopePayload($request));
         $coupon['created_at'] = $coupon['updated_at'] = time();
         $coupon['show'] = 1;
         unset($coupon['generate_count']);
@@ -211,7 +219,7 @@ class CouponController extends Controller
             return $this->fail([500, '生成失败']);
         }
 
-        $data = "名称,类型,金额或比例,开始时间,结束时间,可用次数,可用于订阅,券码,生成时间\r\n";
+        $data = "名称,类型,金额或比例,开始时间,结束时间,可用次数,可用于订阅,归属类型,站点ID,代理ID,代理域名ID,券码,生成时间\r\n";
         foreach ($coupons as $coupon) {
             $type = ['', '金额', '比例'][$coupon['type']];
             $value = ['', ($coupon['value'] / 100), $coupon['value']][$coupon['type']];
@@ -220,7 +228,11 @@ class CouponController extends Controller
             $limitUse = $coupon['limit_use'] ?? '不限制';
             $createTime = date('Y-m-d H:i:s', $coupon['created_at']);
             $limitPlanIds = isset($coupon['limit_plan_ids']) ? implode("/", $coupon['limit_plan_ids']) : '不限制';
-            $data .= "{$coupon['name']},{$type},{$value},{$startTime},{$endTime},{$limitUse},{$limitPlanIds},{$coupon['code']},{$createTime}\r\n";
+            $scopeType = $coupon['scope_type'] ?? Coupon::SCOPE_GLOBAL;
+            $siteId = $coupon['site_id'] ?? '';
+            $agentUserId = $coupon['agent_user_id'] ?? '';
+            $agentDomainId = $coupon['agent_domain_id'] ?? '';
+            $data .= "{$coupon['name']},{$type},{$value},{$startTime},{$endTime},{$limitUse},{$limitPlanIds},{$scopeType},{$siteId},{$agentUserId},{$agentDomainId},{$coupon['code']},{$createTime}\r\n";
         }
 
         $fileName = 'coupons_' . date('YmdHis') . '.csv';
@@ -248,5 +260,40 @@ class CouponController extends Controller
         }
 
         return $this->success(true);
+    }
+
+    private function scopePayload(Request $request): array
+    {
+        $scopeType = Coupon::normalizeScopeType($request->input('scope_type', Coupon::SCOPE_GLOBAL));
+        $siteId = $this->positiveIntOrNull($request->input('site_id'));
+        $agentUserId = $this->positiveIntOrNull($request->input('agent_user_id'));
+        $agentDomainId = $this->positiveIntOrNull($request->input('agent_domain_id'));
+
+        if ($scopeType === Coupon::SCOPE_SITE && !$siteId) {
+            throw new ApiException(400203, '请选择优惠券所属站点');
+        }
+        if ($scopeType === Coupon::SCOPE_AGENT && !$agentUserId) {
+            throw new ApiException(400204, '请选择优惠券所属代理');
+        }
+
+        return [
+            'scope_type' => $scopeType,
+            'site_id' => $scopeType === Coupon::SCOPE_SITE ? $siteId : null,
+            'agent_user_id' => $scopeType === Coupon::SCOPE_AGENT ? $agentUserId : null,
+            'agent_domain_id' => $scopeType === Coupon::SCOPE_AGENT ? $agentDomainId : null,
+        ];
+    }
+
+    private function positiveIntOrNull(mixed $value): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+        if (!is_numeric($value)) {
+            return null;
+        }
+
+        $int = (int) $value;
+        return $int > 0 ? $int : null;
     }
 }

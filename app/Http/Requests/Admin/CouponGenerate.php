@@ -24,6 +24,10 @@ class CouponGenerate extends FormRequest
             'limit_use_with_user' => 'nullable|integer',
             'limit_plan_ids' => 'nullable|array',
             'limit_period' => 'nullable|array',
+            'scope_type' => 'nullable|string|in:global,site,agent',
+            'site_id' => 'nullable|integer|min:1|required_if:scope_type,site',
+            'agent_user_id' => 'nullable|integer|min:1|required_if:scope_type,agent',
+            'agent_domain_id' => 'nullable|integer|min:1',
             'code' => ''
         ];
     }
@@ -45,7 +49,10 @@ class CouponGenerate extends FormRequest
             'limit_use.integer' => '最大使用次数格式有误',
             'limit_use_with_user.integer' => '限制用户使用次数格式有误',
             'limit_plan_ids.array' => '指定订阅格式有误',
-            'limit_period.array' => '指定周期格式有误'
+            'limit_period.array' => '指定周期格式有误',
+            'scope_type.in' => '优惠券归属类型有误',
+            'site_id.required_if' => '请选择优惠券所属站点',
+            'agent_user_id.required_if' => '请选择优惠券所属代理',
         ];
     }
 }
