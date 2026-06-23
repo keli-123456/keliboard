@@ -73,13 +73,39 @@ class AgentCommerceService
             throw new ApiException('Agent user does not exist');
         }
 
+        return $this->createOrderForContext($user, $plan, $period, $context, false, $couponCode);
+    }
+
+    public function createAutoRenewOrder(User $user, Plan $plan, string $period): ?Order
+    {
+        $context = app(AgentCommerceContextResolver::class)->resolveUser($user);
+        if (!$context) {
+            return null;
+        }
+
+        return $this->createOrderForContext($user, $plan, $period, $context, true);
+    }
+
+    private function createOrderForContext(
+        User $user,
+        Plan $plan,
+        string $period,
+        array $context,
+        bool $useUserBalance,
+        ?string $couponCode = null
+    ): Order {
+        $agent = User::query()->find((int) $context['agent_user_id']);
+        if (!$agent) {
+            throw new ApiException('Agent user does not exist');
+        }
+
         $period = PlanService::getPeriodKey($period);
         $sale = app(AgentStorefrontService::class)->resolveSalePrice($agent->id, $plan->id, $period);
         $cost = $this->calculatePlatformCost($agent, $plan, $period);
 
         HookManager::call('order.create.before', [$user, $plan, $period, $couponCode]);
 
-        return DB::transaction(function () use ($user, $plan, $period, $context, $sale, $cost): Order {
+        return DB::transaction(function () use ($user, $plan, $period, $context, $sale, $cost, $useUserBalance): Order {
             $lockedAgent = User::query()
                 ->whereKey((int) $context['agent_user_id'])
                 ->lockForUpdate()
@@ -103,6 +129,11 @@ class AgentCommerceService
                 throw new ApiException(self::INSUFFICIENT_SITE_BALANCE_MESSAGE);
             }
 
+            $saleAmount = (int) $sale['sale_amount'];
+            if ($useUserBalance && (int) $lockedUser->balance < $saleAmount) {
+                throw new ApiException(__('Insufficient balance'));
+            }
+
             $now = time();
             $order = new Order([
                 'user_id' => $lockedUser->id,
@@ -110,12 +141,19 @@ class AgentCommerceService
                 'plan_id' => $plan->id,
                 'period' => $period,
                 'trade_no' => Helper::generateOrderNo(),
-                'total_amount' => (int) $sale['sale_amount'],
+                'total_amount' => $useUserBalance ? 0 : $saleAmount,
                 'discount_amount' => 0,
-                'balance_amount' => 0,
+                'balance_amount' => $useUserBalance ? $saleAmount : 0,
             ]);
             $orderService = new OrderService($order);
             $orderService->setOrderType($lockedUser);
+
+            if ($useUserBalance && $saleAmount > 0) {
+                if (!app(UserService::class)->addBalance($lockedUser->id, -$saleAmount)) {
+                    throw new ApiException(__('Insufficient balance'));
+                }
+                $lockedUser->balance = (int) $lockedUser->balance - $saleAmount;
+            }
 
             $ownership = AgentUser::query()
                 ->where('sub_user_id', $lockedUser->id)

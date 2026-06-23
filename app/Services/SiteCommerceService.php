@@ -7,6 +7,7 @@ use App\Models\AgentOrderContext;
 use App\Models\Order;
 use App\Models\Payment;
 use App\Models\Plan;
+use App\Models\Site;
 use App\Models\SiteOrderContext;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -33,6 +34,23 @@ class SiteCommerceService
         );
 
         return OrderService::createFromRequest($user, $plan, $period, $couponCode, $pricing, $siteContext);
+    }
+
+    public function createAutoRenewOrder(User $user, Plan $plan, string $period): ?Order
+    {
+        $siteContext = $this->contextForUser($user);
+        if (!$siteContext) {
+            return null;
+        }
+
+        $period = PlanService::getPeriodKey($period);
+        $pricing = app(SiteStorefrontService::class)->resolveSalePrice(
+            (int) $siteContext['site_id'],
+            (int) $plan->id,
+            $period
+        );
+
+        return OrderService::createFromRequest($user, $plan, $period, null, $pricing, $siteContext);
     }
 
     public function createRechargeOrderFromRequest(
@@ -169,6 +187,26 @@ class SiteCommerceService
         }
 
         return null;
+    }
+
+    public function contextForUser(User $user): ?array
+    {
+        if (!$this->hasSiteTenantTables() || empty($user->site_id)) {
+            return null;
+        }
+
+        $site = Site::query()->find((int) $user->site_id);
+        if (!$site) {
+            return null;
+        }
+
+        return [
+            'site_id' => (int) $site->id,
+            'site_domain_id' => null,
+            'domain' => '',
+            'is_default' => (bool) $site->is_default,
+            'source' => 'user',
+        ];
     }
 
     private function hasAgentOrderContext(Order $order): bool

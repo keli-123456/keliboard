@@ -5,8 +5,13 @@ namespace App\Console\Commands;
 use App\Models\Order;
 use App\Models\Plan;
 use App\Models\User;
+use App\Services\AgentCommerceContextResolver;
+use App\Services\AgentCommerceService;
+use App\Services\AgentStorefrontService;
 use App\Services\OrderService;
 use App\Services\PlanService;
+use App\Services\SiteCommerceService;
+use App\Services\SiteStorefrontService;
 use App\Services\UserService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -84,7 +89,7 @@ class AutoRenewOrders extends Command
                     return;
                 }
 
-                $order = OrderService::createFromRequest($user, $plan, $user->auto_renew_period);
+                $order = $this->createAutoRenewOrder($user, $plan, $user->auto_renew_period);
                 if ((int) $order->total_amount > 0) {
                     throw new \RuntimeException("Auto renew order requires external payment: {$order->trade_no}");
                 }
@@ -144,7 +149,52 @@ class AutoRenewOrders extends Command
     private function getAutoRenewAmount(User $user, Plan $plan, string $period): int
     {
         $periodKey = PlanService::getPeriodKey($period);
-        $baseAmount = OrderService::amountToCents($plan->prices[$periodKey] ?? 0);
+
+        $agentContext = app(AgentCommerceContextResolver::class)->resolveUser($user);
+        if ($agentContext) {
+            $sale = app(AgentStorefrontService::class)->resolveSalePrice(
+                (int) $agentContext['agent_user_id'],
+                (int) $plan->id,
+                $periodKey
+            );
+
+            return max(0, (int) ($sale['sale_amount'] ?? 0));
+        }
+
+        $siteContext = app(SiteCommerceService::class)->contextForUser($user);
+        if ($siteContext) {
+            $pricing = app(SiteStorefrontService::class)->resolveSalePrice(
+                (int) $siteContext['site_id'],
+                (int) $plan->id,
+                $periodKey
+            );
+
+            return $this->applyUserDiscount($user, max(0, (int) ($pricing['sale_amount'] ?? 0)));
+        }
+
+        return $this->applyUserDiscount(
+            $user,
+            OrderService::amountToCents($plan->prices[$periodKey] ?? 0)
+        );
+    }
+
+    private function createAutoRenewOrder(User $user, Plan $plan, string $period): Order
+    {
+        $agentOrder = app(AgentCommerceService::class)->createAutoRenewOrder($user, $plan, $period);
+        if ($agentOrder) {
+            return $agentOrder;
+        }
+
+        $siteOrder = app(SiteCommerceService::class)->createAutoRenewOrder($user, $plan, $period);
+        if ($siteOrder) {
+            return $siteOrder;
+        }
+
+        return OrderService::createFromRequest($user, $plan, $period);
+    }
+
+    private function applyUserDiscount(User $user, int $baseAmount): int
+    {
         if ($baseAmount <= 0) {
             return 0;
         }
