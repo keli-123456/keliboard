@@ -113,6 +113,7 @@ return [
             'version_kind' => 'semver',
             'unknown_version_policy' => 'conservative',
             'core_version_wrappers' => ['sparkle'],
+            'core_version_aliases' => ['mihomo'],
             'protocols' => ['shadowsocks', 'vmess', 'trojan', 'vless', 'hysteria', 'tuic', 'anytls', 'socks', 'http', 'mieru'],
             'variants' => [
                 'nekobox' => [
@@ -168,7 +169,7 @@ return [
                 ],
                 'anytls' => [
                     ['when' => ['network' => ['ws', 'grpc', 'httpupgrade', 'xhttp', 'splithttp']], 'support' => 'no', 'reason' => 'AnyTLS custom transport is not exported for mihomo'],
-                    ['when' => [], 'support' => 'yes'],
+                    ['when' => [], 'min_version' => '1.19.3', 'requires_core_version' => true, 'support' => 'yes'],
                     ['when' => ['feature' => 'alpn'], 'support' => 'yes'],
                     ['when' => ['feature' => 'client_fingerprint'], 'support' => 'yes'],
                     ['when' => ['feature' => 'idle_session'], 'support' => 'yes'],

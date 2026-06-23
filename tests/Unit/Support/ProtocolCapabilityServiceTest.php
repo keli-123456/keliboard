@@ -218,6 +218,71 @@ final class ProtocolCapabilityServiceTest extends TestCase
         $this->assertFalse($result->supported);
     }
 
+    public function test_mihomo_without_core_version_drops_anytls(): void
+    {
+        $server = $this->makeServer('anytls', [
+            'tls_mode' => 1,
+            'network' => 'tcp',
+            'tls' => ['server_name' => 'example.com'],
+        ]);
+
+        $result = $this->service->supportsClient('mihomo', null, $server);
+
+        $this->assertFalse($result->supported);
+    }
+
+    public function test_mihomo_before_1_19_3_drops_anytls(): void
+    {
+        $server = $this->makeServer('anytls', [
+            'tls_mode' => 1,
+            'network' => 'tcp',
+            'tls' => ['server_name' => 'example.com'],
+        ]);
+
+        $result = $this->service->supportsClient('mihomo', '1.19.2', $server);
+
+        $this->assertFalse($result->supported);
+    }
+
+    public function test_mihomo_1_19_3_keeps_anytls(): void
+    {
+        $server = $this->makeServer('anytls', [
+            'tls_mode' => 1,
+            'network' => 'tcp',
+            'tls' => ['server_name' => 'example.com'],
+        ]);
+
+        $result = $this->service->supportsClient('mihomo', '1.19.3', $server);
+
+        $this->assertTrue($result->supported);
+    }
+
+    public function test_clash_meta_for_android_app_version_drops_anytls(): void
+    {
+        $server = $this->makeServer('anytls', [
+            'tls_mode' => 1,
+            'network' => 'tcp',
+            'tls' => ['server_name' => 'example.com'],
+        ]);
+
+        $result = $this->service->supportsClient('clashmetaforandroid', '2.11.30', $server);
+
+        $this->assertFalse($result->supported);
+    }
+
+    public function test_clashmeta_app_style_version_drops_anytls_without_core_identity(): void
+    {
+        $server = $this->makeServer('anytls', [
+            'tls_mode' => 1,
+            'network' => 'tcp',
+            'tls' => ['server_name' => 'example.com'],
+        ]);
+
+        $result = $this->service->supportsClient('clashmeta', '2.11.30', $server);
+
+        $this->assertFalse($result->supported);
+    }
+
     public function test_shadowrocket_drops_anytls_custom_transport(): void
     {
         $server = $this->makeServer('anytls', [

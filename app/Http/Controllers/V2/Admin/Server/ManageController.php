@@ -558,12 +558,13 @@ class ManageController extends Controller
                         'v2node' => 'allow',
                     ],
                     'clients' => [
+                        'mihomo' => 'partial',
                         'quantumult-x' => 'partial',
                         'shadowrocket' => 'partial',
                         'surge' => 'partial',
                         'surfboard' => 'partial',
                     ],
-                    'message' => 'AnyTLS 的 Reality / ALPN / uTLS 指纹 / idle-session 仅对部分客户端可导出，Quantumult X / Shadowrocket / Surge / Surfboard 适合基础 TLS 或有限 Reality 形态',
+                    'message' => 'AnyTLS 对 Mihomo/Clash 需要 mihomo core 1.19.3+；未知或旧版本订阅会自动过滤，其他客户端也只适合部分字段',
                 ],
                 [
                     'id' => 'tuic_general_family_block',

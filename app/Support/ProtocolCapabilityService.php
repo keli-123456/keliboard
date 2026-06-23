@@ -106,17 +106,23 @@ class ProtocolCapabilityService
 
             $support = $rule['support'] ?? 'unknown';
             $minVersion = $rule['min_version'] ?? null;
-            if (
-                $minVersion !== null
-                && !$this->shouldBypassCoreMinVersion($family, $normalizedClientName, $clientVersion, $clientConfig)
-            ) {
-                $compare = $this->compareVersion(
-                    (string) ($clientConfig['version_kind'] ?? 'semver'),
-                    $clientVersion,
-                    $minVersion
-                );
-                if ($compare < 0) {
-                    return SupportResult::drop("client {$family} version too low", $rule);
+            if ($minVersion !== null) {
+                if (
+                    !empty($rule['requires_core_version'])
+                    && !$this->usesCoreVersionAlias($normalizedClientName, $clientConfig)
+                ) {
+                    return SupportResult::drop("client {$family} version is not a verified core version", $rule);
+                }
+
+                if (!$this->shouldBypassCoreMinVersion($family, $normalizedClientName, $clientVersion, $clientConfig)) {
+                    $compare = $this->compareVersion(
+                        (string) ($clientConfig['version_kind'] ?? 'semver'),
+                        $clientVersion,
+                        $minVersion
+                    );
+                    if ($compare < 0) {
+                        return SupportResult::drop("client {$family} version too low", $rule);
+                    }
                 }
             }
 
@@ -216,9 +222,13 @@ class ProtocolCapabilityService
             return [
                 'family' => $family,
                 'status' => 'partial',
-                'reason' => $minVersion !== ''
-                    ? "requires {$family} >= {$minVersion}"
-                    : "client {$family} may require a newer version",
+                'reason' => !empty($matchedPartialRule['requires_core_version']) && $minVersion !== ''
+                    ? "requires verified {$family} core >= {$minVersion}"
+                    : (
+                        $minVersion !== ''
+                            ? "requires {$family} >= {$minVersion}"
+                            : "client {$family} may require a newer version"
+                    ),
                 'matched_rule' => $matchedPartialRule,
             ];
         }
@@ -404,5 +414,19 @@ class ProtocolCapabilityService
 
         return in_array($clientName, $wrappers, true)
             || ($family === 'sing-box' && $clientName === 'sing-box');
+    }
+
+    protected function usesCoreVersionAlias(?string $clientName, array $clientConfig): bool
+    {
+        if (!is_string($clientName) || $clientName === '') {
+            return false;
+        }
+
+        $aliases = $clientConfig['core_version_aliases'] ?? [];
+        if (!is_array($aliases)) {
+            return false;
+        }
+
+        return in_array($clientName, $aliases, true);
     }
 }
