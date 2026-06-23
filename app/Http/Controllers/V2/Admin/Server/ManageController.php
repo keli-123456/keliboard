@@ -633,6 +633,21 @@ class ManageController extends Controller
                     'message' => 'TUIC 的 zero-RTT 以及部分高级项并非所有客户端都能完整导出；Stash 不导出 zero-RTT，Shadowrocket 不导出 zero-RTT / 非默认 congestion_control / udp_relay_mode',
                 ],
                 [
+                    'id' => 'naive_sing_box_version_warn',
+                    'type' => 'warn',
+                    'when' => [
+                        'server_type' => Server::TYPE_NAIVE,
+                    ],
+                    'runtime' => [
+                        'v2node' => 'allow',
+                    ],
+                    'clients' => [
+                        'sing-box' => 'partial',
+                        'shadowrocket' => 'partial',
+                    ],
+                    'message' => 'Naive 对 sing-box 系客户端需要 sing-box core 1.13.0+；Shadowrocket 仅适合 Naive HTTPS，订阅会按客户端能力过滤',
+                ],
+                [
                     'id' => 'naive_quic_shadowrocket_block',
                     'type' => 'block',
                     'when' => [
