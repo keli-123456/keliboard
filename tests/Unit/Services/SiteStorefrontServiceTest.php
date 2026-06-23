@@ -115,6 +115,32 @@ final class SiteStorefrontServiceTest extends TestCase
         $this->assertSame('Starter', $resource['platform_name']);
     }
 
+    public function test_site_display_name_can_be_applied_to_current_plan_without_enabled_sale_price(): void
+    {
+        [$site] = $this->siteWithDomain('cheap', 'Cheap Site', 'cheap.example.test');
+        $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 20.00]);
+        SitePlanOverride::query()->create([
+            'site_id' => $site->id,
+            'plan_id' => $plan->id,
+            'display_name' => '光喵当前套餐',
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $decorated = app(SiteStorefrontService::class)->applyDisplayNameForRequest(
+            $this->requestForHost('cheap.example.test'),
+            $plan
+        );
+        $resource = PlanResource::make($decorated)->toArray($this->requestForHost('cheap.example.test'));
+
+        $this->assertSame('光喵当前套餐', $resource['name']);
+        $this->assertSame('光喵当前套餐', $resource['display_name']);
+        $this->assertSame('光喵当前套餐', $resource['site_display_name']);
+        $this->assertSame('Starter', $resource['platform_name']);
+        $this->assertEquals(2000, $resource['month_price']);
+        $this->assertSame($site->id, $resource['site_context']['site_id']);
+    }
+
     public function test_non_default_site_rejects_missing_price_for_checkout(): void
     {
         [$site] = $this->siteWithDomain('cheap', 'Cheap Site', 'cheap.example.test');

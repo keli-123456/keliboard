@@ -8,6 +8,7 @@ use App\Models\Plugin as PluginModel;
 use App\Services\Plugin\AbstractPlugin;
 use App\Services\Plugin\InterceptResponseException;
 use App\Services\Plugin\PluginManager;
+use App\Services\NotificationSiteContextService;
 use App\Services\UserOnlineService;
 use App\Models\User;
 use App\Utils\Helper;
@@ -1005,19 +1006,20 @@ class Plugin extends AbstractPlugin
             return $result;
         }
 
-        $subject = $this->buildNotificationSubject();
-        $content = $this->buildNotificationContent($code, $reason, $meta);
+        $contextService = app(NotificationSiteContextService::class);
+        $notificationContext = $contextService->forUser($user);
+        $subject = $this->buildNotificationSubject((string) $notificationContext['app_name']);
+        $content = $this->buildNotificationContent($code, $reason, $meta, $notificationContext);
 
         if ($this->getConfig('enable_email_notice', true) && !empty($user->email)) {
             SendEmailJob::dispatch([
                 'email' => $user->email,
                 'subject' => $subject,
                 'template_name' => 'notify',
-                'template_value' => [
-                    'name' => admin_setting('app_name', 'XBoard'),
+                'template_value' => $contextService->templateValues($notificationContext, [
                     'content' => $content,
-                    'url' => admin_setting('app_url'),
-                ],
+                ]),
+                'dispatch_context' => $contextService->dispatchContext($notificationContext),
             ]);
             Log::info('[SubscriptionControl] 风控邮件已提交', [
                 'user_id' => $user->id,
@@ -1032,7 +1034,10 @@ class Plugin extends AbstractPlugin
             && !empty($user->telegram_id)
             && trim((string) admin_setting('telegram_bot_token', '')) !== ''
         ) {
-            SendTelegramJob::dispatch((int) $user->telegram_id, $this->buildTelegramMessage($code, $reason, $meta));
+            SendTelegramJob::dispatch(
+                (int) $user->telegram_id,
+                $this->buildTelegramMessage($code, $reason, $meta, $notificationContext)
+            );
             Log::info('[SubscriptionControl] 风控 TG 消息已提交', [
                 'user_id' => $user->id,
                 'code' => $code,
@@ -1044,12 +1049,14 @@ class Plugin extends AbstractPlugin
         return $result;
     }
 
-    private function buildNotificationSubject(): string
+    private function buildNotificationSubject(?string $appName = null): string
     {
-        return '[' . admin_setting('app_name', 'XBoard') . '] 订阅风控提醒';
+        $appName = trim((string) ($appName ?: admin_setting('app_name', 'XBoard')));
+
+        return '[' . ($appName !== '' ? $appName : 'XBoard') . '] 订阅风控提醒';
     }
 
-    private function buildNotificationContent(string $code, string $reason, array $meta = []): string
+    private function buildNotificationContent(string $code, string $reason, array $meta = [], array $notificationContext = []): string
     {
         $lines = [
             '检测到您的订阅触发了风控规则。',
@@ -1081,7 +1088,7 @@ class Plugin extends AbstractPlugin
             $lines[] = '客户端UA：' . (string) $meta['user_agent'];
         }
 
-        $appUrl = trim((string) admin_setting('app_url', ''));
+        $appUrl = trim((string) ($notificationContext['app_url'] ?? admin_setting('app_url', '')));
         if ($appUrl !== '') {
             $lines[] = '面板地址：' . $appUrl;
         }
@@ -1089,9 +1096,10 @@ class Plugin extends AbstractPlugin
         return implode("\n", $lines);
     }
 
-    private function buildTelegramMessage(string $code, string $reason, array $meta = []): string
+    private function buildTelegramMessage(string $code, string $reason, array $meta = [], array $notificationContext = []): string
     {
         $lines = [
+            $this->buildNotificationSubject((string) ($notificationContext['app_name'] ?? '')),
             '检测到您的订阅触发了风控规则。',
             '类型：' . $reason,
             '处理：' . $this->buildActionText($code, $meta),
@@ -1117,7 +1125,7 @@ class Plugin extends AbstractPlugin
             $lines[] = '来源IP：' . (string) $meta['client_ip'];
         }
 
-        $appUrl = trim((string) admin_setting('app_url', ''));
+        $appUrl = trim((string) ($notificationContext['app_url'] ?? admin_setting('app_url', '')));
         if ($appUrl !== '') {
             $lines[] = '面板地址：' . $appUrl;
         }

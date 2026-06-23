@@ -210,6 +210,36 @@ class SiteStorefrontService
             ->all();
     }
 
+    public function applyDisplayNameForRequest(Request $request, Plan $plan): Plan
+    {
+        $context = app(SiteContextService::class)->resolve($request, $request->user());
+        $siteId = (int) ($context['site_id'] ?? 0);
+        if ($siteId <= 0) {
+            return $plan;
+        }
+
+        $site = Site::query()->find($siteId);
+        if (!$site || $site->status !== Site::STATUS_ACTIVE) {
+            return $plan;
+        }
+
+        $decorated = clone $plan;
+        $displayName = $this->siteDisplayName($siteId, $plan);
+        $decorated->setAttribute('platform_name', (string) ($plan->getAttribute('platform_name') ?: $plan->name));
+        $decorated->setAttribute('display_name', $displayName);
+        $decorated->setAttribute('site_display_name', $displayName);
+        $decorated->setAttribute('site_context', [
+            'site_id' => (int) $site->id,
+            'site_code' => (string) $site->code,
+            'site_domain_id' => ($context['site_domain_id'] ?? null) !== null ? (int) $context['site_domain_id'] : null,
+            'domain' => (string) ($context['domain'] ?? ''),
+            'source' => (string) ($context['source'] ?? 'default'),
+            'is_default' => (bool) $site->is_default,
+        ]);
+
+        return $decorated;
+    }
+
     public function resolveSalePrice(int $siteId, int $planId, string $period): array
     {
         $period = PlanService::getPeriodKey($period);

@@ -7,6 +7,7 @@ use App\Models\AgentBalanceHold;
 use App\Models\AgentDomain;
 use App\Models\AgentPlanPrice;
 use App\Models\AgentProfile;
+use App\Models\AgentSiteSetting;
 use App\Models\Payment;
 use App\Models\Plan;
 use App\Models\User;
@@ -36,6 +37,14 @@ class AgentCommerceDiagnosticsService
             ->where('enabled', true)
             ->get()
             ->groupBy('plan_id');
+        $siteSettings = AgentSiteSetting::query()
+            ->where('agent_user_id', $agent->id)
+            ->get();
+        $enabledSiteSettings = $siteSettings->filter(fn (AgentSiteSetting $setting): bool => (bool) $setting->enabled);
+        $defaultSiteSettingEnabled = $enabledSiteSettings->contains(
+            fn (AgentSiteSetting $setting): bool => $setting->agent_domain_id === null
+                && $setting->setting_scope === AgentSiteSetting::SCOPE_DEFAULT
+        );
 
         $activeDomains = $domains
             ->filter(fn (AgentDomain $domain): bool => $domain->status === AgentDomain::STATUS_ACTIVE);
@@ -70,6 +79,11 @@ class AgentCommerceDiagnosticsService
 
         $checks = [
             'domains' => $this->domainCheck($domains),
+            'site_settings' => $this->siteSettingCheck(
+                $siteSettings->count(),
+                $enabledSiteSettings->count(),
+                $defaultSiteSettingEnabled
+            ),
             'payments' => $this->paymentCheck(
                 $enabledPayments->count(),
                 count($paymentContexts),
@@ -84,6 +98,9 @@ class AgentCommerceDiagnosticsService
             'summary' => [
                 'domains_total' => $domains->count(),
                 'active_domains' => count($activeDomainIds),
+                'site_settings_total' => $siteSettings->count(),
+                'enabled_site_settings' => $enabledSiteSettings->count(),
+                'default_site_setting_enabled' => $defaultSiteSettingEnabled,
                 'enabled_payments' => $enabledPayments->count(),
                 'available_payments' => $availablePayments->count(),
                 'payment_contexts_total' => count($paymentContexts),
@@ -203,6 +220,21 @@ class AgentCommerceDiagnosticsService
         }
 
         return $this->check(self::STATUS_OK, 'domains', '代理域名正常', '当前有可用代理域名。');
+    }
+
+    private function siteSettingCheck(int $total, int $enabled, bool $defaultEnabled): array
+    {
+        if ($enabled <= 0) {
+            return $this->check(self::STATUS_WARNING, 'site_settings', '暂无启用网站设置', '请配置并启用默认网站设置，否则代理站会回退到平台默认展示。');
+        }
+        if (!$defaultEnabled) {
+            return $this->check(self::STATUS_WARNING, 'site_settings', '缺少默认网站设置', '未单独配置的代理域名和主站访问会回退到平台默认展示。');
+        }
+        if ($enabled < $total) {
+            return $this->check(self::STATUS_WARNING, 'site_settings', '部分网站设置未启用', '关闭的网站设置不会应用到对应代理域名。');
+        }
+
+        return $this->check(self::STATUS_OK, 'site_settings', '网站设置正常', '默认网站设置已启用，代理站展示可正常覆盖。');
     }
 
     private function paymentCheck(int $enabledCount, int $contextCount, int $availableContextCount): array

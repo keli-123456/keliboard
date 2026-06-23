@@ -202,6 +202,43 @@ class AgentStorefrontService
             ->all();
     }
 
+    public function applyDisplayNameForRequest(Request $request, Plan $plan): Plan
+    {
+        $context = app(AgentCommerceContextResolver::class)->resolveRequest($request, $request->user());
+        if (!$context) {
+            return $plan;
+        }
+
+        $agentUserId = (int) ($context['agent_user_id'] ?? 0);
+        if ($agentUserId <= 0) {
+            return $plan;
+        }
+
+        $agentDisplayName = $this->normalizeDisplayName(
+            AgentPlanOverride::query()
+                ->where('agent_user_id', $agentUserId)
+                ->where('plan_id', $plan->id)
+                ->value('display_name')
+        );
+        $siteDisplayName = $this->normalizeDisplayName($plan->getAttribute('site_display_name'));
+        $fallbackDisplayName = $this->normalizeDisplayName($plan->getAttribute('display_name')) ?? (string) $plan->name;
+        $displayName = $agentDisplayName ?? $fallbackDisplayName;
+
+        $decorated = clone $plan;
+        $decorated->setAttribute('platform_name', (string) ($plan->getAttribute('platform_name') ?: $plan->name));
+        $decorated->setAttribute('display_name', $displayName);
+        $decorated->setAttribute('site_display_name', $siteDisplayName);
+        $decorated->setAttribute('agent_display_name', $agentDisplayName);
+        $decorated->setAttribute('agent_context', [
+            'agent_user_id' => $agentUserId,
+            'agent_domain_id' => ($context['agent_domain_id'] ?? null) !== null ? (int) $context['agent_domain_id'] : null,
+            'domain' => (string) ($context['domain'] ?? ''),
+            'source' => (string) ($context['source'] ?? AgentCommerceContextResolver::SOURCE_DOMAIN),
+        ]);
+
+        return $decorated;
+    }
+
     public function resolveSalePrice(int $agentUserId, int $planId, string $period): array
     {
         $period = PlanService::getPeriodKey($period);

@@ -4,9 +4,19 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Plugins;
 
+use App\Jobs\SendEmailJob;
+use App\Jobs\SendTelegramJob;
+use App\Models\AgentDomain;
+use App\Models\AgentProfile;
+use App\Models\AgentSiteSetting;
+use App\Models\AgentUser;
 use App\Models\Plugin as PluginModel;
+use App\Models\Site;
+use App\Models\SiteDomain;
 use App\Models\User;
+use App\Services\AgentCenterService;
 use App\Services\Plugin\InterceptResponseException;
+use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -532,6 +542,85 @@ final class SubscriptionControlPluginTest extends TestCase
         }
     }
 
+    public function test_risk_notifications_use_agent_site_branding_for_bound_user(): void
+    {
+        $this->setUpInMemoryDatabase();
+        $this->createUserTable();
+        $this->database->schema()->table('v2_user', function (Blueprint $table): void {
+            $table->unsignedBigInteger('telegram_id')->nullable();
+        });
+        $this->createSiteTenantTables();
+        $this->createSiteCommerceTables();
+        $this->createAgentCenterTables();
+        $this->createAgentCommerceTables();
+        $this->createAgentSiteSettingTable();
+        $this->bindTestSettings([
+            'app_name' => 'Main Cloud',
+            'app_url' => 'https://main.example.test',
+            'telegram_bot_token' => 'telegram-token',
+        ]);
+        app()->instance('log', new class {
+            public function info(...$arguments): void {}
+            public function warning(...$arguments): void {}
+            public function error(...$arguments): void {}
+        });
+        $dispatcher = $this->bindCapturingDispatcher();
+
+        $site = $this->createSite('gm', '光喵', 'gm.example.test');
+        $agent = $this->createAgent('agent@example.test');
+        $user = $this->createUser('customer@example.test', $site->id);
+        $user->telegram_id = 123456;
+        $user->save();
+        AgentUser::query()->create([
+            'agent_user_id' => $agent->id,
+            'sub_user_id' => $user->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => 'agent.example.test',
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        AgentSiteSetting::query()->create([
+            'agent_user_id' => $agent->id,
+            'agent_domain_id' => null,
+            'setting_scope' => AgentSiteSetting::SCOPE_DEFAULT,
+            'setting_key' => AgentSiteSetting::KEY_DEFAULT,
+            'site_name' => '代理云',
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $plugin = new Plugin('subscription_control');
+        $plugin->setConfig([
+            'enable_email_notice' => true,
+            'enable_telegram_notice' => true,
+            'notify_cooldown_seconds' => 60,
+        ]);
+        $method = new ReflectionMethod($plugin, 'sendRiskNotifications');
+        $method->setAccessible(true);
+
+        $result = $method->invoke($plugin, $user, 'ua_blacklist', '恶意扫描 UA', []);
+
+        $this->assertTrue($result['email_sent']);
+        $this->assertTrue($result['telegram_sent']);
+        $this->assertCount(2, $dispatcher->dispatched);
+        $emailParams = $this->emailJobParams($dispatcher->dispatched[0]);
+        $telegramText = $this->telegramJobText($dispatcher->dispatched[1]);
+
+        $this->assertSame('[代理云] 订阅风控提醒', $emailParams['subject']);
+        $this->assertSame('代理云', $emailParams['template_value']['name']);
+        $this->assertSame('https://agent.example.test', $emailParams['template_value']['url']);
+        $this->assertSame($agent->id, $emailParams['dispatch_context']['agent_user_id']);
+        $this->assertStringContainsString('[代理云] 订阅风控提醒', $telegramText);
+        $this->assertStringContainsString('https://agent.example.test', $telegramText);
+    }
+
     private function createPluginTable(): void
     {
         $this->database->schema()->create('v2_plugins', function (Blueprint $table): void {
@@ -550,5 +639,119 @@ final class SubscriptionControlPluginTest extends TestCase
             $table->boolean('is_enabled')->default(true);
             $table->timestamps();
         });
+    }
+
+    private function createSite(string $code, string $name, string $host): Site
+    {
+        $site = Site::query()->create([
+            'code' => $code,
+            'name' => $name,
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        SiteDomain::query()->create([
+            'site_id' => $site->id,
+            'domain' => $host,
+            'status' => SiteDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        return $site;
+    }
+
+    private function createAgent(string $email): User
+    {
+        $agent = $this->createUser($email, null);
+        AgentProfile::query()->create([
+            'user_id' => $agent->id,
+            'status' => AgentCenterService::STATUS_ACTIVE,
+            'level' => 'default',
+            'enabled_at' => time(),
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        return $agent;
+    }
+
+    private function createUser(string $email, ?int $siteId): User
+    {
+        return User::query()->create([
+            'email' => $email,
+            'password' => password_hash('secret123', PASSWORD_BCRYPT),
+            'site_id' => $siteId,
+            'uuid' => $email . '-uuid',
+            'token' => $email . '-token',
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+    }
+
+    private function bindCapturingDispatcher(): object
+    {
+        $dispatcher = new class implements Dispatcher {
+            public array $dispatched = [];
+
+            public function dispatch($command)
+            {
+                $this->dispatched[] = $command;
+
+                return $command;
+            }
+
+            public function dispatchSync($command, $handler = null)
+            {
+                return $this->dispatch($command);
+            }
+
+            public function dispatchNow($command, $handler = null)
+            {
+                return $this->dispatch($command);
+            }
+
+            public function hasCommandHandler($command)
+            {
+                return false;
+            }
+
+            public function getCommandHandler($command)
+            {
+                return null;
+            }
+
+            public function pipeThrough(array $pipes)
+            {
+                return $this;
+            }
+
+            public function map(array $map)
+            {
+                return $this;
+            }
+        };
+
+        app()->instance(Dispatcher::class, $dispatcher);
+
+        return $dispatcher;
+    }
+
+    private function emailJobParams(SendEmailJob $job): array
+    {
+        $property = new \ReflectionProperty($job, 'params');
+        $property->setAccessible(true);
+
+        return $property->getValue($job);
+    }
+
+    private function telegramJobText(SendTelegramJob $job): string
+    {
+        $property = new \ReflectionProperty($job, 'text');
+        $property->setAccessible(true);
+
+        return (string) $property->getValue($job);
     }
 }

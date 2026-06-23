@@ -186,6 +186,44 @@ final class AgentStorefrontServiceTest extends TestCase
         $this->assertSame('Starter', $resource['platform_name']);
     }
 
+    public function test_agent_display_name_can_be_applied_to_bound_current_plan_without_enabled_sale_price(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $buyer = $this->createUser('buyer@example.test');
+        AgentUser::query()->create([
+            'agent_user_id' => $agent->id,
+            'sub_user_id' => $buyer->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 20.00]);
+        $plan->setAttribute('display_name', '光喵当前套餐');
+        $plan->setAttribute('site_display_name', '光喵当前套餐');
+        $plan->setAttribute('platform_name', 'Starter');
+        AgentPlanOverride::query()->create([
+            'agent_user_id' => $agent->id,
+            'plan_id' => $plan->id,
+            'display_name' => '代理当前套餐',
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $decorated = app(AgentStorefrontService::class)->applyDisplayNameForRequest(
+            $this->requestForHost('platform.example.test', $buyer),
+            $plan
+        );
+        $resource = PlanResource::make($decorated)->toArray($this->requestForHost('platform.example.test', $buyer));
+
+        $this->assertSame('代理当前套餐', $resource['name']);
+        $this->assertSame('代理当前套餐', $resource['display_name']);
+        $this->assertSame('代理当前套餐', $resource['agent_display_name']);
+        $this->assertSame('光喵当前套餐', $resource['site_display_name']);
+        $this->assertSame('Starter', $resource['platform_name']);
+        $this->assertEquals(2000, $resource['month_price']);
+        $this->assertSame($agent->id, $resource['agent_context']['agent_user_id']);
+        $this->assertSame('user_binding', $resource['agent_context']['source']);
+    }
+
     public function test_price_save_rejects_plan_not_allowed_for_agents(): void
     {
         $this->bindTestSettings(['agent_center_allowed_plan_ids' => '999']);
