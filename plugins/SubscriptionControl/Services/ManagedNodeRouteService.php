@@ -170,6 +170,20 @@ final class ManagedNodeRouteService
             '120.92.224.0/20', '103.26.64.0/22', '120.92.216.0/22', '120.92.192.0/23',
             '120.92.209.0/24', '120.92.211.0/24',
         ],
+        'aws' => [
+            '100.20.0.0/14', '100.24.0.0/13', '100.48.0.0/12', '104.216.0.0/15',
+            '107.176.0.0/15', '107.20.0.0/14', '108.128.0.0/13', '108.136.0.0/15',
+            '108.138.0.0/15', '108.156.0.0/14', '122.248.192.0/18', '13.112.0.0/14',
+            '13.124.0.0/16', '13.125.0.0/16', '13.126.0.0/15', '13.128.0.0/16',
+            '13.130.0.0/16', '13.134.0.0/15', '13.144.0.0/16', '13.146.0.0/16',
+        ],
+        'azure' => [
+            '102.133.0.0/19', '102.133.128.0/18', '102.133.192.0/19', '102.133.224.0/20',
+            '102.133.32.0/20', '102.133.64.0/19', '102.133.96.0/20', '102.37.0.0/20',
+            '102.37.128.0/19', '102.37.176.0/20', '102.37.192.0/18', '102.37.32.0/19',
+            '102.37.80.0/20', '102.37.96.0/19', '104.208.0.0/19', '104.208.128.0/17',
+            '104.208.32.0/20', '104.208.48.0/20', '104.208.64.0/18', '104.209.0.0/18',
+        ],
     ];
 
     public function overview(): array
@@ -600,7 +614,8 @@ final class ManagedNodeRouteService
         $payload = $this->bgpCachePayload($config);
         $ttlSeconds = max(1, (int) ($config['node_source_ip_bgp_prefix_cache_hours'] ?? 24)) * 3600;
         $updatedAt = (int) ($payload['updated_at'] ?? 0);
-        if ($updatedAt > 0 && (time() - $updatedAt) < $ttlSeconds) {
+        $cacheIsFresh = $updatedAt > 0 && (time() - $updatedAt) < $ttlSeconds;
+        if ($cacheIsFresh && !$this->bgpCacheMissingBlockedProvider($payload, $policies)) {
             return $this->cachedBgpProviderCidrs($config);
         }
 
@@ -613,6 +628,9 @@ final class ManagedNodeRouteService
 
         foreach (self::PROVIDERS as $key => $provider) {
             if (($policies[$key] ?? self::POLICY_ALLOW) !== self::POLICY_BLOCK) {
+                continue;
+            }
+            if ($cacheIsFresh && $this->bgpCacheHasProviderCidrs($payload, $key)) {
                 continue;
             }
 
@@ -633,6 +651,30 @@ final class ManagedNodeRouteService
         }
 
         return $this->cachedBgpProviderCidrs($config);
+    }
+
+    private function bgpCacheMissingBlockedProvider(array $payload, array $policies): bool
+    {
+        foreach (self::PROVIDERS as $key => $_) {
+            if (($policies[$key] ?? self::POLICY_ALLOW) !== self::POLICY_BLOCK) {
+                continue;
+            }
+            if (!$this->bgpCacheHasProviderCidrs($payload, $key)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function bgpCacheHasProviderCidrs(array $payload, string $key): bool
+    {
+        $providers = (array) ($payload['providers'] ?? []);
+        if (!array_key_exists($key, $providers)) {
+            return false;
+        }
+
+        return $this->validCidrs(is_array($providers[$key]) ? $providers[$key] : []) !== [];
     }
 
     private function fetchBgpCidrsForAsns(array $asns, int $max): array

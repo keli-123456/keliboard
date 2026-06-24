@@ -8,6 +8,8 @@ use App\Models\Plugin;
 use App\Models\Server;
 use App\Models\ServerRoute;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Plugin\SubscriptionControl\Services\ManagedNodeRouteService;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
@@ -178,7 +180,7 @@ final class ManagedNodeRouteServiceTest extends TestCase
             'enable_node_source_ip_bgp_prefix_refresh' => false,
             'enable_node_source_ip_route_learned_prefixes' => false,
             'source_ip_deny_cidrs' => '',
-            'node_source_ip_provider_policy' => "ucloud=allow\naliyun=allow\ntencent=allow\nhuawei=allow\nbaidu=allow\nvolcengine=allow\ntianyi=allow\nmobile_cloud=allow\njdcloud=block\nkingsoft=allow",
+            'node_source_ip_provider_policy' => "ucloud=allow\naliyun=allow\ntencent=allow\nhuawei=allow\nbaidu=allow\nvolcengine=allow\ntianyi=allow\nmobile_cloud=allow\njdcloud=block\nkingsoft=allow\naws=allow\nazure=allow",
             'node_source_ip_provider_cidrs' => '',
             'node_source_ip_managed_max_prefixes_per_provider' => 100,
         ]);
@@ -206,10 +208,55 @@ final class ManagedNodeRouteServiceTest extends TestCase
         $this->assertTrue($providers->has('aws'));
         $this->assertSame('AWS', $providers->get('aws')['label']);
         $this->assertSame('block', $providers->get('aws')['policy']);
+        $this->assertGreaterThan(0, $providers->get('aws')['builtin_cidr_count']);
+        $this->assertGreaterThan(0, $providers->get('aws')['cidr_count']);
 
         $this->assertTrue($providers->has('azure'));
         $this->assertSame('Azure', $providers->get('azure')['label']);
         $this->assertSame('block', $providers->get('azure')['policy']);
+        $this->assertGreaterThan(0, $providers->get('azure')['builtin_cidr_count']);
+        $this->assertGreaterThan(0, $providers->get('azure')['cidr_count']);
+    }
+
+    public function test_sync_refreshes_fresh_bgp_cache_when_blocked_provider_is_missing(): void
+    {
+        $this->createServer();
+        Cache::put('subscription_control:managed_node_route:bgp_provider_cidrs:v2', [
+            'updated_at' => time(),
+            'providers' => [
+                'tencent' => ['203.0.113.0/24'],
+            ],
+            'errors' => [],
+        ], 3600);
+
+        Http::fake([
+            'https://api.routeviews.org/asn/16509' => Http::response(['198.51.100.0/24'], 200),
+            'https://api.routeviews.org/asn/14618' => Http::response([], 200),
+            'https://api.routeviews.org/asn/7224' => Http::response([], 200),
+            '*' => Http::response([], 200),
+        ]);
+
+        $result = (new ManagedNodeRouteService())->sync([
+            'enable_node_source_ip_managed_routes' => true,
+            'enable_node_source_ip_builtin_provider_cidrs' => false,
+            'enable_node_source_ip_bgp_prefix_refresh' => true,
+            'enable_node_source_ip_route_learned_prefixes' => false,
+            'source_ip_deny_cidrs' => '',
+            'node_source_ip_provider_policy' => "ucloud=allow\naliyun=allow\ntencent=allow\nhuawei=allow\nbaidu=allow\nvolcengine=allow\ntianyi=allow\nmobile_cloud=allow\njdcloud=allow\nkingsoft=allow\naws=block\nazure=allow",
+            'node_source_ip_provider_cidrs' => '',
+            'node_source_ip_managed_max_prefixes_per_provider' => 100,
+            'node_source_ip_bgp_prefix_cache_hours' => 24,
+        ]);
+
+        $this->assertCount(1, $result['active_route_ids']);
+
+        $route = ServerRoute::query()
+            ->where('remarks', ManagedNodeRouteService::ROUTE_REMARK_PREFIX . ' provider:aws 云厂商 AWS')
+            ->first();
+        $this->assertNotNull($route);
+        $this->assertContains('source_ip:198.51.100.0/24', $route->match);
+
+        Http::assertSent(fn($request): bool => (string) $request->url() === 'https://api.routeviews.org/asn/16509');
     }
 
     private function createTables(): void
