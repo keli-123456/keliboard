@@ -23,6 +23,7 @@ use App\Services\SiteDataScopeService;
 use App\Services\OrderUpgradeService;
 use App\Services\UserService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 class OrderController extends Controller
 {
@@ -225,17 +226,39 @@ class OrderController extends Controller
         } catch (ApiException $exception) {
             return $this->fail([400, $exception->getMessage()]);
         }
-        $paymentService = new PaymentService($payment->payment, $payment->id);
-        $result = $paymentService->pay([
-            'trade_no' => $tradeNo,
-            'total_amount' => isset($order->handling_amount) ? ($order->total_amount + $order->handling_amount) : $order->total_amount,
-            'user_id' => $order->user_id,
-            'stripe_token' => $request->input('token')
-        ]);
+        try {
+            $paymentService = new PaymentService($payment->payment, $payment->id);
+            $result = $paymentService->pay([
+                'trade_no' => $tradeNo,
+                'total_amount' => isset($order->handling_amount) ? ($order->total_amount + $order->handling_amount) : $order->total_amount,
+                'user_id' => $order->user_id,
+                'stripe_token' => $request->input('token')
+            ]);
+        } catch (\Throwable $exception) {
+            Log::warning('Payment checkout request failed', [
+                'trade_no' => $tradeNo,
+                'payment_id' => $payment->id,
+                'payment' => $payment->payment,
+                'exception' => get_class($exception),
+                'message' => $exception->getMessage(),
+            ]);
+
+            return $this->fail([400, $this->paymentFailureMessage($exception)]);
+        }
         return response([
             'type' => $result['type'],
             'data' => $result['data']
         ]);
+    }
+
+    private function paymentFailureMessage(\Throwable $exception): string
+    {
+        $message = trim($exception->getMessage());
+        if ($message === '') {
+            return '支付请求失败，请稍后重试或联系管理员';
+        }
+
+        return mb_substr($message, 0, 500);
     }
 
     public function check(Request $request)

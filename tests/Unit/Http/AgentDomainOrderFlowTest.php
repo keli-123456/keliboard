@@ -158,6 +158,28 @@ final class AgentDomainOrderFlowTest extends TestCase
         $this->assertSame($payment->id, (int) $order->fresh()->payment_id);
     }
 
+    public function test_agent_checkout_returns_readable_error_when_payment_plugin_fails(): void
+    {
+        $this->bindFakePaymentGateway('支付宝当面付请求失败：访问被禁止（ACQ.ACCESS_FORBIDDEN）。');
+        [$agent, $buyer, $order] = $this->createAgentOrderFixture();
+        $payment = $this->createPayment(Payment::OWNER_AGENT, $agent->id);
+        $request = BaseRequest::create('/api/v1/user/order/checkout', 'POST', [
+            'trade_no' => $order->trade_no,
+            'method' => $payment->id,
+        ]);
+        $request->setUserResolver(static fn (): User => $buyer);
+        app()->instance('request', $request);
+
+        $response = app(OrderController::class)->checkout($request);
+        $payload = $this->responsePayload($response);
+
+        $this->assertSame('fail', $payload['status']);
+        $this->assertStringContainsString('支付宝当面付请求失败', $payload['message']);
+        $this->assertSame(Order::STATUS_PENDING, (int) $order->fresh()->status);
+        $this->assertSame(AgentBalanceHold::STATUS_PENDING, AgentBalanceHold::query()->where('order_id', $order->id)->value('status'));
+        $this->assertSame(10000, (int) $agent->fresh()->balance);
+    }
+
     public function test_agent_checkout_does_not_double_count_current_hold(): void
     {
         [$agent, $buyer, $order] = $this->createAgentOrderFixture();
@@ -815,7 +837,7 @@ final class AgentDomainOrderFlowTest extends TestCase
         return json_decode((string) $response->getContent(), true) ?: [];
     }
 
-    private function bindFakePaymentGateway(): void
+    private function bindFakePaymentGateway(?string $payExceptionMessage = null): void
     {
         HookManager::registerFilter('available_payment_methods', static function (array $methods): array {
             $methods['FAKEPAY'] = [
@@ -828,13 +850,21 @@ final class AgentDomainOrderFlowTest extends TestCase
             return $methods;
         });
 
-        app()->instance(PluginManager::class, new class {
+        app()->instance(PluginManager::class, new class($payExceptionMessage) {
+            public function __construct(private ?string $payExceptionMessage)
+            {
+            }
+
             public function initializeEnabledPlugins(): void {}
 
             public function getEnabledPaymentPlugins(): array
             {
-                return [new class {
+                return [new class($this->payExceptionMessage) {
                     private array $config = [];
+
+                    public function __construct(private ?string $payExceptionMessage)
+                    {
+                    }
 
                     public function getPluginCode(): string
                     {
@@ -848,6 +878,10 @@ final class AgentDomainOrderFlowTest extends TestCase
 
                     public function pay(array $order): array
                     {
+                        if ($this->payExceptionMessage !== null) {
+                            throw new \RuntimeException($this->payExceptionMessage);
+                        }
+
                         return [
                             'type' => 0,
                             'data' => [
