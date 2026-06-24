@@ -87,6 +87,19 @@ final class AgentCenterServiceTest extends TestCase
         $this->assertStringContainsString('我想申请代理', (string) $message?->message);
     }
 
+    public function test_apply_from_site_initializes_agent_cost_site(): void
+    {
+        $this->createSiteTenantTables();
+        $site = $this->siteWithDomain('sub-site', 'sub.example.test', false);
+        $user = $this->createUser('site-user@example.test', 0, ['site_id' => $site->id]);
+
+        app(AgentCenterService::class)->apply($user, '申请代理');
+
+        $profile = AgentProfile::query()->where('user_id', $user->id)->first();
+        $this->assertNotNull($profile);
+        $this->assertSame($site->id, (int) $profile->cost_site_id);
+    }
+
     public function test_agent_subordinate_cannot_unlock_without_platform_review(): void
     {
         $agent = $this->createActiveAgent('agent@example.test', 10000);
@@ -137,7 +150,7 @@ final class AgentCenterServiceTest extends TestCase
         $this->assertSame(1, $this->tableCount('v2_agent_user'));
     }
 
-    public function test_create_subordinate_scopes_duplicate_email_to_agent_site(): void
+    public function test_create_subordinate_uses_platform_scope_even_when_agent_has_site(): void
     {
         $this->createSiteTenantTables();
         $defaultSite = $this->siteWithDomain('default', 'main.example.test', true);
@@ -153,7 +166,7 @@ final class AgentCenterServiceTest extends TestCase
         ]);
 
         $subordinate = User::query()->findOrFail($created['user']['id']);
-        $this->assertSame($secondSite->id, $subordinate->site_id);
+        $this->assertNull($subordinate->site_id);
         $this->assertSame(2, User::query()->where('email', 'buyer@example.test')->count());
     }
 

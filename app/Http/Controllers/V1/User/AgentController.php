@@ -15,7 +15,7 @@ class AgentController extends Controller
 
     public function unlock(Request $request)
     {
-        return $this->success($this->service()->unlock($request->user()));
+        return $this->success($this->service()->unlock($request->user(), $request));
     }
 
     public function apply(Request $request)
@@ -24,7 +24,7 @@ class AgentController extends Controller
             'message' => 'nullable|string|max:1000',
         ]);
 
-        return $this->success($this->service()->apply($request->user(), $params['message'] ?? null));
+        return $this->success($this->service()->apply($request->user(), $params['message'] ?? null, $request));
     }
 
     public function users(Request $request)

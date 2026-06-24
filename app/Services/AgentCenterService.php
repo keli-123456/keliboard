@@ -7,10 +7,12 @@ use App\Models\AgentLedger;
 use App\Models\AgentProfile;
 use App\Models\AgentUser;
 use App\Models\Plan;
+use App\Models\Site;
 use App\Models\User;
 use App\Services\SiteUserScopeService;
 use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use App\Utils\Helper;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class AgentCenterService
@@ -47,7 +49,7 @@ class AgentCenterService
         ];
     }
 
-    public function unlock(User $agent): array
+    public function unlock(User $agent, ?Request $request = null): array
     {
         $this->assertEnabled();
 
@@ -74,6 +76,7 @@ class AgentCenterService
             [
                 'status' => $status,
                 'level' => 'default',
+                'cost_site_id' => $this->profileCostSiteId($profile, $request, $agent),
                 'enabled_at' => $status === self::STATUS_ACTIVE ? $now : null,
                 'disabled_at' => null,
                 'updated_at' => $now,
@@ -83,7 +86,7 @@ class AgentCenterService
         return $this->overview($agent->fresh() ?: $agent);
     }
 
-    public function apply(User $user, ?string $message = null): array
+    public function apply(User $user, ?string $message = null, ?Request $request = null): array
     {
         $this->assertEnabled();
 
@@ -111,6 +114,7 @@ class AgentCenterService
             [
                 'status' => self::STATUS_PENDING,
                 'level' => $profile?->level ?: 'default',
+                'cost_site_id' => $this->profileCostSiteId($profile, $request, $user),
                 'enabled_at' => null,
                 'disabled_at' => null,
                 'updated_at' => $now,
@@ -232,7 +236,7 @@ class AgentCenterService
             throw new ApiException('Password must be at least 6 characters');
         }
         if (app(SiteUserScopeService::class)
-            ->scopeUserQueryForSiteId(User::query(), $agent->site_id ? (int) $agent->site_id : null)
+            ->scopeUserQueryForSiteId(User::query(), null)
             ->where('email', $email)
             ->exists()) {
             throw new ApiException('Email already exists');
@@ -250,7 +254,7 @@ class AgentCenterService
             $user = User::query()->create([
                 'email' => $email,
                 'password' => password_hash($password, PASSWORD_BCRYPT),
-                'site_id' => $lockedAgent->site_id ? (int) $lockedAgent->site_id : null,
+                'site_id' => null,
                 'uuid' => $this->randomToken(32),
                 'token' => $this->randomToken(32),
                 'invite_user_id' => null,
@@ -659,6 +663,49 @@ class AgentCenterService
             ->with('agent:id,email')
             ->where('sub_user_id', $user->id)
             ->first();
+    }
+
+    private function profileCostSiteId(?AgentProfile $profile, ?Request $request, User $user): ?int
+    {
+        if ($profile && $profile->cost_site_id) {
+            return (int) $profile->cost_site_id;
+        }
+
+        return $this->resolveInitialCostSiteId($request, $user);
+    }
+
+    private function resolveInitialCostSiteId(?Request $request, User $user): ?int
+    {
+        $siteId = null;
+        if ($request) {
+            $context = app(SiteContextService::class)->resolve($request, $user);
+            $siteId = empty($context['site_id']) ? null : (int) $context['site_id'];
+        }
+
+        if (!$siteId && $user->site_id) {
+            $siteId = (int) $user->site_id;
+        }
+
+        return $this->activeSubSiteId($siteId);
+    }
+
+    private function activeSubSiteId(?int $siteId): ?int
+    {
+        if (!$siteId) {
+            return null;
+        }
+
+        try {
+            $site = Site::query()
+                ->where('id', $siteId)
+                ->where('status', Site::STATUS_ACTIVE)
+                ->where('is_default', false)
+                ->first();
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return $site ? (int) $site->id : null;
     }
 
     private function applicationSnapshot(?AgentProfile $profile, ?AgentUser $ownership): array
