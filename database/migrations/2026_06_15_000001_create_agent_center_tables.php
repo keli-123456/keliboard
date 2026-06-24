@@ -12,7 +12,7 @@ return new class extends Migration
             Schema::create('v2_agent_profile', function (Blueprint $table): void {
                 $table->increments('id');
                 $table->unsignedInteger('user_id')->unique();
-                $table->unsignedInteger('cost_site_id')->nullable()->after('user_id')->index();
+                $table->unsignedInteger('cost_site_id')->nullable()->index();
                 $table->string('status', 32)->default('pending')->index();
                 $table->string('level', 64)->default('default');
                 $table->string('remark')->nullable();

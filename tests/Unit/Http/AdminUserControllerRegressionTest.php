@@ -310,6 +310,7 @@ final class AdminUserControllerRegressionTest extends TestCase
         $this->database->schema()->create('v2_agent_profile', function (Blueprint $table): void {
             $table->increments('id');
             $table->integer('user_id')->unique();
+            $table->integer('cost_site_id')->nullable()->index();
             $table->string('status', 32)->default('pending');
             $table->string('level', 32)->default('default');
             $table->string('remark')->nullable();
