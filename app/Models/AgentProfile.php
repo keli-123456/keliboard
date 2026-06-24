@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Site;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -21,5 +22,10 @@ class AgentProfile extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class, 'user_id', 'id');
+    }
+
+    public function costSite(): BelongsTo
+    {
+        return $this->belongsTo(Site::class, 'cost_site_id', 'id');
     }
 }
