@@ -12,6 +12,7 @@ use App\Models\AgentProfile;
 use App\Models\Order;
 use App\Models\Payment;
 use App\Models\Plan;
+use App\Models\Site;
 use App\Models\User;
 use App\Services\AgentCenterService;
 use App\Services\AgentOperationsService;
@@ -28,6 +29,7 @@ final class AgentOperationsServiceTest extends TestCase
 
         $this->setUpInMemoryDatabase();
         $this->createUserTable();
+        $this->createSiteTenantTables();
         $this->createAgentCenterTables();
         $this->createAgentCommerceTables();
         $this->createOrderTable();
@@ -171,6 +173,10 @@ final class AgentOperationsServiceTest extends TestCase
     public function test_admin_agents_include_finance_and_readiness_counts(): void
     {
         $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $costSite = $this->createSite('gm', '光喵');
+        AgentProfile::query()->where('user_id', $agent->id)->update([
+            'cost_site_id' => $costSite->id,
+        ]);
         $domain = $this->createDomain($agent, 'shop.example.test');
         $this->createDomain($agent, 'disabled.example.test', AgentDomain::STATUS_DISABLED);
         $this->createPayment($agent, null, true);
@@ -203,6 +209,66 @@ final class AgentOperationsServiceTest extends TestCase
         $this->assertSame(9100, $agents['data'][0]['available_balance']);
         $this->assertSame(2, $agents['data'][0]['enabled_payment_count']);
         $this->assertSame(1, $agents['data'][0]['active_domain_count']);
+        $this->assertSame([
+            'site_id' => $costSite->id,
+            'code' => 'gm',
+            'name' => '光喵',
+            'is_platform' => false,
+        ], $agents['data'][0]['cost_site']);
+    }
+
+    public function test_admin_agent_detail_reports_platform_cost_site_by_default(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+
+        $detail = app(AgentOperationsService::class)->adminAgentDetail($agent->id);
+
+        $this->assertSame([
+            'site_id' => null,
+            'code' => null,
+            'name' => '主站',
+            'is_platform' => true,
+        ], $detail['cost_site']);
+    }
+
+    public function test_update_agent_cost_site_switches_between_site_and_platform(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $site = $this->createSite('nnm', '囡囡喵');
+
+        $siteResult = app(AgentOperationsService::class)->updateAgentCostSite($agent->id, $site->id);
+
+        $this->assertSame($site->id, AgentProfile::query()->where('user_id', $agent->id)->value('cost_site_id'));
+        $this->assertSame([
+            'site_id' => $site->id,
+            'code' => 'nnm',
+            'name' => '囡囡喵',
+            'is_platform' => false,
+        ], $siteResult['cost_site']);
+
+        $platformResult = app(AgentOperationsService::class)->updateAgentCostSite($agent->id, null);
+
+        $this->assertNull(AgentProfile::query()->where('user_id', $agent->id)->value('cost_site_id'));
+        $this->assertTrue($platformResult['cost_site']['is_platform']);
+        $this->assertNull($platformResult['cost_site']['site_id']);
+    }
+
+    public function test_update_agent_cost_site_rejects_default_and_disabled_sites(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $defaultSite = $this->createSite('default', '默认站点', Site::STATUS_ACTIVE, true);
+        $disabledSite = $this->createSite('disabled', '停用站点', Site::STATUS_DISABLED);
+
+        foreach ([$defaultSite->id, $disabledSite->id, 0, 999] as $siteId) {
+            try {
+                app(AgentOperationsService::class)->updateAgentCostSite($agent->id, $siteId);
+                $this->fail('Expected unavailable cost site to be rejected.');
+            } catch (ApiException $exception) {
+                $this->assertSame('Cost site is not available', $exception->getMessage());
+            }
+        }
+
+        $this->assertNull(AgentProfile::query()->where('user_id', $agent->id)->value('cost_site_id'));
     }
 
     public function test_admin_summary_reports_operations_health_counts(): void
@@ -249,6 +315,22 @@ final class AgentOperationsServiceTest extends TestCase
         ]);
 
         return $agent;
+    }
+
+    private function createSite(
+        string $code,
+        string $name,
+        string $status = Site::STATUS_ACTIVE,
+        bool $isDefault = false
+    ): Site {
+        return Site::query()->create([
+            'code' => $code,
+            'name' => $name,
+            'status' => $status,
+            'is_default' => $isDefault,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
     }
 
     private function createUser(string $email, int $balance = 0): User

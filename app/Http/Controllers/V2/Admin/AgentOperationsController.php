@@ -31,6 +31,20 @@ class AgentOperationsController extends Controller
         return $this->success($this->service()->adminOrdersForAgent($agentUserId, $request->all()));
     }
 
+    public function updateAgentCostSite(Request $request, int $agentUserId)
+    {
+        $siteId = $request->input('site_id');
+        if ($siteId === null || $siteId === '') {
+            $siteId = null;
+        } elseif (!is_numeric($siteId)) {
+            throw new ApiException('Cost site is not available');
+        } else {
+            $siteId = (int) $siteId;
+        }
+
+        return $this->success($this->service()->updateAgentCostSite($agentUserId, $siteId));
+    }
+
     public function disablePayment(int $paymentId)
     {
         return $this->setPaymentEnabled($paymentId, false);

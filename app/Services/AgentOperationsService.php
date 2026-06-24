@@ -7,8 +7,10 @@ namespace App\Services;
 use App\Exceptions\ApiException;
 use App\Models\AgentDomain;
 use App\Models\AgentOrderContext;
+use App\Models\AgentProfile;
 use App\Models\Order;
 use App\Models\Payment;
+use App\Models\Site;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -101,13 +103,7 @@ class AgentOperationsService
         $data = [];
 
         foreach ($agents as $agent) {
-            $data[] = array_merge([
-                'agent_user_id' => (int) $agent->id,
-                'agent_email' => $agent->email,
-            ], $this->summaryForAgent($agent), [
-                'active_domain_count' => $this->activeDomainCount((int) $agent->id),
-                'enabled_payment_count' => $this->enabledPaymentCount((int) $agent->id),
-            ]);
+            $data[] = $this->adminAgentRow($agent);
         }
 
         return [
@@ -128,12 +124,45 @@ class AgentOperationsService
             throw new ApiException('Agent not found');
         }
 
+        return $this->adminAgentRow($agent);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function updateAgentCostSite(int $agentUserId, ?int $siteId): array
+    {
+        $agent = User::query()->find($agentUserId);
+        if ($agent === null) {
+            throw new ApiException('Agent not found');
+        }
+
+        $profile = AgentProfile::query()
+            ->where('user_id', $agentUserId)
+            ->first();
+        if ($profile === null) {
+            throw new ApiException('Agent profile not found');
+        }
+
+        $profile->cost_site_id = $this->validCostSiteId($siteId);
+        $profile->updated_at = time();
+        $profile->save();
+
+        return $this->adminAgentRow($agent);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function adminAgentRow(User $agent): array
+    {
         return array_merge([
             'agent_user_id' => (int) $agent->id,
             'agent_email' => $agent->email,
         ], $this->summaryForAgent($agent), [
             'active_domain_count' => $this->activeDomainCount((int) $agent->id),
             'enabled_payment_count' => $this->enabledPaymentCount((int) $agent->id),
+            'cost_site' => $this->costSitePayloadForAgent((int) $agent->id),
         ]);
     }
 
@@ -339,6 +368,60 @@ class AgentOperationsService
             ->where('owner_id', $agentUserId)
             ->where('enable', true)
             ->count();
+    }
+
+    private function validCostSiteId(?int $siteId): ?int
+    {
+        if ($siteId === null) {
+            return null;
+        }
+
+        $site = Site::query()
+            ->where('id', $siteId)
+            ->where('status', Site::STATUS_ACTIVE)
+            ->where('is_default', false)
+            ->first();
+
+        if ($site === null) {
+            throw new ApiException('Cost site is not available');
+        }
+
+        return (int) $site->id;
+    }
+
+    /**
+     * @return array{site_id: int|null, code: string|null, name: string, is_platform: bool}
+     */
+    private function costSitePayloadForAgent(int $agentUserId): array
+    {
+        $profile = AgentProfile::query()
+            ->with('costSite')
+            ->where('user_id', $agentUserId)
+            ->first();
+
+        if (!$profile || !$profile->cost_site_id || !$profile->costSite) {
+            return $this->platformCostSitePayload();
+        }
+
+        return [
+            'site_id' => (int) $profile->costSite->id,
+            'code' => (string) $profile->costSite->code,
+            'name' => (string) $profile->costSite->name,
+            'is_platform' => false,
+        ];
+    }
+
+    /**
+     * @return array{site_id: null, code: null, name: string, is_platform: true}
+     */
+    private function platformCostSitePayload(): array
+    {
+        return [
+            'site_id' => null,
+            'code' => null,
+            'name' => '主站',
+            'is_platform' => true,
+        ];
     }
 
     private function positiveInt(mixed $value, int $default): int
