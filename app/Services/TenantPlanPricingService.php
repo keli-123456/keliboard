@@ -15,8 +15,6 @@ class TenantPlanPricingService
         $agentContext = app(AgentCommerceContextResolver::class)->resolveUser($user);
         $siteContext = app(SiteCommerceService::class)->contextForUser($user);
         if ($agentContext) {
-            $this->validateSitePeriodIfPresent($siteContext, $plan, $periodKey);
-
             return $this->agentPrice($agentContext, $plan, $periodKey);
         }
 
@@ -34,8 +32,6 @@ class TenantPlanPricingService
         $agentContext = app(AgentCommerceContextResolver::class)->resolveRequest($request, $user);
         $siteContext = app(SiteCommerceService::class)->contextForRequest($request, $user);
         if ($agentContext) {
-            $this->validateSitePeriodIfPresent($siteContext, $plan, $periodKey);
-
             return $this->agentPrice($agentContext, $plan, $periodKey);
         }
 
@@ -54,8 +50,6 @@ class TenantPlanPricingService
         $agentContext = $tenantContext['agent_context'] ?? null;
         $siteContext = $tenantContext['site_context'] ?? null;
         if (is_array($agentContext) && !empty($agentContext['agent_user_id'])) {
-            $this->validateSitePeriodIfPresent(is_array($siteContext) ? $siteContext : null, $plan, $periodKey);
-
             return $this->agentPrice($agentContext, $plan, $periodKey);
         }
 
@@ -69,19 +63,6 @@ class TenantPlanPricingService
     public function amountForUser(User $user, Plan $plan, string $period): int
     {
         return (int) $this->resolveForUser($user, $plan, $period)['sale_amount'];
-    }
-
-    private function validateSitePeriodIfPresent(?array $siteContext, Plan $plan, string $periodKey): void
-    {
-        if (!is_array($siteContext) || empty($siteContext['site_id'])) {
-            return;
-        }
-
-        app(SiteStorefrontService::class)->resolveSalePrice(
-            (int) $siteContext['site_id'],
-            (int) $plan->id,
-            $periodKey
-        );
     }
 
     private function agentPrice(array $agentContext, Plan $plan, string $periodKey): array

@@ -75,7 +75,7 @@ final class TenantPlanCatalogServiceTest extends TestCase
         $this->assertEquals(13.0, $plans[0]->prices[Plan::PERIOD_MONTHLY]);
     }
 
-    public function test_agent_bound_user_catalog_respects_site_visible_periods(): void
+    public function test_agent_bound_user_catalog_ignores_site_visible_periods(): void
     {
         $site = Site::query()->create([
             'code' => 'cheap',
@@ -132,9 +132,9 @@ final class TenantPlanCatalogServiceTest extends TestCase
         );
 
         $this->assertCount(1, $plans);
-        $this->assertSame([Plan::PERIOD_MONTHLY], array_keys($plans[0]->prices));
+        $this->assertSame([Plan::PERIOD_MONTHLY, Plan::PERIOD_YEARLY], array_keys($plans[0]->prices));
         $this->assertSame(1100, $plans[0]->agent_sale_periods[Plan::PERIOD_MONTHLY]);
-        $this->assertArrayNotHasKey(Plan::PERIOD_YEARLY, $plans[0]->prices);
+        $this->assertSame(9000, $plans[0]->agent_sale_periods[Plan::PERIOD_YEARLY]);
     }
 
     private function createActiveAgent(string $email): User

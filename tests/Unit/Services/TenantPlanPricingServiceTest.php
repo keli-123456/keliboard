@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Services;
 
-use App\Exceptions\ApiException;
 use App\Models\AgentPlanPrice;
 use App\Models\AgentProfile;
 use App\Models\AgentUser;
@@ -85,7 +84,7 @@ final class TenantPlanPricingServiceTest extends TestCase
         $this->assertSame(200, (int) $price['pricing_snapshot']['user_discount_amount']);
     }
 
-    public function test_agent_bound_user_price_rejects_period_hidden_by_site(): void
+    public function test_agent_bound_user_price_ignores_period_hidden_by_site(): void
     {
         $site = $this->createSite('cheap');
         $agent = $this->createActiveAgent('agent@example.test');
@@ -98,10 +97,11 @@ final class TenantPlanPricingServiceTest extends TestCase
         $this->setSitePrice($site, $plan, Plan::PERIOD_MONTHLY, 1300);
         $this->setAgentPrice($agent, $plan, Plan::PERIOD_YEARLY, 9000);
 
-        $this->expectException(ApiException::class);
-        $this->expectExceptionMessage('Site price is not available');
+        $price = app(TenantPlanPricingService::class)->resolveForUser($buyer, $plan, Plan::PERIOD_YEARLY);
 
-        app(TenantPlanPricingService::class)->resolveForUser($buyer, $plan, Plan::PERIOD_YEARLY);
+        $this->assertSame('agent', $price['source']);
+        $this->assertSame(9000, $price['sale_amount']);
+        $this->assertNull($price['site_context']);
     }
 
     private function createActiveAgent(string $email): User

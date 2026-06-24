@@ -14,9 +14,7 @@ class TenantPlanCatalogService
         $resolvedUser = $resolvedUser instanceof User ? $resolvedUser : null;
 
         if (app(AgentCommerceContextResolver::class)->resolveRequest($request, $resolvedUser)) {
-            $siteDecoratedPlans = app(SiteStorefrontService::class)->plansForRequest($request, $platformPlans);
-
-            return app(AgentStorefrontService::class)->plansForRequest($request, $siteDecoratedPlans);
+            return app(AgentStorefrontService::class)->plansForRequest($request, $platformPlans);
         }
 
         return app(SiteStorefrontService::class)->plansForRequest($request, $platformPlans);
