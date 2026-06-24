@@ -79,6 +79,7 @@ class AgentCostService
             ->where('plan_id', $plan->id)
             ->where('period', $period)
             ->where('enabled', true)
+            ->where('sale_price', '>=', 0)
             ->first();
     }
 }
