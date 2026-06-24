@@ -166,6 +166,41 @@ final class OrderUpgradeServiceTenantPricingTest extends TestCase
             ->count());
     }
 
+    public function test_agent_discount_upgrade_cost_snapshot_uses_agent_cost_site_price(): void
+    {
+        $site = $this->createSite('agent-cost', 'Agent Cost Site');
+        $agent = $this->createActiveAgent('agent-cost-upgrade@example.test', 5000);
+        AgentProfile::query()
+            ->where('user_id', $agent->id)
+            ->update(['cost_site_id' => $site->id]);
+        $this->assignAgentDomain($agent, 'agent-cost-upgrade.example.test');
+        [$buyer, , $targetPlan] = $this->createUpgradeableSubscription();
+        $this->setAgentPrice($agent, $targetPlan, Plan::PERIOD_MONTHLY, 2500);
+        $this->setSitePrice($site, $targetPlan, Plan::PERIOD_MONTHLY, 1300);
+
+        $preview = app(OrderUpgradeService::class)->previewUpgrade(
+            $buyer,
+            $targetPlan,
+            Plan::PERIOD_MONTHLY,
+            $this->requestForHost('agent-cost-upgrade.example.test')
+        );
+        $order = app(OrderUpgradeService::class)->confirmUpgrade($buyer, (string) $preview['quote_token']);
+
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->first();
+        $this->assertNotNull($context);
+        $snapshot = $context->pricing_snapshot;
+
+        $this->assertSame(2000, (int) $snapshot['platform_base_amount']);
+        $this->assertSame(1300, (int) $snapshot['cost_base_amount']);
+        $this->assertSame(650, (int) $snapshot['full_cost_amount']);
+        $this->assertSame((int) $context->cost_amount, (int) $snapshot['cost_amount']);
+        $this->assertGreaterThan(0, (int) $snapshot['cost_amount']);
+        $this->assertLessThan(650, (int) $snapshot['cost_amount']);
+        $this->assertSame(50.0, (float) $snapshot['discount_percent']);
+        $this->assertSame($site->id, (int) $snapshot['cost_site_id']);
+        $this->assertSame('site', $snapshot['cost_source']);
+    }
+
     public function test_site_domain_discount_upgrade_uses_site_price_and_records_site_context(): void
     {
         $site = $this->createSite('cheap', 'Cheap Site');

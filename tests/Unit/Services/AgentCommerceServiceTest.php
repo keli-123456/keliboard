@@ -479,6 +479,7 @@ final class AgentCommerceServiceTest extends TestCase
         $this->assertSame(650, (int) $context->cost_amount);
         $this->assertSame($site->id, (int) $context->pricing_snapshot['cost_site_id']);
         $this->assertSame('site', $context->pricing_snapshot['cost_source']);
+        $this->assertSame(2000, (int) $context->pricing_snapshot['platform_base_amount']);
         $this->assertSame(1300, (int) $context->pricing_snapshot['cost_base_amount']);
     }
 

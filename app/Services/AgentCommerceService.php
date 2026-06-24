@@ -185,7 +185,7 @@ class AgentCommerceService
             }
 
             $pricingSnapshot = array_merge($sale['pricing_snapshot'], [
-                'platform_base_amount' => (int) $cost['base_amount'],
+                'platform_base_amount' => (int) $cost['platform_base_amount'],
                 'cost_base_amount' => (int) $cost['base_amount'],
                 'cost_amount' => (int) $cost['amount'],
                 'discount_percent' => (float) $cost['discount_percent'],

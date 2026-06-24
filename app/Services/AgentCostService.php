@@ -18,6 +18,7 @@ class AgentCostService
         if ($platformPrice === null || $platformPrice === '' || (float) $platformPrice < 0) {
             throw new ApiException('Period is not available');
         }
+        $platformBaseAmount = OrderService::amountToCents($platformPrice);
 
         $profile = AgentProfile::query()
             ->where('user_id', $agent->id)
@@ -29,6 +30,7 @@ class AgentCostService
                 return [
                     'period' => $period,
                     'base_amount' => (int) $sitePrice->sale_price,
+                    'platform_base_amount' => $platformBaseAmount,
                     'cost_site_id' => $costSiteId,
                     'cost_source' => 'site',
                 ];
@@ -37,7 +39,8 @@ class AgentCostService
 
         return [
             'period' => $period,
-            'base_amount' => OrderService::amountToCents($platformPrice),
+            'base_amount' => $platformBaseAmount,
+            'platform_base_amount' => $platformBaseAmount,
             'cost_site_id' => null,
             'cost_source' => 'platform',
         ];
@@ -53,6 +56,7 @@ class AgentCostService
             'period' => $base['period'],
             'amount' => $amount,
             'base_amount' => (int) $base['base_amount'],
+            'platform_base_amount' => (int) $base['platform_base_amount'],
             'discount_percent' => $discountPercent,
             'cost_site_id' => $base['cost_site_id'],
             'cost_source' => $base['cost_source'],
