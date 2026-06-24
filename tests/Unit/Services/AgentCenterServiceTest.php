@@ -17,6 +17,7 @@ use App\Services\AgentCenterService;
 use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use App\Support\Setting;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Http\Request;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
 
@@ -98,6 +99,36 @@ final class AgentCenterServiceTest extends TestCase
         $profile = AgentProfile::query()->where('user_id', $user->id)->first();
         $this->assertNotNull($profile);
         $this->assertSame($site->id, (int) $profile->cost_site_id);
+    }
+
+    public function test_apply_with_request_uses_request_site_over_user_site(): void
+    {
+        $this->createSiteTenantTables();
+        $userSite = $this->siteWithDomain('user-site', 'user.example.test', false);
+        $requestSite = $this->siteWithDomain('request-site', 'request.example.test', false);
+        $user = $this->createUser('request-site-user@example.test', 0, ['site_id' => $userSite->id]);
+        $request = Request::create('https://request.example.test/api/v1/user/agent/apply', 'POST');
+
+        app(AgentCenterService::class)->apply($user, '申请代理', $request);
+
+        $profile = AgentProfile::query()->where('user_id', $user->id)->first();
+        $this->assertNotNull($profile);
+        $this->assertSame($requestSite->id, (int) $profile->cost_site_id);
+    }
+
+    public function test_apply_with_platform_request_does_not_fallback_to_user_site(): void
+    {
+        $this->createSiteTenantTables();
+        $this->siteWithDomain('default', 'main.example.test', true);
+        $userSite = $this->siteWithDomain('user-site', 'user.example.test', false);
+        $user = $this->createUser('platform-request-user@example.test', 0, ['site_id' => $userSite->id]);
+        $request = Request::create('https://main.example.test/api/v1/user/agent/apply', 'POST');
+
+        app(AgentCenterService::class)->apply($user, '申请代理', $request);
+
+        $profile = AgentProfile::query()->where('user_id', $user->id)->first();
+        $this->assertNotNull($profile);
+        $this->assertNull($profile->cost_site_id);
     }
 
     public function test_agent_subordinate_cannot_unlock_without_platform_review(): void

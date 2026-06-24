@@ -676,17 +676,13 @@ class AgentCenterService
 
     private function resolveInitialCostSiteId(?Request $request, User $user): ?int
     {
-        $siteId = null;
         if ($request) {
-            $context = app(SiteContextService::class)->resolve($request, $user);
+            $context = app(SiteResolver::class)->resolveRequest($request);
             $siteId = empty($context['site_id']) ? null : (int) $context['site_id'];
+            return $this->activeSubSiteId($siteId);
         }
 
-        if (!$siteId && $user->site_id) {
-            $siteId = (int) $user->site_id;
-        }
-
-        return $this->activeSubSiteId($siteId);
+        return $this->activeSubSiteId($user->site_id ? (int) $user->site_id : null);
     }
 
     private function activeSubSiteId(?int $siteId): ?int
