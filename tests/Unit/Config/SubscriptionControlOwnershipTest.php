@@ -27,7 +27,7 @@ final class SubscriptionControlOwnershipTest extends TestCase
         $this->assertStringNotContainsString('subscription-control:enforce', $kernel);
     }
 
-    public function test_subscription_control_source_denylist_defaults_cover_major_china_clouds(): void
+    public function test_subscription_control_source_denylist_defaults_cover_major_clouds(): void
     {
         $path = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
         $config = json_decode((string) file_get_contents($path), true);
@@ -37,11 +37,11 @@ final class SubscriptionControlOwnershipTest extends TestCase
         $asns = (string) ($items['source_ip_deny_asns']['default'] ?? '');
         $keywords = strtolower((string) ($items['source_ip_deny_org_keywords']['default'] ?? ''));
 
-        foreach (['AS135377', 'AS59077', 'AS45102', 'AS37963', 'AS134963', 'AS24429', 'AS45090', 'AS133478', 'AS132203', 'AS136907', 'AS55990', 'AS131444'] as $asn) {
+        foreach (['AS135377', 'AS59077', 'AS45102', 'AS37963', 'AS134963', 'AS24429', 'AS45090', 'AS133478', 'AS132203', 'AS136907', 'AS55990', 'AS131444', 'AS16509', 'AS14618', 'AS7224', 'AS8075', 'AS8068', 'AS8069', 'AS12076'] as $asn) {
             $this->assertStringContainsString($asn, $asns);
         }
 
-        foreach (['ucloud', 'aliyun', 'alibaba', 'tencent', 'huawei cloud', 'huaweicloud', 'baidu cloud', 'volcengine', 'tianyi cloud', 'china mobile cloud'] as $keyword) {
+        foreach (['ucloud', 'aliyun', 'alibaba', 'tencent', 'huawei cloud', 'huaweicloud', 'baidu cloud', 'volcengine', 'tianyi cloud', 'china mobile cloud', 'amazon', 'amazon web services', 'microsoft', 'microsoft azure', 'azure'] as $keyword) {
             $this->assertStringContainsString($keyword, $keywords);
         }
 

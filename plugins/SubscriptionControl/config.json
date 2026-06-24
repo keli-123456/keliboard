@@ -106,15 +106,15 @@
         },
         "source_ip_deny_asns": {
             "type": "text",
-            "default": "AS135377\nAS59077\nAS45102\nAS37963\nAS134963\nAS24429\nAS45090\nAS133478\nAS132203\nAS136907\nAS55990\nAS131444",
+            "default": "AS135377\nAS59077\nAS45102\nAS37963\nAS134963\nAS24429\nAS45090\nAS133478\nAS132203\nAS136907\nAS55990\nAS131444\nAS16509\nAS14618\nAS7224\nAS8075\nAS8068\nAS8069\nAS12076",
             "label": "订阅来源 ASN 黑名单",
-            "description": "每行一个 ASN，支持 AS135377 或 135377。默认预置 UCloud、阿里云、腾讯云、华为云常见 ASN，开启黑名单后生效"
+            "description": "每行一个 ASN，支持 AS135377 或 135377。默认预置 UCloud、阿里云、腾讯云、华为云、AWS、Azure 常见 ASN，开启黑名单后生效"
         },
         "source_ip_deny_org_keywords": {
             "type": "text",
-            "default": "ucloud\nUCLOUD INFORMATION TECHNOLOGY\naliyun\nalibaba\nalibaba cloud\ntaobao network\ntencent\ntencent cloud\nhuawei cloud\nhuawei clouds\nhuaweicloud\nbaidu cloud\nbaidu netcom\nvolcengine\nbytedance\nbyteplus\ntianyi cloud\nctyun\nchina mobile cloud\njd cloud\njcloud\nkingsoft cloud",
+            "default": "ucloud\nUCLOUD INFORMATION TECHNOLOGY\naliyun\nalibaba\nalibaba cloud\ntaobao network\ntencent\ntencent cloud\nhuawei cloud\nhuawei clouds\nhuaweicloud\nbaidu cloud\nbaidu netcom\nvolcengine\nbytedance\nbyteplus\ntianyi cloud\nctyun\nchina mobile cloud\njd cloud\njcloud\nkingsoft cloud\namazon\namazon web services\namazon technologies\nmicrosoft\nmicrosoft azure\nazure",
             "label": "订阅来源组织关键词黑名单",
-            "description": "每行一个组织名关键词，基于 Team Cymru ASN 组织名匹配。适合 UCloud、阿里云、腾讯云、华为云等国内云厂商"
+            "description": "每行一个组织名关键词，基于 Team Cymru ASN 组织名匹配。适合 UCloud、阿里云、腾讯云、华为云、AWS、Azure 等云厂商"
         },
         "source_ip_deny_action": {
             "type": "string",
@@ -160,7 +160,7 @@
         },
         "node_source_ip_provider_policy": {
             "type": "text",
-            "default": "ucloud=block\naliyun=block\ntencent=block\nhuawei=block\nbaidu=block\nvolcengine=block\ntianyi=block\nmobile_cloud=block\njdcloud=block\nkingsoft=block",
+            "default": "ucloud=block\naliyun=block\ntencent=block\nhuawei=block\nbaidu=block\nvolcengine=block\ntianyi=block\nmobile_cloud=block\njdcloud=block\nkingsoft=block\naws=block\nazure=block",
             "label": "节点来源 IP 云厂商策略",
             "description": "每行 provider=block/allow。建议在路由管理页使用可视化入口修改。"
         },

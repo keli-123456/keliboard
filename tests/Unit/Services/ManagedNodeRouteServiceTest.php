@@ -198,6 +198,20 @@ final class ManagedNodeRouteServiceTest extends TestCase
         $this->assertGreaterThanOrEqual($jdcloud['builtin_cidr_count'], $jdcloud['cidr_count']);
     }
 
+    public function test_overview_includes_aws_and_azure_cloud_provider_policies(): void
+    {
+        $overview = (new ManagedNodeRouteService())->overview();
+        $providers = collect($overview['providers'])->keyBy('key');
+
+        $this->assertTrue($providers->has('aws'));
+        $this->assertSame('AWS', $providers->get('aws')['label']);
+        $this->assertSame('block', $providers->get('aws')['policy']);
+
+        $this->assertTrue($providers->has('azure'));
+        $this->assertSame('Azure', $providers->get('azure')['label']);
+        $this->assertSame('block', $providers->get('azure')['policy']);
+    }
+
     private function createTables(): void
     {
         $this->database->schema()->create('v2_plugins', function (Blueprint $table): void {

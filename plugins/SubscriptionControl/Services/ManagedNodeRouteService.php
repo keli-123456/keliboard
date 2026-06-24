@@ -91,6 +91,18 @@ final class ManagedNodeRouteService
             'asns' => [59019],
             'keywords' => ['kingsoft cloud'],
         ],
+        'aws' => [
+            'label' => 'AWS',
+            'default_policy' => self::POLICY_BLOCK,
+            'asns' => [16509, 14618, 7224],
+            'keywords' => ['amazon', 'amazon web services', 'amazon technologies', 'aws'],
+        ],
+        'azure' => [
+            'label' => 'Azure',
+            'default_policy' => self::POLICY_BLOCK,
+            'asns' => [8075, 8068, 8069, 12076],
+            'keywords' => ['microsoft', 'microsoft azure', 'azure'],
+        ],
     ];
 
     private const BUILTIN_PROVIDER_CIDRS = [
