@@ -54,22 +54,8 @@ class AgentCommerceService
     public function calculatePlatformCost(User $agent, Plan $plan, string $period): array
     {
         $this->activeProfile($agent);
-        $period = PlanService::getPeriodKey($period);
-        $price = $plan->prices[$period] ?? null;
-        if ($price === null || $price === '' || (float) $price < 0) {
-            throw new ApiException('Period is not available');
-        }
 
-        $baseAmount = OrderService::amountToCents($price);
-        $discountPercent = max(0, min(100, (float) admin_setting('agent_center_discount_percent', 100)));
-        $amount = (int) round($baseAmount * ($discountPercent / 100));
-
-        return [
-            'period' => $period,
-            'amount' => $amount,
-            'base_amount' => $baseAmount,
-            'discount_percent' => $discountPercent,
-        ];
+        return app(AgentCostService::class)->resolveDiscounted($agent, $plan, $period);
     }
 
     public function createOrderFromRequest(
@@ -200,8 +186,11 @@ class AgentCommerceService
 
             $pricingSnapshot = array_merge($sale['pricing_snapshot'], [
                 'platform_base_amount' => (int) $cost['base_amount'],
+                'cost_base_amount' => (int) $cost['base_amount'],
                 'cost_amount' => (int) $cost['amount'],
                 'discount_percent' => (float) $cost['discount_percent'],
+                'cost_site_id' => $cost['cost_site_id'] !== null ? (int) $cost['cost_site_id'] : null,
+                'cost_source' => (string) $cost['cost_source'],
             ]);
             $contextSource = (string) ($context['source'] ?? AgentCommerceContextResolver::SOURCE_DOMAIN);
             $agentDomainId = $context['agent_domain_id'] ?? null;

@@ -14,6 +14,8 @@ use App\Models\AgentProfile;
 use App\Models\AgentUser;
 use App\Models\Order;
 use App\Models\Plan;
+use App\Models\Site;
+use App\Models\SitePlanPrice;
 use App\Models\User;
 use App\Services\AgentCenterService;
 use App\Services\AgentCommerceService;
@@ -433,8 +435,82 @@ final class AgentCommerceServiceTest extends TestCase
         $this->assertSame(Plan::PERIOD_MONTHLY, $snapshot['period']);
         $this->assertSame(1300, (int) $snapshot['sale_price']);
         $this->assertSame(1000, (int) $snapshot['platform_base_amount']);
+        $this->assertSame(1000, (int) $snapshot['cost_base_amount']);
         $this->assertSame(500, (int) $snapshot['cost_amount']);
         $this->assertSame(50.0, (float) $snapshot['discount_percent']);
+        $this->assertNull($snapshot['cost_site_id']);
+        $this->assertSame('platform', $snapshot['cost_source']);
+    }
+
+    public function test_agent_order_cost_uses_agent_cost_site_price(): void
+    {
+        $this->createSiteTenantTables();
+        $this->createSiteCommerceTables();
+        $site = $this->createSite('agent-cost');
+        $agent = $this->createActiveAgent('agent@example.test', 5000);
+        AgentProfile::query()
+            ->where('user_id', $agent->id)
+            ->update(['cost_site_id' => $site->id]);
+        $this->assignDomain($agent, 'agent.example.test');
+        $buyer = $this->createUser('buyer@example.test');
+        $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 20.00]);
+        SitePlanPrice::query()->create([
+            'site_id' => $site->id,
+            'plan_id' => $plan->id,
+            'period' => Plan::PERIOD_MONTHLY,
+            'sale_price' => 1300,
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $this->setAgentPrice($agent, $plan, Plan::PERIOD_MONTHLY, 2500);
+
+        $order = app(AgentCommerceService::class)->createOrderFromRequest(
+            $buyer,
+            $plan,
+            Plan::PERIOD_MONTHLY,
+            null,
+            $this->requestForHost('agent.example.test')
+        );
+
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->first();
+        $this->assertNotNull($context);
+        $this->assertSame(2500, (int) $context->sale_amount);
+        $this->assertSame(650, (int) $context->cost_amount);
+        $this->assertSame($site->id, (int) $context->pricing_snapshot['cost_site_id']);
+        $this->assertSame('site', $context->pricing_snapshot['cost_source']);
+        $this->assertSame(1300, (int) $context->pricing_snapshot['cost_base_amount']);
+    }
+
+    public function test_agent_order_cost_falls_back_to_platform_price_when_cost_site_period_is_missing(): void
+    {
+        $this->createSiteTenantTables();
+        $this->createSiteCommerceTables();
+        $site = $this->createSite('agent-cost');
+        $agent = $this->createActiveAgent('agent@example.test', 5000);
+        AgentProfile::query()
+            ->where('user_id', $agent->id)
+            ->update(['cost_site_id' => $site->id]);
+        $this->assignDomain($agent, 'agent.example.test');
+        $buyer = $this->createUser('buyer@example.test');
+        $plan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 20.00]);
+        $this->setAgentPrice($agent, $plan, Plan::PERIOD_MONTHLY, 2500);
+
+        $order = app(AgentCommerceService::class)->createOrderFromRequest(
+            $buyer,
+            $plan,
+            Plan::PERIOD_MONTHLY,
+            null,
+            $this->requestForHost('agent.example.test')
+        );
+
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->first();
+        $this->assertNotNull($context);
+        $this->assertSame(2500, (int) $context->sale_amount);
+        $this->assertSame(1000, (int) $context->cost_amount);
+        $this->assertNull($context->pricing_snapshot['cost_site_id']);
+        $this->assertSame('platform', $context->pricing_snapshot['cost_source']);
+        $this->assertSame(2000, (int) $context->pricing_snapshot['cost_base_amount']);
     }
 
     public function test_zero_discount_agent_order_creates_zero_amount_hold_without_requiring_balance(): void
@@ -538,6 +614,18 @@ final class AgentCommerceServiceTest extends TestCase
             'trade_no' => $tradeNo,
             'total_amount' => 0,
             'status' => $status,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+    }
+
+    private function createSite(string $code): Site
+    {
+        return Site::query()->create([
+            'code' => $code,
+            'name' => ucfirst($code),
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
             'created_at' => time(),
             'updated_at' => time(),
         ]);

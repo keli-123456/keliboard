@@ -9,6 +9,7 @@ use App\Models\AgentProfile;
 use App\Models\Plan;
 use App\Models\Site;
 use App\Models\SiteDomain;
+use App\Models\SitePlanPrice;
 use App\Models\Ticket;
 use App\Models\TicketMessage;
 use App\Models\User;
@@ -430,6 +431,52 @@ final class AgentCenterServiceTest extends TestCase
             'bonus_days' => 3,
             'bonus_day_price' => 200,
             'bonus_amount' => 600,
+        ], $result['ledger']['metadata']);
+    }
+
+    public function test_assign_plan_cost_uses_agent_cost_site_price(): void
+    {
+        $this->createSiteTenantTables();
+        $this->createSiteCommerceTables();
+        $this->bindAgentSettings(['agent_center_discount_percent' => 50]);
+        $site = $this->siteWithDomain('agent-cost', 'agent-cost.example.test', false);
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        AgentProfile::query()
+            ->where('user_id', $agent->id)
+            ->update(['cost_site_id' => $site->id]);
+        $subordinate = $this->createOwnedSubordinate($agent, 'buyer@example.test');
+        $plan = $this->createPlan('Starter', ['monthly' => 20.00], 128, 2);
+        SitePlanPrice::query()->create([
+            'site_id' => $site->id,
+            'plan_id' => $plan->id,
+            'period' => 'monthly',
+            'sale_price' => 1300,
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $preview = app(AgentCenterService::class)->previewAssignPlan($agent, $subordinate->id, [
+            'plan_id' => $plan->id,
+            'period' => 'monthly',
+        ]);
+        $result = app(AgentCenterService::class)->assignPlan($agent, $subordinate->id, [
+            'plan_id' => $plan->id,
+            'period' => 'monthly',
+        ]);
+
+        $agent->refresh();
+
+        $this->assertSame(650, $preview['base_amount']);
+        $this->assertSame(650, $preview['amount']);
+        $this->assertSame(9350, (int) $agent->balance);
+        $this->assertSame(-650, (int) $result['ledger']['amount']);
+        $this->assertSame([
+            'plan_name' => 'Starter',
+            'base_amount' => 650,
+            'bonus_days' => 0,
+            'bonus_day_price' => 0,
+            'bonus_amount' => 0,
         ], $result['ledger']['metadata']);
     }
 

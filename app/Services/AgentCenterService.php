@@ -237,7 +237,7 @@ class AgentCenterService
             ->exists()) {
             throw new ApiException('Email already exists');
         }
-        $assignment = $this->resolveOptionalPlanPrice($payload);
+        $assignment = $this->resolveOptionalPlanPrice($agent, $payload);
 
         return DB::transaction(function () use ($agent, $email, $password, $remark, $assignment): array {
             $lockedAgent = User::query()->lockForUpdate()->find($agent->id);
@@ -383,7 +383,7 @@ class AgentCenterService
     {
         $this->activeProfile($agent);
         $ownership = $this->ownership($agent, $subUserId);
-        [$plan, $period, $baseAmount, $bonusDays, $bonusDayPrice, $bonusAmount, $amount] = $this->resolvePlanPrice($payload);
+        [$plan, $period, $baseAmount, $bonusDays, $bonusDayPrice, $bonusAmount, $amount] = $this->resolvePlanPrice($agent, $payload);
 
         return [
             'target_user' => $this->ownedUserSnapshot($ownership),
@@ -401,7 +401,7 @@ class AgentCenterService
     public function assignPlan(User $agent, int $subUserId, array $payload): array
     {
         $this->activeProfile($agent);
-        [$plan, $period, $baseAmount, $bonusDays, $bonusDayPrice, $bonusAmount, $amount] = $this->resolvePlanPrice($payload);
+        [$plan, $period, $baseAmount, $bonusDays, $bonusDayPrice, $bonusAmount, $amount] = $this->resolvePlanPrice($agent, $payload);
 
         return DB::transaction(function () use ($agent, $subUserId, $plan, $period, $baseAmount, $bonusDays, $bonusDayPrice, $bonusAmount, $amount): array {
             $lockedAgent = User::query()->lockForUpdate()->find($agent->id);
@@ -750,7 +750,7 @@ class AgentCenterService
         return $ownership;
     }
 
-    private function resolvePlanPrice(array $payload): array
+    private function resolvePlanPrice(User $agent, array $payload): array
     {
         $planId = (int) ($payload['plan_id'] ?? 0);
         $period = $this->periodKey((string) ($payload['period'] ?? ''));
@@ -766,14 +766,8 @@ class AgentCenterService
             throw new ApiException('Plan is not allowed for agents');
         }
 
-        $price = $plan->prices[$period] ?? null;
-        if ($price === null || $price === '' || (float) $price < 0) {
-            throw new ApiException('Period is not available');
-        }
-
-        $baseAmount = OrderService::amountToCents($price);
-        $discountPercent = max(0, min(100, (float) admin_setting('agent_center_discount_percent', 100)));
-        $discountedAmount = (int) round($baseAmount * ($discountPercent / 100));
+        $cost = app(AgentCostService::class)->resolveDiscounted($agent, $plan, $period);
+        $discountedAmount = (int) $cost['amount'];
         $bonusDays = $this->bonusDays($payload);
         $bonusDayPrice = $this->bonusDayPrice();
         if ($bonusDays > 0 && $period === Plan::PERIOD_ONETIME) {
@@ -789,7 +783,7 @@ class AgentCenterService
         return [$plan, $period, $discountedAmount, $bonusDays, $bonusDayPrice, $bonusAmount, $amount];
     }
 
-    private function resolveOptionalPlanPrice(array $payload): ?array
+    private function resolveOptionalPlanPrice(User $agent, array $payload): ?array
     {
         if (!array_key_exists('plan_id', $payload) || $payload['plan_id'] === null || $payload['plan_id'] === '') {
             return null;
@@ -798,7 +792,7 @@ class AgentCenterService
             throw new ApiException('Plan period is required');
         }
 
-        return $this->resolvePlanPrice($payload);
+        return $this->resolvePlanPrice($agent, $payload);
     }
 
     private function bonusDays(array $payload): int
