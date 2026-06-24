@@ -131,6 +131,29 @@ final class AgentCenterServiceTest extends TestCase
         $this->assertNull($profile->cost_site_id);
     }
 
+    public function test_apply_with_platform_request_clears_existing_cost_site(): void
+    {
+        $this->createSiteTenantTables();
+        $this->siteWithDomain('default', 'main.example.test', true);
+        $oldSite = $this->siteWithDomain('old-site', 'old.example.test', false);
+        $user = $this->createUser('existing-cost-site-user@example.test', 0, ['site_id' => $oldSite->id]);
+        AgentProfile::query()->create([
+            'user_id' => $user->id,
+            'cost_site_id' => $oldSite->id,
+            'status' => AgentCenterService::STATUS_PENDING,
+            'level' => 'default',
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $request = Request::create('https://main.example.test/api/v1/user/agent/apply', 'POST');
+
+        app(AgentCenterService::class)->apply($user, '重新申请代理', $request);
+
+        $profile = AgentProfile::query()->where('user_id', $user->id)->first();
+        $this->assertNotNull($profile);
+        $this->assertNull($profile->cost_site_id);
+    }
+
     public function test_agent_subordinate_cannot_unlock_without_platform_review(): void
     {
         $agent = $this->createActiveAgent('agent@example.test', 10000);

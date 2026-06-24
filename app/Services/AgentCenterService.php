@@ -667,11 +667,15 @@ class AgentCenterService
 
     private function profileCostSiteId(?AgentProfile $profile, ?Request $request, User $user): ?int
     {
+        if ($request) {
+            return $this->resolveInitialCostSiteId($request, $user);
+        }
+
         if ($profile && $profile->cost_site_id) {
             return (int) $profile->cost_site_id;
         }
 
-        return $this->resolveInitialCostSiteId($request, $user);
+        return $this->resolveInitialCostSiteId(null, $user);
     }
 
     private function resolveInitialCostSiteId(?Request $request, User $user): ?int
