@@ -405,6 +405,7 @@ class OrderService
                 HookManager::call('order.cancel.before', $order);
 
                 $order->status = Order::STATUS_CANCELLED;
+                $this->invalidateCommissionForCancelledOrder($order);
                 if (!$order->save()) {
                     throw new \Exception('Failed to save order status.');
                 }
@@ -427,6 +428,22 @@ class OrderService
             Log::error($e);
             return false;
         }
+    }
+
+    private function invalidateCommissionForCancelledOrder(Order $order): void
+    {
+        if (!in_array((int) $order->commission_status, [
+            Order::COMMISSION_STATUS_PENDING,
+            Order::COMMISSION_STATUS_PROCESSING,
+        ], true)) {
+            return;
+        }
+
+        if (empty($order->invite_user_id) && (int) $order->commission_balance <= 0) {
+            return;
+        }
+
+        $order->commission_status = Order::COMMISSION_STATUS_INVALID;
     }
 
     private function setSpeedLimit($speedLimit)

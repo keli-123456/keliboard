@@ -572,7 +572,9 @@ trait InteractsWithInMemoryDatabase
             $table->json('upgrade_source_order_ids')->nullable();
             $table->json('upgrade_pricing_snapshot')->nullable();
             $table->integer('status')->default(0);
+            $table->integer('commission_status')->default(0);
             $table->integer('commission_balance')->default(0);
+            $table->integer('actual_commission_balance')->nullable();
             $table->integer('paid_at')->nullable();
             $table->integer('created_at')->nullable();
             $table->integer('updated_at')->nullable();

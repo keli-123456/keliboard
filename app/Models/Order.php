@@ -79,6 +79,11 @@ class Order extends Model
         self::STATUS_DISCOUNTED => '已折抵',
     ];
 
+    const COMMISSION_STATUS_PENDING = 0; // 待确认
+    const COMMISSION_STATUS_PROCESSING = 1; // 发放中
+    const COMMISSION_STATUS_VALID = 2; // 有效
+    const COMMISSION_STATUS_INVALID = 3; // 无效
+
     const TYPE_NEW_PURCHASE = 1; // 新购
     const TYPE_RENEWAL = 2; // 续费
     const TYPE_UPGRADE = 3; // 升级

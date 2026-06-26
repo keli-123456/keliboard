@@ -51,19 +51,19 @@ class CheckCommission extends Command
     public function autoCheck()
     {
         if ((int)admin_setting('commission_auto_check_enable', 1)) {
-            Order::where('commission_status', 0)
+            Order::where('commission_status', Order::COMMISSION_STATUS_PENDING)
                 ->whereNotNull('invite_user_id')
-                ->where('status', 3)
+                ->where('status', Order::STATUS_COMPLETED)
                 ->where('updated_at', '<=', strtotime('-3 day', time()))
                 ->update([
-                    'commission_status' => 1
+                    'commission_status' => Order::COMMISSION_STATUS_PROCESSING
                 ]);
         }
     }
 
     public function autoPayCommission()
     {
-        Order::where('commission_status', 1)
+        Order::where('commission_status', Order::COMMISSION_STATUS_PROCESSING)
             ->whereNotNull('invite_user_id')
             ->select(['id', 'trade_no', 'invite_user_id', 'commission_status', 'commission_balance'])
             ->chunkById(200, function ($orders): void {
@@ -72,14 +72,14 @@ class CheckCommission extends Command
                         DB::transaction(function () use ($order) {
                             $lockedOrder = Order::whereKey($order->id)->lockForUpdate()->first();
                             if (!$lockedOrder) return;
-                            if ((int) $lockedOrder->commission_status !== 1) return;
+                            if ((int) $lockedOrder->commission_status !== Order::COMMISSION_STATUS_PROCESSING) return;
                             if (empty($lockedOrder->invite_user_id)) return;
 
                             if (!$this->payHandle($lockedOrder->invite_user_id, $lockedOrder)) {
                                 throw new \RuntimeException('payHandle returned false');
                             }
 
-                            $lockedOrder->commission_status = 2;
+                            $lockedOrder->commission_status = Order::COMMISSION_STATUS_VALID;
                             $lockedOrder->saveOrFail();
                         }, 3);
                     } catch (\Throwable $e) {
