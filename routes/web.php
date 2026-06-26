@@ -3,7 +3,9 @@
 use App\Services\ThemeService;
 use App\Services\HiddenApiPathService;
 use App\Services\UpdateService;
+use App\Http\Controllers\V1\Client\ClientController;
 use App\Http\Controllers\WellKnown\KeliClientDiscoveryController;
+use App\Support\LegacySubscribeRoutePaths;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Log;
@@ -142,6 +144,29 @@ Route::get('/' . admin_setting('secure_path', admin_setting('frontend_admin_path
     ]);
 })->where('any', '.*');
 
-Route::get('/' . (admin_setting('subscribe_path', 's')) . '/{token}', [\App\Http\Controllers\V1\Client\ClientController::class, 'subscribe'])
+$subscribeController = [ClientController::class, 'subscribe'];
+$subscribePath = LegacySubscribeRoutePaths::currentPath(admin_setting('subscribe_path', 's'));
+$legacySubscribePaths = LegacySubscribeRoutePaths::aliases($subscribePath, (string) admin_setting('legacy_subscribe_paths', ''));
+
+Route::get('/' . $subscribePath . '/{token}', $subscribeController)
     ->middleware('client')
     ->name('client.subscribe');
+
+// Keep migrated users' old subscription URLs working after their domain is proxied to this panel.
+foreach ($legacySubscribePaths as $legacySubscribePath) {
+    $routeSuffix = LegacySubscribeRoutePaths::routeNameSuffix($legacySubscribePath);
+
+    Route::get('/' . $legacySubscribePath . '/{token}', $subscribeController)
+        ->middleware('client')
+        ->name('client.subscribe.legacy.' . $routeSuffix);
+
+    Route::get('/' . $legacySubscribePath, $subscribeController)
+        ->middleware('client')
+        ->name('client.subscribe.legacy.' . $routeSuffix . '.query');
+}
+
+if (LegacySubscribeRoutePaths::shouldRegisterSiteTokenAlias($subscribePath, $legacySubscribePaths)) {
+    Route::get('/sub/{site}/{token}', $subscribeController)
+        ->middleware('client')
+        ->name('client.subscribe.legacy.sub.site');
+}
