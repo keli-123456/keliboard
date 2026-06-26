@@ -116,6 +116,40 @@ final class SiteStorefrontServiceTest extends TestCase
         $this->assertSame('Starter', $resource['platform_name']);
     }
 
+    public function test_non_default_site_can_sell_hidden_plan_with_enabled_site_price(): void
+    {
+        [$site] = $this->siteWithDomain('cheap', 'Cheap Site', 'cheap.example.test');
+        $visiblePlan = $this->createPlan('Starter', [Plan::PERIOD_MONTHLY => 20.00]);
+        $hiddenPlan = $this->createPlan('Site Only 500G', [Plan::PERIOD_YEARLY => 50.00], false);
+        SitePlanPrice::query()->create([
+            'site_id' => $site->id,
+            'plan_id' => $hiddenPlan->id,
+            'period' => Plan::PERIOD_YEARLY,
+            'sale_price' => 5000,
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        SitePlanOverride::query()->create([
+            'site_id' => $site->id,
+            'plan_id' => $hiddenPlan->id,
+            'display_name' => '标准套餐',
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $plans = app(SiteStorefrontService::class)->plansForRequest(
+            $this->requestForHost('cheap.example.test'),
+            collect([$visiblePlan])
+        );
+
+        $this->assertCount(1, $plans);
+        $this->assertSame($hiddenPlan->id, $plans[0]->id);
+        $this->assertSame('标准套餐', $plans[0]->site_display_name);
+        $this->assertEquals(50.0, $plans[0]->prices[Plan::PERIOD_YEARLY]);
+        $this->assertSame(5000, $plans[0]->site_sale_periods[Plan::PERIOD_YEARLY]);
+    }
+
     public function test_site_display_name_can_be_applied_to_current_plan_without_enabled_sale_price(): void
     {
         [$site] = $this->siteWithDomain('cheap', 'Cheap Site', 'cheap.example.test');
@@ -175,7 +209,7 @@ final class SiteStorefrontServiceTest extends TestCase
         return [$site, $domainRow];
     }
 
-    private function createPlan(string $name, array $prices): Plan
+    private function createPlan(string $name, array $prices, bool $show = true): Plan
     {
         return Plan::query()->create([
             'name' => $name,
@@ -185,7 +219,7 @@ final class SiteStorefrontServiceTest extends TestCase
             'speed_limit' => 100,
             'device_limit' => 3,
             'sell' => true,
-            'show' => true,
+            'show' => $show,
             'renew' => true,
             'created_at' => time(),
             'updated_at' => time(),

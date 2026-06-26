@@ -8,6 +8,7 @@ use App\Models\Site;
 use App\Models\SitePlanOverride;
 use App\Models\SitePlanPrice;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 
 class SiteStorefrontService
 {
@@ -146,6 +147,7 @@ class SiteStorefrontService
         }
 
         $plans = collect($platformPlans)->values();
+        $plans = $this->appendSitePricedPlans($site->id, $plans);
         $planIds = $plans->map(fn (Plan $plan): int => (int) $plan->id)->all();
         $prices = SitePlanPrice::query()
             ->where('site_id', $site->id)
@@ -199,6 +201,48 @@ class SiteStorefrontService
             ->filter()
             ->values()
             ->all();
+    }
+
+    private function appendSitePricedPlans(int $siteId, Collection $plans): Collection
+    {
+        $existingPlanIds = $plans
+            ->map(fn (Plan $plan): int => (int) $plan->id)
+            ->filter()
+            ->values()
+            ->all();
+
+        $extraPlanIds = SitePlanPrice::query()
+            ->where('site_id', $siteId)
+            ->where('enabled', true)
+            ->when(!empty($existingPlanIds), fn ($query) => $query->whereNotIn('plan_id', $existingPlanIds))
+            ->distinct()
+            ->pluck('plan_id')
+            ->map(fn ($planId): int => (int) $planId)
+            ->filter()
+            ->values()
+            ->all();
+
+        if (empty($extraPlanIds)) {
+            return $plans;
+        }
+
+        $planService = new PlanService(new Plan());
+        $extraPlans = Plan::query()
+            ->whereIn('id', $extraPlanIds)
+            ->where('sell', true)
+            ->orderBy('sort')
+            ->orderBy('id')
+            ->get()
+            ->filter(fn (Plan $plan): bool => $planService->hasCapacity($plan));
+
+        if ($extraPlans->isEmpty()) {
+            return $plans;
+        }
+
+        return $plans
+            ->concat($extraPlans)
+            ->sortBy(fn (Plan $plan): string => sprintf('%010d:%010d', (int) $plan->sort, (int) $plan->id))
+            ->values();
     }
 
     public function applyDisplayNameForRequest(Request $request, Plan $plan): Plan
