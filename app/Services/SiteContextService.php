@@ -61,8 +61,8 @@ class SiteContextService
             $config['app_name'] = $site['site_name'];
             $config['website_name'] = $site['site_name'];
         }
-        if ($shouldOverrideBrand && !empty($site['logo_url'])) {
-            $config['logo'] = $site['logo_url'];
+        if ($shouldOverrideBrand) {
+            $config['logo'] = trim((string) ($site['logo_url'] ?? ''));
         }
         if ($shouldOverrideBrand && !empty($site['landing_theme'])) {
             $config['landing_theme'] = $site['landing_theme'];

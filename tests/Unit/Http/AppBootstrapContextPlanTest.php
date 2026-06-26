@@ -33,6 +33,7 @@ final class AppBootstrapContextPlanTest extends TestCase
         $this->bindTestSettings([
             'app_name' => 'Main Cloud',
             'app_url' => 'https://main.example.test',
+            'logo' => 'https://cdn.example.test/main-logo.png',
             'reset_traffic_method' => Plan::RESET_TRAFFIC_NEVER,
             'subscription_proxy_enable' => false,
         ]);
@@ -59,6 +60,9 @@ final class AppBootstrapContextPlanTest extends TestCase
 
         $payload = $this->bootstrapPayload($this->requestForHost('gm.example.test', $user));
 
+        $this->assertSame('光喵', $payload['data']['app']['name']);
+        $this->assertSame('', $payload['data']['app']['logo']);
+        $this->assertSame($site->id, $payload['data']['app']['site_context']['site_id']);
         $this->assertSame('光喵标准套餐', $payload['data']['subscribe']['plan']['name']);
         $this->assertSame('光喵标准套餐', $payload['data']['subscribe']['plan']['site_display_name']);
         $this->assertSame('Starter', $payload['data']['subscribe']['plan']['platform_name']);

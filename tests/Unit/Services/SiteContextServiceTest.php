@@ -131,6 +131,31 @@ final class SiteContextServiceTest extends TestCase
         $this->assertSame('https://t.me/cheap_group', $config['site_context']['telegram_discuss_link']);
     }
 
+    public function test_sub_site_without_logo_does_not_inherit_platform_logo(): void
+    {
+        [$site] = $this->siteWithDomain('cheap', 'Cheap Site', 'cheap.example.test');
+        SiteSetting::query()->create([
+            'site_id' => $site->id,
+            'site_name' => 'Cheap Cloud',
+            'logo_url' => '',
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $request = Request::create('/api/v1/guest/comm/config', 'GET', [], [], [], ['HTTP_HOST' => 'cheap.example.test']);
+        $config = app(SiteContextService::class)->applyToConfig([
+            'app_name' => 'Platform Cloud',
+            'website_name' => 'Platform Cloud',
+            'logo' => 'https://cdn.example.test/platform.png',
+        ], $request);
+
+        $this->assertSame('Cheap Cloud', $config['app_name']);
+        $this->assertSame('Cheap Cloud', $config['website_name']);
+        $this->assertSame('', $config['logo']);
+        $this->assertSame('', $config['site_context']['logo_url']);
+    }
+
     public function test_authenticated_context_prefers_user_site_over_request_host(): void
     {
         [$cheap] = $this->siteWithDomain('cheap', 'Cheap Site', 'cheap.example.test');

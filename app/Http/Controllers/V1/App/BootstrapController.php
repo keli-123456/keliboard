@@ -9,6 +9,7 @@ use App\Models\Plan;
 use App\Models\User;
 use App\Services\Plugin\HookManager;
 use App\Services\ServerService;
+use App\Services\SiteContextService;
 use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use App\Services\TenantPlanCatalogService;
 use App\Services\UserService;
@@ -116,12 +117,20 @@ class BootstrapController extends Controller
         }
         $serverData = NodeResource::collection($servers)->resolve($request);
 
+        $appConfig = app(SiteContextService::class)->applyToConfig([
+            'app_name' => admin_setting('app_name', 'Xboard'),
+            'app_url' => admin_setting('app_url'),
+            'logo' => admin_setting('logo'),
+            'tos_url' => admin_setting('tos_url'),
+        ], $request, $user);
+
         return $this->success([
             'app' => [
-                'name' => admin_setting('app_name', 'Xboard'),
-                'url' => admin_setting('app_url'),
-                'logo' => admin_setting('logo'),
-                'tos_url' => admin_setting('tos_url'),
+                'name' => $appConfig['app_name'] ?? admin_setting('app_name', 'Xboard'),
+                'url' => $appConfig['app_url'] ?? admin_setting('app_url'),
+                'logo' => $appConfig['logo'] ?? '',
+                'tos_url' => $appConfig['tos_url'] ?? admin_setting('tos_url'),
+                'site_context' => $appConfig['site_context'] ?? null,
             ],
             'user' => $userInfo,
             'servers' => $serverData,
