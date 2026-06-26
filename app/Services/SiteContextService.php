@@ -73,6 +73,9 @@ class SiteContextService
         if ($shouldOverrideBrand && !empty($site['support_url'])) {
             $config['customer_service_url'] = $site['support_url'];
         }
+        if ($shouldOverrideBrand && !empty($site['telegram_discuss_link'])) {
+            $config['telegram_discuss_link'] = $site['telegram_discuss_link'];
+        }
         $config['site_context'] = $site;
 
         return $config;
@@ -99,6 +102,7 @@ class SiteContextService
             'accent_color' => (string) ($setting?->accent_color ?? ''),
             'support_name' => (string) ($setting?->support_name ?? ''),
             'support_url' => (string) ($setting?->support_url ?? ''),
+            'telegram_discuss_link' => (string) ($setting?->telegram_discuss_link ?? ''),
             'announcement' => (string) ($setting?->announcement ?? ''),
             'seo_title' => (string) ($setting?->seo_title ?? ''),
             'seo_description' => (string) ($setting?->seo_description ?? ''),
@@ -154,6 +158,7 @@ class SiteContextService
             'accent_color' => '',
             'support_name' => '',
             'support_url' => '',
+            'telegram_discuss_link' => '',
             'announcement' => '',
             'seo_title' => '',
             'seo_description' => '',
@@ -180,6 +185,7 @@ class SiteContextService
             'accent_color' => '',
             'support_name' => '',
             'support_url' => '',
+            'telegram_discuss_link' => '',
             'announcement' => '',
             'seo_title' => '',
             'seo_description' => '',

@@ -70,6 +70,7 @@ final class SiteContextServiceTest extends TestCase
             'accent_color' => '#f43f5e',
             'support_name' => 'Cheap Support',
             'support_url' => 'https://t.me/cheap',
+            'telegram_discuss_link' => 'https://t.me/cheap_group',
             'announcement' => 'Cheap announcement',
             'seo_title' => 'Cheap SEO',
             'seo_description' => 'Cheap description',
@@ -87,6 +88,29 @@ final class SiteContextServiceTest extends TestCase
         $this->assertSame('Cheap Cloud', $context['site_name']);
         $this->assertSame('sakura', $context['landing_theme']);
         $this->assertSame('cheap.example.test', $context['domain']);
+        $this->assertSame('https://t.me/cheap_group', $context['telegram_discuss_link']);
+    }
+
+    public function test_site_setting_overrides_telegram_group_link_in_comm_config(): void
+    {
+        [$site] = $this->siteWithDomain('cheap', 'Cheap Site', 'cheap.example.test');
+        SiteSetting::query()->create([
+            'site_id' => $site->id,
+            'site_name' => 'Cheap Cloud',
+            'telegram_discuss_link' => 'https://t.me/cheap_group',
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $request = Request::create('/api/v1/guest/comm/config', 'GET', [], [], [], ['HTTP_HOST' => 'cheap.example.test']);
+        $config = app(SiteContextService::class)->applyToConfig([
+            'app_name' => 'Platform Cloud',
+            'telegram_discuss_link' => 'https://t.me/platform_group',
+        ], $request);
+
+        $this->assertSame('https://t.me/cheap_group', $config['telegram_discuss_link']);
+        $this->assertSame('https://t.me/cheap_group', $config['site_context']['telegram_discuss_link']);
     }
 
     public function test_authenticated_context_prefers_user_site_over_request_host(): void
