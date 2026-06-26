@@ -14,6 +14,7 @@ use App\Jobs\ProcessTelegramTicketMediaGroupReplyJob;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 
 class Plugin extends AbstractPlugin
@@ -122,13 +123,75 @@ class Plugin extends AbstractPlugin
       "———————————————\n" .
       "支付接口：%s\n" .
       "支付渠道：%s\n" .
+      "站点来源：%s\n" .
       "本站订单：`%s`",
       $order->total_amount / 100,
       $payment->payment,
       $payment->name,
+      $this->paymentSourceLabel($order),
       $order->trade_no
     );
     $this->telegramService->sendMessageWithAdmin($message, false);
+  }
+
+  private function paymentSourceLabel(Order $order): string
+  {
+    $this->loadPaymentSourceRelations($order);
+
+    $agentContext = $order->relationLoaded('agentOrderContext') ? $order->agentOrderContext : null;
+    if ($agentContext) {
+      $domain = trim((string) ($agentContext->domain?->domain ?? data_get($agentContext->domain_snapshot, 'domain', '')));
+
+      return $domain !== '' ? "代理域名（{$domain}）" : '代理中心';
+    }
+
+    $siteContext = $order->relationLoaded('siteOrderContext') ? $order->siteOrderContext : null;
+    if ($siteContext) {
+      $siteName = trim((string) ($siteContext->site?->name ?? ''));
+      $domain = trim((string) ($siteContext->domain?->domain ?? data_get($siteContext->domain_snapshot, 'domain', '')));
+
+      return $this->formatSiteSourceLabel($siteName, $domain);
+    }
+
+    $site = $order->relationLoaded('site') ? $order->site : null;
+    if ($site) {
+      return $this->formatSiteSourceLabel(trim((string) ($site->name ?? '')), '');
+    }
+
+    return '主站';
+  }
+
+  private function loadPaymentSourceRelations(Order $order): void
+  {
+    try {
+      $relations = [];
+      if (Schema::hasTable('v2_agent_order_context')) {
+        $relations[] = 'agentOrderContext.domain';
+      }
+      if (Schema::hasTable('v2_site_order_context')) {
+        $relations[] = 'siteOrderContext.site';
+        $relations[] = 'siteOrderContext.domain';
+      }
+      if (Schema::hasTable('v2_site')) {
+        $relations[] = 'site';
+      }
+      if ($relations) {
+        $order->loadMissing($relations);
+      }
+    } catch (\Throwable $e) {
+      Log::warning('支付通知站点来源解析失败', [
+        'order_id' => $order->id,
+        'trade_no' => $order->trade_no,
+        'message' => $e->getMessage(),
+      ]);
+    }
+  }
+
+  private function formatSiteSourceLabel(string $siteName, string $domain): string
+  {
+    $label = $siteName !== '' ? $siteName : '分站';
+
+    return $domain !== '' ? "{$label}（{$domain}）" : $label;
   }
 
   public function sendTicketNotify(Ticket $ticket): void
