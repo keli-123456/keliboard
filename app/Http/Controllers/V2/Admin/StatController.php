@@ -7,6 +7,7 @@ use App\Http\Resources\TrafficNodeLogResource;
 use App\Models\CommissionLog;
 use App\Models\Order;
 use App\Models\Server;
+use App\Models\Site;
 use App\Models\Stat;
 use App\Models\StatServer;
 use App\Models\StatUser;
@@ -105,6 +106,7 @@ class StatController extends Controller
                 ->where('created_at', '<', $now)
                 ->whereNotIn('status', [0, 2])
                 ->sum('total_amount'),
+            'today_income_by_site' => $this->buildTodayIncomeBySite($todayStart, $now),
             'last_month_income' => Order::where('created_at', '>=', strtotime('-1 month', strtotime(date('Y-m-1'))))
                 ->where('created_at', '<', strtotime(date('Y-m-1')))
                 ->whereNotIn('status', [0, 2])
@@ -145,6 +147,7 @@ class StatController extends Controller
             'ticketPendingTotal' => $data['ticket_pending_total'],
             'commissionPendingTotal' => $data['commission_pending_total'],
             'todayIncome' => $data['day_income'],
+            'todayIncomeBySite' => $data['today_income_by_site'],
             'lastMonthIncome' => $data['last_month_income'],
             'currentMonthCommissionPayout' => $data['commission_month_payout'],
             'lastMonthCommissionPayout' => $data['commission_last_month_payout'],
@@ -433,6 +436,7 @@ class StatController extends Controller
             ->where('created_at', '<', $now)
             ->whereNotIn('status', [0, 2])
             ->sum('total_amount');
+        $todayIncomeBySite = $this->buildTodayIncomeBySite($todayStart, $now);
 
         // Yesterday's income for day growth calculation
         $yesterdayIncome = Order::where('created_at', '>=', $yesterdayStart)
@@ -510,6 +514,7 @@ class StatController extends Controller
         return [
             // 收入相关
             'todayIncome' => $todayIncome,
+            'todayIncomeBySite' => $todayIncomeBySite,
             'dayIncomeGrowth' => $dayIncomeGrowth,
             'currentMonthIncome' => $currentMonthIncome,
             'lastMonthIncome' => $lastMonthIncome,
@@ -553,6 +558,66 @@ class StatController extends Controller
                 'total' => $totalTraffic->total ?? 0
             ]
         ];
+    }
+
+    private function buildTodayIncomeBySite(int $startAt, int $endAt): array
+    {
+        $incomeRows = Order::query()
+            ->selectRaw('site_id, SUM(total_amount) as income, COUNT(*) as order_count')
+            ->where('created_at', '>=', $startAt)
+            ->where('created_at', '<', $endAt)
+            ->whereNotIn('status', [Order::STATUS_PENDING, Order::STATUS_CANCELLED])
+            ->groupBy('site_id')
+            ->get();
+
+        $incomeBySiteId = $incomeRows->keyBy(fn ($row): string => (string) ($row->site_id ?? 'platform'));
+        $siteIds = $incomeRows
+            ->pluck('site_id')
+            ->filter(fn ($siteId): bool => $siteId !== null)
+            ->map(fn ($siteId): int => (int) $siteId)
+            ->values()
+            ->all();
+
+        $sites = Site::query()
+            ->where(function ($query) use ($siteIds): void {
+                $query->where('status', Site::STATUS_ACTIVE);
+
+                if ($siteIds) {
+                    $query->orWhereIn('id', $siteIds);
+                }
+            })
+            ->orderBy('id')
+            ->get()
+            ->keyBy('id');
+
+        $items = [];
+        foreach ($sites as $site) {
+            $row = $incomeBySiteId->get((string) $site->id);
+            $items[] = [
+                'site_id' => (int) $site->id,
+                'site_code' => (string) $site->code,
+                'site_name' => (string) $site->name,
+                'income' => (int) ($row->income ?? 0),
+                'order_count' => (int) ($row->order_count ?? 0),
+            ];
+        }
+
+        $platformRow = $incomeBySiteId->get('platform');
+        $items[] = [
+            'site_id' => null,
+            'site_code' => 'platform',
+            'site_name' => '主站',
+            'income' => (int) ($platformRow->income ?? 0),
+            'order_count' => (int) ($platformRow->order_count ?? 0),
+        ];
+
+        usort($items, static function (array $a, array $b): int {
+            return ($b['income'] <=> $a['income'])
+                ?: ($b['order_count'] <=> $a['order_count'])
+                ?: strcmp((string) $a['site_name'], (string) $b['site_name']);
+        });
+
+        return $items;
     }
 
     /**
