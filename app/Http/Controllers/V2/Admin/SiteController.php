@@ -147,8 +147,8 @@ class SiteController extends Controller
             'setting.logo_url' => 'nullable|string|max:500',
             'setting.landing_theme' => 'nullable|string|max:64',
             'setting.accent_color' => 'nullable|string|max:16',
-            'setting.support_name' => 'nullable|string|max:120',
-            'setting.support_url' => 'nullable|string|max:500',
+            'setting.customer_service_type' => 'nullable|string|in:none,crisp,chatra',
+            'setting.customer_service_id' => 'nullable|string|max:255',
             'setting.telegram_discuss_link' => 'nullable|url|max:500',
             'setting.announcement' => 'nullable|string|max:1000',
             'setting.seo_title' => 'nullable|string|max:160',
@@ -281,8 +281,8 @@ class SiteController extends Controller
                 'logo_url' => (string) ($site->setting->logo_url ?? ''),
                 'landing_theme' => (string) ($site->setting->landing_theme ?? ''),
                 'accent_color' => (string) ($site->setting->accent_color ?? ''),
-                'support_name' => (string) ($site->setting->support_name ?? ''),
-                'support_url' => (string) ($site->setting->support_url ?? ''),
+                'customer_service_type' => $this->customerServiceType((string) ($site->setting->customer_service_type ?? '')),
+                'customer_service_id' => (string) ($site->setting->customer_service_id ?? ''),
                 'telegram_discuss_link' => (string) ($site->setting->telegram_discuss_link ?? ''),
                 'announcement' => (string) ($site->setting->announcement ?? ''),
                 'seo_title' => (string) ($site->setting->seo_title ?? ''),
@@ -330,6 +330,7 @@ class SiteController extends Controller
     private function saveSetting(Site $site, array $setting): void
     {
         $now = time();
+        $customerServiceType = $this->customerServiceType((string) ($setting['customer_service_type'] ?? ''));
         SiteSetting::query()->updateOrCreate(
             ['site_id' => $site->id],
             [
@@ -337,8 +338,10 @@ class SiteController extends Controller
                 'logo_url' => $this->nullableString($setting['logo_url'] ?? null),
                 'landing_theme' => $this->nullableString($setting['landing_theme'] ?? null),
                 'accent_color' => $this->nullableString($setting['accent_color'] ?? null),
-                'support_name' => $this->nullableString($setting['support_name'] ?? null),
-                'support_url' => $this->nullableString($setting['support_url'] ?? null),
+                'customer_service_type' => $this->nullableString($customerServiceType),
+                'customer_service_id' => $customerServiceType === 'none'
+                    ? null
+                    : $this->nullableString($setting['customer_service_id'] ?? null),
                 'telegram_discuss_link' => $this->nullableString($setting['telegram_discuss_link'] ?? null),
                 'announcement' => $this->nullableString($setting['announcement'] ?? null),
                 'seo_title' => $this->nullableString($setting['seo_title'] ?? null),
@@ -355,6 +358,13 @@ class SiteController extends Controller
         $value = trim((string) $value);
 
         return $value === '' ? null : $value;
+    }
+
+    private function customerServiceType(string $value): string
+    {
+        $value = strtolower(trim($value));
+
+        return in_array($value, ['none', 'crisp', 'chatra'], true) ? $value : '';
     }
 
     private function normalizeCode(string $code): string

@@ -73,6 +73,17 @@ class SiteContextService
         if ($shouldOverrideBrand && !empty($site['support_url'])) {
             $config['customer_service_url'] = $site['support_url'];
         }
+        if ($shouldOverrideBrand && !empty($site['customer_service_type'])) {
+            $customerServiceId = $site['customer_service_type'] === 'none'
+                ? ''
+                : (string) ($site['customer_service_id'] ?? '');
+            $config['customer_service_type'] = $site['customer_service_type'];
+            $config['customer_service_id'] = $customerServiceId;
+            $themeConfig = is_array($config['theme_config'] ?? null) ? $config['theme_config'] : [];
+            $themeConfig['customer_service_type'] = $site['customer_service_type'];
+            $themeConfig['customer_service_id'] = $customerServiceId;
+            $config['theme_config'] = $themeConfig;
+        }
         if ($shouldOverrideBrand && !empty($site['telegram_discuss_link'])) {
             $config['telegram_discuss_link'] = $site['telegram_discuss_link'];
         }
@@ -102,6 +113,8 @@ class SiteContextService
             'accent_color' => (string) ($setting?->accent_color ?? ''),
             'support_name' => (string) ($setting?->support_name ?? ''),
             'support_url' => (string) ($setting?->support_url ?? ''),
+            'customer_service_type' => $this->customerServiceType((string) ($setting?->customer_service_type ?? '')),
+            'customer_service_id' => (string) ($setting?->customer_service_id ?? ''),
             'telegram_discuss_link' => (string) ($setting?->telegram_discuss_link ?? ''),
             'announcement' => (string) ($setting?->announcement ?? ''),
             'seo_title' => (string) ($setting?->seo_title ?? ''),
@@ -158,6 +171,8 @@ class SiteContextService
             'accent_color' => '',
             'support_name' => '',
             'support_url' => '',
+            'customer_service_type' => '',
+            'customer_service_id' => '',
             'telegram_discuss_link' => '',
             'announcement' => '',
             'seo_title' => '',
@@ -185,6 +200,8 @@ class SiteContextService
             'accent_color' => '',
             'support_name' => '',
             'support_url' => '',
+            'customer_service_type' => '',
+            'customer_service_id' => '',
             'telegram_discuss_link' => '',
             'announcement' => '',
             'seo_title' => '',
@@ -207,5 +224,12 @@ class SiteContextService
         }
 
         return (int) $value;
+    }
+
+    private function customerServiceType(string $value): string
+    {
+        $value = strtolower(trim($value));
+
+        return in_array($value, ['none', 'crisp', 'chatra'], true) ? $value : '';
     }
 }

@@ -18,6 +18,8 @@ return new class extends Migration
                 $table->string('accent_color', 16)->nullable();
                 $table->string('support_name', 120)->nullable();
                 $table->string('support_url', 500)->nullable();
+                $table->string('customer_service_type', 32)->nullable();
+                $table->string('customer_service_id', 255)->nullable();
                 $table->string('telegram_discuss_link', 500)->nullable();
                 $table->string('announcement', 1000)->nullable();
                 $table->string('seo_title', 160)->nullable();

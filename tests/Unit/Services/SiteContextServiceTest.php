@@ -70,6 +70,8 @@ final class SiteContextServiceTest extends TestCase
             'accent_color' => '#f43f5e',
             'support_name' => 'Cheap Support',
             'support_url' => 'https://t.me/cheap',
+            'customer_service_type' => 'chatra',
+            'customer_service_id' => 'cheap-chatra-id',
             'telegram_discuss_link' => 'https://t.me/cheap_group',
             'announcement' => 'Cheap announcement',
             'seo_title' => 'Cheap SEO',
@@ -88,6 +90,8 @@ final class SiteContextServiceTest extends TestCase
         $this->assertSame('Cheap Cloud', $context['site_name']);
         $this->assertSame('sakura', $context['landing_theme']);
         $this->assertSame('cheap.example.test', $context['domain']);
+        $this->assertSame('chatra', $context['customer_service_type']);
+        $this->assertSame('cheap-chatra-id', $context['customer_service_id']);
         $this->assertSame('https://t.me/cheap_group', $context['telegram_discuss_link']);
     }
 
@@ -97,6 +101,8 @@ final class SiteContextServiceTest extends TestCase
         SiteSetting::query()->create([
             'site_id' => $site->id,
             'site_name' => 'Cheap Cloud',
+            'customer_service_type' => 'crisp',
+            'customer_service_id' => 'cheap-crisp-id',
             'telegram_discuss_link' => 'https://t.me/cheap_group',
             'enabled' => true,
             'created_at' => time(),
@@ -106,10 +112,22 @@ final class SiteContextServiceTest extends TestCase
         $request = Request::create('/api/v1/guest/comm/config', 'GET', [], [], [], ['HTTP_HOST' => 'cheap.example.test']);
         $config = app(SiteContextService::class)->applyToConfig([
             'app_name' => 'Platform Cloud',
+            'theme_config' => [
+                'customer_service_type' => 'chatra',
+                'customer_service_id' => 'platform-chatra-id',
+            ],
+            'customer_service_type' => 'chatra',
+            'customer_service_id' => 'platform-chatra-id',
             'telegram_discuss_link' => 'https://t.me/platform_group',
         ], $request);
 
+        $this->assertSame('crisp', $config['customer_service_type']);
+        $this->assertSame('cheap-crisp-id', $config['customer_service_id']);
+        $this->assertSame('crisp', $config['theme_config']['customer_service_type']);
+        $this->assertSame('cheap-crisp-id', $config['theme_config']['customer_service_id']);
         $this->assertSame('https://t.me/cheap_group', $config['telegram_discuss_link']);
+        $this->assertSame('crisp', $config['site_context']['customer_service_type']);
+        $this->assertSame('cheap-crisp-id', $config['site_context']['customer_service_id']);
         $this->assertSame('https://t.me/cheap_group', $config['site_context']['telegram_discuss_link']);
     }
 

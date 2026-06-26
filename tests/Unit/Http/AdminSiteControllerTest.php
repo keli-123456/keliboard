@@ -191,6 +191,8 @@ final class AdminSiteControllerTest extends TestCase
             'setting' => [
                 'site_name' => 'Cheap Brand',
                 'landing_theme' => 'sakura',
+                'customer_service_type' => 'chatra',
+                'customer_service_id' => 'site-chatra-id',
                 'telegram_discuss_link' => 'https://t.me/cheap_group',
                 'enabled' => true,
             ],
@@ -220,8 +222,12 @@ final class AdminSiteControllerTest extends TestCase
         $payload = $this->responsePayload(app(SiteController::class)->saveCommerce($request));
 
         $this->assertSame('Cheap Brand', $payload['data']['setting']['site_name']);
+        $this->assertSame('chatra', $payload['data']['setting']['customer_service_type']);
+        $this->assertSame('site-chatra-id', $payload['data']['setting']['customer_service_id']);
         $this->assertSame('https://t.me/cheap_group', $payload['data']['setting']['telegram_discuss_link']);
         $this->assertSame('sakura', SiteSetting::query()->where('site_id', $site->id)->value('landing_theme'));
+        $this->assertSame('chatra', SiteSetting::query()->where('site_id', $site->id)->value('customer_service_type'));
+        $this->assertSame('site-chatra-id', SiteSetting::query()->where('site_id', $site->id)->value('customer_service_id'));
         $this->assertSame('https://t.me/cheap_group', SiteSetting::query()->where('site_id', $site->id)->value('telegram_discuss_link'));
         $this->assertSame(1300, SitePlanPrice::query()->where('site_id', $site->id)->where('plan_id', $plan->id)->value('sale_price'));
         $this->assertSame('光喵入门版', SitePlanOverride::query()->where('site_id', $site->id)->where('plan_id', $plan->id)->value('display_name'));
