@@ -55,6 +55,43 @@ class SiteDataScopeService
         });
     }
 
+    public function applyNoticeScope(Builder $query, ?int $siteId): void
+    {
+        if (!$this->hasColumn('v2_notice', 'site_id')) {
+            return;
+        }
+
+        if (!$this->hasColumn('v2_notice', 'scope_type')) {
+            $this->applyNullableSiteScope($query, $siteId, 'v2_notice');
+
+            return;
+        }
+
+        $scopeColumn = 'v2_notice.scope_type';
+        $siteColumn = 'v2_notice.site_id';
+        $query->where(function (Builder $builder) use ($scopeColumn, $siteColumn, $siteId): void {
+            $builder->where($scopeColumn, 'global')
+                ->orWhere(function (Builder $legacyGlobal) use ($scopeColumn, $siteColumn): void {
+                    $legacyGlobal->whereNull($scopeColumn)
+                        ->whereNull($siteColumn);
+                });
+
+            if ($siteId === null) {
+                $builder->orWhere($scopeColumn, 'platform');
+
+                return;
+            }
+
+            $builder->orWhere(function (Builder $siteBuilder) use ($scopeColumn, $siteColumn, $siteId): void {
+                $siteBuilder->where($siteColumn, $siteId)
+                    ->where(function (Builder $typedSite) use ($scopeColumn): void {
+                        $typedSite->where($scopeColumn, 'site')
+                            ->orWhereNull($scopeColumn);
+                    });
+            });
+        });
+    }
+
     public function hasColumn(string $table, string $column): bool
     {
         try {

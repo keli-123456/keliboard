@@ -51,9 +51,10 @@ final class SiteScopedUserDataTest extends TestCase
         $secondSite = $this->siteWithDomain('second', 'second.example.test', false);
         $user = $this->createUser('buyer@example.test', $firstSite);
 
-        $global = $this->createNotice('Global Notice', null);
-        $first = $this->createNotice('First Site Notice', $firstSite->id);
-        $this->createNotice('Second Site Notice', $secondSite->id);
+        $global = $this->createNotice('Global Notice', 'global');
+        $first = $this->createNotice('First Site Notice', 'site', $firstSite->id);
+        $this->createNotice('Second Site Notice', 'site', $secondSite->id);
+        $this->createNotice('Platform Notice', 'platform');
 
         $payload = $this->responsePayload(app(NoticeController::class)->fetch($this->userRequest(
             '/api/v1/user/notice/fetch',
@@ -66,13 +67,14 @@ final class SiteScopedUserDataTest extends TestCase
         $this->assertEqualsCanonicalizing(['Global Notice', 'First Site Notice'], array_column($payload['data'], 'title'));
     }
 
-    public function test_platform_notices_include_global_only(): void
+    public function test_platform_notices_include_global_and_platform_only(): void
     {
         $site = $this->siteWithDomain('branch', 'branch.example.test', false);
         $user = $this->createUser('platform-buyer@example.test', null);
 
-        $global = $this->createNotice('Global Notice', null);
-        $this->createNotice('Branch Site Notice', $site->id);
+        $global = $this->createNotice('Global Notice', 'global');
+        $platform = $this->createNotice('Platform Notice', 'platform');
+        $this->createNotice('Branch Site Notice', 'site', $site->id);
 
         $payload = $this->responsePayload(app(NoticeController::class)->fetch($this->userRequest(
             '/api/v1/user/notice/fetch',
@@ -80,9 +82,9 @@ final class SiteScopedUserDataTest extends TestCase
             'main.example.test'
         )));
 
-        $this->assertSame(1, $payload['total']);
-        $this->assertSame([$global->id], array_column($payload['data'], 'id'));
-        $this->assertSame(['Global Notice'], array_column($payload['data'], 'title'));
+        $this->assertSame(2, $payload['total']);
+        $this->assertEqualsCanonicalizing([$global->id, $platform->id], array_column($payload['data'], 'id'));
+        $this->assertEqualsCanonicalizing(['Global Notice', 'Platform Notice'], array_column($payload['data'], 'title'));
     }
 
     public function test_admin_notice_fetch_can_filter_by_site_scope_and_include_site(): void
@@ -90,9 +92,10 @@ final class SiteScopedUserDataTest extends TestCase
         $firstSite = $this->siteWithDomain('notice-a', 'notice-a.example.test', false);
         $secondSite = $this->siteWithDomain('notice-b', 'notice-b.example.test', false);
 
-        $global = $this->createNotice('Global Notice', null);
-        $first = $this->createNotice('First Site Notice', $firstSite->id);
-        $this->createNotice('Second Site Notice', $secondSite->id);
+        $global = $this->createNotice('Global Notice', 'global');
+        $platform = $this->createNotice('Platform Notice', 'platform');
+        $first = $this->createNotice('First Site Notice', 'site', $firstSite->id);
+        $this->createNotice('Second Site Notice', 'site', $secondSite->id);
 
         $sitePayload = (new AdminNoticeController())->fetch(Request::create('/api/v2/admin/notice/fetch', 'GET', [
             'site_id' => $firstSite->id,
@@ -109,8 +112,19 @@ final class SiteScopedUserDataTest extends TestCase
 
         $this->assertCount(1, $globalPayload['data']);
         $this->assertSame($global->id, (int) $globalPayload['data'][0]['id']);
+        $this->assertSame('global', $globalPayload['data'][0]['scope_type']);
         $this->assertNull($globalPayload['data'][0]['site_id']);
         $this->assertNull($globalPayload['data'][0]['site']);
+
+        $platformPayload = (new AdminNoticeController())->fetch(Request::create('/api/v2/admin/notice/fetch', 'GET', [
+            'scope_type' => 'platform',
+        ]))->getData(true);
+
+        $this->assertCount(1, $platformPayload['data']);
+        $this->assertSame($platform->id, (int) $platformPayload['data'][0]['id']);
+        $this->assertSame('platform', $platformPayload['data'][0]['scope_type']);
+        $this->assertNull($platformPayload['data'][0]['site_id']);
+        $this->assertNull($platformPayload['data'][0]['site']);
     }
 
     public function test_ticket_creation_records_site_context(): void
@@ -202,6 +216,7 @@ final class SiteScopedUserDataTest extends TestCase
     {
         $this->database->schema()->create('v2_notice', function (Blueprint $table): void {
             $table->integer('id', true);
+            $table->string('scope_type', 16)->default('global')->index();
             $table->unsignedInteger('site_id')->nullable()->index();
             $table->integer('sort')->nullable()->index();
             $table->string('title');
@@ -270,9 +285,10 @@ final class SiteScopedUserDataTest extends TestCase
         ]);
     }
 
-    private function createNotice(string $title, ?int $siteId): Notice
+    private function createNotice(string $title, string $scopeType, ?int $siteId = null): Notice
     {
         return Notice::query()->create([
+            'scope_type' => $scopeType,
             'site_id' => $siteId,
             'title' => $title,
             'content' => $title . ' content',

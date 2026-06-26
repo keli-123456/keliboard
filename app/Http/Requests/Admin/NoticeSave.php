@@ -18,6 +18,7 @@ class NoticeSave extends FormRequest
             'content' => 'required',
             'img_url' => 'nullable|url',
             'tags' => 'nullable|array',
+            'scope_type' => 'nullable|in:global,platform,site',
             'site_id' => 'nullable|integer'
         ];
     }
@@ -29,6 +30,7 @@ class NoticeSave extends FormRequest
             'content.required' => '内容不能为空',
             'img_url.url' => '图片URL格式不正确',
             'tags.array' => '标签格式不正确',
+            'scope_type.in' => '公告范围不正确',
             'site_id.integer' => '站点格式不正确'
         ];
     }

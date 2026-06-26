@@ -20,15 +20,7 @@ class NoticeController extends Controller
 
         if (app(SiteDataScopeService::class)->hasColumn('v2_notice', 'site_id')) {
             $query->with('site:id,code,name,status,is_default');
-            $siteId = $request->input('site_id');
-            if (is_scalar($siteId) && trim((string) $siteId) !== '') {
-                $normalized = strtolower(trim((string) $siteId));
-                if (in_array($normalized, ['0', 'global', 'null'], true)) {
-                    $query->whereNull('site_id');
-                } elseif ((int) $normalized > 0) {
-                    $query->where('site_id', (int) $normalized);
-                }
-            }
+            $this->applyScopeFilter($query, $request);
         }
 
         return $this->success($query->get());
@@ -44,11 +36,16 @@ class NoticeController extends Controller
             'show',
             'popup'
         ]);
-        if (app(SiteDataScopeService::class)->hasColumn('v2_notice', 'site_id')) {
-            $siteId = $request->input('site_id');
-            $data['site_id'] = is_scalar($siteId) && trim((string) $siteId) !== '' && (int) $siteId > 0
-                ? (int) $siteId
-                : null;
+        $siteScope = app(SiteDataScopeService::class);
+        if ($siteScope->hasColumn('v2_notice', 'site_id')) {
+            [$scopeType, $siteId] = $this->normalizeScope($request);
+            if ($scopeType === 'site' && !$siteId) {
+                return $this->fail([422, '请选择分站']);
+            }
+            if ($siteScope->hasColumn('v2_notice', 'scope_type')) {
+                $data['scope_type'] = $scopeType;
+            }
+            $data['site_id'] = $scopeType === 'site' ? $siteId : null;
         }
         if (!$request->input('id')) {
             if (!Notice::create($data)) {
@@ -121,5 +118,76 @@ class NoticeController extends Controller
             \Log::error($e);
             return $this->fail([500, '排序保存失败']);
         }
+    }
+
+    private function applyScopeFilter($query, Request $request): void
+    {
+        $siteScope = app(SiteDataScopeService::class);
+        $hasScopeType = $siteScope->hasColumn('v2_notice', 'scope_type');
+        $scopeType = strtolower(trim((string) $request->input('scope_type', '')));
+        $siteId = $request->input('site_id');
+
+        if ($scopeType === '' && is_scalar($siteId)) {
+            $normalized = strtolower(trim((string) $siteId));
+            if (in_array($normalized, ['0', 'global', 'null'], true)) {
+                $scopeType = 'global';
+            } elseif ($normalized === 'platform') {
+                $scopeType = 'platform';
+            } elseif ((int) $normalized > 0) {
+                $scopeType = 'site';
+            }
+        }
+
+        if ($hasScopeType) {
+            if ($scopeType === 'global') {
+                $query->where('scope_type', 'global')->whereNull('site_id');
+
+                return;
+            }
+            if ($scopeType === 'platform') {
+                $query->where('scope_type', 'platform')->whereNull('site_id');
+
+                return;
+            }
+            if ($scopeType === 'site') {
+                if (is_scalar($siteId) && (int) $siteId > 0) {
+                    $query->where('scope_type', 'site')->where('site_id', (int) $siteId);
+                } else {
+                    $query->whereRaw('1 = 0');
+                }
+
+                return;
+            }
+
+            return;
+        }
+
+        if (is_scalar($siteId) && trim((string) $siteId) !== '') {
+            $normalized = strtolower(trim((string) $siteId));
+            if (in_array($normalized, ['0', 'global', 'null'], true)) {
+                $query->whereNull('site_id');
+            } elseif ((int) $normalized > 0) {
+                $query->where('site_id', (int) $normalized);
+            }
+        }
+    }
+
+    private function normalizeScope(Request $request): array
+    {
+        $siteIdInput = $request->input('site_id');
+        $siteId = is_scalar($siteIdInput) && trim((string) $siteIdInput) !== '' && (int) $siteIdInput > 0
+            ? (int) $siteIdInput
+            : null;
+        $scopeType = strtolower(trim((string) $request->input('scope_type', '')));
+
+        if ($scopeType === '' || !in_array($scopeType, ['global', 'platform', 'site'], true)) {
+            $scopeType = $siteId ? 'site' : 'global';
+        }
+
+        if ($scopeType !== 'site') {
+            $siteId = null;
+        }
+
+        return [$scopeType, $siteId];
     }
 }

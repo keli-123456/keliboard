@@ -52,10 +52,9 @@ class NoticeController extends Controller
             ->orderBy('id', 'DESC')
             ->where('show', true);
         $siteScope = app(SiteDataScopeService::class);
-        $siteScope->applyNullableSiteScope(
+        $siteScope->applyNoticeScope(
             $model,
-            $siteScope->siteIdForRequest($request, $request->user()),
-            'v2_notice'
+            $siteScope->siteIdForRequest($request, $request->user())
         );
         $total = $model->count() + ($hasAgentAnnouncement ? 1 : 0);
         $res = $model->skip($globalOffset)
