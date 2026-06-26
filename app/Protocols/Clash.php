@@ -25,7 +25,7 @@ class Clash extends AbstractProtocol
     {
         $servers = $this->servers;
         $user = $this->user;
-        $appName = admin_setting('app_name', 'XBoard');
+        $appName = $this->subscriptionAppName();
 
         // 优先从数据库配置中获取模板
         $template = subscribe_template('clash', File::exists(base_path(self::CUSTOM_TEMPLATE_FILE))
@@ -87,13 +87,13 @@ class Clash extends AbstractProtocol
 
 
         $yaml = Yaml::dump($config, 2, 4, Yaml::DUMP_EMPTY_ARRAY_AS_SEQUENCE);
-        $yaml = str_replace('$app_name', admin_setting('app_name', 'XBoard'), $yaml);
+        $yaml = str_replace('$app_name', $appName, $yaml);
         return response($yaml)
             ->header('content-type', 'text/yaml')
             ->header('subscription-userinfo', "upload={$user['u']}; download={$user['d']}; total={$user['transfer_enable']}; expire={$user['expired_at']}")
             ->header('profile-update-interval', '24')
             ->header('content-disposition', 'attachment;filename*=UTF-8\'\'' . rawurlencode($appName))
-            ->header('profile-web-page-url', admin_setting('app_url'));
+            ->header('profile-web-page-url', $this->subscriptionAppUrl());
     }
 
     /**

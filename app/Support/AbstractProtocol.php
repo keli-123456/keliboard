@@ -2,7 +2,9 @@
 
 namespace App\Support;
 
+use App\Models\User;
 use App\Services\Plugin\HookManager;
+use App\Services\NotificationSiteContextService;
 
 abstract class AbstractProtocol
 {
@@ -220,6 +222,43 @@ abstract class AbstractProtocol
         return $this->clientName === 'sing-box'
             || $family === 'sing-box'
             || in_array($this->clientName, ['sparkle'], true);
+    }
+
+    protected function subscriptionAppName(): string
+    {
+        $name = trim((string) data_get($this->subscriptionBrandingContext(), 'app_name', ''));
+
+        return $name !== '' ? $name : (string) admin_setting('app_name', 'XBoard');
+    }
+
+    protected function subscriptionAppUrl(): string
+    {
+        $url = trim((string) data_get($this->subscriptionBrandingContext(), 'app_url', ''));
+
+        return $url !== '' ? rtrim($url, '/') : rtrim((string) admin_setting('app_url', ''), '/');
+    }
+
+    protected function subscriptionBrandingContext(): array
+    {
+        try {
+            $request = request();
+            $user = $this->user instanceof User ? $this->user : null;
+            if (!$user && is_array($this->user) && !empty($this->user['id'])) {
+                $user = User::query()->find((int) $this->user['id']);
+            }
+
+            $service = app(NotificationSiteContextService::class);
+            if ($user instanceof User) {
+                return $service->forUser($user, $request);
+            }
+
+            return $service->forRequest($request);
+        } catch (\Throwable) {
+            return [
+                'app_name' => (string) admin_setting('app_name', 'XBoard'),
+                'app_url' => rtrim((string) admin_setting('app_url', ''), '/'),
+            ];
+        }
     }
 
     /**
