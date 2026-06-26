@@ -148,6 +148,9 @@ final class SiteStorefrontServiceTest extends TestCase
         $this->assertSame('标准套餐', $plans[0]->site_display_name);
         $this->assertEquals(50.0, $plans[0]->prices[Plan::PERIOD_YEARLY]);
         $this->assertSame(5000, $plans[0]->site_sale_periods[Plan::PERIOD_YEARLY]);
+
+        $resource = PlanResource::make($plans[0])->toArray($this->requestForHost('cheap.example.test'));
+        $this->assertTrue($resource['show']);
     }
 
     public function test_site_display_name_can_be_applied_to_current_plan_without_enabled_sale_price(): void

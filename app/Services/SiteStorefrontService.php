@@ -195,6 +195,7 @@ class SiteStorefrontService
                     'is_default' => false,
                 ]);
                 $plan->setAttribute('site_sale_periods', $salePricesInCents);
+                $plan->setAttribute('show', true);
 
                 return $plan;
             })
