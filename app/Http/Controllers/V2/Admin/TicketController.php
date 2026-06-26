@@ -198,7 +198,8 @@ class TicketController extends Controller
         $ticket = Ticket::with([
             'messages.ticket',
             'messages.attachments',
-            'user',
+            'user.site:id,code,name',
+            'site:id,code,name',
             'agent:id,email',
             'agentDomain:id,domain',
         ])->find($request->input('id'));
@@ -208,8 +209,14 @@ class TicketController extends Controller
         }
         $result = $ticket->toArray();
         $result['user'] = UserController::transformUserData($ticket->user);
+        $result['site'] = $this->formatSitePayload($this->resolveTicketSite($ticket));
         $result['agent'] = $this->formatAgentPayload($ticket->agent);
         $result['agent_domain'] = $this->formatAgentDomainPayload($ticket->agentDomain);
+        $result['source'] = $this->buildTicketSourcePayload(
+            $result['site'],
+            $result['agent'],
+            $result['agent_domain']
+        );
         $result['risk_context'] = $this->buildSubscriptionRiskContext(
             (int) $ticket->user_id,
             (string) ($ticket->user->email ?? '')
@@ -322,7 +329,7 @@ class TicketController extends Controller
      */
     private function fetchTickets(Request $request)
     {
-        $ticketModel = Ticket::with(['user', 'agent:id,email', 'agentDomain:id,domain'])
+        $ticketModel = Ticket::with(['user.site:id,code,name', 'site:id,code,name', 'agent:id,email', 'agentDomain:id,domain'])
             ->when($request->has('status'), function ($query) use ($request) {
                 $status = $request->input('status');
                 if (is_scalar($status) && $status !== '') {
@@ -389,8 +396,14 @@ class TicketController extends Controller
         $items = collect($tickets->items())->map(function ($ticket) use ($latestAiByTicket) {
             $ticketData = $ticket->toArray();
             $ticketData['user'] = UserController::transformUserData($ticket->user);
+            $ticketData['site'] = $this->formatSitePayload($this->resolveTicketSite($ticket));
             $ticketData['agent'] = $this->formatAgentPayload($ticket->agent);
             $ticketData['agent_domain'] = $this->formatAgentDomainPayload($ticket->agentDomain);
+            $ticketData['source'] = $this->buildTicketSourcePayload(
+                $ticketData['site'],
+                $ticketData['agent'],
+                $ticketData['agent_domain']
+            );
             $latestAi = $latestAiByTicket->get((int) $ticket->id);
             if ($latestAi) {
                 $ticketData['ai_category'] = $latestAi->category;
@@ -401,6 +414,24 @@ class TicketController extends Controller
         })->all();
 
         return $this->paginate($tickets, $items);
+    }
+
+    private function resolveTicketSite(Ticket $ticket)
+    {
+        if ($ticket->relationLoaded('site') && $ticket->site) {
+            return $ticket->site;
+        }
+
+        if (
+            $ticket->relationLoaded('user')
+            && $ticket->user
+            && $ticket->user->relationLoaded('site')
+            && $ticket->user->site
+        ) {
+            return $ticket->user->site;
+        }
+
+        return null;
     }
 
     private function hasTicketAiSuggestionTable(): bool
@@ -433,6 +464,54 @@ class TicketController extends Controller
         return [
             'id' => (int) $domain->id,
             'domain' => (string) $domain->domain,
+        ];
+    }
+
+    private function formatSitePayload($site): ?array
+    {
+        if (!$site) {
+            return null;
+        }
+
+        return [
+            'id' => (int) $site->id,
+            'code' => (string) $site->code,
+            'name' => (string) $site->name,
+        ];
+    }
+
+    private function buildTicketSourcePayload(?array $site, ?array $agent, ?array $agentDomain): array
+    {
+        if ($agent || $agentDomain) {
+            $label = $agentDomain
+                ? '代理域名 ' . (string) $agentDomain['domain']
+                : '代理账号 ' . (string) ($agent['email'] ?? ('#' . ($agent['id'] ?? '')));
+
+            return [
+                'type' => 'agent',
+                'label' => $label,
+                'site' => $site,
+                'agent' => $agent,
+                'agent_domain' => $agentDomain,
+            ];
+        }
+
+        if ($site) {
+            return [
+                'type' => 'site',
+                'label' => '站点 ' . (string) $site['name'],
+                'site' => $site,
+                'agent' => null,
+                'agent_domain' => null,
+            ];
+        }
+
+        return [
+            'type' => 'platform',
+            'label' => '主站',
+            'site' => null,
+            'agent' => null,
+            'agent_domain' => null,
         ];
     }
 

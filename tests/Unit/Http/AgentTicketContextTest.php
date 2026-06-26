@@ -9,6 +9,7 @@ use App\Http\Resources\TicketResource;
 use App\Models\AgentDomain;
 use App\Models\AgentProfile;
 use App\Models\AgentUser;
+use App\Models\Site;
 use App\Models\Ticket;
 use App\Models\User;
 use App\Services\AgentCenterService;
@@ -53,6 +54,7 @@ final class AgentTicketContextTest extends TestCase
         app()->instance('url', $urlGenerator);
         app()->instance(\Illuminate\Contracts\Routing\UrlGenerator::class, $urlGenerator);
         $this->createUserTable();
+        $this->createSiteTenantTables();
         $this->createAgentCenterTables();
         $this->createAgentCommerceTables();
         $this->createTicketTables();
@@ -172,6 +174,50 @@ final class AgentTicketContextTest extends TestCase
         $this->assertSame($firstAgent->id, $items[0]['agent']['id']);
         $this->assertSame($firstAgent->email, $items[0]['agent']['email']);
         $this->assertNull($items[0]['agent_domain']);
+    }
+
+    public function test_admin_fetch_includes_ticket_source_summary(): void
+    {
+        $site = Site::query()->create([
+            'code' => 'lion',
+            'name' => 'Lion Cloud',
+            'status' => Site::STATUS_ACTIVE,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $agent = $this->createActiveAgent('source-agent@example.test');
+        $buyer = $this->createUser('source-buyer@example.test');
+        $buyer->site_id = $site->id;
+        $buyer->save();
+        $domain = $this->assignDomain($agent, 'source.example.test');
+
+        Ticket::query()->create([
+            'site_id' => $site->id,
+            'user_id' => $buyer->id,
+            'agent_user_id' => $agent->id,
+            'agent_domain_id' => $domain->id,
+            'subject' => 'Source visible ticket',
+            'level' => 1,
+            'status' => Ticket::STATUS_OPENING,
+            'reply_status' => Ticket::REPLY_STATUS_WAITING_ADMIN,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $request = Request::create('/api/v2/admin/ticket/fetch', 'GET', [
+            'pageSize' => 10,
+            'current' => 1,
+        ]);
+
+        $payload = (new AdminTicketController())->fetch($request)->getData(true);
+        $item = $payload['data']['items'][0];
+
+        $this->assertSame(['id' => $site->id, 'code' => 'lion', 'name' => 'Lion Cloud'], $item['site']);
+        $this->assertSame('agent', $item['source']['type']);
+        $this->assertSame('代理域名 source.example.test', $item['source']['label']);
+        $this->assertSame(['id' => $site->id, 'code' => 'lion', 'name' => 'Lion Cloud'], $item['source']['site']);
+        $this->assertSame(['id' => $agent->id, 'email' => $agent->email], $item['source']['agent']);
+        $this->assertSame(['id' => $domain->id, 'domain' => $domain->domain], $item['source']['agent_domain']);
     }
 
     public function test_admin_fetch_ignores_malformed_agent_user_filter(): void
