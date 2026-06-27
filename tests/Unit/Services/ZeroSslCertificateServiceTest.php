@@ -201,6 +201,32 @@ final class ZeroSslCertificateServiceTest extends TestCase
         $this->assertArrayHasKey('downloaded_at', $state);
     }
 
+    public function test_handle_machine_status_appends_legacy_java_compatibility_chain_to_downloaded_ca_bundle(): void
+    {
+        $machine = $this->createMachine([
+            'subproxy_cert_state' => [
+                'provider' => 'zerossl',
+                'certificate_id' => 'cert-1',
+                'domain' => '203.0.113.10',
+                'csr_hash' => hash('sha256', '-----BEGIN CERTIFICATE REQUEST-----test-----END CERTIFICATE REQUEST-----'),
+                'status' => 'issued',
+            ],
+        ]);
+
+        Http::fake([
+            'https://api.zerossl.com/certificates/cert-1/download/json?*' => Http::response([
+                'certificate.crt' => "-----BEGIN CERTIFICATE-----\nleaf\n-----END CERTIFICATE-----",
+                'ca_bundle.crt' => "-----BEGIN CERTIFICATE-----\nzero-ssl-ca\n-----END CERTIFICATE-----",
+            ]),
+        ]);
+
+        app(ZeroSslCertificateService::class)->handleMachineStatus($machine, $this->statusPayload(true, 'cert-1'));
+
+        $state = ServerMachine::find($machine->id)?->subproxy_cert_state;
+        $this->assertStringContainsString('zero-ssl-ca', $state['ca_bundle_pem']);
+        $this->assertSame(2, substr_count($state['ca_bundle_pem'], '-----BEGIN CERTIFICATE-----'));
+    }
+
     public function test_handle_machine_status_splits_fullchain_certificate_download_when_ca_bundle_is_empty(): void
     {
         $machine = $this->createMachine([
@@ -231,7 +257,8 @@ final class ZeroSslCertificateServiceTest extends TestCase
 
         $state = ServerMachine::find($machine->id)?->subproxy_cert_state;
         $this->assertSame("-----BEGIN CERTIFICATE-----\nleaf\n-----END CERTIFICATE-----", $state['certificate_pem']);
-        $this->assertSame("-----BEGIN CERTIFICATE-----\ncompat-ca\n-----END CERTIFICATE-----", $state['ca_bundle_pem']);
+        $this->assertStringContainsString("-----BEGIN CERTIFICATE-----\ncompat-ca\n-----END CERTIFICATE-----", $state['ca_bundle_pem']);
+        $this->assertSame(2, substr_count($state['ca_bundle_pem'], '-----BEGIN CERTIFICATE-----'));
     }
 
     public function test_handle_machine_status_clears_last_error_after_successful_certificate_refresh(): void
