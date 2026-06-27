@@ -15,6 +15,7 @@ use App\Models\Site;
 use App\Models\User;
 use App\Services\AgentCenterService;
 use App\Services\AuthService;
+use App\Services\NotificationSiteContextService;
 use App\Services\TicketCleanupService;
 use App\Services\UserService;
 use App\Services\UserOnlineService;
@@ -828,11 +829,8 @@ class UserController extends Controller
 
         $subject = $request->input('subject');
         $content = $request->input('content');
-        $templateValue = [
-            'name' => admin_setting('app_name', 'XBoard'),
-            'url' => admin_setting('app_url'),
-            'content' => $content
-        ];
+        /** @var NotificationSiteContextService $notificationSiteContext */
+        $notificationSiteContext = app(NotificationSiteContextService::class);
 
         $chunkSize = 500;
         $agentSubUserIds = fn () => AgentUser::query()->select('sub_user_id');
@@ -842,14 +840,18 @@ class UserController extends Controller
         $builder->whereNotIn('id', $agentSubUserIds());
         $queuedCount = 0;
 
-        $builder->chunk($chunkSize, function ($users) use ($subject, $templateValue, &$queuedCount) {
+        $builder->chunk($chunkSize, function ($users) use ($subject, $content, $notificationSiteContext, &$queuedCount) {
             foreach ($users as $user) {
+                $context = $notificationSiteContext->forUser($user);
                 dispatch(new SendEmailJob([
                     'email' => $user->email,
                     'subject' => $subject,
                     'message_type' => MarketingRule::TYPE_MARKETING,
                     'template_name' => 'notify',
-                    'template_value' => $templateValue
+                    'template_value' => $notificationSiteContext->templateValues($context, [
+                        'content' => $content,
+                    ]),
+                    'dispatch_context' => $notificationSiteContext->dispatchContext($context),
                 ], 'send_email_mass'));
                 $queuedCount++;
             }

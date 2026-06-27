@@ -247,46 +247,7 @@ final class AdminUserControllerRegressionTest extends TestCase
 
     public function test_send_mail_excludes_agent_subordinate_users(): void
     {
-        $dispatcher = new class implements Dispatcher {
-            public array $dispatched = [];
-
-            public function dispatch($command)
-            {
-                $this->dispatched[] = $command;
-                return $command;
-            }
-
-            public function dispatchSync($command, $handler = null)
-            {
-                return $this->dispatch($command);
-            }
-
-            public function dispatchNow($command, $handler = null)
-            {
-                return $this->dispatch($command);
-            }
-
-            public function hasCommandHandler($command)
-            {
-                return false;
-            }
-
-            public function getCommandHandler($command)
-            {
-                return null;
-            }
-
-            public function pipeThrough(array $pipes)
-            {
-                return $this;
-            }
-
-            public function map(array $map)
-            {
-                return $this;
-            }
-        };
-        app()->instance(Dispatcher::class, $dispatcher);
+        $dispatcher = $this->bindCapturingDispatcher();
 
         $normal = User::create([
             'email' => 'normal@example.com',
@@ -330,6 +291,114 @@ final class AdminUserControllerRegressionTest extends TestCase
         $this->assertContains($normal->email, $emails);
         $this->assertContains($agent->email, $emails);
         $this->assertNotContains($subordinate->email, $emails);
+    }
+
+    public function test_send_mail_uses_each_users_site_branding(): void
+    {
+        $dispatcher = $this->bindCapturingDispatcher();
+        $this->bindTestSettings([
+            'app_name' => 'Main Cloud',
+            'app_url' => 'https://main.example.test',
+        ]);
+        $this->createSiteTenantTables();
+        $this->createSiteCommerceTables();
+        $siteId = DB::table('v2_site')->insertGetId([
+            'code' => 'lion',
+            'name' => 'Lion Default',
+            'status' => 'active',
+            'is_default' => false,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $domainId = DB::table('v2_site_domain')->insertGetId([
+            'site_id' => $siteId,
+            'domain' => 'lion.example.test',
+            'status' => 'active',
+            'is_primary' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        DB::table('v2_site_setting')->insert([
+            'site_id' => $siteId,
+            'site_name' => 'Lion Cloud',
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        User::create([
+            'email' => 'site-user@example.com',
+            'password' => 'secret',
+            'token' => 'site-user-token',
+            'uuid' => 'site-user-uuid',
+            'site_id' => $siteId,
+        ]);
+
+        $response = (new UserController())->sendMail($this->userSendMailRequest([
+            'subject' => 'Hello',
+            'content' => 'Message',
+        ]));
+        $payload = $response->getData(true);
+        $jobs = array_values(array_filter(
+            $dispatcher->dispatched,
+            fn ($job) => $job instanceof SendEmailJob
+        ));
+        $templateValue = $this->emailJobParam($jobs[0], 'template_value');
+        $dispatchContext = $this->emailJobParam($jobs[0], 'dispatch_context');
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame(1, $payload['data']['queued_count']);
+        $this->assertSame('Lion Cloud', $templateValue['name'] ?? null);
+        $this->assertSame('https://lion.example.test', $templateValue['url'] ?? null);
+        $this->assertSame('Message', $templateValue['content'] ?? null);
+        $this->assertSame('site', $dispatchContext['brand_source'] ?? null);
+        $this->assertSame($siteId, $dispatchContext['site_id'] ?? null);
+        $this->assertSame($domainId, $dispatchContext['site_domain_id'] ?? null);
+    }
+
+    private function bindCapturingDispatcher()
+    {
+        $dispatcher = new class implements Dispatcher {
+            public array $dispatched = [];
+
+            public function dispatch($command)
+            {
+                $this->dispatched[] = $command;
+                return $command;
+            }
+
+            public function dispatchSync($command, $handler = null)
+            {
+                return $this->dispatch($command);
+            }
+
+            public function dispatchNow($command, $handler = null)
+            {
+                return $this->dispatch($command);
+            }
+
+            public function hasCommandHandler($command)
+            {
+                return false;
+            }
+
+            public function getCommandHandler($command)
+            {
+                return null;
+            }
+
+            public function pipeThrough(array $pipes)
+            {
+                return $this;
+            }
+
+            public function map(array $map)
+            {
+                return $this;
+            }
+        };
+        app()->instance(Dispatcher::class, $dispatcher);
+
+        return $dispatcher;
     }
 
     private function createAgentUserTable(): void
