@@ -314,7 +314,7 @@ class UserController extends Controller
         $current = $request->input('current', 1);
         $pageSize = $request->input('pageSize', 10);
 
-        $userModel = User::with(['plan:id,name', 'invite_user:id,email', 'group:id,name'])
+        $userModel = User::with(['plan:id,name', 'invite_user:id,email', 'group:id,name', 'site:id,code,name,status,is_default'])
             ->select(DB::raw('*, (u+d) as total_used'));
 
         $this->applyFiltersAndSorts($request, $userModel);

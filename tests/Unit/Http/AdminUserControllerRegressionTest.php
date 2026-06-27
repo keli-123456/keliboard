@@ -25,7 +25,9 @@ final class AdminUserControllerRegressionTest extends TestCase
         parent::setUp();
 
         $this->setUpInMemoryDatabase();
+        app()->instance('db.schema', $this->database->getConnection()->getSchemaBuilder());
         $this->bindJsonResponseFactory();
+        $this->bindTestUrlGenerator();
         $this->createUserTable();
         $this->createAgentUserTable();
         $this->createPersonalAccessTokenTable();
@@ -105,6 +107,43 @@ final class AdminUserControllerRegressionTest extends TestCase
         $this->assertSame($agent->id, (int) $user->fresh()->invite_user_id);
         $this->assertSame($agent->id, (int) DB::table('v2_agent_user')->where('sub_user_id', $user->id)->value('agent_user_id'));
         $this->assertSame('active', DB::table('v2_agent_profile')->where('user_id', $user->id)->value('status'));
+    }
+
+    public function test_fetch_includes_site_summary_for_user_list(): void
+    {
+        $this->createSiteTenantTables();
+        $site = DB::table('v2_site')->insertGetId([
+            'code' => 'lion',
+            'name' => 'Lion Cloud',
+            'status' => 'active',
+            'is_default' => false,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        User::create([
+            'email' => 'site-user@example.com',
+            'password' => 'secret',
+            'token' => 'site-user-token',
+            'uuid' => 'site-user-uuid',
+            'site_id' => $site,
+        ]);
+
+        $response = (new UserController())->fetch(Request::create('/admin/user/fetch', 'GET', [
+            'current' => 1,
+            'pageSize' => 10,
+        ]));
+        $payload = $response->getData(true);
+        $user = $payload['data']['items'][0];
+
+        $this->assertSame('site-user@example.com', $user['email']);
+        $this->assertSame($site, (int) $user['site_id']);
+        $this->assertSame([
+            'id' => $site,
+            'code' => 'lion',
+            'name' => 'Lion Cloud',
+            'status' => 'active',
+            'is_default' => false,
+        ], $user['site']);
     }
 
     public function test_update_can_clear_agent_owner_and_agent_profile(): void
