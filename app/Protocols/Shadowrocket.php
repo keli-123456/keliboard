@@ -305,27 +305,24 @@ class Shadowrocket extends AbstractProtocol
                 break;
             case 2:
                 $params = [
-                    "obfs" => 'none',
                     "fastopen" => 1
                 ];
                 if ($serverName = data_get($protocol_settings, 'tls.server_name')) {
-                    $params['peer'] = $serverName;
+                    $params['sni'] = $serverName;
                 }
                 if (data_get($protocol_settings, 'obfs.open')) {
                     $params['obfs'] = data_get($protocol_settings, 'obfs.type');
                     $params['obfs-password'] = data_get($protocol_settings, 'obfs.password');
                 }
                 $params['insecure'] = data_get($protocol_settings, 'tls.allow_insecure');
-                if (isset($protocol_settings['hop_interval'])) {
-                    $params['keepalive'] = $protocol_settings['hop_interval'];
-                }
-                if (isset($server['ports'])) {
-                    $params['mport'] = $server['ports'];
-                }
                 $query = http_build_query($params);
                 $addr = Helper::wrapIPv6($server['host']);
+                $port = trim((string) data_get($server, 'ports', ''));
+                if ($port === '') {
+                    $port = (string) $server['port'];
+                }
 
-                $uri = "hysteria2://{$password}@{$addr}:{$server['port']}?{$query}#{$server['name']}";
+                $uri = "hysteria2://{$password}@{$addr}:{$port}/?{$query}#{$server['name']}";
                 $uri .= "\r\n";
                 break;
         }

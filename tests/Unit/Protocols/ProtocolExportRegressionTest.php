@@ -777,12 +777,13 @@ final class ProtocolExportRegressionTest extends TestCase
             ],
         ]);
 
-        $this->assertStringContainsString('hysteria2://secret@sr-hy.example.com:8443', $hysteria);
-        $this->assertStringContainsString('peer=sr-hy-sni.example.com', $hysteria);
+        $this->assertStringContainsString('hysteria2://secret@sr-hy.example.com:30000-30100/', $hysteria);
+        $this->assertStringContainsString('sni=sr-hy-sni.example.com', $hysteria);
         $this->assertStringContainsString('obfs=salamander', $hysteria);
         $this->assertStringContainsString('obfs-password=mask-pass', $hysteria);
-        $this->assertStringContainsString('keepalive=30', $hysteria);
-        $this->assertStringContainsString('mport=30000-30100', $hysteria);
+        $this->assertStringNotContainsString('peer=', $hysteria);
+        $this->assertStringNotContainsString('mport=', $hysteria);
+        $this->assertStringNotContainsString('keepalive=', $hysteria);
         $this->assertStringContainsString('anytls://secret@sr-anytls.example.com:9443', $anytls);
         $this->assertStringContainsString('sni=sr-anytls-sni.example.com', $anytls);
         $this->assertStringContainsString('insecure=1', $anytls);
