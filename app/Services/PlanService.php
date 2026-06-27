@@ -149,16 +149,14 @@ class PlanService
 
     protected function validatePlanAvailability(User $user): void
     {
-        if ((!$this->plan->show && !$this->plan->renew) || (!$this->plan->show && $user->plan_id !== $this->plan->id)) {
+        $isSamePlan = (int) $user->plan_id === (int) $this->plan->id;
+
+        if ((!$this->plan->show && !$this->plan->renew) || (!$this->plan->show && !$isSamePlan)) {
             throw new ApiException(__('This subscription has been sold out, please choose another subscription'));
         }
 
-        if (!$this->plan->renew && $user->plan_id == $this->plan->id) {
+        if (!$this->plan->renew && $isSamePlan) {
             throw new ApiException(__('This subscription cannot be renewed, please change to another subscription'));
-        }
-
-        if (!$this->plan->show && $this->plan->renew && !app(UserService::class)->isAvailable($user)) {
-            throw new ApiException(__('This subscription has expired, please change to another subscription'));
         }
     }
 
