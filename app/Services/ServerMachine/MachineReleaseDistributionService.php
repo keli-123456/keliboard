@@ -47,7 +47,7 @@ final class MachineReleaseDistributionService
             return $this->customBaseUrl() . '/releases';
         }
         if ($source === self::SOURCE_PANEL) {
-            return rtrim($panelBaseUrl, '/') . '/server/machine/releases';
+            return $this->panelApiBaseUrl($panelBaseUrl) . '/server/machine/releases';
         }
         return '';
     }
@@ -59,9 +59,15 @@ final class MachineReleaseDistributionService
             return $this->customBaseUrl() . '/' . trim($component, '/') . '/install.sh';
         }
         if ($source === self::SOURCE_PANEL) {
-            return rtrim($panelBaseUrl, '/') . '/server/machine/' . trim($component, '/') . '/install.sh';
+            return $this->panelApiBaseUrl($panelBaseUrl) . '/server/machine/' . trim($component, '/') . '/install.sh';
         }
         return 'https://raw.githubusercontent.com/keli-123456/kelinode-rs/main/script/install.sh';
+    }
+
+    private function panelApiBaseUrl(string $panelBaseUrl): string
+    {
+        $baseUrl = rtrim($panelBaseUrl, '/');
+        return preg_match('#/api/v2$#', $baseUrl) ? $baseUrl : $baseUrl . '/api/v2';
     }
 
     public function validateMachine(Request $request): ?ServerMachine

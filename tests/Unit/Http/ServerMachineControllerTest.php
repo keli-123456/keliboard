@@ -82,7 +82,7 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertTrue($proxy['enabled']);
         $this->assertSame('panel-a', $proxy['site_id']);
         $this->assertSame('https://panel.example.test', $proxy['upstream_base_url']);
-        $this->assertSame('answer/land', $proxy['subscribe_path']);
+        $this->assertSame('sub/panel-a', $proxy['subscribe_path']);
         $this->assertSame('0.0.0.0:8443', $proxy['https_listen']);
         $this->assertSame('0.0.0.0:8080', $proxy['http_listen']);
         $this->assertSame('203.0.113.10', $proxy['certificate_domain']);
@@ -688,6 +688,78 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertTrue($payload['reload']);
     }
 
+    public function test_status_response_requests_one_reload_when_subscription_proxy_desired_config_changes(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscription_proxy_enable' => true,
+            'subscription_proxy_site_id' => 'panel-a',
+            'subscription_proxy_https_port' => 443,
+            'subscription_proxy_http_port' => 80,
+            'subscription_proxy_cert_file' => '/etc/v2node/subproxy/fullchain.pem',
+            'subscription_proxy_key_file' => '/etc/v2node/subproxy/key.pem',
+            'subscription_proxy_challenge_dir' => '/etc/v2node/subproxy/challenges',
+            'subscription_proxy_allow_http_fallback' => false,
+            'subscription_proxy_max_response_bytes' => 10485760,
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $machine->forceFill([
+            'subproxy_enabled' => true,
+        ])->save();
+
+        $requestPayload = [
+            'machine_id' => $machine->id,
+            'token' => 'machine-token',
+            'status' => [
+                'runtime' => [
+                    'nodes' => 0,
+                ],
+                'agent' => [
+                    'subscription_proxy' => [
+                        'enabled' => true,
+                        'profiles' => 1,
+                        'website_profiles' => 0,
+                        'certificate_domain' => '198.51.100.20',
+                    ],
+                ],
+            ],
+        ];
+        $server = ['REMOTE_ADDR' => '198.51.100.20'];
+
+        $first = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            $requestPayload,
+            [],
+            [],
+            $server
+        ));
+        $firstPayload = $first->getData(true);
+        $state = ServerMachine::find($machine->id)?->subproxy_cert_state;
+
+        $this->assertTrue($firstPayload['reload']);
+        $this->assertNotEmpty($state['config_signature'] ?? null);
+
+        $second = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            $requestPayload,
+            [],
+            [],
+            $server
+        ));
+        $secondPayload = $second->getData(true);
+        $nextState = ServerMachine::find($machine->id)?->subproxy_cert_state;
+
+        $this->assertFalse($secondPayload['reload']);
+        $this->assertSame($state['config_signature'], $nextState['config_signature'] ?? null);
+    }
+
     public function test_status_response_requests_reload_when_website_proxy_profile_is_missing(): void
     {
         $this->bindSettings([
@@ -1065,7 +1137,7 @@ final class ServerMachineControllerTest extends TestCase
         $payload = $response->getData(true);
 
         $this->assertSame('panel', $payload['upgrade']['release_source']);
-        $this->assertSame('https://panel.example.test/server/machine/releases', $payload['upgrade']['release_base_url']);
+        $this->assertSame('https://panel.example.test/api/v2/server/machine/releases', $payload['upgrade']['release_base_url']);
         $this->assertSame([
             'machine_id' => (string) $machine->id,
             'machine_token' => 'machine-token',

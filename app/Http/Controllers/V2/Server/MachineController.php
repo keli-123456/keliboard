@@ -457,6 +457,10 @@ class MachineController extends Controller
             return true;
         }
 
+        if ($this->subscriptionProxyDesiredConfigChanged($machine, $desired)) {
+            return true;
+        }
+
         $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
         $certificateId = trim((string) ($state['certificate_id'] ?? ''));
         $certificateStatus = trim((string) ($state['status'] ?? ''));
@@ -481,6 +485,77 @@ class MachineController extends Controller
         }
 
         return false;
+    }
+
+    private function subscriptionProxyDesiredConfigChanged(ServerMachine $machine, array $desired): bool
+    {
+        $signature = $this->subscriptionProxyDesiredConfigSignature($desired);
+        if ($signature === '') {
+            return false;
+        }
+
+        $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
+        $current = trim((string) ($state['config_signature'] ?? ''));
+        if ($current !== '' && hash_equals($current, $signature)) {
+            return false;
+        }
+
+        $state['config_signature'] = $signature;
+        $state['config_signature_at'] = now()->timestamp;
+        $machine->setAttribute('subproxy_cert_state', $state);
+
+        return true;
+    }
+
+    private function subscriptionProxyDesiredConfigSignature(array $desired): string
+    {
+        if (!(bool) ($desired['enabled'] ?? false)) {
+            return '';
+        }
+
+        $payload = [
+            'enabled' => true,
+            'https_listen' => trim((string) ($desired['https_listen'] ?? '')),
+            'http_listen' => trim((string) ($desired['http_listen'] ?? '')),
+            'certificate_domain' => trim((string) ($desired['certificate_domain'] ?? '')),
+            'challenge_dir' => trim((string) ($desired['challenge_dir'] ?? '')),
+            'cert_file' => trim((string) ($desired['cert_file'] ?? '')),
+            'key_file' => trim((string) ($desired['key_file'] ?? '')),
+            'allow_http_fallback' => (bool) ($desired['allow_http_fallback'] ?? false),
+            'max_response_bytes' => max(0, (int) ($desired['max_response_bytes'] ?? 0)),
+            'profiles' => $this->subscriptionProxyProfileSignatureRows($desired['profiles'] ?? [], [
+                'site_id',
+                'upstream_base_url',
+                'subscribe_path',
+            ]),
+            'website_profiles' => $this->subscriptionProxyProfileSignatureRows($desired['website_profiles'] ?? [], [
+                'site_id',
+                'upstream_base_url',
+                'path_prefix',
+            ]),
+        ];
+
+        return hash('sha256', (string) json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+    }
+
+    private function subscriptionProxyProfileSignatureRows(mixed $profiles, array $keys): array
+    {
+        if (!is_array($profiles)) {
+            return [];
+        }
+
+        return collect($profiles)
+            ->filter(fn ($profile): bool => is_array($profile))
+            ->map(function (array $profile) use ($keys): array {
+                $row = [];
+                foreach ($keys as $key) {
+                    $row[$key] = trim((string) ($profile[$key] ?? ''));
+                }
+
+                return $row;
+            })
+            ->values()
+            ->all();
     }
 
     private function reportedProxyProfileCount(array $reported, string $key): int
@@ -530,11 +605,8 @@ class MachineController extends Controller
         }
 
         $upstreamBaseURL = $this->resolvePanelBaseURL($request);
-        $subscribePath = trim((string) admin_setting('subscribe_path', 's'), '/');
-        if ($subscribePath === '') {
-            $subscribePath = 's';
-        }
         $siteId = $this->resolveSubscriptionProxySiteId($upstreamBaseURL);
+        $subscribePath = $this->resolveSubscriptionProxySubscribePath($siteId);
 
         $config = [
             'enabled' => true,
@@ -628,6 +700,11 @@ class MachineController extends Controller
         }
 
         return substr(sha1($baseURL), 0, 12);
+    }
+
+    private function resolveSubscriptionProxySubscribePath(string $siteId): string
+    {
+        return 'sub/' . trim($siteId, '/');
     }
 
     private function sanitizeSiteId(string $value): string

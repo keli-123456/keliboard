@@ -143,10 +143,10 @@ final class MachineControllerInstallCommandTest extends TestCase
 
         $this->assertSame(200, $response->getStatusCode());
         $this->assertStringStartsWith(
-            "curl -fsSL 'https://panel.example.test/server/machine/kelinode-rs/install.sh'",
+            "curl -fsSL 'https://panel.example.test/api/v2/server/machine/kelinode-rs/install.sh'",
             $payload['data']['command']
         );
-        $this->assertStringContainsString("--release-base-url 'https://panel.example.test/server/machine/releases'", $payload['data']['command']);
+        $this->assertStringContainsString("--release-base-url 'https://panel.example.test/api/v2/server/machine/releases'", $payload['data']['command']);
         $this->assertStringContainsString("--machine-id {$machine->id}", $payload['data']['command']);
         $this->assertStringContainsString("--machine-token 'machine-token'", $payload['data']['command']);
         $this->assertSame('panel', $payload['data']['distribution_source']);
