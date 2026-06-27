@@ -631,12 +631,14 @@ class StatController extends Controller
         $request->validate([
             'type' => 'required|in:node,user',
             'start_time' => 'nullable|integer|min:1000000000|max:9999999999',
-            'end_time' => 'nullable|integer|min:1000000000|max:9999999999'
+            'end_time' => 'nullable|integer|min:1000000000|max:9999999999',
+            'site_id' => 'nullable|integer|min:1',
         ]);
 
         $type = $request->input('type');
         $startDate = $request->input('start_time', strtotime('-7 days'));
         $endDate = $request->input('end_time', time());
+        $siteId = (int) $request->input('site_id', 0);
         $rangeSeconds = $endDate - $startDate;
         if (date('Y-m-d', $startDate) === date('Y-m-d', $endDate)) {
             $rangeSeconds = 86400;
@@ -668,6 +670,11 @@ class StatController extends Controller
             $currentData = StatUser::selectRaw('user_id as id, SUM(u + d) as value')
                 ->where('record_at', '>=', $startDate)
                 ->where('record_at', '<=', $endDate)
+                ->when($siteId > 0, function ($query) use ($siteId): void {
+                    $query->whereIn('user_id', User::query()
+                        ->select('id')
+                        ->where('site_id', $siteId));
+                })
                 ->groupBy('user_id')
                 ->orderBy('value', 'DESC')
                 ->limit(10)
@@ -678,6 +685,11 @@ class StatController extends Controller
                 ->where('record_at', '>=', $previousStartDate)
                 ->where('record_at', '<', $previousEndDate)
                 ->whereIn('user_id', $currentData->pluck('id'))
+                ->when($siteId > 0, function ($query) use ($siteId): void {
+                    $query->whereIn('user_id', User::query()
+                        ->select('id')
+                        ->where('site_id', $siteId));
+                })
                 ->groupBy('user_id')
                 ->get()
                 ->keyBy('id');
@@ -712,11 +724,13 @@ class StatController extends Controller
             'start_time' => 'nullable|integer|min:1000000000|max:9999999999',
             'end_time' => 'nullable|integer|min:1000000000|max:9999999999',
             'limit' => 'nullable|integer|min:1|max:50',
+            'site_id' => 'nullable|integer|min:1',
         ]);
 
         $startDate = (int) $request->input('start_time', strtotime('-30 days'));
         $endDate = (int) $request->input('end_time', time());
         $limit = (int) $request->input('limit', 10);
+        $siteId = (int) $request->input('site_id', 0);
 
         $rangeSeconds = $endDate - $startDate;
         if (date('Y-m-d', $startDate) === date('Y-m-d', $endDate)) {
@@ -729,6 +743,7 @@ class StatController extends Controller
             ->where('created_at', '>=', $startDate)
             ->where('created_at', '<=', $endDate)
             ->whereNotNull('invite_user_id')
+            ->when($siteId > 0, fn ($query) => $query->where('site_id', $siteId))
             ->groupBy('invite_user_id')
             ->orderBy('value', 'DESC')
             ->limit($limit)
@@ -739,6 +754,7 @@ class StatController extends Controller
             ->where('created_at', '<', $previousEndDate)
             ->whereNotNull('invite_user_id')
             ->whereIn('invite_user_id', $currentData->pluck('id'))
+            ->when($siteId > 0, fn ($query) => $query->where('site_id', $siteId))
             ->groupBy('invite_user_id')
             ->get()
             ->keyBy('id');
