@@ -12,6 +12,7 @@ use App\Models\Order;
 use App\Models\Payment;
 use App\Models\Plan;
 use App\Models\User;
+use App\Services\AgentCommerceContextResolver;
 use App\Services\CouponService;
 use App\Services\AgentCommerceService;
 use App\Services\OrderService;
@@ -83,7 +84,9 @@ class OrderController extends Controller
         $plan = Plan::findOrFail($request->input('plan_id'));
         $planService = new PlanService($plan);
 
-        $planService->validatePurchase($user, $request->input('period'));
+        $hasTenantContext = (bool) app(AgentCommerceContextResolver::class)->resolveRequest($request, $user)
+            || (bool) app(SiteCommerceService::class)->contextForRequest($request, $user);
+        $planService->validatePurchase($user, $request->input('period'), $hasTenantContext);
 
         $agentOrder = app(AgentCommerceService::class)->createOrderFromRequest(
             $user,

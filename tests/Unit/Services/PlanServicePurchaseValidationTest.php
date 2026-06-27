@@ -88,4 +88,30 @@ final class PlanServicePurchaseValidationTest extends TestCase
 
         (new PlanService($plan))->validatePurchase($user, 'year_price');
     }
+
+    public function test_tenant_context_can_purchase_hidden_renewable_plan_for_migrated_site_user(): void
+    {
+        $plan = new Plan([
+            'name' => 'Hidden site-priced plan',
+            'show' => false,
+            'sell' => true,
+            'renew' => true,
+            'prices' => [
+                Plan::PERIOD_YEARLY => 108,
+            ],
+        ]);
+        $plan->id = 56;
+
+        $user = new User([
+            'site_id' => 3,
+            'plan_id' => 12,
+            'expired_at' => time() - 3600,
+            'transfer_enable' => 100 * 1024 * 1024 * 1024,
+            'banned' => 0,
+        ]);
+
+        (new PlanService($plan))->validatePurchase($user, 'year_price', true);
+
+        $this->addToAssertionCount(1);
+    }
 }

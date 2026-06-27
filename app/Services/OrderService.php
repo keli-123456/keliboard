@@ -54,7 +54,7 @@ class OrderService
         $userService = app(UserService::class);
         $planService = new PlanService($plan);
 
-        $planService->validatePurchase($user, $period);
+        $planService->validatePurchase($user, $period, $siteContext !== null);
         HookManager::call('order.create.before', [$user, $plan, $period, $couponCode]);
 
         return DB::transaction(function () use ($user, $plan, $period, $couponCode, $userService, $pricing, $siteContext) {

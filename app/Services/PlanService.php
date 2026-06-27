@@ -66,7 +66,7 @@ class PlanService
         return $plan->show && $plan->sell && $this->hasCapacity($plan);
     }
 
-    public function validatePurchase(User $user, string $period): void
+    public function validatePurchase(User $user, string $period, bool $allowHiddenPlanPurchase = false): void
     {
         if (!$this->plan) {
             throw new ApiException(__('Subscription plan does not exist'));
@@ -89,7 +89,7 @@ class PlanService
             throw new ApiException(__('Current product is sold out'));
         }
 
-        $this->validatePlanAvailability($user);
+        $this->validatePlanAvailability($user, $allowHiddenPlanPurchase);
     }
 
     /**
@@ -147,11 +147,11 @@ class PlanService
         }
     }
 
-    protected function validatePlanAvailability(User $user): void
+    protected function validatePlanAvailability(User $user, bool $allowHiddenPlanPurchase = false): void
     {
         $isSamePlan = (int) $user->plan_id === (int) $this->plan->id;
 
-        if ((!$this->plan->show && !$this->plan->renew) || (!$this->plan->show && !$isSamePlan)) {
+        if ((!$this->plan->show && !$this->plan->renew) || (!$this->plan->show && !$isSamePlan && !$allowHiddenPlanPurchase)) {
             throw new ApiException(__('This subscription has been sold out, please choose another subscription'));
         }
 
