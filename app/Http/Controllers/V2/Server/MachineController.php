@@ -324,7 +324,22 @@ class MachineController extends Controller
 
     private function versionsMatch(string $current, string $target): bool
     {
-        return ltrim(trim($current), 'vV') === ltrim(trim($target), 'vV');
+        $current = ltrim(trim($current), 'vV');
+        $target = ltrim(trim($target), 'vV');
+        if ($current === '' || $target === '') {
+            return false;
+        }
+        if ($current === $target) {
+            return true;
+        }
+        if (
+            preg_match('/^\d+(?:\.\d+)+(?:[-+][0-9A-Za-z._-]+)?$/', $current)
+            && preg_match('/^\d+(?:\.\d+)+(?:[-+][0-9A-Za-z._-]+)?$/', $target)
+        ) {
+            return version_compare($current, $target, '>=');
+        }
+
+        return false;
     }
 
     private function isValidKelinodeVersion(string $version): bool

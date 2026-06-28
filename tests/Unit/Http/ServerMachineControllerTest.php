@@ -1189,6 +1189,47 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame('v0.1.1', ServerMachine::find($machine->id)?->load_status['core']['versions']['keli-core-rs'] ?? null);
     }
 
+    public function test_status_marks_node_upgrade_succeeded_when_current_version_is_newer(): void
+    {
+        $this->bindSettings([
+            'subscription_proxy_enable' => false,
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-upgrade',
+            'token' => 'machine-token',
+            'is_active' => true,
+            'upgrade_state' => [
+                'id' => 'upgrade-node-1',
+                'status' => 'running',
+                'component' => 'kelinode-rs',
+                'target_version' => 'v0.1.330',
+                'requested_at' => now()->timestamp,
+            ],
+        ]);
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'version' => 'v0.1.331',
+                    'runtime' => [
+                        'agent' => 'kelinode-rs',
+                    ],
+                ],
+            ]
+        ));
+        $payload = $response->getData(true);
+        $state = ServerMachine::find($machine->id)?->upgrade_state ?? [];
+
+        $this->assertNull($payload['upgrade']);
+        $this->assertSame('succeeded', $state['status']);
+        $this->assertSame('v0.1.331', $state['current_version']);
+    }
+
     private function createTables(): void
     {
         Schema::create('v2_server_machine', function (Blueprint $table): void {
