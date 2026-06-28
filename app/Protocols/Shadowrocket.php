@@ -315,13 +315,13 @@ class Shadowrocket extends AbstractProtocol
                     $params['obfs-password'] = data_get($protocol_settings, 'obfs.password');
                 }
                 $params['insecure'] = data_get($protocol_settings, 'tls.allow_insecure');
-                $ports = trim((string) data_get($server, 'ports', ''));
-                if ($ports !== '') {
+                $ports = self::normalizePortRangeString(data_get($server, 'ports'));
+                if ($ports !== null) {
                     $params['mport'] = $ports;
                 }
                 $query = http_build_query($params);
                 $addr = Helper::wrapIPv6($server['host']);
-                $port = (string) $server['port'];
+                $port = (string) (self::firstPortFromPortRange($ports) ?? $server['port']);
 
                 $uri = "hysteria2://{$password}@{$addr}:{$port}/?{$query}#{$server['name']}";
                 $uri .= "\r\n";

@@ -431,8 +431,12 @@ class ClashMeta extends AbstractProtocol
             'down' => data_get($protocol_settings, 'bandwidth.down'),
             'skip-cert-verify' => (bool) data_get($protocol_settings, 'tls.allow_insecure', false),
         ];
-        if (isset($server['ports'])) {
-            $array['ports'] = $server['ports'];
+        $ports = self::normalizePortRangeString(data_get($server, 'ports'));
+        if ($ports !== null) {
+            $array['ports'] = $ports;
+            if (($firstPort = self::firstPortFromPortRange($ports)) !== null) {
+                $array['port'] = $firstPort;
+            }
         }
         switch (data_get($protocol_settings, 'version')) {
             case 1:

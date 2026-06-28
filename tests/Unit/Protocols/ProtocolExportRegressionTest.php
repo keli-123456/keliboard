@@ -1094,6 +1094,30 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertTrue($anytls['skip-cert-verify']);
     }
 
+    public function test_clashmeta_hysteria2_port_hopping_uses_external_first_port_as_primary(): void
+    {
+        $hysteria = ClashMeta::buildHysteria('secret', [
+            'name' => 'Meta Hy2 Hop',
+            'host' => 'meta-hy-hop.example.com',
+            'port' => 10088,
+            'ports' => '32000-33000',
+            'protocol_settings' => [
+                'version' => 2,
+                'tls' => [
+                    'server_name' => 'meta-hy-hop-sni.example.com',
+                    'allow_insecure' => true,
+                ],
+                'bandwidth' => [
+                    'up' => 1000,
+                    'down' => 1000,
+                ],
+            ],
+        ], []);
+
+        $this->assertSame(32000, $hysteria['port']);
+        $this->assertSame('32000-33000', $hysteria['ports']);
+    }
+
     public function test_clashmeta_build_anytls_defaults_client_fingerprint_when_not_configured(): void
     {
         $config = ClashMeta::buildAnyTLS('secret', [

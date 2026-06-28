@@ -261,6 +261,31 @@ abstract class AbstractProtocol
         }
     }
 
+    protected static function normalizePortRangeString($value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $range = preg_replace('/\s+/', '', (string) $value) ?? '';
+        return $range === '' ? null : $range;
+    }
+
+    protected static function firstPortFromPortRange($value): ?int
+    {
+        $range = self::normalizePortRangeString($value);
+        if ($range === null) {
+            return null;
+        }
+
+        if (!preg_match('/^(\d{1,5})(?:[-:]\d{1,5})?$/', $range, $matches)) {
+            return null;
+        }
+
+        $port = (int) $matches[1];
+        return ($port >= 1 && $port <= 65535) ? $port : null;
+    }
+
     /**
      * 检查当前客户端是否支持特定功能
      *
