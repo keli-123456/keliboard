@@ -789,6 +789,27 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertStringContainsString('insecure=1', $anytls);
     }
 
+    public function test_shadowrocket_hysteria2_can_export_without_port_hopping_for_compatibility(): void
+    {
+        $hysteria = Shadowrocket::buildHysteria('secret', [
+            'name' => 'SR Hy2',
+            'host' => 'sr-hy.example.com',
+            'port' => 8443,
+            'protocol_settings' => [
+                'version' => 2,
+                'tls' => [
+                    'server_name' => 'sr-hy-sni.example.com',
+                    'allow_insecure' => true,
+                ],
+            ],
+            'ports' => '30000-30100',
+        ], false);
+
+        $this->assertStringContainsString('hysteria2://secret@sr-hy.example.com:8443/', $hysteria);
+        $this->assertStringNotContainsString('mport=', $hysteria);
+        $this->assertStringContainsString('sni=sr-hy-sni.example.com', $hysteria);
+    }
+
     public function test_shadowrocket_build_naive_exports_https_uri(): void
     {
         $uri = Shadowrocket::buildNaive('user-uuid', [
@@ -1116,6 +1137,54 @@ final class ProtocolExportRegressionTest extends TestCase
 
         $this->assertSame(32000, $hysteria['port']);
         $this->assertSame('32000-33000', $hysteria['ports']);
+    }
+
+    public function test_clashmeta_sparkle_hysteria2_downgrades_port_hopping_for_compatibility(): void
+    {
+        $server = [
+            'name' => 'Meta Hy2 Hop',
+            'host' => 'meta-hy-hop.example.com',
+            'port' => 10088,
+            'ports' => '32000-33000',
+            'protocol_settings' => [
+                'version' => 2,
+                'tls' => [
+                    'server_name' => 'meta-hy-hop-sni.example.com',
+                    'allow_insecure' => true,
+                ],
+            ],
+        ];
+
+        $sparkle = new class([], [], 'sparkle', '1.26.5') extends ClashMeta {
+            public function handle()
+            {
+                return [];
+            }
+
+            public function buildHysteriaForTest(array $server): array
+            {
+                return self::buildHysteria('secret', $server, [], $this->shouldExportHysteriaPortHopping());
+            }
+        };
+        $mihomo = new class([], [], 'mihomo', '1.19.27') extends ClashMeta {
+            public function handle()
+            {
+                return [];
+            }
+
+            public function buildHysteriaForTest(array $server): array
+            {
+                return self::buildHysteria('secret', $server, [], $this->shouldExportHysteriaPortHopping());
+            }
+        };
+
+        $sparkleConfig = $sparkle->buildHysteriaForTest($server);
+        $mihomoConfig = $mihomo->buildHysteriaForTest($server);
+
+        $this->assertSame(10088, $sparkleConfig['port']);
+        $this->assertArrayNotHasKey('ports', $sparkleConfig);
+        $this->assertSame(32000, $mihomoConfig['port']);
+        $this->assertSame('32000-33000', $mihomoConfig['ports']);
     }
 
     public function test_clashmeta_build_anytls_defaults_client_fingerprint_when_not_configured(): void

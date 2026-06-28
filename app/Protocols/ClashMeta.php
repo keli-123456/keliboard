@@ -96,7 +96,12 @@ class ClashMeta extends AbstractProtocol
                 array_push($proxies, $item['name']);
             }
             if ($item['type'] === Server::TYPE_HYSTERIA) {
-                array_push($proxy, self::buildHysteria($item['password'], $item, $user));
+                array_push($proxy, self::buildHysteria(
+                    $item['password'],
+                    $item,
+                    $user,
+                    $this->shouldExportHysteriaPortHopping()
+                ));
                 array_push($proxies, $item['name']);
             }
             if ($item['type'] === Server::TYPE_TUIC) {
@@ -143,6 +148,11 @@ class ClashMeta extends AbstractProtocol
             ->header('subscription-userinfo', "upload={$user['u']}; download={$user['d']}; total={$user['transfer_enable']}; expire={$user['expired_at']}")
             ->header('profile-update-interval', '24')
             ->header('content-disposition', 'attachment;filename*=UTF-8\'\'' . rawurlencode($appName));
+    }
+
+    protected function shouldExportHysteriaPortHopping(): bool
+    {
+        return $this->clientName !== 'sparkle';
     }
 
     /**
@@ -419,7 +429,7 @@ class ClashMeta extends AbstractProtocol
         return $array;
     }
 
-    public static function buildHysteria($password, $server, $user)
+    public static function buildHysteria($password, $server, $user, bool $exportPortHopping = true)
     {
         $protocol_settings = data_get($server, 'protocol_settings', []);
         $array = [
@@ -432,7 +442,7 @@ class ClashMeta extends AbstractProtocol
             'skip-cert-verify' => (bool) data_get($protocol_settings, 'tls.allow_insecure', false),
         ];
         $ports = self::normalizePortRangeString(data_get($server, 'ports'));
-        if ($ports !== null) {
+        if ($exportPortHopping && $ports !== null) {
             $array['ports'] = $ports;
             if (($firstPort = self::firstPortFromPortRange($ports)) !== null) {
                 $array['port'] = $firstPort;

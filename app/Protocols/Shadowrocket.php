@@ -54,7 +54,7 @@ class Shadowrocket extends AbstractProtocol
                 $uri .= self::buildTrojan($item['password'], $item);
             }
             if ($item['type'] === Server::TYPE_HYSTERIA) {
-                $uri .= self::buildHysteria($item['password'], $item);
+                $uri .= self::buildHysteria($item['password'], $item, false);
             }
             if ($item['type'] === Server::TYPE_TUIC) {
                 $uri .= self::buildTuic($item['password'], $item);
@@ -273,7 +273,7 @@ class Shadowrocket extends AbstractProtocol
         return $uri;
     }
 
-    public static function buildHysteria($password, $server)
+    public static function buildHysteria($password, $server, bool $exportPortHopping = true)
     {
         $protocol_settings = $server['protocol_settings'];
         $uri = ''; // 初始化变量
@@ -295,7 +295,7 @@ class Shadowrocket extends AbstractProtocol
                     $params["obfsParam"] = data_get($protocol_settings, 'obfs_settings.password');
                 }
                 $params['insecure'] = data_get($protocol_settings, 'tls.allow_insecure');
-                if (isset($server['ports']))
+                if ($exportPortHopping && isset($server['ports']))
                     $params['mport'] = $server['ports'];
                 $query = http_build_query($params);
                 $addr = Helper::wrapIPv6($server['host']);
@@ -316,12 +316,12 @@ class Shadowrocket extends AbstractProtocol
                 }
                 $params['insecure'] = data_get($protocol_settings, 'tls.allow_insecure');
                 $ports = self::normalizePortRangeString(data_get($server, 'ports'));
-                if ($ports !== null) {
+                if ($exportPortHopping && $ports !== null) {
                     $params['mport'] = $ports;
                 }
                 $query = http_build_query($params);
                 $addr = Helper::wrapIPv6($server['host']);
-                $port = (string) (self::firstPortFromPortRange($ports) ?? $server['port']);
+                $port = (string) (($exportPortHopping ? self::firstPortFromPortRange($ports) : null) ?? $server['port']);
 
                 $uri = "hysteria2://{$password}@{$addr}:{$port}/?{$query}#{$server['name']}";
                 $uri .= "\r\n";
