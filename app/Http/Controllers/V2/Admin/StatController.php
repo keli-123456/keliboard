@@ -16,9 +16,11 @@ use App\Models\Ticket;
 use App\Models\User;
 use App\Services\StatisticalService;
 use App\Services\UserOnlineService;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Schema;
 
 class StatController extends Controller
 {
@@ -88,10 +90,7 @@ class StatController extends Controller
             ->first();
 
         $data = [
-            'month_income' => Order::where('created_at', '>=', strtotime(date('Y-m-1')))
-                ->where('created_at', '<', $now)
-                ->whereNotIn('status', [0, 2])
-                ->sum('total_amount'),
+            'month_income' => $this->platformIncome(strtotime(date('Y-m-1')), $now),
             'month_register_total' => User::where('created_at', '>=', strtotime(date('Y-m-1')))
                 ->where('created_at', '<', $now)
                 ->count(),
@@ -102,15 +101,12 @@ class StatController extends Controller
                 ->whereNotIn('status', [0, 2])
                 ->where('commission_balance', '>', 0)
                 ->count(),
-            'day_income' => Order::where('created_at', '>=', strtotime(date('Y-m-d')))
-                ->where('created_at', '<', $now)
-                ->whereNotIn('status', [0, 2])
-                ->sum('total_amount'),
+            'day_income' => $this->platformIncome(strtotime(date('Y-m-d')), $now),
             'today_income_by_site' => $this->buildTodayIncomeBySite($todayStart, $now),
-            'last_month_income' => Order::where('created_at', '>=', strtotime('-1 month', strtotime(date('Y-m-1'))))
-                ->where('created_at', '<', strtotime(date('Y-m-1')))
-                ->whereNotIn('status', [0, 2])
-                ->sum('total_amount'),
+            'last_month_income' => $this->platformIncome(
+                strtotime('-1 month', strtotime(date('Y-m-1'))),
+                strtotime(date('Y-m-1'))
+            ),
             'commission_month_payout' => CommissionLog::where('created_at', '>=', strtotime(date('Y-m-1')))
                 ->where('created_at', '<', $now)
                 ->sum('get_amount'),
@@ -432,29 +428,17 @@ class StatController extends Controller
             ->first();
 
         // Today's income
-        $todayIncome = Order::where('created_at', '>=', $todayStart)
-            ->where('created_at', '<', $now)
-            ->whereNotIn('status', [0, 2])
-            ->sum('total_amount');
+        $todayIncome = $this->platformIncome($todayStart, $now);
         $todayIncomeBySite = $this->buildTodayIncomeBySite($todayStart, $now);
 
         // Yesterday's income for day growth calculation
-        $yesterdayIncome = Order::where('created_at', '>=', $yesterdayStart)
-            ->where('created_at', '<', $todayStart)
-            ->whereNotIn('status', [0, 2])
-            ->sum('total_amount');
+        $yesterdayIncome = $this->platformIncome($yesterdayStart, $todayStart);
 
         // Current month income
-        $currentMonthIncome = Order::where('created_at', '>=', $currentMonthStart)
-            ->where('created_at', '<', $now)
-            ->whereNotIn('status', [0, 2])
-            ->sum('total_amount');
+        $currentMonthIncome = $this->platformIncome($currentMonthStart, $now);
 
         // Last month income
-        $lastMonthIncome = Order::where('created_at', '>=', $lastMonthStart)
-            ->where('created_at', '<', $currentMonthStart)
-            ->whereNotIn('status', [0, 2])
-            ->sum('total_amount');
+        $lastMonthIncome = $this->platformIncome($lastMonthStart, $currentMonthStart);
 
         // Last month commission payout
         $lastMonthCommissionPayout = CommissionLog::where('created_at', '>=', $lastMonthStart)
@@ -481,10 +465,7 @@ class StatController extends Controller
         })->count();
 
         // Previous month income for growth calculation
-        $twoMonthsAgoIncome = Order::where('created_at', '>=', $twoMonthsAgoStart)
-            ->where('created_at', '<', $lastMonthStart)
-            ->whereNotIn('status', [0, 2])
-            ->sum('total_amount');
+        $twoMonthsAgoIncome = $this->platformIncome($twoMonthsAgoStart, $lastMonthStart);
 
         // Previous month commission for growth calculation
         $twoMonthsAgoCommission = CommissionLog::where('created_at', '>=', $twoMonthsAgoStart)
@@ -562,11 +543,8 @@ class StatController extends Controller
 
     private function buildTodayIncomeBySite(int $startAt, int $endAt): array
     {
-        $incomeRows = Order::query()
+        $incomeRows = $this->platformPaidOrderQuery($startAt, $endAt)
             ->selectRaw('site_id, SUM(total_amount) as income, COUNT(*) as order_count')
-            ->where('created_at', '>=', $startAt)
-            ->where('created_at', '<', $endAt)
-            ->whereNotIn('status', [Order::STATUS_PENDING, Order::STATUS_CANCELLED])
             ->groupBy('site_id')
             ->get();
 
@@ -618,6 +596,25 @@ class StatController extends Controller
         });
 
         return $items;
+    }
+
+    private function platformIncome(int $startAt, int $endAt): int
+    {
+        return (int) $this->platformPaidOrderQuery($startAt, $endAt)->sum('total_amount');
+    }
+
+    private function platformPaidOrderQuery(int $startAt, int $endAt): Builder
+    {
+        $query = Order::query()
+            ->where('created_at', '>=', $startAt)
+            ->where('created_at', '<', $endAt)
+            ->whereNotIn('status', [Order::STATUS_PENDING, Order::STATUS_CANCELLED]);
+
+        if (Schema::hasTable('v2_agent_order_context')) {
+            $query->whereDoesntHave('agentOrderContext');
+        }
+
+        return $query;
     }
 
     /**

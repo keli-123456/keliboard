@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Http;
 
 use App\Http\Controllers\V2\Admin\StatController;
+use App\Models\AgentOrderContext;
 use App\Models\Order;
 use App\Models\Site;
 use App\Services\StatisticalService;
@@ -20,8 +21,10 @@ final class AdminDashboardSiteIncomeTest extends TestCase
         parent::setUp();
 
         $this->setUpInMemoryDatabase();
+        app()->instance('db.schema', $this->database->getConnection()->getSchemaBuilder());
         $this->createSiteTenantTables();
         $this->createOrderTable();
+        $this->createAgentCommerceTables();
     }
 
     public function test_today_income_breakdown_groups_paid_orders_by_site_and_platform(): void
@@ -59,6 +62,8 @@ final class AdminDashboardSiteIncomeTest extends TestCase
         $this->createOrder('lion-processing', $lion->id, 2500, Order::STATUS_PROCESSING, $todayStart + 30);
         $this->createOrder('miaosu-cancelled', $miaosu->id, 9999, Order::STATUS_CANCELLED, $todayStart + 40);
         $this->createOrder('lion-yesterday', $lion->id, 8888, Order::STATUS_COMPLETED, $todayStart - 60);
+        $agentOrder = $this->createOrder('agent-paid', $lion->id, 7777, Order::STATUS_COMPLETED, $todayStart + 50);
+        $this->createAgentOrderContext($agentOrder, $todayStart + 50);
 
         $method = new \ReflectionMethod(StatController::class, 'buildTodayIncomeBySite');
         $method->setAccessible(true);
@@ -95,11 +100,19 @@ final class AdminDashboardSiteIncomeTest extends TestCase
                 'order_count' => 0,
             ],
         ], $breakdown);
+
+        $platformIncome = new \ReflectionMethod(StatController::class, 'platformIncome');
+        $platformIncome->setAccessible(true);
+
+        $this->assertSame(
+            4255,
+            $platformIncome->invoke(new StatController(new StatisticalService()), $todayStart, $now)
+        );
     }
 
-    private function createOrder(string $tradeNo, ?int $siteId, int $amount, int $status, int $createdAt): void
+    private function createOrder(string $tradeNo, ?int $siteId, int $amount, int $status, int $createdAt): Order
     {
-        Order::query()->create([
+        return Order::query()->create([
             'site_id' => $siteId,
             'invite_user_id' => null,
             'user_id' => 1,
@@ -112,6 +125,23 @@ final class AdminDashboardSiteIncomeTest extends TestCase
             'status' => $status,
             'commission_status' => Order::COMMISSION_STATUS_PENDING,
             'commission_balance' => 0,
+            'created_at' => $createdAt,
+            'updated_at' => $createdAt,
+        ]);
+    }
+
+    private function createAgentOrderContext(Order $order, int $createdAt): void
+    {
+        AgentOrderContext::query()->create([
+            'order_id' => $order->id,
+            'trade_no' => $order->trade_no,
+            'agent_user_id' => 9,
+            'agent_domain_id' => null,
+            'payment_id' => null,
+            'sale_amount' => $order->total_amount,
+            'cost_amount' => 100,
+            'hold_id' => null,
+            'status' => AgentOrderContext::STATUS_PAID,
             'created_at' => $createdAt,
             'updated_at' => $createdAt,
         ]);
