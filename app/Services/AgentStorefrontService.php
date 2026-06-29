@@ -29,6 +29,7 @@ class AgentStorefrontService
             ->orderBy('sort')
             ->orderBy('id')
             ->get()
+            ->filter(fn (Plan $plan): bool => $this->planAllowed($plan))
             ->map(function (Plan $plan) use ($prices, $overrides): array {
                 $periods = [];
                 foreach ((array) $plan->prices as $period => $platformPrice) {
@@ -52,6 +53,7 @@ class AgentStorefrontService
                     'periods' => $periods,
                 ];
             })
+            ->filter(fn (array $plan): bool => !empty($plan['periods']))
             ->values()
             ->all();
     }

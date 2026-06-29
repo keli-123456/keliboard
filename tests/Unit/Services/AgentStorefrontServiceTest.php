@@ -241,6 +241,40 @@ final class AgentStorefrontServiceTest extends TestCase
         ]]);
     }
 
+    public function test_price_list_hides_plans_not_allowed_for_agents(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $blockedPlan = $this->createPlan('Blocked', [Plan::PERIOD_MONTHLY => 20.00]);
+        $allowedPlan = $this->createPlan('Allowed', [Plan::PERIOD_MONTHLY => 30.00]);
+        AgentPlanPrice::query()->create([
+            'agent_user_id' => $agent->id,
+            'plan_id' => $blockedPlan->id,
+            'period' => Plan::PERIOD_MONTHLY,
+            'sale_price' => 1500,
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        AgentPlanPrice::query()->create([
+            'agent_user_id' => $agent->id,
+            'plan_id' => $allowedPlan->id,
+            'period' => Plan::PERIOD_MONTHLY,
+            'sale_price' => 2500,
+            'enabled' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $this->bindTestSettings(['agent_center_allowed_plan_ids' => (string) $allowedPlan->id]);
+
+        $plans = app(AgentStorefrontService::class)->listPrices($agent);
+
+        $this->assertCount(1, $plans);
+        $this->assertSame($allowedPlan->id, $plans[0]['plan_id']);
+        $this->assertSame('Allowed', $plans[0]['plan_name']);
+        $this->assertSame(1, count($plans[0]['periods']));
+        $this->assertSame(2500, $plans[0]['periods'][0]['sale_price']);
+    }
+
     public function test_price_save_rejects_period_missing_on_plan(): void
     {
         $agent = $this->createActiveAgent('agent@example.test');
