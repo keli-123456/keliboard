@@ -129,6 +129,11 @@ class OrderController extends Controller
         }
 
         $bonusAmount = app(RechargeBonusService::class)->calculateBonus($amount);
+        $agentOrder = app(AgentCommerceService::class)->createRechargeOrderFromRequest($user, $amount, $bonusAmount, $request);
+        if ($agentOrder) {
+            return $this->success($agentOrder->trade_no);
+        }
+
         $order = app(SiteCommerceService::class)->createRechargeOrderFromRequest($user, $amount, $bonusAmount, $request);
         return $this->success($order->trade_no);
     }

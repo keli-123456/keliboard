@@ -14,6 +14,7 @@ use App\Models\AgentLedger;
 use App\Models\AgentOrderContext;
 use App\Models\AgentPlanPrice;
 use App\Models\AgentProfile;
+use App\Models\AgentUser;
 use App\Models\Order;
 use App\Models\Payment;
 use App\Models\Plan;
@@ -306,6 +307,86 @@ final class AgentDomainOrderFlowTest extends TestCase
         $payload = $this->responsePayload($response);
 
         $this->assertSame([$platformPayment->id], array_column($payload['data'], 'id'));
+    }
+
+    public function test_agent_domain_recharge_creates_agent_context_without_balance_hold(): void
+    {
+        [$agent, $buyer, $order] = $this->createAgentRechargeOrderFixture();
+
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->first();
+
+        $this->assertSame(Order::TYPE_RECHARGE, (int) $order->type);
+        $this->assertSame(0, (int) $order->plan_id);
+        $this->assertSame('recharge', (string) $order->period);
+        $this->assertSame(1200, (int) $order->total_amount);
+        $this->assertNotNull($context);
+        $this->assertSame($agent->id, (int) $context->agent_user_id);
+        $this->assertSame(1200, (int) $context->sale_amount);
+        $this->assertSame(0, (int) $context->cost_amount);
+        $this->assertNull($context->hold_id);
+        $this->assertSame(0, AgentBalanceHold::query()->where('order_id', $order->id)->count());
+        $this->assertSame(1, AgentUser::query()
+            ->where('agent_user_id', $agent->id)
+            ->where('sub_user_id', $buyer->id)
+            ->count());
+        $this->assertSame($agent->id, (int) $buyer->fresh()->invite_user_id);
+        $this->assertSame(10000, (int) $agent->fresh()->balance);
+        $this->assertSame(0, (int) $buyer->fresh()->balance);
+    }
+
+    public function test_agent_recharge_order_trade_no_uses_agent_payment_methods(): void
+    {
+        [$agent, $buyer, $order] = $this->createAgentRechargeOrderFixture();
+        $agentPayment = $this->createPayment(Payment::OWNER_AGENT, $agent->id);
+        $this->createPayment(Payment::OWNER_PLATFORM, null);
+
+        $request = BaseRequest::create('/api/v1/user/order/getPaymentMethod', 'GET', [
+            'trade_no' => $order->trade_no,
+        ], [], [], [
+            'HTTP_HOST' => 'agent.example.test',
+        ]);
+        $request->setUserResolver(static fn (): User => $buyer);
+
+        $response = app(OrderController::class)->getPaymentMethod($request);
+        $payload = $this->responsePayload($response);
+
+        $this->assertSame([$agentPayment->id], array_column($payload['data'], 'id'));
+    }
+
+    public function test_agent_recharge_payment_credits_user_without_deducting_agent_balance(): void
+    {
+        [$agent, $buyer, $order] = $this->createAgentRechargeOrderFixture();
+        $payment = $this->createPayment(Payment::OWNER_AGENT, $agent->id);
+
+        $request = BaseRequest::create('/api/v1/user/order/checkout', 'POST', [
+            'trade_no' => $order->trade_no,
+            'method' => $payment->id,
+        ], [], [], [
+            'HTTP_HOST' => 'agent.example.test',
+        ]);
+        $request->setUserResolver(static fn (): User => $buyer);
+        app()->instance('request', $request);
+
+        $response = app(OrderController::class)->checkout($request);
+        $payload = $this->responsePayload($response);
+
+        $this->assertSame(0, $payload['type']);
+        $this->assertSame($payment->id, (int) $order->fresh()->payment_id);
+
+        $handled = $this->invokePaymentHandle([
+            'trade_no' => $order->trade_no,
+            'callback_no' => 'agent-recharge-gateway',
+            'paid_amount' => 1200,
+        ], $this->paymentServiceWithId($payment->id));
+
+        $context = AgentOrderContext::query()->where('order_id', $order->id)->first();
+        $this->assertTrue($handled);
+        $this->assertSame(Order::STATUS_COMPLETED, (int) $order->fresh()->status);
+        $this->assertSame(1200, (int) $buyer->fresh()->balance);
+        $this->assertSame(10000, (int) $agent->fresh()->balance);
+        $this->assertSame(AgentOrderContext::STATUS_PAID, $context->fresh()->status);
+        $this->assertSame(0, AgentBalanceHold::query()->where('order_id', $order->id)->count());
+        $this->assertSame(0, AgentLedger::query()->where('agent_user_id', $agent->id)->count());
     }
 
     public function test_agent_domain_payment_methods_exclude_payments_bound_to_another_agent_domain(): void
@@ -778,6 +859,34 @@ final class AgentDomainOrderFlowTest extends TestCase
                 'HTTP_HOST' => $domain,
             ])
         );
+
+        return [$agent, $buyer, $order];
+    }
+
+    /**
+     * @return array{0: User, 1: User, 2: Order}
+     */
+    private function createAgentRechargeOrderFixture(string $domain = 'agent.example.test'): array
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => $domain,
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $buyer = $this->createUser('buyer@example.test');
+        $request = BaseRequest::create('/api/v1/user/order/recharge', 'POST', [
+            'amount' => 12,
+        ], [], [], [
+            'HTTP_HOST' => $domain,
+        ]);
+        $request->setUserResolver(static fn (): User => $buyer);
+
+        $response = app(OrderController::class)->recharge($request);
+        $payload = $this->responsePayload($response);
+        $order = Order::query()->where('trade_no', $payload['data'])->firstOrFail();
 
         return [$agent, $buyer, $order];
     }

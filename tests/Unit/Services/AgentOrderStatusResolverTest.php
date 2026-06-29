@@ -131,6 +131,24 @@ final class AgentOrderStatusResolverTest extends TestCase
         $this->assertSame([], $result['abnormal_flags']);
     }
 
+    public function test_zero_cost_paid_order_does_not_require_hold_or_ledger(): void
+    {
+        $context = $this->createContext([
+            'status' => AgentOrderContext::STATUS_PAID,
+            'sale_amount' => 1200,
+            'cost_amount' => 0,
+            'hold_id' => null,
+            'order_status' => Order::STATUS_COMPLETED,
+        ]);
+
+        $result = app(AgentOrderStatusResolver::class)->resolve($context->fresh());
+
+        $this->assertSame(AgentOrderStatusResolver::HOLD_STATUS_NOT_REQUIRED, $result['hold_status']);
+        $this->assertSame(AgentBalanceHold::STATUS_CAPTURED, $result['capture_status']);
+        $this->assertSame(1200, $result['margin_amount']);
+        $this->assertSame([], $result['abnormal_flags']);
+    }
+
     private function createContext(array $overrides = []): AgentOrderContext
     {
         $now = time();

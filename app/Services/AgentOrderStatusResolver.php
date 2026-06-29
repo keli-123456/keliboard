@@ -11,6 +11,7 @@ use App\Models\Order;
 class AgentOrderStatusResolver
 {
     public const HOLD_STATUS_MISSING = 'missing';
+    public const HOLD_STATUS_NOT_REQUIRED = 'not_required';
     public const CAPTURE_STATUS_NOT_CAPTURED = 'not_captured';
 
     /**
@@ -22,10 +23,15 @@ class AgentOrderStatusResolver
         $payment = $context->payment;
         $order = $context->order;
         $flags = [];
+        $requiresHold = (int) $context->cost_amount > 0 || $context->hold_id !== null;
 
         $holdStatus = $hold?->status ?? self::HOLD_STATUS_MISSING;
         if ($hold === null) {
-            $flags[] = 'hold_missing';
+            if ($requiresHold) {
+                $flags[] = 'hold_missing';
+            } else {
+                $holdStatus = self::HOLD_STATUS_NOT_REQUIRED;
+            }
         } else {
             if (
                 $hold->status === AgentBalanceHold::STATUS_PENDING
@@ -69,6 +75,10 @@ class AgentOrderStatusResolver
     private function captureStatus(AgentOrderContext $context, ?AgentBalanceHold $hold): string
     {
         if ($hold === null) {
+            if ((int) $context->cost_amount <= 0 && $context->hold_id === null && $context->status === AgentOrderContext::STATUS_PAID) {
+                return AgentBalanceHold::STATUS_CAPTURED;
+            }
+
             return self::CAPTURE_STATUS_NOT_CAPTURED;
         }
 

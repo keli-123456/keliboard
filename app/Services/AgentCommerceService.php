@@ -91,6 +91,104 @@ class AgentCommerceService
         return $this->createOrderForContext($user, $plan, $period, $context, true);
     }
 
+    public function createRechargeOrderFromRequest(
+        User $user,
+        int $amount,
+        int $bonusAmount,
+        Request $request
+    ): ?Order {
+        $context = app(AgentCommerceContextResolver::class)->resolveRequest($request, $user);
+        if (!$context) {
+            return null;
+        }
+
+        $agent = User::query()->find((int) $context['agent_user_id']);
+        if (!$agent) {
+            throw new ApiException('Agent user does not exist');
+        }
+        $this->activeProfile($agent);
+
+        return DB::transaction(function () use ($user, $amount, $bonusAmount, $context): Order {
+            $lockedAgent = User::query()
+                ->whereKey((int) $context['agent_user_id'])
+                ->lockForUpdate()
+                ->first();
+            if (!$lockedAgent) {
+                throw new ApiException('Agent user does not exist');
+            }
+            $this->activeProfile($lockedAgent);
+
+            $lockedUser = User::query()
+                ->whereKey($user->id)
+                ->lockForUpdate()
+                ->first();
+            if (!$lockedUser) {
+                throw new ApiException(__('User does not exist'));
+            }
+
+            OrderService::assertNoIncompleteOrder($lockedUser->id);
+
+            $now = time();
+            $ownership = AgentUser::query()
+                ->where('sub_user_id', $lockedUser->id)
+                ->first();
+            if (!$ownership) {
+                AgentUser::query()->create([
+                    'agent_user_id' => $lockedAgent->id,
+                    'sub_user_id' => $lockedUser->id,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+                $lockedUser->invite_user_id = $lockedAgent->id;
+                $lockedUser->updated_at = $now;
+                $lockedUser->save();
+            } elseif ((int) $lockedUser->invite_user_id !== (int) $ownership->agent_user_id) {
+                $lockedUser->invite_user_id = (int) $ownership->agent_user_id;
+                $lockedUser->updated_at = $now;
+                $lockedUser->save();
+            }
+
+            $order = OrderService::createRechargeOrder($lockedUser, $amount, $bonusAmount);
+            $order->invite_user_id = $lockedUser->invite_user_id;
+            $order->updated_at = $now;
+            $order->save();
+            $contextSource = (string) ($context['source'] ?? AgentCommerceContextResolver::SOURCE_DOMAIN);
+            $agentDomainId = $context['agent_domain_id'] ?? null;
+            $domainSnapshot = [
+                'source' => $contextSource,
+                'agent_domain_id' => $agentDomainId !== null ? (int) $agentDomainId : null,
+                'domain' => (string) ($context['domain'] ?? ''),
+                'is_primary' => (bool) ($context['is_primary'] ?? false),
+            ];
+            $pricingSnapshot = [
+                'type' => 'recharge',
+                'period' => 'recharge',
+                'sale_amount' => max(0, $amount),
+                'bonus_amount' => max(0, $bonusAmount),
+                'cost_amount' => 0,
+            ];
+
+            AgentOrderContext::query()->create([
+                'order_id' => $order->id,
+                'trade_no' => $order->trade_no,
+                'agent_user_id' => $lockedAgent->id,
+                'agent_domain_id' => $agentDomainId !== null ? (int) $agentDomainId : null,
+                'payment_id' => null,
+                'sale_amount' => max(0, $amount),
+                'cost_amount' => 0,
+                'hold_id' => null,
+                'status' => AgentOrderContext::STATUS_PENDING,
+                'pricing_snapshot' => $pricingSnapshot,
+                'domain_snapshot' => $domainSnapshot,
+                'payment_snapshot' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+
+            return $order;
+        });
+    }
+
     private function createOrderForContext(
         User $user,
         Plan $plan,
@@ -342,26 +440,28 @@ class AgentCommerceService
                     throw new ApiException('This payment method is unavailable.');
                 }
 
-                $hold = AgentBalanceHold::query()
-                    ->whereKey($context->hold_id)
-                    ->lockForUpdate()
-                    ->first();
-                if (!$hold || $hold->status !== AgentBalanceHold::STATUS_PENDING) {
-                    throw new ApiException('Agent balance hold is unavailable');
-                }
+                if ((int) $context->cost_amount > 0 || $context->hold_id !== null) {
+                    $hold = AgentBalanceHold::query()
+                        ->whereKey($context->hold_id)
+                        ->lockForUpdate()
+                        ->first();
+                    if (!$hold || $hold->status !== AgentBalanceHold::STATUS_PENDING) {
+                        throw new ApiException('Agent balance hold is unavailable');
+                    }
 
-                $agent = User::query()
-                    ->whereKey($context->agent_user_id)
-                    ->lockForUpdate()
-                    ->first();
-                if (!$agent) {
-                    throw new ApiException('Agent user does not exist');
-                }
+                    $agent = User::query()
+                        ->whereKey($context->agent_user_id)
+                        ->lockForUpdate()
+                        ->first();
+                    if (!$agent) {
+                        throw new ApiException('Agent user does not exist');
+                    }
 
-                $pendingOther = max(0, $this->activePendingHoldTotal((int) $agent->id) - (int) $hold->amount);
+                    $pendingOther = max(0, $this->activePendingHoldTotal((int) $agent->id) - (int) $hold->amount);
 
-                if (((int) $agent->balance - (int) $pendingOther) < (int) $hold->amount) {
-                    throw new ApiException(self::INSUFFICIENT_SITE_BALANCE_MESSAGE);
+                    if (((int) $agent->balance - (int) $pendingOther) < (int) $hold->amount) {
+                        throw new ApiException(self::INSUFFICIENT_SITE_BALANCE_MESSAGE);
+                    }
                 }
 
                 $context->payment_id = $payment->id;
@@ -450,6 +550,13 @@ class AgentCommerceService
                 ->lockForUpdate()
                 ->first();
             if (!$context) {
+                return;
+            }
+
+            if ((int) $context->cost_amount <= 0 && $context->hold_id === null) {
+                $context->status = AgentOrderContext::STATUS_PAID;
+                $context->updated_at = time();
+                $context->save();
                 return;
             }
 
@@ -626,6 +733,11 @@ class AgentCommerceService
 
             $hold = $this->pendingHoldForOrder($order, $context);
             if (!$hold) {
+                if ($context) {
+                    $context->status = AgentOrderContext::STATUS_CANCELLED;
+                    $context->updated_at = time();
+                    $context->save();
+                }
                 return;
             }
 
