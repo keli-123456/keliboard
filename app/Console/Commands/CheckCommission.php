@@ -2,6 +2,8 @@
 
 namespace App\Console\Commands;
 
+use App\Models\AgentOrderContext;
+use App\Models\AgentUser;
 use App\Models\CommissionLog;
 use Illuminate\Console\Command;
 use App\Models\Order;
@@ -51,49 +53,52 @@ class CheckCommission extends Command
     public function autoCheck()
     {
         if ((int)admin_setting('commission_auto_check_enable', 1)) {
-            Order::where('commission_status', Order::COMMISSION_STATUS_PENDING)
+            $query = Order::where('commission_status', Order::COMMISSION_STATUS_PENDING)
                 ->whereNotNull('invite_user_id')
                 ->where('status', Order::STATUS_COMPLETED)
-                ->where('updated_at', '<=', strtotime('-3 day', time()))
-                ->update([
-                    'commission_status' => Order::COMMISSION_STATUS_PROCESSING
-                ]);
+                ->where('updated_at', '<=', strtotime('-3 day', time()));
+
+            $this->excludeAgentOrders($query)->update([
+                'commission_status' => Order::COMMISSION_STATUS_PROCESSING
+            ]);
         }
     }
 
     public function autoPayCommission()
     {
-        Order::where('commission_status', Order::COMMISSION_STATUS_PROCESSING)
+        $query = Order::where('commission_status', Order::COMMISSION_STATUS_PROCESSING)
             ->whereNotNull('invite_user_id')
-            ->select(['id', 'trade_no', 'invite_user_id', 'commission_status', 'commission_balance'])
-            ->chunkById(200, function ($orders): void {
-                foreach ($orders as $order) {
-                    try {
-                        DB::transaction(function () use ($order) {
-                            $lockedOrder = Order::whereKey($order->id)->lockForUpdate()->first();
-                            if (!$lockedOrder) return;
-                            if ((int) $lockedOrder->commission_status !== Order::COMMISSION_STATUS_PROCESSING) return;
-                            if (empty($lockedOrder->invite_user_id)) return;
+            ->select(['id', 'trade_no', 'user_id', 'invite_user_id', 'commission_status', 'commission_balance']);
 
-                            if (!$this->payHandle($lockedOrder->invite_user_id, $lockedOrder)) {
-                                throw new \RuntimeException('payHandle returned false');
-                            }
+        $this->excludeAgentOrders($query)->chunkById(200, function ($orders): void {
+            foreach ($orders as $order) {
+                try {
+                    DB::transaction(function () use ($order) {
+                        $lockedOrder = Order::whereKey($order->id)->lockForUpdate()->first();
+                        if (!$lockedOrder) return;
+                        if ((int) $lockedOrder->commission_status !== Order::COMMISSION_STATUS_PROCESSING) return;
+                        if (empty($lockedOrder->invite_user_id)) return;
+                        if ($this->isAgentOrder($lockedOrder)) return;
 
-                            $lockedOrder->commission_status = Order::COMMISSION_STATUS_VALID;
-                            $lockedOrder->saveOrFail();
-                        }, 3);
-                    } catch (\Throwable $e) {
-                        Log::error('Auto pay commission failed', [
-                            'order_id' => $order->id,
-                            'trade_no' => $order->trade_no ?? null,
-                            'invite_user_id' => $order->invite_user_id ?? null,
-                            'commission_status' => $order->commission_status ?? null,
-                            'commission_balance' => $order->commission_balance ?? null,
-                            'error' => $e->getMessage(),
-                        ]);
-                    }
+                        if (!$this->payHandle($lockedOrder->invite_user_id, $lockedOrder)) {
+                            throw new \RuntimeException('payHandle returned false');
+                        }
+
+                        $lockedOrder->commission_status = Order::COMMISSION_STATUS_VALID;
+                        $lockedOrder->saveOrFail();
+                    }, 3);
+                } catch (\Throwable $e) {
+                    Log::error('Auto pay commission failed', [
+                        'order_id' => $order->id,
+                        'trade_no' => $order->trade_no ?? null,
+                        'invite_user_id' => $order->invite_user_id ?? null,
+                        'commission_status' => $order->commission_status ?? null,
+                        'commission_balance' => $order->commission_balance ?? null,
+                        'error' => $e->getMessage(),
+                    ]);
                 }
-            });
+            }
+        });
     }
 
     public function payHandle($inviteUserId, Order $order)
@@ -136,6 +141,39 @@ class CheckCommission extends Command
             $order->actual_commission_balance = $order->actual_commission_balance + $commissionBalance;
         }
         return true;
+    }
+
+    private function excludeAgentOrders($query)
+    {
+        if ($this->hasTable('v2_agent_order_context')) {
+            $query->whereNotIn('id', AgentOrderContext::query()->select('order_id'));
+        }
+
+        if ($this->hasTable('v2_agent_user')) {
+            $query->whereNotIn('user_id', AgentUser::query()->select('sub_user_id'));
+        }
+
+        return $query;
+    }
+
+    private function isAgentOrder(Order $order): bool
+    {
+        if ($this->hasTable('v2_agent_order_context')
+            && AgentOrderContext::query()->where('order_id', $order->id)->exists()) {
+            return true;
+        }
+
+        return $this->hasTable('v2_agent_user')
+            && AgentUser::query()->where('sub_user_id', $order->user_id)->exists();
+    }
+
+    private function hasTable(string $table): bool
+    {
+        try {
+            return DB::connection()->getSchemaBuilder()->hasTable($table);
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
 }

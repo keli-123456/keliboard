@@ -10,16 +10,22 @@ use App\Models\CommissionLog;
 use App\Models\InviteCode;
 use App\Models\Order;
 use App\Models\User;
+use App\Services\AgentCommerceContextResolver;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
 
 class InviteController extends Controller
 {
+    private const AGENT_SUBORDINATE_INVITE_DISABLED_MESSAGE = '代理下级用户不参与普通邀请返利';
+
     public function save(Request $request)
     {
         $user = $request->user();
         if (!$user) {
             throw new ApiException('未登录或登陆已过期', 403);
+        }
+        if ($this->isAgentSubordinate($user)) {
+            return $this->fail([403, self::AGENT_SUBORDINATE_INVITE_DISABLED_MESSAGE]);
         }
 
         if (InviteCode::where('user_id', $user->id)->where('status', InviteCode::STATUS_UNUSED)->count() >= admin_setting('invite_gen_limit', 5)) {
@@ -42,6 +48,10 @@ class InviteController extends Controller
 
     public function details(Request $request)
     {
+        if ($this->isAgentSubordinate($request->user())) {
+            return $this->fail([403, self::AGENT_SUBORDINATE_INVITE_DISABLED_MESSAGE]);
+        }
+
         $current = $request->input('current') ? $request->input('current') : 1;
         $pageSize = $request->input('page_size') >= 10 ? $request->input('page_size') : 10;
         $builder = CommissionLog::where('invite_user_id', $request->user()->id)
@@ -62,6 +72,9 @@ class InviteController extends Controller
         $user = User::find($request->user()->id);
         if (!$user) {
             return $this->fail([400, __('The user does not exist')]);
+        }
+        if ($this->isAgentSubordinate($user)) {
+            return $this->fail([403, self::AGENT_SUBORDINATE_INVITE_DISABLED_MESSAGE]);
         }
 
         $user->load(['codes' => fn($query) => $query->where('status', 0)]);
@@ -93,5 +106,14 @@ class InviteController extends Controller
             'stat' => $stat
         ];
         return $this->success($data);
+    }
+
+    private function isAgentSubordinate(?User $user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        return app(AgentCommerceContextResolver::class)->resolveUser($user) !== null;
     }
 }

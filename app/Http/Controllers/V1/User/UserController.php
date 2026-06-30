@@ -11,6 +11,7 @@ use App\Models\Order;
 use App\Models\Plan;
 use App\Models\Ticket;
 use App\Models\User;
+use App\Services\AgentCommerceContextResolver;
 use App\Services\Auth\LoginService;
 use App\Services\AuthService;
 use App\Services\Plugin\HookManager;
@@ -290,6 +291,12 @@ class UserController extends Controller
                 ];
             }
 
+            if (app(AgentCommerceContextResolver::class)->resolveUser($user) !== null) {
+                return [
+                    'status' => 'agent_subordinate',
+                ];
+            }
+
             $commissionBalance = (int) $user->commission_balance;
             $balance = (int) $user->balance;
 
@@ -323,6 +330,9 @@ class UserController extends Controller
 
         if ($result['status'] === 'missing') {
             return $this->fail([400, __('The user does not exist')]);
+        }
+        if ($result['status'] === 'agent_subordinate') {
+            return $this->fail([403, __('代理下级用户不参与普通邀请返利')]);
         }
         if ($result['status'] === 'insufficient') {
             return $this->fail([400, __('Insufficient commission balance')], $result['data']);

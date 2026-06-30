@@ -6,6 +6,7 @@ namespace Tests\Unit\Http;
 
 use App\Http\Controllers\V1\User\UserController;
 use App\Http\Requests\User\UserTransfer;
+use App\Models\AgentUser;
 use App\Models\User;
 use App\Services\Auth\LoginService;
 use Tests\Support\InteractsWithInMemoryDatabase;
@@ -22,6 +23,7 @@ final class UserTransferControllerTest extends TestCase
         $this->setUpInMemoryDatabase();
         $this->bindJsonResponseFactory();
         $this->createUserTable();
+        $this->createAgentCenterTables();
     }
 
     public function test_transfer_moves_commission_to_account_balance_and_returns_new_balances(): void
@@ -62,6 +64,29 @@ final class UserTransferControllerTest extends TestCase
         $user->refresh();
         $this->assertSame(500, (int) $user->commission_balance);
         $this->assertSame(2500, (int) $user->balance);
+    }
+
+    public function test_agent_subordinate_cannot_transfer_commission_to_account_balance(): void
+    {
+        $agent = $this->createUser(balance: 0, commissionBalance: 0);
+        $subordinate = $this->createUser(balance: 2500, commissionBalance: 1500);
+        AgentUser::query()->create([
+            'agent_user_id' => $agent->id,
+            'sub_user_id' => $subordinate->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $response = $this->controller()->transfer($this->transferRequest($subordinate, 600));
+        $payload = $response->getData(true);
+
+        $this->assertSame(403, $response->getStatusCode());
+        $this->assertSame('fail', $payload['status']);
+        $this->assertSame('代理下级用户不参与普通邀请返利', $payload['message']);
+
+        $subordinate->refresh();
+        $this->assertSame(1500, (int) $subordinate->commission_balance);
+        $this->assertSame(2500, (int) $subordinate->balance);
     }
 
     private function controller(): UserController

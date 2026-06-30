@@ -304,6 +304,12 @@ class OrderService
     public function setInvite(User $user): void
     {
         $order = $this->order;
+        if (app(AgentCommerceContextResolver::class)->resolveUser($user) !== null) {
+            $order->invite_user_id = null;
+            $order->commission_balance = 0;
+            return;
+        }
+
         if ($user->invite_user_id && ($order->total_amount <= 0))
             return;
         $order->invite_user_id = $user->invite_user_id;
