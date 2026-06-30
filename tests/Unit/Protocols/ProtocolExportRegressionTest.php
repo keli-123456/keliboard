@@ -15,10 +15,13 @@ use App\Protocols\Stash;
 use App\Protocols\SingBox;
 use App\Protocols\Surfboard;
 use App\Protocols\Surge;
+use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
 
 final class ProtocolExportRegressionTest extends TestCase
 {
+    use InteractsWithInMemoryDatabase;
+
     public function test_quantumultx_build_vless_reality_exports_required_fields(): void
     {
         $server = [
@@ -761,6 +764,10 @@ final class ProtocolExportRegressionTest extends TestCase
                     'type' => 'salamander',
                     'password' => 'mask-pass',
                 ],
+                'bandwidth' => [
+                    'up' => 120,
+                    'down' => 240,
+                ],
                 'hop_interval' => 30,
             ],
             'ports' => '30000-30100',
@@ -782,6 +789,8 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertStringContainsString('sni=sr-hy-sni.example.com', $hysteria);
         $this->assertStringContainsString('obfs=salamander', $hysteria);
         $this->assertStringContainsString('obfs-password=mask-pass', $hysteria);
+        $this->assertStringContainsString('upmbps=120', $hysteria);
+        $this->assertStringContainsString('downmbps=240', $hysteria);
         $this->assertStringNotContainsString('peer=', $hysteria);
         $this->assertStringNotContainsString('keepalive=', $hysteria);
         $this->assertStringContainsString('anytls://secret@sr-anytls.example.com:9443', $anytls);
@@ -808,6 +817,43 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertStringContainsString('hysteria2://secret@sr-hy.example.com:8443/', $hysteria);
         $this->assertStringNotContainsString('mport=', $hysteria);
         $this->assertStringContainsString('sni=sr-hy-sni.example.com', $hysteria);
+    }
+
+    public function test_shadowrocket_handle_exports_hysteria2_port_hopping(): void
+    {
+        $this->bindJsonResponseFactory();
+
+        $protocol = new Shadowrocket([
+            'u' => 0,
+            'd' => 0,
+            'transfer_enable' => 1073741824,
+            'expired_at' => 1893456000,
+        ], [[
+            'type' => Server::TYPE_HYSTERIA,
+            'name' => 'SR Hy2 Hop',
+            'host' => 'sr-hy-hop.example.com',
+            'port' => 8443,
+            'password' => 'secret',
+            'protocol_settings' => [
+                'version' => 2,
+                'tls' => [
+                    'server_name' => 'sr-hy-hop-sni.example.com',
+                    'allow_insecure' => true,
+                ],
+                'bandwidth' => [
+                    'up' => 120,
+                    'down' => 240,
+                ],
+            ],
+            'ports' => '30000-30100',
+        ]], 'shadowrocket', '2698');
+
+        $content = base64_decode((string) $protocol->handle()->getContent(), true) ?: '';
+
+        $this->assertStringContainsString('hysteria2://secret@sr-hy-hop.example.com:30000/', $content);
+        $this->assertStringContainsString('mport=30000-30100', $content);
+        $this->assertStringContainsString('upmbps=120', $content);
+        $this->assertStringContainsString('downmbps=240', $content);
     }
 
     public function test_shadowrocket_build_naive_exports_https_uri(): void

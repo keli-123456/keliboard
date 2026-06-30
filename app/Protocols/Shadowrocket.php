@@ -54,7 +54,7 @@ class Shadowrocket extends AbstractProtocol
                 $uri .= self::buildTrojan($item['password'], $item);
             }
             if ($item['type'] === Server::TYPE_HYSTERIA) {
-                $uri .= self::buildHysteria($item['password'], $item, false);
+                $uri .= self::buildHysteria($item['password'], $item);
             }
             if ($item['type'] === Server::TYPE_TUIC) {
                 $uri .= self::buildTuic($item['password'], $item);
@@ -307,6 +307,14 @@ class Shadowrocket extends AbstractProtocol
                 $params = [
                     "fastopen" => 1
                 ];
+                $upMbps = data_get($protocol_settings, 'bandwidth.up');
+                if ($upMbps !== null && $upMbps !== '') {
+                    $params['upmbps'] = $upMbps;
+                }
+                $downMbps = data_get($protocol_settings, 'bandwidth.down');
+                if ($downMbps !== null && $downMbps !== '') {
+                    $params['downmbps'] = $downMbps;
+                }
                 if ($serverName = data_get($protocol_settings, 'tls.server_name')) {
                     $params['sni'] = $serverName;
                 }
