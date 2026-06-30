@@ -90,10 +90,14 @@ class StatController extends Controller
             ->first();
 
         $data = [
-            'month_income' => $this->platformIncome(strtotime(date('Y-m-1')), $now),
-            'month_register_total' => User::where('created_at', '>=', strtotime(date('Y-m-1')))
+            'month_income' => $this->platformIncome($monthStart, $now),
+            'month_register_total' => User::where('created_at', '>=', $monthStart)
                 ->where('created_at', '<', $now)
                 ->count(),
+            'day_register_total' => User::where('created_at', '>=', $todayStart)
+                ->where('created_at', '<', $now)
+                ->count(),
+            'new_users_by_site' => $this->buildNewUsersBySite($todayStart, $monthStart, $now),
             'ticket_pending_total' => Ticket::where('status', 0)
                 ->count(),
             'commission_pending_total' => Order::where('commission_status', 0)
@@ -104,14 +108,14 @@ class StatController extends Controller
             'day_income' => $this->platformIncome(strtotime(date('Y-m-d')), $now),
             'today_income_by_site' => $this->buildTodayIncomeBySite($todayStart, $now),
             'last_month_income' => $this->platformIncome(
-                strtotime('-1 month', strtotime(date('Y-m-1'))),
-                strtotime(date('Y-m-1'))
+                strtotime('-1 month', $monthStart),
+                $monthStart
             ),
-            'commission_month_payout' => CommissionLog::where('created_at', '>=', strtotime(date('Y-m-1')))
+            'commission_month_payout' => CommissionLog::where('created_at', '>=', $monthStart)
                 ->where('created_at', '<', $now)
                 ->sum('get_amount'),
-            'commission_last_month_payout' => CommissionLog::where('created_at', '>=', strtotime('-1 month', strtotime(date('Y-m-1'))))
-                ->where('created_at', '<', strtotime(date('Y-m-1')))
+            'commission_last_month_payout' => CommissionLog::where('created_at', '>=', strtotime('-1 month', $monthStart))
+                ->where('created_at', '<', $monthStart)
                 ->sum('get_amount'),
             // 新增统计数据
             'online_nodes' => $onlineNodes,
@@ -140,6 +144,8 @@ class StatController extends Controller
         return array_merge($data, [
             'currentMonthIncome' => $data['month_income'],
             'currentMonthNewUsers' => $data['month_register_total'],
+            'todayNewUsers' => $data['day_register_total'],
+            'newUsersBySite' => $data['new_users_by_site'],
             'ticketPendingTotal' => $data['ticket_pending_total'],
             'commissionPendingTotal' => $data['commission_pending_total'],
             'todayIncome' => $data['day_income'],
@@ -455,6 +461,12 @@ class StatController extends Controller
             ->where('created_at', '<', $now)
             ->count();
 
+        // Today's new users
+        $todayNewUsers = User::where('created_at', '>=', $todayStart)
+            ->where('created_at', '<', $now)
+            ->count();
+        $newUsersBySite = $this->buildNewUsersBySite($todayStart, $currentMonthStart, $now);
+
         // Total users
         $totalUsers = User::count();
 
@@ -510,6 +522,8 @@ class StatController extends Controller
 
             // 用户相关
             'currentMonthNewUsers' => $currentMonthNewUsers,
+            'todayNewUsers' => $todayNewUsers,
+            'newUsersBySite' => $newUsersBySite,
             'totalUsers' => $totalUsers,
             'activeUsers' => $activeUsers,
             'userGrowth' => $userGrowth,
@@ -592,6 +606,65 @@ class StatController extends Controller
         usort($items, static function (array $a, array $b): int {
             return ($b['income'] <=> $a['income'])
                 ?: ($b['order_count'] <=> $a['order_count'])
+                ?: strcmp((string) $a['site_name'], (string) $b['site_name']);
+        });
+
+        return $items;
+    }
+
+    private function buildNewUsersBySite(int $todayStart, int $monthStart, int $endAt): array
+    {
+        $userRows = User::query()
+            ->selectRaw('site_id, SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) as today_count, COUNT(*) as month_count', [$todayStart])
+            ->where('created_at', '>=', $monthStart)
+            ->where('created_at', '<', $endAt)
+            ->groupBy('site_id')
+            ->get();
+
+        $usersBySiteId = $userRows->keyBy(fn ($row): string => (string) ($row->site_id ?? 'platform'));
+        $siteIds = $userRows
+            ->pluck('site_id')
+            ->filter(fn ($siteId): bool => $siteId !== null)
+            ->map(fn ($siteId): int => (int) $siteId)
+            ->values()
+            ->all();
+
+        $sites = Site::query()
+            ->where(function ($query) use ($siteIds): void {
+                $query->where('status', Site::STATUS_ACTIVE);
+
+                if ($siteIds) {
+                    $query->orWhereIn('id', $siteIds);
+                }
+            })
+            ->orderBy('id')
+            ->get()
+            ->keyBy('id');
+
+        $items = [];
+        foreach ($sites as $site) {
+            $row = $usersBySiteId->get((string) $site->id);
+            $items[] = [
+                'site_id' => (int) $site->id,
+                'site_code' => (string) $site->code,
+                'site_name' => (string) $site->name,
+                'today_count' => (int) ($row->today_count ?? 0),
+                'month_count' => (int) ($row->month_count ?? 0),
+            ];
+        }
+
+        $platformRow = $usersBySiteId->get('platform');
+        $items[] = [
+            'site_id' => null,
+            'site_code' => 'platform',
+            'site_name' => '主站',
+            'today_count' => (int) ($platformRow->today_count ?? 0),
+            'month_count' => (int) ($platformRow->month_count ?? 0),
+        ];
+
+        usort($items, static function (array $a, array $b): int {
+            return ($b['month_count'] <=> $a['month_count'])
+                ?: ($b['today_count'] <=> $a['today_count'])
                 ?: strcmp((string) $a['site_name'], (string) $b['site_name']);
         });
 

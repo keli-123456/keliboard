@@ -8,6 +8,7 @@ use App\Http\Controllers\V2\Admin\StatController;
 use App\Models\AgentOrderContext;
 use App\Models\Order;
 use App\Models\Site;
+use App\Models\User;
 use App\Services\StatisticalService;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
@@ -23,6 +24,7 @@ final class AdminDashboardSiteIncomeTest extends TestCase
         $this->setUpInMemoryDatabase();
         app()->instance('db.schema', $this->database->getConnection()->getSchemaBuilder());
         $this->createSiteTenantTables();
+        $this->createUserTable();
         $this->createOrderTable();
         $this->createAgentCommerceTables();
     }
@@ -110,6 +112,79 @@ final class AdminDashboardSiteIncomeTest extends TestCase
         );
     }
 
+    public function test_new_user_breakdown_groups_daily_and_monthly_users_by_site_and_platform(): void
+    {
+        $monthStart = strtotime('2026-06-01 00:00:00');
+        $todayStart = strtotime('2026-06-24 00:00:00');
+        $now = $todayStart + 3600;
+
+        $miaosu = Site::query()->create([
+            'code' => 'miaosu',
+            'name' => '秒速云',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+            'created_at' => $monthStart,
+            'updated_at' => $monthStart,
+        ]);
+        $lion = Site::query()->create([
+            'code' => 'lion',
+            'name' => 'LionCloud',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+            'created_at' => $monthStart,
+            'updated_at' => $monthStart,
+        ]);
+        $idle = Site::query()->create([
+            'code' => 'idle',
+            'name' => '零新增站',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+            'created_at' => $monthStart,
+            'updated_at' => $monthStart,
+        ]);
+
+        $this->createDashboardUser('platform-today@example.test', null, $todayStart + 10);
+        $this->createDashboardUser('miaosu-today@example.test', $miaosu->id, $todayStart + 20);
+        $this->createDashboardUser('miaosu-month@example.test', $miaosu->id, $monthStart + 30);
+        $this->createDashboardUser('lion-month@example.test', $lion->id, $monthStart + 40);
+        $this->createDashboardUser('ignored-last-month@example.test', $miaosu->id, $monthStart - 10);
+
+        $method = new \ReflectionMethod(StatController::class, 'buildNewUsersBySite');
+        $method->setAccessible(true);
+
+        $breakdown = $method->invoke(new StatController(new StatisticalService()), $todayStart, $monthStart, $now);
+
+        $this->assertSame([
+            [
+                'site_id' => $miaosu->id,
+                'site_code' => 'miaosu',
+                'site_name' => '秒速云',
+                'today_count' => 1,
+                'month_count' => 2,
+            ],
+            [
+                'site_id' => null,
+                'site_code' => 'platform',
+                'site_name' => '主站',
+                'today_count' => 1,
+                'month_count' => 1,
+            ],
+            [
+                'site_id' => $lion->id,
+                'site_code' => 'lion',
+                'site_name' => 'LionCloud',
+                'today_count' => 0,
+                'month_count' => 1,
+            ],
+            [
+                'site_id' => $idle->id,
+                'site_code' => 'idle',
+                'site_name' => '零新增站',
+                'today_count' => 0,
+                'month_count' => 0,
+            ],
+        ], $breakdown);
+    }
     private function createOrder(string $tradeNo, ?int $siteId, int $amount, int $status, int $createdAt): Order
     {
         return Order::query()->create([
@@ -125,6 +200,19 @@ final class AdminDashboardSiteIncomeTest extends TestCase
             'status' => $status,
             'commission_status' => Order::COMMISSION_STATUS_PENDING,
             'commission_balance' => 0,
+            'created_at' => $createdAt,
+            'updated_at' => $createdAt,
+        ]);
+    }
+
+    private function createDashboardUser(string $email, ?int $siteId, int $createdAt): User
+    {
+        return User::query()->create([
+            'site_id' => $siteId,
+            'email' => $email,
+            'password' => 'secret',
+            'token' => sha1($email),
+            'uuid' => sha1('uuid-' . $email),
             'created_at' => $createdAt,
             'updated_at' => $createdAt,
         ]);
