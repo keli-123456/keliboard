@@ -59,6 +59,18 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertStringContainsString('--machine-id ' . $machine->id, $command);
         $this->assertStringContainsString("--machine-token 'tok'\"'\"'en'", $command);
         $this->assertStringContainsString("--machine-name 'edge '\"'\"'hk'", $command);
+        $commands = collect($payload['data']['install_commands'] ?? [])->keyBy('agent');
+        $this->assertSame(['kelinode', 'kelinode-rs'], $commands->keys()->all());
+        $this->assertTrue((bool) $commands['kelinode']['is_default']);
+        $this->assertFalse((bool) $commands['kelinode-rs']['is_default']);
+        $this->assertStringStartsWith(
+            "curl -fsSL 'https://raw.githubusercontent.com/keli-123456/kelinode/main/script/install.sh'",
+            $commands['kelinode']['command']
+        );
+        $this->assertStringStartsWith(
+            "curl -fsSL 'https://raw.githubusercontent.com/keli-123456/kelinode-rs/main/script/install.sh'",
+            $commands['kelinode-rs']['command']
+        );
         $this->assertArrayNotHasKey('native_command', $payload['data']);
         $this->assertArrayNotHasKey('native_config', $payload['data']);
     }
@@ -121,6 +133,11 @@ final class MachineControllerInstallCommandTest extends TestCase
         );
         $this->assertStringContainsString('machine:', $legacyConfig);
         $this->assertStringNotContainsString('kernel:', $legacyConfig);
+        $commands = collect($payload['data']['install_commands'] ?? [])->keyBy('agent');
+        $this->assertFalse((bool) $commands['kelinode']['is_default']);
+        $this->assertTrue((bool) $commands['kelinode-rs']['is_default']);
+        $this->assertSame($legacyCommand, $commands['kelinode']['command']);
+        $this->assertSame($nativeCommand, $commands['kelinode-rs']['command']);
     }
 
     public function test_install_command_uses_panel_distribution_source_setting(): void

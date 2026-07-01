@@ -499,17 +499,18 @@ class MachineController extends Controller
         $nativeEnabled = $defaultAgent === 'kelinode-rs';
         $legacyConfig = $this->buildMachineConfig($baseURL, $machine);
         $legacyCommand = $this->buildInstallCommand($baseURL, $machine);
-        $nativeConfig = $nativeEnabled ? $this->buildNativeInstallConfig($baseURL, $machine) : null;
-        $nativeCommand = $nativeEnabled ? $this->buildNativeInstallCommand($baseURL, $machine) : null;
+        $nativeConfig = $this->buildNativeInstallConfig($baseURL, $machine);
+        $nativeCommand = $this->buildNativeInstallCommand($baseURL, $machine);
 
         $data = [
             'machine_id' => (int) $machine->id,
             'token' => $machine->token,
-            'config' => $nativeConfig ?: $legacyConfig,
-            'command' => $nativeCommand ?: $legacyCommand,
+            'config' => $nativeEnabled ? $nativeConfig : $legacyConfig,
+            'command' => $nativeEnabled ? $nativeCommand : $legacyCommand,
             'default_agent' => $defaultAgent,
             'distribution_source' => $this->releaseDistribution()->source(),
             'native_enabled' => $nativeEnabled,
+            'install_commands' => $this->buildInstallCommandOptions($legacyCommand, $nativeCommand, $defaultAgent),
         ];
 
         if ($nativeEnabled) {
@@ -626,6 +627,25 @@ class MachineController extends Controller
         ])->save();
 
         return $this->success($this->withOnlineStatus($machine->fresh() ?: $machine));
+    }
+
+    private function buildInstallCommandOptions(string $legacyCommand, string $nativeCommand, string $defaultAgent): array
+    {
+        return [
+            [
+                'agent' => 'kelinode',
+                'label' => 'kelinode',
+                'command' => $legacyCommand,
+                'is_default' => $defaultAgent === 'kelinode',
+            ],
+            [
+                'agent' => 'kelinode-rs',
+                'label' => 'kelinode-rs',
+                'command' => $nativeCommand,
+                'is_default' => $defaultAgent === 'kelinode-rs',
+                'version' => self::NATIVE_NODE_INSTALL_VERSION,
+            ],
+        ];
     }
 
     private function buildInstallCommand(string $baseURL, ServerMachine $machine): string
