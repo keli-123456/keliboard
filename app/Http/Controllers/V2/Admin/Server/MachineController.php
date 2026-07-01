@@ -650,52 +650,47 @@ class MachineController extends Controller
 
     private function buildInstallCommand(string $baseURL, ServerMachine $machine): string
     {
-        $scriptURL = 'https://raw.githubusercontent.com/keli-123456/kelinode/main/script/install.sh';
-        return implode(' ', [
-            'curl -fsSL',
-            $this->shellQuote($scriptURL),
-            '-o /tmp/v2node-install.sh',
-            '&& bash /tmp/v2node-install.sh',
-            '--machine-url',
-            $this->shellQuote($baseURL),
-            '--machine-id',
-            (string) ((int) $machine->id),
-            '--machine-token',
-            $this->shellQuote((string) $machine->token),
-            '--machine-name',
-            $this->shellQuote($machine->name ?: ('machine-' . $machine->id)),
-        ]);
+        return $this->buildPanelInstallScript($baseURL, $machine, 'kelinode');
     }
 
     private function buildNativeInstallCommand(string $baseURL, ServerMachine $machine): string
     {
-        $distribution = $this->releaseDistribution();
-        $scriptURL = $distribution->installScriptUrl($baseURL);
-        $parts = [
-            'curl -fsSL',
-            $this->shellQuote($scriptURL),
-            '-o /tmp/keli-native-node-install.sh',
-            '&& bash /tmp/keli-native-node-install.sh',
-        ];
-
-        $releaseBaseUrl = $distribution->releaseBaseUrl($baseURL);
-        if ($releaseBaseUrl !== '') {
-            $parts[] = '--release-base-url';
-            $parts[] = $this->shellQuote($releaseBaseUrl);
-        }
-
-        return implode(' ', array_merge($parts, [
-            '--machine-url',
-            $this->shellQuote($baseURL),
-            '--machine-id',
-            (string) ((int) $machine->id),
-            '--machine-token',
-            $this->shellQuote((string) $machine->token),
-            '--machine-name',
-            $this->shellQuote($machine->name ?: ('machine-' . $machine->id)),
-        ]));
+        return $this->buildPanelInstallScript($baseURL, $machine, 'kelinode-rs');
     }
 
+    private function buildPanelInstallScript(string $baseURL, ServerMachine $machine, string $agent): string
+    {
+        $template = (string) file_get_contents($this->panelInstallScriptTemplatePath());
+        $distribution = $this->releaseDistribution();
+        $machineName = $machine->name ?: ('machine-' . $machine->id);
+
+        return strtr($template, [
+            '{{AGENT_TYPE}}' => $this->bashString($agent),
+            '{{MACHINE_URL}}' => $this->bashString($baseURL),
+            '{{MACHINE_ID}}' => $this->bashString((string) ((int) $machine->id)),
+            '{{MACHINE_TOKEN}}' => $this->bashString((string) $machine->token),
+            '{{MACHINE_NAME}}' => $this->bashString($machineName),
+            '{{KELINODE_INSTALL_SCRIPT_URL}}' => $this->bashString('https://raw.githubusercontent.com/keli-123456/kelinode/main/script/install.sh'),
+            '{{KELINODE_RS_INSTALL_SCRIPT_URL}}' => $this->bashString($distribution->installScriptUrl($baseURL)),
+            '{{KELINODE_RS_RELEASE_BASE_URL}}' => $this->bashString($distribution->releaseBaseUrl($baseURL)),
+        ]);
+    }
+
+    private function panelInstallScriptTemplatePath(): string
+    {
+        return dirname(__DIR__, 6) . DIRECTORY_SEPARATOR . 'resources' . DIRECTORY_SEPARATOR . 'server-machine' . DIRECTORY_SEPARATOR . 'install-script.sh';
+    }
+
+    private function bashString(string $value): string
+    {
+        $escaped = str_replace(
+            ["\\", '"', '$', '`', "\r", "\n"],
+            ["\\\\", '\\"', '\\$', '\\`', '', ''],
+            $value
+        );
+
+        return '"' . $escaped . '"';
+    }
     private function buildNativeUninstallCommand(string $baseURL): string
     {
         $scriptURL = $this->releaseDistribution()->installScriptUrl($baseURL);
