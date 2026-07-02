@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Exceptions\ApiException;
 use App\Models\AgentBalanceHold;
+use App\Models\AgentDomain;
 use App\Models\AgentLedger;
 use App\Models\AgentOrderContext;
 use App\Models\AgentProfile;
@@ -408,6 +409,34 @@ class AgentCommerceService
         if ($payment->owner_domain_id !== null && (int) $payment->owner_domain_id !== (int) $context->agent_domain_id) {
             throw new ApiException('This payment method is unavailable.');
         }
+    }
+
+    public function paymentReturnBaseUrlForOrder(Order $order, Payment $payment, Request $request): ?string
+    {
+        $context = $this->contextForOrder($order);
+        if (!$context || $payment->owner_type !== Payment::OWNER_AGENT || $payment->owner_domain_id === null) {
+            return null;
+        }
+
+        if ((int) $payment->owner_domain_id !== (int) $context->agent_domain_id) {
+            return null;
+        }
+
+        $domain = AgentDomain::query()
+            ->whereKey((int) $payment->owner_domain_id)
+            ->where('agent_user_id', (int) $context->agent_user_id)
+            ->where('status', AgentDomain::STATUS_ACTIVE)
+            ->value('domain');
+        if (!$domain) {
+            return null;
+        }
+
+        $scheme = strtolower(trim(explode(',', (string) ($request->headers->get('X-Forwarded-Proto') ?: $request->getScheme()))[0]));
+        if (!in_array($scheme, ['http', 'https'], true)) {
+            $scheme = 'https';
+        }
+
+        return $scheme . '://' . $domain;
     }
 
     public function assignPaymentForCheckout(Order $order, Payment $payment, ?int $handlingAmount): Order

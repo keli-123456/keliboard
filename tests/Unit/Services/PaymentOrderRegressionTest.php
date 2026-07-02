@@ -24,8 +24,42 @@ final class PaymentOrderRegressionTest extends TestCase
         $this->bindSynchronousBusDispatcher();
         $this->createUserTable();
         $this->createOrderTable();
+        $this->bindTestUrlGenerator('https://panel.example.test');
     }
 
+    public function test_payment_return_url_can_use_explicit_base_url(): void
+    {
+        $service = new class extends PaymentService {
+            public function __construct()
+            {
+                $this->method = 'FAKEPAY';
+                $this->config = [
+                    'uuid' => 'agent001',
+                    'enable' => true,
+                    'notify_domain' => '',
+                ];
+                $this->payment = new class {
+                    public function pay(array $payload): array
+                    {
+                        return ['type' => 0, 'data' => $payload];
+                    }
+                };
+            }
+        };
+
+        $result = $service->pay([
+            'trade_no' => 'trade-agent-domain',
+            'total_amount' => 1000,
+            'user_id' => 1,
+            'stripe_token' => null,
+            'return_base_url' => 'https://pay.agent.example.test',
+        ]);
+
+        $this->assertSame(
+            'https://pay.agent.example.test/#/pay-success?trade_no=trade-agent-domain',
+            $result['data']['return_url']
+        );
+    }
     public function test_payment_notify_amount_mismatch_does_not_complete_order(): void
     {
         $user = $this->createUser(balance: 0);

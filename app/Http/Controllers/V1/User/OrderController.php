@@ -231,6 +231,7 @@ class OrderController extends Controller
         try {
             app(SiteCommerceService::class)->assertPaymentAvailableForOrder($order, $payment);
             $order = $agentCommerce->assignPaymentForCheckout($order, $payment, $handlingAmount);
+            $returnBaseUrl = $agentCommerce->paymentReturnBaseUrlForOrder($order, $payment, $request);
         } catch (ApiException $exception) {
             return $this->fail([400, $exception->getMessage()]);
         }
@@ -240,7 +241,8 @@ class OrderController extends Controller
                 'trade_no' => $tradeNo,
                 'total_amount' => isset($order->handling_amount) ? ($order->total_amount + $order->handling_amount) : $order->total_amount,
                 'user_id' => $order->user_id,
-                'stripe_token' => $request->input('token')
+                'stripe_token' => $request->input('token'),
+                'return_base_url' => $returnBaseUrl
             ]);
         } catch (\Throwable $exception) {
             Log::warning('Payment checkout request failed', [

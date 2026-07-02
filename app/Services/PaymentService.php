@@ -87,12 +87,23 @@ class PaymentService
 
         return $this->payment->pay([
             'notify_url' => $notifyUrl,
-            'return_url' => source_base_url('/#/pay-success?trade_no=' . rawurlencode((string) $order['trade_no'])),
+            'return_url' => $this->returnUrl($order),
             'trade_no' => $order['trade_no'],
             'total_amount' => $order['total_amount'],
             'user_id' => $order['user_id'],
             'stripe_token' => $order['stripe_token']
         ]);
+    }
+
+    private function returnUrl(array $order): string
+    {
+        $path = '/#/pay-success?trade_no=' . rawurlencode((string) $order['trade_no']);
+        $baseUrl = trim((string) ($order['return_base_url'] ?? ''));
+        if ($baseUrl !== '') {
+            return rtrim($baseUrl, '/') . $path;
+        }
+
+        return source_base_url($path);
     }
 
     public function form()
