@@ -68,6 +68,46 @@ final class UserGiftCardControllerTest extends TestCase
         $this->assertSame(777, $payload['data']['reward_preview']['raw']['balance']);
     }
 
+    public function test_multi_use_gift_card_code_is_used_only_after_reaching_limit(): void
+    {
+        $firstUser = $this->createUser('first-multi@example.test');
+        $secondUser = $this->createUser('second-multi@example.test');
+        $code = $this->createGiftCardCode(['max_usage' => 2]);
+
+        $this->assertTrue($code->markAsUsed($firstUser));
+        $afterFirstUse = $code->fresh();
+        $this->assertSame(1, (int) $afterFirstUse->usage_count);
+        $this->assertSame(GiftCardCode::STATUS_UNUSED, (int) $afterFirstUse->status);
+        $this->assertTrue($afterFirstUse->isAvailable());
+
+        $this->assertTrue($afterFirstUse->markAsUsed($secondUser));
+        $afterSecondUse = $afterFirstUse->fresh();
+        $this->assertSame(2, (int) $afterSecondUse->usage_count);
+        $this->assertSame(GiftCardCode::STATUS_USED, (int) $afterSecondUse->status);
+        $this->assertFalse($afterSecondUse->isAvailable());
+    }
+
+    public function test_unlimited_gift_card_code_remains_available_after_redemptions(): void
+    {
+        $firstUser = $this->createUser('first@example.test');
+        $secondUser = $this->createUser('second@example.test');
+        $code = $this->createGiftCardCode(['max_usage' => 0]);
+
+        $this->assertTrue($code->isAvailable());
+        $this->assertTrue($code->markAsUsed($firstUser));
+
+        $afterFirstUse = $code->fresh();
+        $this->assertSame(1, (int) $afterFirstUse->usage_count);
+        $this->assertSame(GiftCardCode::STATUS_UNUSED, (int) $afterFirstUse->status);
+        $this->assertTrue($afterFirstUse->isAvailable());
+        $this->assertTrue($afterFirstUse->markAsUsed($secondUser));
+
+        $afterSecondUse = $afterFirstUse->fresh();
+        $this->assertSame(2, (int) $afterSecondUse->usage_count);
+        $this->assertSame(GiftCardCode::STATUS_UNUSED, (int) $afterSecondUse->status);
+        $this->assertTrue($afterSecondUse->isAvailable());
+    }
+
     private function checkRequest(User $user, string $code): GiftCardCheckRequest
     {
         $request = GiftCardCheckRequest::create('/api/v1/user/gift-card/check', 'POST', [
@@ -105,6 +145,9 @@ final class UserGiftCardControllerTest extends TestCase
             'updated_at' => time(),
         ], $scope));
 
+        $codeOverrides = $overrides;
+        unset($codeOverrides['rewards']);
+
         return GiftCardCode::query()->create(array_merge([
             'template_id' => $template->id,
             'code' => 'GC' . strtoupper(substr(md5((string) microtime(true)), 0, 12)),
@@ -113,7 +156,7 @@ final class UserGiftCardControllerTest extends TestCase
             'max_usage' => 1,
             'created_at' => time(),
             'updated_at' => time(),
-        ], $scope));
+        ], $scope, $codeOverrides));
     }
 
     private function createUser(string $email, array $overrides = []): User

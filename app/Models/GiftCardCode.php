@@ -126,8 +126,9 @@ class GiftCardCode extends Model
             return false;
         }
 
-        // 检查使用次数
-        if ($this->usage_count >= $this->max_usage) {
+        // max_usage <= 0 means unlimited redemptions.
+        $maxUsage = (int) $this->max_usage;
+        if ($maxUsage > 0 && (int) $this->usage_count >= $maxUsage) {
             return false;
         }
 
@@ -147,10 +148,14 @@ class GiftCardCode extends Model
      */
     public function markAsUsed(User $user): bool
     {
-        $this->status = self::STATUS_USED;
         $this->user_id = $user->id;
         $this->used_at = time();
         $this->usage_count += 1;
+
+        $maxUsage = (int) $this->max_usage;
+        $this->status = $maxUsage > 0 && (int) $this->usage_count >= $maxUsage
+            ? self::STATUS_USED
+            : self::STATUS_UNUSED;
 
         return $this->save();
     }
@@ -194,7 +199,7 @@ class GiftCardCode extends Model
         $batchId = uniqid('batch_');
         $prefix = $options['prefix'] ?? 'GC';
         $expiresAt = $options['expires_at'] ?? null;
-        $maxUsage = $options['max_usage'] ?? 1;
+        $maxUsage = max(0, (int) ($options['max_usage'] ?? 1));
         $template = GiftCardTemplate::query()->find($templateId);
         $scope = array_merge([
             'scope_type' => GiftCardTemplate::SCOPE_GLOBAL,
