@@ -1087,13 +1087,24 @@ class Plugin extends AbstractPlugin
         if (!empty($meta['user_agent'])) {
             $lines[] = '客户端UA：' . (string) $meta['user_agent'];
         }
-
-        $appUrl = trim((string) ($notificationContext['app_url'] ?? admin_setting('app_url', '')));
-        if ($appUrl !== '') {
-            $lines[] = '面板地址：' . $appUrl;
+        $siteSource = $this->buildNotificationSiteSourceText($notificationContext);
+        if ($siteSource !== '') {
+            $lines[] = $siteSource;
         }
 
         return implode("\n", $lines);
+    }
+
+    private function buildNotificationSiteSourceText(array $notificationContext = []): string
+    {
+        $appName = trim((string) ($notificationContext['app_name'] ?? admin_setting('app_name', '')));
+        $brandSource = strtolower(trim((string) ($notificationContext['brand_source'] ?? 'main')));
+        $sourceLabel = match ($brandSource) {
+            'agent' => '代理站点',
+            'site' => '分站',
+            default => '主站',
+        };
+        return '站点来源：' . ($appName !== '' ? "{$appName}（{$sourceLabel}）" : $sourceLabel);
     }
 
     private function buildTelegramMessage(string $code, string $reason, array $meta = [], array $notificationContext = []): string
@@ -1124,10 +1135,9 @@ class Plugin extends AbstractPlugin
         if (!empty($meta['client_ip'])) {
             $lines[] = '来源IP：' . (string) $meta['client_ip'];
         }
-
-        $appUrl = trim((string) ($notificationContext['app_url'] ?? admin_setting('app_url', '')));
-        if ($appUrl !== '') {
-            $lines[] = '面板地址：' . $appUrl;
+        $siteSource = $this->buildNotificationSiteSourceText($notificationContext);
+        if ($siteSource !== '') {
+            $lines[] = $siteSource;
         }
 
         return implode("\n", $lines);

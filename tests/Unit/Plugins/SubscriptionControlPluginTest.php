@@ -648,9 +648,14 @@ final class SubscriptionControlPluginTest extends TestCase
         $this->assertSame('[代理云] 订阅风控提醒', $emailParams['subject']);
         $this->assertSame('代理云', $emailParams['template_value']['name']);
         $this->assertSame('https://agent.example.test', $emailParams['template_value']['url']);
+        $this->assertStringContainsString('站点来源：代理云（代理站点）', $emailParams['template_value']['content']);
+        $this->assertStringNotContainsString('面板地址', $emailParams['template_value']['content']);
+        $this->assertStringNotContainsString('https://agent.example.test', $emailParams['template_value']['content']);
         $this->assertSame($agent->id, $emailParams['dispatch_context']['agent_user_id']);
         $this->assertStringContainsString('[代理云] 订阅风控提醒', $telegramText);
-        $this->assertStringContainsString('https://agent.example.test', $telegramText);
+        $this->assertStringContainsString('站点来源：代理云（代理站点）', $telegramText);
+        $this->assertStringNotContainsString('面板地址', $telegramText);
+        $this->assertStringNotContainsString('https://agent.example.test', $telegramText);
     }
 
     private function createPluginTable(): void
