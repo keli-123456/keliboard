@@ -8,6 +8,7 @@ use App\Models\ServerMachineLoadHistory;
 use App\Services\NodeRealtime\NodeRealtimeSettings;
 use App\Services\ServerMachine\MachineReleaseDistributionService;
 use App\Services\ServerService;
+use App\Services\ServerTlsCertificateService;
 use App\Services\SubscriptionProxy\ZeroSslCertificateService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -122,6 +123,7 @@ class MachineController extends Controller
             'metrics' => is_array(data_get($payload, 'metrics')) ? data_get($payload, 'metrics') : null,
             'agent' => is_array(data_get($payload, 'agent')) ? data_get($payload, 'agent') : null,
             'node_failures' => $this->normalizeNodeFailures(data_get($payload, 'node_failures')),
+            'tls_certificates' => $this->normalizeTlsCertificates(data_get($payload, 'tls_certificates')),
             'updated_at' => now()->timestamp,
         ];
 
@@ -140,6 +142,7 @@ class MachineController extends Controller
         }
 
         $upgradeState = $this->resolveUpgradeState($machine, $status, data_get($payload, 'upgrade'));
+        app(ServerTlsCertificateService::class)->handleMachineStatus($machine, $status);
         $reload = app(ZeroSslCertificateService::class)->handleMachineStatus(
             $machine,
             $status,
@@ -216,6 +219,36 @@ class MachineController extends Controller
                 'error' => $error,
             ];
             if (count($out) >= 50) {
+                break;
+            }
+        }
+
+        return $out;
+    }
+
+    private function normalizeTlsCertificates(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $out = [];
+        foreach (array_values($value) as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $out[] = [
+                'node_id' => $this->statusInt(data_get($item, 'node_id')),
+                'machine_id' => $this->statusInt(data_get($item, 'machine_id')),
+                'tag' => $this->statusString(data_get($item, 'tag'), 128),
+                'protocol' => $this->statusString(data_get($item, 'protocol'), 32),
+                'sni' => $this->statusString(data_get($item, 'sni'), 255),
+                'status' => $this->statusString(data_get($item, 'status'), 32),
+                'sha256_hex' => $this->statusString(data_get($item, 'sha256_hex'), 128),
+            ];
+
+            if (count($out) >= 200) {
                 break;
             }
         }

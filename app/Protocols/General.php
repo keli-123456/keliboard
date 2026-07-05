@@ -3,6 +3,7 @@
 namespace App\Protocols;
 
 use App\Models\Server;
+use App\Services\ServerTlsCertificateResolver;
 use App\Utils\Helper;
 use Illuminate\Support\Arr;
 use App\Support\AbstractProtocol;
@@ -246,6 +247,9 @@ class General extends AbstractProtocol
         }
 
         $params['insecure'] = data_get($protocol_settings, 'tls.allow_insecure');
+        if ($pinnedPeerCertSha256 = app(ServerTlsCertificateResolver::class)->resolvePinnedPeerCertSha256($server)) {
+            $params['pinnedPeerCertSha256'] = $pinnedPeerCertSha256;
+        }
 
         $query = http_build_query($params);
         $name = rawurlencode($server['name']);

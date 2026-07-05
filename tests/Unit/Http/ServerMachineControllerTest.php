@@ -8,6 +8,7 @@ use App\Http\Controllers\V2\Server\MachineController;
 use App\Models\Server;
 use App\Models\ServerMachine;
 use App\Models\ServerMachineLoadHistory;
+use App\Models\ServerTlsCertificate;
 use App\Services\ServerService;
 use App\Support\Setting;
 use Illuminate\Database\Schema\Blueprint;
@@ -462,6 +463,65 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame('native_delta', $history?->load_status['metrics']['native_core_gray_health']['mode'] ?? null);
         $this->assertSame(true, $history?->load_status['mieru_port_forward']['enabled'] ?? null);
         $this->assertSame(51, $history?->load_status['node_failures'][0]['node_id'] ?? null);
+    }
+
+    public function test_status_persists_hy2_tls_certificate_fingerprint(): void
+    {
+        $this->bindSettings([
+            'subscription_proxy_enable' => false,
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $server = $this->createServer([
+            'type' => Server::TYPE_HYSTERIA,
+            'machine_id' => $machine->id,
+            'protocol_settings' => [
+                'version' => 2,
+                'tls' => [
+                    'server_name' => 'hy-sni.example.com',
+                    'allow_insecure' => true,
+                ],
+            ],
+        ]);
+        $hex = str_repeat('d', 64);
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'tls_certificates' => [
+                        [
+                            'node_id' => $server->id,
+                            'machine_id' => $machine->id,
+                            'tag' => 'hysteria2:node-' . $server->id,
+                            'protocol' => 'hysteria2',
+                            'sni' => 'HY-SNI.EXAMPLE.COM',
+                            'status' => 'valid',
+                            'sha256_hex' => strtoupper($hex),
+                        ],
+                    ],
+                ],
+            ]
+        ));
+        $payload = $response->getData(true);
+
+        $this->assertTrue($payload['data']);
+        $record = ServerTlsCertificate::query()->first();
+        $this->assertSame($server->id, $record?->server_id);
+        $this->assertSame($machine->id, $record?->machine_id);
+        $this->assertSame('hysteria2', $record?->protocol);
+        $this->assertSame('hy-sni.example.com', $record?->sni);
+        $this->assertSame('valid', $record?->status);
+        $this->assertSame($hex, $record?->sha256_hex);
+        $this->assertSame(base64_encode(hex2bin($hex)), $record?->sha256_base64);
+        $this->assertSame($server->id, ServerMachine::find($machine->id)?->load_status['tls_certificates'][0]['node_id'] ?? null);
     }
 
     public function test_status_for_reactivated_machine_requests_reload_when_runtime_has_no_nodes(): void
@@ -1284,6 +1344,20 @@ final class ServerMachineControllerTest extends TestCase
             $table->boolean('show')->default(true);
             $table->boolean('enabled')->default(true);
             $table->integer('sort')->nullable();
+            $table->timestamps();
+        });
+
+        Schema::create('v2_server_tls_certificate', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('server_id');
+            $table->unsignedBigInteger('machine_id');
+            $table->string('protocol', 32);
+            $table->string('sni', 255)->default('');
+            $table->string('status', 32)->default('valid');
+            $table->string('sha256_hex', 64)->nullable();
+            $table->string('sha256_base64', 128)->nullable();
+            $table->timestamp('changed_at')->nullable();
+            $table->timestamp('reported_at')->nullable();
             $table->timestamps();
         });
     }
