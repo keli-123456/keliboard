@@ -13,6 +13,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class ManageController extends Controller
 {
@@ -39,6 +40,13 @@ class ManageController extends Controller
     public function getNodes(Request $request)
     {
         $servers = ServerService::getAllServers();
+        $tlsCertificatesByServer = $this->tlsCertificatesByServer(
+            $servers->pluck('id')
+                ->map(fn ($id): int => (int) $id)
+                ->filter(fn (int $id): bool => $id > 0)
+                ->values()
+                ->all()
+        );
         $groupIds = $servers
             ->flatMap(fn (Server $server): array => (array) ($server->group_ids ?? []))
             ->map(fn ($id): int => (int) $id)
@@ -58,17 +66,63 @@ class ManageController extends Controller
             ? collect()
             : Server::whereIn('id', $parentIds)->get()->keyBy('id');
 
-        $servers = $servers->map(function (Server $item) use ($groups, $parents) {
+        $servers = $servers->map(function (Server $item) use ($groups, $parents, $tlsCertificatesByServer) {
             $item['groups'] = collect((array) ($item->group_ids ?? []))
                 ->map(fn ($id) => $groups->get((int) $id))
                 ->filter()
                 ->values();
             $item['parent'] = $item->parent_id ? $parents->get((int) $item->parent_id) : null;
+            $item['tls_certificates'] = $tlsCertificatesByServer[(int) $item->id] ?? [];
             return $item;
         });
         return $this->success($servers);
     }
 
+    private function tlsCertificatesByServer(array $serverIds): array
+    {
+        $serverIds = array_values(array_unique(array_filter($serverIds, fn (int $id): bool => $id > 0)));
+        if (empty($serverIds)) {
+            return [];
+        }
+
+        try {
+            if (!Schema::hasTable('v2_server_tls_certificate')) {
+                return [];
+            }
+        } catch (\Throwable) {
+            return [];
+        }
+
+        return DB::table('v2_server_tls_certificate')
+            ->select([
+                'server_id',
+                'machine_id',
+                'protocol',
+                'sni',
+                'status',
+                'sha256_base64',
+                'changed_at',
+                'reported_at',
+            ])
+            ->whereIn('server_id', $serverIds)
+            ->orderByDesc('reported_at')
+            ->orderByDesc('id')
+            ->get()
+            ->groupBy(fn ($row): int => (int) $row->server_id)
+            ->map(fn ($rows): array => $rows
+                ->map(fn ($row): array => [
+                    'machine_id' => (int) $row->machine_id,
+                    'protocol' => (string) $row->protocol,
+                    'sni' => (string) $row->sni,
+                    'status' => (string) $row->status,
+                    'sha256_base64' => $row->sha256_base64 !== null ? (string) $row->sha256_base64 : null,
+                    'changed_at' => $row->changed_at !== null ? (string) $row->changed_at : null,
+                    'reported_at' => $row->reported_at !== null ? (string) $row->reported_at : null,
+                ])
+                ->values()
+                ->all())
+            ->all();
+    }
     public function getOptions()
     {
         $version = Server::query()
