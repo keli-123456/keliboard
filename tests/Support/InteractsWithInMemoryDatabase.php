@@ -566,6 +566,7 @@ trait InteractsWithInMemoryDatabase
             $table->integer('handling_amount')->nullable();
             $table->integer('discount_amount')->nullable();
             $table->integer('balance_amount')->nullable();
+            $table->integer('refund_amount')->nullable();
             $table->integer('bonus_amount')->default(0);
             $table->integer('upgrade_quote_id')->nullable();
             $table->integer('upgrade_credit_amount')->nullable();

@@ -223,9 +223,13 @@ final class AdminOrderTenantContextTest extends TestCase
         $this->assertSame([$failedOrder->trade_no], $this->fetchTradeNos([
             ['id' => 'agent_order_issue', 'value' => 'failed'],
         ]));
-        $this->assertSameCanonicalizing([$cancelledOrder->trade_no, $pendingOrder->trade_no], $this->fetchTradeNos([
+        $pendingHoldTradeNos = $this->fetchTradeNos([
             ['id' => 'agent_order_issue', 'value' => 'pending_hold'],
-        ]));
+        ]);
+        $expectedPendingHoldTradeNos = [$cancelledOrder->trade_no, $pendingOrder->trade_no];
+        sort($pendingHoldTradeNos);
+        sort($expectedPendingHoldTradeNos);
+        $this->assertSame($expectedPendingHoldTradeNos, $pendingHoldTradeNos);
         $this->assertSame([$cancelledOrder->trade_no], $this->fetchTradeNos([
             ['id' => 'agent_order_issue', 'value' => 'cancelled_with_hold'],
         ]));

@@ -10,6 +10,7 @@ use App\Models\Site;
 use App\Models\SiteDomain;
 use App\Models\SiteSetting;
 use App\Services\SiteStorefrontService;
+use App\Services\SiteStorefrontHealthService;
 use App\Services\SiteResolver;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -127,6 +128,15 @@ class SiteController extends Controller
         }]);
 
         return $this->success($this->sitePayload($site));
+    }
+
+    public function health(Request $request, SiteStorefrontHealthService $health)
+    {
+        $params = $request->validate([
+            'site_id' => 'required|integer',
+        ]);
+
+        return $this->success($health->check($this->site((int) $params['site_id'])));
     }
 
     public function commerce(Request $request)

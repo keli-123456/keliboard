@@ -301,6 +301,57 @@ final class AgentOperationsServiceTest extends TestCase
         ], $summary);
     }
 
+    public function test_admin_reconciliation_separates_captured_pending_released_and_refunded_amounts(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test', 10000);
+        $this->createAgentOrder($agent, [
+            'trade_no' => 'captured-order',
+            'sale_amount' => 1300,
+            'cost_amount' => 800,
+            'context_status' => AgentOrderContext::STATUS_PAID,
+            'order_status' => Order::STATUS_COMPLETED,
+            'hold_status' => AgentBalanceHold::STATUS_CAPTURED,
+        ]);
+        $this->createAgentOrder($agent, [
+            'trade_no' => 'pending-order',
+            'sale_amount' => 1500,
+            'cost_amount' => 900,
+            'context_status' => AgentOrderContext::STATUS_PENDING,
+            'order_status' => Order::STATUS_PENDING,
+            'hold_status' => AgentBalanceHold::STATUS_PENDING,
+        ]);
+        $this->createAgentOrder($agent, [
+            'trade_no' => 'released-order',
+            'sale_amount' => 1600,
+            'cost_amount' => 1000,
+            'context_status' => AgentOrderContext::STATUS_CANCELLED,
+            'order_status' => Order::STATUS_CANCELLED,
+            'hold_status' => AgentBalanceHold::STATUS_RELEASED,
+        ]);
+        $refunded = $this->createAgentOrder($agent, [
+            'trade_no' => 'refunded-order',
+            'sale_amount' => 2000,
+            'cost_amount' => 1100,
+            'context_status' => AgentOrderContext::STATUS_PAID,
+            'order_status' => Order::STATUS_COMPLETED,
+            'hold_status' => AgentBalanceHold::STATUS_CAPTURED,
+        ]);
+        Order::query()->where('id', $refunded->order_id)->update(['refund_amount' => 500]);
+
+        $reconciliation = app(AgentOperationsService::class)->adminReconciliation();
+
+        $this->assertSame([
+            'context_count' => 4,
+            'paid_sales_total' => 3300,
+            'captured_cost_total' => 1900,
+            'pending_hold_total' => 900,
+            'released_hold_total' => 1000,
+            'refunded_total' => 500,
+            'refunded_order_count' => 1,
+            'abnormal_order_count' => 0,
+        ], $reconciliation);
+    }
+
     private function createActiveAgent(string $email, int $balance): User
     {
         $agent = $this->createUser($email, $balance);

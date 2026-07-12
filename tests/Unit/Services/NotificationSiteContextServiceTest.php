@@ -113,6 +113,28 @@ final class NotificationSiteContextServiceTest extends TestCase
         $this->assertSame('agent', $context['brand_source']);
     }
 
+    public function test_template_and_dispatch_context_expose_the_same_tenant_source_fields(): void
+    {
+        $context = [
+            'app_name' => 'Agent Cloud',
+            'app_url' => 'https://agent.example.test',
+            'support_name' => '',
+            'support_url' => '',
+            'brand_source' => 'agent',
+            'site_id' => 12,
+            'site_domain_id' => 34,
+            'agent_user_id' => 56,
+            'agent_domain_id' => 78,
+            'domain' => 'agent.example.test',
+        ];
+
+        $service = app(NotificationSiteContextService::class);
+        $this->assertSame('agent', $service->templateValues($context)['tenant_source']);
+        $this->assertSame('agent.example.test', $service->templateValues($context)['tenant_domain']);
+        $this->assertSame(12, $service->dispatchContext($context)['tenant_site_id']);
+        $this->assertSame(56, $service->dispatchContext($context)['tenant_agent_id']);
+    }
+
     public function test_ticket_notification_uses_ticket_agent_context(): void
     {
         $site = $this->createSite('second', 'Second Site', 'second.example.test', false);

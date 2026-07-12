@@ -16,6 +16,11 @@ class AgentOperationsController extends Controller
         return $this->success($this->service()->adminSummary());
     }
 
+    public function reconciliation(Request $request)
+    {
+        return $this->success($this->service()->adminReconciliation());
+    }
+
     public function agents(Request $request)
     {
         return $this->success($this->service()->adminAgents($request->all()));

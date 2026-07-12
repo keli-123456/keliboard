@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Exceptions\ApiException;
+use App\Models\AgentBalanceHold;
 use App\Models\AgentDomain;
 use App\Models\AgentOrderContext;
 use App\Models\AgentProfile;
@@ -78,6 +79,64 @@ class AgentOperationsService
                 static fn (array $row): bool => (int) $row['enabled_payment_count'] === 0
             )),
         ];
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    public function adminReconciliation(): array
+    {
+        $totals = [
+            'context_count' => 0,
+            'paid_sales_total' => 0,
+            'captured_cost_total' => 0,
+            'pending_hold_total' => 0,
+            'released_hold_total' => 0,
+            'refunded_total' => 0,
+            'refunded_order_count' => 0,
+            'abnormal_order_count' => 0,
+        ];
+
+        $contexts = AgentOrderContext::query()
+            ->with(['order', 'hold'])
+            ->orderBy('id')
+            ->get();
+
+        foreach ($contexts as $context) {
+            $totals['context_count']++;
+            $resolved = $this->statusResolver->resolve($context);
+            $order = $context->order;
+            $hold = $context->hold;
+
+            if ($context->status === AgentOrderContext::STATUS_PAID) {
+                $totals['paid_sales_total'] += (int) $context->sale_amount;
+            }
+            if ($resolved['capture_status'] === AgentBalanceHold::STATUS_CAPTURED) {
+                $totals['captured_cost_total'] += (int) $context->cost_amount;
+            }
+            if (
+                $hold !== null
+                && $hold->status === AgentBalanceHold::STATUS_PENDING
+                && $order !== null
+                && in_array((int) $order->status, [Order::STATUS_PENDING, Order::STATUS_PROCESSING], true)
+            ) {
+                $totals['pending_hold_total'] += (int) $hold->amount;
+            }
+            if ($resolved['capture_status'] === AgentBalanceHold::STATUS_RELEASED) {
+                $totals['released_hold_total'] += (int) ($hold?->amount ?? $context->cost_amount);
+            }
+
+            $refundAmount = max(0, (int) ($order?->refund_amount ?? 0));
+            if ($refundAmount > 0) {
+                $totals['refunded_total'] += $refundAmount;
+                $totals['refunded_order_count']++;
+            }
+            if (count($resolved['abnormal_flags']) > 0) {
+                $totals['abnormal_order_count']++;
+            }
+        }
+
+        return $totals;
     }
 
     /**

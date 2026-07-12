@@ -74,6 +74,7 @@ class AdminRoute
             ], function ($router) {
                 $router->get('/fetch', [SiteController::class, 'fetch']);
                 $router->post('/save', [SiteController::class, 'save']);
+                $router->get('/health', [SiteController::class, 'health']);
                 $router->get('/commerce', [SiteController::class, 'commerce']);
                 $router->post('/commerce/save', [SiteController::class, 'saveCommerce']);
             });
@@ -292,6 +293,7 @@ class AdminRoute
                 'prefix' => 'agent-operations'
             ], function ($router) {
                 $router->get('/summary', [AgentOperationsController::class, 'summary']);
+                $router->get('/reconciliation', [AgentOperationsController::class, 'reconciliation']);
                 $router->get('/agents', [AgentOperationsController::class, 'agents']);
                 $router->get('/agents/{agentUserId}', [AgentOperationsController::class, 'agent']);
                 $router->get('/agents/{agentUserId}/orders', [AgentOperationsController::class, 'agentOrders']);

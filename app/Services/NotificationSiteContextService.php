@@ -65,6 +65,10 @@ class NotificationSiteContextService
             'app_url' => $context['app_url'],
             'support_name' => $context['support_name'],
             'support_url' => $context['support_url'],
+            'tenant_source' => $context['brand_source'],
+            'tenant_domain' => $context['domain'],
+            'tenant_site_id' => $context['site_id'],
+            'tenant_agent_id' => $context['agent_user_id'],
         ]);
     }
 
@@ -79,6 +83,10 @@ class NotificationSiteContextService
             'domain' => $context['domain'],
             'app_name' => $context['app_name'],
             'app_url' => $context['app_url'],
+            'tenant_source' => $context['brand_source'],
+            'tenant_domain' => $context['domain'],
+            'tenant_site_id' => $context['site_id'],
+            'tenant_agent_id' => $context['agent_user_id'],
         ];
     }
 

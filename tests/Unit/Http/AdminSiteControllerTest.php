@@ -16,6 +16,7 @@ use App\Models\SitePayment;
 use App\Models\SitePlanOverride;
 use App\Models\SitePlanPrice;
 use App\Models\SiteSetting;
+use App\Services\SiteStorefrontHealthService;
 use Illuminate\Contracts\Routing\Registrar;
 use Illuminate\Http\Request;
 use Tests\Support\InteractsWithInMemoryDatabase;
@@ -239,6 +240,41 @@ final class AdminSiteControllerTest extends TestCase
         $this->assertSame('platform_inherited', $payload['data']['payment_policy']['mode']);
     }
 
+    public function test_admin_can_run_live_storefront_health_check_for_a_site(): void
+    {
+        $site = Site::query()->create([
+            'code' => 'branch',
+            'name' => 'Branch Site',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        SiteDomain::query()->create([
+            'site_id' => $site->id,
+            'domain' => 'branch.example.test',
+            'status' => SiteDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $health = new SiteStorefrontHealthService(
+            static fn (): array => ['203.0.113.10'],
+            static fn (): array => [
+                'status' => 200,
+                'payload' => ['site_context' => ['site_code' => 'branch']],
+            ],
+        );
+
+        $payload = $this->responsePayload(app(SiteController::class)->health(Request::create('/admin/site/health', 'GET', [
+            'site_id' => $site->id,
+        ]), $health));
+
+        $this->assertSame('success', $payload['status']);
+        $this->assertSame('ready', $payload['data']['status']);
+        $this->assertSame('branch.example.test', $payload['data']['domains'][0]['domain']);
+    }
+
     public function test_admin_route_registers_site_endpoints(): void
     {
         $registrar = new AdminSiteRouteRegistrar();
@@ -254,6 +290,11 @@ final class AdminSiteControllerTest extends TestCase
             'method' => 'POST',
             'uri' => '/admin/site/save',
             'action' => [SiteController::class, 'save'],
+        ], $registrar->routes);
+        $this->assertContains([
+            'method' => 'GET',
+            'uri' => '/admin/site/health',
+            'action' => [SiteController::class, 'health'],
         ], $registrar->routes);
         $this->assertContains([
             'method' => 'GET',
