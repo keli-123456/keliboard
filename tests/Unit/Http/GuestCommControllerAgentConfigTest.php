@@ -80,6 +80,28 @@ final class GuestCommControllerAgentConfigTest extends TestCase
         $this->assertSame(AgentCommerceContextResolver::SOURCE_DOMAIN, $data['agent_context']['source']);
     }
 
+    public function test_agent_domain_uses_host_when_forwarded_host_is_not_managed(): void
+    {
+        $agent = $this->createActiveAgent('forwarded-host-agent@example.test');
+        $this->createActiveDomain($agent, 'shop.example.test');
+        $this->createSiteSetting($agent, null, [
+            'site_name' => 'Host Fallback Shop',
+            'logo_url' => 'https://assets.example.test/host-fallback-logo.png',
+            'landing_theme' => 'detective',
+            'announcement' => 'Host fallback announcement',
+        ]);
+
+        $request = Request::create('https://shop.example.test/api/v1/guest/comm/config', 'GET');
+        $request->headers->set('host', 'shop.example.test');
+        $request->headers->set('x-forwarded-host', 'sp.huhu.icu');
+        $data = $this->responsePayload(app(CommController::class)->config($request))['data'];
+
+        $this->assertSame('Host Fallback Shop', $data['app_name']);
+        $this->assertSame('https://assets.example.test/host-fallback-logo.png', $data['logo']);
+        $this->assertSame('detective', $data['landing_theme']);
+        $this->assertSame('Host fallback announcement', $data['agent_announcement']);
+    }
+
     public function test_non_agent_host_returns_base_guest_config_without_agent_context(): void
     {
         $data = $this->configForHost('main.example.test');

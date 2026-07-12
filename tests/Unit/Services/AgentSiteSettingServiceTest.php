@@ -312,6 +312,36 @@ final class AgentSiteSettingServiceTest extends TestCase
         $this->assertSame('Default announcement', $payload['announcement']);
     }
 
+    public function test_effective_reports_domain_overrides_and_default_inheritance_per_field(): void
+    {
+        $agent = $this->createActiveAgent('agent@example.test');
+        $domain = $this->createActiveDomain($agent, 'agent.example.test');
+        $this->createSiteSetting($agent, null, [
+            'site_name' => 'Default Site',
+            'logo_url' => 'https://example.test/default-logo.png',
+            'landing_theme' => 'sakura',
+            'announcement_title' => 'Default notice',
+            'announcement' => 'Default announcement',
+        ]);
+        $this->createSiteSetting($agent, $domain, [
+            'site_name' => 'Domain Site',
+            'landing_theme' => 'phantom',
+        ]);
+
+        $effective = app(AgentSiteSettingService::class)->effective($agent, $domain->id);
+
+        $this->assertSame('domain', $effective['scope']);
+        $this->assertSame('agent.example.test', $effective['domain']['domain']);
+        $this->assertSame('Domain Site', $effective['setting']['site_name']);
+        $this->assertSame('https://example.test/default-logo.png', $effective['setting']['logo_url']);
+        $this->assertSame('phantom', $effective['setting']['landing_theme']);
+        $this->assertSame('Default announcement', $effective['setting']['announcement']);
+        $this->assertSame('domain', $effective['sources']['site_name']);
+        $this->assertSame('default', $effective['sources']['logo_url']);
+        $this->assertSame('domain', $effective['sources']['landing_theme']);
+        $this->assertSame('default', $effective['sources']['announcement']);
+    }
+
     public function test_resolve_returns_empty_when_default_setting_is_disabled(): void
     {
         $agent = $this->createActiveAgent('agent@example.test');

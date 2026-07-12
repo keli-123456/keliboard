@@ -143,6 +143,66 @@ class AgentSiteSettingService
         return $payload;
     }
 
+    public function effective(User $agent, ?int $agentDomainId = null): array
+    {
+        $this->activeProfile($agent);
+
+        $default = AgentSiteSetting::query()
+            ->where('agent_user_id', $agent->id)
+            ->where('setting_scope', AgentSiteSetting::SCOPE_DEFAULT)
+            ->where('setting_key', AgentSiteSetting::KEY_DEFAULT)
+            ->where('enabled', true)
+            ->first();
+
+        $agentDomain = null;
+        $domain = null;
+        if ($agentDomainId !== null) {
+            $domainId = $this->agentDomainId($agent, $agentDomainId);
+            $agentDomain = AgentDomain::query()->findOrFail($domainId);
+            $domain = AgentSiteSetting::query()
+                ->where('agent_user_id', $agent->id)
+                ->where('agent_domain_id', $domainId)
+                ->where('setting_scope', AgentSiteSetting::SCOPE_DOMAIN)
+                ->where('setting_key', (string) $domainId)
+                ->where('enabled', true)
+                ->first();
+        }
+
+        $setting = null;
+        if ($domain || $default) {
+            $setting = $this->payload($domain ?: $default);
+            foreach (self::CONFIG_FIELDS as $field) {
+                $domainValue = $setting[$field] ?? '';
+                if ($domain && $this->isEmptyValue($domainValue) && $default) {
+                    $setting[$field] = $this->payloadValue($default->{$field});
+                }
+            }
+        }
+
+        $sources = [];
+        foreach (self::CONFIG_FIELDS as $field) {
+            if ($domain && !$this->isEmptyValue($domain->{$field})) {
+                $sources[$field] = 'domain';
+                continue;
+            }
+
+            $sources[$field] = $default && !$this->isEmptyValue($default->{$field})
+                ? 'default'
+                : 'empty';
+        }
+
+        return [
+            'scope' => $agentDomain ? AgentSiteSetting::SCOPE_DOMAIN : AgentSiteSetting::SCOPE_DEFAULT,
+            'domain' => $agentDomain ? [
+                'id' => (int) $agentDomain->id,
+                'domain' => (string) $agentDomain->domain,
+                'status' => (string) $agentDomain->status,
+            ] : null,
+            'setting' => $setting,
+            'sources' => $sources,
+        ];
+    }
+
     public function payload(AgentSiteSetting $setting): array
     {
         $payload = [

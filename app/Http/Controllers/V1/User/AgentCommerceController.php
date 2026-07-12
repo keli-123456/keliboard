@@ -136,6 +136,18 @@ class AgentCommerceController extends Controller
         ]);
     }
 
+    public function effectiveSiteSetting(Request $request)
+    {
+        $params = $request->validate([
+            'agent_domain_id' => 'nullable|integer|min:1',
+        ]);
+
+        return $this->success($this->siteSettingService()->effective(
+            $request->user(),
+            array_key_exists('agent_domain_id', $params) ? (int) $params['agent_domain_id'] : null,
+        ));
+    }
+
     public function saveSiteSetting(Request $request)
     {
         $params = $request->validate([

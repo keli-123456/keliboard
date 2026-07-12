@@ -5,6 +5,7 @@ namespace App\Http\Controllers\V1\User;
 use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
 use App\Models\Payment;
+use App\Services\AgentPublicConfigService;
 use App\Services\RechargeBonusService;
 use App\Services\SiteContextService;
 use App\Utils\Dict;
@@ -34,7 +35,11 @@ class CommController extends Controller
         ];
         $data = array_merge($data, app(RechargeBonusService::class)->getConfig());
         $data = app(SiteContextService::class)->applyToConfig($data, $request, $request->user());
-        return $this->success($data);
+        $data = app(AgentPublicConfigService::class)->apply($data, $request);
+
+        return $this->success($data)
+            ->header('Cache-Control', 'no-store, private, max-age=0')
+            ->header('Pragma', 'no-cache');
     }
 
     public function getStripePublicKey(Request $request)

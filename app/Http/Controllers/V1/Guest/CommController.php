@@ -50,7 +50,9 @@ class CommController extends Controller
         $data = app(AgentPublicConfigService::class)->apply($data, $request);
         $data = HookManager::filter('guest_comm_config', $data);
 
-        return $this->success($data);
+        return $this->success($data)
+            ->header('Cache-Control', 'no-store, private, max-age=0')
+            ->header('Pragma', 'no-cache');
     }
 
     private function getCurrentThemeConfig(): array
