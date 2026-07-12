@@ -81,11 +81,57 @@ class StatUserNodeDayJob implements ShouldQueue
                 $this->upsertRowsForPostgres($rows);
                 return;
             }
-            $this->upsertRowsForMySqlLike($rows);
+            $this->upsertRowsForMySqlWithRetry($rows);
         } catch (\Throwable $e) {
             Log::error('StatUserNodeDayJob failed for server ' . ($this->server['id'] ?? 'unknown') . ': ' . $e->getMessage());
             throw $e;
         }
+    }
+
+    protected function upsertRowsForMySqlWithRetry(array $rows): void
+    {
+        usort($rows, fn (array $left, array $right): int => [
+            $left['user_id'],
+            $left['server_id'],
+            $left['server_rate'],
+            $left['record_at'],
+            $left['record_type'],
+        ] <=> [
+            $right['user_id'],
+            $right['server_id'],
+            $right['server_rate'],
+            $right['record_at'],
+            $right['record_type'],
+        ]);
+
+        foreach (array_chunk($rows, 100) as $batch) {
+            for ($attempt = 1; $attempt <= 5; $attempt++) {
+                try {
+                    $this->upsertRowsForMySqlLike($batch);
+                    break;
+                } catch (\Throwable $e) {
+                    if (!$this->isMySqlDeadlock($e) || $attempt === 5) {
+                        throw $e;
+                    }
+
+                    Log::warning('StatUserNodeDayJob retrying MySQL deadlock', [
+                        'server_id' => $this->server['id'] ?? null,
+                        'attempt' => $attempt,
+                        'error' => $e->getMessage(),
+                    ]);
+                    usleep($attempt * 100000);
+                }
+            }
+        }
+    }
+
+    private function isMySqlDeadlock(\Throwable $e): bool
+    {
+        $message = strtolower($e->getMessage());
+
+        return str_contains($message, 'deadlock')
+            || str_contains($message, 'sqlstate[40001]')
+            || str_contains($message, ' 1213 ');
     }
 
     protected function upsertRowsForSqlite(array $rows): void

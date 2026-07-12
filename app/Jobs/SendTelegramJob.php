@@ -2,12 +2,14 @@
 
 namespace App\Jobs;
 
+use App\Exceptions\ApiException;
 use App\Services\TelegramService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
 
 class SendTelegramJob implements ShouldQueue
 {
@@ -38,6 +40,27 @@ class SendTelegramJob implements ShouldQueue
     public function handle()
     {
         $telegramService = new TelegramService();
-        $telegramService->sendMessage($this->telegramId, $this->text, 'markdown');
+
+        try {
+            $telegramService->sendMessage($this->telegramId, $this->text, 'markdown');
+        } catch (ApiException $e) {
+            if (!$this->isUnrecoverableRecipientFailure($e)) {
+                throw $e;
+            }
+
+            Log::warning('Telegram notification skipped because recipient is unavailable', [
+                'chat_id' => $this->telegramId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function isUnrecoverableRecipientFailure(ApiException $e): bool
+    {
+        $message = strtolower($e->getMessage());
+
+        return str_contains($message, 'chat not found')
+            || str_contains($message, 'bot was blocked by the user')
+            || str_contains($message, 'user is deactivated');
     }
 }
