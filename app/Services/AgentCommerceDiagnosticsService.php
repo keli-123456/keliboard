@@ -31,10 +31,10 @@ class AgentCommerceDiagnosticsService
             ->where('owner_id', $agent->id)
             ->get();
         $plans = (new PlanService(new Plan()))->getAvailablePlans();
-        $prices = AgentPlanPrice::query()
+        $allPrices = AgentPlanPrice::query()
             ->where('agent_user_id', $agent->id)
-            ->where('enabled', true)
-            ->get()
+            ->get();
+        $prices = $allPrices->where('enabled', true)
             ->groupBy('plan_id');
         $siteSettings = AgentSiteSetting::query()
             ->where('agent_user_id', $agent->id)
@@ -89,9 +89,19 @@ class AgentCommerceDiagnosticsService
             'balance' => $this->balanceCheck($availableBalance, $minimumCost, $maximumCost, $hasConfiguredCost),
         ];
 
+        $storefrontConfigured = $domains->isNotEmpty()
+            || $payments->isNotEmpty()
+            || $allPrices->isNotEmpty()
+            || $siteSettings->isNotEmpty();
+        $mode = $storefrontConfigured ? 'storefront' : 'basic';
+        $storefrontStatus = $this->worstStatus(array_column($checks, 'status'));
+
         return [
-            'overall_status' => $this->worstStatus(array_column($checks, 'status')),
+            'mode' => $mode,
+            'overall_status' => $mode === 'basic' ? self::STATUS_OK : $storefrontStatus,
+            'storefront_status' => $storefrontStatus,
             'summary' => [
+                'storefront_configured' => $storefrontConfigured,
                 'domains_total' => $domains->count(),
                 'active_domains' => count($activeDomainIds),
                 'site_settings_total' => $siteSettings->count(),

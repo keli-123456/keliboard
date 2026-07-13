@@ -29,6 +29,7 @@ trait InteractsWithInMemoryDatabase
 
         app()->instance('db', $this->database->getDatabaseManager());
         app()->instance('db.connection', $this->database->getConnection());
+        app()->instance('db.schema', $this->database->getConnection()->getSchemaBuilder());
 
         Model::setConnectionResolver($this->database->getDatabaseManager());
         Model::unsetEventDispatcher();

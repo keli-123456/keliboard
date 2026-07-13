@@ -31,6 +31,7 @@ final class AgentCommerceDiagnosticsServiceTest extends TestCase
         $this->createAgentCenterTables();
         $this->createPaymentTable();
         $this->createAgentCommerceTables();
+        $this->createAgentSiteSettingTable();
         $this->createPlanTable();
         $this->bindTestSettings([
             'agent_center_discount_percent' => 50,
@@ -46,6 +47,49 @@ final class AgentCommerceDiagnosticsServiceTest extends TestCase
         $this->expectExceptionMessage('Agent permission is not active');
 
         app(AgentCommerceDiagnosticsService::class)->diagnose($agent);
+    }
+
+    public function test_agent_without_commerce_artifacts_is_reported_as_healthy_basic_mode(): void
+    {
+        $agent = $this->createActiveAgent('basic-agent@example.test', 1000);
+
+        $diagnostics = app(AgentCommerceDiagnosticsService::class)->diagnose($agent);
+
+        $this->assertSame('basic', $diagnostics['mode']);
+        $this->assertSame('ok', $diagnostics['overall_status']);
+        $this->assertSame('blocked', $diagnostics['storefront_status']);
+        $this->assertFalse($diagnostics['summary']['storefront_configured']);
+        $this->assertSame(0, $diagnostics['summary']['domains_total']);
+        $this->assertSame(0, $diagnostics['summary']['enabled_payments']);
+        $this->assertSame(0, $diagnostics['summary']['priced_periods']);
+        $this->assertSame(0, $diagnostics['summary']['site_settings_total']);
+    }
+
+    public function test_any_commerce_artifact_switches_diagnostics_to_storefront_mode(): void
+    {
+        $agent = $this->createActiveAgent('storefront-agent@example.test', 1000);
+        $this->createDefaultSiteSetting($agent, 'Storefront Setup');
+
+        $diagnostics = app(AgentCommerceDiagnosticsService::class)->diagnose($agent);
+
+        $this->assertSame('storefront', $diagnostics['mode']);
+        $this->assertSame('blocked', $diagnostics['overall_status']);
+        $this->assertSame('blocked', $diagnostics['storefront_status']);
+        $this->assertTrue($diagnostics['summary']['storefront_configured']);
+    }
+
+    public function test_disabled_price_still_counts_as_a_storefront_artifact(): void
+    {
+        $agent = $this->createActiveAgent('disabled-price@example.test', 1000);
+        $plan = $this->createPlan('Disabled Price Plan', [Plan::PERIOD_MONTHLY => 10.00]);
+        $this->createAgentPrice($agent, $plan->id, Plan::PERIOD_MONTHLY, 1300, false);
+
+        $diagnostics = app(AgentCommerceDiagnosticsService::class)->diagnose($agent);
+
+        $this->assertSame('storefront', $diagnostics['mode']);
+        $this->assertSame('blocked', $diagnostics['overall_status']);
+        $this->assertTrue($diagnostics['summary']['storefront_configured']);
+        $this->assertSame(0, $diagnostics['summary']['priced_periods']);
     }
 
     public function test_no_enabled_payments_blocks_payment_check(): void
@@ -406,14 +450,14 @@ final class AgentCommerceDiagnosticsServiceTest extends TestCase
         ], $overrides));
     }
 
-    private function createAgentPrice(User $agent, int $planId, string $period, int $salePrice): AgentPlanPrice
+    private function createAgentPrice(User $agent, int $planId, string $period, int $salePrice, bool $enabled = true): AgentPlanPrice
     {
         return AgentPlanPrice::query()->create([
             'agent_user_id' => $agent->id,
             'plan_id' => $planId,
             'period' => $period,
             'sale_price' => $salePrice,
-            'enabled' => true,
+            'enabled' => $enabled,
             'created_at' => time(),
             'updated_at' => time(),
         ]);

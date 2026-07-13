@@ -89,16 +89,7 @@ final class AgentOrderStatusResolverTest extends TestCase
 
     public function test_disabled_payment_adds_payment_disabled_flag(): void
     {
-        $payment = Payment::query()->create([
-            'owner_type' => Payment::OWNER_AGENT,
-            'owner_id' => 1,
-            'uuid' => 'agent-payment-disabled',
-            'payment' => 'stripe',
-            'name' => 'Agent Stripe',
-            'enable' => false,
-            'created_at' => time(),
-            'updated_at' => time(),
-        ]);
+        $payment = $this->createDisabledPayment();
         $context = $this->createContext(['payment_id' => $payment->id]);
         $hold = $this->createHold($context);
         $context->forceFill(['hold_id' => $hold->id])->save();
@@ -106,6 +97,94 @@ final class AgentOrderStatusResolverTest extends TestCase
         $result = app(AgentOrderStatusResolver::class)->resolve($context->fresh());
 
         $this->assertContains('payment_disabled', $result['abnormal_flags']);
+    }
+
+    public function test_processing_order_keeps_payment_disabled_flag(): void
+    {
+        $payment = $this->createDisabledPayment();
+        $context = $this->createContext([
+            'payment_id' => $payment->id,
+            'order_status' => Order::STATUS_PROCESSING,
+        ]);
+        $hold = $this->createHold($context);
+        $context->forceFill(['hold_id' => $hold->id])->save();
+
+        $result = app(AgentOrderStatusResolver::class)->resolve($context->fresh());
+
+        $this->assertContains('payment_disabled', $result['abnormal_flags']);
+    }
+
+    public function test_discounted_order_does_not_become_abnormal_when_historical_payment_is_disabled(): void
+    {
+        $payment = $this->createDisabledPayment();
+        $context = $this->createContext([
+            'payment_id' => $payment->id,
+            'status' => AgentOrderContext::STATUS_PAID,
+            'order_status' => Order::STATUS_DISCOUNTED,
+        ]);
+        $hold = $this->createHold($context, [
+            'status' => AgentBalanceHold::STATUS_CAPTURED,
+            'captured_at' => time(),
+        ]);
+        $context->forceFill(['hold_id' => $hold->id])->save();
+
+        $result = app(AgentOrderStatusResolver::class)->resolve($context->fresh());
+
+        $this->assertNotContains('payment_disabled', $result['abnormal_flags']);
+    }
+
+    public function test_cancelled_order_does_not_become_abnormal_when_historical_payment_is_disabled(): void
+    {
+        $payment = $this->createDisabledPayment();
+        $context = $this->createContext([
+            'payment_id' => $payment->id,
+            'status' => AgentOrderContext::STATUS_CANCELLED,
+            'order_status' => Order::STATUS_CANCELLED,
+        ]);
+        $hold = $this->createHold($context, [
+            'status' => AgentBalanceHold::STATUS_RELEASED,
+            'released_at' => time(),
+        ]);
+        $context->forceFill(['hold_id' => $hold->id])->save();
+
+        $result = app(AgentOrderStatusResolver::class)->resolve($context->fresh());
+
+        $this->assertSame([], $result['abnormal_flags']);
+    }
+
+    public function test_completed_order_does_not_become_abnormal_when_historical_payment_is_disabled(): void
+    {
+        $payment = $this->createDisabledPayment();
+        $context = $this->createContext([
+            'payment_id' => $payment->id,
+            'status' => AgentOrderContext::STATUS_PAID,
+            'order_status' => Order::STATUS_COMPLETED,
+        ]);
+        $hold = $this->createHold($context, [
+            'status' => AgentBalanceHold::STATUS_CAPTURED,
+            'captured_at' => time(),
+        ]);
+        $context->forceFill(['hold_id' => $hold->id])->save();
+
+        $result = app(AgentOrderStatusResolver::class)->resolve($context->fresh());
+
+        $this->assertSame([], $result['abnormal_flags']);
+    }
+
+    public function test_orphaned_historical_context_does_not_inherit_payment_disabled_flag(): void
+    {
+        $payment = $this->createDisabledPayment();
+        $context = $this->createContext(['payment_id' => $payment->id]);
+        $hold = $this->createHold($context, [
+            'status' => AgentBalanceHold::STATUS_RELEASED,
+            'released_at' => time(),
+        ]);
+        $context->forceFill(['hold_id' => $hold->id])->save();
+        $context->order()->delete();
+
+        $result = app(AgentOrderStatusResolver::class)->resolve($context->fresh());
+
+        $this->assertNotContains('payment_disabled', $result['abnormal_flags']);
     }
 
     public function test_captured_paid_order_is_captured_without_abnormal_flags(): void
@@ -199,5 +278,19 @@ final class AgentOrderStatusResolverTest extends TestCase
             'created_at' => $now,
             'updated_at' => $now,
         ], $overrides));
+    }
+
+    private function createDisabledPayment(): Payment
+    {
+        return Payment::query()->create([
+            'owner_type' => Payment::OWNER_AGENT,
+            'owner_id' => 1,
+            'uuid' => uniqid('agent-payment-disabled-', true),
+            'payment' => 'stripe',
+            'name' => 'Agent Stripe',
+            'enable' => false,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
     }
 }

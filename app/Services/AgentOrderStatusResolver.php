@@ -55,7 +55,12 @@ class AgentOrderStatusResolver
             }
         }
 
-        if ($payment !== null && $payment->enable === false) {
+        if (
+            $payment !== null
+            && $payment->enable === false
+            && $order !== null
+            && in_array((int) $order->status, [Order::STATUS_PENDING, Order::STATUS_PROCESSING], true)
+        ) {
             $flags[] = 'payment_disabled';
         }
 
