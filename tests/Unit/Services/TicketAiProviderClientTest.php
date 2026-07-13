@@ -43,6 +43,32 @@ final class TicketAiProviderClientTest extends TestCase
         ];
     }
 
+    #[DataProvider('invalidStructuredContentProvider')]
+    public function test_json_without_a_valid_draft_schema_is_rejected(string $content): void
+    {
+        Http::fake(['*' => Http::response($this->responsePayload($content))]);
+
+        try {
+            (new TicketAiProviderClient())->complete($this->settings(), [
+                ['role' => 'user', 'content' => '请分析工单'],
+            ]);
+            $this->fail('Expected invalid provider response.');
+        } catch (TicketAiProviderException $exception) {
+            $this->assertSame('invalid_response', $exception->errorCode());
+        }
+    }
+
+    public static function invalidStructuredContentProvider(): array
+    {
+        return [
+            'missing draft' => ['{"message":"ok"}'],
+            'empty draft' => ['{"draft":"  "}'],
+            'array draft' => ['{"draft":[]}'],
+            'invalid boolean field' => ['{"draft":"ok","needs_human":"no"}'],
+            'invalid reference field' => ['{"draft":"ok","knowledge_refs":{"id":1}}'],
+        ];
+    }
+
     public function test_plain_text_falls_back_without_claiming_structured_output(): void
     {
         Http::fake(['*' => Http::response($this->responsePayload('请让用户重新导入订阅。'))]);

@@ -138,6 +138,36 @@ final class TicketAiContextServiceTest extends TestCase
         $this->assertSame('dash.miaosu.example', $context['scope']['domain']);
     }
 
+    public function test_missing_site_record_keeps_site_scope_and_excludes_platform_orders(): void
+    {
+        $missingSiteId = 999999;
+        $plan = Plan::query()->create(['name' => '主站套餐']);
+        $user = $this->createUser(null, $missingSiteId);
+        Order::query()->create([
+            'site_id' => null,
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'period' => 'month_price',
+            'total_amount' => 1300,
+            'type' => Order::TYPE_NEW_PURCHASE,
+            'status' => Order::STATUS_COMPLETED,
+            'created_at' => 100,
+            'updated_at' => 100,
+        ]);
+
+        $context = (new TicketAiContextService())->build(
+            $this->createTicket($user, ['site_id' => $missingSiteId]),
+            12,
+            null
+        );
+
+        $this->assertSame('site', $context['scope']['type']);
+        $this->assertSame($missingSiteId, $context['scope']['site_id']);
+        $this->assertSame('', $context['scope']['brand_name']);
+        $this->assertSame('', $context['scope']['domain']);
+        $this->assertSame([], $context['orders']);
+    }
+
     public function test_agent_domain_context_takes_precedence_and_never_leaks_platform_brand(): void
     {
         $site = Site::query()->create([
@@ -175,6 +205,36 @@ final class TicketAiContextServiceTest extends TestCase
         $this->assertSame('樱花代理站', $context['scope']['brand_name']);
         $this->assertSame('agent.example.test', $context['scope']['domain']);
         $this->assertStringNotContainsString('Platform Cloud', $serialized);
+    }
+
+    public function test_agent_domain_owned_by_another_agent_is_not_used_for_branding(): void
+    {
+        $agentA = $this->createUser();
+        $agentB = $this->createUser();
+        $foreignDomain = AgentDomain::query()->create([
+            'agent_user_id' => $agentB->id,
+            'domain' => 'foreign-agent.example.test',
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+        ]);
+        AgentSiteSetting::query()->create([
+            'agent_user_id' => $agentB->id,
+            'agent_domain_id' => $foreignDomain->id,
+            'site_name' => '其他代理品牌',
+            'enabled' => true,
+        ]);
+        $user = $this->createUser();
+
+        $context = (new TicketAiContextService())->build($this->createTicket($user, [
+            'agent_user_id' => $agentA->id,
+            'agent_domain_id' => $foreignDomain->id,
+        ]), 12, null);
+
+        $this->assertSame('agent', $context['scope']['type']);
+        $this->assertSame((int) $agentA->id, $context['scope']['agent_user_id']);
+        $this->assertSame((int) $foreignDomain->id, $context['scope']['agent_domain_id']);
+        $this->assertSame('代理站点', $context['scope']['brand_name']);
+        $this->assertSame('', $context['scope']['domain']);
     }
 
     public function test_recent_orders_are_restricted_to_current_site_scope(): void

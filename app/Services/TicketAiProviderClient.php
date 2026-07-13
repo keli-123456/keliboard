@@ -127,7 +127,46 @@ class TicketAiProviderClient
     {
         $decoded = json_decode(trim($value), true);
 
-        return is_array($decoded) && !array_is_list($decoded) ? $decoded : null;
+        if (!is_array($decoded) || array_is_list($decoded)) {
+            return null;
+        }
+        if (!$this->isValidStructuredPayload($decoded)) {
+            throw new TicketAiProviderException('invalid_response');
+        }
+
+        return $decoded;
+    }
+
+    /** @param array<string, mixed> $decoded */
+    private function isValidStructuredPayload(array $decoded): bool
+    {
+        if (!is_string($decoded['draft'] ?? null) || trim($decoded['draft']) === '') {
+            return false;
+        }
+
+        foreach (['summary', 'category', 'sentiment', 'risk'] as $field) {
+            if (array_key_exists($field, $decoded) && !is_string($decoded[$field])) {
+                return false;
+            }
+        }
+        if (array_key_exists('needs_human', $decoded) && !is_bool($decoded['needs_human'])) {
+            return false;
+        }
+        if (array_key_exists('confidence', $decoded) && !is_int($decoded['confidence']) && !is_float($decoded['confidence'])) {
+            return false;
+        }
+        if (array_key_exists('knowledge_refs', $decoded)) {
+            if (!is_array($decoded['knowledge_refs']) || !array_is_list($decoded['knowledge_refs'])) {
+                return false;
+            }
+            foreach ($decoded['knowledge_refs'] as $reference) {
+                if (!is_string($reference) && !is_int($reference)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     private function firstBalancedObject(string $value): ?string

@@ -72,7 +72,10 @@ class TicketAiContextService
         $agentDomainId = $this->positiveInt($ticket->agent_domain_id);
 
         if ($agentUserId !== null) {
-            $domain = trim((string) ($ticket->agentDomain?->domain ?? ''));
+            $agentDomain = $ticket->agentDomain;
+            $domainBelongsToAgent = $agentDomain
+                && $this->positiveInt($agentDomain->agent_user_id) === $agentUserId;
+            $domain = $domainBelongsToAgent ? trim((string) $agentDomain->domain) : '';
             $setting = $this->agentSetting($agentUserId, $agentDomainId);
             $brand = trim((string) ($setting?->site_name ?? ''));
             if ($brand === '') {
@@ -89,7 +92,17 @@ class TicketAiContextService
             ];
         }
 
-        if ($siteId !== null && $ticket->site) {
+        if ($siteId !== null) {
+            if (!$ticket->site) {
+                return [
+                    'type' => 'site',
+                    'site_id' => $siteId,
+                    'agent_user_id' => null,
+                    'agent_domain_id' => null,
+                    'brand_name' => '',
+                    'domain' => '',
+                ];
+            }
             $setting = $ticket->site->setting;
             $setting = $setting instanceof SiteSetting && $setting->enabled ? $setting : null;
             $brand = trim((string) ($setting?->site_name ?: $ticket->site->name));
