@@ -14,7 +14,7 @@ class TicketAiContentSanitizer
             $value
         ) ?? $value;
         $value = preg_replace(
-            '/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/iu',
+            '/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/iu',
             '[UUID]',
             $value
         ) ?? $value;
@@ -29,12 +29,12 @@ class TicketAiContentSanitizer
             $value
         ) ?? $value;
         $value = preg_replace(
-            '/\b(password|passwd|pwd|密码)\s*[:=]\s*["\']?[^\s"\']+["\']?/iu',
+            '/(password|passwd|pwd|密码)\s*[:=：]\s*["\']?[^\s"\']+["\']?/iu',
             '$1=[REDACTED]',
             $value
         ) ?? $value;
         $value = preg_replace(
-            '/\b(token|api[\s_\-]?key|secret)\s*[:=]\s*["\']?[A-Za-z0-9._~+\/=\-]{8,}["\']?/iu',
+            '/\b(token|api[\s_\-]?key|secret)\s*[:=：]\s*["\']?[A-Za-z0-9._~+\/=\-]{8,}["\']?/iu',
             '$1=[TOKEN]',
             $value
         ) ?? $value;

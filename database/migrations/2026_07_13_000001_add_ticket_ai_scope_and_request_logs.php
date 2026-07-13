@@ -7,42 +7,7 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up(): void
     {
-        if (Schema::hasTable('v2_ticket_ai_suggestion')) {
-            $hasScopeType = Schema::hasColumn('v2_ticket_ai_suggestion', 'scope_type');
-            $hasSiteId = Schema::hasColumn('v2_ticket_ai_suggestion', 'site_id');
-            $hasAgentUserId = Schema::hasColumn('v2_ticket_ai_suggestion', 'agent_user_id');
-            $hasAgentDomainId = Schema::hasColumn('v2_ticket_ai_suggestion', 'agent_domain_id');
-            $hasStructuredOutput = Schema::hasColumn('v2_ticket_ai_suggestion', 'structured_output');
-
-            Schema::table('v2_ticket_ai_suggestion', function (Blueprint $table) use (
-                $hasScopeType,
-                $hasSiteId,
-                $hasAgentUserId,
-                $hasAgentDomainId,
-                $hasStructuredOutput
-            ): void {
-                if (!$hasScopeType) {
-                    $table->string('scope_type', 20)->default('platform')->index();
-                }
-                if (!$hasSiteId) {
-                    $table->unsignedInteger('site_id')->nullable()->index();
-                }
-                if (!$hasAgentUserId) {
-                    $table->unsignedInteger('agent_user_id')->nullable()->index();
-                }
-                if (!$hasAgentDomainId) {
-                    $table->unsignedInteger('agent_domain_id')->nullable()->index();
-                }
-                if (!$hasStructuredOutput) {
-                    $table->boolean('structured_output')->default(true)->index();
-                }
-            });
-        }
-
-        if (Schema::hasTable('v2_ticket_ai_request_log')) {
-            return;
-        }
-
+        $this->assertSchemaIsAvailable();
         Schema::create('v2_ticket_ai_request_log', function (Blueprint $table): void {
             $table->integer('id', true);
             $table->unsignedInteger('ticket_id')->nullable()->index();
@@ -65,13 +30,22 @@ return new class extends Migration {
             $table->integer('created_at')->index();
             $table->integer('updated_at');
         });
+
+        if (Schema::hasTable('v2_ticket_ai_suggestion')) {
+            Schema::table('v2_ticket_ai_suggestion', function (Blueprint $table): void {
+                $table->string('scope_type', 20)->default('platform')->index();
+                $table->unsignedInteger('site_id')->nullable()->index();
+                $table->unsignedInteger('agent_user_id')->nullable()->index();
+                $table->unsignedInteger('agent_domain_id')->nullable()->index();
+                $table->boolean('structured_output')->default(true)->index();
+            });
+        }
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('v2_ticket_ai_request_log');
-
         if (!Schema::hasTable('v2_ticket_ai_suggestion')) {
+            Schema::dropIfExists('v2_ticket_ai_request_log');
             return;
         }
 
@@ -83,10 +57,45 @@ return new class extends Migration {
             Schema::hasColumn('v2_ticket_ai_suggestion', 'structured_output') ? 'structured_output' : null,
         ]));
 
+        $indexedColumns = array_values(array_intersect($columns, [
+            'scope_type',
+            'site_id',
+            'agent_user_id',
+            'agent_domain_id',
+            'structured_output',
+        ]));
+        foreach ($indexedColumns as $column) {
+            Schema::table('v2_ticket_ai_suggestion', fn (Blueprint $table) => $table->dropIndex([$column]));
+        }
+
         if ($columns !== []) {
             Schema::table('v2_ticket_ai_suggestion', function (Blueprint $table) use ($columns): void {
                 $table->dropColumn($columns);
             });
+        }
+
+        Schema::dropIfExists('v2_ticket_ai_request_log');
+    }
+
+    private function assertSchemaIsAvailable(): void
+    {
+        if (Schema::hasTable('v2_ticket_ai_request_log')) {
+            throw new RuntimeException('v2_ticket_ai_request_log already exists; refusing a partial migration.');
+        }
+        if (!Schema::hasTable('v2_ticket_ai_suggestion')) {
+            return;
+        }
+
+        foreach ([
+            'scope_type',
+            'site_id',
+            'agent_user_id',
+            'agent_domain_id',
+            'structured_output',
+        ] as $column) {
+            if (Schema::hasColumn('v2_ticket_ai_suggestion', $column)) {
+                throw new RuntimeException("v2_ticket_ai_suggestion.{$column} already exists; refusing a partial migration.");
+            }
         }
     }
 };

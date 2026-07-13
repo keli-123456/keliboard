@@ -7,6 +7,7 @@ use App\Models\Order;
 use App\Models\SiteSetting;
 use App\Models\Ticket;
 use App\Models\User;
+use Illuminate\Database\Eloquent\Builder;
 use Plugin\SubscriptionControl\Services\SubscriptionControlEventStore;
 
 class TicketAiContextService
@@ -25,9 +26,10 @@ class TicketAiContextService
     {
         $this->loadContextRelations($ticket);
         $user = $ticket->user instanceof User ? $ticket->user : null;
+        $scope = $this->scope($ticket);
 
         return [
-            'scope' => $this->scope($ticket),
+            'scope' => $scope,
             'ticket' => [
                 'subject' => $this->sanitizer->sanitize((string) $ticket->subject, 300),
                 'level' => (int) $ticket->level,
@@ -36,7 +38,7 @@ class TicketAiContextService
             ],
             'user' => $this->userSummary($user),
             'subscription' => $this->subscriptionSummary($user),
-            'orders' => $this->recentOrders($user),
+            'orders' => $this->recentOrders($user, $scope),
             'risk' => $this->riskSummary($user),
             'conversation' => $this->conversation($ticket, $maxMessages),
             'instruction' => $this->sanitizer->sanitize((string) ($instruction ?? ''), 1000),
@@ -188,16 +190,19 @@ class TicketAiContextService
     }
 
     /** @return array<int, array<string, mixed>> */
-    private function recentOrders(?User $user): array
+    private function recentOrders(?User $user, array $scope): array
     {
         if (!$user || !$this->hasTable('v2_order')) {
             return [];
         }
 
         try {
-            return Order::query()
+            $query = Order::query()
                 ->with($this->hasTable('v2_plan') ? ['plan:id,name'] : [])
-                ->where('user_id', $user->id)
+                ->where('user_id', $user->id);
+            $this->restrictOrdersToScope($query, $scope);
+
+            return $query
                 ->orderByDesc('created_at')
                 ->orderByDesc('id')
                 ->limit(3)
@@ -214,6 +219,64 @@ class TicketAiContextService
                 ->all();
         } catch (\Throwable) {
             return [];
+        }
+    }
+
+    /** @param array<string, mixed> $scope */
+    private function restrictOrdersToScope(Builder $query, array $scope): void
+    {
+        $type = (string) ($scope['type'] ?? 'platform');
+        $hasAgentContext = $this->hasTable('v2_agent_order_context');
+        $hasSiteContext = $this->hasTable('v2_site_order_context');
+        $hasDirectSite = $this->hasColumn('v2_order', 'site_id');
+
+        if ($type === 'agent') {
+            $agentUserId = $this->positiveInt($scope['agent_user_id'] ?? null);
+            $agentDomainId = $this->positiveInt($scope['agent_domain_id'] ?? null);
+            if (!$hasAgentContext || $agentUserId === null) {
+                $query->whereRaw('1 = 0');
+                return;
+            }
+
+            $query->whereHas('agentOrderContext', function (Builder $context) use ($agentUserId, $agentDomainId): void {
+                $context->where('agent_user_id', $agentUserId);
+                if ($agentDomainId !== null) {
+                    $context->where('agent_domain_id', $agentDomainId);
+                }
+            });
+            return;
+        }
+
+        if ($type === 'site') {
+            $siteId = $this->positiveInt($scope['site_id'] ?? null);
+            if ($siteId === null || (!$hasDirectSite && !$hasSiteContext)) {
+                $query->whereRaw('1 = 0');
+                return;
+            }
+
+            $query->where(function (Builder $siteQuery) use ($siteId, $hasDirectSite, $hasSiteContext): void {
+                if ($hasDirectSite) {
+                    $siteQuery->where('site_id', $siteId);
+                }
+                if ($hasSiteContext) {
+                    $method = $hasDirectSite ? 'orWhereHas' : 'whereHas';
+                    $siteQuery->{$method}('siteOrderContext', fn (Builder $context) => $context->where('site_id', $siteId));
+                }
+            });
+            if ($hasAgentContext) {
+                $query->whereDoesntHave('agentOrderContext');
+            }
+            return;
+        }
+
+        if ($hasDirectSite) {
+            $query->whereNull('site_id');
+        }
+        if ($hasSiteContext) {
+            $query->whereDoesntHave('siteOrderContext');
+        }
+        if ($hasAgentContext) {
+            $query->whereDoesntHave('agentOrderContext');
         }
     }
 
@@ -314,6 +377,15 @@ class TicketAiContextService
     {
         try {
             return app('db')->connection()->getSchemaBuilder()->hasTable($table);
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    private function hasColumn(string $table, string $column): bool
+    {
+        try {
+            return app('db')->connection()->getSchemaBuilder()->hasColumn($table, $column);
         } catch (\Throwable) {
             return false;
         }

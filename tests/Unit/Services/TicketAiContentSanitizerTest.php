@@ -33,6 +33,21 @@ final class TicketAiContentSanitizerTest extends TestCase
         $this->assertStringContainsString('https://help.example.com/a', $output);
     }
 
+    public function test_chinese_secret_separator_and_uuid_v7_are_redacted(): void
+    {
+        $input = implode(' ', [
+            '我的密码：secret123',
+            'api key：abcdef0123456789',
+            'uuid 018f22e2-7a9b-7cc2-98c4-dc0c0c07398f',
+        ]);
+
+        $output = (new TicketAiContentSanitizer())->sanitize($input, 1000);
+
+        $this->assertStringNotContainsString('secret123', $output);
+        $this->assertStringNotContainsString('abcdef0123456789', $output);
+        $this->assertStringNotContainsString('018f22e2-7a9b-7cc2-98c4-dc0c0c07398f', $output);
+    }
+
     public function test_sanitize_respects_a_unicode_character_limit(): void
     {
         $output = (new TicketAiContentSanitizer())->sanitize(str_repeat('测试内容', 20), 17);

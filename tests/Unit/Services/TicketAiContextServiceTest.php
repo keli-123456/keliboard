@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Services;
 
+use App\Models\AgentOrderContext;
 use App\Models\AgentDomain;
 use App\Models\AgentSiteSetting;
 use App\Models\Order;
@@ -176,6 +177,118 @@ final class TicketAiContextServiceTest extends TestCase
         $this->assertStringNotContainsString('Platform Cloud', $serialized);
     }
 
+    public function test_recent_orders_are_restricted_to_current_site_scope(): void
+    {
+        $siteA = Site::query()->create([
+            'code' => 'site-a',
+            'name' => 'Site A',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+        ]);
+        $siteB = Site::query()->create([
+            'code' => 'site-b',
+            'name' => 'Site B',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+        ]);
+        $planA = Plan::query()->create(['name' => 'Site A Plan']);
+        $planB = Plan::query()->create(['name' => 'Site B Plan']);
+        $user = $this->createUser(null, (int) $siteA->id);
+        Order::query()->create([
+            'site_id' => $siteA->id,
+            'user_id' => $user->id,
+            'plan_id' => $planA->id,
+            'period' => 'month_price',
+            'total_amount' => 1100,
+            'type' => Order::TYPE_NEW_PURCHASE,
+            'status' => Order::STATUS_COMPLETED,
+            'created_at' => 100,
+            'updated_at' => 100,
+        ]);
+        Order::query()->create([
+            'site_id' => $siteB->id,
+            'user_id' => $user->id,
+            'plan_id' => $planB->id,
+            'period' => 'year_price',
+            'total_amount' => 9900,
+            'type' => Order::TYPE_NEW_PURCHASE,
+            'status' => Order::STATUS_COMPLETED,
+            'created_at' => 200,
+            'updated_at' => 200,
+        ]);
+
+        $context = (new TicketAiContextService())->build(
+            $this->createTicket($user, ['site_id' => $siteA->id]),
+            12,
+            null
+        );
+
+        $this->assertCount(1, $context['orders']);
+        $this->assertSame('Site A Plan', $context['orders'][0]['plan_name']);
+        $this->assertSame(1100, $context['orders'][0]['total_amount']);
+    }
+
+    public function test_recent_orders_are_restricted_to_current_agent_scope(): void
+    {
+        $site = Site::query()->create([
+            'code' => 'agent-source',
+            'name' => 'Agent Source',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+        ]);
+        $agentA = $this->createUser();
+        $agentB = $this->createUser();
+        $domainA = AgentDomain::query()->create([
+            'agent_user_id' => $agentA->id,
+            'domain' => 'agent-a.example.test',
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+        ]);
+        $domainB = AgentDomain::query()->create([
+            'agent_user_id' => $agentB->id,
+            'domain' => 'agent-b.example.test',
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+        ]);
+        $planA = Plan::query()->create(['name' => 'Agent A Plan']);
+        $planB = Plan::query()->create(['name' => 'Agent B Plan']);
+        $user = $this->createUser(null, (int) $site->id);
+        $orderA = Order::query()->create([
+            'site_id' => $site->id, 'user_id' => $user->id, 'plan_id' => $planA->id,
+            'period' => 'month_price', 'total_amount' => 1200, 'type' => Order::TYPE_NEW_PURCHASE,
+            'status' => Order::STATUS_COMPLETED, 'created_at' => 100, 'updated_at' => 100,
+        ]);
+        $orderB = Order::query()->create([
+            'site_id' => $site->id, 'user_id' => $user->id, 'plan_id' => $planB->id,
+            'period' => 'year_price', 'total_amount' => 8800, 'type' => Order::TYPE_NEW_PURCHASE,
+            'status' => Order::STATUS_COMPLETED, 'created_at' => 200, 'updated_at' => 200,
+        ]);
+        AgentOrderContext::query()->create([
+            'order_id' => $orderA->id,
+            'trade_no' => 'agent-a-order',
+            'agent_user_id' => $agentA->id,
+            'agent_domain_id' => $domainA->id,
+            'status' => AgentOrderContext::STATUS_PAID,
+        ]);
+        AgentOrderContext::query()->create([
+            'order_id' => $orderB->id,
+            'trade_no' => 'agent-b-order',
+            'agent_user_id' => $agentB->id,
+            'agent_domain_id' => $domainB->id,
+            'status' => AgentOrderContext::STATUS_PAID,
+        ]);
+
+        $context = (new TicketAiContextService())->build($this->createTicket($user, [
+            'site_id' => $site->id,
+            'agent_user_id' => $agentA->id,
+            'agent_domain_id' => $domainA->id,
+        ]), 12, null);
+
+        $this->assertCount(1, $context['orders']);
+        $this->assertSame('Agent A Plan', $context['orders'][0]['plan_name']);
+        $this->assertSame(1200, $context['orders'][0]['total_amount']);
+    }
+
     private function createUser(?int $planId = null, ?int $siteId = null): User
     {
         return User::query()->create([
@@ -222,6 +335,7 @@ final class TicketAiContextServiceTest extends TestCase
     {
         Schema::create('v2_order', function (Blueprint $table): void {
             $table->id();
+            $table->integer('site_id')->nullable();
             $table->integer('user_id');
             $table->integer('plan_id')->nullable();
             $table->string('period')->nullable();

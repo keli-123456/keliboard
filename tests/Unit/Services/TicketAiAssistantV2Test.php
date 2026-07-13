@@ -104,6 +104,7 @@ final class TicketAiAssistantV2Test extends TestCase
             $payload = json_encode($request->data(), JSON_UNESCAPED_UNICODE);
 
             return str_contains($payload, '秒速云 AI')
+                && !str_contains($payload, 'Keli 面板')
                 && !str_contains($payload, $user->email)
                 && !str_contains($payload, $user->token)
                 && !str_contains($payload, $user->uuid);
