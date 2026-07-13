@@ -2,13 +2,14 @@
 
 namespace App\Services;
 
+use App\Exceptions\TicketAiProviderException;
 use App\Models\Knowledge;
 use App\Models\Ticket;
+use App\Models\TicketAiRequestLog;
 use App\Models\TicketAiSuggestion;
 use App\Models\TicketMessage;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
 class TicketAiAssistantService
@@ -27,6 +28,20 @@ class TicketAiAssistantService
     ];
     private const HUMAN_REVIEW_CATEGORIES = ['支付退款', '账号安全', '服务器故障'];
 
+    private TicketAiContextService $contextService;
+    private TicketAiContentSanitizer $sanitizer;
+    private TicketAiProviderClient $providerClient;
+
+    public function __construct(
+        ?TicketAiContextService $contextService = null,
+        ?TicketAiContentSanitizer $sanitizer = null,
+        ?TicketAiProviderClient $providerClient = null
+    ) {
+        $this->sanitizer = $sanitizer ?? new TicketAiContentSanitizer();
+        $this->contextService = $contextService ?? new TicketAiContextService($this->sanitizer);
+        $this->providerClient = $providerClient ?? new TicketAiProviderClient();
+    }
+
     public function publicSettings(): array
     {
         $settings = $this->settings();
@@ -38,6 +53,10 @@ class TicketAiAssistantService
             'ticket_ai_temperature' => $settings['temperature'],
             'ticket_ai_max_messages' => $settings['max_messages'],
             'ticket_ai_knowledge_enable' => $settings['knowledge_enable'],
+            'ticket_ai_max_tokens' => $settings['max_tokens'],
+            'ticket_ai_timeout' => $settings['timeout'],
+            'ticket_ai_json_mode' => $settings['json_mode'],
+            'ticket_ai_log_retention_days' => $settings['log_retention_days'],
             'ticket_ai_system_prompt' => $settings['system_prompt'],
             'ticket_ai_api_key' => '',
             'ticket_ai_api_key_set' => $this->apiKey() !== '',
@@ -60,66 +79,147 @@ class TicketAiAssistantService
         return $data;
     }
 
+    /** @return array{enabled:bool,configured:bool,available:bool,reason:?string} */
+    public function capabilities(): array
+    {
+        $settings = $this->settings();
+        $reason = null;
+        if (!$settings['enabled']) {
+            $reason = 'disabled';
+        } elseif ($settings['base_url'] === '') {
+            $reason = 'missing_base_url';
+        } elseif ($settings['model'] === '') {
+            $reason = 'missing_model';
+        } elseif ($this->apiKey() === '') {
+            $reason = 'missing_api_key';
+        }
+
+        $configured = $settings['base_url'] !== ''
+            && $settings['model'] !== ''
+            && $this->apiKey() !== '';
+
+        return [
+            'enabled' => $settings['enabled'],
+            'configured' => $configured,
+            'available' => $settings['enabled'] && $configured,
+            'reason' => $reason,
+        ];
+    }
+
+    /** @return array{ok:bool,model:string,latency_ms:int} */
+    public function testConnection(?int $adminId = null): array
+    {
+        $settings = $this->settings();
+        $this->assertAvailable();
+        $providerSettings = array_merge($settings, ['api_key' => $this->apiKey()]);
+        $messages = [
+            ['role' => 'system', 'content' => 'Return a minimal JSON object.'],
+            ['role' => 'user', 'content' => '{"ping":"ok"}'],
+        ];
+        $startedAt = hrtime(true);
+
+        try {
+            $completion = $this->providerClient->complete($providerSettings, $messages);
+            $this->recordRequestLog(array_merge(
+                $this->platformScopeFields(),
+                $this->completionLogFields($completion),
+                [
+                    'admin_id' => $adminId,
+                    'status' => TicketAiRequestLog::STATUS_SUCCESS,
+                    'provider_host' => $this->providerHost($settings['base_url']),
+                    'model' => $settings['model'],
+                ]
+            ));
+
+            return [
+                'ok' => true,
+                'model' => $settings['model'],
+                'latency_ms' => (int) $completion['latency_ms'],
+            ];
+        } catch (TicketAiProviderException $exception) {
+            $this->recordRequestLog(array_merge($this->platformScopeFields(), [
+                'admin_id' => $adminId,
+                'status' => TicketAiRequestLog::STATUS_FAILED,
+                'error_code' => $exception->errorCode(),
+                'provider_host' => $this->providerHost($settings['base_url']),
+                'model' => $settings['model'],
+                'latency_ms' => (int) round((hrtime(true) - $startedAt) / 1_000_000),
+                'prompt_chars' => $this->messageChars($messages),
+            ]));
+            throw $exception;
+        }
+    }
+
     public function suggest(Ticket $ticket, ?string $instruction = null, ?int $adminId = null): array
     {
         $settings = $this->settings();
-        if (!$settings['enabled']) {
-            throw new RuntimeException('AI 工单助手未启用');
-        }
-
-        $apiKey = $this->apiKey();
-        if ($apiKey === '') {
-            throw new RuntimeException('AI API Key 未配置');
-        }
-        if ($settings['base_url'] === '' || $settings['model'] === '') {
-            throw new RuntimeException('AI 接口地址或模型未配置');
-        }
-
-        $ticket->loadMissing(['messages', 'user']);
+        $this->assertAvailable();
+        $context = $this->contextService->build($ticket, $settings['max_messages'], $instruction);
         $knowledge = $settings['knowledge_enable'] ? $this->findRelevantKnowledge($ticket) : [];
-        $messages = $this->buildMessages($ticket, $knowledge, $settings, $instruction);
+        $knowledge = $this->sanitizer->sanitizeKnowledge($knowledge);
+        $messages = $this->buildMessages($context, $knowledge, $settings);
+        $scopeFields = $this->scopeFields((array) ($context['scope'] ?? []));
+        $providerSettings = array_merge($settings, ['api_key' => $this->apiKey()]);
+        $startedAt = hrtime(true);
 
-        $response = Http::timeout(30)
-            ->acceptJson()
-            ->withToken($apiKey)
-            ->post(rtrim($settings['base_url'], '/') . '/chat/completions', [
+        try {
+            $completion = $this->providerClient->complete($providerSettings, $messages);
+            $result = $this->normalizeAiResult(
+                (string) $completion['content'],
+                $knowledge,
+                is_array($completion['decoded']) ? $completion['decoded'] : null,
+                (bool) $completion['structured']
+            );
+            $suggestion = TicketAiSuggestion::create(array_merge($scopeFields, [
+                'ticket_id' => (int) $ticket->id,
+                'admin_id' => $adminId,
                 'model' => $settings['model'],
-                'temperature' => $settings['temperature'],
-                'messages' => $messages,
-            ]);
+                'structured_output' => $result['structured_output'],
+                'category' => $result['category'],
+                'sentiment' => $result['sentiment'],
+                'risk' => $result['risk'],
+                'needs_human' => $result['needs_human'],
+                'confidence' => $result['confidence'],
+                'summary' => $result['summary'],
+                'draft' => $result['draft'],
+                'draft_hash' => $this->messageHash($result['draft']),
+                'instruction' => $this->sanitizer->sanitize((string) ($instruction ?? ''), 1000),
+                'knowledge_refs' => $result['knowledge_refs'],
+                'matched_knowledge' => $result['matched_knowledge'],
+                'status' => TicketAiSuggestion::STATUS_GENERATED,
+            ]));
 
-        if (!$response->successful()) {
-            throw new RuntimeException('AI 服务请求失败：HTTP ' . $response->status());
+            $this->recordRequestLog(array_merge(
+                $scopeFields,
+                $this->completionLogFields($completion),
+                [
+                    'ticket_id' => (int) $ticket->id,
+                    'suggestion_id' => (int) $suggestion->id,
+                    'admin_id' => $adminId,
+                    'status' => TicketAiRequestLog::STATUS_SUCCESS,
+                    'provider_host' => $this->providerHost($settings['base_url']),
+                    'model' => $settings['model'],
+                ]
+            ));
+
+            $result['suggestion_id'] = (int) $suggestion->id;
+            $result['category_options'] = self::CATEGORY_OPTIONS;
+            $result['scope'] = $context['scope'];
+
+            return $result;
+        } catch (TicketAiProviderException $exception) {
+            $this->recordRequestLog(array_merge($scopeFields, [
+                'ticket_id' => (int) $ticket->id,
+                'admin_id' => $adminId,
+                'status' => TicketAiRequestLog::STATUS_FAILED,
+                'error_code' => $exception->errorCode(),
+                'provider_host' => $this->providerHost($settings['base_url']),
+                'model' => $settings['model'],
+                'latency_ms' => (int) round((hrtime(true) - $startedAt) / 1_000_000),
+                'prompt_chars' => $this->messageChars($messages),
+            ]));
+            throw $exception;
         }
-
-        $content = trim((string) data_get($response->json(), 'choices.0.message.content', ''));
-        if ($content === '') {
-            throw new RuntimeException('AI 服务未返回可用内容');
-        }
-
-        $result = $this->normalizeAiResult($content, $knowledge);
-        $suggestion = TicketAiSuggestion::create([
-            'ticket_id' => (int) $ticket->id,
-            'admin_id' => $adminId,
-            'model' => $settings['model'],
-            'category' => $result['category'],
-            'sentiment' => $result['sentiment'],
-            'risk' => $result['risk'],
-            'needs_human' => $result['needs_human'],
-            'confidence' => $result['confidence'],
-            'summary' => $result['summary'],
-            'draft' => $result['draft'],
-            'draft_hash' => $this->messageHash($result['draft']),
-            'instruction' => trim((string) $instruction),
-            'knowledge_refs' => $result['knowledge_refs'],
-            'matched_knowledge' => $result['matched_knowledge'],
-            'status' => TicketAiSuggestion::STATUS_GENERATED,
-        ]);
-
-        $result['suggestion_id'] = (int) $suggestion->id;
-        $result['category_options'] = self::CATEGORY_OPTIONS;
-
-        return $result;
     }
 
     public function recordFeedback(int $suggestionId, int $ticketId, ?int $adminId, string $status): array
@@ -202,6 +302,24 @@ class TicketAiAssistantService
         $edited = (clone $baseQuery)->where('edited', 1)->count();
         $needsHuman = (clone $baseQuery)->where('needs_human', 1)->count();
 
+        $requests = 0;
+        $successfulRequests = 0;
+        $averageLatency = 0;
+        $totalTokens = 0;
+        $topErrors = [];
+        if ($this->hasTable('v2_ticket_ai_request_log')) {
+            $requestQuery = TicketAiRequestLog::query()->where('created_at', '>=', $since);
+            $requests = (clone $requestQuery)->count();
+            $successfulRequests = (clone $requestQuery)
+                ->where('status', TicketAiRequestLog::STATUS_SUCCESS)
+                ->count();
+            $averageLatency = $requests > 0
+                ? (int) round((float) (clone $requestQuery)->avg('latency_ms'))
+                : 0;
+            $totalTokens = (int) (clone $requestQuery)->sum('total_tokens');
+            $topErrors = $this->groupRequestCounts($requestQuery, 'error_code');
+        }
+
         return [
             'days' => $days,
             'since' => $since,
@@ -216,6 +334,12 @@ class TicketAiAssistantService
             'category_options' => self::CATEGORY_OPTIONS,
             'top_categories' => $this->groupSuggestionCounts($baseQuery, 'category'),
             'top_risks' => $this->groupSuggestionCounts($baseQuery, 'risk'),
+            'requests' => (int) $requests,
+            'successful_requests' => (int) $successfulRequests,
+            'success_rate' => $requests > 0 ? round($successfulRequests / $requests, 4) : 0.0,
+            'average_latency_ms' => $averageLatency,
+            'total_tokens' => $totalTokens,
+            'top_errors' => $topErrors,
         ];
     }
 
@@ -228,6 +352,10 @@ class TicketAiAssistantService
             'temperature' => max(0.0, min(1.0, (float) admin_setting('ticket_ai_temperature', 0.2))),
             'max_messages' => max(3, min(30, (int) admin_setting('ticket_ai_max_messages', 12))),
             'knowledge_enable' => (bool) admin_setting('ticket_ai_knowledge_enable', true),
+            'max_tokens' => max(128, min(4096, (int) admin_setting('ticket_ai_max_tokens', 800))),
+            'timeout' => max(5, min(120, (int) admin_setting('ticket_ai_timeout', 30))),
+            'json_mode' => (bool) admin_setting('ticket_ai_json_mode', false),
+            'log_retention_days' => max(7, min(365, (int) admin_setting('ticket_ai_log_retention_days', 30))),
             'system_prompt' => trim((string) admin_setting('ticket_ai_system_prompt', $this->defaultSystemPrompt())),
         ];
     }
@@ -306,55 +434,46 @@ class TicketAiAssistantService
     /**
      * @param array<int, array{id:int,title:string,category:string,body:string}> $knowledge
      * @param array<string, mixed> $settings
+     * @param array<string, mixed> $context
      * @return array<int, array{role:string,content:string}>
      */
-    private function buildMessages(Ticket $ticket, array $knowledge, array $settings, ?string $instruction): array
+    private function buildMessages(array $context, array $knowledge, array $settings): array
     {
-        $conversation = $ticket->messages
-            ->sortBy('created_at')
-            ->take(-$settings['max_messages'])
-            ->map(function ($message) use ($ticket) {
-                $role = (int) $message->user_id === (int) $ticket->user_id ? '用户' : '客服';
-                return sprintf('[%s] %s', $role, trim((string) $message->message));
-            })
-            ->implode("\n");
-
-        $knowledgeText = collect($knowledge)
-            ->map(fn (array $item) => sprintf('#%d %s / %s：%s', $item['id'], $item['category'], $item['title'], $item['body']))
-            ->implode("\n\n");
-
-        $user = $ticket->user;
-        $context = [
-            'ticket_id' => (int) $ticket->id,
-            'subject' => (string) $ticket->subject,
-            'level' => $ticket->level,
-            'status' => $ticket->status,
-            'reply_status' => $ticket->reply_status,
-            'user_email' => $user?->email,
-            'user_plan_id' => $user?->plan_id,
-            'user_banned' => (bool) ($user?->banned ?? false),
-        ];
-
-        $prompt = "工单上下文：\n" . json_encode($context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
-            . "\n\n最近对话：\n" . ($conversation !== '' ? $conversation : '暂无对话')
-            . "\n\n相关知识库：\n" . ($knowledgeText !== '' ? $knowledgeText : '无匹配知识库')
-            . "\n\n固定分类：\n" . implode('、', self::CATEGORY_OPTIONS)
-            . "\n\n管理员补充要求：\n" . (trim((string) $instruction) !== '' ? trim((string) $instruction) : '无')
-            . "\n\n输出 JSON 字段要求：summary/category/sentiment/risk/needs_human/confidence/draft/knowledge_refs。category 必须使用固定分类，risk 只能是 low、medium、high，draft 是可以直接发给用户的中文回复草稿。";
+        $prompt = json_encode([
+            'ticket_context' => $context,
+            'relevant_knowledge' => $knowledge,
+            'category_options' => self::CATEGORY_OPTIONS,
+            'output_contract' => [
+                'fields' => ['summary', 'category', 'sentiment', 'risk', 'needs_human', 'confidence', 'draft', 'knowledge_refs'],
+                'risk_values' => ['low', 'medium', 'high'],
+                'review_required' => true,
+            ],
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
         return [
-            ['role' => 'system', 'content' => $settings['system_prompt'] ?: $this->defaultSystemPrompt()],
-            ['role' => 'user', 'content' => $prompt],
+            [
+                'role' => 'system',
+                'content' => $this->sanitizer->sanitize(
+                    (string) ($settings['system_prompt'] ?: $this->defaultSystemPrompt()),
+                    5000
+                ),
+            ],
+            ['role' => 'user', 'content' => (string) $prompt],
         ];
     }
 
     /**
      * @param array<int, array{id:int,title:string,category:string,body:string}> $knowledge
      */
-    private function normalizeAiResult(string $content, array $knowledge): array
+    private function normalizeAiResult(
+        string $content,
+        array $knowledge,
+        ?array $decoded = null,
+        bool $structured = true
+    ): array
     {
-        $decoded = json_decode($content, true);
-        if (!is_array($decoded)) {
+        $decoded = $decoded ?? ($structured ? json_decode($content, true) : null);
+        if (!is_array($decoded) || !$structured) {
             $decoded = ['draft' => $content];
         }
 
@@ -362,22 +481,24 @@ class TicketAiAssistantService
         $risk = $this->normalizeRisk((string) ($decoded['risk'] ?? ''));
         $needsHuman = (bool) ($decoded['needs_human'] ?? false)
             || $risk === 'high'
-            || in_array($category, self::HUMAN_REVIEW_CATEGORIES, true);
+            || in_array($category, self::HUMAN_REVIEW_CATEGORIES, true)
+            || !$structured;
 
         return [
-            'summary' => trim((string) ($decoded['summary'] ?? '')),
+            'summary' => $this->sanitizer->sanitize(trim((string) ($decoded['summary'] ?? '')), 1000),
             'category' => $category,
-            'sentiment' => trim((string) ($decoded['sentiment'] ?? '')),
+            'sentiment' => $this->sanitizer->sanitize(trim((string) ($decoded['sentiment'] ?? '')), 100),
             'risk' => $risk,
             'needs_human' => $needsHuman,
-            'confidence' => max(0, min(1, (float) ($decoded['confidence'] ?? 0))),
-            'draft' => trim((string) ($decoded['draft'] ?? $content)),
+            'confidence' => $structured ? max(0, min(1, (float) ($decoded['confidence'] ?? 0))) : 0.0,
+            'draft' => $this->sanitizer->sanitize(trim((string) ($decoded['draft'] ?? $content)), 5000),
             'knowledge_refs' => is_array($decoded['knowledge_refs'] ?? null) ? array_values($decoded['knowledge_refs']) : [],
             'matched_knowledge' => array_map(fn (array $item) => [
                 'id' => $item['id'],
                 'title' => $item['title'],
                 'category' => $item['category'],
             ], $knowledge),
+            'structured_output' => $structured,
         ];
     }
 
@@ -411,6 +532,98 @@ class TicketAiAssistantService
         return 'low';
     }
 
+    private function assertAvailable(): void
+    {
+        $capabilities = $this->capabilities();
+        if ($capabilities['available']) {
+            return;
+        }
+
+        throw new RuntimeException(match ($capabilities['reason']) {
+            'disabled' => 'AI 工单助手未启用',
+            'missing_api_key' => 'AI API Key 未配置',
+            'missing_base_url' => 'AI 接口地址未配置',
+            'missing_model' => 'AI 模型未配置',
+            default => 'AI 工单助手配置不完整',
+        });
+    }
+
+    /** @return array<string, mixed> */
+    private function scopeFields(array $scope): array
+    {
+        $type = in_array(($scope['type'] ?? null), ['platform', 'site', 'agent'], true)
+            ? (string) $scope['type']
+            : 'platform';
+
+        return [
+            'scope_type' => $type,
+            'site_id' => $this->positiveIntOrNull($scope['site_id'] ?? null),
+            'agent_user_id' => $this->positiveIntOrNull($scope['agent_user_id'] ?? null),
+            'agent_domain_id' => $this->positiveIntOrNull($scope['agent_domain_id'] ?? null),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function platformScopeFields(): array
+    {
+        return $this->scopeFields(['type' => 'platform']);
+    }
+
+    /** @return array<string, int> */
+    private function completionLogFields(array $completion): array
+    {
+        return [
+            'latency_ms' => max(0, (int) ($completion['latency_ms'] ?? 0)),
+            'input_tokens' => max(0, (int) ($completion['input_tokens'] ?? 0)),
+            'output_tokens' => max(0, (int) ($completion['output_tokens'] ?? 0)),
+            'total_tokens' => max(0, (int) ($completion['total_tokens'] ?? 0)),
+            'prompt_chars' => max(0, (int) ($completion['prompt_chars'] ?? 0)),
+            'response_chars' => max(0, (int) ($completion['response_chars'] ?? 0)),
+        ];
+    }
+
+    /** @param array<string, mixed> $attributes */
+    private function recordRequestLog(array $attributes): void
+    {
+        if (!$this->hasTable('v2_ticket_ai_request_log')) {
+            return;
+        }
+
+        try {
+            TicketAiRequestLog::record($attributes);
+        } catch (\Throwable) {
+            // AI assistance must remain usable when operational logging is unavailable.
+        }
+    }
+
+    private function providerHost(string $baseUrl): string
+    {
+        return trim((string) (parse_url($baseUrl, PHP_URL_HOST) ?: ''));
+    }
+
+    /** @param array<int, array{role:string,content:string}> $messages */
+    private function messageChars(array $messages): int
+    {
+        return array_sum(array_map(
+            static fn (array $message): int => mb_strlen((string) ($message['content'] ?? '')),
+            $messages
+        ));
+    }
+
+    private function positiveIntOrNull(mixed $value): ?int
+    {
+        return is_numeric($value) && (int) $value > 0 ? (int) $value : null;
+    }
+
+    private function hasTable(string $table): bool
+    {
+        try {
+            return app('db')->connection()->getSchemaBuilder()->hasTable($table);
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
     private function messageHash(string $message): string
     {
         $normalized = trim(str_replace(["\r\n", "\r"], "\n", $message));
@@ -419,6 +632,24 @@ class TicketAiAssistantService
     }
 
     private function groupSuggestionCounts($baseQuery, string $column): array
+    {
+        return (clone $baseQuery)
+            ->select($column, DB::raw('COUNT(*) as total'))
+            ->whereNotNull($column)
+            ->where($column, '!=', '')
+            ->groupBy($column)
+            ->orderByDesc('total')
+            ->limit(10)
+            ->get()
+            ->map(fn ($item) => [
+                $column => (string) ($item->{$column} ?? ''),
+                'total' => (int) ($item->total ?? 0),
+            ])
+            ->values()
+            ->all();
+    }
+
+    private function groupRequestCounts($baseQuery, string $column): array
     {
         return (clone $baseQuery)
             ->select($column, DB::raw('COUNT(*) as total'))
