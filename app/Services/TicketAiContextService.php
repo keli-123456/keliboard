@@ -27,6 +27,8 @@ class TicketAiContextService
         $this->loadContextRelations($ticket);
         $user = $ticket->user instanceof User ? $ticket->user : null;
         $scope = $this->scope($ticket);
+        $orders = $this->recentOrders($user, $scope);
+        unset($scope['_orders_allowed']);
 
         return [
             'scope' => $scope,
@@ -38,7 +40,7 @@ class TicketAiContextService
             ],
             'user' => $this->userSummary($user),
             'subscription' => $this->subscriptionSummary($user),
-            'orders' => $this->recentOrders($user, $scope),
+            'orders' => $orders,
             'risk' => $this->riskSummary($user),
             'conversation' => $this->conversation($ticket, $maxMessages),
             'instruction' => $this->sanitizer->sanitize((string) ($instruction ?? ''), 1000),
@@ -76,7 +78,7 @@ class TicketAiContextService
             $domainBelongsToAgent = $agentDomain
                 && $this->positiveInt($agentDomain->agent_user_id) === $agentUserId;
             $domain = $domainBelongsToAgent ? trim((string) $agentDomain->domain) : '';
-            $setting = $this->agentSetting($agentUserId, $agentDomainId);
+            $setting = $this->agentSetting($agentUserId, $domainBelongsToAgent ? $agentDomainId : null);
             $brand = trim((string) ($setting?->site_name ?? ''));
             if ($brand === '') {
                 $brand = $domain !== '' ? $domain : '代理站点';
@@ -101,6 +103,7 @@ class TicketAiContextService
                     'agent_domain_id' => null,
                     'brand_name' => '',
                     'domain' => '',
+                    '_orders_allowed' => false,
                 ];
             }
             $setting = $ticket->site->setting;
@@ -238,6 +241,10 @@ class TicketAiContextService
     /** @param array<string, mixed> $scope */
     private function restrictOrdersToScope(Builder $query, array $scope): void
     {
+        if (($scope['_orders_allowed'] ?? true) === false) {
+            $query->whereRaw('1 = 0');
+            return;
+        }
         $type = (string) ($scope['type'] ?? 'platform');
         $hasAgentContext = $this->hasTable('v2_agent_order_context');
         $hasSiteContext = $this->hasTable('v2_site_order_context');

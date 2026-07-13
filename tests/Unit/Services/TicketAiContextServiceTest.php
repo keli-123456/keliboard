@@ -154,6 +154,17 @@ final class TicketAiContextServiceTest extends TestCase
             'created_at' => 100,
             'updated_at' => 100,
         ]);
+        Order::query()->create([
+            'site_id' => $missingSiteId,
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'period' => 'year_price',
+            'total_amount' => 9900,
+            'type' => Order::TYPE_NEW_PURCHASE,
+            'status' => Order::STATUS_COMPLETED,
+            'created_at' => 200,
+            'updated_at' => 200,
+        ]);
 
         $context = (new TicketAiContextService())->build(
             $this->createTicket($user, ['site_id' => $missingSiteId]),
@@ -221,6 +232,12 @@ final class TicketAiContextServiceTest extends TestCase
             'agent_user_id' => $agentB->id,
             'agent_domain_id' => $foreignDomain->id,
             'site_name' => '其他代理品牌',
+            'enabled' => true,
+        ]);
+        AgentSiteSetting::query()->create([
+            'agent_user_id' => $agentA->id,
+            'agent_domain_id' => $foreignDomain->id,
+            'site_name' => '域名转移前遗留品牌',
             'enabled' => true,
         ]);
         $user = $this->createUser();
