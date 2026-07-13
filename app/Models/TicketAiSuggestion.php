@@ -18,6 +18,10 @@ class TicketAiSuggestion extends Model
     protected $casts = [
         'knowledge_refs' => 'array',
         'matched_knowledge' => 'array',
+        'site_id' => 'integer',
+        'agent_user_id' => 'integer',
+        'agent_domain_id' => 'integer',
+        'structured_output' => 'boolean',
         'needs_human' => 'boolean',
         'confidence' => 'float',
         'edited' => 'boolean',
