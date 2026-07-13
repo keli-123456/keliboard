@@ -205,6 +205,8 @@ class AdminRoute
                 $router->any('/fetch', [TicketController::class, 'fetch']);
                 $router->post('/reply', [TicketController::class, 'reply']);
                 $router->post('/close', [TicketController::class, 'close']);
+                $router->get('/aiCapabilities', [TicketController::class, 'aiCapabilities']);
+                $router->post('/aiTestConnection', [TicketController::class, 'aiTestConnection']);
                 $router->post('/aiSuggest', [TicketController::class, 'aiSuggest']);
                 $router->post('/aiSuggestionFeedback', [TicketController::class, 'aiSuggestionFeedback']);
                 $router->get('/aiStats', [TicketController::class, 'aiStats']);

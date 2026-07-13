@@ -18,6 +18,10 @@ trait InteractsWithInMemoryDatabase
 
     protected function setUpInMemoryDatabase(): void
     {
+        Model::reguard();
+        $guardableColumns = new \ReflectionProperty(Model::class, 'guardableColumns');
+        $guardableColumns->setValue(null, []);
+
         $this->database = new Capsule(app());
         $this->database->addConnection([
             'driver' => 'sqlite',

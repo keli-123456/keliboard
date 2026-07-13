@@ -60,6 +60,10 @@ class ConfigSave extends FormRequest
         'ticket_ai_temperature' => 'nullable|numeric|min:0|max:1',
         'ticket_ai_max_messages' => 'nullable|integer|min:3|max:30',
         'ticket_ai_knowledge_enable' => 'boolean',
+        'ticket_ai_max_tokens' => 'nullable|integer|min:128|max:4096',
+        'ticket_ai_timeout' => 'nullable|integer|min:5|max:120',
+        'ticket_ai_json_mode' => 'boolean',
+        'ticket_ai_log_retention_days' => 'nullable|integer|min:7|max:365',
         'ticket_ai_system_prompt' => 'nullable|string|max:5000',
         // site
         'logo' => 'nullable|url',

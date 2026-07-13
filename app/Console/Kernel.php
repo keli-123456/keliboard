@@ -56,6 +56,7 @@ class Kernel extends ConsoleKernel
         $schedule->command('horizon:snapshot')->everyFiveMinutes()->onOneServer();
         $this->scheduleDatabaseBackup($schedule);
         $schedule->command('cleanup:expired-online-status')->everyMinute()->onOneServer()->withoutOverlapping(4);
+        $schedule->command('cleanup:ticket-ai-logs')->dailyAt('3:40')->onOneServer()->withoutOverlapping();
         $schedule->command('cleanup:ticket')->dailyAt('3:20')->onOneServer()->withoutOverlapping();
         if (config('tickets.attachments.prewarm_schedule', false)) {
             $schedule->command('ticket:prewarm-thumbnails', [

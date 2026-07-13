@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\V2\Admin;
 
+use App\Exceptions\TicketAiProviderException;
 use App\Http\Controllers\Controller;
 use App\Models\TicketMessageAttachment;
 use App\Models\Ticket;
@@ -630,6 +631,22 @@ class TicketController extends Controller
         ]);
     }
 
+    public function aiCapabilities(Request $request, TicketAiAssistantService $assistant)
+    {
+        return $this->success($assistant->capabilities());
+    }
+
+    public function aiTestConnection(Request $request, TicketAiAssistantService $assistant)
+    {
+        try {
+            return $this->success($assistant->testConnection($request->user()?->id));
+        } catch (TicketAiProviderException $exception) {
+            return $this->fail([422, $exception->errorCode()]);
+        } catch (\RuntimeException $exception) {
+            return $this->fail([422, $exception->getMessage()]);
+        }
+    }
+
     public function aiSuggest(Request $request, TicketAiAssistantService $assistant)
     {
         $params = $request->validate([
@@ -646,6 +663,8 @@ class TicketController extends Controller
 
         try {
             return $this->success($assistant->suggest($ticket, $params['instruction'] ?? null, $request->user()?->id));
+        } catch (TicketAiProviderException $e) {
+            return $this->fail([422, $e->errorCode()]);
         } catch (\RuntimeException $e) {
             return $this->fail([422, $e->getMessage()]);
         }
