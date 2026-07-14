@@ -1219,6 +1219,7 @@ final class ServerMachineControllerTest extends TestCase
                 'status' => 'running',
                 'component' => 'core',
                 'target_version' => 'v0.1.1',
+                'expected_binary_sha256' => str_repeat('a', 64),
                 'requested_at' => now()->timestamp,
             ],
         ]);
@@ -1231,6 +1232,7 @@ final class ServerMachineControllerTest extends TestCase
                 'token' => 'machine-token',
                 'status' => [
                     'version' => 'v0.1.4',
+                    'runtime' => ['binary_sha256' => str_repeat('a', 64)],
                     'core' => [
                         'versions' => [
                             'keli-core-rs' => 'v0.1.1',
@@ -1264,6 +1266,7 @@ final class ServerMachineControllerTest extends TestCase
                 'status' => 'running',
                 'component' => 'kelinode-rs',
                 'target_version' => 'v0.1.330',
+                'expected_binary_sha256' => str_repeat('a', 64),
                 'requested_at' => now()->timestamp,
             ],
         ]);
@@ -1277,6 +1280,7 @@ final class ServerMachineControllerTest extends TestCase
                 'status' => [
                     'version' => 'v0.1.331',
                     'runtime' => [
+                        'binary_sha256' => str_repeat('a', 64),
                         'agent' => 'kelinode-rs',
                     ],
                 ],
@@ -1290,6 +1294,153 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame('v0.1.331', $state['current_version']);
     }
 
+    public function test_status_does_not_mark_upgrade_succeeded_when_runtime_hash_differs(): void
+    {
+        $this->bindSettings(['subscription_proxy_enable' => false]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-upgrade',
+            'token' => 'machine-token',
+            'is_active' => true,
+            'upgrade_state' => [
+                'id' => 'upgrade-node-hash-mismatch',
+                'status' => 'running',
+                'component' => 'node',
+                'target_version' => 'v0.1.343',
+                'expected_binary_sha256' => str_repeat('a', 64),
+                'requested_at' => now()->timestamp,
+            ],
+        ]);
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'version' => 'v0.1.343',
+                    'runtime' => ['binary_sha256' => str_repeat('b', 64)],
+                    'upgrade' => [
+                        'id' => 'upgrade-node-hash-mismatch',
+                        'status' => 'succeeded',
+                        'phase' => 'completed',
+                        'expected_binary_sha256' => str_repeat('a', 64),
+                    ],
+                ],
+            ]
+        ));
+
+        $state = ServerMachine::find($machine->id)?->upgrade_state ?? [];
+
+        $this->assertNull($response->getData(true)['upgrade']);
+        $this->assertSame('failed', $state['status']);
+        $this->assertSame('runtime_binary_sha256_mismatch', $state['error']);
+    }
+
+    public function test_status_marks_upgrade_succeeded_when_runtime_hash_matches_target(): void
+    {
+        $this->bindSettings(['subscription_proxy_enable' => false]);
+
+        $hash = str_repeat('a', 64);
+        $machine = ServerMachine::create([
+            'name' => 'edge-upgrade',
+            'token' => 'machine-token',
+            'is_active' => true,
+            'upgrade_state' => [
+                'id' => 'upgrade-node-hash-match',
+                'status' => 'running',
+                'component' => 'node',
+                'target_version' => 'v0.1.343',
+                'expected_binary_sha256' => $hash,
+                'requested_at' => now()->timestamp,
+            ],
+        ]);
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'version' => 'v0.1.343',
+                    'runtime' => ['binary_sha256' => $hash],
+                    'upgrade' => [
+                        'id' => 'upgrade-node-hash-match',
+                        'status' => 'succeeded',
+                        'phase' => 'completed',
+                        'expected_binary_sha256' => $hash,
+                    ],
+                ],
+            ]
+        ));
+
+        $state = ServerMachine::find($machine->id)?->upgrade_state ?? [];
+
+        $this->assertNull($response->getData(true)['upgrade']);
+        $this->assertSame('succeeded', $state['status']);
+        $this->assertSame($hash, $state['expected_binary_sha256']);
+        $this->assertSame($hash, $state['running_binary_sha256']);
+        $this->assertGreaterThan(0, (int) ($state['finished_at'] ?? 0));
+    }
+
+    public function test_status_copies_only_bounded_upgrade_report_fields(): void
+    {
+        $this->bindSettings(['subscription_proxy_enable' => false]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-upgrade',
+            'token' => 'machine-token',
+            'is_active' => true,
+            'upgrade_state' => [
+                'id' => 'upgrade-node-report',
+                'status' => 'running',
+                'component' => 'node',
+                'target_version' => 'v0.1.343',
+                'expected_binary_sha256' => str_repeat('a', 64),
+                'requested_at' => now()->timestamp,
+            ],
+        ]);
+
+        (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'version' => 'v0.1.342',
+                    'runtime' => ['binary_sha256' => str_repeat('a', 64)],
+                    'upgrade' => [
+                        'id' => 'upgrade-node-report',
+                        'status' => 'failed',
+                        'phase' => 'rollback_failed',
+                        'expected_archive_sha256' => str_repeat('b', 64),
+                        'expected_binary_sha256' => str_repeat('a', 64),
+                        'previous_binary_sha256' => str_repeat('c', 64),
+                        'installed_binary_sha256' => str_repeat('d', 64),
+                        'running_binary_sha256' => str_repeat('e', 64),
+                        'previous_pid' => 100,
+                        'running_pid' => 200,
+                        'rollback_performed' => true,
+                        'rollback_succeeded' => false,
+                        'rollback_error' => 'rollback_restart_failed',
+                        'unknown_secret' => 'must-not-persist',
+                    ],
+                ],
+            ]
+        ));
+
+        $state = ServerMachine::find($machine->id)?->upgrade_state ?? [];
+
+        $this->assertSame('failed', $state['status']);
+        $this->assertSame('rollback_failed', $state['phase']);
+        $this->assertSame(str_repeat('b', 64), $state['expected_archive_sha256']);
+        $this->assertSame(100, $state['previous_pid']);
+        $this->assertFalse($state['rollback_succeeded']);
+        $this->assertArrayNotHasKey('unknown_secret', $state);
+    }
     private function createTables(): void
     {
         Schema::create('v2_server_machine', function (Blueprint $table): void {

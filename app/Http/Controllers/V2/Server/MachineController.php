@@ -268,14 +268,7 @@ class MachineController extends Controller
         $component = $this->normalizeUpgradeComponent($state['component'] ?? 'node');
         $state['component'] = $component;
         $currentVersion = $this->currentVersionForUpgradeComponent($status, $component);
-        if ($targetVersion !== '' && $currentVersion !== '' && $this->versionsMatch($currentVersion, $targetVersion)) {
-            $state['status'] = 'succeeded';
-            $state['current_version'] = $currentVersion;
-            $state['finished_at'] = $state['finished_at'] ?? $now;
-            $state['updated_at'] = $now;
-            unset($state['error']);
-            return $state;
-        }
+        $reportedStatus = '';
 
         if (is_array($reported) && (string) ($reported['id'] ?? '') === (string) ($state['id'] ?? '')) {
             $reportedStatus = trim((string) ($reported['status'] ?? ''));
@@ -284,21 +277,57 @@ class MachineController extends Controller
                 $state['component'] = $reportedComponent;
                 $component = $reportedComponent;
             }
-            if (in_array($reportedStatus, ['running', 'failed', 'succeeded'], true)) {
-                $state['status'] = $reportedStatus;
+            $this->mergeUpgradeReportFields($state, $reported);
+
+            if ($reportedStatus === 'running') {
+                $state['status'] = 'running';
+                $state['started_at'] = $state['started_at'] ?? $now;
                 $state['updated_at'] = $now;
-                if ($reportedStatus === 'running') {
-                    $state['started_at'] = $state['started_at'] ?? $now;
-                    unset($state['error']);
-                } elseif ($reportedStatus === 'failed') {
+            } elseif ($reportedStatus === 'failed') {
+                $state['status'] = 'failed';
+                $state['finished_at'] = $state['finished_at'] ?? $now;
+                $state['updated_at'] = $now;
+                $state['error'] = $this->statusString(
+                    data_get($reported, 'error'),
+                    1000
+                ) ?: ($state['phase'] ?? 'upgrade_failed');
+            } elseif ($reportedStatus === 'succeeded') {
+                if ($this->upgradeIdentityMatches($state, $status)) {
+                    $state['status'] = 'succeeded';
                     $state['finished_at'] = $state['finished_at'] ?? $now;
-                    $state['error'] = $this->statusString(data_get($reported, 'error'), 1000);
-                } else {
-                    $state['finished_at'] = $state['finished_at'] ?? $now;
+                    $state['updated_at'] = $now;
                     $state['current_version'] = $currentVersion !== '' ? $currentVersion : $targetVersion;
+                    $runtimeHash = $this->statusHash(data_get($status, 'runtime.binary_sha256'));
+                    if ($runtimeHash !== null) {
+                        $state['running_binary_sha256'] = $runtimeHash;
+                    }
                     unset($state['error']);
+                } else {
+                    $state['status'] = 'failed';
+                    $state['finished_at'] = $state['finished_at'] ?? $now;
+                    $state['updated_at'] = $now;
+                    $state['error'] = $this->upgradeIdentityMismatchError($state, $status);
                 }
             }
+        }
+
+        if (
+            $reportedStatus === ''
+            && !in_array((string) ($state['status'] ?? ''), ['failed', 'succeeded'], true)
+            && $targetVersion !== ''
+            && $currentVersion !== ''
+            && $this->versionsMatch($currentVersion, $targetVersion)
+            && $this->upgradeIdentityMatches($state, $status)
+        ) {
+            $state['status'] = 'succeeded';
+            $state['current_version'] = $currentVersion;
+            $state['finished_at'] = $state['finished_at'] ?? $now;
+            $state['updated_at'] = $now;
+            $runtimeHash = $this->statusHash(data_get($status, 'runtime.binary_sha256'));
+            if ($runtimeHash !== null) {
+                $state['running_binary_sha256'] = $runtimeHash;
+            }
+            unset($state['error']);
         }
 
         $statusValue = (string) ($state['status'] ?? '');
@@ -307,12 +336,98 @@ class MachineController extends Controller
             $state['status'] = 'failed';
             $state['finished_at'] = $now;
             $state['updated_at'] = $now;
-            $state['error'] = 'upgrade_timeout';
+            $expectedHash = $this->statusHash($state['expected_binary_sha256'] ?? null);
+            $runtimeHash = $this->statusHash(data_get($status, 'runtime.binary_sha256'));
+            $state['error'] = $expectedHash === null || $runtimeHash === null
+                ? 'upgrade_identity_unavailable'
+                : 'upgrade_timeout';
         }
 
         return $state;
     }
 
+    private function mergeUpgradeReportFields(array &$state, array $reported): void
+    {
+        foreach (['phase', 'current_version', 'previous_version', 'rollback_error', 'error'] as $field) {
+            if (!array_key_exists($field, $reported)) {
+                continue;
+            }
+            $value = $this->statusString($reported[$field], 1000);
+            if ($value !== '') {
+                $state[$field] = $value;
+            }
+        }
+
+        foreach ([
+            'expected_archive_sha256',
+            'expected_binary_sha256',
+            'previous_binary_sha256',
+            'installed_binary_sha256',
+            'running_binary_sha256',
+        ] as $field) {
+            if (!array_key_exists($field, $reported)) {
+                continue;
+            }
+            $value = $this->statusHash($reported[$field]);
+            if ($value !== null) {
+                $state[$field] = $value;
+            }
+        }
+
+        foreach (['previous_pid', 'running_pid', 'started_at', 'finished_at', 'updated_at'] as $field) {
+            if (!array_key_exists($field, $reported)) {
+                continue;
+            }
+            $value = $this->statusInt($reported[$field]);
+            if ($value !== null) {
+                $state[$field] = $value;
+            }
+        }
+
+        foreach (['rollback_performed', 'rollback_succeeded'] as $field) {
+            if (!array_key_exists($field, $reported)) {
+                continue;
+            }
+            $value = $this->statusBool($reported[$field]);
+            if ($value !== null) {
+                $state[$field] = $value;
+            }
+        }
+    }
+
+    private function upgradeIdentityMatches(array $state, array $status): bool
+    {
+        $targetVersion = trim((string) ($state['target_version'] ?? ''));
+        $currentVersion = $this->currentVersionForUpgradeComponent(
+            $status,
+            $this->normalizeUpgradeComponent($state['component'] ?? 'node')
+        );
+        if (!$this->versionsMatch($currentVersion, $targetVersion)) {
+            return false;
+        }
+
+        $expectedHash = $this->statusHash($state['expected_binary_sha256'] ?? null);
+        if ($expectedHash === null) {
+            return false;
+        }
+
+        $runtimeHash = $this->statusHash(data_get($status, 'runtime.binary_sha256'));
+        return $runtimeHash !== null && hash_equals($expectedHash, $runtimeHash);
+    }
+
+    private function upgradeIdentityMismatchError(array $state, array $status): string
+    {
+        $expectedHash = trim((string) ($state['expected_binary_sha256'] ?? ''));
+        $runtimeHash = trim((string) data_get($status, 'runtime.binary_sha256', ''));
+        if ($expectedHash === '') {
+            return 'upgrade_identity_unavailable';
+        }
+        if (strcasecmp($expectedHash, $runtimeHash) !== 0) {
+            return 'runtime_binary_sha256_mismatch';
+        }
+
+        return 'runtime_version_mismatch';
+    }
     private function buildUpgradeCommand(ServerMachine $machine, string $panelBaseUrl): ?array
     {
         $state = is_array($machine->upgrade_state) ? $machine->upgrade_state : null;
@@ -330,6 +445,19 @@ class MachineController extends Controller
             return null;
         }
 
+        $component = $this->normalizeUpgradeComponent($state['component'] ?? 'node');
+        $distribution = app(MachineReleaseDistributionService::class);
+        $source = $distribution->source();
+        $release = $distribution->findLocalRelease(
+            $distribution->componentFromUpgradeComponent($component),
+            $targetVersion,
+            MachineReleaseDistributionService::PLATFORM_LINUX_X86_64
+        );
+        if ($release) {
+            $state['expected_archive_sha256'] = strtolower((string) $release->sha256);
+            $state['expected_binary_sha256'] = strtolower((string) $release->binary_sha256);
+        }
+
         $state['status'] = 'dispatched';
         $state['dispatched_at'] = now()->timestamp;
         $state['updated_at'] = now()->timestamp;
@@ -337,12 +465,16 @@ class MachineController extends Controller
 
         $command = [
             'id' => (string) ($state['id'] ?? ''),
-            'component' => $this->normalizeUpgradeComponent($state['component'] ?? 'node'),
+            'component' => $component,
             'target_version' => $targetVersion,
         ];
+        if ($release) {
+            $command += [
+                'expected_archive_sha256' => strtolower((string) $release->sha256),
+                'expected_binary_sha256' => strtolower((string) $release->binary_sha256),
+            ];
+        }
 
-        $distribution = app(MachineReleaseDistributionService::class);
-        $source = $distribution->source();
         $releaseBaseUrl = $distribution->releaseBaseUrl($panelBaseUrl);
         if ($source !== MachineReleaseDistributionService::SOURCE_GITHUB && $releaseBaseUrl !== '') {
             $command += [
@@ -354,7 +486,6 @@ class MachineController extends Controller
 
         return $command;
     }
-
     private function versionsMatch(string $current, string $target): bool
     {
         $current = ltrim(trim($current), 'vV');
@@ -417,6 +548,30 @@ class MachineController extends Controller
         return $int > 0 ? $int : null;
     }
 
+    private function statusBool(mixed $value): ?bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (!is_scalar($value)) {
+            return null;
+        }
+
+        return match (strtolower(trim((string) $value))) {
+            '1', 'true', 'yes' => true,
+            '0', 'false', 'no' => false,
+            default => null,
+        };
+    }
+
+    private function statusHash(mixed $value): ?string
+    {
+        if (!is_scalar($value)) {
+            return null;
+        }
+        $value = strtolower(trim((string) $value));
+        return preg_match('/^[a-f0-9]{64}$/', $value) === 1 ? $value : null;
+    }
     private function statusString(mixed $value, int $limit): string
     {
         if (!is_scalar($value)) {
