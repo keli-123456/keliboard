@@ -49,6 +49,7 @@ final class MachineReleaseManagementControllerTest extends TestCase
 
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame('v0.1.308', $payload['data']['version']);
+        $this->assertSame(str_repeat('b', 64), $payload['data']['binary_sha256']);
         $this->assertTrue($payload['data']['is_default']);
         Storage::disk('local')->assertExists(
             'kelinode-rs/releases/kelinode-rs/v0.1.308/linux-x86_64/keli-native-node-v0.1.308-linux-x86_64.manifest.json'
@@ -57,6 +58,37 @@ final class MachineReleaseManagementControllerTest extends TestCase
             'kelinode-rs/releases/kelinode-rs/v0.1.308/linux-x86_64/keli-native-node-v0.1.308-linux-x86_64.tar.gz'
         );
         $this->assertSame('v0.1.308', app(MachineReleaseDistributionService::class)->latestLocalVersion('kelinode-rs', 'linux-x86_64'));
+    }
+
+    public function test_upload_rejects_manifest_without_binary_sha256(): void
+    {
+        Storage::fake('local');
+        $archiveContent = 'native-node-tarball';
+        $sha256 = hash('sha256', $archiveContent);
+        $manifest = json_decode(
+            $this->manifestJson('kelinode-rs', 'v0.1.308', 'linux-x86_64', $sha256),
+            true,
+            512,
+            JSON_THROW_ON_ERROR
+        );
+        unset($manifest['binary_sha256']);
+        $request = Request::create('/admin/server/machine/release/upload', 'POST', [
+            'component' => 'kelinode-rs',
+            'version' => 'v0.1.308',
+            'platform' => 'linux-x86_64',
+        ], [], [
+            'manifest' => $this->upload(
+                'keli-native-node-v0.1.308-linux-x86_64.manifest.json',
+                json_encode($manifest, JSON_THROW_ON_ERROR)
+            ),
+            'archive' => $this->upload('keli-native-node-v0.1.308-linux-x86_64.tar.gz', $archiveContent),
+        ]);
+
+        $response = (new MachineReleaseManagementController(app(MachineReleaseDistributionService::class)))->upload($request);
+
+        $this->assertSame(422, $response->getStatusCode());
+        $this->assertSame('Manifest binary_sha256 无效', $response->getData(true)['message']);
+        $this->assertCount(0, ServerMachineRelease::query()->get());
     }
 
     public function test_upload_accepts_github_release_manifest_name_field(): void
@@ -150,6 +182,34 @@ final class MachineReleaseManagementControllerTest extends TestCase
         $this->assertNotNull(ServerMachineRelease::find($release->id));
     }
 
+    public function test_find_local_release_requires_active_record_and_existing_artifacts(): void
+    {
+        Storage::fake('local');
+        Storage::disk('local')->put('present.manifest.json', '{}');
+        Storage::disk('local')->put('present.tar.gz', 'archive');
+
+        ServerMachineRelease::create([
+            'component' => 'kelinode-rs',
+            'version' => 'v0.1.308',
+            'platform' => 'linux-x86_64',
+            'manifest_path' => 'present.manifest.json',
+            'archive_path' => 'present.tar.gz',
+            'sha256' => str_repeat('a', 64),
+            'binary_sha256' => str_repeat('b', 64),
+            'size' => 7,
+            'is_default' => true,
+            'status' => ServerMachineRelease::STATUS_ACTIVE,
+        ]);
+
+        $release = app(MachineReleaseDistributionService::class)->findLocalRelease(
+            'kelinode-rs',
+            'v0.1.308',
+            'linux-x86_64'
+        );
+
+        $this->assertNotNull($release);
+        $this->assertSame(str_repeat('b', 64), $release->binary_sha256);
+    }
     private function createTables(): void
     {
         Schema::create('v2_server_machine_release', function (Blueprint $table): void {
@@ -160,6 +220,7 @@ final class MachineReleaseManagementControllerTest extends TestCase
             $table->string('manifest_path', 512);
             $table->string('archive_path', 512);
             $table->char('sha256', 64);
+            $table->char('binary_sha256', 64)->nullable();
             $table->unsignedBigInteger('size')->default(0);
             $table->boolean('is_default')->default(false);
             $table->string('status', 16)->default('active');
@@ -184,6 +245,7 @@ final class MachineReleaseManagementControllerTest extends TestCase
             'asset' => ($component === 'keli-core-rs' ? 'keli-core-rs' : 'keli-native-node') . '-' . $version . '-' . $platform . '.tar.gz',
             'binary' => $component === 'keli-core-rs' ? 'keli-core-rs' : 'kelinode',
             'sha256' => $sha256,
+            'binary_sha256' => str_repeat('b', 64),
         ], JSON_THROW_ON_ERROR);
     }
 
@@ -195,6 +257,7 @@ final class MachineReleaseManagementControllerTest extends TestCase
             'platform' => $platform,
             'archive' => 'keli-native-node-' . $version . '-' . $platform . '.tar.gz',
             'sha256' => $sha256,
+            'binary_sha256' => str_repeat('b', 64),
             'binary' => 'kelinode',
             'binaries' => [
                 'agent' => 'bin/kelinode',

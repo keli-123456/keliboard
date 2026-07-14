@@ -30,6 +30,7 @@ class ServerMachineRelease extends Model
             'manifest_path' => (string) $this->manifest_path,
             'archive_path' => (string) $this->archive_path,
             'sha256' => (string) $this->sha256,
+            'binary_sha256' => (string) $this->binary_sha256,
             'size' => (int) $this->size,
             'is_default' => (bool) $this->is_default,
             'status' => (string) $this->status,

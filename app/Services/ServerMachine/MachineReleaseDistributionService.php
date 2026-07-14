@@ -182,6 +182,33 @@ final class MachineReleaseDistributionService
             ->all();
     }
 
+    public function findLocalRelease(string $component, string $version, string $platform): ?ServerMachineRelease
+    {
+        $component = $this->normalizeComponent($component) ?? '';
+        $version = $this->normalizeVersion($version) ?? '';
+        $platform = $this->normalizePlatform($platform) ?? '';
+        if ($component === '' || $version === '' || $platform === '' || !$this->releaseTableExists()) {
+            return null;
+        }
+
+        $release = ServerMachineRelease::query()
+            ->where('component', $component)
+            ->where('version', $version)
+            ->where('platform', $platform)
+            ->where('status', ServerMachineRelease::STATUS_ACTIVE)
+            ->first();
+
+        if (
+            !$release
+            || !Storage::disk('local')->exists((string) $release->manifest_path)
+            || !Storage::disk('local')->exists((string) $release->archive_path)
+        ) {
+            return null;
+        }
+
+        return $release;
+    }
+
     public function storeLocalRelease(
         string $component,
         string $version,
@@ -209,6 +236,11 @@ final class MachineReleaseDistributionService
         if ($manifestSha256 === '' || !hash_equals($sha256, $manifestSha256)) {
             throw new InvalidArgumentException('Manifest SHA256 与压缩包不一致');
         }
+
+        $binarySha256 = strtolower(trim((string) data_get($manifestData, 'binary_sha256', '')));
+        if (!preg_match('/^[a-f0-9]{64}$/', $binarySha256)) {
+            throw new InvalidArgumentException('Manifest binary_sha256 无效');
+        }
         if (!$this->manifestComponentMatches($manifestData, $component)) {
             throw new InvalidArgumentException('Manifest component 与表单不一致');
         }
@@ -234,7 +266,7 @@ final class MachineReleaseDistributionService
 
         $size = (int) ($archive->getSize() ?: filesize($archivePath) ?: 0);
 
-        $release = DB::transaction(function () use ($component, $version, $platform, $manifestPath, $releaseArchivePath, $sha256, $size, $makeDefault): ServerMachineRelease {
+        $release = DB::transaction(function () use ($component, $version, $platform, $manifestPath, $releaseArchivePath, $sha256, $binarySha256, $size, $makeDefault): ServerMachineRelease {
             $existing = ServerMachineRelease::query()
                 ->where('component', $component)
                 ->where('version', $version)
@@ -262,6 +294,7 @@ final class MachineReleaseDistributionService
                 'manifest_path' => $manifestPath,
                 'archive_path' => $releaseArchivePath,
                 'sha256' => $sha256,
+                'binary_sha256' => $binarySha256,
                 'size' => $size,
                 'is_default' => $shouldBeDefault,
                 'status' => ServerMachineRelease::STATUS_ACTIVE,
