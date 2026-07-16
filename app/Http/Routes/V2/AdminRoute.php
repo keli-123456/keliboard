@@ -61,6 +61,7 @@ class AdminRoute
                 'prefix' => 'plan'
             ], function ($router) {
                 $router->get('/fetch', [PlanController::class, 'fetch']);
+                $router->get('/fetchStats', [PlanController::class, 'fetchStats']);
                 $router->post('/save', [PlanController::class, 'save']);
                 $router->post('/applyUsers', [PlanController::class, 'applyUsers']);
                 $router->post('/drop', [PlanController::class, 'drop']);

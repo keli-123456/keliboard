@@ -4,6 +4,7 @@ namespace App\Http\Controllers\V2\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\TrafficNodeLogResource;
+use App\Models\AgentUser;
 use App\Models\CommissionLog;
 use App\Models\Order;
 use App\Models\Server;
@@ -73,17 +74,10 @@ class StatController extends Controller
 
         // 获取今日流量统计
         $todayStart = strtotime('today');
-        $todayTraffic = StatServer::where('record_at', '>=', $todayStart)
-            ->where('record_at', '<', $now)
-            ->selectRaw('SUM(u) as upload, SUM(d) as download, SUM(u + d) as total')
-            ->first();
-
-        // 获取本月流量统计
         $monthStart = strtotime(date('Y-m-1'));
-        $monthTraffic = StatServer::where('record_at', '>=', $monthStart)
-            ->where('record_at', '<', $now)
-            ->selectRaw('SUM(u) as upload, SUM(d) as download, SUM(u + d) as total')
-            ->first();
+        $trafficBySite = $this->buildTrafficBySite($todayStart, $monthStart, $now);
+        $todayTraffic = $this->summarizeTrafficBySite($trafficBySite, 'today');
+        $monthTraffic = $this->summarizeTrafficBySite($trafficBySite, 'month');
 
         // 获取总流量统计
         $totalTraffic = StatServer::selectRaw('SUM(u) as upload, SUM(d) as download, SUM(u + d) as total')
@@ -122,15 +116,16 @@ class StatController extends Controller
             'online_devices' => $onlineDevices,
             'online_users' => $onlineUsers,
             'today_traffic' => [
-                'upload' => $todayTraffic->upload ?? 0,
-                'download' => $todayTraffic->download ?? 0,
-                'total' => $todayTraffic->total ?? 0
+                'upload' => $todayTraffic['upload'],
+                'download' => $todayTraffic['download'],
+                'total' => $todayTraffic['total']
             ],
             'month_traffic' => [
-                'upload' => $monthTraffic->upload ?? 0,
-                'download' => $monthTraffic->download ?? 0,
-                'total' => $monthTraffic->total ?? 0
+                'upload' => $monthTraffic['upload'],
+                'download' => $monthTraffic['download'],
+                'total' => $monthTraffic['total']
             ],
+            'traffic_by_site' => $trafficBySite,
             'total_traffic' => [
                 'upload' => $totalTraffic->upload ?? 0,
                 'download' => $totalTraffic->download ?? 0,
@@ -158,6 +153,7 @@ class StatController extends Controller
             'onlineUsers' => $data['online_users'],
             'todayTraffic' => $data['today_traffic'],
             'monthTraffic' => $data['month_traffic'],
+            'trafficBySite' => $data['traffic_by_site'],
             'totalTraffic' => $data['total_traffic'],
         ]);
     }
@@ -417,17 +413,9 @@ class StatController extends Controller
         $onlineNodes = $this->getOnlineNodeCount();
         ['online_devices' => $onlineDevices, 'online_users' => $onlineUsers] = $this->getOnlineOverview();
 
-        // 获取今日流量统计
-        $todayTraffic = StatServer::where('record_at', '>=', $todayStart)
-            ->where('record_at', '<', $now)
-            ->selectRaw('SUM(u) as upload, SUM(d) as download, SUM(u + d) as total')
-            ->first();
-
-        // 获取本月流量统计
-        $monthTraffic = StatServer::where('record_at', '>=', $currentMonthStart)
-            ->where('record_at', '<', $now)
-            ->selectRaw('SUM(u) as upload, SUM(d) as download, SUM(u + d) as total')
-            ->first();
+        $trafficBySite = $this->buildTrafficBySite($todayStart, $currentMonthStart, $now);
+        $todayTraffic = $this->summarizeTrafficBySite($trafficBySite, 'today');
+        $monthTraffic = $this->summarizeTrafficBySite($trafficBySite, 'month');
 
         // 获取总流量统计
         $totalTraffic = StatServer::selectRaw('SUM(u) as upload, SUM(d) as download, SUM(u + d) as total')
@@ -538,15 +526,16 @@ class StatController extends Controller
 
             // 流量统计
             'todayTraffic' => [
-                'upload' => $todayTraffic->upload ?? 0,
-                'download' => $todayTraffic->download ?? 0,
-                'total' => $todayTraffic->total ?? 0
+                'upload' => $todayTraffic['upload'],
+                'download' => $todayTraffic['download'],
+                'total' => $todayTraffic['total']
             ],
             'monthTraffic' => [
-                'upload' => $monthTraffic->upload ?? 0,
-                'download' => $monthTraffic->download ?? 0,
-                'total' => $monthTraffic->total ?? 0
+                'upload' => $monthTraffic['upload'],
+                'download' => $monthTraffic['download'],
+                'total' => $monthTraffic['total']
             ],
+            'trafficBySite' => $trafficBySite,
             'totalTraffic' => [
                 'upload' => $totalTraffic->upload ?? 0,
                 'download' => $totalTraffic->download ?? 0,
@@ -669,6 +658,108 @@ class StatController extends Controller
         });
 
         return $items;
+    }
+
+    private function buildTrafficBySite(int $todayStart, int $monthStart, int $endAt): array
+    {
+        $trafficQuery = StatUser::query()
+            ->from('v2_stat_user as stats')
+            ->join('v2_user as users', 'users.id', '=', 'stats.user_id')
+            ->selectRaw(
+                'users.site_id as site_id, '
+                . 'SUM(CASE WHEN stats.record_at >= ? THEN stats.u ELSE 0 END) as today_upload, '
+                . 'SUM(CASE WHEN stats.record_at >= ? THEN stats.d ELSE 0 END) as today_download, '
+                . 'SUM(stats.u) as month_upload, SUM(stats.d) as month_download',
+                [$todayStart, $todayStart]
+            )
+            ->where('stats.record_type', 'd')
+            ->where('stats.record_at', '>=', $monthStart)
+            ->where('stats.record_at', '<', $endAt);
+
+        if (Schema::hasTable('v2_agent_user')) {
+            $trafficQuery->whereNotIn('stats.user_id', AgentUser::query()->select('sub_user_id'));
+        }
+
+        $trafficRows = $trafficQuery
+            ->groupBy('users.site_id')
+            ->get();
+
+        $trafficBySiteId = $trafficRows->keyBy(fn ($row): string => (string) ($row->site_id ?? 'platform'));
+        $siteIds = $trafficRows
+            ->pluck('site_id')
+            ->filter(fn ($siteId): bool => $siteId !== null)
+            ->map(fn ($siteId): int => (int) $siteId)
+            ->values()
+            ->all();
+
+        $sites = Site::query()
+            ->where(function ($query) use ($siteIds): void {
+                $query->where('status', Site::STATUS_ACTIVE);
+
+                if ($siteIds) {
+                    $query->orWhereIn('id', $siteIds);
+                }
+            })
+            ->orderBy('id')
+            ->get()
+            ->keyBy('id');
+
+        $items = [];
+        foreach ($sites as $site) {
+            $row = $trafficBySiteId->get((string) $site->id);
+            $items[] = $this->trafficSiteItem(
+                (int) $site->id,
+                (string) $site->code,
+                (string) $site->name,
+                $row
+            );
+        }
+
+        $items[] = $this->trafficSiteItem(
+            null,
+            'platform',
+            '主站',
+            $trafficBySiteId->get('platform')
+        );
+
+        usort($items, static function (array $a, array $b): int {
+            return ($b['month_total'] <=> $a['month_total'])
+                ?: ($b['today_total'] <=> $a['today_total'])
+                ?: strcmp((string) $a['site_name'], (string) $b['site_name']);
+        });
+
+        return $items;
+    }
+
+    private function trafficSiteItem(?int $siteId, string $siteCode, string $siteName, mixed $row): array
+    {
+        $todayUpload = (int) ($row->today_upload ?? 0);
+        $todayDownload = (int) ($row->today_download ?? 0);
+        $monthUpload = (int) ($row->month_upload ?? 0);
+        $monthDownload = (int) ($row->month_download ?? 0);
+
+        return [
+            'site_id' => $siteId,
+            'site_code' => $siteCode,
+            'site_name' => $siteName,
+            'today_upload' => $todayUpload,
+            'today_download' => $todayDownload,
+            'today_total' => $todayUpload + $todayDownload,
+            'month_upload' => $monthUpload,
+            'month_download' => $monthDownload,
+            'month_total' => $monthUpload + $monthDownload,
+        ];
+    }
+
+    private function summarizeTrafficBySite(array $items, string $period): array
+    {
+        $prefix = $period === 'today' ? 'today' : 'month';
+
+        return [
+            'upload' => array_sum(array_column($items, $prefix . '_upload')),
+            'download' => array_sum(array_column($items, $prefix . '_download')),
+            'total' => array_sum(array_column($items, $prefix . '_total')),
+        ];
     }
 
     private function platformIncome(int $startAt, int $endAt): int

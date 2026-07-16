@@ -83,7 +83,10 @@ class StatUserNodeDayJob implements ShouldQueue
             }
             $this->upsertRowsForMySqlWithRetry($rows);
         } catch (\Throwable $e) {
-            Log::error('StatUserNodeDayJob failed for server ' . ($this->server['id'] ?? 'unknown') . ': ' . $e->getMessage());
+            Log::error('StatUserNodeDayJob failed', [
+                'server_id' => $this->server['id'] ?? null,
+                'error' => $this->summarizeDatabaseError($e),
+            ]);
             throw $e;
         }
     }
@@ -117,12 +120,19 @@ class StatUserNodeDayJob implements ShouldQueue
                     Log::warning('StatUserNodeDayJob retrying MySQL deadlock', [
                         'server_id' => $this->server['id'] ?? null,
                         'attempt' => $attempt,
-                        'error' => $e->getMessage(),
+                        'error' => $this->summarizeDatabaseError($e),
                     ]);
-                    usleep($attempt * 100000);
+                    usleep(($attempt * 100000) + random_int(0, 150000));
                 }
             }
         }
+    }
+
+    protected function summarizeDatabaseError(\Throwable $e): string
+    {
+        $message = preg_split('/\s+\(Connection:/i', $e->getMessage(), 2)[0] ?? $e->getMessage();
+
+        return mb_substr(trim($message), 0, 500);
     }
 
     private function isMySqlDeadlock(\Throwable $e): bool

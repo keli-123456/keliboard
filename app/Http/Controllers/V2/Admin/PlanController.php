@@ -21,6 +21,15 @@ class PlanController extends Controller
             ->with([
                 'group:id,name'
             ])
+            ->get();
+
+        return $this->success($plans);
+    }
+
+    public function fetchStats(Request $request)
+    {
+        $stats = Plan::query()
+            ->select('id')
             ->withCount([
                 'users',
                 'users as active_users_count' => function ($query) {
@@ -32,7 +41,7 @@ class PlanController extends Controller
             ])
             ->get();
 
-        return $this->success($plans);
+        return $this->success($stats);
     }
 
     public function save(PlanSave $request)

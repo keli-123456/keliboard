@@ -6,10 +6,13 @@ namespace Tests\Unit\Http;
 
 use App\Http\Controllers\V2\Admin\StatController;
 use App\Models\AgentOrderContext;
+use App\Models\AgentUser;
 use App\Models\Order;
 use App\Models\Site;
+use App\Models\StatUser;
 use App\Models\User;
 use App\Services\StatisticalService;
+use Illuminate\Database\Schema\Blueprint;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
 
@@ -27,6 +30,8 @@ final class AdminDashboardSiteIncomeTest extends TestCase
         $this->createUserTable();
         $this->createOrderTable();
         $this->createAgentCommerceTables();
+        $this->createAgentCenterTables();
+        $this->createStatUserTable();
     }
 
     public function test_today_income_breakdown_groups_paid_orders_by_site_and_platform(): void
@@ -185,6 +190,121 @@ final class AdminDashboardSiteIncomeTest extends TestCase
             ],
         ], $breakdown);
     }
+
+    public function test_traffic_breakdown_groups_daily_and_monthly_usage_by_site_and_excludes_agent_users(): void
+    {
+        $monthStart = strtotime('2026-06-01 00:00:00');
+        $todayStart = strtotime('2026-06-24 00:00:00');
+        $now = $todayStart + 3600;
+
+        $miaosu = Site::query()->create([
+            'code' => 'miaosu',
+            'name' => '秒速云',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+            'created_at' => $monthStart,
+            'updated_at' => $monthStart,
+        ]);
+        $lion = Site::query()->create([
+            'code' => 'lion',
+            'name' => 'LionCloud',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+            'created_at' => $monthStart,
+            'updated_at' => $monthStart,
+        ]);
+        $idle = Site::query()->create([
+            'code' => 'idle',
+            'name' => '零流量站',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+            'created_at' => $monthStart,
+            'updated_at' => $monthStart,
+        ]);
+
+        $platformUser = $this->createDashboardUser('platform-traffic@example.test', null, $monthStart);
+        $miaosuUser = $this->createDashboardUser('miaosu-traffic@example.test', $miaosu->id, $monthStart);
+        $lionUser = $this->createDashboardUser('lion-traffic@example.test', $lion->id, $monthStart);
+        $agentUser = $this->createDashboardUser('agent-traffic@example.test', $miaosu->id, $monthStart);
+
+        AgentUser::query()->create([
+            'agent_user_id' => 999,
+            'sub_user_id' => $agentUser->id,
+            'created_at' => $monthStart,
+            'updated_at' => $monthStart,
+        ]);
+
+        $this->createTraffic($platformUser->id, $todayStart, 10, 20);
+        $this->createTraffic($miaosuUser->id, $monthStart + 60, 100, 200);
+        $this->createTraffic($miaosuUser->id, $todayStart, 30, 40);
+        $this->createTraffic($lionUser->id, $todayStart, 50, 60);
+        $this->createTraffic($agentUser->id, $todayStart, 700, 800);
+
+        $method = new \ReflectionMethod(StatController::class, 'buildTrafficBySite');
+        $method->setAccessible(true);
+        $controller = new StatController(new StatisticalService());
+        $breakdown = $method->invoke($controller, $todayStart, $monthStart, $now);
+
+        $this->assertSame([
+            [
+                'site_id' => $miaosu->id,
+                'site_code' => 'miaosu',
+                'site_name' => '秒速云',
+                'today_upload' => 30,
+                'today_download' => 40,
+                'today_total' => 70,
+                'month_upload' => 130,
+                'month_download' => 240,
+                'month_total' => 370,
+            ],
+            [
+                'site_id' => $lion->id,
+                'site_code' => 'lion',
+                'site_name' => 'LionCloud',
+                'today_upload' => 50,
+                'today_download' => 60,
+                'today_total' => 110,
+                'month_upload' => 50,
+                'month_download' => 60,
+                'month_total' => 110,
+            ],
+            [
+                'site_id' => null,
+                'site_code' => 'platform',
+                'site_name' => '主站',
+                'today_upload' => 10,
+                'today_download' => 20,
+                'today_total' => 30,
+                'month_upload' => 10,
+                'month_download' => 20,
+                'month_total' => 30,
+            ],
+            [
+                'site_id' => $idle->id,
+                'site_code' => 'idle',
+                'site_name' => '零流量站',
+                'today_upload' => 0,
+                'today_download' => 0,
+                'today_total' => 0,
+                'month_upload' => 0,
+                'month_download' => 0,
+                'month_total' => 0,
+            ],
+        ], $breakdown);
+
+        $summarize = new \ReflectionMethod(StatController::class, 'summarizeTrafficBySite');
+        $summarize->setAccessible(true);
+
+        $this->assertSame(
+            ['upload' => 90, 'download' => 120, 'total' => 210],
+            $summarize->invoke($controller, $breakdown, 'today')
+        );
+        $this->assertSame(
+            ['upload' => 190, 'download' => 320, 'total' => 510],
+            $summarize->invoke($controller, $breakdown, 'month')
+        );
+    }
+
     private function createOrder(string $tradeNo, ?int $siteId, int $amount, int $status, int $createdAt): Order
     {
         return Order::query()->create([
@@ -232,6 +352,35 @@ final class AdminDashboardSiteIncomeTest extends TestCase
             'status' => AgentOrderContext::STATUS_PAID,
             'created_at' => $createdAt,
             'updated_at' => $createdAt,
+        ]);
+    }
+
+    private function createStatUserTable(): void
+    {
+        $this->database->schema()->create('v2_stat_user', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('user_id')->index();
+            $table->decimal('server_rate', 10, 2)->default(1);
+            $table->bigInteger('u')->default(0);
+            $table->bigInteger('d')->default(0);
+            $table->char('record_type', 2)->default('d');
+            $table->integer('record_at')->index();
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+    }
+
+    private function createTraffic(int $userId, int $recordAt, int $upload, int $download): void
+    {
+        StatUser::query()->create([
+            'user_id' => $userId,
+            'server_rate' => 1,
+            'u' => $upload,
+            'd' => $download,
+            'record_type' => 'd',
+            'record_at' => $recordAt,
+            'created_at' => $recordAt,
+            'updated_at' => $recordAt,
         ]);
     }
 }

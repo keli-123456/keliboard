@@ -52,6 +52,20 @@ final class StatUserNodeDayJobTest extends TestCase
 
         $this->assertSame(1, $job->attempts);
     }
+
+    public function test_it_removes_the_sql_statement_from_database_error_logs(): void
+    {
+        $job = new DeadlockRetryStatUserNodeDayJob();
+        $summary = $job->summarize(new RuntimeException(
+            'SQLSTATE[40001]: Serialization failure: 1213 Deadlock found (Connection: mysql, SQL: INSERT INTO secret_table VALUES (1))'
+        ));
+
+        $this->assertSame(
+            'SQLSTATE[40001]: Serialization failure: 1213 Deadlock found',
+            $summary
+        );
+        $this->assertStringNotContainsString('secret_table', $summary);
+    }
 }
 
 final class DeadlockRetryStatUserNodeDayJob extends StatUserNodeDayJob
@@ -75,6 +89,11 @@ final class DeadlockRetryStatUserNodeDayJob extends StatUserNodeDayJob
         if ($this->attempts < 3) {
             throw new RuntimeException('SQLSTATE[40001]: Serialization failure: 1213 Deadlock found when trying to get lock');
         }
+    }
+
+    public function summarize(\Throwable $error): string
+    {
+        return $this->summarizeDatabaseError($error);
     }
 }
 

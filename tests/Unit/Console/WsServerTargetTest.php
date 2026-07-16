@@ -58,11 +58,60 @@ final class WsServerTargetTest extends TestCase
         $this->assertTrue($this->shouldDeliver($connection, ['targets' => []]));
     }
 
+    public function test_it_prefers_trusted_proxy_headers_for_realtime_remote_ip(): void
+    {
+        $connection = new WsServerTestConnection('127.0.0.1');
+        $request = new WsServerTestRequest([
+            'cf-connecting-ip' => '203.0.113.18',
+            'x-forwarded-for' => '198.51.100.20, 127.0.0.1',
+        ]);
+
+        $method = new ReflectionMethod(WsServer::class, 'resolveHandshakeRemoteIp');
+        $method->setAccessible(true);
+
+        $this->assertSame('203.0.113.18', $method->invoke(new WsServer(), $connection, $request));
+    }
+
+    public function test_it_rate_limits_duplicate_authentication_failures(): void
+    {
+        $method = new ReflectionMethod(WsServer::class, 'shouldLogAuthFailure');
+        $method->setAccessible(true);
+        $command = new WsServer();
+        $context = ['remote_ip' => '203.0.113.18', 'node_id' => 37, 'node_type' => 'v2node'];
+
+        $this->assertTrue($method->invoke($command, $context));
+        $this->assertFalse($method->invoke($command, $context));
+    }
+
     private function shouldDeliver(object $connection, ?array $message): bool
     {
         $method = new ReflectionMethod(WsServer::class, 'shouldDeliverMessage');
         $method->setAccessible(true);
 
         return (bool) $method->invoke(new WsServer(), $connection, $message);
+    }
+}
+
+final class WsServerTestConnection
+{
+    public function __construct(private readonly string $remoteIp)
+    {
+    }
+
+    public function getRemoteIp(): string
+    {
+        return $this->remoteIp;
+    }
+}
+
+final class WsServerTestRequest
+{
+    public function __construct(private readonly array $headers)
+    {
+    }
+
+    public function header(string $name, mixed $default = null): mixed
+    {
+        return $this->headers[$name] ?? $default;
     }
 }

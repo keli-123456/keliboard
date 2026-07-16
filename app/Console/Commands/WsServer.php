@@ -11,6 +11,8 @@ use Illuminate\Support\Facades\Redis;
 
 class WsServer extends Command
 {
+    private array $authFailureLogAt = [];
+
     protected $signature = 'ws-server {action=start : start|stop|restart|reload|status|connections} {--d : Run as daemon}';
 
     protected $description = 'Run the node realtime websocket server';
@@ -63,6 +65,9 @@ class WsServer extends Command
         $server->name = 'xboard-node-realtime';
         $server->count = 1;
         $server->reusePort = false;
+        $server->onWebSocketConnect = function ($connection, $request) {
+            $connection->xboard_forwarded_ip = $this->resolveHandshakeRemoteIp($connection, $request);
+        };
 
         $authenticator = app(NodeRealtimeAuthenticator::class);
         $connections = [];
@@ -187,24 +192,30 @@ class WsServer extends Command
                         'machine_id' => $payload['machine_id'] ?? null,
                     ]);
                 } catch (\Throwable $e) {
-                    Log::warning('Node realtime authentication failed with exception', [
+                    $context = [
                         'error' => $e->getMessage(),
                         'remote_ip' => $this->resolveRemoteIp($connection),
                         'node_id' => $payload['node_id'] ?? null,
                         'node_type' => $payload['node_type'] ?? null,
                         'machine_id' => $payload['machine_id'] ?? null,
-                    ]);
+                    ];
+                    if ($this->shouldLogAuthFailure($context)) {
+                        Log::warning('Node realtime authentication failed with exception', $context);
+                    }
                     $connection->close();
                     return;
                 }
 
                 if (!$auth) {
-                    Log::warning('Node realtime authentication failed', [
+                    $context = [
                         'remote_ip' => $this->resolveRemoteIp($connection),
                         'node_id' => $payload['node_id'] ?? null,
                         'node_type' => $payload['node_type'] ?? null,
                         'machine_id' => $payload['machine_id'] ?? null,
-                    ]);
+                    ];
+                    if ($this->shouldLogAuthFailure($context)) {
+                        Log::warning('Node realtime authentication failed', $context);
+                    }
                     $connection->send(json_encode([
                         'type' => 'error',
                         'message' => 'authentication failed',
@@ -403,7 +414,7 @@ class WsServer extends Command
             'updated_at' => date(DATE_ATOM),
         ];
 
-        Log::info('Node realtime receipt recorded', [
+        Log::debug('Node realtime receipt recorded', [
             'server_id' => $serverId,
             'node_id' => (string) ($connection->xboard_input_node_id ?? ''),
             'topic' => $topic,
@@ -599,6 +610,45 @@ class WsServer extends Command
 
     private function resolveRemoteIp(object $connection): ?string
     {
+        $forwardedIp = $connection->xboard_forwarded_ip ?? null;
+        if (is_string($forwardedIp) && filter_var($forwardedIp, FILTER_VALIDATE_IP)) {
+            return $forwardedIp;
+        }
+
+        return $this->resolvePeerIp($connection);
+    }
+
+    private function resolveHandshakeRemoteIp(object $connection, mixed $request): ?string
+    {
+        $peerIp = $this->resolvePeerIp($connection);
+        if (!in_array($peerIp, ['127.0.0.1', '::1'], true)) {
+            return $peerIp;
+        }
+
+        if (!is_object($request) || !method_exists($request, 'header')) {
+            return $peerIp;
+        }
+
+        foreach (['cf-connecting-ip', 'true-client-ip', 'x-real-ip'] as $header) {
+            $candidate = trim((string) $request->header($header, ''));
+            if (filter_var($candidate, FILTER_VALIDATE_IP)) {
+                return $candidate;
+            }
+        }
+
+        $forwardedFor = (string) $request->header('x-forwarded-for', '');
+        foreach (explode(',', $forwardedFor) as $candidate) {
+            $candidate = trim($candidate);
+            if (filter_var($candidate, FILTER_VALIDATE_IP)) {
+                return $candidate;
+            }
+        }
+
+        return $peerIp;
+    }
+
+    private function resolvePeerIp(object $connection): ?string
+    {
         try {
             if (method_exists($connection, 'getRemoteIp')) {
                 $remoteIp = $connection->getRemoteIp();
@@ -610,6 +660,30 @@ class WsServer extends Command
         }
 
         return null;
+    }
+
+    private function shouldLogAuthFailure(array $context, int $intervalSeconds = 300): bool
+    {
+        $key = implode('|', [
+            (string) ($context['remote_ip'] ?? ''),
+            (string) ($context['node_id'] ?? ''),
+            (string) ($context['node_type'] ?? ''),
+            (string) ($context['machine_id'] ?? ''),
+        ]);
+        $now = time();
+        if (($this->authFailureLogAt[$key] ?? 0) > $now - $intervalSeconds) {
+            return false;
+        }
+
+        $this->authFailureLogAt[$key] = $now;
+        if (count($this->authFailureLogAt) > 1000) {
+            $this->authFailureLogAt = array_filter(
+                $this->authFailureLogAt,
+                fn (int $loggedAt): bool => $loggedAt > $now - $intervalSeconds
+            );
+        }
+
+        return true;
     }
 
     private function formatTimestamp(int $timestamp): ?string
