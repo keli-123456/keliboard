@@ -24,6 +24,7 @@ class BootstrapController extends Controller
         $user = User::where('id', $request->user()->id)
             ->select([
                 'id',
+                'site_id',
                 'email',
                 'transfer_enable',
                 'last_login_at',

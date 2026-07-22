@@ -18,7 +18,7 @@ class KeliClientDiscoveryService
     {
         $payload = [
             'api_base' => $this->normalizeBaseUrl(
-                config('keli_client.discovery.api_base') ?: $request->getSchemeAndHttpHost()
+                config('keli_client.discovery.api_base') ?: $this->requestBaseUrl($request)
             ),
             'api_prefix' => $this->normalizeApiPrefix(
                 (string) config('keli_client.discovery.api_prefix', '/api/v1')
@@ -93,6 +93,16 @@ class KeliClientDiscoveryService
             $url = 'https://' . $url;
         }
         return rtrim($url, '/');
+    }
+
+    private function requestBaseUrl(Request $request): string
+    {
+        $forwardedProto = strtolower(trim(explode(',', (string) $request->header('X-Forwarded-Proto'))[0]));
+        $cfVisitor = json_decode((string) $request->header('CF-Visitor'), true);
+        $cfScheme = is_array($cfVisitor) ? strtolower((string) ($cfVisitor['scheme'] ?? '')) : '';
+        $secure = $request->isSecure() || $forwardedProto === 'https' || $cfScheme === 'https';
+
+        return ($secure ? 'https' : 'http') . '://' . $request->getHttpHost();
     }
 
     private function normalizeApiPrefix(string $value): string

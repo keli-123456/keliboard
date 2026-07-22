@@ -103,6 +103,8 @@ final class AppBootstrapContextPlanTest extends TestCase
 
         $payload = $this->bootstrapPayload($this->requestForHost('main.example.test', $user));
 
+        $this->assertSame('光喵', $payload['data']['app']['name']);
+        $this->assertSame($site->id, $payload['data']['app']['site_context']['site_id']);
         $this->assertSame('代理专属套餐', $payload['data']['subscribe']['plan']['name']);
         $this->assertSame('代理专属套餐', $payload['data']['subscribe']['plan']['agent_display_name']);
         $this->assertSame('光喵标准套餐', $payload['data']['subscribe']['plan']['site_display_name']);

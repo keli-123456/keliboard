@@ -67,6 +67,19 @@ final class KeliClientDiscoveryServiceTest extends TestCase
         ));
     }
 
+    public function test_payload_honors_https_forwarded_by_reverse_proxy(): void
+    {
+        config()->set('keli_client.discovery.api_base', null);
+        config()->set('keli_client.discovery.ed25519_private_key', null);
+
+        $request = Request::create('http://panel.example/.well-known/keli-client.json');
+        $request->headers->set('X-Forwarded-Proto', 'https');
+
+        $payload = (new KeliClientDiscoveryService())->payload($request);
+
+        $this->assertSame('https://panel.example', $payload['api_base']);
+    }
+
     private function decodeBase64Url(string $value): string
     {
         $base64 = strtr($value, '-_', '+/');
