@@ -26,7 +26,9 @@ use Illuminate\Support\Facades\Schema;
 class StatController extends Controller
 {
     private const USER_TRAFFIC_NOISE_FLOOR_BYTES = 10240;
-    private const ADMIN_STATS_CACHE_SECONDS = 15;
+    private const ADMIN_STATS_CACHE_SECONDS = 30;
+    private const ADMIN_STATS_STALE_SECONDS = 300;
+    private const ADMIN_STATS_REFRESH_LOCK_SECONDS = 120;
     private const ONLINE_NODE_COUNT_CACHE_SECONDS = 15;
 
     private $service;
@@ -56,9 +58,8 @@ class StatController extends Controller
 
     public function getOverride(Request $request)
     {
-        $data = Cache::remember(
+        $data = $this->cachedAdminStats(
             'admin:stats:getOverride',
-            now()->addSeconds(self::ADMIN_STATS_CACHE_SECONDS),
             fn (): array => $this->buildOverrideStatsPayload()
         );
 
@@ -389,13 +390,22 @@ class StatController extends Controller
      */
     public function getStats()
     {
-        $data = Cache::remember(
+        $data = $this->cachedAdminStats(
             'admin:stats:getStats',
-            now()->addSeconds(self::ADMIN_STATS_CACHE_SECONDS),
             fn (): array => $this->buildStatsPayload()
         );
 
         return $this->statSuccess($data);
+    }
+
+    private function cachedAdminStats(string $key, callable $resolver): array
+    {
+        return Cache::flexible(
+            $key,
+            [self::ADMIN_STATS_CACHE_SECONDS, self::ADMIN_STATS_STALE_SECONDS],
+            $resolver,
+            ['seconds' => self::ADMIN_STATS_REFRESH_LOCK_SECONDS]
+        );
     }
 
     private function buildStatsPayload(): array
