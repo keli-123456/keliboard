@@ -134,7 +134,10 @@ class CheckCommission extends Command
                 'user_id' => $order->user_id,
                 'trade_no' => $order->trade_no,
                 'order_amount' => $order->total_amount,
-                'get_amount' => $commissionBalance
+                'get_amount' => $commissionBalance,
+                'credited_to' => (int)admin_setting('withdraw_close_enable', 0)
+                    ? \App\Services\OrderRefundDispositionService::CREDIT_BALANCE
+                    : \App\Services\OrderRefundDispositionService::CREDIT_COMMISSION_BALANCE,
             ]);
             $inviteUserId = $inviter->invite_user_id;
             // update order actual commission balance

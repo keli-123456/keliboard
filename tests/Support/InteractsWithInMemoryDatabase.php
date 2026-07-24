@@ -293,6 +293,7 @@ trait InteractsWithInMemoryDatabase
             $table->bigInteger('u')->default(0);
             $table->bigInteger('d')->default(0);
             $table->boolean('banned')->default(false);
+            $table->string('banned_reason')->nullable();
             $table->boolean('is_admin')->default(false);
             $table->boolean('is_staff')->default(false);
             $table->boolean('remind_expire')->nullable()->default(true);
@@ -572,6 +573,8 @@ trait InteractsWithInMemoryDatabase
             $table->integer('discount_amount')->nullable();
             $table->integer('balance_amount')->nullable();
             $table->integer('refund_amount')->nullable();
+            $table->integer('refund_disposed_at')->nullable();
+            $table->integer('refund_disposed_by')->nullable();
             $table->integer('bonus_amount')->default(0);
             $table->integer('upgrade_quote_id')->nullable();
             $table->integer('upgrade_credit_amount')->nullable();
@@ -581,6 +584,7 @@ trait InteractsWithInMemoryDatabase
             $table->integer('commission_status')->default(0);
             $table->integer('commission_balance')->default(0);
             $table->integer('actual_commission_balance')->nullable();
+            $table->integer('commission_reversed_amount')->default(0);
             $table->integer('paid_at')->nullable();
             $table->integer('created_at')->nullable();
             $table->integer('updated_at')->nullable();

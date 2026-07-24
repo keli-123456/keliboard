@@ -12,6 +12,8 @@ use App\Models\Plan;
 use App\Models\User;
 use App\Services\AgentCommerceService;
 use App\Services\AgentOrderStatusResolver;
+use App\Services\AuthService;
+use App\Services\OrderRefundDispositionService;
 use App\Services\OrderService;
 use App\Services\PlanService;
 use App\Services\UserService;
@@ -143,6 +145,17 @@ class OrderController extends Controller
 
     private function applySpecialFilter(Builder $builder, string $field, mixed $value): bool
     {
+        if ($field === 'order_no') {
+            if (is_scalar($value) && trim((string) $value) !== '') {
+                $orderNo = trim((string) $value);
+                $builder->where(function (Builder $query) use ($orderNo): void {
+                    $query->where('trade_no', 'like', "%{$orderNo}%")
+                        ->orWhere('callback_no', 'like', "%{$orderNo}%");
+                });
+            }
+            return true;
+        }
+
         if ($field === 'tenant_source') {
             if (is_scalar($value)) {
                 $this->applyTenantSourceFilter($builder, trim((string) $value));
@@ -382,6 +395,54 @@ class OrderController extends Controller
             return $this->fail([400, '更新失败']);
         }
         return $this->success(true);
+    }
+
+    public function refundDispose(
+        Request $request,
+        OrderRefundDispositionService $refundDispositionService
+    ) {
+        $tradeNo = trim((string) $request->input('trade_no', ''));
+        if ($tradeNo === '') {
+            return $this->fail([400, '订单号不能为空']);
+        }
+
+        $order = Order::query()->where('trade_no', $tradeNo)->first();
+        if (!$order) {
+            return $this->fail([400202, '订单不存在']);
+        }
+
+        $adminId = (int) ($request->user()?->id ?? 0);
+        if ($adminId <= 0) {
+            return $this->fail([401, '管理员身份无效']);
+        }
+
+        try {
+            $result = $refundDispositionService->dispose($order, $adminId);
+        } catch (\InvalidArgumentException $e) {
+            return $this->fail([400, $e->getMessage()]);
+        } catch (\Throwable $e) {
+            Log::error('Refund disposition failed', [
+                'trade_no' => $tradeNo,
+                'admin_id' => $adminId,
+                'error' => $e->getMessage(),
+            ]);
+            return $this->fail([500, '退款处置失败']);
+        }
+
+        try {
+            $user = User::query()->find($result['user_id']);
+            if ($user) {
+                (new AuthService($user))->removeAllSessions();
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Refund disposition session cleanup failed', [
+                'trade_no' => $tradeNo,
+                'user_id' => $result['user_id'],
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return $this->success($result);
     }
 
     public function releaseAgentHold(Request $request)

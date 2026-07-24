@@ -35,6 +35,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property int|null $commission_status
  * @property int|null $invite_user_id
  * @property int|null $actual_commission_balance
+ * @property int $commission_reversed_amount
  * @property int|null $commission_rate
  * @property int|null $commission_auto_check
  * @property int|null $commission_balance
@@ -42,6 +43,8 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property int|null $bonus_amount
  * @property int|null $paid_at
  * @property string|null $callback_no
+ * @property int|null $refund_disposed_at
+ * @property int|null $refund_disposed_by
  *
  * @property-read Plan $plan
  * @property-read Payment|null $payment
@@ -63,6 +66,9 @@ class Order extends Model
         'bonus_amount' => 'integer',
         'upgrade_quote_id' => 'integer',
         'upgrade_credit_amount' => 'integer',
+        'commission_reversed_amount' => 'integer',
+        'refund_disposed_at' => 'integer',
+        'refund_disposed_by' => 'integer',
     ];
 
     const STATUS_PENDING = 0; // 待支付
