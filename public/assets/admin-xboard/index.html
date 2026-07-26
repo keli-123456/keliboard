@@ -1,13 +1,182 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Keli Admin</title>
-    <script type="module" crossorigin src="/assets/admin-xboard/assets/index.js?v=1a0ed5dfb33a"></script>
-    <link rel="stylesheet" crossorigin href="/assets/admin-xboard/assets/index.css?v=c5cfb2d4f9a6">
+    <style>
+      #xboard-admin-boot {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background: #f6f7f9;
+        color: #172033;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      #xboard-admin-boot-panel {
+        width: min(420px, 100%);
+        border: 1px solid #dfe3ea;
+        border-radius: 8px;
+        background: #fff;
+        padding: 24px;
+        box-shadow: 0 12px 32px rgb(15 23 42 / 8%);
+      }
+      #xboard-admin-boot-heading {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.5;
+      }
+      #xboard-admin-boot-indicator {
+        width: 10px;
+        height: 10px;
+        flex: 0 0 auto;
+        border-radius: 50%;
+        background: #0f8bc9;
+        box-shadow: 0 0 0 5px rgb(15 139 201 / 12%);
+      }
+      #xboard-admin-boot[data-state="error"] #xboard-admin-boot-indicator {
+        background: #dc3545;
+        box-shadow: 0 0 0 5px rgb(220 53 69 / 12%);
+      }
+      #xboard-admin-boot-detail {
+        margin: 10px 0 0;
+        color: #667085;
+        font-size: 14px;
+        line-height: 1.7;
+      }
+      #xboard-admin-boot-retry {
+        display: none;
+        width: 100%;
+        margin-top: 18px;
+        border: 0;
+        border-radius: 6px;
+        background: #0f8bc9;
+        color: #fff;
+        padding: 10px 16px;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      #xboard-admin-boot[data-state="error"] #xboard-admin-boot-retry { display: block; }
+      @media (prefers-color-scheme: dark) {
+        #xboard-admin-boot { background: #101318; color: #f4f6f8; }
+        #xboard-admin-boot-panel { border-color: #303641; background: #181c23; }
+        #xboard-admin-boot-detail { color: #a6adbb; }
+      }
+    </style>
+    <script>
+      (() => {
+        const recoveryKey = 'xboard_admin_boot_recovery_v1';
+        const issueKey = 'xboard_admin_runtime_issues_v1';
+        let ready = false;
+
+        const cleanMessage = (value) => String(value || '').trim().slice(0, 1000);
+        const pageUrl = () => `${location.origin}${location.pathname}${location.hash || ''}`;
+        const saveIssue = (kind, message, source, assetUrl = '') => {
+          try {
+            const parsed = JSON.parse(localStorage.getItem(issueKey) || '[]');
+            const issues = Array.isArray(parsed) ? parsed : [];
+            issues.unshift({
+              kind,
+              message: cleanMessage(message),
+              source: cleanMessage(source),
+              assetUrl: cleanMessage(assetUrl),
+              pageUrl: pageUrl(),
+              occurredAt: new Date().toISOString(),
+            });
+            localStorage.setItem(issueKey, JSON.stringify(issues.slice(0, 12)));
+          } catch {}
+        };
+        const showFailure = (message) => {
+          const boot = document.getElementById('xboard-admin-boot');
+          const detail = document.getElementById('xboard-admin-boot-detail');
+          if (!boot || !detail) return;
+          boot.dataset.state = 'error';
+          detail.textContent = cleanMessage(message) || '管理界面加载失败，请重新加载。';
+        };
+        const recoverOnce = (message, source, assetUrl = '') => {
+          saveIssue('asset', message, source, assetUrl);
+          let alreadyRecovered = false;
+          try {
+            const lastAttempt = Number(sessionStorage.getItem(recoveryKey) || 0);
+            alreadyRecovered = Date.now() - lastAttempt < 60_000;
+            if (!alreadyRecovered) sessionStorage.setItem(recoveryKey, String(Date.now()));
+          } catch {}
+
+          if (alreadyRecovered) {
+            showFailure(message);
+            return;
+          }
+
+          const url = new URL(location.href);
+          url.searchParams.set('__admin_recovery', String(Date.now()));
+          location.replace(url.toString());
+        };
+
+        window.__XBOARD_ADMIN_BOOT__ = {
+          markReady() {
+            ready = true;
+            try { sessionStorage.removeItem(recoveryKey); } catch {}
+            const url = new URL(location.href);
+            if (url.searchParams.has('__admin_recovery')) {
+              url.searchParams.delete('__admin_recovery');
+              history.replaceState(history.state, '', url.toString());
+            }
+          },
+          showFailure(message) {
+            saveIssue('boot', message, 'application');
+            showFailure(message);
+          },
+        };
+
+        window.addEventListener('error', (event) => {
+          const target = event.target;
+          if (target instanceof HTMLScriptElement && target.src) {
+            recoverOnce('后台脚本加载失败，已尝试刷新资源。', 'script', target.src);
+          } else if (target instanceof HTMLLinkElement && target.href) {
+            recoverOnce('后台样式加载失败，已尝试刷新资源。', 'stylesheet', target.href);
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', (event) => {
+          const message = cleanMessage(event.reason?.message || event.reason);
+          if (/chunk|dynamically imported|module script|load failed/i.test(message)) {
+            recoverOnce('后台资源版本不一致，已尝试重新加载。', 'unhandledrejection');
+          }
+        });
+
+        window.addEventListener('DOMContentLoaded', () => {
+          document.getElementById('xboard-admin-boot-retry')?.addEventListener('click', () => location.reload());
+        });
+
+        window.setTimeout(() => {
+          if (!ready && document.getElementById('xboard-admin-boot')) {
+            saveIssue('boot', 'Application startup timed out.', 'watchdog');
+            showFailure('后台启动时间过长，请重新加载页面。');
+          }
+        }, 12_000);
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/admin-xboard/assets/index.js?v=b89a038839de"></script>
+    <link rel="stylesheet" crossorigin href="/assets/admin-xboard/assets/index.css?v=897a929df588">
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="xboard-admin-boot" data-state="loading" role="status" aria-live="polite">
+        <div id="xboard-admin-boot-panel">
+          <h1 id="xboard-admin-boot-heading">
+            <span id="xboard-admin-boot-indicator" aria-hidden="true"></span>
+            管理后台正在启动
+          </h1>
+          <p id="xboard-admin-boot-detail">正在加载管理界面...</p>
+          <button id="xboard-admin-boot-retry" type="button">重新加载</button>
+        </div>
+      </div>
+    </div>
   </body>
 </html>
