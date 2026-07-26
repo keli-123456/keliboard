@@ -1,1 +1,0 @@
-import{l as s}from"./index.js";const i={fetch:()=>s.get("/site/fetch"),save:e=>s.post("/site/save",e),health:e=>s.get("/site/health",{params:{site_id:e}}),commerce:e=>s.get("/site/commerce",{params:{site_id:e}}),saveCommerce:e=>s.post("/site/commerce/save",e)};export{i as s};
