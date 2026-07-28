@@ -44,6 +44,10 @@ class MachineController extends Controller
             'webproxy_enabled' => 'nullable|boolean',
             'webproxy_path_prefix' => 'nullable|string|max:255',
             'webproxy_site_domain_id' => 'nullable|integer|min:1|exists:v2_site_domain,id',
+            'webproxy_bindings' => 'nullable|array|max:64',
+            'webproxy_bindings.*.site_domain_id' => 'nullable|integer|min:1|exists:v2_site_domain,id|distinct',
+            'webproxy_bindings.*.https_port' => 'required|integer|min:1|max:65535|distinct',
+            'webproxy_bindings.*.path_prefix' => 'nullable|string|max:255',
             'subproxy_https_port' => 'nullable|integer|min:1|max:65535',
             'subproxy_http_port' => 'nullable|integer|min:1|max:65535',
             'subproxy_cert_domain' => 'nullable|string|max:255',
@@ -76,6 +80,9 @@ class MachineController extends Controller
                 'webproxy_site_domain_id' => array_key_exists('webproxy_site_domain_id', $params)
                     ? ($params['webproxy_site_domain_id'] === null ? null : (int) $params['webproxy_site_domain_id'])
                     : ($machine->webproxy_site_domain_id ? (int) $machine->webproxy_site_domain_id : null),
+                'webproxy_bindings' => array_key_exists('webproxy_bindings', $params)
+                    ? $this->normalizeWebsiteProxyBindings($params['webproxy_bindings'])
+                    : $machine->webproxy_bindings,
                 'subproxy_https_port' => array_key_exists('subproxy_https_port', $params)
                     ? $this->normalizeNullablePort($params['subproxy_https_port'])
                     : $this->normalizeNullablePort($machine->subproxy_https_port ?? null),
@@ -897,6 +904,32 @@ class MachineController extends Controller
         }
         $port = (int) $value;
         return $port >= 1 && $port <= 65535 ? $port : null;
+    }
+
+    private function normalizeWebsiteProxyBindings(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $bindings = [];
+        foreach ($value as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $port = $this->normalizeNullablePort($row['https_port'] ?? null);
+            if ($port === null) {
+                continue;
+            }
+            $siteDomainId = (int) ($row['site_domain_id'] ?? 0);
+            $bindings[] = [
+                'site_domain_id' => $siteDomainId > 0 ? $siteDomainId : null,
+                'https_port' => $port,
+                'path_prefix' => $this->normalizeProxyPathPrefix($row['path_prefix'] ?? null) ?: '/',
+            ];
+        }
+
+        return $bindings;
     }
 
     private function normalizeProxyPathPrefix(mixed $value): ?string

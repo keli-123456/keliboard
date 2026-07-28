@@ -59,6 +59,39 @@ final class MachineWebsiteProxySiteBindingTest extends TestCase
         $this->assertSame($machine?->id, $this->publisher->payload['machine_id'] ?? null);
     }
 
+    public function test_save_persists_multiple_website_port_bindings(): void
+    {
+        $domainA = DB::table('v2_site_domain')->insertGetId([
+            'site_id' => 10,
+            'domain' => 'branch-a.example.test',
+            'status' => 'active',
+            'is_primary' => true,
+        ]);
+        $domainB = DB::table('v2_site_domain')->insertGetId([
+            'site_id' => 11,
+            'domain' => 'branch-b.example.test',
+            'status' => 'active',
+            'is_primary' => true,
+        ]);
+
+        $response = (new MachineController())->save($this->request([
+            'name' => 'edge-sites',
+            'webproxy_enabled' => true,
+            'webproxy_bindings' => [
+                ['site_domain_id' => null, 'https_port' => 443],
+                ['site_domain_id' => $domainA, 'https_port' => 8443],
+                ['site_domain_id' => $domainB, 'https_port' => 8444],
+            ],
+        ]));
+        $machine = ServerMachine::find((int) $response->getData(true)['data']['id']);
+
+        $this->assertSame([
+            ['site_domain_id' => null, 'https_port' => 443, 'path_prefix' => '/'],
+            ['site_domain_id' => $domainA, 'https_port' => 8443, 'path_prefix' => '/'],
+            ['site_domain_id' => $domainB, 'https_port' => 8444, 'path_prefix' => '/'],
+        ], $machine?->webproxy_bindings);
+    }
+
     private function bindPublisher(): void
     {
         $this->publisher = new class {
@@ -108,6 +141,7 @@ final class MachineWebsiteProxySiteBindingTest extends TestCase
             $table->boolean('webproxy_enabled')->default(false);
             $table->string('webproxy_path_prefix')->nullable();
             $table->unsignedBigInteger('webproxy_site_domain_id')->nullable();
+            $table->json('webproxy_bindings')->nullable();
             $table->unsignedSmallInteger('subproxy_https_port')->nullable();
             $table->unsignedSmallInteger('subproxy_http_port')->nullable();
             $table->string('subproxy_cert_domain')->nullable();

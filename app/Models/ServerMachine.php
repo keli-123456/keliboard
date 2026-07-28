@@ -16,6 +16,7 @@ class ServerMachine extends Model
         'subproxy_enabled' => 'boolean',
         'webproxy_enabled' => 'boolean',
         'webproxy_site_domain_id' => 'integer',
+        'webproxy_bindings' => 'array',
         'subproxy_https_port' => 'integer',
         'subproxy_http_port' => 'integer',
         'subproxy_cert_state' => 'array',

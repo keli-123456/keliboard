@@ -188,6 +188,84 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame('/', $profile['path_prefix']);
     }
 
+    public function test_nodes_response_includes_multiple_website_proxy_listeners(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscription_proxy_enable' => true,
+            'website_proxy_enable' => true,
+            'subscription_proxy_site_id' => 'panel-a',
+        ]);
+
+        $siteA = Site::create([
+            'code' => 'branch-a',
+            'name' => 'Branch A',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+        ]);
+        $domainA = SiteDomain::create([
+            'site_id' => $siteA->id,
+            'domain' => 'branch-a.example.test',
+            'status' => SiteDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+        ]);
+        $siteB = Site::create([
+            'code' => 'branch-b',
+            'name' => 'Branch B',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+        ]);
+        $domainB = SiteDomain::create([
+            'site_id' => $siteB->id,
+            'domain' => 'branch-b.example.test',
+            'status' => SiteDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+        ]);
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $machine->forceFill([
+            'subproxy_enabled' => true,
+            'webproxy_enabled' => true,
+            'subproxy_https_port' => 443,
+            'webproxy_bindings' => [
+                ['site_domain_id' => null, 'https_port' => 443],
+                ['site_domain_id' => $domainA->id, 'https_port' => 8443],
+                ['site_domain_id' => $domainB->id, 'https_port' => 8444],
+            ],
+        ])->save();
+
+        $response = (new MachineController())->nodes(Request::create(
+            'https://panel.example.test/api/v2/server/machine/nodes',
+            'POST',
+            ['machine_id' => $machine->id, 'token' => 'machine-token']
+        ));
+        $proxy = $response->getData(true)['agent']['subscription_proxy'];
+
+        $this->assertSame('panel-a', $proxy['profiles'][0]['site_id']);
+        $this->assertSame('panel-a', $proxy['website_profiles'][0]['site_id']);
+        $this->assertSame([
+            [
+                'https_listen' => '0.0.0.0:8443',
+                'website_profiles' => [[
+                    'site_id' => 'branch-a',
+                    'upstream_base_url' => 'https://branch-a.example.test',
+                    'path_prefix' => '/',
+                ]],
+            ],
+            [
+                'https_listen' => '0.0.0.0:8444',
+                'website_profiles' => [[
+                    'site_id' => 'branch-b',
+                    'upstream_base_url' => 'https://branch-b.example.test',
+                    'path_prefix' => '/',
+                ]],
+            ],
+        ], $proxy['website_listeners']);
+    }
+
     public function test_nodes_response_fails_closed_for_inactive_selected_site_domain(): void
     {
         $this->bindSettings([
@@ -1538,6 +1616,7 @@ final class ServerMachineControllerTest extends TestCase
             $table->boolean('webproxy_enabled')->default(false);
             $table->string('webproxy_path_prefix')->nullable();
             $table->unsignedBigInteger('webproxy_site_domain_id')->nullable();
+            $table->json('webproxy_bindings')->nullable();
             $table->unsignedSmallInteger('subproxy_https_port')->nullable();
             $table->unsignedSmallInteger('subproxy_http_port')->nullable();
             $table->string('subproxy_cert_domain')->nullable();

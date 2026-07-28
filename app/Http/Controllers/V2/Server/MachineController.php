@@ -812,19 +812,23 @@ class MachineController extends Controller
         $upstreamBaseURL = $this->resolvePanelBaseURL($request);
         $siteId = $this->resolveSubscriptionProxySiteId($upstreamBaseURL);
         $subscribePath = $this->resolveSubscriptionProxySubscribePath($siteId);
-        $websiteProfile = $websiteEnabled
-            ? $this->resolveWebsiteProxyProfile($machine, $upstreamBaseURL, $siteId)
-            : null;
-        if (!$subscriptionEnabled && $websiteProfile === null) {
+        $httpsListen = $this->listenAddress(
+            (int) ($machine->subproxy_https_port ?: admin_setting('subscription_proxy_https_port', 443)),
+            443
+        );
+        $websiteRouting = $websiteEnabled
+            ? $this->resolveWebsiteProxyRouting($machine, $upstreamBaseURL, $siteId, $httpsListen)
+            : ['main_profiles' => [], 'listeners' => []];
+        if (!$subscriptionEnabled
+            && $websiteRouting['main_profiles'] === []
+            && $websiteRouting['listeners'] === []
+        ) {
             return ['enabled' => false];
         }
 
         $config = [
             'enabled' => true,
-            'https_listen' => $this->listenAddress(
-                (int) ($machine->subproxy_https_port ?: admin_setting('subscription_proxy_https_port', 443)),
-                443
-            ),
+            'https_listen' => $httpsListen,
             'http_listen' => $this->listenAddress(
                 (int) ($machine->subproxy_http_port ?: admin_setting('subscription_proxy_http_port', 80)),
                 80
@@ -837,7 +841,8 @@ class MachineController extends Controller
             'allow_http_fallback' => (bool) admin_setting('subscription_proxy_allow_http_fallback', false),
             'max_response_bytes' => max(1024 * 1024, (int) admin_setting('subscription_proxy_max_response_bytes', 10485760)),
             'profiles' => [],
-            'website_profiles' => [],
+            'website_profiles' => $websiteRouting['main_profiles'],
+            'website_listeners' => $websiteRouting['listeners'],
         ];
 
         if ($subscriptionEnabled) {
@@ -850,10 +855,6 @@ class MachineController extends Controller
             $config['upstream_base_url'] = $subscriptionProfile['upstream_base_url'];
             $config['subscribe_path'] = $subscriptionProfile['subscribe_path'];
             $config['profiles'][] = $subscriptionProfile;
-        }
-
-        if ($websiteProfile !== null) {
-            $config['website_profiles'][] = $websiteProfile;
         }
 
         return $config;
@@ -871,17 +872,76 @@ class MachineController extends Controller
             && (bool) $machine->getAttribute('webproxy_enabled');
     }
 
-    private function resolveWebsiteProxyProfile(
+    private function resolveWebsiteProxyRouting(
         ServerMachine $machine,
         string $fallbackBaseURL,
-        string $fallbackSiteId
+        string $fallbackSiteId,
+        string $mainHttpsListen
+    ): array {
+        $bindings = $machine->getAttribute('webproxy_bindings');
+        if (is_array($bindings)) {
+            $mainProfiles = [];
+            $listeners = [];
+            $seenListens = [];
+            foreach ($bindings as $binding) {
+                if (!is_array($binding)) {
+                    continue;
+                }
+                $port = (int) ($binding['https_port'] ?? 0);
+                if ($port < 1 || $port > 65535) {
+                    continue;
+                }
+                $listen = $this->listenAddress($port, 443);
+                if (isset($seenListens[$listen])) {
+                    continue;
+                }
+                $profile = $this->resolveWebsiteProxyTarget(
+                    (int) ($binding['site_domain_id'] ?? 0),
+                    $fallbackBaseURL,
+                    $fallbackSiteId,
+                    $this->normalizeWebsiteProxyPathPrefix($binding['path_prefix'] ?? '/')
+                );
+                if ($profile === null) {
+                    continue;
+                }
+                $seenListens[$listen] = true;
+                if ($listen === $mainHttpsListen) {
+                    $mainProfiles[] = $profile;
+                    continue;
+                }
+                $listeners[] = [
+                    'https_listen' => $listen,
+                    'website_profiles' => [$profile],
+                ];
+            }
+
+            return ['main_profiles' => $mainProfiles, 'listeners' => $listeners];
+        }
+
+        $profile = $this->resolveWebsiteProxyTarget(
+            (int) $machine->getAttribute('webproxy_site_domain_id'),
+            $fallbackBaseURL,
+            $fallbackSiteId,
+            $this->resolveWebsiteProxyPathPrefix($machine)
+        );
+
+        return [
+            'main_profiles' => $profile === null ? [] : [$profile],
+            'listeners' => [],
+        ];
+    }
+
+    private function resolveWebsiteProxyTarget(
+        int $selectedDomainId,
+        string $fallbackBaseURL,
+        string $fallbackSiteId,
+        string $pathPrefix
     ): ?array {
-        $selectedDomainId = (int) $machine->getAttribute('webproxy_site_domain_id');
         if ($selectedDomainId <= 0) {
             return [
                 'site_id' => $fallbackSiteId,
                 'upstream_base_url' => $fallbackBaseURL,
-                'path_prefix' => $this->resolveWebsiteProxyPathPrefix($machine),
+                'path_prefix' => $pathPrefix,
             ];
         }
 
@@ -907,13 +967,20 @@ class MachineController extends Controller
         return [
             'site_id' => $siteId,
             'upstream_base_url' => 'https://' . $host,
-            'path_prefix' => $this->resolveWebsiteProxyPathPrefix($machine),
+            'path_prefix' => $pathPrefix,
         ];
     }
 
     private function resolveWebsiteProxyPathPrefix(ServerMachine $machine): string
     {
-        $value = trim((string) ($machine->getAttribute('webproxy_path_prefix') ?: admin_setting('website_proxy_path_prefix', '/')));
+        $value = $machine->getAttribute('webproxy_path_prefix')
+            ?: admin_setting('website_proxy_path_prefix', '/');
+        return $this->normalizeWebsiteProxyPathPrefix($value);
+    }
+
+    private function normalizeWebsiteProxyPathPrefix(mixed $value): string
+    {
+        $value = trim((string) $value);
         if ($value === '' || $value === '/') {
             return '/';
         }
