@@ -9,6 +9,8 @@ use App\Models\Server;
 use App\Models\ServerMachine;
 use App\Models\ServerMachineLoadHistory;
 use App\Models\ServerTlsCertificate;
+use App\Models\Site;
+use App\Models\SiteDomain;
 use App\Services\ServerService;
 use App\Support\Setting;
 use Illuminate\Database\Schema\Blueprint;
@@ -143,6 +145,90 @@ final class ServerMachineControllerTest extends TestCase
         ], $proxy['website_profiles']);
     }
 
+    public function test_nodes_response_targets_selected_active_site_domain(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscription_proxy_enable' => false,
+            'website_proxy_enable' => true,
+        ]);
+
+        $site = Site::create([
+            'code' => 'branch-a',
+            'name' => 'Branch A',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+        ]);
+        $domain = SiteDomain::create([
+            'site_id' => $site->id,
+            'domain' => 'branch-a.example.test',
+            'status' => SiteDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+        ]);
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $machine->forceFill([
+            'webproxy_enabled' => true,
+            'webproxy_site_domain_id' => $domain->id,
+            'webproxy_path_prefix' => '/',
+        ])->save();
+
+        $response = (new MachineController())->nodes(Request::create(
+            'https://panel.example.test/api/v2/server/machine/nodes',
+            'POST',
+            ['machine_id' => $machine->id, 'token' => 'machine-token']
+        ));
+        $profile = $response->getData(true)['agent']['subscription_proxy']['website_profiles'][0];
+
+        $this->assertSame('branch-a', $profile['site_id']);
+        $this->assertSame('https://branch-a.example.test', $profile['upstream_base_url']);
+        $this->assertSame('/', $profile['path_prefix']);
+    }
+
+    public function test_nodes_response_fails_closed_for_inactive_selected_site_domain(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscription_proxy_enable' => false,
+            'website_proxy_enable' => true,
+        ]);
+
+        $site = Site::create([
+            'code' => 'branch-a',
+            'name' => 'Branch A',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+        ]);
+        $domain = SiteDomain::create([
+            'site_id' => $site->id,
+            'domain' => 'branch-a.example.test',
+            'status' => SiteDomain::STATUS_DISABLED,
+            'is_primary' => true,
+        ]);
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $machine->forceFill([
+            'webproxy_enabled' => true,
+            'webproxy_site_domain_id' => $domain->id,
+        ])->save();
+
+        $response = (new MachineController())->nodes(Request::create(
+            'https://panel.example.test/api/v2/server/machine/nodes',
+            'POST',
+            ['machine_id' => $machine->id, 'token' => 'machine-token']
+        ));
+
+        $this->assertSame(
+            ['enabled' => false],
+            $response->getData(true)['agent']['subscription_proxy']
+        );
+    }
     public function test_nodes_response_reuses_subscription_proxy_certificate_for_website_proxy(): void
     {
         $this->bindSettings([
@@ -1451,6 +1537,7 @@ final class ServerMachineControllerTest extends TestCase
             $table->boolean('subproxy_enabled')->default(false);
             $table->boolean('webproxy_enabled')->default(false);
             $table->string('webproxy_path_prefix')->nullable();
+            $table->unsignedBigInteger('webproxy_site_domain_id')->nullable();
             $table->unsignedSmallInteger('subproxy_https_port')->nullable();
             $table->unsignedSmallInteger('subproxy_http_port')->nullable();
             $table->string('subproxy_cert_domain')->nullable();
@@ -1462,6 +1549,23 @@ final class ServerMachineControllerTest extends TestCase
             $table->timestamps();
         });
 
+        Schema::create('v2_site', function (Blueprint $table): void {
+            $table->id();
+            $table->string('code')->unique();
+            $table->string('name');
+            $table->string('status')->default(Site::STATUS_ACTIVE);
+            $table->boolean('is_default')->default(false);
+            $table->timestamps();
+        });
+
+        Schema::create('v2_site_domain', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('site_id')->index();
+            $table->string('domain')->unique();
+            $table->string('status')->default(SiteDomain::STATUS_PENDING);
+            $table->boolean('is_primary')->default(false);
+            $table->timestamps();
+        });
         Schema::create('v2_server_machine_load_history', function (Blueprint $table): void {
             $table->id();
             $table->unsignedBigInteger('machine_id')->index();

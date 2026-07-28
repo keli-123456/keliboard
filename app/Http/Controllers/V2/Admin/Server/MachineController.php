@@ -43,6 +43,7 @@ class MachineController extends Controller
             'subproxy_enabled' => 'nullable|boolean',
             'webproxy_enabled' => 'nullable|boolean',
             'webproxy_path_prefix' => 'nullable|string|max:255',
+            'webproxy_site_domain_id' => 'nullable|integer|min:1|exists:v2_site_domain,id',
             'subproxy_https_port' => 'nullable|integer|min:1|max:65535',
             'subproxy_http_port' => 'nullable|integer|min:1|max:65535',
             'subproxy_cert_domain' => 'nullable|string|max:255',
@@ -72,6 +73,9 @@ class MachineController extends Controller
                 'webproxy_path_prefix' => array_key_exists('webproxy_path_prefix', $params)
                     ? $this->normalizeProxyPathPrefix($params['webproxy_path_prefix'])
                     : $this->normalizeProxyPathPrefix($machine->webproxy_path_prefix ?? null),
+                'webproxy_site_domain_id' => array_key_exists('webproxy_site_domain_id', $params)
+                    ? ($params['webproxy_site_domain_id'] === null ? null : (int) $params['webproxy_site_domain_id'])
+                    : ($machine->webproxy_site_domain_id ? (int) $machine->webproxy_site_domain_id : null),
                 'subproxy_https_port' => array_key_exists('subproxy_https_port', $params)
                     ? $this->normalizeNullablePort($params['subproxy_https_port'])
                     : $this->normalizeNullablePort($machine->subproxy_https_port ?? null),

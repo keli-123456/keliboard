@@ -5,6 +5,8 @@ namespace App\Http\Controllers\V2\Server;
 use App\Http\Controllers\Controller;
 use App\Models\ServerMachine;
 use App\Models\ServerMachineLoadHistory;
+use App\Models\Site;
+use App\Models\SiteDomain;
 use App\Services\NodeRealtime\NodeRealtimeSettings;
 use App\Services\ServerMachine\MachineReleaseDistributionService;
 use App\Services\ServerService;
@@ -810,6 +812,12 @@ class MachineController extends Controller
         $upstreamBaseURL = $this->resolvePanelBaseURL($request);
         $siteId = $this->resolveSubscriptionProxySiteId($upstreamBaseURL);
         $subscribePath = $this->resolveSubscriptionProxySubscribePath($siteId);
+        $websiteProfile = $websiteEnabled
+            ? $this->resolveWebsiteProxyProfile($machine, $upstreamBaseURL, $siteId)
+            : null;
+        if (!$subscriptionEnabled && $websiteProfile === null) {
+            return ['enabled' => false];
+        }
 
         $config = [
             'enabled' => true,
@@ -844,12 +852,8 @@ class MachineController extends Controller
             $config['profiles'][] = $subscriptionProfile;
         }
 
-        if ($websiteEnabled) {
-            $config['website_profiles'][] = [
-                'site_id' => $siteId,
-                'upstream_base_url' => $upstreamBaseURL,
-                'path_prefix' => $this->resolveWebsiteProxyPathPrefix($machine),
-            ];
+        if ($websiteProfile !== null) {
+            $config['website_profiles'][] = $websiteProfile;
         }
 
         return $config;
@@ -865,6 +869,46 @@ class MachineController extends Controller
     {
         return (bool) admin_setting('website_proxy_enable', false)
             && (bool) $machine->getAttribute('webproxy_enabled');
+    }
+
+    private function resolveWebsiteProxyProfile(
+        ServerMachine $machine,
+        string $fallbackBaseURL,
+        string $fallbackSiteId
+    ): ?array {
+        $selectedDomainId = (int) $machine->getAttribute('webproxy_site_domain_id');
+        if ($selectedDomainId <= 0) {
+            return [
+                'site_id' => $fallbackSiteId,
+                'upstream_base_url' => $fallbackBaseURL,
+                'path_prefix' => $this->resolveWebsiteProxyPathPrefix($machine),
+            ];
+        }
+
+        $domain = SiteDomain::query()->with('site')->find($selectedDomainId);
+        if (!$domain
+            || $domain->status !== SiteDomain::STATUS_ACTIVE
+            || !$domain->site
+            || $domain->site->status !== Site::STATUS_ACTIVE
+        ) {
+            return null;
+        }
+
+        $host = strtolower(trim((string) $domain->domain, " \n\r\t\v\0."));
+        if ($host === '' || parse_url('https://' . $host, PHP_URL_HOST) !== $host) {
+            return null;
+        }
+
+        $siteId = $this->sanitizeSiteId((string) $domain->site->code);
+        if ($siteId === '') {
+            $siteId = 'site-' . (int) $domain->site->id;
+        }
+
+        return [
+            'site_id' => $siteId,
+            'upstream_base_url' => 'https://' . $host,
+            'path_prefix' => $this->resolveWebsiteProxyPathPrefix($machine),
+        ];
     }
 
     private function resolveWebsiteProxyPathPrefix(ServerMachine $machine): string
