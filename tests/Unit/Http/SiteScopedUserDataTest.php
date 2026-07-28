@@ -18,6 +18,7 @@ use App\Models\Site;
 use App\Models\SiteDomain;
 use App\Models\Ticket;
 use App\Models\User;
+use App\Services\SubscriptionRiskContextService;
 use App\Services\TicketService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
@@ -45,6 +46,7 @@ final class SiteScopedUserDataTest extends TestCase
         $this->createSiteTenantTables();
         $this->createTicketTables();
         $this->createNoticeTable();
+        $this->createSubscriptionControlEventTable();
         $this->addTicketTestColumns();
     }
 
@@ -292,6 +294,112 @@ final class SiteScopedUserDataTest extends TestCase
     }
 
 
+    public function test_staff_user_lookup_can_select_site_and_rejects_ambiguous_email(): void
+    {
+        $firstSite = $this->siteWithDomain('lookup-first', 'lookup-first.example.test', false);
+        $secondSite = $this->siteWithDomain('lookup-second', 'lookup-second.example.test', false);
+        $firstUser = $this->createUser('shared@example.test', $firstSite);
+        $this->createUser('shared@example.test', $secondSite);
+        $controller = new StaffUserController();
+
+        $ambiguous = $controller->getUserInfoByEmail($this->staffLookupRequest([
+            'email' => 'shared@example.test',
+            'site_scope' => 'all',
+        ]))->getData(true);
+        $this->assertNotSame('success', $ambiguous['status']);
+        $this->assertStringContainsString('选择站点', $ambiguous['message']);
+
+        $scoped = $controller->getUserInfoByEmail($this->staffLookupRequest([
+            'email' => 'shared@example.test',
+            'site_scope' => (string) $firstSite->id,
+        ]))->getData(true);
+        $this->assertSame('success', $scoped['status']);
+        $this->assertSame($firstUser->id, (int) $scoped['data']['id']);
+        $this->assertSame($firstSite->id, (int) $scoped['data']['site_id']);
+
+        $wrongSite = $controller->getUserInfoById($this->staffLookupRequest([
+            'id' => $firstUser->id,
+            'site_scope' => (string) $secondSite->id,
+        ]))->getData(true);
+        $this->assertNotSame('success', $wrongSite['status']);
+    }
+    public function test_staff_workspace_hides_withdrawal_tickets_from_list_overview_and_detail(): void
+    {
+        $site = $this->siteWithDomain('staff-private', 'staff-private.example.test', false);
+        $user = $this->createUser('staff-private@example.test', $site);
+        $visible = $this->createTicket($user, $site, 'Normal support ticket');
+        $withdrawal = $this->createTicket($user, $site, '[提现申请] 本工单由系统发出');
+
+        $controller = new StaffTicketController();
+        $list = $controller->fetch(Request::create('/staff/ticket/fetch', 'POST', [
+            'pageSize' => 10,
+            'current' => 1,
+        ]))->getData(true);
+
+        $this->assertCount(1, $list['data']['items']);
+        $this->assertSame($visible->id, (int) $list['data']['items'][0]['id']);
+        $this->assertSame(1, $controller->overview()->getData(true)['data']['open_total']);
+
+        $detail = $controller->fetch(Request::create('/staff/ticket/fetch', 'POST', [
+            'id' => $withdrawal->id,
+        ]))->getData(true);
+        $this->assertNotSame('success', $detail['status']);
+    }
+
+    public function test_staff_ticket_detail_returns_subscription_risk_reasons(): void
+    {
+        $site = $this->siteWithDomain('staff-risk', 'staff-risk.example.test', false);
+        $user = $this->createUser('staff-risk@example.test', $site);
+        $ticket = $this->createTicket($user, $site, 'Subscription issue');
+        $now = time();
+
+        $this->database->table('v2_subscription_control_event')->insert([
+            'event_id' => 'staff-risk-event',
+            'user_id' => $user->id,
+            'email' => $user->email,
+            'code' => 'multi_region',
+            'reason' => '短时间内跨多个地区拉取订阅',
+            'action' => 'reset_token_uuid',
+            'client_ip' => '203.0.113.10',
+            'ua_category' => 'clash',
+            'region' => 'SG',
+            'ip_type' => 'hosting',
+            'risk_score' => 75,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $payload = (new StaffTicketController())->fetch(Request::create('/staff/ticket/fetch', 'POST', [
+            'id' => $ticket->id,
+        ]))->getData(true)['data'];
+
+        $this->assertTrue($payload['risk_context']['available']);
+        $this->assertSame('high', $payload['risk_context']['risk_level']);
+        $this->assertSame('短时间内跨多个地区拉取订阅', $payload['risk_context']['latest_events'][0]['reason']);
+        $this->assertSame(1, $payload['risk_context']['reset_count']);
+        $this->assertSame('high', app(SubscriptionRiskContextService::class)->build($user->id, $user->email)['risk_level']);
+    }
+
+    private function createSubscriptionControlEventTable(): void
+    {
+        $this->database->schema()->create('v2_subscription_control_event', function (Blueprint $table): void {
+            $table->integer('id', true);
+            $table->string('event_id')->unique();
+            $table->integer('user_id')->nullable()->index();
+            $table->string('email')->nullable()->index();
+            $table->string('code')->nullable();
+            $table->text('reason')->nullable();
+            $table->string('action')->nullable();
+            $table->string('client_ip')->nullable();
+            $table->string('ua_category')->nullable();
+            $table->string('region')->nullable();
+            $table->string('ip_type')->nullable();
+            $table->integer('risk_score')->nullable();
+            $table->integer('created_at')->index();
+            $table->integer('updated_at');
+        });
+    }
+
     private function createNoticeTable(): void
     {
         $this->database->schema()->create('v2_notice', function (Blueprint $table): void {
@@ -421,6 +529,18 @@ final class SiteScopedUserDataTest extends TestCase
         return $request;
     }
 
+    private function staffLookupRequest(array $input): Request
+    {
+        $request = new class extends Request {
+            public function validate(array $rules, ...$params): array
+            {
+                return [];
+            }
+        };
+        $request->initialize($input);
+
+        return $request;
+    }
     private function responsePayload($response): array
     {
         return json_decode($response->getContent(), true);

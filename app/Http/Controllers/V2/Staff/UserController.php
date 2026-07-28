@@ -4,6 +4,7 @@ namespace App\Http\Controllers\V2\Staff;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\SubscriptionRiskContextService;
 use Illuminate\Http\Request;
 
 class UserController extends Controller
@@ -51,12 +52,40 @@ class UserController extends Controller
             'id.required' => '用户ID不能为空',
         ]);
 
-        $user = User::with(['plan:id,name', 'site:id,code,name'])->find($request->integer('id'));
+        $user = $this->applySiteScope(
+            User::with(['plan:id,name', 'site:id,code,name']),
+            (string) $request->input('site_scope', 'all')
+        )->find($request->integer('id'));
         if (!$user) {
             return $this->fail([404, '用户不存在']);
         }
 
-        return $this->success(self::transformUserData($user));
+        return $this->success($this->transformUserDataWithRisk($user));
+    }
+
+    /** @return array<string, mixed> */
+    private function transformUserDataWithRisk(User $user): array
+    {
+        $data = self::transformUserData($user);
+        $data['risk_context'] = app(SubscriptionRiskContextService::class)->build(
+            (int) $user->id,
+            (string) $user->email
+        );
+
+        return $data;
+    }
+
+    private function applySiteScope($query, string $siteScope)
+    {
+        $siteScope = trim($siteScope);
+        if ($siteScope === 'platform') {
+            return $query->whereNull('site_id');
+        }
+        if (ctype_digit($siteScope) && (int) $siteScope > 0) {
+            return $query->where('site_id', (int) $siteScope);
+        }
+
+        return $query;
     }
 
     public function getUserInfoByEmail(Request $request)
@@ -68,12 +97,20 @@ class UserController extends Controller
         ]);
 
         $email = (string) $request->input('email');
-        $user = User::with(['plan:id,name', 'site:id,code,name'])->where('email', $email)->first();
-        if (!$user) {
+        $siteScope = trim((string) $request->input('site_scope', 'all'));
+        $users = $this->applySiteScope(
+            User::with(['plan:id,name', 'site:id,code,name'])->where('email', $email),
+            $siteScope
+        )->limit(2)->get();
+
+        if ($users->isEmpty()) {
             return $this->fail([404, '用户不存在']);
         }
+        if (($siteScope === '' || $siteScope === 'all') && $users->count() > 1) {
+            return $this->fail([409, '该邮箱存在于多个站点，请选择站点后查询']);
+        }
 
-        return $this->success(self::transformUserData($user));
+        return $this->success($this->transformUserDataWithRisk($users->first()));
     }
 }
 

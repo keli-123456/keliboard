@@ -6,6 +6,8 @@ use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
 use App\Models\Ticket;
 use App\Models\TicketMessageAttachment;
+use App\Services\StaffTicketVisibilityService;
+use App\Services\SubscriptionRiskContextService;
 use App\Services\TicketService;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
@@ -146,13 +148,13 @@ class TicketController extends Controller
 
     private function fetchTicketById(Request $request)
     {
-        $ticket = Ticket::with([
+        $ticket = $this->visibleTickets(Ticket::with([
             'messages.ticket',
             'messages.attachments',
             'user.plan:id,name',
             'user.site:id,code,name',
             'site:id,code,name',
-        ])->find($request->input('id'));
+        ]))->find($request->input('id'));
         if (!$ticket) {
             return $this->fail([400202, '工单不存在']);
         }
@@ -160,6 +162,10 @@ class TicketController extends Controller
         $result = $ticket->toArray();
         if ($ticket->relationLoaded('user') && $ticket->user) {
             $result['user'] = UserController::transformUserData($ticket->user);
+            $result['risk_context'] = app(SubscriptionRiskContextService::class)->build(
+                (int) $ticket->user_id,
+                (string) $ticket->user->email
+            );
         }
 
         return $this->success($result);
@@ -167,10 +173,10 @@ class TicketController extends Controller
 
     private function fetchTickets(Request $request)
     {
-        $ticketModel = Ticket::with([
+        $ticketModel = $this->visibleTickets(Ticket::with([
             'user:id,email,site_id',
             'site:id,code,name',
-        ])
+        ]))
             ->when($request->filled('site_scope'), function ($query) use ($request) {
                 $scope = trim((string) $request->input('site_scope'));
                 if ($scope === 'platform') {
@@ -234,8 +240,8 @@ class TicketController extends Controller
     public function overview()
     {
         $todayStart = strtotime('today');
-        $base = Ticket::query();
-        $siteRows = Ticket::query()
+        $base = $this->visibleTickets(Ticket::query());
+        $siteRows = $this->visibleTickets(Ticket::query())
             ->where('status', Ticket::STATUS_OPENING)
             ->whereIn('reply_status', [
                 Ticket::REPLY_STATUS_WAITING_ADMIN,
@@ -281,6 +287,11 @@ class TicketController extends Controller
             'message.required_without' => '消息不能为空'
         ]);
 
+        $ticketId = (int) $request->input('id');
+        if (!$this->visibleTickets(Ticket::query())->whereKey($ticketId)->exists()) {
+            return $this->fail([400202, '工单不存在']);
+        }
+
         $actorId = (int) (Auth::guard()->id() ?: ($request->input('user.id') ?? 0));
         if ($actorId <= 0) {
             throw new ApiException('未登录或登陆已过期', 403);
@@ -291,7 +302,7 @@ class TicketController extends Controller
 
         $ticketService = new TicketService();
         $ticketService->replyByAdmin(
-            (int) $request->input('id'),
+            $ticketId,
             (string) $request->input('message', ''),
             $actorId,
             $images
@@ -308,7 +319,7 @@ class TicketController extends Controller
         ]);
 
         try {
-            $ticket = Ticket::findOrFail($request->input('id'));
+            $ticket = $this->visibleTickets(Ticket::query())->findOrFail($request->input('id'));
             $ticket->status = Ticket::STATUS_CLOSED;
             $ticket->save();
             return $this->success(true);
@@ -321,7 +332,10 @@ class TicketController extends Controller
 
     public function attachment(int $id)
     {
-        $attachment = TicketMessageAttachment::find($id);
+        $attachment = TicketMessageAttachment::query()
+            ->whereKey($id)
+            ->whereHas('ticket', fn ($query) => $this->visibleTickets($query))
+            ->first();
         if (!$attachment) {
             throw new ApiException('Not Found', 404);
         }
@@ -340,5 +354,10 @@ class TicketController extends Controller
             $headers['Content-Type'] = $attachment->mime;
         }
         return response()->file($absolute, $headers);
+    }
+
+    private function visibleTickets($query)
+    {
+        return app(StaffTicketVisibilityService::class)->apply($query);
     }
 }
