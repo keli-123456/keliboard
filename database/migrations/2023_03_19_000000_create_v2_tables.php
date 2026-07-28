@@ -214,7 +214,7 @@ return new class extends Migration {
         // stat user
         if (!Schema::hasTable('v2_stat_user')) {
             Schema::create('v2_stat_user', function (Blueprint $table) {
-                $table->integer('id', true);
+                $table->bigIncrements('id');
                 $table->integer('user_id');
                 $table->decimal('server_rate', 10);
                 $table->bigInteger('u');
