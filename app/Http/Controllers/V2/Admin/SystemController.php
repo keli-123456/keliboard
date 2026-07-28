@@ -4,9 +4,11 @@ namespace App\Http\Controllers\V2\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\AdminAuditLog;
+use App\Services\SystemHealthEvaluator;
 use App\Utils\CacheKey;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Laravel\Horizon\Contracts\JobRepository;
 use Laravel\Horizon\Contracts\MasterSupervisorRepository;
@@ -19,6 +21,7 @@ use App\Helpers\ResponseEnum;
 class SystemController extends Controller
 {
     private const SNAPSHOT_TTL_SECONDS = 5;
+    private const HEALTH_SNAPSHOT_TTL_SECONDS = 30;
 
     public function getSystemStatus(Request $request)
     {
@@ -31,6 +34,27 @@ class SystemController extends Controller
                 'schedule_last_runtime' => Cache::get(CacheKey::get('SCHEDULE_LAST_CHECK_AT', null)),
                 'logs' => $this->getLogStatistics(),
             ]
+        );
+    }
+
+    public function getHealthDiagnostics(Request $request, SystemHealthEvaluator $evaluator)
+    {
+        return $this->cachedSnapshotResponse(
+            $request,
+            CacheKey::get('ADMIN_SYSTEM_HEALTH_DIAGNOSTICS'),
+            fn() => $evaluator->evaluate([
+                'checked_at' => time(),
+                'traffic' => $this->getTrafficHealthMetrics(),
+                'scheduler' => [
+                    'running' => $this->getScheduleStatus(),
+                    'last_runtime' => Cache::get(CacheKey::get('SCHEDULE_LAST_CHECK_AT', null)),
+                ],
+                'queue' => $this->getQueueHealthMetrics(),
+                'log_storage' => $this->getLogStorageMetrics(),
+                'database_capacity' => $this->getDatabaseCapacityMetrics(),
+                'migrations' => $this->getMigrationMetrics(),
+            ]),
+            self::HEALTH_SNAPSHOT_TTL_SECONDS
         );
     }
 
@@ -108,9 +132,17 @@ class SystemController extends Controller
         );
     }
 
-    private function cachedSnapshotResponse(Request $request, string $cacheKey, callable $resolver)
+    private function cachedSnapshotResponse(
+        Request $request,
+        string $cacheKey,
+        callable $resolver,
+        int $ttl = self::SNAPSHOT_TTL_SECONDS
+    )
     {
-        $ttl = self::SNAPSHOT_TTL_SECONDS;
+        if ($request->boolean('refresh')) {
+            Cache::forget($cacheKey);
+        }
+
         $data = Cache::remember($cacheKey, now()->addSeconds($ttl), $resolver);
         $etag = '"' . sha1(json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '') . '"';
         $headers = [
@@ -123,6 +155,165 @@ class SystemController extends Controller
         }
 
         return $this->success($data)->withHeaders($headers);
+    }
+
+    private function getTrafficHealthMetrics(): array
+    {
+        try {
+            if (!DB::getSchemaBuilder()->hasTable('v2_stat_user')) {
+                return ['available' => false];
+            }
+
+            $now = time();
+            $todayStart = strtotime(date('Y-m-d', $now));
+            $monthStart = strtotime(date('Y-m-01', $now));
+            $metrics = DB::table('v2_stat_user')
+                ->where('record_at', '>=', $todayStart)
+                ->selectRaw(
+                    'MAX(updated_at) as latest_updated_at, '
+                    . 'COUNT(*) as today_rows, '
+                    . 'COALESCE(SUM(u + d), 0) as today_total'
+                )
+                ->first();
+            $todayRows = (int) ($metrics->today_rows ?? 0);
+            $monthHasRows = $todayRows > 0 || DB::table('v2_stat_user')
+                ->where('record_at', '>=', $monthStart)
+                ->exists();
+
+            return [
+                'available' => true,
+                'now' => $now,
+                'today_start' => $todayStart,
+                'latest_updated_at' => (int) ($metrics->latest_updated_at ?? 0),
+                'today_rows' => $todayRows,
+                'today_total' => (int) ($metrics->today_total ?? 0),
+                'month_total' => $monthHasRows ? 1 : 0,
+            ];
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            return ['available' => false];
+        }
+    }
+
+    private function getQueueHealthMetrics(): array
+    {
+        try {
+            $waitSeconds = collect(app(WaitTimeCalculator::class)->calculate())
+                ->map(fn($value) => (int) $value)
+                ->max() ?? 0;
+
+            return [
+                'available' => true,
+                'running' => $this->getHorizonStatus(),
+                'failed_jobs' => app(JobRepository::class)->countRecentlyFailed(),
+                'wait_seconds' => $waitSeconds,
+                'paused_masters' => $this->totalPausedMasters(),
+                'processes' => $this->totalProcessCount(),
+            ];
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            return ['available' => false];
+        }
+    }
+
+    private function getLogStorageMetrics(): array
+    {
+        $bytes = 0;
+        $latestModifiedAt = null;
+        $files = $this->getAllSystemLogFiles();
+
+        foreach ($files as $path) {
+            try {
+                $bytes += max(0, (int) File::size($path));
+                $modifiedAt = (int) File::lastModified($path);
+                $latestModifiedAt = max((int) ($latestModifiedAt ?? 0), $modifiedAt);
+            } catch (\Throwable $exception) {
+                report($exception);
+            }
+        }
+
+        return [
+            'bytes' => $bytes,
+            'files' => count($files),
+            'latest_modified_at' => $latestModifiedAt,
+        ];
+    }
+
+    private function getDatabaseCapacityMetrics(): array
+    {
+        if (DB::connection()->getDriverName() !== 'mysql') {
+            return ['supported' => false];
+        }
+
+        try {
+            $database = DB::connection()->getDatabaseName();
+            $column = DB::selectOne(
+                'SELECT COLUMN_TYPE AS column_type FROM information_schema.COLUMNS '
+                . 'WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ? LIMIT 1',
+                [$database, 'v2_stat_user', 'id']
+            );
+            $table = DB::selectOne(
+                'SELECT AUTO_INCREMENT AS auto_increment, '
+                . 'COALESCE(DATA_LENGTH, 0) + COALESCE(INDEX_LENGTH, 0) AS table_bytes '
+                . 'FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? LIMIT 1',
+                [$database, 'v2_stat_user']
+            );
+
+            if (!$column || !$table) {
+                return ['available' => false];
+            }
+
+            $columnType = strtolower((string) ($column->column_type ?? ''));
+            $unsigned = str_contains($columnType, 'unsigned');
+            $maxValue = match (true) {
+                str_contains($columnType, 'bigint') => $unsigned ? 18446744073709551615.0 : 9223372036854775807.0,
+                str_contains($columnType, 'mediumint') => $unsigned ? 16777215.0 : 8388607.0,
+                str_contains($columnType, 'smallint') => $unsigned ? 65535.0 : 32767.0,
+                str_contains($columnType, 'tinyint') => $unsigned ? 255.0 : 127.0,
+                default => $unsigned ? 4294967295.0 : 2147483647.0,
+            };
+            $autoIncrement = (float) ($table->auto_increment ?? 0);
+
+            return [
+                'available' => true,
+                'supported' => true,
+                'column_type' => $columnType,
+                'auto_increment' => (string) ($table->auto_increment ?? ''),
+                'utilization_percent' => $maxValue > 0 ? ($autoIncrement / $maxValue) * 100 : 0,
+                'table_bytes' => (int) ($table->table_bytes ?? 0),
+            ];
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            return ['available' => false];
+        }
+    }
+
+    private function getMigrationMetrics(): array
+    {
+        try {
+            if (!DB::getSchemaBuilder()->hasTable('migrations')) {
+                return ['available' => false];
+            }
+
+            $files = collect(File::files(database_path('migrations')))
+                ->map(fn($file) => pathinfo($file->getFilename(), PATHINFO_FILENAME))
+                ->values();
+            $applied = DB::table('migrations')->pluck('migration')->map(fn($name) => (string) $name);
+
+            return [
+                'available' => true,
+                'pending' => $files->diff($applied)->count(),
+                'applied' => $applied->count(),
+                'total' => $files->count(),
+            ];
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            return ['available' => false];
+        }
     }
 
     /**
