@@ -191,7 +191,7 @@ final class AdminDashboardSiteIncomeTest extends TestCase
         ], $breakdown);
     }
 
-    public function test_traffic_breakdown_groups_daily_and_monthly_usage_by_site_and_excludes_agent_users(): void
+    public function test_traffic_breakdown_groups_daily_and_monthly_usage_by_site_and_includes_agent_users(): void
     {
         $monthStart = strtotime('2026-06-01 00:00:00');
         $todayStart = strtotime('2026-06-24 00:00:00');
@@ -250,12 +250,12 @@ final class AdminDashboardSiteIncomeTest extends TestCase
                 'site_id' => $miaosu->id,
                 'site_code' => 'miaosu',
                 'site_name' => '秒速云',
-                'today_upload' => 30,
-                'today_download' => 40,
-                'today_total' => 70,
-                'month_upload' => 130,
-                'month_download' => 240,
-                'month_total' => 370,
+                'today_upload' => 730,
+                'today_download' => 840,
+                'today_total' => 1570,
+                'month_upload' => 830,
+                'month_download' => 1040,
+                'month_total' => 1870,
             ],
             [
                 'site_id' => $lion->id,
@@ -296,11 +296,11 @@ final class AdminDashboardSiteIncomeTest extends TestCase
         $summarize->setAccessible(true);
 
         $this->assertSame(
-            ['upload' => 90, 'download' => 120, 'total' => 210],
+            ['upload' => 790, 'download' => 920, 'total' => 1710],
             $summarize->invoke($controller, $breakdown, 'today')
         );
         $this->assertSame(
-            ['upload' => 190, 'download' => 320, 'total' => 510],
+            ['upload' => 890, 'download' => 1120, 'total' => 2010],
             $summarize->invoke($controller, $breakdown, 'month')
         );
     }

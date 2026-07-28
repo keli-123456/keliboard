@@ -4,7 +4,6 @@ namespace App\Http\Controllers\V2\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\TrafficNodeLogResource;
-use App\Models\AgentUser;
 use App\Models\CommissionLog;
 use App\Models\Order;
 use App\Models\Server;
@@ -60,7 +59,8 @@ class StatController extends Controller
     {
         $data = $this->cachedAdminStats(
             'admin:stats:getOverride',
-            fn (): array => $this->buildOverrideStatsPayload()
+            fn (): array => $this->buildOverrideStatsPayload(),
+            $request->boolean('refresh')
         );
 
         return $this->statSuccess($data);
@@ -388,18 +388,23 @@ class StatController extends Controller
     /**
      * Get comprehensive statistics data including income, users, and growth rates
      */
-    public function getStats()
+    public function getStats(Request $request)
     {
         $data = $this->cachedAdminStats(
             'admin:stats:getStats',
-            fn (): array => $this->buildStatsPayload()
+            fn (): array => $this->buildStatsPayload(),
+            $request->boolean('refresh')
         );
 
         return $this->statSuccess($data);
     }
 
-    private function cachedAdminStats(string $key, callable $resolver): array
+    private function cachedAdminStats(string $key, callable $resolver, bool $force = false): array
     {
+        if ($force) {
+            Cache::forget($key);
+        }
+
         return Cache::flexible(
             $key,
             [self::ADMIN_STATS_CACHE_SECONDS, self::ADMIN_STATS_STALE_SECONDS],
@@ -685,10 +690,6 @@ class StatController extends Controller
             ->where('stats.record_type', 'd')
             ->where('stats.record_at', '>=', $monthStart)
             ->where('stats.record_at', '<', $endAt);
-
-        if (Schema::hasTable('v2_agent_user')) {
-            $trafficQuery->whereNotIn('stats.user_id', AgentUser::query()->select('sub_user_id'));
-        }
 
         $trafficRows = $trafficQuery
             ->groupBy('users.site_id')
