@@ -18,6 +18,7 @@ class UserController extends Controller
         return [
             'id' => (int) $user->id,
             'email' => (string) $user->email,
+            'site_id' => $user->site_id !== null ? (int) $user->site_id : null,
             'plan_id' => $user->plan_id !== null ? (int) $user->plan_id : null,
             'group_id' => $user->group_id !== null ? (int) $user->group_id : null,
             'transfer_enable' => $user->transfer_enable !== null ? (int) $user->transfer_enable : null,
@@ -34,6 +35,11 @@ class UserController extends Controller
                 'id' => (int) $plan->id,
                 'name' => (string) $plan->name,
             ] : null,
+            'site' => $user->relationLoaded('site') && $user->site ? [
+                'id' => (int) $user->site->id,
+                'code' => (string) $user->site->code,
+                'name' => (string) $user->site->name,
+            ] : null,
         ];
     }
 
@@ -45,7 +51,7 @@ class UserController extends Controller
             'id.required' => '用户ID不能为空',
         ]);
 
-        $user = User::with('plan:id,name')->find($request->integer('id'));
+        $user = User::with(['plan:id,name', 'site:id,code,name'])->find($request->integer('id'));
         if (!$user) {
             return $this->fail([404, '用户不存在']);
         }
@@ -62,7 +68,7 @@ class UserController extends Controller
         ]);
 
         $email = (string) $request->input('email');
-        $user = User::with('plan:id,name')->where('email', $email)->first();
+        $user = User::with(['plan:id,name', 'site:id,code,name'])->where('email', $email)->first();
         if (!$user) {
             return $this->fail([404, '用户不存在']);
         }

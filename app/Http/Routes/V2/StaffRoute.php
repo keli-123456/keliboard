@@ -18,6 +18,7 @@ class StaffRoute
             $router->group([
                 'prefix' => 'ticket'
             ], function ($router) {
+                $router->get('/overview', [TicketController::class, 'overview']);
                 $router->any('/fetch', [TicketController::class, 'fetch']);
                 $router->post('/reply', [TicketController::class, 'reply']);
                 $router->post('/close', [TicketController::class, 'close']);

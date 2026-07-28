@@ -8,6 +8,9 @@ use App\Http\Controllers\V1\User\NoticeController;
 use App\Http\Controllers\V2\Admin\NoticeController as AdminNoticeController;
 use App\Http\Controllers\V2\Admin\OrderController as AdminOrderController;
 use App\Http\Controllers\V2\Admin\TicketController as AdminTicketController;
+use App\Http\Controllers\V2\Staff\SiteController as StaffSiteController;
+use App\Http\Controllers\V2\Staff\TicketController as StaffTicketController;
+use App\Http\Controllers\V2\Staff\UserController as StaffUserController;
 use App\Models\Notice;
 use App\Models\Order;
 use App\Models\Plan;
@@ -211,6 +214,83 @@ final class SiteScopedUserDataTest extends TestCase
             $table->string('auto_reply_rule')->nullable();
         });
     }
+
+    public function test_staff_workspace_lists_real_sites_and_platform_scope(): void
+    {
+        $active = $this->siteWithDomain('staff-active', 'staff-active.example.test', false);
+        $disabled = $this->siteWithDomain('staff-disabled', 'staff-disabled.example.test', false);
+        $disabled->status = Site::STATUS_DISABLED;
+        $disabled->save();
+
+        $payload = (new StaffSiteController())->fetch()->getData(true);
+
+        $this->assertSame('platform', $payload['data'][0]['id']);
+        $this->assertSame('主站', $payload['data'][0]['name']);
+        $this->assertTrue($payload['data'][0]['is_platform']);
+        $this->assertCount(2, $payload['data']);
+        $this->assertSame((string) $active->id, $payload['data'][1]['id']);
+    }
+
+    public function test_staff_workspace_filters_tickets_by_site_and_returns_source(): void
+    {
+        $firstSite = $this->siteWithDomain('staff-tickets-a', 'staff-a.example.test', false);
+        $secondSite = $this->siteWithDomain('staff-tickets-b', 'staff-b.example.test', false);
+        $firstUser = $this->createUser('staff-first@example.test', $firstSite);
+        $secondUser = $this->createUser('staff-second@example.test', $secondSite);
+        $this->createTicket($firstUser, $firstSite, 'Staff First Ticket');
+        $this->createTicket($secondUser, $secondSite, 'Staff Second Ticket');
+
+        $payload = (new StaffTicketController())->fetch(Request::create('/staff/ticket/fetch', 'POST', [
+            'site_scope' => (string) $firstSite->id,
+            'pageSize' => 10,
+            'current' => 1,
+        ]))->getData(true);
+        $items = $payload['data']['items'];
+
+        $this->assertCount(1, $items);
+        $this->assertSame('Staff First Ticket', $items[0]['subject']);
+        $this->assertSame($firstSite->id, (int) $items[0]['site_id']);
+        $this->assertSame($firstSite->name, $items[0]['site']['name']);
+    }
+
+    public function test_staff_workspace_overview_groups_pending_tickets_by_site(): void
+    {
+        $site = $this->siteWithDomain('staff-overview', 'staff-overview.example.test', false);
+        $siteUser = $this->createUser('staff-overview@example.test', $site);
+        $platformUser = $this->createUser('staff-platform@example.test', null);
+        $this->createTicket($siteUser, $site, 'Site pending ticket');
+        Ticket::query()->create([
+            'user_id' => $platformUser->id,
+            'site_id' => null,
+            'subject' => 'Platform AI ticket',
+            'level' => 1,
+            'status' => Ticket::STATUS_OPENING,
+            'reply_status' => Ticket::REPLY_STATUS_AUTO_REPLIED,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $payload = (new StaffTicketController())->overview()->getData(true)['data'];
+
+        $this->assertSame(2, $payload['open_total']);
+        $this->assertSame(1, $payload['waiting_admin']);
+        $this->assertSame(1, $payload['auto_pending']);
+        $this->assertSame(1, $payload['pending_by_site'][(string) $site->id]);
+        $this->assertSame(1, $payload['pending_by_site']['platform']);
+    }
+
+    public function test_staff_user_lookup_returns_source_site(): void
+    {
+        $site = $this->siteWithDomain('staff-user', 'staff-user.example.test', false);
+        $user = $this->createUser('staff-lookup@example.test', $site);
+
+        $loaded = User::with(['plan:id,name', 'site:id,code,name'])->findOrFail($user->id);
+        $payload = StaffUserController::transformUserData($loaded);
+
+        $this->assertSame($site->id, $payload['site_id']);
+        $this->assertSame($site->name, $payload['site']['name']);
+    }
+
 
     private function createNoticeTable(): void
     {

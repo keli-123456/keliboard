@@ -16,6 +16,7 @@ class TicketController extends Controller
 {
     private const TICKET_FILTER_FIELDS = [
         'id' => 'id',
+        'site_id' => 'site_id',
         'user_id' => 'user_id',
         'subject' => 'subject',
         'level' => 'level',
@@ -27,6 +28,7 @@ class TicketController extends Controller
 
     private const TICKET_SORT_FIELDS = [
         'id' => 'id',
+        'site_id' => 'site_id',
         'user_id' => 'user_id',
         'subject' => 'subject',
         'level' => 'level',
@@ -83,7 +85,14 @@ class TicketController extends Controller
                         return;
                     }
 
-                    if (is_array($value)) {
+                    if ($key === 'site_id') {
+                        $siteId = filter_var($value, FILTER_VALIDATE_INT, [
+                            'options' => ['min_range' => 1],
+                        ]);
+                        if ($siteId !== false) {
+                            $query->where($column, (int) $siteId);
+                        }
+                    } elseif (is_array($value)) {
                         $query->whereIn($column, $value);
                     } else {
                         $query->where($column, 'like', "%{$value}%");
@@ -137,7 +146,13 @@ class TicketController extends Controller
 
     private function fetchTicketById(Request $request)
     {
-        $ticket = Ticket::with(['messages.ticket', 'messages.attachments', 'user.plan:id,name'])->find($request->input('id'));
+        $ticket = Ticket::with([
+            'messages.ticket',
+            'messages.attachments',
+            'user.plan:id,name',
+            'user.site:id,code,name',
+            'site:id,code,name',
+        ])->find($request->input('id'));
         if (!$ticket) {
             return $this->fail([400202, '工单不存在']);
         }
@@ -152,7 +167,21 @@ class TicketController extends Controller
 
     private function fetchTickets(Request $request)
     {
-        $ticketModel = Ticket::with('user:id,email')
+        $ticketModel = Ticket::with([
+            'user:id,email,site_id',
+            'site:id,code,name',
+        ])
+            ->when($request->filled('site_scope'), function ($query) use ($request) {
+                $scope = trim((string) $request->input('site_scope'));
+                if ($scope === 'platform') {
+                    $query->whereNull('site_id');
+                    return;
+                }
+
+                if (ctype_digit($scope) && (int) $scope > 0) {
+                    $query->where('site_id', (int) $scope);
+                }
+            })
             ->when($request->has('status'), function ($query) use ($request) {
                 $status = $request->input('status');
                 if (is_scalar($status) && $status !== '') {
@@ -193,12 +222,49 @@ class TicketController extends Controller
                 $ticketData['user'] = [
                     'id' => (int) $ticket->user->id,
                     'email' => (string) $ticket->user->email,
+                    'site_id' => $ticket->user->site_id !== null ? (int) $ticket->user->site_id : null,
                 ];
             }
             return $ticketData;
         })->all();
 
         return $this->paginate($tickets, $items);
+    }
+
+    public function overview()
+    {
+        $todayStart = strtotime('today');
+        $base = Ticket::query();
+        $siteRows = Ticket::query()
+            ->where('status', Ticket::STATUS_OPENING)
+            ->whereIn('reply_status', [
+                Ticket::REPLY_STATUS_WAITING_ADMIN,
+                Ticket::REPLY_STATUS_AUTO_REPLIED,
+            ])
+            ->selectRaw('site_id, COUNT(*) as pending_count')
+            ->groupBy('site_id')
+            ->get()
+            ->mapWithKeys(static fn ($row): array => [
+                $row->site_id === null ? 'platform' : (string) $row->site_id => (int) $row->pending_count,
+            ])
+            ->all();
+
+        return $this->success([
+            'open_total' => (clone $base)->where('status', Ticket::STATUS_OPENING)->count(),
+            'waiting_admin' => (clone $base)
+                ->where('status', Ticket::STATUS_OPENING)
+                ->where('reply_status', Ticket::REPLY_STATUS_WAITING_ADMIN)
+                ->count(),
+            'auto_pending' => (clone $base)
+                ->where('status', Ticket::STATUS_OPENING)
+                ->where('reply_status', Ticket::REPLY_STATUS_AUTO_REPLIED)
+                ->count(),
+            'closed_today' => (clone $base)
+                ->where('status', Ticket::STATUS_CLOSED)
+                ->where('updated_at', '>=', $todayStart)
+                ->count(),
+            'pending_by_site' => $siteRows,
+        ]);
     }
 
     public function reply(Request $request)
