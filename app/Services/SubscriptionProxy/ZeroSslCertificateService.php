@@ -109,6 +109,19 @@ PEM;
         }
         $domain = $configuredDomain !== '' ? $configuredDomain : $reportedDomain;
         $csr = trim((string) data_get($proxy, 'csr_pem', ''));
+        $agentIdentity = $this->machineAgentIdentity($status);
+        $stateAgentIdentity = trim((string) ($state['agent_identity'] ?? ''));
+        if ($stateAgentIdentity !== '' && $agentIdentity !== '' && !hash_equals($stateAgentIdentity, $agentIdentity)) {
+            Log::warning('Subscription proxy certificate report ignored from duplicate machine credentials', [
+                'machine_id' => (int) $machine->id,
+                'certificate_agent_identity' => $stateAgentIdentity,
+                'reported_agent_identity' => $agentIdentity,
+            ]);
+            return false;
+        }
+        if ($stateAgentIdentity === '' && $agentIdentity !== '') {
+            $state['agent_identity'] = $agentIdentity;
+        }
 
         $accessKey = trim((string) admin_setting('zerossl_access_key', ''));
         if ($accessKey === '') {
@@ -173,6 +186,9 @@ PEM;
             if ($this->shouldCreateCertificate($state, $domain, $csrHash, $renewDays)) {
                 $state = $this->createCertificate($accessKey, $domain, $csr, $csrHash, $this->replacementCertificateId($state, $renewDays));
             }
+            if ($agentIdentity !== '') {
+                $state['agent_identity'] = $agentIdentity;
+            }
 
             $validationReady = (bool) data_get($proxy, 'validation_ready', false);
             if ($validationReady && !empty($state['certificate_id']) && ($state['status'] ?? '') === 'draft') {
@@ -227,6 +243,17 @@ PEM;
         }
     }
 
+    private function machineAgentIdentity(array $status): string
+    {
+        foreach (['system.hostname', 'system.machine_id', 'agent.instance_id'] as $path) {
+            $value = strtolower(trim((string) data_get($status, $path, '')));
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return '';
+    }
     private function machineWantsSharedHttpsProxy(ServerMachine $machine): bool
     {
         return ((bool) admin_setting('subscription_proxy_enable', false)

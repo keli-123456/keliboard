@@ -109,6 +109,51 @@ final class ZeroSslCertificateServiceTest extends TestCase
         $this->assertSame('cert-1', ServerMachine::find($machine->id)?->subproxy_cert_state['certificate_id']);
     }
 
+    public function test_handle_machine_status_ignores_csr_from_duplicate_machine_identity(): void
+    {
+        $creates = 0;
+        Http::fake(function ($request) use (&$creates) {
+            if ($request->method() === 'POST' && str_contains($request->url(), '/certificates?')) {
+                $creates++;
+                return Http::response([
+                    'id' => 'cert-' . $creates,
+                    'status' => 'draft',
+                    'expires' => '2026-10-01',
+                    'validation' => [
+                        'other_methods' => [
+                            '203.0.113.10' => [
+                                'file_validation_url_http' => 'http://203.0.113.10/.well-known/pki-validation/token.txt',
+                                'file_validation_content' => ['line-a', 'line-b'],
+                            ],
+                        ],
+                    ],
+                ]);
+            }
+
+            return Http::response([
+                'id' => 'cert-1',
+                'status' => 'draft',
+                'expires' => '2026-10-01',
+            ]);
+        });
+
+        $machine = $this->createMachine();
+        $firstStatus = $this->statusPayload(false);
+        $firstStatus['system']['hostname'] = 'edge-a';
+        $duplicateStatus = $this->statusPayload(false);
+        $duplicateStatus['system']['hostname'] = 'edge-b';
+        $duplicateStatus['agent']['subscription_proxy']['csr_pem'] = '-----BEGIN CERTIFICATE REQUEST-----duplicate-----END CERTIFICATE REQUEST-----';
+        $service = app(ZeroSslCertificateService::class);
+
+        $service->handleMachineStatus($machine, $firstStatus);
+        $service->handleMachineStatus($machine->fresh(), $duplicateStatus);
+
+        $state = ServerMachine::find($machine->id)?->subproxy_cert_state;
+        $this->assertSame(1, $creates);
+        $this->assertSame('cert-1', $state['certificate_id']);
+        $this->assertSame('edge-a', $state['agent_identity']);
+    }
+
     public function test_handle_machine_status_requests_validation_and_downloads_issued_certificate(): void
     {
         $machine = $this->createMachine([
