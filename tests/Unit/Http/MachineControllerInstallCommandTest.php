@@ -380,6 +380,36 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertSame('v0.1.1', $state['target_version']);
     }
 
+    public function test_upgrade_requires_bootstrap_for_old_native_agent_using_panel_releases(): void
+    {
+        $this->settings->values['server_machine_distribution_source'] = 'panel';
+        $machine = ServerMachine::create([
+            'name' => 'edge-old-native-agent',
+            'token' => 'machine-token',
+            'is_active' => true,
+            'load_status' => [
+                'version' => 'v0.1.307',
+                'runtime' => [
+                    'agent' => 'kelinode-rs',
+                ],
+            ],
+        ]);
+
+        $request = $this->installRequest('https://panel.example.test/admin/server/machine/upgrade', [
+            'id' => $machine->id,
+            'component' => 'kelinode-rs',
+            'target_version' => 'v0.1.345',
+        ]);
+
+        $response = (new MachineController())->upgrade($request);
+        $payload = $response->getData(true);
+
+        $this->assertSame(422, $response->getStatusCode());
+        $this->assertSame('fail', $payload['status']);
+        $this->assertStringContainsString('一键安装命令', $payload['message']);
+        $this->assertNull(ServerMachine::find($machine->id)?->upgrade_state);
+    }
+
     public function test_upgrade_rejects_native_component_on_legacy_machine(): void
     {
         $machine = ServerMachine::create([

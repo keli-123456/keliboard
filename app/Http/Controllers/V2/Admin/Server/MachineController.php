@@ -18,6 +18,7 @@ use Illuminate\Support\Str;
 class MachineController extends Controller
 {
     private const NATIVE_NODE_INSTALL_VERSION = 'latest';
+    private const PANEL_RELEASE_MIN_AGENT_VERSION = '0.1.309';
     private const MACHINE_ONLINE_WINDOW_SECONDS = 300;
 
     public function fetch(Request $request)
@@ -602,6 +603,12 @@ class MachineController extends Controller
         if (!$this->machineSupportsUpgradeComponent($machine, $component)) {
             return $this->fail([422, '该机器当前节点端不支持该组件升级，请先安装 kelinode-rs']);
         }
+        if ($component === 'kelinode-rs' && $this->requiresPanelReleaseBootstrap($machine)) {
+            return $this->fail([
+                422,
+                '当前 kelinode-rs 版本过旧，尚不支持面板版本仓库，请先复制最新的一键安装命令完成一次引导升级',
+            ]);
+        }
 
         $currentUpgrade = is_array($machine->upgrade_state) ? $machine->upgrade_state : [];
         if (
@@ -856,6 +863,17 @@ class MachineController extends Controller
 
         $version = strtolower(trim((string) data_get($status, 'version', '')));
         return (bool) preg_match('/^v?0\.1\./', $version);
+    }
+
+    private function requiresPanelReleaseBootstrap(ServerMachine $machine): bool
+    {
+        if ($this->releaseDistribution()->source() !== MachineReleaseDistributionService::SOURCE_PANEL) {
+            return false;
+        }
+
+        $status = is_array($machine->load_status) ? $machine->load_status : [];
+        $version = ltrim(trim((string) data_get($status, 'version', '')), 'vV');
+        return $version !== '' && version_compare($version, self::PANEL_RELEASE_MIN_AGENT_VERSION, '<');
     }
 
     private function isValidKelinodeVersion(string $version): bool
