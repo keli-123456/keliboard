@@ -314,9 +314,7 @@ class MachineController extends Controller
         }
 
         if (
-            $reportedStatus === ''
-            && !in_array((string) ($state['status'] ?? ''), ['failed', 'succeeded'], true)
-            && $targetVersion !== ''
+            $targetVersion !== ''
             && $currentVersion !== ''
             && $this->versionsMatch($currentVersion, $targetVersion)
             && $this->upgradeIdentityMatches($state, $status)

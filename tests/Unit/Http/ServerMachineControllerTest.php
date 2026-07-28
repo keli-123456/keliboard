@@ -1693,6 +1693,51 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertGreaterThan(0, (int) ($state['finished_at'] ?? 0));
     }
 
+    public function test_status_recovers_timed_out_upgrade_when_runtime_identity_arrives_late(): void
+    {
+        $this->bindSettings(['subscription_proxy_enable' => false]);
+
+        $hash = str_repeat('a', 64);
+        $machine = ServerMachine::create([
+            'name' => 'edge-upgrade',
+            'token' => 'machine-token',
+            'is_active' => true,
+            'upgrade_state' => [
+                'id' => 'upgrade-node-late-identity',
+                'status' => 'failed',
+                'component' => 'kelinode-rs',
+                'target_version' => 'v0.1.344',
+                'expected_binary_sha256' => $hash,
+                'requested_at' => now()->subMinutes(30)->timestamp,
+                'finished_at' => now()->subMinutes(10)->timestamp,
+                'error' => 'upgrade_identity_unavailable',
+            ],
+        ]);
+
+        (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'version' => 'v0.1.344',
+                    'runtime' => [
+                        'binary_sha256' => $hash,
+                        'agent' => 'kelinode-rs',
+                    ],
+                ],
+            ]
+        ));
+
+        $state = ServerMachine::find($machine->id)?->upgrade_state ?? [];
+
+        $this->assertSame('succeeded', $state['status']);
+        $this->assertSame('v0.1.344', $state['current_version']);
+        $this->assertSame($hash, $state['running_binary_sha256']);
+        $this->assertArrayNotHasKey('error', $state);
+    }
+
     public function test_status_copies_only_bounded_upgrade_report_fields(): void
     {
         $this->bindSettings(['subscription_proxy_enable' => false]);
