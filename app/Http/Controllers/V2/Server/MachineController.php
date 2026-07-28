@@ -681,7 +681,15 @@ class MachineController extends Controller
             return true;
         }
 
-        if ($this->reportedProxyProfileCount($reported, 'website_profiles') !== count($desired['website_profiles'] ?? [])) {
+        if ($this->reportedProxyProfileCount($reported, 'website_profiles') !== $this->desiredWebsiteProxyProfileCount($desired)) {
+            return true;
+        }
+
+        $desiredWebsiteListens = $this->desiredWebsiteProxyListens($desired);
+        if ($this->reportedProxyProfileCount($reported, 'website_listeners') !== count($desiredWebsiteListens)) {
+            return true;
+        }
+        if ($this->reportedWebsiteProxyListens($reported) !== $desiredWebsiteListens) {
             return true;
         }
 
@@ -719,6 +727,41 @@ class MachineController extends Controller
         }
 
         return false;
+    }
+
+    private function desiredWebsiteProxyProfileCount(array $desired): int
+    {
+        $count = count((array) ($desired['website_profiles'] ?? []));
+        foreach ((array) ($desired['website_listeners'] ?? []) as $listener) {
+            if (is_array($listener)) {
+                $count += count((array) ($listener['website_profiles'] ?? []));
+            }
+        }
+
+        return $count;
+    }
+
+    private function desiredWebsiteProxyListens(array $desired): array
+    {
+        return collect((array) ($desired['website_listeners'] ?? []))
+            ->filter(fn ($listener): bool => is_array($listener))
+            ->map(fn (array $listener): string => trim((string) ($listener['https_listen'] ?? '')))
+            ->filter()
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
+    }
+
+    private function reportedWebsiteProxyListens(array $reported): array
+    {
+        return collect((array) ($reported['website_listens'] ?? []))
+            ->map(fn ($listen): string => trim((string) $listen))
+            ->filter()
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
     }
 
     private function subscriptionProxyDesiredConfigChanged(ServerMachine $machine, array $desired): bool
@@ -767,6 +810,18 @@ class MachineController extends Controller
                 'upstream_base_url',
                 'path_prefix',
             ]),
+            'website_listeners' => collect((array) ($desired['website_listeners'] ?? []))
+                ->filter(fn ($listener): bool => is_array($listener))
+                ->map(fn (array $listener): array => [
+                    'https_listen' => trim((string) ($listener['https_listen'] ?? '')),
+                    'website_profiles' => $this->subscriptionProxyProfileSignatureRows($listener['website_profiles'] ?? [], [
+                        'site_id',
+                        'upstream_base_url',
+                        'path_prefix',
+                    ]),
+                ])
+                ->values()
+                ->all(),
         ];
 
         return hash('sha256', (string) json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));

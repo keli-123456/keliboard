@@ -1114,6 +1114,97 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame($state['config_signature'], $nextState['config_signature'] ?? null);
     }
 
+    public function test_status_multi_site_website_proxy_stops_reloading_after_report_matches(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscription_proxy_enable' => false,
+            'website_proxy_enable' => true,
+        ]);
+
+        $siteA = Site::create([
+            'code' => 'branch-a',
+            'name' => 'Branch A',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+        ]);
+        $domainA = SiteDomain::create([
+            'site_id' => $siteA->id,
+            'domain' => 'branch-a.example.test',
+            'status' => SiteDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+        ]);
+        $siteB = Site::create([
+            'code' => 'branch-b',
+            'name' => 'Branch B',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+        ]);
+        SiteDomain::create([
+            'site_id' => $siteB->id,
+            'domain' => 'branch-b.example.test',
+            'status' => SiteDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+        ]);
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+        ]);
+        $machine->forceFill(['webproxy_enabled' => true])->save();
+
+        $requestPayload = [
+            'machine_id' => $machine->id,
+            'token' => 'machine-token',
+            'status' => [
+                'runtime' => ['nodes' => 0],
+                'agent' => [
+                    'subscription_proxy' => [
+                        'enabled' => true,
+                        'running' => true,
+                        'profiles' => 0,
+                        'website_profiles' => 3,
+                        'website_listeners' => 2,
+                        'website_listens' => ['0.0.0.0:8443', '0.0.0.0:8444'],
+                        'certificate_domain' => '198.51.100.20',
+                    ],
+                ],
+            ],
+        ];
+        $server = ['REMOTE_ADDR' => '198.51.100.20'];
+
+        $first = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            $requestPayload,
+            [],
+            [],
+            $server
+        ));
+        $second = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            $requestPayload,
+            [],
+            [],
+            $server
+        ));
+
+        $this->assertTrue($first->getData(true)['reload']);
+        $this->assertFalse($second->getData(true)['reload']);
+
+        $domainA->forceFill(['domain' => 'branch-a-new.example.test'])->save();
+        $changed = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            $requestPayload,
+            [],
+            [],
+            $server
+        ));
+
+        $this->assertTrue($changed->getData(true)['reload']);
+    }
     public function test_status_response_requests_reload_when_website_proxy_profile_is_missing(): void
     {
         $this->bindSettings([
