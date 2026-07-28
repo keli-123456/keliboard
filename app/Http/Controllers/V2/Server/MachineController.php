@@ -1055,6 +1055,15 @@ class MachineController extends Controller
 
     private function resolveAutomaticCertificateDomain(string $requestIP, ServerMachine $machine, array $state): string
     {
+        $stateDomain = trim((string) ($state['domain'] ?? ''));
+        $stateStatus = trim((string) ($state['status'] ?? ''));
+        if (($state['domain_source'] ?? '') === 'auto'
+            && $this->isIPv4Address($stateDomain)
+            && in_array($stateStatus, ['draft', 'pending_validation', 'waiting_agent_reload', 'issued', 'expiring_soon'], true)
+        ) {
+            return $stateDomain;
+        }
+
         $statusIPv4 = $this->machineStatusIPv4($machine);
         if ($statusIPv4 !== '') {
             return $statusIPv4;
@@ -1064,9 +1073,8 @@ class MachineController extends Controller
             return $requestIP;
         }
 
-        $domain = trim((string) ($state['domain'] ?? ''));
-        if ($this->isIPv4Address($domain)) {
-            return $domain;
+        if ($this->isIPv4Address($stateDomain)) {
+            return $stateDomain;
         }
 
         return '';
