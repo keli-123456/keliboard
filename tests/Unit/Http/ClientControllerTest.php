@@ -14,6 +14,7 @@ use App\Protocols\SingBox;
 use App\Services\Plugin\HookManager;
 use App\Services\Plugin\InterceptResponseException;
 use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
+use App\Services\SubscriptionProxy\WebsiteProxyEndpointService;
 use App\Support\ProtocolManager;
 use Illuminate\Container\Container;
 use Illuminate\Http\Request;
@@ -27,6 +28,31 @@ use Tests\TestCase;
 final class ClientControllerTest extends TestCase
 {
     use InteractsWithInMemoryDatabase;
+
+    private array $requestMacrosBeforeTest = [];
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $macros = new \ReflectionProperty(Request::class, 'macros');
+        $this->requestMacrosBeforeTest = $macros->getValue();
+
+        $this->setUpInMemoryDatabase();
+        $this->bindJsonResponseFactory();
+        $this->bindValidatorFactory();
+        Request::macro('validate', function (array $rules): array {
+            return app('validator')->make($this->all(), $rules)->validate();
+        });
+    }
+
+    protected function tearDown(): void
+    {
+        $macros = new \ReflectionProperty(Request::class, 'macros');
+        $macros->setValue(null, $this->requestMacrosBeforeTest);
+
+        parent::tearDown();
+    }
 
     public function test_subscribe_runs_access_hook_for_unavailable_user_before_availability_gate(): void
     {
@@ -62,7 +88,6 @@ final class ClientControllerTest extends TestCase
             'REMOTE_ADDR' => '8.8.8.8',
             'HTTP_USER_AGENT' => 'Mozilla/5.0 Chrome/138.0 Safari/537.36',
         ]);
-        $request->setContainer(app());
         $request->setUserResolver(fn (): User => $user);
 
         try {
@@ -213,6 +238,38 @@ final class ClientControllerTest extends TestCase
         $this->assertSame('hiddify', $filter->clientName);
         $this->assertSame('1.2.8.1103', $filter->clientVersion);
         $this->assertSame(['AnyTLS TCP'], json_decode($response->getContent(), true)['names']);
+    }
+
+    public function test_subscription_response_exposes_reverse_website_url_as_client_metadata(): void
+    {
+        $this->bindProtocolManager([
+            TestClientFilteredProtocol::class,
+        ]);
+        app()->instance('protocols.capabilities', new TestClientCapabilityFilter());
+        app()->instance(WebsiteProxyEndpointService::class, new class extends WebsiteProxyEndpointService {
+            public function urlForSubscription(mixed $user, Request $request): ?string
+            {
+                return 'https://2.56.116.39:8444';
+            }
+        });
+
+        $response = (new ClientController())->doSubscribe(
+            Request::create('/', 'GET', ['flag' => 'Hiddify/1.2.8.1103']),
+            [
+                'u' => 0,
+                'd' => 0,
+                'transfer_enable' => 1024,
+                'expired_at' => 0,
+            ],
+            [[
+                'type' => 'anytls',
+                'name' => 'AnyTLS TCP',
+                'protocol_settings' => [],
+            ]]
+        );
+
+        $this->assertSame('https://2.56.116.39:8444', $response->headers->get('profile-web-page-url'));
+        $this->assertSame('https://2.56.116.39:8444', $response->headers->get('support-url'));
     }
 
     private function bindProtocolManager(array $classes): void

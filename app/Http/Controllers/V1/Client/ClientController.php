@@ -9,6 +9,7 @@ use App\Services\Plugin\HookManager;
 use App\Services\RiskEventService;
 use App\Services\ServerService;
 use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
+use App\Services\SubscriptionProxy\WebsiteProxyEndpointService;
 use App\Services\UserService;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
@@ -108,7 +109,14 @@ class ClientController extends Controller
             'clientVersion' => $clientInfo['version'] ?? null
         ]);
 
-        return $protocolInstance->handle();
+        $response = $protocolInstance->handle();
+        $websiteUrl = app(WebsiteProxyEndpointService::class)->urlForSubscription($user, $request);
+        if ($websiteUrl !== null && is_object($response) && isset($response->headers)) {
+            $response->headers->set('profile-web-page-url', $websiteUrl);
+            $response->headers->set('support-url', $websiteUrl);
+        }
+
+        return $response;
     }
 
     private function recordSubscribeEvent(Request $request, $user, array $clientInfo): void

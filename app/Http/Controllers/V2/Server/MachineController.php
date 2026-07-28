@@ -5,12 +5,11 @@ namespace App\Http\Controllers\V2\Server;
 use App\Http\Controllers\Controller;
 use App\Models\ServerMachine;
 use App\Models\ServerMachineLoadHistory;
-use App\Models\Site;
-use App\Models\SiteDomain;
 use App\Services\NodeRealtime\NodeRealtimeSettings;
 use App\Services\ServerMachine\MachineReleaseDistributionService;
 use App\Services\ServerService;
 use App\Services\ServerTlsCertificateService;
+use App\Services\SubscriptionProxy\WebsiteProxyRoutingService;
 use App\Services\SubscriptionProxy\ZeroSslCertificateService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -847,7 +846,7 @@ class MachineController extends Controller
             443
         );
         $websiteRouting = $websiteEnabled
-            ? $this->resolveWebsiteProxyRouting($upstreamBaseURL, $siteId, $httpsListen)
+            ? app(WebsiteProxyRoutingService::class)->build($upstreamBaseURL, $siteId, $httpsListen)
             : ['main_profiles' => [], 'listeners' => []];
         if (!$subscriptionEnabled
             && $websiteRouting['main_profiles'] === []
@@ -899,96 +898,6 @@ class MachineController extends Controller
     private function machineWantsWebsiteProxy(ServerMachine $machine): bool
     {
         return (bool) $machine->getAttribute('webproxy_enabled');
-    }
-
-    private function resolveWebsiteProxyRouting(
-        string $fallbackBaseURL,
-        string $fallbackSiteId,
-        string $mainHttpsListen
-    ): array {
-        $mainProfiles = [[
-            'site_id' => $fallbackSiteId,
-            'upstream_base_url' => $fallbackBaseURL,
-            'path_prefix' => '/',
-        ]];
-        $usedPorts = [$this->listenPort($mainHttpsListen, 443) => true];
-        $listeners = [];
-
-        $sites = Site::query()
-            ->with(['domains' => function ($query): void {
-                $query->where('status', SiteDomain::STATUS_ACTIVE)
-                    ->orderByDesc('is_primary')
-                    ->orderBy('id');
-            }])
-            ->where('is_default', false)
-            ->where('status', Site::STATUS_ACTIVE)
-            ->orderBy('id')
-            ->get();
-
-        foreach ($sites as $site) {
-            $domain = $site->domains->first();
-            if (!$domain instanceof SiteDomain) {
-                continue;
-            }
-            $profile = $this->resolveWebsiteProxySiteTarget($site, $domain);
-            if ($profile === null) {
-                continue;
-            }
-            $port = $this->allocateWebsiteProxyPort((int) $site->id, $usedPorts);
-            if ($port === null) {
-                break;
-            }
-            $listeners[] = [
-                'https_listen' => $this->listenAddress($port, 8443),
-                'website_profiles' => [$profile],
-            ];
-        }
-
-        return ['main_profiles' => $mainProfiles, 'listeners' => $listeners];
-    }
-
-    private function resolveWebsiteProxySiteTarget(Site $site, SiteDomain $domain): ?array
-    {
-        $host = strtolower(trim((string) $domain->domain, " \n\r\t\v\0."));
-        if ($host === '' || parse_url('https://' . $host, PHP_URL_HOST) !== $host) {
-            return null;
-        }
-
-        $siteId = $this->sanitizeSiteId((string) $site->code);
-        if ($siteId === '') {
-            $siteId = 'site-' . (int) $site->id;
-        }
-
-        return [
-            'site_id' => $siteId,
-            'upstream_base_url' => 'https://' . $host,
-            'path_prefix' => '/',
-        ];
-    }
-
-    private function allocateWebsiteProxyPort(int $siteId, array &$usedPorts): ?int
-    {
-        $start = 8443;
-
-        $span = 65535 - $start + 1;
-        $candidate = $start + ((max(1, $siteId) - 1) % $span);
-
-        for ($attempt = 0; $attempt < $span; $attempt++) {
-            if (!isset($usedPorts[$candidate])) {
-                $usedPorts[$candidate] = true;
-                return $candidate;
-            }
-            $candidate = $candidate >= 65535 ? $start : $candidate + 1;
-        }
-
-        return null;
-    }
-
-    private function listenPort(string $listen, int $fallback): int
-    {
-        $separator = strrpos($listen, ':');
-        $port = $separator === false ? 0 : (int) substr($listen, $separator + 1);
-        return $port >= 1 && $port <= 65535 ? $port : $fallback;
     }
 
     private function resolvePanelBaseURL(Request $request): string
