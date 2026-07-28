@@ -1369,6 +1369,103 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame('v0.1.1', $payload['upgrade']['target_version']);
         $this->assertSame('dispatched', $state['status']);
         $this->assertSame('core', $state['component']);
+        $this->assertSame(1, $state['dispatch_attempts']);
+        $this->assertGreaterThan(0, (int) $state['last_dispatched_at']);
+    }
+
+    public function test_status_redispatches_upgrade_until_agent_acknowledges_command(): void
+    {
+        $this->bindSettings([
+            'subscription_proxy_enable' => false,
+        ]);
+
+        $firstDispatchedAt = now()->timestamp - 30;
+        $machine = ServerMachine::create([
+            'name' => 'edge-upgrade-retry',
+            'token' => 'machine-token',
+            'is_active' => true,
+            'upgrade_state' => [
+                'id' => 'upgrade-node-retry',
+                'status' => 'dispatched',
+                'component' => 'kelinode-rs',
+                'target_version' => 'v0.1.344',
+                'requested_at' => now()->timestamp - 60,
+                'dispatched_at' => $firstDispatchedAt,
+                'dispatch_attempts' => 1,
+            ],
+        ]);
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'version' => 'v0.1.343',
+                    'runtime' => ['agent' => 'kelinode-rs'],
+                    'upgrade' => [
+                        'id' => 'previous-upgrade',
+                        'status' => 'succeeded',
+                    ],
+                ],
+            ]
+        ));
+        $payload = $response->getData(true);
+        $state = ServerMachine::find($machine->id)?->upgrade_state ?? [];
+
+        $this->assertSame('upgrade-node-retry', $payload['upgrade']['id']);
+        $this->assertSame('kelinode-rs', $payload['upgrade']['component']);
+        $this->assertSame('v0.1.344', $payload['upgrade']['target_version']);
+        $this->assertSame('dispatched', $state['status']);
+        $this->assertSame($firstDispatchedAt, $state['dispatched_at']);
+        $this->assertSame(2, $state['dispatch_attempts']);
+        $this->assertGreaterThan($firstDispatchedAt, (int) $state['last_dispatched_at']);
+    }
+
+    public function test_status_stops_redispatch_after_agent_acknowledges_command(): void
+    {
+        $this->bindSettings([
+            'subscription_proxy_enable' => false,
+        ]);
+
+        $machine = ServerMachine::create([
+            'name' => 'edge-upgrade-running',
+            'token' => 'machine-token',
+            'is_active' => true,
+            'upgrade_state' => [
+                'id' => 'upgrade-node-running',
+                'status' => 'dispatched',
+                'component' => 'kelinode-rs',
+                'target_version' => 'v0.1.344',
+                'requested_at' => now()->timestamp - 60,
+                'dispatch_attempts' => 1,
+            ],
+        ]);
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'version' => 'v0.1.343',
+                    'runtime' => ['agent' => 'kelinode-rs'],
+                    'upgrade' => [
+                        'id' => 'upgrade-node-running',
+                        'status' => 'running',
+                        'phase' => 'downloading_manifest',
+                    ],
+                ],
+            ]
+        ));
+        $state = ServerMachine::find($machine->id)?->upgrade_state ?? [];
+
+        $this->assertNull($response->getData(true)['upgrade']);
+        $this->assertSame('running', $state['status']);
+        $this->assertSame('downloading_manifest', $state['phase']);
+        $this->assertSame(1, $state['dispatch_attempts']);
     }
 
     public function test_status_dispatches_panel_release_source_with_upgrade_command(): void

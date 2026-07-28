@@ -433,7 +433,7 @@ class MachineController extends Controller
     private function buildUpgradeCommand(ServerMachine $machine, string $panelBaseUrl): ?array
     {
         $state = is_array($machine->upgrade_state) ? $machine->upgrade_state : null;
-        if (($state['status'] ?? '') !== 'queued') {
+        if (!in_array((string) ($state['status'] ?? ''), ['queued', 'dispatched'], true)) {
             return null;
         }
 
@@ -460,9 +460,14 @@ class MachineController extends Controller
             $state['expected_binary_sha256'] = strtolower((string) $release->binary_sha256);
         }
 
+        $now = now()->timestamp;
         $state['status'] = 'dispatched';
-        $state['dispatched_at'] = now()->timestamp;
-        $state['updated_at'] = now()->timestamp;
+        $state['dispatched_at'] = (int) ($state['dispatched_at'] ?? 0) > 0
+            ? (int) $state['dispatched_at']
+            : $now;
+        $state['last_dispatched_at'] = $now;
+        $state['dispatch_attempts'] = max(0, (int) ($state['dispatch_attempts'] ?? 0)) + 1;
+        $state['updated_at'] = $now;
         $machine->forceFill(['upgrade_state' => $state])->save();
 
         $command = [
