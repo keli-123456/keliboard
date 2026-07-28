@@ -99,7 +99,7 @@ final class ServerMachineControllerTest extends TestCase
         $this->bindSettings([
             'app_url' => 'https://panel.example.test',
             'subscription_proxy_enable' => false,
-            'website_proxy_enable' => true,
+            'website_proxy_enable' => false,
             'website_proxy_path_prefix' => '/shop',
             'subscription_proxy_https_port' => 443,
             'subscription_proxy_http_port' => 80,

@@ -898,8 +898,7 @@ class MachineController extends Controller
 
     private function machineWantsWebsiteProxy(ServerMachine $machine): bool
     {
-        return (bool) admin_setting('website_proxy_enable', false)
-            && (bool) $machine->getAttribute('webproxy_enabled');
+        return (bool) $machine->getAttribute('webproxy_enabled');
     }
 
     private function resolveWebsiteProxyRouting(

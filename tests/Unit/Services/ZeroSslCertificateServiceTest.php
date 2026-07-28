@@ -519,7 +519,7 @@ final class ZeroSslCertificateServiceTest extends TestCase
     {
         $this->bindSettings([
             'subscription_proxy_enable' => false,
-            'website_proxy_enable' => true,
+            'website_proxy_enable' => false,
             'zerossl_access_key' => '',
         ]);
         Http::fake();

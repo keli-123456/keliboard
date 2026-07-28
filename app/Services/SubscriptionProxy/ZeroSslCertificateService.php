@@ -194,8 +194,7 @@ PEM;
     {
         return ((bool) admin_setting('subscription_proxy_enable', false)
                 && (bool) $machine->getAttribute('subproxy_enabled'))
-            || ((bool) admin_setting('website_proxy_enable', false)
-                && (bool) $machine->getAttribute('webproxy_enabled'));
+            || (bool) $machine->getAttribute('webproxy_enabled');
     }
 
     private function shouldCreateCertificate(array $state, string $domain, string $csrHash, int $renewDays): bool
