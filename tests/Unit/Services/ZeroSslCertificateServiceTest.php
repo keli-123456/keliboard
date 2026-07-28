@@ -139,9 +139,11 @@ final class ZeroSslCertificateServiceTest extends TestCase
 
         $machine = $this->createMachine();
         $firstStatus = $this->statusPayload(false);
-        $firstStatus['system']['hostname'] = 'edge-a';
+        $firstStatus['system']['hostname'] = 'unknown';
+        $firstStatus['ip']['public_ipv4'] = '2.56.116.39';
         $duplicateStatus = $this->statusPayload(false);
-        $duplicateStatus['system']['hostname'] = 'edge-b';
+        $duplicateStatus['system']['hostname'] = 'unknown';
+        $duplicateStatus['ip']['public_ipv4'] = '139.28.232.249';
         $duplicateStatus['agent']['subscription_proxy']['csr_pem'] = '-----BEGIN CERTIFICATE REQUEST-----duplicate-----END CERTIFICATE REQUEST-----';
         $service = app(ZeroSslCertificateService::class);
 
@@ -151,7 +153,7 @@ final class ZeroSslCertificateServiceTest extends TestCase
         $state = ServerMachine::find($machine->id)?->subproxy_cert_state;
         $this->assertSame(1, $creates);
         $this->assertSame('cert-1', $state['certificate_id']);
-        $this->assertSame('edge-a', $state['agent_identity']);
+        $this->assertSame('ipv4:2.56.116.39', $state['agent_identity']);
     }
 
     public function test_handle_machine_status_requests_validation_and_downloads_issued_certificate(): void

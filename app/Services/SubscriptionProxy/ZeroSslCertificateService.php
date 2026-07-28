@@ -245,10 +245,20 @@ PEM;
 
     private function machineAgentIdentity(array $status): string
     {
-        foreach (['system.hostname', 'system.machine_id', 'agent.instance_id'] as $path) {
+        $hostname = strtolower(trim((string) data_get($status, 'system.hostname', '')));
+        if ($hostname !== '' && !in_array($hostname, ['unknown', 'localhost'], true)) {
+            return 'hostname:' . $hostname;
+        }
+
+        $publicIPv4 = trim((string) data_get($status, 'ip.public_ipv4', ''));
+        if (filter_var($publicIPv4, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+            return 'ipv4:' . $publicIPv4;
+        }
+
+        foreach (['system.machine_id', 'agent.instance_id'] as $path) {
             $value = strtolower(trim((string) data_get($status, $path, '')));
             if ($value !== '') {
-                return $value;
+                return $path . ':' . $value;
             }
         }
 
