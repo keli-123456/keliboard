@@ -4,6 +4,7 @@ namespace App\Services\SubscriptionProxy;
 
 use App\Models\ServerMachine;
 use App\Services\NodeRealtime\NodeRealtimePublisher;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -53,6 +54,21 @@ Rnnyp58XRStJ
 PEM;
 
     public function handleMachineStatus(ServerMachine $machine, array $status, string $currentSiteId = ''): bool
+    {
+        $lock = Cache::lock('subscription-proxy:zerossl:machine:' . $machine->id, 120);
+        if (!$lock->get()) {
+            return false;
+        }
+
+        try {
+            $machine = $machine->fresh() ?? $machine;
+            return $this->handleMachineStatusLocked($machine, $status, $currentSiteId);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    private function handleMachineStatusLocked(ServerMachine $machine, array $status, string $currentSiteId = ''): bool
     {
         if (!$this->machineWantsSharedHttpsProxy($machine)) {
             return false;

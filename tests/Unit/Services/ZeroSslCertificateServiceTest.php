@@ -70,6 +70,45 @@ final class ZeroSslCertificateServiceTest extends TestCase
         $this->assertSame(hash('sha256', '-----BEGIN CERTIFICATE REQUEST-----test-----END CERTIFICATE REQUEST-----'), $state['csr_hash']);
     }
 
+    public function test_handle_machine_status_refreshes_state_after_lock_to_avoid_duplicate_certificates(): void
+    {
+        $creates = 0;
+        Http::fake(function ($request) use (&$creates) {
+            if ($request->method() === 'POST' && str_contains($request->url(), '/certificates?')) {
+                $creates++;
+                return Http::response([
+                    'id' => 'cert-' . $creates,
+                    'status' => 'draft',
+                    'expires' => '2026-10-01',
+                    'validation' => [
+                        'other_methods' => [
+                            '203.0.113.10' => [
+                                'file_validation_url_http' => 'http://203.0.113.10/.well-known/pki-validation/token.txt',
+                                'file_validation_content' => ['line-a', 'line-b'],
+                            ],
+                        ],
+                    ],
+                ]);
+            }
+
+            return Http::response([
+                'id' => 'cert-1',
+                'status' => 'draft',
+                'expires' => '2026-10-01',
+            ]);
+        });
+
+        $machine = $this->createMachine();
+        $staleMachine = ServerMachine::findOrFail($machine->id);
+        $service = app(ZeroSslCertificateService::class);
+
+        $service->handleMachineStatus($machine, $this->statusPayload(false));
+        $service->handleMachineStatus($staleMachine, $this->statusPayload(false));
+
+        $this->assertSame(1, $creates);
+        $this->assertSame('cert-1', ServerMachine::find($machine->id)?->subproxy_cert_state['certificate_id']);
+    }
+
     public function test_handle_machine_status_requests_validation_and_downloads_issued_certificate(): void
     {
         $machine = $this->createMachine([
