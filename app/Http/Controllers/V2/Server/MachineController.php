@@ -14,10 +14,13 @@ use App\Services\ServerTlsCertificateService;
 use App\Services\SubscriptionProxy\ZeroSslCertificateService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 
 class MachineController extends Controller
 {
+    private const UPGRADE_REDISPATCH_DELAY_SECONDS = 15;
+
     public function nodes(Request $request): JsonResponse
     {
         $machine = $this->authenticateMachine($request, true);
@@ -430,43 +433,67 @@ class MachineController extends Controller
     }
     private function buildUpgradeCommand(ServerMachine $machine, string $panelBaseUrl): ?array
     {
-        $state = is_array($machine->upgrade_state) ? $machine->upgrade_state : null;
-        if (!in_array((string) ($state['status'] ?? ''), ['queued', 'dispatched'], true)) {
-            return null;
-        }
-
-        $targetVersion = trim((string) ($state['target_version'] ?? ''));
-        if (!$this->isValidKelinodeVersion($targetVersion)) {
-            $state['status'] = 'failed';
-            $state['error'] = 'invalid_target_version';
-            $state['finished_at'] = now()->timestamp;
-            $state['updated_at'] = now()->timestamp;
-            $machine->forceFill(['upgrade_state' => $state])->save();
-            return null;
-        }
-
-        $component = $this->normalizeUpgradeComponent($state['component'] ?? 'node');
         $distribution = app(MachineReleaseDistributionService::class);
         $source = $distribution->source();
-        $release = $distribution->findLocalRelease(
-            $distribution->componentFromUpgradeComponent($component),
-            $targetVersion,
-            MachineReleaseDistributionService::PLATFORM_LINUX_X86_64
-        );
-        if ($release) {
-            $state['expected_archive_sha256'] = strtolower((string) $release->sha256);
-            $state['expected_binary_sha256'] = strtolower((string) $release->binary_sha256);
+        $claimed = DB::transaction(function () use ($machine, $distribution): ?array {
+            $locked = ServerMachine::query()->lockForUpdate()->find($machine->id);
+            if (!$locked) {
+                return null;
+            }
+
+            $state = is_array($locked->upgrade_state) ? $locked->upgrade_state : null;
+            if (!in_array((string) ($state['status'] ?? ''), ['queued', 'dispatched'], true)) {
+                return null;
+            }
+
+            $now = now()->timestamp;
+            $lastDispatchedAt = (int) ($state['last_dispatched_at'] ?? 0);
+            if (
+                (string) ($state['status'] ?? '') === 'dispatched'
+                && $lastDispatchedAt > $now - self::UPGRADE_REDISPATCH_DELAY_SECONDS
+            ) {
+                return null;
+            }
+
+            $targetVersion = trim((string) ($state['target_version'] ?? ''));
+            if (!$this->isValidKelinodeVersion($targetVersion)) {
+                $state['status'] = 'failed';
+                $state['error'] = 'invalid_target_version';
+                $state['finished_at'] = $now;
+                $state['updated_at'] = $now;
+                $locked->forceFill(['upgrade_state' => $state])->save();
+                return null;
+            }
+
+            $component = $this->normalizeUpgradeComponent($state['component'] ?? 'node');
+            $release = $distribution->findLocalRelease(
+                $distribution->componentFromUpgradeComponent($component),
+                $targetVersion,
+                MachineReleaseDistributionService::PLATFORM_LINUX_X86_64
+            );
+            if ($release) {
+                $state['expected_archive_sha256'] = strtolower((string) $release->sha256);
+                $state['expected_binary_sha256'] = strtolower((string) $release->binary_sha256);
+            }
+
+            $state['status'] = 'dispatched';
+            $state['dispatched_at'] = (int) ($state['dispatched_at'] ?? 0) > 0
+                ? (int) $state['dispatched_at']
+                : $now;
+            $state['last_dispatched_at'] = $now;
+            $state['dispatch_attempts'] = max(0, (int) ($state['dispatch_attempts'] ?? 0)) + 1;
+            $state['updated_at'] = $now;
+            $locked->forceFill(['upgrade_state' => $state])->save();
+
+            return [$state, $release];
+        });
+        if ($claimed === null) {
+            return null;
         }
 
-        $now = now()->timestamp;
-        $state['status'] = 'dispatched';
-        $state['dispatched_at'] = (int) ($state['dispatched_at'] ?? 0) > 0
-            ? (int) $state['dispatched_at']
-            : $now;
-        $state['last_dispatched_at'] = $now;
-        $state['dispatch_attempts'] = max(0, (int) ($state['dispatch_attempts'] ?? 0)) + 1;
-        $state['updated_at'] = $now;
-        $machine->forceFill(['upgrade_state' => $state])->save();
+        [$state, $release] = $claimed;
+        $targetVersion = trim((string) ($state['target_version'] ?? ''));
+        $component = $this->normalizeUpgradeComponent($state['component'] ?? 'node');
 
         $command = [
             'id' => (string) ($state['id'] ?? ''),

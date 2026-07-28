@@ -1423,6 +1423,49 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertGreaterThan($firstDispatchedAt, (int) $state['last_dispatched_at']);
     }
 
+    public function test_status_does_not_immediately_redispatch_unacknowledged_upgrade(): void
+    {
+        $this->bindSettings([
+            'subscription_proxy_enable' => false,
+        ]);
+
+        $lastDispatchedAt = now()->timestamp - 5;
+        $machine = ServerMachine::create([
+            'name' => 'edge-upgrade-dispatch-cooldown',
+            'token' => 'machine-token',
+            'is_active' => true,
+            'upgrade_state' => [
+                'id' => 'upgrade-node-cooldown',
+                'status' => 'dispatched',
+                'component' => 'kelinode-rs',
+                'target_version' => 'v0.1.344',
+                'requested_at' => now()->timestamp - 60,
+                'dispatched_at' => now()->timestamp - 30,
+                'last_dispatched_at' => $lastDispatchedAt,
+                'dispatch_attempts' => 1,
+            ],
+        ]);
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => [
+                    'version' => 'v0.1.343',
+                    'runtime' => ['agent' => 'kelinode-rs'],
+                ],
+            ]
+        ));
+        $state = ServerMachine::find($machine->id)?->upgrade_state ?? [];
+
+        $this->assertNull($response->getData(true)['upgrade']);
+        $this->assertSame('dispatched', $state['status']);
+        $this->assertSame(1, $state['dispatch_attempts']);
+        $this->assertSame($lastDispatchedAt, $state['last_dispatched_at']);
+    }
+
     public function test_status_stops_redispatch_after_agent_acknowledges_command(): void
     {
         $this->bindSettings([
