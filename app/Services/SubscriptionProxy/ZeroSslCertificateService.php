@@ -5,6 +5,7 @@ namespace App\Services\SubscriptionProxy;
 use App\Models\ServerMachine;
 use App\Services\NodeRealtime\NodeRealtimePublisher;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -55,6 +56,10 @@ PEM;
 
     public function handleMachineStatus(ServerMachine $machine, array $status, string $currentSiteId = ''): bool
     {
+        if (DB::connection()->getDriverName() === 'mysql') {
+            return $this->handleMachineStatusWithDatabaseLock($machine, $status, $currentSiteId);
+        }
+
         $lock = Cache::lock('subscription-proxy:zerossl:machine:' . $machine->id, 120);
         if (!$lock->get()) {
             return false;
@@ -65,6 +70,22 @@ PEM;
             return $this->handleMachineStatusLocked($machine, $status, $currentSiteId);
         } finally {
             $lock->release();
+        }
+    }
+
+    private function handleMachineStatusWithDatabaseLock(ServerMachine $machine, array $status, string $currentSiteId): bool
+    {
+        $lockName = 'keliboard_zerossl_machine_' . $machine->id;
+        $result = DB::selectOne('SELECT GET_LOCK(?, 0) AS acquired', [$lockName]);
+        if ((int) ($result->acquired ?? 0) !== 1) {
+            return false;
+        }
+
+        try {
+            $machine = $machine->fresh() ?? $machine;
+            return $this->handleMachineStatusLocked($machine, $status, $currentSiteId);
+        } finally {
+            DB::selectOne('SELECT RELEASE_LOCK(?) AS released', [$lockName]);
         }
     }
 
