@@ -17,8 +17,12 @@ use App\Models\SitePlanOverride;
 use App\Models\SitePlanPrice;
 use App\Models\SiteSetting;
 use App\Services\SiteStorefrontHealthService;
+use App\Services\NodeRealtime\NodeRealtimePublisher;
 use Illuminate\Contracts\Routing\Registrar;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
 
@@ -67,6 +71,55 @@ final class AdminSiteControllerTest extends TestCase
         $this->assertSame('cheap.example.test', $payload['data']['domains'][0]['domain']);
         $this->assertTrue($payload['data']['domains'][0]['is_primary']);
         $this->assertSame(0, Site::query()->where('is_default', true)->count());
+    }
+
+    public function test_site_save_invalidates_all_website_proxy_machines(): void
+    {
+        Schema::create('v2_server_machine', function (Blueprint $table): void {
+            $table->id();
+            $table->boolean('webproxy_enabled')->default(false);
+        });
+        DB::table('v2_server_machine')->insert([
+            ['id' => 1, 'webproxy_enabled' => true],
+            ['id' => 2, 'webproxy_enabled' => false],
+            ['id' => 3, 'webproxy_enabled' => true],
+        ]);
+        $publisher = new class {
+            public array $machineIds = [];
+            public string $reason = '';
+            public array $payload = [];
+
+            public function invalidateConfigForMachines(
+                array $machineIds,
+                string $reason = 'config.updated',
+                array $payload = []
+            ): void {
+                $this->machineIds = $machineIds;
+                $this->reason = $reason;
+                $this->payload = $payload;
+            }
+        };
+        app()->instance(NodeRealtimePublisher::class, $publisher);
+
+        $payload = $this->responsePayload(app(SiteController::class)->save(Request::create(
+            '/admin/site/save',
+            'POST',
+            [
+                'code' => 'branch-live',
+                'name' => 'Branch Live',
+                'status' => Site::STATUS_ACTIVE,
+                'domains' => [[
+                    'domain' => 'branch-live.example.test',
+                    'status' => SiteDomain::STATUS_ACTIVE,
+                    'is_primary' => true,
+                ]],
+            ]
+        )));
+
+        $this->assertSame('success', $payload['status']);
+        $this->assertSame([1, 3], $publisher->machineIds);
+        $this->assertSame('admin.site.saved', $publisher->reason);
+        $this->assertSame($payload['data']['id'], $publisher->payload['site_id'] ?? null);
     }
 
     public function test_duplicate_site_domain_is_rejected(): void

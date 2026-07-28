@@ -140,12 +140,12 @@ final class ServerMachineControllerTest extends TestCase
             [
                 'site_id' => 'panel.example.test',
                 'upstream_base_url' => 'https://panel.example.test',
-                'path_prefix' => '/checkout',
+                'path_prefix' => '/',
             ],
         ], $proxy['website_profiles']);
     }
 
-    public function test_nodes_response_targets_selected_active_site_domain(): void
+    public function test_nodes_response_automatically_targets_active_site_primary_domain(): void
     {
         $this->bindSettings([
             'app_url' => 'https://panel.example.test',
@@ -159,7 +159,13 @@ final class ServerMachineControllerTest extends TestCase
             'status' => Site::STATUS_ACTIVE,
             'is_default' => false,
         ]);
-        $domain = SiteDomain::create([
+        $fallbackDomain = SiteDomain::create([
+            'site_id' => $site->id,
+            'domain' => 'fallback.example.test',
+            'status' => SiteDomain::STATUS_ACTIVE,
+            'is_primary' => false,
+        ]);
+        SiteDomain::create([
             'site_id' => $site->id,
             'domain' => 'branch-a.example.test',
             'status' => SiteDomain::STATUS_ACTIVE,
@@ -172,8 +178,10 @@ final class ServerMachineControllerTest extends TestCase
         ]);
         $machine->forceFill([
             'webproxy_enabled' => true,
-            'webproxy_site_domain_id' => $domain->id,
-            'webproxy_path_prefix' => '/',
+            'webproxy_site_domain_id' => $fallbackDomain->id,
+            'webproxy_bindings' => [
+                ['site_domain_id' => $fallbackDomain->id, 'https_port' => 9443],
+            ],
         ])->save();
 
         $response = (new MachineController())->nodes(Request::create(
@@ -181,14 +189,23 @@ final class ServerMachineControllerTest extends TestCase
             'POST',
             ['machine_id' => $machine->id, 'token' => 'machine-token']
         ));
-        $profile = $response->getData(true)['agent']['subscription_proxy']['website_profiles'][0];
+        $proxy = $response->getData(true)['agent']['subscription_proxy'];
 
-        $this->assertSame('branch-a', $profile['site_id']);
-        $this->assertSame('https://branch-a.example.test', $profile['upstream_base_url']);
-        $this->assertSame('/', $profile['path_prefix']);
+        $this->assertSame('panel.example.test', $proxy['website_profiles'][0]['site_id']);
+        $this->assertSame([], $proxy['profiles']);
+        $this->assertSame([
+            [
+                'https_listen' => '0.0.0.0:8443',
+                'website_profiles' => [[
+                    'site_id' => 'branch-a',
+                    'upstream_base_url' => 'https://branch-a.example.test',
+                    'path_prefix' => '/',
+                ]],
+            ],
+        ], $proxy['website_listeners']);
     }
 
-    public function test_nodes_response_includes_multiple_website_proxy_listeners(): void
+    public function test_nodes_response_includes_all_active_sites_and_one_domain_per_site(): void
     {
         $this->bindSettings([
             'app_url' => 'https://panel.example.test',
@@ -203,11 +220,17 @@ final class ServerMachineControllerTest extends TestCase
             'status' => Site::STATUS_ACTIVE,
             'is_default' => false,
         ]);
-        $domainA = SiteDomain::create([
+        SiteDomain::create([
             'site_id' => $siteA->id,
             'domain' => 'branch-a.example.test',
             'status' => SiteDomain::STATUS_ACTIVE,
             'is_primary' => true,
+        ]);
+        SiteDomain::create([
+            'site_id' => $siteA->id,
+            'domain' => 'branch-a-alt.example.test',
+            'status' => SiteDomain::STATUS_ACTIVE,
+            'is_primary' => false,
         ]);
         $siteB = Site::create([
             'code' => 'branch-b',
@@ -215,9 +238,27 @@ final class ServerMachineControllerTest extends TestCase
             'status' => Site::STATUS_ACTIVE,
             'is_default' => false,
         ]);
-        $domainB = SiteDomain::create([
+        SiteDomain::create([
+            'site_id' => $siteB->id,
+            'domain' => 'branch-b-disabled.example.test',
+            'status' => SiteDomain::STATUS_DISABLED,
+            'is_primary' => true,
+        ]);
+        SiteDomain::create([
             'site_id' => $siteB->id,
             'domain' => 'branch-b.example.test',
+            'status' => SiteDomain::STATUS_ACTIVE,
+            'is_primary' => false,
+        ]);
+        $inactiveSite = Site::create([
+            'code' => 'branch-off',
+            'name' => 'Branch Off',
+            'status' => Site::STATUS_DISABLED,
+            'is_default' => false,
+        ]);
+        SiteDomain::create([
+            'site_id' => $inactiveSite->id,
+            'domain' => 'branch-off.example.test',
             'status' => SiteDomain::STATUS_ACTIVE,
             'is_primary' => true,
         ]);
@@ -230,11 +271,7 @@ final class ServerMachineControllerTest extends TestCase
             'subproxy_enabled' => true,
             'webproxy_enabled' => true,
             'subproxy_https_port' => 443,
-            'webproxy_bindings' => [
-                ['site_domain_id' => null, 'https_port' => 443],
-                ['site_domain_id' => $domainA->id, 'https_port' => 8443],
-                ['site_domain_id' => $domainB->id, 'https_port' => 8444],
-            ],
+            'webproxy_bindings' => [],
         ])->save();
 
         $response = (new MachineController())->nodes(Request::create(
@@ -266,7 +303,7 @@ final class ServerMachineControllerTest extends TestCase
         ], $proxy['website_listeners']);
     }
 
-    public function test_nodes_response_fails_closed_for_inactive_selected_site_domain(): void
+    public function test_nodes_response_skips_sites_without_active_domain_but_keeps_main_website(): void
     {
         $this->bindSettings([
             'app_url' => 'https://panel.example.test',
@@ -280,7 +317,7 @@ final class ServerMachineControllerTest extends TestCase
             'status' => Site::STATUS_ACTIVE,
             'is_default' => false,
         ]);
-        $domain = SiteDomain::create([
+        SiteDomain::create([
             'site_id' => $site->id,
             'domain' => 'branch-a.example.test',
             'status' => SiteDomain::STATUS_DISABLED,
@@ -291,21 +328,18 @@ final class ServerMachineControllerTest extends TestCase
             'token' => 'machine-token',
             'is_active' => true,
         ]);
-        $machine->forceFill([
-            'webproxy_enabled' => true,
-            'webproxy_site_domain_id' => $domain->id,
-        ])->save();
+        $machine->forceFill(['webproxy_enabled' => true])->save();
 
         $response = (new MachineController())->nodes(Request::create(
             'https://panel.example.test/api/v2/server/machine/nodes',
             'POST',
             ['machine_id' => $machine->id, 'token' => 'machine-token']
         ));
+        $proxy = $response->getData(true)['agent']['subscription_proxy'];
 
-        $this->assertSame(
-            ['enabled' => false],
-            $response->getData(true)['agent']['subscription_proxy']
-        );
+        $this->assertTrue($proxy['enabled']);
+        $this->assertSame('panel.example.test', $proxy['website_profiles'][0]['site_id']);
+        $this->assertSame([], $proxy['website_listeners']);
     }
     public function test_nodes_response_reuses_subscription_proxy_certificate_for_website_proxy(): void
     {
@@ -323,6 +357,18 @@ final class ServerMachineControllerTest extends TestCase
             'subscription_proxy_challenge_dir' => '/etc/v2node/subproxy/challenges',
         ]);
 
+        $site = Site::create([
+            'code' => 'branch-a',
+            'name' => 'Branch A',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+        ]);
+        SiteDomain::create([
+            'site_id' => $site->id,
+            'domain' => 'branch-a.example.test',
+            'status' => SiteDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+        ]);
         $machine = ServerMachine::create([
             'name' => 'edge-a',
             'token' => 'machine-token',
@@ -352,6 +398,7 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame('0.0.0.0:8443', $proxy['https_listen']);
         $this->assertSame('/etc/v2node/subproxy/fullchain.pem', $proxy['cert_file']);
         $this->assertSame('/etc/v2node/subproxy/key.pem', $proxy['key_file']);
+        $this->assertSame('0.0.0.0:8444', $proxy['website_listeners'][0]['https_listen']);
     }
 
     public function test_nodes_response_disables_subscription_proxy_when_machine_is_not_bound(): void

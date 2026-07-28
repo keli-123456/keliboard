@@ -817,7 +817,7 @@ class MachineController extends Controller
             443
         );
         $websiteRouting = $websiteEnabled
-            ? $this->resolveWebsiteProxyRouting($machine, $upstreamBaseURL, $siteId, $httpsListen)
+            ? $this->resolveWebsiteProxyRouting($upstreamBaseURL, $siteId, $httpsListen)
             : ['main_profiles' => [], 'listeners' => []];
         if (!$subscriptionEnabled
             && $websiteRouting['main_profiles'] === []
@@ -873,118 +873,93 @@ class MachineController extends Controller
     }
 
     private function resolveWebsiteProxyRouting(
-        ServerMachine $machine,
         string $fallbackBaseURL,
         string $fallbackSiteId,
         string $mainHttpsListen
     ): array {
-        $bindings = $machine->getAttribute('webproxy_bindings');
-        if (is_array($bindings)) {
-            $mainProfiles = [];
-            $listeners = [];
-            $seenListens = [];
-            foreach ($bindings as $binding) {
-                if (!is_array($binding)) {
-                    continue;
-                }
-                $port = (int) ($binding['https_port'] ?? 0);
-                if ($port < 1 || $port > 65535) {
-                    continue;
-                }
-                $listen = $this->listenAddress($port, 443);
-                if (isset($seenListens[$listen])) {
-                    continue;
-                }
-                $profile = $this->resolveWebsiteProxyTarget(
-                    (int) ($binding['site_domain_id'] ?? 0),
-                    $fallbackBaseURL,
-                    $fallbackSiteId,
-                    $this->normalizeWebsiteProxyPathPrefix($binding['path_prefix'] ?? '/')
-                );
-                if ($profile === null) {
-                    continue;
-                }
-                $seenListens[$listen] = true;
-                if ($listen === $mainHttpsListen) {
-                    $mainProfiles[] = $profile;
-                    continue;
-                }
-                $listeners[] = [
-                    'https_listen' => $listen,
-                    'website_profiles' => [$profile],
-                ];
+        $mainProfiles = [[
+            'site_id' => $fallbackSiteId,
+            'upstream_base_url' => $fallbackBaseURL,
+            'path_prefix' => '/',
+        ]];
+        $usedPorts = [$this->listenPort($mainHttpsListen, 443) => true];
+        $listeners = [];
+
+        $sites = Site::query()
+            ->with(['domains' => function ($query): void {
+                $query->where('status', SiteDomain::STATUS_ACTIVE)
+                    ->orderByDesc('is_primary')
+                    ->orderBy('id');
+            }])
+            ->where('is_default', false)
+            ->where('status', Site::STATUS_ACTIVE)
+            ->orderBy('id')
+            ->get();
+
+        foreach ($sites as $site) {
+            $domain = $site->domains->first();
+            if (!$domain instanceof SiteDomain) {
+                continue;
             }
-
-            return ['main_profiles' => $mainProfiles, 'listeners' => $listeners];
-        }
-
-        $profile = $this->resolveWebsiteProxyTarget(
-            (int) $machine->getAttribute('webproxy_site_domain_id'),
-            $fallbackBaseURL,
-            $fallbackSiteId,
-            $this->resolveWebsiteProxyPathPrefix($machine)
-        );
-
-        return [
-            'main_profiles' => $profile === null ? [] : [$profile],
-            'listeners' => [],
-        ];
-    }
-
-    private function resolveWebsiteProxyTarget(
-        int $selectedDomainId,
-        string $fallbackBaseURL,
-        string $fallbackSiteId,
-        string $pathPrefix
-    ): ?array {
-        if ($selectedDomainId <= 0) {
-            return [
-                'site_id' => $fallbackSiteId,
-                'upstream_base_url' => $fallbackBaseURL,
-                'path_prefix' => $pathPrefix,
+            $profile = $this->resolveWebsiteProxySiteTarget($site, $domain);
+            if ($profile === null) {
+                continue;
+            }
+            $port = $this->allocateWebsiteProxyPort((int) $site->id, $usedPorts);
+            if ($port === null) {
+                break;
+            }
+            $listeners[] = [
+                'https_listen' => $this->listenAddress($port, 8443),
+                'website_profiles' => [$profile],
             ];
         }
 
-        $domain = SiteDomain::query()->with('site')->find($selectedDomainId);
-        if (!$domain
-            || $domain->status !== SiteDomain::STATUS_ACTIVE
-            || !$domain->site
-            || $domain->site->status !== Site::STATUS_ACTIVE
-        ) {
-            return null;
-        }
+        return ['main_profiles' => $mainProfiles, 'listeners' => $listeners];
+    }
 
+    private function resolveWebsiteProxySiteTarget(Site $site, SiteDomain $domain): ?array
+    {
         $host = strtolower(trim((string) $domain->domain, " \n\r\t\v\0."));
         if ($host === '' || parse_url('https://' . $host, PHP_URL_HOST) !== $host) {
             return null;
         }
 
-        $siteId = $this->sanitizeSiteId((string) $domain->site->code);
+        $siteId = $this->sanitizeSiteId((string) $site->code);
         if ($siteId === '') {
-            $siteId = 'site-' . (int) $domain->site->id;
+            $siteId = 'site-' . (int) $site->id;
         }
 
         return [
             'site_id' => $siteId,
             'upstream_base_url' => 'https://' . $host,
-            'path_prefix' => $pathPrefix,
+            'path_prefix' => '/',
         ];
     }
 
-    private function resolveWebsiteProxyPathPrefix(ServerMachine $machine): string
+    private function allocateWebsiteProxyPort(int $siteId, array &$usedPorts): ?int
     {
-        $value = $machine->getAttribute('webproxy_path_prefix')
-            ?: admin_setting('website_proxy_path_prefix', '/');
-        return $this->normalizeWebsiteProxyPathPrefix($value);
+        $start = 8443;
+
+        $span = 65535 - $start + 1;
+        $candidate = $start + ((max(1, $siteId) - 1) % $span);
+
+        for ($attempt = 0; $attempt < $span; $attempt++) {
+            if (!isset($usedPorts[$candidate])) {
+                $usedPorts[$candidate] = true;
+                return $candidate;
+            }
+            $candidate = $candidate >= 65535 ? $start : $candidate + 1;
+        }
+
+        return null;
     }
 
-    private function normalizeWebsiteProxyPathPrefix(mixed $value): string
+    private function listenPort(string $listen, int $fallback): int
     {
-        $value = trim((string) $value);
-        if ($value === '' || $value === '/') {
-            return '/';
-        }
-        return '/' . trim($value, '/');
+        $separator = strrpos($listen, ':');
+        $port = $separator === false ? 0 : (int) substr($listen, $separator + 1);
+        return $port >= 1 && $port <= 65535 ? $port : $fallback;
     }
 
     private function resolvePanelBaseURL(Request $request): string

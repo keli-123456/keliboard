@@ -31,7 +31,7 @@ final class MachineWebsiteProxySiteBindingTest extends TestCase
         $this->createTables();
     }
 
-    public function test_save_persists_website_site_domain_binding(): void
+    public function test_save_clears_legacy_website_target_and_path(): void
     {
         $domainId = DB::table('v2_site_domain')->insertGetId([
             'site_id' => 10,
@@ -51,15 +51,15 @@ final class MachineWebsiteProxySiteBindingTest extends TestCase
         $machine = ServerMachine::find((int) $payload['data']['id']);
 
         $this->assertSame(200, $response->getStatusCode());
-        $this->assertSame($domainId, $payload['data']['webproxy_site_domain_id']);
-        $this->assertSame($domainId, $machine?->webproxy_site_domain_id);
+        $this->assertNull($payload['data']['webproxy_site_domain_id']);
+        $this->assertNull($machine?->webproxy_site_domain_id);
         $this->assertTrue((bool) $machine?->webproxy_enabled);
-        $this->assertSame('/checkout', $machine?->webproxy_path_prefix);
+        $this->assertNull($machine?->webproxy_path_prefix);
         $this->assertSame('admin.server_machine.saved', $this->publisher->reason);
         $this->assertSame($machine?->id, $this->publisher->payload['machine_id'] ?? null);
     }
 
-    public function test_save_persists_multiple_website_port_bindings(): void
+    public function test_save_discards_manual_website_port_bindings(): void
     {
         $domainA = DB::table('v2_site_domain')->insertGetId([
             'site_id' => 10,
@@ -85,11 +85,7 @@ final class MachineWebsiteProxySiteBindingTest extends TestCase
         ]));
         $machine = ServerMachine::find((int) $response->getData(true)['data']['id']);
 
-        $this->assertSame([
-            ['site_domain_id' => null, 'https_port' => 443, 'path_prefix' => '/'],
-            ['site_domain_id' => $domainA, 'https_port' => 8443, 'path_prefix' => '/'],
-            ['site_domain_id' => $domainB, 'https_port' => 8444, 'path_prefix' => '/'],
-        ], $machine?->webproxy_bindings);
+        $this->assertNull($machine?->webproxy_bindings);
     }
 
     private function bindPublisher(): void

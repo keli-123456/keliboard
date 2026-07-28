@@ -8,12 +8,15 @@ use App\Models\AgentDomain;
 use App\Models\Payment;
 use App\Models\Site;
 use App\Models\SiteDomain;
+use App\Models\ServerMachine;
 use App\Models\SiteSetting;
 use App\Services\SiteStorefrontService;
+use App\Services\NodeRealtime\NodeRealtimePublisher;
 use App\Services\SiteStorefrontHealthService;
 use App\Services\SiteResolver;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class SiteController extends Controller
 {
@@ -126,6 +129,21 @@ class SiteController extends Controller
         $site->load(['domains' => function ($query): void {
             $query->orderByDesc('is_primary')->orderBy('id');
         }]);
+
+        if (Schema::hasTable('v2_server_machine')) {
+            $machineIds = ServerMachine::query()
+                ->where('webproxy_enabled', true)
+                ->pluck('id')
+                ->map(fn ($machineId) => (int) $machineId)
+                ->all();
+            if ($machineIds !== []) {
+                app(NodeRealtimePublisher::class)->invalidateConfigForMachines(
+                    $machineIds,
+                    'admin.site.saved',
+                    ['site_id' => (int) $site->id]
+                );
+            }
+        }
 
         return $this->success($this->sitePayload($site));
     }
