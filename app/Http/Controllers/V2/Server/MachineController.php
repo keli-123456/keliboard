@@ -1055,13 +1055,13 @@ class MachineController extends Controller
 
     private function resolveAutomaticCertificateDomain(string $requestIP, ServerMachine $machine, array $state): string
     {
-        if ($this->isIPv4Address($requestIP)) {
-            return $requestIP;
-        }
-
         $statusIPv4 = $this->machineStatusIPv4($machine);
         if ($statusIPv4 !== '') {
             return $statusIPv4;
+        }
+
+        if ($this->isIPv4Address($requestIP)) {
+            return $requestIP;
         }
 
         $domain = trim((string) ($state['domain'] ?? ''));
