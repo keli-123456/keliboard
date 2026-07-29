@@ -270,6 +270,13 @@ final class ClientControllerTest extends TestCase
 
         $this->assertSame('https://2.56.116.39:8444', $response->headers->get('profile-web-page-url'));
         $this->assertSame('https://2.56.116.39:8444', $response->headers->get('support-url'));
+        $this->assertSame(
+            [
+                '官网/续费入口：https://2.56.116.39:8444',
+                'AnyTLS TCP',
+            ],
+            json_decode($response->getContent(), true)['names']
+        );
     }
 
     private function bindProtocolManager(array $classes): void

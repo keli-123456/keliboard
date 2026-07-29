@@ -98,8 +98,10 @@ class ClientController extends Controller
             $clientInfo['version'] ?? null
         );
 
+        $websiteUrl = app(WebsiteProxyEndpointService::class)->urlForSubscription($user, $request);
         $this->setSubscribeInfoToServers($serversFiltered, $user, count($servers) - count($serversFiltered));
         $serversFiltered = $this->addPrefixToServerName($serversFiltered);
+        $this->prependWebsiteEntryToServers($serversFiltered, $websiteUrl);
 
         // Instantiate the protocol class with filtered servers and client info
         $protocolInstance = app()->make($protocolClassName, [
@@ -110,7 +112,6 @@ class ClientController extends Controller
         ]);
 
         $response = $protocolInstance->handle();
-        $websiteUrl = app(WebsiteProxyEndpointService::class)->urlForSubscription($user, $request);
         if ($websiteUrl !== null && is_object($response) && isset($response->headers)) {
             $response->headers->set('profile-web-page-url', $websiteUrl);
             $response->headers->set('support-url', $websiteUrl);
@@ -278,6 +279,17 @@ class ClientController extends Controller
         }
         array_unshift($servers, array_merge($servers[0], [
             'name' => "剩余流量：{$remainingTraffic}",
+        ]));
+    }
+
+    private function prependWebsiteEntryToServers(array &$servers, ?string $websiteUrl): void
+    {
+        if ($websiteUrl === null || !isset($servers[0])) {
+            return;
+        }
+
+        array_unshift($servers, array_merge($servers[0], [
+            'name' => "官网/续费入口：{$websiteUrl}",
         ]));
     }
 
