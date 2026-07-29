@@ -260,7 +260,7 @@ class Shadowrocket extends AbstractProtocol
                 $params['path'] = data_get($protocol_settings, 'network_settings.serviceName');
                 break;
             case 'ws':
-                $host = data_get($protocol_settings, 'network_settings.headers.Host');
+                $host = Helper::resolveTrojanWebSocketHost($server, $serverName);
                 $path = data_get($protocol_settings, 'network_settings.path');
                 $params['plugin'] = "obfs-local;obfs=websocket;obfs-host={$host};obfs-uri={$path}";
                 break;

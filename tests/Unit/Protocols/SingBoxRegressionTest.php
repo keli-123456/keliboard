@@ -80,7 +80,7 @@ final class SingBoxRegressionTest extends TestCase
         $this->assertSame('30s', $config['hop_interval']);
     }
 
-    public function test_singbox_build_trojan_ws_keeps_server_name_without_synthesizing_host(): void
+    public function test_singbox_build_trojan_ws_uses_sni_as_host_for_cdn_address(): void
     {
         $protocol = $this->makeProtocol();
 
@@ -100,12 +100,12 @@ final class SingBoxRegressionTest extends TestCase
         $this->assertSame('ws', $config['transport']['type']);
         $this->assertSame('/music', $config['transport']['path']);
         $this->assertSame('sni.example.com', $config['tls']['server_name']);
-        $this->assertArrayNotHasKey('headers', $config['transport']);
+        $this->assertSame('sni.example.com', $config['transport']['headers']['Host']);
         $this->assertArrayNotHasKey('max_early_data', $config['transport']);
         $this->assertArrayNotHasKey('early_data_header_name', $config['transport']);
     }
 
-    public function test_singbox_build_trojan_ws_keeps_dynamic_sni_without_synthesizing_host(): void
+    public function test_singbox_build_trojan_ws_reuses_resolved_dynamic_sni_as_host(): void
     {
         $protocol = $this->makeProtocol();
 
@@ -123,6 +123,26 @@ final class SingBoxRegressionTest extends TestCase
         ]);
 
         $this->assertMatchesRegularExpression('/^\d{6}\.example\.com$/', $config['tls']['server_name']);
+        $this->assertSame($config['tls']['server_name'], $config['transport']['headers']['Host']);
+    }
+
+    public function test_singbox_build_trojan_ws_omits_redundant_host_when_address_matches_sni(): void
+    {
+        $protocol = $this->makeProtocol();
+
+        $config = $protocol->buildTrojanForTest('secret', [
+            'name' => 'Trojan Direct WS',
+            'host' => 'direct.example.com',
+            'port' => 443,
+            'protocol_settings' => [
+                'server_name' => 'direct.example.com',
+                'network' => 'ws',
+                'network_settings' => [
+                    'path' => '/music',
+                ],
+            ],
+        ]);
+
         $this->assertArrayNotHasKey('headers', $config['transport']);
     }
 

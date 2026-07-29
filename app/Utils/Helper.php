@@ -206,6 +206,28 @@ class Helper
         return implode('.', $labels);
     }
 
+    public static function resolveTrojanWebSocketHost(array $server, string $resolvedServerName): string
+    {
+        $configuredHost = data_get($server, 'protocol_settings.network_settings.headers.Host');
+        if (is_array($configuredHost)) {
+            $configuredHost = collect($configuredHost)
+                ->first(fn($value) => is_string($value) && trim($value) !== '');
+        }
+
+        $configuredHost = is_string($configuredHost) ? trim($configuredHost) : '';
+        if ($configuredHost !== '') {
+            return $configuredHost;
+        }
+
+        $serverName = trim($resolvedServerName);
+        $address = trim((string) data_get($server, 'host', ''));
+        if ($serverName === '' || $address === '' || strcasecmp($serverName, $address) === 0) {
+            return '';
+        }
+
+        return $serverName;
+    }
+
     public static function getIpByDomainName($domain) {
         return gethostbynamel($domain) ?: [];
     }
