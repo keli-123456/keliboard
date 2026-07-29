@@ -2,6 +2,7 @@
 
 use App\Services\ThemeService;
 use App\Services\HiddenApiPathService;
+use App\Services\SiteNavigationService;
 use App\Services\UpdateService;
 use App\Http\Controllers\V1\Client\ClientController;
 use App\Http\Controllers\WellKnown\KeliClientDiscoveryController;
@@ -60,6 +61,17 @@ Route::get('/theme/{theme}/assets/locales/{locale}.json', function (string $them
 
 
 Route::get('/', function (Request $request) {
+    $navigation = app(SiteNavigationService::class)->pageForRequest($request);
+    if ($navigation !== null) {
+        return response()
+            ->view('site_navigation', $navigation)
+            ->header('Content-Security-Policy', "default-src 'none'; img-src 'self' https: data:; style-src 'unsafe-inline'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'")
+            ->header('Referrer-Policy', 'no-referrer')
+            ->header('X-Content-Type-Options', 'nosniff')
+            ->header('X-Frame-Options', 'DENY')
+            ->header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
+
     if (admin_setting('app_url') && admin_setting('safe_mode_enable', 0)) {
         if ($request->server('HTTP_HOST') !== parse_url(admin_setting('app_url'))['host']) {
             abort(403);

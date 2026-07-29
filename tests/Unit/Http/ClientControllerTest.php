@@ -13,6 +13,7 @@ use App\Protocols\Shadowrocket;
 use App\Protocols\SingBox;
 use App\Services\Plugin\HookManager;
 use App\Services\Plugin\InterceptResponseException;
+use App\Services\SiteNavigationService;
 use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use App\Services\SubscriptionProxy\WebsiteProxyEndpointService;
 use App\Support\ProtocolManager;
@@ -273,6 +274,52 @@ final class ClientControllerTest extends TestCase
         $this->assertSame(
             [
                 '官网/续费入口：https://2.56.116.39:8444',
+                'AnyTLS TCP',
+            ],
+            json_decode($response->getContent(), true)['names']
+        );
+    }
+
+    public function test_navigation_url_is_primary_metadata_and_reverse_website_remains_backup(): void
+    {
+        $this->bindProtocolManager([
+            TestClientFilteredProtocol::class,
+        ]);
+        app()->instance('protocols.capabilities', new TestClientCapabilityFilter());
+        app()->instance(SiteNavigationService::class, new class extends SiteNavigationService {
+            public function urlForSubscription(mixed $user, Request $request): ?string
+            {
+                return 'https://nav.example.test';
+            }
+        });
+        app()->instance(WebsiteProxyEndpointService::class, new class extends WebsiteProxyEndpointService {
+            public function urlForSubscription(mixed $user, Request $request): ?string
+            {
+                return 'https://2.56.116.39:8444';
+            }
+        });
+
+        $response = (new ClientController())->doSubscribe(
+            Request::create('/', 'GET', ['flag' => 'Hiddify/1.2.8.1103']),
+            [
+                'u' => 0,
+                'd' => 0,
+                'transfer_enable' => 1024,
+                'expired_at' => 0,
+            ],
+            [[
+                'type' => 'anytls',
+                'name' => 'AnyTLS TCP',
+                'protocol_settings' => [],
+            ]]
+        );
+
+        $this->assertSame('https://nav.example.test', $response->headers->get('profile-web-page-url'));
+        $this->assertSame('https://2.56.116.39:8444', $response->headers->get('support-url'));
+        $this->assertSame(
+            [
+                '官网导航：https://nav.example.test',
+                '备用官网/续费入口：https://2.56.116.39:8444',
                 'AnyTLS TCP',
             ],
             json_decode($response->getContent(), true)['names']

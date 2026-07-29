@@ -7,6 +7,7 @@ use App\Models\Server;
 use App\Protocols\General;
 use App\Services\Plugin\HookManager;
 use App\Services\RiskEventService;
+use App\Services\SiteNavigationService;
 use App\Services\ServerService;
 use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use App\Services\SubscriptionProxy\WebsiteProxyEndpointService;
@@ -99,9 +100,10 @@ class ClientController extends Controller
         );
 
         $websiteUrl = app(WebsiteProxyEndpointService::class)->urlForSubscription($user, $request);
+        $navigationUrl = app(SiteNavigationService::class)->urlForSubscription($user, $request);
         $this->setSubscribeInfoToServers($serversFiltered, $user, count($servers) - count($serversFiltered));
         $serversFiltered = $this->addPrefixToServerName($serversFiltered);
-        $this->prependWebsiteEntryToServers($serversFiltered, $websiteUrl);
+        $this->prependWebsiteEntriesToServers($serversFiltered, $navigationUrl, $websiteUrl);
 
         // Instantiate the protocol class with filtered servers and client info
         $protocolInstance = app()->make($protocolClassName, [
@@ -112,9 +114,11 @@ class ClientController extends Controller
         ]);
 
         $response = $protocolInstance->handle();
-        if ($websiteUrl !== null && is_object($response) && isset($response->headers)) {
-            $response->headers->set('profile-web-page-url', $websiteUrl);
-            $response->headers->set('support-url', $websiteUrl);
+        $profileUrl = $navigationUrl ?? $websiteUrl;
+        $supportUrl = $websiteUrl ?? $navigationUrl;
+        if ($profileUrl !== null && is_object($response) && isset($response->headers)) {
+            $response->headers->set('profile-web-page-url', $profileUrl);
+            $response->headers->set('support-url', $supportUrl);
         }
 
         return $response;
@@ -282,15 +286,28 @@ class ClientController extends Controller
         ]));
     }
 
-    private function prependWebsiteEntryToServers(array &$servers, ?string $websiteUrl): void
+    private function prependWebsiteEntriesToServers(
+        array &$servers,
+        ?string $navigationUrl,
+        ?string $websiteUrl
+    ): void
     {
-        if ($websiteUrl === null || !isset($servers[0])) {
+        if (!isset($servers[0])) {
             return;
         }
 
-        array_unshift($servers, array_merge($servers[0], [
-            'name' => "官网/续费入口：{$websiteUrl}",
-        ]));
+        if ($websiteUrl !== null && $websiteUrl !== $navigationUrl) {
+            array_unshift($servers, array_merge($servers[0], [
+                'name' => $navigationUrl === null
+                    ? "官网/续费入口：{$websiteUrl}"
+                    : "备用官网/续费入口：{$websiteUrl}",
+            ]));
+        }
+        if ($navigationUrl !== null) {
+            array_unshift($servers, array_merge($servers[0], [
+                'name' => "官网导航：{$navigationUrl}",
+            ]));
+        }
     }
 
     private function addPrefixToServerName(array $servers): array

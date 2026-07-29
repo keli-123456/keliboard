@@ -26,26 +26,39 @@ class WebsiteProxyEndpointService
 
     public function urlForSiteId(?int $siteId): ?string
     {
+        return $this->urlsForSiteId($siteId)[0] ?? null;
+    }
+
+    public function urlsForSiteId(?int $siteId): array
+    {
         if (!(bool) admin_setting('website_proxy_enable', false)) {
-            return null;
+            return [];
         }
 
         $siteId = max(0, (int) $siteId);
         $cached = Cache::remember(
-            'website_proxy_endpoint:v1:site:' . $siteId,
+            'website_proxy_endpoint:v2:site:' . $siteId,
             30,
-            fn (): array => ['url' => $this->resolveUrlForSiteId($siteId)]
+            fn (): array => ['urls' => $this->resolveUrlsForSiteId($siteId)]
         );
 
-        return is_array($cached) && is_string($cached['url'] ?? null) ? $cached['url'] : null;
-    }
-
-    private function resolveUrlForSiteId(int $siteId): ?string
-    {
-        if (!$this->canUseMachineTable()) {
-            return null;
+        if (!is_array($cached) || !is_array($cached['urls'] ?? null)) {
+            return [];
         }
 
+        return array_values(array_filter(
+            $cached['urls'],
+            fn (mixed $url): bool => is_string($url) && $url !== ''
+        ));
+    }
+
+    private function resolveUrlsForSiteId(int $siteId): array
+    {
+        if (!$this->canUseMachineTable()) {
+            return [];
+        }
+
+        $urls = [];
         foreach (ServerMachine::query()
             ->where('is_active', true)
             ->where('webproxy_enabled', true)
@@ -65,10 +78,10 @@ class WebsiteProxyEndpointService
                 continue;
             }
 
-            return 'https://' . $host . ($port === 443 ? '' : ':' . $port);
+            $urls[] = 'https://' . $host . ($port === 443 ? '' : ':' . $port);
         }
 
-        return null;
+        return array_values(array_unique($urls));
     }
 
     private function runtimeServesPort(ServerMachine $machine, int $port, bool $main): bool

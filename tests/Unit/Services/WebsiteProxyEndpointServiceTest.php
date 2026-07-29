@@ -40,6 +40,23 @@ final class WebsiteProxyEndpointServiceTest extends TestCase
         $this->assertSame('https://2.56.116.39:8445', $service->urlForSiteId(3));
     }
 
+    public function test_returns_all_online_machine_urls_for_navigation_pages(): void
+    {
+        $this->createRunningMachine();
+        $second = $this->createRunningMachine();
+        $second->forceFill([
+            'name' => 'edge-b',
+            'token' => 'machine-token-b',
+            'sort' => 20,
+            'subproxy_cert_domain' => '2.56.116.40',
+        ])->save();
+
+        $this->assertSame([
+            'https://2.56.116.39:8444',
+            'https://2.56.116.40:8444',
+        ], (new WebsiteProxyEndpointService())->urlsForSiteId(2));
+    }
+
     public function test_does_not_publish_a_stale_or_unreported_endpoint(): void
     {
         $machine = $this->createRunningMachine();
