@@ -63,6 +63,11 @@ Route::get('/theme/{theme}/assets/locales/{locale}.json', function (string $them
 Route::get('/', function (Request $request) {
     $navigation = app(SiteNavigationService::class)->pageForRequest($request);
     if ($navigation !== null) {
+        if (!$request->isSecure()) {
+            $httpsUrl = 'https://' . $request->getHost() . $request->getRequestUri();
+            return redirect()->to($httpsUrl, 308);
+        }
+
         return response()
             ->view('site_navigation', $navigation)
             ->header('Content-Security-Policy', "default-src 'none'; img-src 'self' https: data:; style-src 'unsafe-inline'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'")
