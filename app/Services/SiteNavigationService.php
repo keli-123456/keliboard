@@ -10,26 +10,26 @@ use App\Models\SiteNavigationLink;
 use App\Models\User;
 use App\Services\SubscriptionProxy\WebsiteProxyEndpointService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Cache;
 
 class SiteNavigationService
 {
     public function pageForRequest(Request $request): ?array
     {
-        if (!$this->tablesAvailable()) {
-            return null;
-        }
-
         $host = app(SiteResolver::class)->normalizeHost((string) $request->getHost());
         if ($host === '') {
             return null;
         }
 
-        $domain = SiteNavigationDomain::query()
-            ->with(['navigation.site', 'navigation.domains', 'navigation.links'])
-            ->where('domain', $host)
-            ->where('status', SiteNavigationDomain::STATUS_ACTIVE)
-            ->first();
+        try {
+            $domain = SiteNavigationDomain::query()
+                ->with(['navigation.site.setting', 'navigation.domains', 'navigation.links'])
+                ->where('domain', $host)
+                ->where('status', SiteNavigationDomain::STATUS_ACTIVE)
+                ->first();
+        } catch (\Throwable) {
+            return null;
+        }
         $navigation = $domain?->navigation;
         if (!$navigation instanceof SiteNavigation || !$navigation->enabled) {
             return null;
@@ -53,6 +53,20 @@ class SiteNavigationService
     }
 
     public function urlForSiteId(?int $siteId): ?string
+    {
+        $siteId = max(0, (int) $siteId);
+        $cached = Cache::remember(
+            'site_navigation_url:v1:site:' . $siteId,
+            30,
+            fn (): array => ['url' => $this->resolveUrlForSiteId($siteId > 0 ? $siteId : null)]
+        );
+
+        return is_array($cached) && is_string($cached['url'] ?? null)
+            ? $cached['url']
+            : null;
+    }
+
+    private function resolveUrlForSiteId(?int $siteId): ?string
     {
         $navigation = $this->navigationForSiteId($siteId);
         if (!$navigation?->enabled) {
@@ -83,9 +97,10 @@ class SiteNavigationService
                 ->orderByDesc('is_primary')
                 ->orderBy('id')
                 ->get();
-            foreach ($siteDomains as $index => $domain) {
+            $backupIndex = 0;
+            foreach ($siteDomains as $domain) {
                 $destinations[] = [
-                    'label' => $domain->is_primary ? '推荐入口' : '备用入口 ' . ($index + 1),
+                    'label' => $domain->is_primary ? '推荐入口' : '备用入口 ' . (++$backupIndex),
                     'url' => 'https://' . $domain->domain,
                     'kind' => 'site',
                     'recommended' => (bool) $domain->is_primary,
@@ -139,14 +154,14 @@ class SiteNavigationService
 
     public function navigationForSiteId(?int $siteId): ?SiteNavigation
     {
-        if (!$this->tablesAvailable()) {
+        try {
+            return SiteNavigation::query()
+                ->with(['site.setting', 'domains', 'links'])
+                ->where('scope_key', $this->scopeKey($siteId))
+                ->first();
+        } catch (\Throwable) {
             return null;
         }
-
-        return SiteNavigation::query()
-            ->with(['site.setting', 'domains', 'links'])
-            ->where('scope_key', $this->scopeKey($siteId))
-            ->first();
     }
 
     public function scopeKey(?int $siteId): string
@@ -227,16 +242,5 @@ class SiteNavigationService
             return $value->getTimestamp();
         }
         return (int) $value;
-    }
-
-    private function tablesAvailable(): bool
-    {
-        try {
-            return Schema::hasTable('v2_site_navigation')
-                && Schema::hasTable('v2_site_navigation_domain')
-                && Schema::hasTable('v2_site_navigation_link');
-        } catch (\Throwable) {
-            return false;
-        }
     }
 }

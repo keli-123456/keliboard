@@ -69,7 +69,7 @@ Route::get('/', function (Request $request) {
             ->header('Referrer-Policy', 'no-referrer')
             ->header('X-Content-Type-Options', 'nosniff')
             ->header('X-Frame-Options', 'DENY')
-            ->header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+            ->header('Strict-Transport-Security', 'max-age=31536000');
     }
 
     if (admin_setting('app_url') && admin_setting('safe_mode_enable', 0)) {

@@ -14,6 +14,7 @@ use App\Services\SiteNavigationService;
 use App\Services\SiteResolver;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
 
 class SiteNavigationController extends Controller
@@ -164,6 +165,7 @@ class SiteNavigationController extends Controller
             return $navigation->fresh(['domains', 'links']) ?: $navigation;
         });
 
+        Cache::forget('site_navigation_url:v1:site:' . max(0, (int) $siteId));
         return $this->success($this->payload($site, $navigation, $navigationService));
     }
 
@@ -180,7 +182,7 @@ class SiteNavigationController extends Controller
                 continue;
             }
             $domain = $resolver->normalizeHost((string) ($domainData['domain'] ?? ''));
-            if ($domain === '' || filter_var($domain, FILTER_VALIDATE_IP)) {
+            if (!$this->validHostname($domain)) {
                 throw new ApiException('Invalid navigation domain');
             }
             if (isset($seen[$domain])) {
@@ -296,6 +298,26 @@ class SiteNavigationController extends Controller
             && (string) ($parts['host'] ?? '') !== ''
             && !isset($parts['user'])
             && !isset($parts['pass']);
+    }
+
+    private function validHostname(string $host): bool
+    {
+        if ($host === '' || strlen($host) > 253 || !str_contains($host, '.') || str_contains($host, '..')) {
+            return false;
+        }
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            return false;
+        }
+
+        foreach (explode('.', $host) as $label) {
+            if ($label === '' || strlen($label) > 63) {
+                return false;
+            }
+            if (!preg_match('/^[a-z0-9-]+$/i', $label) || str_starts_with($label, '-') || str_ends_with($label, '-')) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private function nullableString(mixed $value): ?string
