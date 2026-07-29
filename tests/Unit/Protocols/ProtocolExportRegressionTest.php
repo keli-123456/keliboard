@@ -1727,7 +1727,7 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertTrue($socks['skip-cert-verify']);
     }
 
-    public function test_trojan_ws_exports_use_sni_as_host_for_cdn_address(): void
+    public function test_trojan_ws_exports_do_not_synthesize_host_when_ws_host_is_empty(): void
     {
         $server = [
             'name' => 'Trojan CF',
@@ -1750,44 +1750,13 @@ final class ProtocolExportRegressionTest extends TestCase
         $generalQuery = [];
         parse_str((string) parse_url(trim($generalUri), PHP_URL_QUERY), $generalQuery);
         $shadowrocketUri = Shadowrocket::buildTrojan('secret', $server);
-        $shadowrocketQuery = [];
-        parse_str((string) parse_url(trim($shadowrocketUri), PHP_URL_QUERY), $shadowrocketQuery);
-
-        $this->assertSame($clash['sni'], $clash['ws-opts']['headers']['Host']);
-        $this->assertSame($clashMeta['sni'], $clashMeta['ws-opts']['headers']['Host']);
-        $this->assertArrayNotHasKey('ip-version', $clashMeta);
-        $this->assertSame($stash['sni'], $stash['ws-opts']['headers']['Host']);
-        $this->assertSame($generalQuery['sni'], $generalQuery['host']);
-        $this->assertStringContainsString("obfs-host={$shadowrocketQuery['peer']}", $shadowrocketQuery['plugin']);
-    }
-
-    public function test_trojan_ws_exports_do_not_add_redundant_host_when_address_matches_sni(): void
-    {
-        $server = [
-            'name' => 'Trojan Direct',
-            'host' => 'direct.example.com',
-            'port' => 443,
-            'protocol_settings' => [
-                'server_name' => 'direct.example.com',
-                'allow_insecure' => false,
-                'network' => 'ws',
-                'network_settings' => [
-                    'path' => '/answer',
-                ],
-            ],
-        ];
-
-        $clash = Clash::buildTrojan('secret', $server);
-        $clashMeta = ClashMeta::buildTrojan('secret', $server);
-        $stash = Stash::buildTrojan('secret', $server);
-        $generalUri = General::buildTrojan('secret', $server);
-        $generalQuery = [];
-        parse_str((string) parse_url(trim($generalUri), PHP_URL_QUERY), $generalQuery);
 
         $this->assertArrayNotHasKey('headers', $clash['ws-opts']);
         $this->assertArrayNotHasKey('headers', $clashMeta['ws-opts']);
+        $this->assertArrayNotHasKey('ip-version', $clashMeta);
         $this->assertArrayNotHasKey('headers', $stash['ws-opts']);
         $this->assertArrayNotHasKey('host', $generalQuery);
+        $this->assertStringNotContainsString('obfs-host=null.123903.xyz', $shadowrocketUri);
     }
 
     public function test_trojan_dynamic_sni_placeholder_is_replaced_in_subscription_exports(): void

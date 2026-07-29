@@ -241,7 +241,7 @@ class Clash extends AbstractProtocol
                 $array['network'] = 'ws';
                 if ($path = data_get($protocol_settings, 'network_settings.path'))
                     $array['ws-opts']['path'] = $path;
-                if ($host = Helper::resolveTrojanWebSocketHost($server, $serverName))
+                if ($host = data_get($protocol_settings, 'network_settings.headers.Host'))
                     $array['ws-opts']['headers'] = ['Host' => $host];
                 break;
             case 'grpc':
