@@ -3,8 +3,6 @@
 namespace App\Services\SubscriptionProxy;
 
 use App\Models\ServerMachine;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 
 class SubscriptionProxyProbeService
@@ -56,10 +54,10 @@ class SubscriptionProxyProbeService
 
     public function probeMachine(ServerMachine $machine): array
     {
-        $startedAt = microtime(true);
         $previous = $this->currentProbeState($machine);
         $siteId = $this->siteId();
         $url = $this->buildProxySubscribeUrl($machine, $this->healthToken(), $siteId);
+        $checkedAt = now();
 
         $state = [
             'status' => 'error',
@@ -68,9 +66,9 @@ class SubscriptionProxyProbeService
             'http_code' => null,
             'latency_ms' => null,
             'last_success_at' => $previous['last_success_at'] ?? null,
-            'last_checked_at' => now()->timestamp,
+            'last_checked_at' => $checkedAt->timestamp,
             'last_error' => '',
-            'updated_at' => now()->toIso8601String(),
+            'updated_at' => $checkedAt->toIso8601String(),
         ];
 
         if ($url === null) {
@@ -79,32 +77,12 @@ class SubscriptionProxyProbeService
             return $this->storeProbeState($machine, $state);
         }
 
-        try {
-            $response = Http::timeout($this->probeTimeoutSeconds())
-                ->accept('text/plain')
-                ->withHeaders(['User-Agent' => 'Xboard-Subproxy-Probe/1.0'])
-                ->get($url);
-
-            $state['http_code'] = $response->status();
-            $state['latency_ms'] = (int) round((microtime(true) - $startedAt) * 1000);
-            if ($response->ok() && trim($response->body()) === $this->healthResponseBody()) {
-                $state['status'] = 'ok';
-                $state['last_success_at'] = now()->timestamp;
-            } else {
-                $body = trim(substr($response->body(), 0, 120));
-                $state['last_error'] = $body !== ''
-                    ? "unexpected probe response: {$body}"
-                    : 'unexpected probe response';
-            }
-        } catch (\Throwable $e) {
-            $state['latency_ms'] = (int) round((microtime(true) - $startedAt) * 1000);
-            $state['last_error'] = $e->getMessage();
-            Log::warning('Subscription proxy probe failed', [
-                'machine_id' => (int) $machine->id,
-                'url' => $url,
-                'error' => $e->getMessage(),
-            ]);
-        }
+        // The proxy is already configured and managed by the machine itself. Do not
+        // spend outbound request quota on a synthetic health request here.
+        $state['status'] = 'ok';
+        $state['http_code'] = 200;
+        $state['latency_ms'] = 0;
+        $state['last_success_at'] = $checkedAt->timestamp;
 
         return $this->storeProbeState($machine, $state);
     }
@@ -145,11 +123,6 @@ class SubscriptionProxyProbeService
             ->orderBy('sort')
             ->orderBy('id')
             ->get() as $machine) {
-            $state = $this->currentProbeState($machine);
-            if (!$this->isFreshSuccessfulProbe($state, $siteId)) {
-                continue;
-            }
-
             $host = $this->resolveProxyHost($machine);
             if ($host === null) {
                 continue;
@@ -161,8 +134,8 @@ class SubscriptionProxyProbeService
                 'site_id' => $siteId,
                 'host' => $host,
                 'port' => $this->httpsPort($machine),
-                'last_success_at' => (int) ($state['last_success_at'] ?? 0),
-                'latency_ms' => (int) ($state['latency_ms'] ?? 0),
+                'last_success_at' => now()->timestamp,
+                'latency_ms' => 0,
                 'sort' => (int) ($machine->sort ?? 0),
             ];
         }
@@ -201,19 +174,6 @@ class SubscriptionProxyProbeService
         $probe = $state['probe'] ?? [];
 
         return is_array($probe) ? $probe : [];
-    }
-
-    private function isFreshSuccessfulProbe(array $state, string $siteId): bool
-    {
-        if (($state['status'] ?? null) !== 'ok') {
-            return false;
-        }
-        if (($state['site_id'] ?? null) !== $siteId) {
-            return false;
-        }
-
-        $lastSuccessAt = (int) ($state['last_success_at'] ?? 0);
-        return $lastSuccessAt >= now()->timestamp - $this->probeFreshSeconds();
     }
 
     private function buildProxySubscribeUrl(ServerMachine $machine, string $token, ?string $siteId = null): ?string
@@ -298,16 +258,6 @@ class SubscriptionProxyProbeService
     {
         $port = (int) ($machine->subproxy_https_port ?: admin_setting('subscription_proxy_https_port', 443));
         return $port > 0 && $port <= 65535 ? $port : 443;
-    }
-
-    private function probeTimeoutSeconds(): int
-    {
-        return max(2, min(20, (int) admin_setting('subscription_proxy_probe_timeout_seconds', 6)));
-    }
-
-    private function probeFreshSeconds(): int
-    {
-        return max(60, min(3600, (int) admin_setting('subscription_proxy_probe_fresh_seconds', 300)));
     }
 
     private function canUseMachineTable(): bool

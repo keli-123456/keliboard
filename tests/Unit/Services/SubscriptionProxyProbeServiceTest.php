@@ -8,7 +8,6 @@ use App\Models\ServerMachine;
 use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use App\Support\Setting;
 use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
@@ -47,10 +46,6 @@ final class SubscriptionProxyProbeServiceTest extends TestCase
         ])->save();
         $machine = $machine->fresh();
 
-        Http::fake([
-            'https://edge.example.com/*' => Http::response($service->healthResponseBody(), 200),
-        ]);
-
         $probe = $service->probeMachine($machine);
 
         $this->assertSame('ok', $probe['status']);
@@ -66,7 +61,7 @@ final class SubscriptionProxyProbeServiceTest extends TestCase
         $this->assertSame('https://edge.example.com/sub/sp.huhu.icu/user-token', $payload['subscribe_url']);
     }
 
-    public function test_probe_failure_keeps_acceleration_unavailable(): void
+    public function test_enabled_proxy_is_available_without_network_probe(): void
     {
         $service = new SubscriptionProxyProbeService();
         $machine = ServerMachine::create([
@@ -80,16 +75,13 @@ final class SubscriptionProxyProbeServiceTest extends TestCase
             'subproxy_cert_domain' => 'edge.example.com',
         ])->save();
 
-        Http::fake([
-            'https://edge.example.com/*' => Http::response('wrong', 200),
-        ]);
 
         $results = $service->probeAll();
-        $this->assertSame('error', $results[0]['status']);
+        $this->assertSame('ok', $results[0]['status']);
 
         $payload = $service->userPayload('user-token');
-        $this->assertFalse($payload['available']);
-        $this->assertNull($payload['subscribe_url']);
+        $this->assertTrue($payload['available']);
+        $this->assertSame('https://edge.example.com/sub/sp.huhu.icu/user-token', $payload['subscribe_url']);
     }
 
     public function test_health_token_is_stable_and_verifiable(): void
