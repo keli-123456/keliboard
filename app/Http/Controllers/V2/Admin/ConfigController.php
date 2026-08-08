@@ -295,6 +295,9 @@ class ConfigController extends Controller
                 'website_proxy_enable' => (bool) admin_setting('website_proxy_enable', false),
                 'website_proxy_path_prefix' => (string) admin_setting('website_proxy_path_prefix', '/'),
                 'zerossl_access_key' => (string) admin_setting('zerossl_access_key', ''),
+                'subscription_proxy_certificate_provider' => (string) admin_setting('subscription_proxy_certificate_provider', 'zerossl'),
+                'letsencrypt_email' => (string) admin_setting('letsencrypt_email', ''),
+                'letsencrypt_renew_hours' => (int) admin_setting('letsencrypt_renew_hours', 48),
                 'subscription_proxy_renew_days' => (int) admin_setting('subscription_proxy_renew_days', 20),
             ],
             'email' => [

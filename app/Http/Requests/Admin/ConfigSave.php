@@ -147,6 +147,9 @@ class ConfigSave extends FormRequest
         'website_proxy_enable' => 'boolean',
         'website_proxy_path_prefix' => 'nullable|string|max:255',
         'zerossl_access_key' => 'nullable|string|max:255',
+        'subscription_proxy_certificate_provider' => 'nullable|in:auto,zerossl,letsencrypt',
+        'letsencrypt_email' => 'nullable|email|max:255',
+        'letsencrypt_renew_hours' => 'integer|min:12|max:120',
         'subscription_proxy_renew_days' => 'integer|min:1|max:60',
         // frontend
         'frontend_theme' => '',

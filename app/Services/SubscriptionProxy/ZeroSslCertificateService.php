@@ -54,6 +54,10 @@ Rnnyp58XRStJ
 -----END CERTIFICATE-----
 PEM;
 
+    public function __construct(private LetsEncryptAcmeClient $letsEncrypt)
+    {
+    }
+
     public function handleMachineStatus(ServerMachine $machine, array $status, string $currentSiteId = ''): bool
     {
         if (DB::connection()->getDriverName() === 'mysql') {
@@ -124,14 +128,16 @@ PEM;
         }
 
         $accessKey = trim((string) admin_setting('zerossl_access_key', ''));
-        if ($accessKey === '') {
+        $provider = $this->certificateProvider($state, $accessKey);
+        if ($provider === 'zerossl' && $accessKey === '') {
             $this->saveDiagnosticState(
                 $machine,
                 $state,
                 $domain,
                 $hasConfiguredDomain,
                 'missing_access_key',
-                'ZeroSSL access key is not configured.'
+                'ZeroSSL access key is not configured.',
+                $provider
             );
             return false;
         }
@@ -143,18 +149,20 @@ PEM;
                 $domain,
                 $hasConfiguredDomain,
                 'waiting_agent_csr',
-                'Agent has not reported the subscription proxy certificate domain and CSR yet.'
+                'Agent has not reported the subscription proxy certificate domain and CSR yet.',
+                $provider
             );
             return false;
         }
-        if ($this->isIPv6Address($domain)) {
+        if ($provider === 'zerossl' && $this->isIPv6Address($domain)) {
             $this->saveDiagnosticState(
                 $machine,
                 $state,
                 $domain,
                 $hasConfiguredDomain,
                 'unsupported_certificate_domain',
-                'ZeroSSL subscription proxy certificate automation requires an IPv4 address.'
+                'ZeroSSL subscription proxy certificate automation requires an IPv4 address.',
+                $provider
             );
             return false;
         }
@@ -163,7 +171,7 @@ PEM;
             $previousState = $state;
             if ($this->shouldDeferToCertificateOwner($proxy, $currentSiteId)) {
                 $ownerSiteId = $this->certificateOwnerSiteId($proxy);
-                $state = $this->delegatedCertificateState($state, $domain, $ownerSiteId);
+                $state = $this->delegatedCertificateState($state, $provider, $domain, $ownerSiteId);
                 $this->saveCertificateState($machine, $state, $domain, $hasConfiguredDomain);
                 $shouldReload = $this->stableStateSignature($previousState) !== $this->stableStateSignature($state);
                 if ($shouldReload) {
@@ -181,10 +189,14 @@ PEM;
             }
 
             $csrHash = hash('sha256', $csr);
-            $renewDays = max(1, min(60, (int) admin_setting('subscription_proxy_renew_days', 20)));
+            $renewWindow = $provider === 'letsencrypt'
+                ? max(12, min(120, (int) admin_setting('letsencrypt_renew_hours', 48))) * 3600
+                : max(1, min(60, (int) admin_setting('subscription_proxy_renew_days', 20))) * 86400;
 
-            if ($this->shouldCreateCertificate($state, $domain, $csrHash, $renewDays)) {
-                $state = $this->createCertificate($accessKey, $domain, $csr, $csrHash, $this->replacementCertificateId($state, $renewDays));
+            if ($this->shouldCreateCertificate($state, $provider, $domain, $csrHash, $renewWindow)) {
+                $state = $provider === 'letsencrypt'
+                    ? $this->createLetsEncryptCertificate($domain, $csrHash)
+                    : $this->createCertificate($accessKey, $domain, $csr, $csrHash, $this->replacementCertificateId($state, $renewWindow));
             }
             if ($agentIdentity !== '') {
                 $state['agent_identity'] = $agentIdentity;
@@ -204,15 +216,21 @@ PEM;
                     $this->notifyAgentConfigChanged($machine, $state);
                     return true;
                 }
-                $state = $this->maybeRequestValidation($accessKey, $state);
+                $state = $provider === 'letsencrypt'
+                    ? $this->requestLetsEncryptValidation($state)
+                    : $this->maybeRequestValidation($accessKey, $state);
             }
 
             if (!empty($state['certificate_id']) && ($state['status'] ?? '') !== 'issued') {
-                $state = $this->refreshCertificate($accessKey, $state);
+                $state = $provider === 'letsencrypt'
+                    ? $this->refreshLetsEncryptCertificate($state, $csr)
+                    : $this->refreshCertificate($accessKey, $state);
             }
 
             if ($this->shouldDownloadIssuedCertificate($state)) {
-                $state = $this->downloadCertificate($accessKey, $state);
+                $state = $provider === 'letsencrypt'
+                    ? $this->downloadLetsEncryptCertificate($state)
+                    : $this->downloadCertificate($accessKey, $state);
             }
 
             $notifyAgent = $this->shouldNotifyAgent($state, $proxy);
@@ -230,10 +248,15 @@ PEM;
             }
             return $shouldReload;
         } catch (\Throwable $e) {
-            Log::warning('Subscription proxy ZeroSSL automation failed', [
+            Log::warning('Subscription proxy certificate automation failed', [
                 'machine_id' => (int) $machine->id,
+                'provider' => $provider ?? 'unknown',
                 'error' => $e->getMessage(),
             ]);
+            if ($provider === 'letsencrypt') {
+                $state['status'] = 'error';
+                $state['failed_at'] = now()->toIso8601String();
+            }
             if (trim((string) ($state['status'] ?? '')) === '') {
                 $state['status'] = 'error';
             }
@@ -271,9 +294,30 @@ PEM;
             || (bool) $machine->getAttribute('webproxy_enabled');
     }
 
-    private function shouldCreateCertificate(array $state, string $domain, string $csrHash, int $renewDays): bool
+    private function certificateProvider(array $state, string $zeroSslAccessKey): string
+    {
+        $configured = strtolower(trim((string) admin_setting('subscription_proxy_certificate_provider', 'zerossl')));
+        if (in_array($configured, ['zerossl', 'letsencrypt'], true)) {
+            return $configured;
+        }
+
+        $current = strtolower(trim((string) ($state['provider'] ?? '')));
+        if ($current === 'letsencrypt') {
+            return 'letsencrypt';
+        }
+        if ($current === 'zerossl' && trim((string) ($state['last_error'] ?? '')) !== '') {
+            return 'letsencrypt';
+        }
+
+        return $zeroSslAccessKey !== '' ? 'zerossl' : 'letsencrypt';
+    }
+
+    private function shouldCreateCertificate(array $state, string $provider, string $domain, string $csrHash, int $renewWindow): bool
     {
         if (empty($state['certificate_id'])) {
+            return true;
+        }
+        if (($state['provider'] ?? '') !== $provider) {
             return true;
         }
         if (($state['domain'] ?? '') !== $domain) {
@@ -282,7 +326,14 @@ PEM;
         if (($state['csr_hash'] ?? '') !== $csrHash) {
             return true;
         }
-        return $this->shouldRenew($state, $renewDays);
+        if ($provider === 'letsencrypt' && ($state['status'] ?? '') === 'error') {
+            $failedAt = strtotime((string) ($state['failed_at'] ?? ''));
+            if ($failedAt === false || $failedAt <= time() - 300) {
+                return true;
+            }
+        }
+
+        return $this->shouldRenew($state, $renewWindow);
     }
 
     private function shouldDeferToCertificateOwner(array $proxy, string $currentSiteId = ''): bool
@@ -363,7 +414,7 @@ PEM;
         return trim($value, '.-_');
     }
 
-    private function delegatedCertificateState(array $state, string $domain, string $ownerSiteId): array
+    private function delegatedCertificateState(array $state, string $provider, string $domain, string $ownerSiteId): array
     {
         foreach ([
             'agent_config_signature',
@@ -382,7 +433,7 @@ PEM;
             unset($state[$key]);
         }
 
-        $state['provider'] = 'zerossl';
+        $state['provider'] = $provider;
         $state['status'] = 'delegated';
         $state['domain'] = $domain;
         $state['certificate_owner_site_id'] = $ownerSiteId;
@@ -400,11 +451,11 @@ PEM;
         $machine->forceFill($payload)->save();
     }
 
-    private function saveDiagnosticState(ServerMachine $machine, array $state, string $domain, bool $hasConfiguredDomain, string $status, string $message): void
+    private function saveDiagnosticState(ServerMachine $machine, array $state, string $domain, bool $hasConfiguredDomain, string $status, string $message, string $provider): void
     {
         $previousState = $state;
         if ($this->canReplaceWithDiagnosticStatus($state)) {
-            $state['provider'] = 'zerossl';
+            $state['provider'] = $provider;
             $state['status'] = $status;
             if ($domain !== '') {
                 $state['domain'] = $domain;
@@ -440,24 +491,162 @@ PEM;
         return filter_var($value, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false;
     }
 
-    private function shouldRenew(array $state, int $renewDays): bool
+    private function shouldRenew(array $state, int $renewWindow): bool
     {
         if (!in_array(($state['status'] ?? ''), ['issued', 'expiring_soon'], true)) {
             return false;
         }
 
         $expiresAt = strtotime((string) ($state['expires_at'] ?? '')) ?: 0;
-        return $expiresAt > 0 && $expiresAt <= time() + ($renewDays * 86400);
+        return $expiresAt > 0 && $expiresAt <= time() + $renewWindow;
     }
 
-    private function replacementCertificateId(array $state, int $renewDays): ?string
+    private function replacementCertificateId(array $state, int $renewWindow): ?string
     {
-        if (!$this->shouldRenew($state, $renewDays)) {
+        if (!$this->shouldRenew($state, $renewWindow)) {
             return null;
         }
 
         $id = trim((string) ($state['certificate_id'] ?? ''));
         return $id === '' ? null : $id;
+    }
+
+    private function createLetsEncryptCertificate(string $domain, string $csrHash): array
+    {
+        $order = $this->letsEncrypt->createOrder($domain);
+        $authorizations = array_values((array) ($order['authorizations'] ?? []));
+        $authorizationURL = trim((string) ($authorizations[0] ?? ''));
+        $finalizeURL = trim((string) ($order['finalize'] ?? ''));
+        $orderURL = trim((string) ($order['order_url'] ?? ''));
+        if ($authorizationURL === '' || $finalizeURL === '' || $orderURL === '') {
+            throw new \RuntimeException('Let\'s Encrypt order response is incomplete.');
+        }
+
+        $authorization = $this->letsEncrypt->fetch($authorizationURL);
+        $challenge = $this->letsEncryptHTTPChallenge($authorization);
+        $token = trim((string) ($challenge['token'] ?? ''));
+        $challengeURL = trim((string) ($challenge['url'] ?? ''));
+        if ($token === '' || $challengeURL === '') {
+            throw new \RuntimeException('Let\'s Encrypt order did not provide an HTTP-01 challenge.');
+        }
+
+        return [
+            'provider' => 'letsencrypt',
+            'certificate_id' => $orderURL,
+            'domain' => $domain,
+            'csr_hash' => $csrHash,
+            'status' => 'draft',
+            'acme_order_url' => $orderURL,
+            'acme_authorization_url' => $authorizationURL,
+            'acme_finalize_url' => $finalizeURL,
+            'acme_challenge_url' => $challengeURL,
+            'validation_path' => '/.well-known/acme-challenge/' . $token,
+            'validation_content' => $token . '.' . $this->letsEncrypt->accountThumbprint(),
+            'created_at' => now()->toIso8601String(),
+            'last_error' => null,
+        ];
+    }
+
+    private function requestLetsEncryptValidation(array $state): array
+    {
+        $lastAttempt = strtotime((string) ($state['validation_requested_at'] ?? '')) ?: 0;
+        if ($lastAttempt > time() - 60) {
+            return $state;
+        }
+        $url = trim((string) ($state['acme_challenge_url'] ?? ''));
+        if ($url === '') {
+            throw new \RuntimeException('Let\'s Encrypt challenge URL is missing.');
+        }
+
+        $this->letsEncrypt->triggerChallenge($url);
+        $state['status'] = 'pending_validation';
+        $state['validation_requested_at'] = now()->toIso8601String();
+        $state['last_error'] = null;
+        return $state;
+    }
+
+    private function refreshLetsEncryptCertificate(array $state, string $csr): array
+    {
+        $authorizationURL = trim((string) ($state['acme_authorization_url'] ?? ''));
+        if ($authorizationURL !== '') {
+            $authorization = $this->letsEncrypt->fetch($authorizationURL);
+            $authorizationStatus = strtolower((string) ($authorization['status'] ?? ''));
+            $state['authorization_status'] = $authorizationStatus;
+            if ($authorizationStatus === 'invalid') {
+                $challenge = $this->letsEncryptHTTPChallenge($authorization);
+                $detail = trim((string) data_get($challenge, 'error.detail', 'HTTP-01 validation failed.'));
+                throw new \RuntimeException("Let's Encrypt validation failed: {$detail}");
+            }
+        }
+
+        $orderURL = trim((string) ($state['acme_order_url'] ?? $state['certificate_id'] ?? ''));
+        if ($orderURL === '') {
+            return $state;
+        }
+        $order = $this->letsEncrypt->fetch($orderURL);
+        $orderStatus = strtolower((string) ($order['status'] ?? ''));
+        if ($orderStatus === 'invalid') {
+            $detail = trim((string) data_get($order, 'error.detail', 'certificate order failed.'));
+            throw new \RuntimeException("Let's Encrypt order failed: {$detail}");
+        }
+
+        if ($orderStatus === 'ready') {
+            $finalizeURL = trim((string) ($state['acme_finalize_url'] ?? $order['finalize'] ?? ''));
+            if ($finalizeURL === '') {
+                throw new \RuntimeException('Let\'s Encrypt finalize URL is missing.');
+            }
+            $order = $this->letsEncrypt->finalize($finalizeURL, $csr);
+            $orderStatus = strtolower((string) ($order['status'] ?? 'processing'));
+            $state['finalized_at'] = now()->toIso8601String();
+        }
+
+        $certificateURL = trim((string) ($order['certificate'] ?? ''));
+        if ($orderStatus === 'valid' && $certificateURL !== '') {
+            $state['status'] = 'issued';
+            $state['acme_certificate_url'] = $certificateURL;
+        } elseif ($orderStatus === 'processing') {
+            $state['status'] = 'processing';
+        } elseif ($orderStatus === 'ready') {
+            $state['status'] = 'processing';
+        } elseif (($state['status'] ?? '') !== 'draft') {
+            $state['status'] = 'pending_validation';
+        }
+        $state['last_error'] = null;
+        return $state;
+    }
+
+    private function downloadLetsEncryptCertificate(array $state): array
+    {
+        $url = trim((string) ($state['acme_certificate_url'] ?? ''));
+        if ($url === '') {
+            throw new \RuntimeException('Let\'s Encrypt certificate download URL is missing.');
+        }
+        $chain = $this->letsEncrypt->downloadCertificate($url);
+        $blocks = $this->extractPemCertificates($chain);
+        if (count($blocks) < 2) {
+            throw new \RuntimeException('Let\'s Encrypt certificate chain is incomplete.');
+        }
+
+        $state['certificate_pem'] = $blocks[0];
+        $state['ca_bundle_pem'] = implode("\n", array_slice($blocks, 1));
+        $state['downloaded_at'] = now()->toIso8601String();
+        $parsed = openssl_x509_parse($blocks[0]);
+        $expiresAt = is_array($parsed) ? (int) ($parsed['validTo_time_t'] ?? 0) : 0;
+        if ($expiresAt > 0) {
+            $state['expires_at'] = date(DATE_ATOM, $expiresAt);
+        }
+        $state['last_error'] = null;
+        return $state;
+    }
+
+    private function letsEncryptHTTPChallenge(array $authorization): array
+    {
+        foreach ((array) ($authorization['challenges'] ?? []) as $challenge) {
+            if (is_array($challenge) && ($challenge['type'] ?? '') === 'http-01') {
+                return $challenge;
+            }
+        }
+        return [];
     }
 
     private function createCertificate(string $accessKey, string $domain, string $csr, string $csrHash, ?string $replacementId = null): array
