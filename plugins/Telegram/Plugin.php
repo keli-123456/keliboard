@@ -299,11 +299,7 @@ class Plugin extends AbstractPlugin
    */
   protected function checkPrivateChat(object $msg): bool
   {
-    if (!$msg->is_private) {
-      $this->sendMessage($msg, '请在私聊中使用此命令');
-      return false;
-    }
-    return true;
+    return (bool) ($msg->is_private ?? false);
   }
 
   /**
@@ -443,6 +439,12 @@ class Plugin extends AbstractPlugin
   {
     if (!isset($this->commands['commands'][$msg->command])) {
       return false;
+    }
+
+    // User commands are private-only. Silently consume them in groups so a
+    // repeated command or Telegram retry cannot make the bot flood the chat.
+    if (!(bool) ($msg->is_private ?? false)) {
+      return true;
     }
 
     call_user_func($this->commands['commands'][$msg->command], $msg);

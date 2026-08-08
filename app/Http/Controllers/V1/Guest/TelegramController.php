@@ -9,6 +9,7 @@ use App\Services\Plugin\HookManager;
 use App\Services\TelegramService;
 use App\Services\UserService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 
 class TelegramController extends Controller
 {
@@ -30,10 +31,32 @@ class TelegramController extends Controller
         }
 
         $data = $request->json()->all();
+        if (!$this->claimUpdate($data)) {
+            return;
+        }
 
         $this->formatMessage($data);
         $this->formatChatJoinRequest($data);
         $this->handle();
+    }
+
+    private function claimUpdate(array $data): bool
+    {
+        $updateId = $data['update_id'] ?? null;
+        if (!is_int($updateId) && !(is_string($updateId) && ctype_digit($updateId))) {
+            return true;
+        }
+
+        try {
+            return Cache::add(
+                'telegram:webhook:update:' . (string) $updateId,
+                true,
+                now()->addMinutes(10)
+            );
+        } catch (\Throwable) {
+            // A cache outage must not cause Telegram updates to be dropped.
+            return true;
+        }
     }
 
     private function handle(): void
