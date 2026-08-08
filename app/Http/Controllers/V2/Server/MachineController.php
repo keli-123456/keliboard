@@ -800,6 +800,8 @@ class MachineController extends Controller
             'key_file' => trim((string) ($desired['key_file'] ?? '')),
             'allow_http_fallback' => (bool) ($desired['allow_http_fallback'] ?? false),
             'max_response_bytes' => max(0, (int) ($desired['max_response_bytes'] ?? 0)),
+            'website_max_request_body_bytes' => max(0, (int) ($desired['website_max_request_body_bytes'] ?? 0)),
+            'website_max_response_bytes' => max(0, (int) ($desired['website_max_response_bytes'] ?? 0)),
             'profiles' => $this->subscriptionProxyProfileSignatureRows($desired['profiles'] ?? [], [
                 'site_id',
                 'upstream_base_url',
@@ -924,6 +926,8 @@ class MachineController extends Controller
             'zerossl' => $this->buildZeroSslAgentConfig($machine),
             'allow_http_fallback' => (bool) admin_setting('subscription_proxy_allow_http_fallback', false),
             'max_response_bytes' => max(1024 * 1024, (int) admin_setting('subscription_proxy_max_response_bytes', 10485760)),
+            'website_max_request_body_bytes' => max(1024 * 1024, (int) admin_setting('website_proxy_max_request_body_bytes', 104857600)),
+            'website_max_response_bytes' => max(1024 * 1024, (int) admin_setting('website_proxy_max_response_bytes', 104857600)),
             'profiles' => [],
             'website_profiles' => $websiteRouting['main_profiles'],
             'website_listeners' => $websiteRouting['listeners'],

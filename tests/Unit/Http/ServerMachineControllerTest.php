@@ -105,6 +105,8 @@ final class ServerMachineControllerTest extends TestCase
             'subscription_proxy_http_port' => 80,
             'subscription_proxy_cert_file' => '/etc/v2node/subproxy/fullchain.pem',
             'subscription_proxy_key_file' => '/etc/v2node/subproxy/key.pem',
+            'website_proxy_max_request_body_bytes' => 67108864,
+            'website_proxy_max_response_bytes' => 134217728,
             'subscription_proxy_challenge_dir' => '/etc/v2node/subproxy/challenges',
         ]);
 
@@ -136,6 +138,8 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame('203.0.113.10', $proxy['certificate_domain']);
         $this->assertSame('/etc/v2node/subproxy/fullchain.pem', $proxy['cert_file']);
         $this->assertSame('/etc/v2node/subproxy/key.pem', $proxy['key_file']);
+        $this->assertSame(67108864, $proxy['website_max_request_body_bytes']);
+        $this->assertSame(134217728, $proxy['website_max_response_bytes']);
         $this->assertSame([
             [
                 'site_id' => 'panel.example.test',
