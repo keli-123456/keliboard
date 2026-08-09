@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Services;
 
 use App\Models\BackupRecord;
+use App\Jobs\BackupDatabaseJob;
 use App\Models\Setting as SettingModel;
 use App\Services\Backup\BackupRecoveryService;
 use App\Services\Backup\BackupService;
@@ -14,6 +15,7 @@ use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Schema;
 use RuntimeException;
 use Tests\Support\InteractsWithInMemoryDatabase;
+use Illuminate\Contracts\Bus\Dispatcher;
 use Tests\TestCase;
 
 final class BackupServiceTest extends TestCase
@@ -215,7 +217,7 @@ final class BackupServiceTest extends TestCase
         $this->assertSame('panel-bucket', $google['bucket']);
         $this->assertSame('panel-backup', $google['prefix']);
         $this->assertTrue($google['credentials_configured']);
-        $this->assertSame('mixed', $google['source']);
+        $this->assertSame('panel', $google['source']);
         $this->assertArrayNotHasKey('credentials_json', $google);
 
         $this->assertSame('ftp.example.test', $ftp['host']);
@@ -277,6 +279,242 @@ final class BackupServiceTest extends TestCase
         $this->assertNotNull(BackupRecord::find($latestLocal->id));
         $this->assertNull(BackupRecord::find($olderRemote->id));
         $this->assertNotNull(BackupRecord::find($latestRemote->id));
+    }
+
+    public function test_manual_backup_is_queued_without_running_dump_in_http_request(): void
+    {
+        $dispatcher = $this->createMock(Dispatcher::class);
+        $dispatcher->expects($this->once())
+            ->method('dispatch')
+            ->with($this->callback(function (mixed $job): bool {
+                $this->assertInstanceOf(BackupDatabaseJob::class, $job);
+                $this->assertSame('redis_backup', $job->connection);
+                $this->assertSame('backup', $job->queue);
+                $this->assertSame(max(300, (int) config('backup.job_timeout_seconds', 21600)), $job->timeout);
+
+                return true;
+            }))
+            ->willReturnCallback(fn(mixed $job): mixed => $job);
+        app()->instance(Dispatcher::class, $dispatcher);
+
+        $record = (new BackupService())->queueDatabaseBackup(false, [
+            'trigger' => 'manual',
+            'keep' => 7,
+        ]);
+
+        $this->assertSame(BackupRecord::STATUS_QUEUED, $record['status']);
+        $this->assertSame('', $record['path']);
+    }
+
+    public function test_backup_queue_has_an_isolated_worker_and_safe_retry_window(): void
+    {
+        $queue = require getcwd() . DIRECTORY_SEPARATOR . 'config' . DIRECTORY_SEPARATOR . 'queue.php';
+        $horizon = require getcwd() . DIRECTORY_SEPARATOR . 'config' . DIRECTORY_SEPARATOR . 'horizon.php';
+        $production = $horizon['environments']['production'];
+
+        $this->assertSame('redis_backup', $production['Backup']['connection']);
+        $this->assertSame(['backup'], $production['Backup']['queue']);
+        $this->assertSame(1, $production['Backup']['maxProcesses']);
+        $this->assertNotContains('backup', $production['Xboard']['queue']);
+        $this->assertGreaterThan(
+            (int) $production['Backup']['timeout'],
+            (int) $queue['connections']['redis_backup']['retry_after']
+        );
+    }
+
+    public function test_stale_queued_backup_is_marked_failed(): void
+    {
+        config([
+            'backup.job_timeout_seconds' => 300,
+            'backup.stale_after_seconds' => 300,
+        ]);
+        $record = $this->createBackupRecord([
+            'status' => BackupRecord::STATUS_QUEUED,
+            'started_at' => time() - 1200,
+            'finished_at' => null,
+        ]);
+
+        $recovered = (new BackupService())->recoverStaleRunningBackups();
+
+        $this->assertSame(1, $recovered);
+        $record->refresh();
+        $this->assertSame(BackupRecord::STATUS_FAILED, $record->status);
+        $this->assertNotNull($record->finished_at);
+        $this->assertStringContainsString('worker stopped', (string) $record->error);
+    }
+
+    public function test_running_backup_is_not_recovered_before_job_timeout_window(): void
+    {
+        config([
+            'backup.job_timeout_seconds' => 300,
+            'backup.stale_after_seconds' => 300,
+        ]);
+        $record = $this->createBackupRecord([
+            'status' => BackupRecord::STATUS_RUNNING,
+            'started_at' => time() - 600,
+            'finished_at' => null,
+        ]);
+
+        $recovered = (new BackupService())->recoverStaleRunningBackups();
+
+        $this->assertSame(0, $recovered);
+        $record->refresh();
+        $this->assertSame(BackupRecord::STATUS_RUNNING, $record->status);
+        $this->assertNull($record->finished_at);
+    }
+
+    public function test_missing_google_key_file_is_not_reported_as_configured(): void
+    {
+        config([
+            'cloud_storage.google_cloud.key_file' => getcwd() . '/missing-google-key.json',
+            'cloud_storage.google_cloud.storage_bucket' => 'env-bucket',
+        ]);
+
+        $service = new BackupService();
+        $google = $service->remoteStorageSettings()['google_cloud'];
+        $readyMethod = new \ReflectionMethod(BackupService::class, 'googleCloudReady');
+        $readyMethod->setAccessible(true);
+        $ready = $readyMethod->invoke($service);
+
+        $this->assertFalse($google['credentials_configured']);
+        $this->assertFalse($google['key_file_readable']);
+        $this->assertFalse($google['env_configured']);
+        $this->assertFalse($ready);
+    }
+
+    public function test_remote_backup_can_be_retrieved_and_keeps_remote_copy_metadata(): void
+    {
+        $filesystem = new Filesystem();
+        $source = getcwd() . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'framework'
+            . DIRECTORY_SEPARATOR . 'remote-backup-fixture.enc';
+        $target = getcwd() . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'backup'
+            . DIRECTORY_SEPARATOR . 'retrieved-backup.enc';
+        $contents = random_bytes(4096);
+        $filesystem->ensureDirectoryExists(dirname($source));
+        $filesystem->put($source, $contents);
+        $filesystem->delete($target);
+
+        $record = $this->createBackupRecord([
+            'status' => BackupRecord::STATUS_UPLOADED,
+            'disk' => 'google_cloud',
+            'filename' => basename($target),
+            'path' => null,
+            'remote_path' => 'backup/retrieved-backup.enc',
+            'size' => strlen($contents),
+            'checksum' => hash('sha256', $contents),
+            'options' => ['remote_disk' => 'google_cloud'],
+        ]);
+
+        $service = new class($source) extends BackupService {
+            public function __construct(private readonly string $fixture)
+            {
+            }
+
+            protected function downloadFromRemoteDisk(string $remotePath, string $target, string $disk): void
+            {
+                if (!copy($this->fixture, $target)) {
+                    throw new RuntimeException('Fixture copy failed');
+                }
+            }
+        };
+
+        try {
+            $result = $service->retrieveRemoteBackup($record->id);
+
+            $this->assertSame(BackupRecord::STATUS_SUCCEEDED, $result['status']);
+            $this->assertSame('local', $result['disk']);
+            $this->assertTrue($result['local_copy']['exists']);
+            $this->assertTrue($result['remote_copy']['exists']);
+            $this->assertTrue($result['downloadable']);
+            $this->assertTrue($result['retrievable']);
+            $this->assertSame($contents, $filesystem->get($target));
+
+            $record->refresh();
+            $this->assertSame('backup/retrieved-backup.enc', $record->remote_path);
+            $this->assertSame('google_cloud', $record->options['remote_disk']);
+            $this->assertNotEmpty($record->options['retrieved_at']);
+        } finally {
+            $filesystem->delete($source);
+            $filesystem->delete($target);
+        }
+    }
+
+    public function test_verified_remote_backup_can_drop_its_local_copy(): void
+    {
+        $filesystem = new Filesystem();
+        $filename = 'finalize-' . bin2hex(random_bytes(4)) . '.enc';
+        $relativePath = 'backup/' . $filename;
+        $path = getcwd() . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'backup'
+            . DIRECTORY_SEPARATOR . $filename;
+        $contents = random_bytes(512);
+        $filesystem->ensureDirectoryExists(dirname($path));
+        $filesystem->put($path, $contents);
+
+        $record = $this->createBackupRecord([
+            'filename' => $filename,
+            'path' => $relativePath,
+            'remote_path' => 'backup/' . $filename,
+            'size' => strlen($contents),
+            'checksum' => hash('sha256', $contents),
+            'options' => [
+                'remote_disk' => 'ftp',
+                'remote_uploaded' => true,
+                'keep_local_after_upload' => false,
+                'last_verification' => ['ok' => true],
+            ],
+        ]);
+
+        try {
+            $result = (new BackupService())->finalizeRemoteOnlyBackup($record->id);
+
+            $this->assertFalse($filesystem->isFile($path));
+            $this->assertSame(BackupRecord::STATUS_UPLOADED, $result['status']);
+            $this->assertSame('ftp', $result['disk']);
+            $this->assertFalse($result['local_copy']['exists']);
+            $this->assertTrue($result['remote_copy']['exists']);
+            $this->assertFalse($result['downloadable']);
+
+            $record->refresh();
+            $this->assertNull($record->path);
+            $this->assertNotEmpty($record->options['local_removed_at']);
+        } finally {
+            $filesystem->delete($path);
+        }
+    }
+
+    public function test_remote_backup_keeps_local_copy_until_required_verification_passes(): void
+    {
+        $filesystem = new Filesystem();
+        $filename = 'unverified-' . bin2hex(random_bytes(4)) . '.enc';
+        $relativePath = 'backup/' . $filename;
+        $path = getcwd() . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'backup'
+            . DIRECTORY_SEPARATOR . $filename;
+        $filesystem->ensureDirectoryExists(dirname($path));
+        $filesystem->put($path, random_bytes(128));
+        $record = $this->createBackupRecord([
+            'filename' => $filename,
+            'path' => $relativePath,
+            'remote_path' => 'backup/' . $filename,
+            'options' => [
+                'remote_disk' => 'ftp',
+                'remote_uploaded' => true,
+                'keep_local_after_upload' => false,
+                'verify_after_backup' => true,
+            ],
+        ]);
+
+        try {
+            (new BackupService())->finalizeRemoteOnlyBackup($record->id);
+            $this->fail('Unverified backup local copy was removed');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('must pass verification', $e->getMessage());
+            $this->assertTrue($filesystem->isFile($path));
+            $record->refresh();
+            $this->assertSame(BackupRecord::STATUS_SUCCEEDED, $record->status);
+            $this->assertSame($relativePath, $record->path);
+        } finally {
+            $filesystem->delete($path);
+        }
     }
 
     private function extractRecoveryEnvBase64(string $dump): string

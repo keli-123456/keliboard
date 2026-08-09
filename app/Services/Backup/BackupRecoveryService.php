@@ -16,6 +16,61 @@ class BackupRecoveryService
 
         $expectedChecksum = strtolower(trim((string) ($options['expected_sha256'] ?? '')));
         $actualChecksum = strtolower((string) hash_file('sha256', $path));
+        $artifact = $this->prepareArtifact($path);
+
+        try {
+            $inspection = $this->inspectLegacyGzip($artifact['database_path'], [
+                'connection' => (string) ($options['connection'] ?? ''),
+            ]);
+            $warnings = array_values(array_filter(
+                (array) ($inspection['warnings'] ?? []),
+                fn(string $warning): bool => !str_starts_with($warning, 'No expected SHA256 was provided')
+            ));
+            if ($expectedChecksum === '') {
+                $warnings[] = 'No expected SHA256 was provided; checksum can only be displayed, not compared.';
+            }
+
+            $inspection['path'] = $path;
+            $inspection['filename'] = basename($path);
+            $inspection['size'] = File::size($path);
+            $inspection['sha256'] = $actualChecksum;
+            $inspection['expected_sha256'] = $expectedChecksum !== '' ? $expectedChecksum : null;
+            $inspection['checksum_ok'] = $expectedChecksum !== ''
+                ? hash_equals($expectedChecksum, $actualChecksum)
+                : null;
+            $inspection['artifact'] = [
+                'format' => $artifact['format'],
+                'encrypted' => $artifact['encrypted'],
+                'cipher' => $artifact['cipher'],
+                'key_fingerprint' => $artifact['key_fingerprint'],
+                'bundled' => $artifact['bundle'] !== null,
+                'entries' => data_get($artifact, 'bundle.entries'),
+                'database' => data_get($artifact, 'bundle.manifest.database'),
+                'resources' => data_get($artifact, 'bundle.resources', []),
+            ];
+            $inspection['restore_commands'] = $this->artifactRestoreCommands(
+                $path,
+                (string) $inspection['database_connection'],
+                (bool) data_get($inspection, 'env.present', false),
+                $artifact
+            );
+            $inspection['warnings'] = array_values(array_unique($warnings));
+
+            return $inspection;
+        } finally {
+            $this->cleanupTemporaryFiles($artifact['temporary_files']);
+        }
+    }
+
+    private function inspectLegacyGzip(string $path, array $options = []): array
+    {
+        $path = $this->normalizePath($path);
+        if (!File::isFile($path)) {
+            throw new RuntimeException('Backup file does not exist');
+        }
+
+        $expectedChecksum = strtolower(trim((string) ($options['expected_sha256'] ?? '')));
+        $actualChecksum = strtolower((string) hash_file('sha256', $path));
         [$gzipOk, $preview, $gzipError] = $this->readGzipPreview($path);
         $metadata = $gzipOk ? $this->parseRecoveryMetadata($preview) : [];
         $connection = trim((string) ($options['connection'] ?? ''));
@@ -210,6 +265,179 @@ class BackupRecoveryService
         }
 
         return $written;
+    }
+
+    public function writeDatabaseArtifact(string $path, string $targetPath, bool $force = false): array
+    {
+        $path = $this->normalizePath($path);
+        $targetPath = $this->normalizePath($targetPath);
+        if (File::exists($targetPath) && !$force) {
+            throw new RuntimeException('Target database backup already exists; pass --force to overwrite');
+        }
+
+        $artifact = $this->prepareArtifact($path);
+
+        try {
+            File::ensureDirectoryExists(dirname($targetPath));
+            if (!File::copy($artifact['database_path'], $targetPath)) {
+                throw new RuntimeException('Failed to extract database backup');
+            }
+
+            return [
+                'path' => $targetPath,
+                'size' => File::size($targetPath),
+                'sha256' => hash_file('sha256', $targetPath),
+            ];
+        } finally {
+            $this->cleanupTemporaryFiles($artifact['temporary_files']);
+        }
+    }
+
+    public function writeBundledResources(string $path, string $targetDirectory, bool $force = false): array
+    {
+        $path = $this->normalizePath($path);
+        $targetDirectory = rtrim($this->normalizePath($targetDirectory), DIRECTORY_SEPARATOR);
+        if (File::isDirectory($targetDirectory) && !$force) {
+            $entries = array_values(array_diff(scandir($targetDirectory) ?: [], ['.', '..']));
+            if ($entries !== []) {
+                throw new RuntimeException('Target resource directory is not empty; pass --force to continue');
+            }
+        }
+
+        $artifact = $this->prepareArtifact($path);
+
+        try {
+            if (!is_string($artifact['bundle_path']) || $artifact['bundle_path'] === '') {
+                throw new RuntimeException('This backup does not contain a recovery resource bundle');
+            }
+
+            return app(BackupBundleService::class)->extractResources(
+                $artifact['bundle_path'],
+                $targetDirectory
+            );
+        } finally {
+            $this->cleanupTemporaryFiles($artifact['temporary_files']);
+        }
+    }
+
+    private function prepareArtifact(string $path): array
+    {
+        $encryption = app(BackupEncryptionService::class);
+        $bundles = app(BackupBundleService::class);
+        $temporaryFiles = [];
+        $workingPath = $path;
+        $encrypted = false;
+        $cipher = null;
+        $keyFingerprint = null;
+
+        try {
+            if ($encryption->isEncryptedFile($workingPath)) {
+                if (!$encryption->available()) {
+                    throw new RuntimeException('Backup encryption key or OpenSSL support is unavailable');
+                }
+
+                $decryptedPath = $this->temporaryRecoveryPath('.decrypted');
+                $details = $encryption->decryptFile($workingPath, $decryptedPath);
+                $temporaryFiles[] = $decryptedPath;
+                $workingPath = $decryptedPath;
+                $encrypted = true;
+                $cipher = (string) ($details['cipher'] ?? '');
+                $keyFingerprint = $details['key_fingerprint'] ?? null;
+            }
+
+            $bundle = null;
+            $bundlePath = null;
+            $databasePath = $workingPath;
+            $format = 'legacy-sql-gzip-v1';
+
+            if ($bundles->isBundleFile($workingPath)) {
+                $bundle = $bundles->inspect($workingPath);
+                $databasePath = $this->temporaryRecoveryPath('.sql.gz');
+                $bundles->extractDatabase($workingPath, $databasePath);
+                $temporaryFiles[] = $databasePath;
+                $bundlePath = $workingPath;
+                $format = (string) ($bundle['format'] ?? BackupBundleService::FORMAT);
+            }
+
+            return [
+                'format' => $format,
+                'encrypted' => $encrypted,
+                'cipher' => $cipher,
+                'key_fingerprint' => $keyFingerprint,
+                'bundle' => $bundle,
+                'bundle_path' => $bundlePath,
+                'database_path' => $databasePath,
+                'temporary_files' => $temporaryFiles,
+            ];
+        } catch (\Throwable $e) {
+            $this->cleanupTemporaryFiles($temporaryFiles);
+            throw $e;
+        }
+    }
+
+    private function artifactRestoreCommands(string $path, string $connection, bool $hasEnv, array $artifact): array
+    {
+        if (!$artifact['encrypted'] && $artifact['bundle'] === null) {
+            return $this->restoreCommands($path, $connection, $hasEnv);
+        }
+
+        $quotedPath = $this->shellQuote(str_replace('\\', '/', $path));
+        $databasePath = str_replace('\\', '/', $this->recoveryStoragePath('backup/restore/database.sql.gz'));
+        $resourcePath = str_replace('\\', '/', $this->recoveryStoragePath('backup/restore/resources'));
+        $supportPath = str_replace('\\', '/', $this->recoveryStoragePath('backup/restore/support'));
+        $extract = "php artisan backup:restore-plan {$quotedPath}"
+            . ' --extract-database=' . $this->shellQuote($databasePath)
+            . ' --extract-files=' . $this->shellQuote($supportPath);
+
+        if ($hasEnv) {
+            $extract .= ' --extract-env=' . $this->shellQuote('.env.restored');
+        }
+        if ((array) data_get($artifact, 'bundle.resources', []) !== []) {
+            $extract .= ' --extract-resources=' . $this->shellQuote($resourcePath);
+        }
+
+        $commands = [$extract, 'php artisan down'];
+        $quotedDatabasePath = $this->shellQuote($databasePath);
+        if ($connection === 'sqlite') {
+            $commands[] = 'gzip -dc ' . $quotedDatabasePath . ' | sqlite3 "database/database.sqlite"';
+        } else {
+            $commands[] = 'gzip -dc ' . $quotedDatabasePath . ' | mysql -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USERNAME" -p "$DB_DATABASE"';
+        }
+        $commands[] = 'php artisan migrate --force';
+        $commands[] = 'php artisan optimize:clear';
+        $commands[] = 'php artisan up';
+
+        return $commands;
+    }
+
+    private function temporaryRecoveryPath(string $suffix = ''): string
+    {
+        $directory = $this->recoveryStoragePath('backup/tmp');
+        File::ensureDirectoryExists($directory);
+
+        return $directory . DIRECTORY_SEPARATOR . 'restore-' . bin2hex(random_bytes(12)) . $suffix;
+    }
+
+    private function cleanupTemporaryFiles(array $paths): void
+    {
+        foreach ($paths as $path) {
+            if (is_string($path) && $path !== '') {
+                File::delete($path);
+            }
+        }
+    }
+
+    private function recoveryStoragePath(string $path = ''): string
+    {
+        $app = app();
+        if (method_exists($app, 'storagePath')) {
+            return $app->storagePath($path);
+        }
+
+        $base = getcwd() . DIRECTORY_SEPARATOR . 'storage';
+        $path = trim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $path), DIRECTORY_SEPARATOR);
+
+        return $path === '' ? $base : $base . DIRECTORY_SEPARATOR . $path;
     }
 
     private function readGzipPreview(string $path): array

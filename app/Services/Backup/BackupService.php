@@ -2,6 +2,7 @@
 
 namespace App\Services\Backup;
 
+use App\Jobs\BackupDatabaseJob;
 use App\Models\BackupRecord;
 use App\Models\Setting as SettingModel;
 use Google\Cloud\Storage\StorageClient;
@@ -43,61 +44,171 @@ class BackupService
     private const RESTORE_DRILL_STATUSES = ['passed', 'failed', 'incomplete'];
     private const RESTORE_DRILL_ENVIRONMENTS = ['local', 'staging', 'production_rehearsal'];
 
+    public function queueDatabaseBackup(bool $upload = false, array $options = []): array
+    {
+        $this->recoverStaleRunningBackups();
+        $options = $this->resolveBackupOptions($options);
+        if ($this->backupRunning()) {
+            throw new RuntimeException('A database backup is already queued or running');
+        }
+
+        $remoteDisk = $this->normalizeRemoteDisk((string) ($options['remote_disk'] ?? self::DISK_GOOGLE_CLOUD));
+        if ($upload && !$this->remoteDiskReady($remoteDisk)) {
+            throw new RuntimeException($this->remoteDiskLabel($remoteDisk) . ' backup config is incomplete');
+        }
+
+        $record = $this->createRecord([
+            'type' => BackupRecord::TYPE_DATABASE,
+            'status' => BackupRecord::STATUS_QUEUED,
+            'disk' => 'local',
+            'filename' => now()->format('Y-m-d_H-i-s') . '_' . $this->databaseNameForFilename() . '_database_backup.pending',
+            'path' => null,
+            'options' => [
+                'database_connection' => config('database.default'),
+                'upload' => $upload,
+                ...$options,
+                'remote_disk' => $upload ? $remoteDisk : null,
+            ],
+            'started_at' => time(),
+        ]);
+        if (!$record) {
+            throw new RuntimeException('Backup metadata table is unavailable');
+        }
+
+        try {
+            BackupDatabaseJob::dispatch((int) $record->id, $upload, $record->options ?: []);
+        } catch (Throwable $e) {
+            $this->updateRecord($record, [
+                'status' => BackupRecord::STATUS_FAILED,
+                'error' => $this->truncateError($e->getMessage()),
+                'finished_at' => time(),
+            ]);
+            try {
+                app(BackupNotificationService::class)->backupFailed($record, $e);
+            } catch (Throwable) {
+                // Queue dispatch failures must still be returned to the caller.
+            }
+            throw $e;
+        }
+
+        return $this->formatRecord($record->refresh());
+    }
+
     public function createDatabaseBackup(bool $upload = false, array $options = []): array
     {
-        if (!Cache::add(self::BACKUP_LOCK_KEY, time(), now()->addHour())) {
+        $this->recoverStaleRunningBackups();
+        $lockSeconds = $this->staleAfterSeconds();
+        if (!Cache::add(self::BACKUP_LOCK_KEY, time(), now()->addSeconds($lockSeconds))) {
             throw new RuntimeException('A database backup is already running');
         }
 
-        $record = null;
+        $options = $this->resolveBackupOptions($options);
+        $recordId = max(0, (int) ($options['record_id'] ?? 0));
+        $record = $recordId > 0 ? BackupRecord::query()->find($recordId) : null;
         $databaseBackupPath = null;
         $compressedBackupPath = null;
+        $bundlePath = null;
+        $artifactPath = null;
+        $finalBackupPath = null;
 
         try {
             $remoteDisk = $this->normalizeRemoteDisk((string) ($options['remote_disk'] ?? self::DISK_GOOGLE_CLOUD));
+            $bundles = app(BackupBundleService::class);
+            $encryption = app(BackupEncryptionService::class);
+            $selectedResources = (array) ($options['resource_sets'] ?? []);
+            $encrypt = (bool) ($options['encrypt'] ?? true);
+            $keepLocal = !$upload || (bool) ($options['keep_local_after_upload'] ?? true);
+            $cleanupAfterVerification = !$keepLocal && (bool) ($options['verify_after_backup'] ?? true);
+
+            if ($selectedResources !== [] && !$bundles->available()) {
+                throw new RuntimeException('PHP zip extension is required for resource backups');
+            }
+            if ($encrypt && !$encryption->available()) {
+                throw new RuntimeException('Backup encryption is enabled but its key or OpenSSL support is unavailable');
+            }
+
             $backupRoot = $this->ensureBackupDirectory();
             $database = $this->databaseNameForFilename();
-            $filename = now()->format('Y-m-d_H-i-s') . '_' . $database . '_database_backup.sql';
-            $databaseBackupPath = $backupRoot . DIRECTORY_SEPARATOR . $filename;
+            $baseName = now()->format('Y-m-d_H-i-s') . '_' . $database . '_database_backup';
+            $databaseBackupPath = $backupRoot . DIRECTORY_SEPARATOR . $baseName . '.sql';
             $compressedBackupPath = $databaseBackupPath . '.gz';
+            $bundlePath = $backupRoot . DIRECTORY_SEPARATOR . $baseName . '.keli.zip';
+            $artifactPath = $bundles->available() ? $bundlePath : $compressedBackupPath;
+            $finalBackupPath = $encrypt ? $artifactPath . '.enc' : $artifactPath;
 
-            $record = $this->createRecord([
+            $recordOptions = [
+                'database_connection' => config('database.default'),
+                'upload' => $upload,
+                ...$options,
+                'remote_disk' => $upload ? $remoteDisk : null,
+            ];
+            $recordAttributes = [
                 'type' => BackupRecord::TYPE_DATABASE,
                 'status' => BackupRecord::STATUS_RUNNING,
                 'disk' => 'local',
-                'filename' => basename($compressedBackupPath),
-                'path' => $this->relativeStoragePath($compressedBackupPath),
-                'options' => [
-                    'database_connection' => config('database.default'),
-                    'upload' => $upload,
-                    ...$options,
-                    'remote_disk' => $upload ? $remoteDisk : null,
-                ],
+                'filename' => basename($finalBackupPath),
+                'path' => $this->relativeStoragePath($finalBackupPath),
+                'options' => $recordOptions,
                 'started_at' => time(),
-            ]);
+            ];
+            $record = $record
+                ? $this->updateRecord($record, $recordAttributes)
+                : $this->createRecord($recordAttributes);
 
             $this->dumpDatabase($databaseBackupPath);
             $this->prependRecoveryMetadata($databaseBackupPath);
             $this->compressGzip($databaseBackupPath, $compressedBackupPath);
             File::delete($databaseBackupPath);
 
-            $size = File::size($compressedBackupPath);
-            $checksum = hash_file('sha256', $compressedBackupPath) ?: null;
+            $bundleDetails = null;
+            if ($bundles->available()) {
+                $bundleDetails = $bundles->create($compressedBackupPath, $bundlePath, $selectedResources);
+                File::delete($compressedBackupPath);
+                $artifactPath = $bundlePath;
+            }
+
+            $encryptionDetails = null;
+            if ($encrypt) {
+                $encryptionDetails = $encryption->encryptFile($artifactPath, $finalBackupPath);
+                File::delete($artifactPath);
+            } else {
+                $finalBackupPath = $artifactPath;
+            }
+
+            $size = File::size($finalBackupPath);
+            $checksum = hash_file('sha256', $finalBackupPath) ?: null;
             $remotePath = null;
             $status = BackupRecord::STATUS_SUCCEEDED;
             $disk = 'local';
+            $localPath = $this->relativeStoragePath($finalBackupPath);
 
             if ($upload) {
-                $remotePath = $this->uploadToRemoteDisk($compressedBackupPath, $remoteDisk);
-                File::delete($compressedBackupPath);
-                $status = BackupRecord::STATUS_UPLOADED;
-                $disk = $remoteDisk;
+                $remotePath = $this->uploadToRemoteDisk($finalBackupPath, $remoteDisk);
+                if (!$keepLocal && !$cleanupAfterVerification) {
+                    $this->deleteLocalArtifact($finalBackupPath);
+                    $status = BackupRecord::STATUS_UPLOADED;
+                    $disk = $remoteDisk;
+                    $localPath = null;
+                }
             }
+
+            $recordOptions['artifact'] = [
+                'format' => $bundleDetails['format'] ?? 'legacy-sql-gzip-v1',
+                'encrypted' => $encrypt,
+                'cipher' => $encryptionDetails['cipher'] ?? null,
+                'key_fingerprint' => $encryptionDetails['key_fingerprint'] ?? null,
+                'resources' => $bundleDetails['resources'] ?? [],
+            ];
+            $recordOptions['remote_uploaded'] = $remotePath !== null;
+            $recordOptions['keep_local_after_upload'] = $keepLocal;
 
             $record = $this->updateRecord($record, [
                 'status' => $status,
                 'disk' => $disk,
+                'filename' => basename($finalBackupPath),
+                'path' => $localPath,
                 'remote_path' => $remotePath,
+                'options' => $recordOptions,
                 'size' => $size,
                 'checksum' => $checksum,
                 'finished_at' => time(),
@@ -106,19 +217,22 @@ class BackupService
 
             Log::channel('backup')->info('Database backup completed', [
                 'id' => $record?->id,
-                'path' => $this->relativeStoragePath($compressedBackupPath),
+                'path' => $localPath,
                 'remote_path' => $remotePath,
                 'size' => $size,
+                'encrypted' => $encrypt,
+                'resources' => $selectedResources,
             ]);
 
             return $record ? $this->formatRecord($record) : [
                 'status' => $status,
                 'disk' => $disk,
-                'filename' => basename($compressedBackupPath),
-                'path' => $upload ? null : $this->relativeStoragePath($compressedBackupPath),
+                'filename' => basename($finalBackupPath),
+                'path' => $localPath,
                 'remote_path' => $remotePath,
                 'size' => $size,
                 'checksum' => $checksum,
+                'options' => $recordOptions,
             ];
         } catch (Throwable $e) {
             $this->updateRecord($record, [
@@ -126,11 +240,12 @@ class BackupService
                 'error' => $this->truncateError($e->getMessage()),
                 'finished_at' => time(),
             ]);
-            if ($databaseBackupPath) {
-                File::delete($databaseBackupPath);
-            }
-            if ($compressedBackupPath && File::exists($compressedBackupPath)) {
-                File::delete($compressedBackupPath);
+            foreach (array_unique(array_filter([
+                $databaseBackupPath, $compressedBackupPath, $bundlePath, $artifactPath, $finalBackupPath,
+            ])) as $temporaryPath) {
+                if (is_string($temporaryPath)) {
+                    File::delete($temporaryPath);
+                }
             }
             Log::channel('backup')->error('Database backup failed', ['error' => $e->getMessage()]);
             throw $e;
@@ -142,8 +257,9 @@ class BackupService
     public function overview(): array
     {
         $hasTable = $this->recordingAvailable();
-        $backupRoot = storage_path(self::BACKUP_DIR);
+        $backupRoot = $this->storagePath(self::BACKUP_DIR);
         $query = $hasTable ? BackupRecord::query() : null;
+        $this->recoverStaleRunningBackups();
         $localSucceeded = $hasTable ? (clone $query)
             ->where('type', BackupRecord::TYPE_DATABASE)
             ->where('disk', 'local')
@@ -153,13 +269,13 @@ class BackupService
             'database_connection' => config('database.default'),
             'backup_path' => $backupRoot,
             'backup_path_exists' => File::exists($backupRoot),
-            'backup_path_writable' => File::exists($backupRoot) ? is_writable($backupRoot) : is_writable(storage_path()),
+            'backup_path_writable' => File::exists($backupRoot) ? is_writable($backupRoot) : is_writable($this->storagePath()),
             'metadata_ready' => $hasTable,
             'gzip_ready' => function_exists('gzopen'),
             'google_cloud_ready' => $this->googleCloudReady(),
             'ftp_ready' => $this->ftpReady(),
             'remote_disks' => $this->remoteDisks(),
-            'running' => $hasTable ? (clone $query)->where('status', BackupRecord::STATUS_RUNNING)->count() : 0,
+            'running' => $hasTable ? (clone $query)->whereIn('status', [BackupRecord::STATUS_QUEUED, BackupRecord::STATUS_RUNNING])->count() : 0,
             'total' => $hasTable ? (clone $query)->count() : 0,
             'local_total_size' => $localSucceeded ? (int) $localSucceeded->sum('size') : 0,
             'latest' => $hasTable ? $this->formatRecord((clone $query)->latest('id')->first()) : null,
@@ -176,6 +292,15 @@ class BackupService
         $keep = $this->normalizeKeep(admin_setting('backup_auto_keep', self::DEFAULT_AUTO_KEEP));
         $remoteDisk = $this->normalizeRemoteDisk((string) admin_setting('backup_auto_remote_disk', self::DISK_GOOGLE_CLOUD));
         $upload = (bool) admin_setting('backup_auto_upload', false);
+        $encrypt = (bool) admin_setting('backup_encrypt', (bool) config('backup.encryption_enabled', true));
+        $includeResources = (bool) admin_setting('backup_include_resources', false);
+        $resourceSets = $this->normalizeResourceSets(
+            admin_setting('backup_resource_sets', config('backup.default_resource_sets', []))
+        );
+        $keepLocal = (bool) admin_setting('backup_keep_local_after_upload', (bool) config('backup.keep_local_after_upload', true));
+        $verifyAfterBackup = (bool) admin_setting('backup_verify_after_backup', true);
+        $notifyFailure = (bool) admin_setting('backup_notify_failure', true);
+        $notifySuccess = (bool) admin_setting('backup_notify_success', false);
         if ($upload && !$this->remoteDiskReady($remoteDisk)) {
             $upload = false;
         }
@@ -187,6 +312,20 @@ class BackupService
             'remote_disk' => $remoteDisk,
             'remote_disks' => $this->remoteDisks(),
             'upload' => $upload,
+            'encrypt' => $encrypt,
+            'encryption_ready' => app(BackupEncryptionService::class)->available(),
+            'encryption_key_fingerprint' => app(BackupEncryptionService::class)->keyFingerprint(),
+            'encryption_key_source' => (string) config('backup.encryption_key_source', 'app_key'),
+            'bundle_ready' => app(BackupBundleService::class)->available(),
+            'include_resources' => $includeResources,
+            'resource_sets' => $resourceSets,
+            'available_resource_sets' => app(BackupBundleService::class)->resourceSets(),
+            'keep_local_after_upload' => $keepLocal,
+            'verify_after_backup' => $verifyAfterBackup,
+            'notify_failure' => $notifyFailure,
+            'notify_success' => $notifySuccess,
+            'job_timeout_seconds' => max(300, (int) config('backup.job_timeout_seconds', 21600)),
+            'stale_after_seconds' => $this->staleAfterSeconds(),
             'timezone' => (string) config('app.timezone'),
             'next_run_at' => $enabled ? $this->nextRunAt($time) : null,
             'remote_storage' => $this->remoteStorageSettings(),
@@ -209,6 +348,13 @@ class BackupService
             'backup_auto_keep' => $keep,
             'backup_auto_remote_disk' => $remoteDisk,
             'backup_auto_upload' => (int) $upload,
+            'backup_encrypt' => (int) (bool) ($settings['encrypt'] ?? true),
+            'backup_include_resources' => (int) (bool) ($settings['include_resources'] ?? false),
+            'backup_resource_sets' => $this->normalizeResourceSets($settings['resource_sets'] ?? []),
+            'backup_keep_local_after_upload' => (int) (bool) ($settings['keep_local_after_upload'] ?? true),
+            'backup_verify_after_backup' => (int) (bool) ($settings['verify_after_backup'] ?? true),
+            'backup_notify_failure' => (int) (bool) ($settings['notify_failure'] ?? true),
+            'backup_notify_success' => (int) (bool) ($settings['notify_success'] ?? false),
         ]);
 
         return $this->settings();
@@ -228,6 +374,7 @@ class BackupService
                 'env_configured' => $google['env_configured'],
                 'source' => $google['source'],
                 'key_file' => $google['key_file'],
+                'key_file_readable' => $google['key_file_readable'],
             ],
             self::DISK_FTP => [
                 'host' => $ftp['host'],
@@ -355,6 +502,8 @@ class BackupService
         $path = trim((string) $record->path);
         $localPath = $path !== '' ? $this->storagePath($path) : '';
         $exists = $localPath !== '' && File::exists($localPath);
+        $remoteDisk = $this->remoteDiskForRecord($record);
+        $hasRemoteCopy = filled($record->remote_path) && in_array($remoteDisk, self::REMOTE_DISKS, true);
 
         return [
             'id' => (int) $record->id,
@@ -370,7 +519,17 @@ class BackupService
             'latest_restore_drill' => $this->latestDrillForRecord($record),
             'error' => $record->error,
             'exists' => $exists,
-            'downloadable' => $exists && $record->disk === 'local' && $record->status === BackupRecord::STATUS_SUCCEEDED,
+            'downloadable' => $exists && $record->status === BackupRecord::STATUS_SUCCEEDED,
+            'retrievable' => $hasRemoteCopy,
+            'local_copy' => [
+                'exists' => $exists,
+                'path' => $path !== '' ? $path : null,
+            ],
+            'remote_copy' => [
+                'exists' => $hasRemoteCopy,
+                'disk' => $remoteDisk !== '' ? $remoteDisk : null,
+                'path' => $record->remote_path,
+            ],
             'started_at' => $record->started_at,
             'finished_at' => $record->finished_at,
             'created_at' => $record->created_at,
@@ -384,7 +543,7 @@ class BackupService
         if ($record->type !== BackupRecord::TYPE_DATABASE) {
             throw new RuntimeException('Only database backups can record restore drills');
         }
-        if (in_array($record->status, [BackupRecord::STATUS_RUNNING, BackupRecord::STATUS_FAILED], true)) {
+        if (in_array($record->status, [BackupRecord::STATUS_QUEUED, BackupRecord::STATUS_RUNNING, BackupRecord::STATUS_FAILED], true)) {
             throw new RuntimeException('Only completed backups can record restore drills');
         }
 
@@ -461,7 +620,174 @@ class BackupService
         return $this->resolveLocalPath($record);
     }
 
-    public function verifyBackup(int $id): array
+    public function finalizeRemoteOnlyBackup(int $id): array
+    {
+        $record = BackupRecord::query()->findOrFail($id);
+        $remoteDisk = $this->remoteDiskForRecord($record);
+        if (!filled($record->remote_path) || !in_array($remoteDisk, self::REMOTE_DISKS, true)) {
+            throw new RuntimeException('Backup does not have a verified remote copy');
+        }
+        $options = $record->options ?: [];
+        if ((bool) data_get($options, 'verify_after_backup', true)
+            && data_get($options, 'last_verification.ok') !== true) {
+            throw new RuntimeException('Backup must pass verification before removing its local copy');
+        }
+
+        if (filled($record->path)) {
+            $this->deleteLocalArtifact($this->resolveLocalPath($record, false));
+        }
+
+        $options['local_removed_at'] = time();
+        $record = $this->updateRecord($record, [
+            'status' => BackupRecord::STATUS_UPLOADED,
+            'disk' => $remoteDisk,
+            'path' => null,
+            'options' => $options,
+        ]) ?: $record;
+
+        return $this->formatRecord($record);
+    }
+
+    public function retrieveRemoteBackup(int $id): array
+    {
+        $record = BackupRecord::query()->findOrFail($id);
+        $remotePath = $this->normalizeRemotePath((string) $record->remote_path);
+        $remoteDisk = $this->remoteDiskForRecord($record);
+        if ($remotePath === '' || !in_array($remoteDisk, self::REMOTE_DISKS, true)) {
+            throw new RuntimeException('Backup does not have a retrievable remote copy');
+        }
+
+        $filename = basename(trim((string) $record->filename));
+        if ($filename === '' || $filename === '.' || $filename === '..') {
+            throw new RuntimeException('Backup filename is invalid');
+        }
+
+        $target = $this->ensureBackupDirectory() . DIRECTORY_SEPARATOR . $filename;
+        $temporary = $target . '.download-' . bin2hex(random_bytes(6));
+
+        try {
+            $this->downloadFromRemoteDisk($remotePath, $temporary, $remoteDisk);
+            if (!File::isFile($temporary) || File::size($temporary) <= 0) {
+                throw new RuntimeException('Downloaded backup is empty');
+            }
+
+            $actualSize = File::size($temporary);
+            $expectedSize = (int) $record->size;
+            if ($expectedSize > 0 && $actualSize !== $expectedSize) {
+                throw new RuntimeException('Downloaded backup size does not match metadata');
+            }
+
+            $actualChecksum = strtolower((string) hash_file('sha256', $temporary));
+            $expectedChecksum = strtolower(trim((string) $record->checksum));
+            if ($expectedChecksum === '' || !hash_equals($expectedChecksum, $actualChecksum)) {
+                throw new RuntimeException('Downloaded backup checksum does not match metadata');
+            }
+
+            File::delete($target);
+            if (!@rename($temporary, $target)) {
+                throw new RuntimeException('Failed to move downloaded backup into local storage');
+            }
+
+            $options = $record->options ?: [];
+            $options['remote_uploaded'] = true;
+            $options['remote_disk'] = $remoteDisk;
+            $options['retrieved_at'] = time();
+            $record = $this->updateRecord($record, [
+                'status' => BackupRecord::STATUS_SUCCEEDED,
+                'disk' => 'local',
+                'path' => $this->relativeStoragePath($target),
+                'options' => $options,
+                'error' => null,
+            ]) ?: $record;
+
+            return $this->formatRecord($record);
+        } finally {
+            File::delete($temporary);
+        }
+    }
+
+    public function verifyBackup(int $id, bool $markFailed = false): array
+    {
+        $record = BackupRecord::query()->findOrFail($id);
+        if ($record->disk !== 'local' || $record->status !== BackupRecord::STATUS_SUCCEEDED) {
+            throw new RuntimeException('Only successful local backups can be verified');
+        }
+
+        $checks = [];
+        $path = null;
+        $inspection = null;
+
+        try {
+            $path = $this->resolveLocalPath($record);
+            $checks[] = $this->verificationCheck('path', true, 'Backup file path is safe and readable');
+        } catch (Throwable $e) {
+            $checks[] = $this->verificationCheck('path', false, $e->getMessage());
+
+            return $this->storeVerificationResult(
+                $record,
+                $this->formatVerificationResult($record, $checks, null),
+                $markFailed
+            );
+        }
+
+        $actualSize = File::size($path);
+        $expectedSize = (int) $record->size;
+        $checks[] = $this->verificationCheck(
+            'size',
+            $expectedSize > 0 && $actualSize === $expectedSize,
+            'Backup file size matches metadata',
+            $expectedSize,
+            $actualSize
+        );
+
+        try {
+            $inspection = app(BackupRecoveryService::class)->inspect($path, [
+                'expected_sha256' => (string) $record->checksum,
+                'connection' => (string) data_get($record->options ?: [], 'database_connection', ''),
+            ]);
+            $checks[] = $this->verificationCheck(
+                'checksum',
+                ($inspection['checksum_ok'] ?? null) === true,
+                'Backup SHA256 checksum matches metadata',
+                (string) $record->checksum,
+                (string) ($inspection['sha256'] ?? '')
+            );
+            $checks[] = $this->verificationCheck(
+                'artifact',
+                true,
+                (bool) data_get($inspection, 'artifact.encrypted', false)
+                    ? 'Encrypted backup authentication and artifact decoding passed'
+                    : 'Backup artifact decoding passed'
+            );
+            $checks[] = $this->verificationCheck(
+                'gzip',
+                (bool) ($inspection['gzip_ok'] ?? false),
+                (bool) ($inspection['gzip_ok'] ?? false)
+                    ? 'Database gzip payload can be read'
+                    : (string) ($inspection['gzip_error'] ?? 'Database gzip payload is unreadable')
+            );
+            $checks[] = $this->verificationCheck(
+                'sql_dump',
+                (bool) ($inspection['sql_dump'] ?? false),
+                (bool) ($inspection['sql_dump'] ?? false)
+                    ? 'Database payload looks like a SQL dump'
+                    : 'Database payload does not look like a SQL dump'
+            );
+        } catch (Throwable $e) {
+            $checks[] = $this->verificationCheck('artifact', false, $e->getMessage());
+        }
+
+        $result = $this->formatVerificationResult($record, $checks, $path);
+        if (is_array($inspection)) {
+            $result['artifact'] = $inspection['artifact'] ?? null;
+            $result['warnings'] = $inspection['warnings'] ?? [];
+            $result['restore']['commands'] = $inspection['restore_commands'] ?? [];
+        }
+
+        return $this->storeVerificationResult($record, $result, $markFailed);
+    }
+
+    private function verifyBackupLegacy(int $id): array
     {
         $record = BackupRecord::query()->findOrFail($id);
         if ($record->disk !== 'local' || $record->status !== BackupRecord::STATUS_SUCCEEDED) {
@@ -588,14 +914,15 @@ class BackupService
     public function deleteBackup(int $id): void
     {
         $record = BackupRecord::query()->findOrFail($id);
-        if ($record->disk === 'local') {
+        if (filled($record->remote_path)) {
+            $this->deleteRemoteBackup($record);
+        }
+        if (filled($record->path)) {
             try {
                 File::delete($this->resolveLocalPath($record, false));
             } catch (Throwable) {
                 // Missing files should not block metadata cleanup.
             }
-        } elseif (in_array($record->disk, self::REMOTE_DISKS, true) && filled($record->remote_path)) {
-            $this->deleteRemoteBackup($record);
         }
         $record->delete();
     }
@@ -720,6 +1047,47 @@ class BackupService
         return in_array($environment, self::RESTORE_DRILL_ENVIRONMENTS, true) ? $environment : 'staging';
     }
 
+    private function resolveBackupOptions(array $options): array
+    {
+        $includeResources = array_key_exists('include_resources', $options)
+            ? (bool) $options['include_resources']
+            : (bool) admin_setting('backup_include_resources', false);
+        $configuredSets = $options['resource_sets']
+            ?? admin_setting('backup_resource_sets', config('backup.default_resource_sets', []));
+        $resourceSets = $includeResources ? $this->normalizeResourceSets($configuredSets) : [];
+
+        return [
+            'encrypt' => (bool) ($options['encrypt']
+                ?? admin_setting('backup_encrypt', (bool) config('backup.encryption_enabled', true))),
+            'include_resources' => $includeResources,
+            'resource_sets' => $resourceSets,
+            'keep_local_after_upload' => (bool) ($options['keep_local_after_upload']
+                ?? admin_setting('backup_keep_local_after_upload', (bool) config('backup.keep_local_after_upload', true))),
+            'verify_after_backup' => (bool) ($options['verify_after_backup']
+                ?? admin_setting('backup_verify_after_backup', true)),
+            ...$options,
+            'resource_sets' => $resourceSets,
+        ];
+    }
+
+    private function normalizeResourceSets(mixed $sets): array
+    {
+        if (is_string($sets)) {
+            $decoded = json_decode($sets, true);
+            $sets = is_array($decoded) ? $decoded : preg_split('/[,\\s]+/', $sets);
+        }
+        if (!is_array($sets)) {
+            return [];
+        }
+
+        $allowed = array_keys((array) config('backup.resource_sets', []));
+
+        return array_values(array_unique(array_filter(
+            array_map('strval', $sets),
+            fn(string $key): bool => in_array($key, $allowed, true)
+        )));
+    }
+
     private function normalizeTime(string $time): string
     {
         $time = trim($time);
@@ -830,13 +1198,20 @@ class BackupService
 
     private function ensureBackupDirectory(): string
     {
-        $path = storage_path(self::BACKUP_DIR);
+        $path = $this->storagePath(self::BACKUP_DIR);
         File::ensureDirectoryExists($path);
         if (!is_writable($path)) {
             throw new RuntimeException('Backup directory is not writable');
         }
 
         return $path;
+    }
+
+    private function deleteLocalArtifact(string $path): void
+    {
+        if (File::exists($path) && !File::delete($path)) {
+            throw new RuntimeException('Failed to delete local backup copy');
+        }
     }
 
     private function databaseNameForFilename(): string
@@ -859,6 +1234,10 @@ class BackupService
                 ->setDbName(config('database.connections.mysql.database'))
                 ->setUserName(config('database.connections.mysql.username'))
                 ->setPassword(config('database.connections.mysql.password'))
+                ->useSingleTransaction()
+                ->skipLockTables()
+                ->useQuick()
+                ->doNotUseColumnStatistics()
                 ->dumpToFile($path);
             return;
         }
@@ -1105,14 +1484,67 @@ class BackupService
         }
     }
 
+    protected function downloadFromRemoteDisk(string $remotePath, string $target, string $disk): void
+    {
+        match ($this->normalizeRemoteDisk($disk)) {
+            self::DISK_FTP => $this->downloadFromFtp($remotePath, $target),
+            default => $this->downloadFromGoogleCloud($remotePath, $target),
+        };
+    }
+
+    private function downloadFromGoogleCloud(string $remotePath, string $target): void
+    {
+        $config = $this->googleCloudConfig();
+        if (blank($config['bucket']) || !$config['credentials_configured']) {
+            throw new RuntimeException('Google Cloud Storage backup config is incomplete');
+        }
+
+        $object = $this->googleStorageClient($config)
+            ->bucket($config['bucket'])
+            ->object($remotePath);
+        if (!$object->exists()) {
+            throw new RuntimeException('Remote Google Cloud backup does not exist');
+        }
+
+        File::ensureDirectoryExists(dirname($target));
+        $object->downloadToFile($target);
+    }
+
+    private function downloadFromFtp(string $remotePath, string $target): void
+    {
+        $connection = $this->connectFtp($this->ftpConfig());
+
+        try {
+            File::ensureDirectoryExists(dirname($target));
+            if (!@ftp_get($connection, $target, $remotePath, FTP_BINARY)) {
+                throw new RuntimeException('Failed to download backup from FTP server');
+            }
+        } finally {
+            @ftp_close($connection);
+        }
+    }
+
+    private function remoteDiskForRecord(BackupRecord $record): string
+    {
+        $configured = (string) data_get($record->options ?: [], 'remote_disk', '');
+        if (in_array($configured, self::REMOTE_DISKS, true)) {
+            return $configured;
+        }
+
+        return in_array((string) $record->disk, self::REMOTE_DISKS, true)
+            ? (string) $record->disk
+            : '';
+    }
+
     private function deleteRemoteBackup(BackupRecord $record): void
     {
         $remotePath = $this->normalizeRemotePath((string) $record->remote_path);
+        $disk = $this->remoteDiskForRecord($record);
         if ($remotePath === '') {
             return;
         }
 
-        if ($record->disk === self::DISK_GOOGLE_CLOUD) {
+        if ($disk === self::DISK_GOOGLE_CLOUD) {
             $config = $this->googleCloudConfig();
             if (blank($config['bucket']) || !$config['credentials_configured']) {
                 throw new RuntimeException('Google Cloud Storage backup config is incomplete');
@@ -1125,7 +1557,7 @@ class BackupService
             return;
         }
 
-        if ($record->disk === self::DISK_FTP) {
+        if ($disk === self::DISK_FTP) {
             $connection = $this->connectFtp($this->ftpConfig());
             try {
                 if (!@ftp_delete($connection, $remotePath)) {
@@ -1148,20 +1580,22 @@ class BackupService
 
         $envKeyFile = (string) config('cloud_storage.google_cloud.key_file', '');
         $envBucket = (string) config('cloud_storage.google_cloud.storage_bucket', '');
+        $keyFileReady = $envKeyFile !== '' && File::isFile($envKeyFile) && is_readable($envKeyFile);
 
         $keyFile = $credentials !== '' ? null : ($envKeyFile !== '' ? $envKeyFile : null);
         $key = $credentials !== '' ? $this->decodeGoogleCredentials($credentials) : null;
         $panelConfigured = $this->settingExists(self::GOOGLE_CLOUD_BUCKET_KEY)
             || $this->settingExists(self::GOOGLE_CLOUD_CREDENTIALS_KEY)
             || $this->settingExists(self::GOOGLE_CLOUD_PREFIX_KEY);
-        $envConfigured = filled($envKeyFile) && filled($envBucket);
+        $envConfigured = $keyFileReady && filled($envBucket);
 
         return [
             'bucket' => $bucket !== '' ? $bucket : $envBucket,
             'prefix' => $prefix !== '' ? $prefix : self::DEFAULT_REMOTE_PREFIX,
             'key_file' => $keyFile,
             'key' => $key,
-            'credentials_configured' => $credentials !== '' || filled($envKeyFile),
+            'credentials_configured' => $credentials !== '' || $keyFileReady,
+            'key_file_readable' => $keyFileReady,
             'panel_configured' => $panelConfigured,
             'env_configured' => $envConfigured,
             'source' => $this->configSource($panelConfigured, $envConfigured),
@@ -1379,6 +1813,67 @@ class BackupService
         return $candidate;
     }
 
+    private function staleAfterSeconds(): int
+    {
+        return max(
+            300,
+            (int) config('backup.job_timeout_seconds', 21600) + 600,
+            (int) config('backup.stale_after_seconds', 25200)
+        );
+    }
+
+    public function recoverStaleRunningBackups(): int
+    {
+        if (!$this->recordingAvailable()) {
+            return 0;
+        }
+
+        $staleAfter = $this->staleAfterSeconds();
+        $threshold = time() - $staleAfter;
+        $records = BackupRecord::query()
+            ->whereIn('status', [BackupRecord::STATUS_QUEUED, BackupRecord::STATUS_RUNNING])
+            ->whereNotNull('started_at')
+            ->where('started_at', '<=', $threshold)
+            ->get();
+
+        foreach ($records as $record) {
+            $error = 'Backup task exceeded its allowed runtime or the worker stopped unexpectedly';
+            $record->forceFill([
+                'status' => BackupRecord::STATUS_FAILED,
+                'error' => $error,
+                'finished_at' => time(),
+            ])->save();
+
+            try {
+                app(BackupNotificationService::class)->backupFailed($record, new RuntimeException($error));
+            } catch (Throwable) {
+                // Stale task recovery must not depend on notification delivery.
+            }
+        }
+
+        try {
+            $lockStartedAt = Cache::get(self::BACKUP_LOCK_KEY);
+            if (is_numeric($lockStartedAt) && (int) $lockStartedAt <= $threshold) {
+                Cache::forget(self::BACKUP_LOCK_KEY);
+            }
+        } catch (Throwable) {
+            // Metadata recovery above remains useful when cache is unavailable.
+        }
+
+        if ($records->isNotEmpty()) {
+            try {
+                Log::channel('backup')->warning('Recovered stale backup tasks', [
+                    'ids' => $records->pluck('id')->all(),
+                    'stale_after_seconds' => $staleAfter,
+                ]);
+            } catch (Throwable) {
+                // A logging outage must not prevent stale task recovery.
+            }
+        }
+
+        return $records->count();
+    }
+
     private function backupRunning(): bool
     {
         try {
@@ -1393,7 +1888,7 @@ class BackupService
             return false;
         }
 
-        return BackupRecord::query()->where('status', BackupRecord::STATUS_RUNNING)->exists();
+        return BackupRecord::query()->whereIn('status', [BackupRecord::STATUS_QUEUED, BackupRecord::STATUS_RUNNING])->exists();
     }
 
     private function maintenanceModeEnabled(): bool
@@ -1427,6 +1922,29 @@ class BackupService
             'expected' => $expected,
             'actual' => $actual,
         ];
+    }
+
+    private function storeVerificationResult(BackupRecord $record, array $result, bool $markFailed): array
+    {
+        $options = $record->options ?: [];
+        $options['last_verification'] = [
+            'ok' => (bool) ($result['ok'] ?? false),
+            'checked_at' => (int) ($result['checked_at'] ?? time()),
+            'checks' => $result['checks'] ?? [],
+            'artifact' => $result['artifact'] ?? null,
+            'warnings' => $result['warnings'] ?? [],
+        ];
+
+        $attributes = ['options' => $options];
+        if ($markFailed && !($result['ok'] ?? false)) {
+            $attributes['status'] = BackupRecord::STATUS_FAILED;
+            $attributes['error'] = 'Automatic backup verification failed';
+        }
+
+        $record = $this->updateRecord($record, $attributes) ?: $record;
+        $result['status'] = (string) $record->status;
+
+        return $result;
     }
 
     private function formatVerificationResult(BackupRecord $record, array $checks, ?string $path): array

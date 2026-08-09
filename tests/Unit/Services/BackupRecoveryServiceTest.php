@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Tests\Unit\Services;
 
 use App\Services\Backup\BackupRecoveryService;
+use App\Services\Backup\BackupBundleService;
+use App\Services\Backup\BackupEncryptionService;
 use Illuminate\Filesystem\Filesystem;
 use Tests\TestCase;
 
@@ -157,6 +159,82 @@ final class BackupRecoveryServiceTest extends TestCase
             $filesystem->deleteDirectory($tempDir);
         }
     }
+
+    public function test_inspect_and_extract_encrypted_recovery_bundle(): void
+    {
+        $filesystem = new Filesystem();
+        $tempDir = getcwd() . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'framework'
+            . DIRECTORY_SEPARATOR . 'backup-recovery-encrypted-test-' . bin2hex(random_bytes(4));
+        $database = $tempDir . DIRECTORY_SEPARATOR . 'database.sql.gz';
+        $resourceRoot = $tempDir . DIRECTORY_SEPARATOR . 'ticket_attachments';
+        $bundle = $tempDir . DIRECTORY_SEPARATOR . 'backup.keli.zip';
+        $encrypted = $bundle . '.enc';
+        $restoredDatabase = $tempDir . DIRECTORY_SEPARATOR . 'restored.sql.gz';
+        $restoredResources = $tempDir . DIRECTORY_SEPARATOR . 'restored-resources';
+        $env = "APP_KEY=base64:test-key\n";
+        $sql = implode("\n", [
+            '-- KELI_RECOVERY_START',
+            '-- KELI_RECOVERY_FORMAT=env-base64-v1',
+            '-- KELI_RECOVERY_DATABASE_CONNECTION=mysql',
+            '-- KELI_RECOVERY_ENV_FILE=.env',
+            '-- KELI_RECOVERY_ENV_BASE64_BEGIN',
+            '-- ' . base64_encode($env),
+            '-- KELI_RECOVERY_ENV_BASE64_END',
+            '-- KELI_RECOVERY_FILES=0',
+            '-- KELI_RECOVERY_END',
+            'CREATE TABLE users (id int);',
+            '',
+        ]);
+
+        $filesystem->ensureDirectoryExists($resourceRoot);
+        $filesystem->put($resourceRoot . DIRECTORY_SEPARATOR . 'ticket.txt', 'ticket-data');
+        $this->writeGzip($database, $sql);
+        config([
+            'backup.encryption_key' => 'base64:' . base64_encode(str_repeat('r', 32)),
+            'backup.resource_sets' => [
+                'ticket_attachments' => [
+                    'path' => $resourceRoot,
+                    'label' => 'Ticket attachments',
+                ],
+            ],
+        ]);
+
+        try {
+            (new BackupBundleService())->create($database, $bundle, ['ticket_attachments']);
+            (new BackupEncryptionService())->encryptFile($bundle, $encrypted);
+
+            $service = new BackupRecoveryService();
+            $result = $service->inspect($encrypted, [
+                'expected_sha256' => hash_file('sha256', $encrypted),
+            ]);
+
+            $this->assertTrue($result['checksum_ok']);
+            $this->assertTrue($result['artifact']['encrypted']);
+            $this->assertTrue($result['artifact']['bundled']);
+            $this->assertSame(BackupBundleService::FORMAT, $result['artifact']['format']);
+            $this->assertSame(1, $result['artifact']['resources'][0]['files']);
+            $this->assertTrue($result['gzip_ok']);
+            $this->assertTrue($result['sql_dump']);
+            $this->assertSame($env, $result['env']['contents']);
+            $this->assertStringContainsString('--extract-database=', $result['restore_commands'][0]);
+
+            $databaseResult = $service->writeDatabaseArtifact($encrypted, $restoredDatabase);
+            $resourceResult = $service->writeBundledResources($encrypted, $restoredResources);
+
+            $this->assertSame(hash_file('sha256', $database), $databaseResult['sha256']);
+            $this->assertCount(1, $resourceResult);
+            $this->assertSame(
+                'ticket-data',
+                $filesystem->get(
+                    $restoredResources . DIRECTORY_SEPARATOR . 'ticket_attachments'
+                    . DIRECTORY_SEPARATOR . 'ticket.txt'
+                )
+            );
+        } finally {
+            $filesystem->deleteDirectory($tempDir);
+        }
+    }
+
 
     private function writeGzip(string $path, string $contents): void
     {

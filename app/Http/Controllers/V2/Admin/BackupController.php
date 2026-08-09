@@ -40,7 +40,7 @@ class BackupController extends Controller
         ]);
 
         try {
-            return $this->success($backups->createDatabaseBackup((bool) $request->boolean('upload'), [
+            return $this->success($backups->queueDatabaseBackup((bool) $request->boolean('upload'), [
                 'trigger' => 'manual',
                 'remote_disk' => $request->input('remote_disk'),
             ]));
@@ -62,6 +62,14 @@ class BackupController extends Controller
             'keep' => 'required|integer|min:1|max:365',
             'upload' => 'nullable|boolean',
             'remote_disk' => 'nullable|string|in:google_cloud,ftp',
+            'encrypt' => 'nullable|boolean',
+            'include_resources' => 'nullable|boolean',
+            'resource_sets' => 'nullable|array',
+            'resource_sets.*' => 'string|in:ticket_attachments,themes,plugins',
+            'keep_local_after_upload' => 'nullable|boolean',
+            'verify_after_backup' => 'nullable|boolean',
+            'notify_failure' => 'nullable|boolean',
+            'notify_success' => 'nullable|boolean',
         ]);
 
         try {
@@ -126,7 +134,7 @@ class BackupController extends Controller
                 $backups->localPath($record),
                 $record->filename,
                 [
-                    'Content-Type' => 'application/gzip',
+                    'Content-Type' => 'application/octet-stream',
                     'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
                     'Pragma' => 'no-cache',
                     'X-Content-Type-Options' => 'nosniff',
@@ -145,6 +153,26 @@ class BackupController extends Controller
 
         try {
             return $this->success($backups->verifyBackup((int) $request->input('id')));
+        } catch (Throwable $e) {
+            return $this->fail([500001, $e->getMessage()]);
+        }
+    }
+
+    public function retrieve(Request $request, BackupService $backups)
+    {
+        $request->validate([
+            'id' => 'required|integer|min:1',
+        ]);
+
+        try {
+            $record = $backups->retrieveRemoteBackup((int) $request->input('id'));
+            Log::channel('backup')->info('Remote backup retrieved by admin', [
+                'id' => (int) ($record['id'] ?? 0),
+                'admin_id' => optional($request->user())->id,
+                'ip' => $request->ip(),
+            ]);
+
+            return $this->success($record);
         } catch (Throwable $e) {
             return $this->fail([500001, $e->getMessage()]);
         }

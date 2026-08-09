@@ -16,6 +16,8 @@ class BackupRestorePlan extends Command
         {--expected-sha256= : Expected compressed backup SHA256}
         {--connection= : Override database connection, for example mysql or sqlite}
         {--extract-env= : Write embedded .env to this target path}
+        {--extract-database= : Write the SQL gzip payload to this target path}
+        {--extract-resources= : Write bundled resource files to this directory}
         {--extract-files= : Write embedded recovery support files to this directory}
         {--force : Overwrite extracted targets}
         {--json : Output machine-readable JSON}';
@@ -30,6 +32,24 @@ class BackupRestorePlan extends Command
                 'expected_sha256' => (string) ($this->option('expected-sha256') ?: $checksum),
                 'connection' => (string) ($this->option('connection') ?: $connection),
             ]);
+
+            $databaseTarget = trim((string) $this->option('extract-database'));
+            if ($databaseTarget !== '') {
+                $result['database_extracted_to'] = $recovery->writeDatabaseArtifact(
+                    $path,
+                    $databaseTarget,
+                    (bool) $this->option('force')
+                );
+            }
+
+            $resourceTarget = trim((string) $this->option('extract-resources'));
+            if ($resourceTarget !== '') {
+                $result['resources_extracted_to'] = $recovery->writeBundledResources(
+                    $path,
+                    $resourceTarget,
+                    (bool) $this->option('force')
+                );
+            }
 
             $extractTarget = trim((string) $this->option('extract-env'));
             if ($extractTarget !== '') {

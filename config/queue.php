@@ -66,6 +66,18 @@ return [
             'block_for' => null,
         ],
 
+        'redis_backup' => [
+            'driver' => 'redis',
+            'connection' => 'default',
+            'queue' => 'backup',
+            'retry_after' => max(
+                (int) env('BACKUP_JOB_TIMEOUT_SECONDS', 21600) + 3600,
+                (int) env('BACKUP_QUEUE_RETRY_AFTER', 28800)
+            ),
+            'block_for' => null,
+            'after_commit' => false,
+        ],
+
     ],
 
     /*

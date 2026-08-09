@@ -21,6 +21,7 @@ class BackupRecord extends Model
 
     public const TYPE_DATABASE = 'database';
 
+    public const STATUS_QUEUED = 'queued';
     public const STATUS_RUNNING = 'running';
     public const STATUS_SUCCEEDED = 'succeeded';
     public const STATUS_UPLOADED = 'uploaded';
