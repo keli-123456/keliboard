@@ -85,6 +85,7 @@ class MarketingController extends Controller
 
         $rule = MarketingRule::query()->findOrFail($data['id']);
         $rule->update($data);
+        $this->cancelDisabledRuleTasks($rule);
 
         return $this->success(true);
     }
@@ -197,6 +198,41 @@ class MarketingController extends Controller
         $saved = $this->dispatchService->saveLogNote($log, $data['note'] ?? null, $request->user()?->id);
 
         return $this->success($saved);
+    }
+
+    private function cancelDisabledRuleTasks(MarketingRule $rule): int
+    {
+        $query = MessageDispatchTask::query()
+            ->where('rule_id', $rule->id)
+            ->whereIn('state', [
+                MessageDispatchTask::STATE_PENDING,
+                MessageDispatchTask::STATE_SENDING,
+            ]);
+
+        if (!$rule->enabled) {
+            $reason = 'marketing rule disabled by admin';
+        } else {
+            $disabledChannels = [];
+            if (!$rule->email_enabled) {
+                $disabledChannels[] = MarketingTemplate::CHANNEL_EMAIL;
+            }
+            if (!$rule->telegram_enabled) {
+                $disabledChannels[] = MarketingTemplate::CHANNEL_TELEGRAM;
+            }
+            if ($disabledChannels === []) {
+                return 0;
+            }
+
+            $query->whereIn('channel', $disabledChannels);
+            $reason = 'marketing channel disabled by admin';
+        }
+
+        return $query->update([
+            'state' => MessageDispatchTask::STATE_CANCELLED,
+            'reserved_at' => null,
+            'last_error' => $reason,
+            'updated_at' => time(),
+        ]);
     }
 
     private function ensureMessageOpsEnabled(): ?JsonResponse

@@ -11,6 +11,7 @@ use App\Models\Order;
 use App\Models\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Cache;
 
 class MarketingAutomationService
 {
@@ -22,6 +23,13 @@ class MarketingAutomationService
     }
 
     public function seedDefaults(): void
+    {
+        Cache::lock('marketing:seed-defaults', 30)->block(10, function (): void {
+            $this->seedDefaultRecords();
+        });
+    }
+
+    private function seedDefaultRecords(): void
     {
         $templates = [
             'registered_no_purchase_1d_email' => [
@@ -68,8 +76,8 @@ class MarketingAutomationService
 
         $templateModels = [];
         foreach ($templates as $code => $template) {
-            $templateModels[$code] = MarketingTemplate::query()->updateOrCreate(
-                ['code' => $code],
+            $templateModels[$code] = $this->firstOrCreateDefaultTemplate(
+                $code,
                 array_merge($template, [
                     'enabled' => true,
                     'is_system' => true,
@@ -141,7 +149,7 @@ class MarketingAutomationService
         ];
 
         foreach ($rules as $rule) {
-            MarketingRule::query()->updateOrCreate(
+            MarketingRule::query()->firstOrCreate(
                 ['code' => $rule['code']],
                 array_merge($rule, [
                     'enabled' => true,
@@ -150,6 +158,45 @@ class MarketingAutomationService
                 ])
             );
         }
+    }
+
+    private function firstOrCreateDefaultTemplate(string $code, array $attributes): MarketingTemplate
+    {
+        $query = MarketingTemplate::query()->where('code', $code);
+
+        if ($this->hasColumn('v2_marketing_template', 'scope_type')) {
+            $query
+                ->where('channel', (string) $attributes['channel'])
+                ->where('message_type', (string) $attributes['message_type'])
+                ->where(function (Builder $scope): void {
+                    $scope->whereNull('scope_type')
+                        ->orWhere('scope_type', '')
+                        ->orWhere('scope_type', MarketingTemplate::SCOPE_GLOBAL);
+                });
+
+            foreach (['site_id', 'agent_user_id', 'agent_domain_id'] as $column) {
+                if ($this->hasColumn('v2_marketing_template', $column)) {
+                    $query->whereNull($column);
+                }
+            }
+        }
+
+        $existing = $query->orderBy('id')->first();
+        if ($existing) {
+            return $existing;
+        }
+
+        $payload = array_merge(['code' => $code], $attributes);
+        if ($this->hasColumn('v2_marketing_template', 'scope_type')) {
+            $payload = array_merge($payload, [
+                'scope_type' => MarketingTemplate::SCOPE_GLOBAL,
+                'site_id' => null,
+                'agent_user_id' => null,
+                'agent_domain_id' => null,
+            ]);
+        }
+
+        return MarketingTemplate::query()->create($payload);
     }
 
     public function scanEnabledRules(): array

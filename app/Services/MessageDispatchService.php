@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Jobs\ExecuteMessageDispatchTaskJob;
 use App\Models\MarketingRule;
+use App\Models\MarketingTemplate;
 use App\Models\MessageDispatchLog;
 use App\Models\MessageDispatchTask;
 use App\Models\MessageSuppression;
@@ -205,6 +206,17 @@ class MessageDispatchService
             return;
         }
 
+        if ($task->rule_id && !$this->ruleAllowsTask($task)) {
+            $task->update([
+                'state' => MessageDispatchTask::STATE_CANCELLED,
+                'reserved_at' => null,
+                'last_error' => 'marketing rule or channel disabled',
+                'updated_at' => time(),
+            ]);
+
+            return;
+        }
+
         $attempt = (int) $task->attempt_count + 1;
         $user = $task->user;
 
@@ -362,6 +374,20 @@ class MessageDispatchService
             $payload,
             $this->tenantScopeAttributes('v2_message_dispatch_log', $attributes)
         ));
+    }
+
+    private function ruleAllowsTask(MessageDispatchTask $task): bool
+    {
+        $rule = $task->rule;
+        if (!$rule || !$rule->enabled) {
+            return false;
+        }
+
+        return match ($task->channel) {
+            MarketingTemplate::CHANNEL_EMAIL => (bool) $rule->email_enabled,
+            MarketingTemplate::CHANNEL_TELEGRAM => (bool) $rule->telegram_enabled,
+            default => false,
+        };
     }
 
     private function tenantScopeAttributes(string $table, array $attributes): array

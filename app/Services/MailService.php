@@ -3,11 +3,13 @@
 namespace App\Services;
 
 use App\Jobs\SendEmailJob;
+use App\Models\AgentUser;
 use App\Models\MarketingRule;
 use App\Models\MailLog;
 use App\Models\MessageDispatchLog;
 use App\Models\User;
 use App\Utils\CacheKey;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Log;
@@ -20,13 +22,15 @@ class MailService
      */
     public function getTotalUsersNeedRemind(): int
     {
-        return User::where(function ($query) {
-            $query->where('remind_expire', true)
-                ->orWhere('remind_traffic', true);
-        })
-            ->where('banned', false)
-            ->whereNotNull('email')
-            ->count();
+        return $this->withoutAgentSubordinates(
+            User::query()
+                ->where(function ($query) {
+                    $query->where('remind_expire', true)
+                        ->orWhere('remind_traffic', true);
+                })
+                ->where('banned', false)
+                ->whereNotNull('email')
+        )->count();
     }
 
     /**
@@ -42,27 +46,42 @@ class MailService
             'skipped' => 0,
         ];
 
-        User::select('id', 'site_id', 'email', 'expired_at', 'transfer_enable', 'u', 'd', 'remind_expire', 'remind_traffic')
-            ->where(function ($query) {
-                $query->where('remind_expire', true)
-                    ->orWhere('remind_traffic', true);
-            })
-            ->where('banned', false)
-            ->whereNotNull('email')
-            ->chunk($chunkSize, function ($users) use (&$statistics, $progressCallback) {
-                $this->processUserChunk($users, $statistics);
+        $this->withoutAgentSubordinates(
+            User::query()
+                ->select('id', 'site_id', 'email', 'expired_at', 'transfer_enable', 'u', 'd', 'remind_expire', 'remind_traffic')
+                ->where(function ($query) {
+                    $query->where('remind_expire', true)
+                        ->orWhere('remind_traffic', true);
+                })
+                ->where('banned', false)
+                ->whereNotNull('email')
+        )->chunkById($chunkSize, function ($users) use (&$statistics, $progressCallback) {
+            $this->processUserChunk($users, $statistics);
 
-                if ($progressCallback) {
-                    $progressCallback();
-                }
+            if ($progressCallback) {
+                $progressCallback();
+            }
 
-                // 定期清理内存
-                if ($statistics['processed_users'] % 2500 === 0) {
-                    gc_collect_cycles();
-                }
-            });
+            // 定期清理内存
+            if ($statistics['processed_users'] % 2500 === 0) {
+                gc_collect_cycles();
+            }
+        });
 
         return $statistics;
+    }
+
+    private function withoutAgentSubordinates(Builder $query): Builder
+    {
+        try {
+            if (!app('db')->connection()->getSchemaBuilder()->hasTable('v2_agent_user')) {
+                return $query;
+            }
+        } catch (\Throwable) {
+            return $query;
+        }
+
+        return $query->whereNotIn('id', AgentUser::query()->select('sub_user_id'));
     }
 
     /**

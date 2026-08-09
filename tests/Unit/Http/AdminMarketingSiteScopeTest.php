@@ -15,6 +15,7 @@ use App\Models\Site;
 use App\Models\SiteDomain;
 use App\Models\User;
 use App\Services\MarketingAutomationService;
+use App\Services\MessageDispatchService;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
@@ -279,6 +280,155 @@ final class AdminMarketingSiteScopeTest extends TestCase
         $this->assertSame('Global only content for First Site', $task->payload['template_value']['content'] ?? null);
         $this->assertSame('site', $task->scope_type);
         $this->assertSame($site->id, (int) $task->site_id);
+    }
+
+    public function test_seed_defaults_preserves_custom_rules_and_scoped_templates(): void
+    {
+        $site = $this->createSite('first', 'First Site', 'first.example.test');
+        $scopedTemplate = $this->createTemplate(
+            'registered_no_purchase_1d_email',
+            'Site Custom',
+            [
+                'subject' => 'Site custom subject',
+                'content' => 'Site custom content',
+                'scope_type' => 'site',
+                'site_id' => $site->id,
+            ]
+        );
+
+        $service = app(MarketingAutomationService::class);
+        $service->seedDefaults();
+
+        $globalTemplate = MarketingTemplate::query()
+            ->where('code', 'registered_no_purchase_1d_email')
+            ->where('scope_type', MarketingTemplate::SCOPE_GLOBAL)
+            ->whereNull('site_id')
+            ->firstOrFail();
+        $rule = MarketingRule::query()
+            ->where('code', 'registered_no_purchase_1d')
+            ->firstOrFail();
+
+        $globalTemplate->update([
+            'subject' => 'Customized global subject',
+            'content' => 'Customized global content',
+            'enabled' => false,
+        ]);
+        $rule->update([
+            'enabled' => false,
+            'email_enabled' => false,
+            'cooldown_hours' => 240,
+            'daily_user_limit' => 3,
+            'priority' => 333,
+        ]);
+
+        $service->seedDefaults();
+
+        $this->assertSame('Site custom subject', $scopedTemplate->fresh()->subject);
+        $this->assertSame('Site custom content', $scopedTemplate->fresh()->content);
+        $this->assertSame('Customized global subject', $globalTemplate->fresh()->subject);
+        $this->assertFalse((bool) $globalTemplate->fresh()->enabled);
+
+        $rule->refresh();
+        $this->assertFalse((bool) $rule->enabled);
+        $this->assertFalse((bool) $rule->email_enabled);
+        $this->assertSame(240, (int) $rule->cooldown_hours);
+        $this->assertSame(3, (int) $rule->daily_user_limit);
+        $this->assertSame(333, (int) $rule->priority);
+        $this->assertSame(
+            2,
+            MarketingTemplate::query()
+                ->where('code', 'registered_no_purchase_1d_email')
+                ->count()
+        );
+    }
+
+    public function test_disabling_rule_or_channel_cancels_queued_and_claimed_tasks(): void
+    {
+        $emailTemplate = $this->createTemplate('disable_email', 'Disable Email');
+        $telegramTemplate = $this->createTemplate('disable_telegram', 'Disable Telegram', [
+            'channel' => MarketingTemplate::CHANNEL_TELEGRAM,
+            'subject' => null,
+        ]);
+        $rule = $this->createMarketingRule('disable_rule', $emailTemplate);
+        $rule->update([
+            'telegram_enabled' => true,
+            'telegram_template_id' => $telegramTemplate->id,
+        ]);
+
+        $taskDefaults = [
+            'rule_id' => $rule->id,
+            'message_type' => MarketingRule::TYPE_MARKETING,
+            'priority' => 100,
+            'state' => MessageDispatchTask::STATE_PENDING,
+            'scope_type' => 'global',
+            'scheduled_at' => time(),
+            'available_at' => time(),
+            'attempt_count' => 0,
+            'max_attempts' => 3,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ];
+        $emailTask = MessageDispatchTask::query()->create(array_merge($taskDefaults, [
+            'template_id' => $emailTemplate->id,
+            'channel' => MarketingTemplate::CHANNEL_EMAIL,
+            'dedupe_key' => 'disable-rule-email',
+        ]));
+        $telegramTask = MessageDispatchTask::query()->create(array_merge($taskDefaults, [
+            'template_id' => $telegramTemplate->id,
+            'channel' => MarketingTemplate::CHANNEL_TELEGRAM,
+            'dedupe_key' => 'disable-rule-telegram',
+        ]));
+
+        $this->responsePayload(app(MarketingController::class)->updateRule(Request::create(
+            '/admin/marketing/rule/update',
+            'POST',
+            [
+                'id' => $rule->id,
+                'enabled' => true,
+                'email_enabled' => false,
+                'telegram_enabled' => true,
+                'email_template_id' => $emailTemplate->id,
+                'telegram_template_id' => $telegramTemplate->id,
+                'cooldown_hours' => 24,
+                'daily_user_limit' => 1,
+                'priority' => 100,
+            ]
+        )));
+
+        $this->assertSame(MessageDispatchTask::STATE_CANCELLED, $emailTask->fresh()->state);
+        $this->assertSame(MessageDispatchTask::STATE_PENDING, $telegramTask->fresh()->state);
+
+        $this->responsePayload(app(MarketingController::class)->updateRule(Request::create(
+            '/admin/marketing/rule/update',
+            'POST',
+            [
+                'id' => $rule->id,
+                'enabled' => false,
+                'email_enabled' => true,
+                'telegram_enabled' => true,
+                'email_template_id' => $emailTemplate->id,
+                'telegram_template_id' => $telegramTemplate->id,
+                'cooldown_hours' => 24,
+                'daily_user_limit' => 1,
+                'priority' => 100,
+            ]
+        )));
+
+        $this->assertSame(MessageDispatchTask::STATE_CANCELLED, $telegramTask->fresh()->state);
+
+        $claimedTask = MessageDispatchTask::query()->create(array_merge($taskDefaults, [
+            'template_id' => $emailTemplate->id,
+            'channel' => MarketingTemplate::CHANNEL_EMAIL,
+            'state' => MessageDispatchTask::STATE_SENDING,
+            'reserved_at' => time(),
+            'dedupe_key' => 'disable-rule-claimed',
+        ]));
+        app(MessageDispatchService::class)->processTask($claimedTask->id);
+
+        $claimedTask->refresh();
+        $this->assertSame(MessageDispatchTask::STATE_CANCELLED, $claimedTask->state);
+        $this->assertNull($claimedTask->reserved_at);
+        $this->assertSame('marketing rule or channel disabled', $claimedTask->last_error);
     }
 
     private function createMarketingTables(): void
