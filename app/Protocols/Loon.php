@@ -172,6 +172,23 @@ class Loon extends AbstractProtocol
         if (!empty($protocol_settings['allow_insecure'])) {
             $config[] = data_get($protocol_settings, 'allow_insecure') ? 'skip-cert-verify=true' : 'skip-cert-verify=false';
         }
+        if (data_get($protocol_settings, 'network') === 'ws') {
+            $config[] = 'transport=ws';
+            $wsSettings = data_get($protocol_settings, 'network_settings', []);
+            $path = trim((string) data_get($wsSettings, 'path', ''));
+            if ($path !== '') {
+                $config[] = "path={$path}";
+            }
+
+            $host = data_get($wsSettings, 'headers.Host');
+            if (is_array($host)) {
+                $host = collect($host)->first(fn ($value) => trim((string) $value) !== '');
+            }
+            $host = trim((string) $host);
+            if ($host !== '') {
+                $config[] = "host={$host}";
+            }
+        }
         $config = array_filter($config);
         $uri = implode(',', $config);
         $uri .= "\r\n";
