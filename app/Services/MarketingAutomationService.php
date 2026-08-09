@@ -12,6 +12,7 @@ use App\Models\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 
 class MarketingAutomationService
 {
@@ -197,6 +198,242 @@ class MarketingAutomationService
         }
 
         return MarketingTemplate::query()->create($payload);
+    }
+
+    public function previewRule(
+        MarketingRule $rule,
+        ?int $siteId = null,
+        bool $globalOnly = false,
+        int $sampleLimit = 12
+    ): array {
+        $sampleLimit = max(1, min(50, $sampleLimit));
+
+        if ($rule->scene === MarketingRule::SCENE_ORDER_PENDING_UNPAID) {
+            return $this->previewPendingOrderRule($rule, $siteId, $globalOnly, $sampleLimit);
+        }
+
+        $query = match ($rule->scene) {
+            MarketingRule::SCENE_REGISTERED_NO_PURCHASE_1D => $this->registeredNoPurchasePreviewQuery($rule),
+            MarketingRule::SCENE_PLAN_EXPIRING_3D => $this->planExpiringPreviewQuery($rule),
+            MarketingRule::SCENE_PLAN_EXPIRED_1D => $this->planExpiredPreviewQuery($rule),
+            MarketingRule::SCENE_INACTIVE_7D => $this->inactivePreviewQuery($rule),
+            default => User::query()->whereRaw('1 = 0'),
+        };
+
+        $this->applyPreviewUserScope($query, $siteId, $globalOnly);
+        $matchedCount = (clone $query)->count();
+        $samples = (clone $query)
+            ->with('plan:id,name')
+            ->orderBy('id')
+            ->limit($sampleLimit)
+            ->get()
+            ->map(fn (User $user): array => $this->previewUserSample($rule, $user))
+            ->values()
+            ->all();
+
+        return [
+            'rule_id' => (int) $rule->id,
+            'rule_code' => (string) $rule->code,
+            'scene' => (string) $rule->scene,
+            'matched_count' => $matchedCount,
+            'sample_limit' => $sampleLimit,
+            'samples' => $samples,
+            'scope_type' => $siteId ? MarketingTemplate::SCOPE_SITE : ($globalOnly ? MarketingTemplate::SCOPE_GLOBAL : 'all'),
+            'site_id' => $siteId,
+            'agent_subordinates_excluded' => true,
+        ];
+    }
+
+    public function queueTemplateTest(
+        MarketingTemplate $template,
+        string $target,
+        ?int $siteId = null,
+        ?int $adminId = null
+    ): MessageDispatchTask {
+        $notificationService = app(NotificationSiteContextService::class);
+        $notificationContext = $notificationService->forSite($siteId);
+        $dispatchContext = array_merge(
+            $notificationService->dispatchContext($notificationContext),
+            [
+                'marketing_test' => true,
+                'marketing_test_admin_id' => $adminId,
+                'template_code' => $template->code,
+            ]
+        );
+        $variables = [
+            'app_name' => (string) $notificationContext['app_name'],
+            'app_url' => (string) $notificationContext['app_url'],
+            'user_email' => $template->channel === MarketingTemplate::CHANNEL_EMAIL ? $target : 'test@example.test',
+            'user_id' => 'test',
+            'plan_name' => '测试套餐',
+            'expire_at' => date('Y-m-d H:i:s', time() + 3 * 86400),
+            'order_trade_no' => 'TEST-' . date('YmdHis'),
+            'order_total' => '1.00',
+            'inactive_days' => '7',
+        ];
+        $rendered = $this->renderTemplate($template, $variables);
+        $isEmail = $template->channel === MarketingTemplate::CHANNEL_EMAIL;
+
+        $task = $this->dispatchService->enqueueTask([
+            'template_id' => $template->id,
+            'channel' => $template->channel,
+            'message_type' => $template->message_type,
+            'priority' => 1,
+            'dedupe_key' => 'marketing-test:' . Str::uuid()->toString(),
+            'to_address' => $target,
+            'subject' => $isEmail ? $rendered['subject'] : null,
+            'payload' => $isEmail
+                ? [
+                    'template_name' => 'notify',
+                    'template_value' => [
+                        'name' => $variables['app_name'],
+                        'url' => $variables['app_url'],
+                        'content' => $rendered['content'],
+                    ],
+                ]
+                : [
+                    'telegram_id' => (int) $target,
+                    'text' => $rendered['content'],
+                ],
+            'context' => $dispatchContext,
+            'scope_type' => !empty($notificationContext['site_id']) ? MarketingTemplate::SCOPE_SITE : MarketingTemplate::SCOPE_GLOBAL,
+            'site_id' => $notificationContext['site_id'] ?? null,
+            'max_attempts' => 1,
+        ]);
+
+        if (!$task) {
+            throw new \RuntimeException('Unable to create marketing test task');
+        }
+
+        return $task;
+    }
+
+    private function registeredNoPurchasePreviewQuery(MarketingRule $rule): Builder
+    {
+        $delayDays = max(1, (int) ($rule->trigger_config['delay_days'] ?? 1));
+        [$start, $end] = $this->dayRange(CarbonImmutable::today()->subDays($delayDays));
+
+        return $this->withoutAgentSubordinates(User::query())
+            ->whereBetween('created_at', [$start, $end])
+            ->where('banned', false)
+            ->whereNull('plan_id')
+            ->whereNotNull('email')
+            ->whereDoesntHave('orders');
+    }
+
+    private function planExpiringPreviewQuery(MarketingRule $rule): Builder
+    {
+        $daysBefore = max(1, (int) ($rule->trigger_config['days_before'] ?? 3));
+        [$start, $end] = $this->dayRange(CarbonImmutable::today()->addDays($daysBefore));
+
+        return $this->withoutAgentSubordinates(User::query())
+            ->where('banned', false)
+            ->whereNotNull('email')
+            ->whereNotNull('plan_id')
+            ->whereBetween('expired_at', [$start, $end]);
+    }
+
+    private function planExpiredPreviewQuery(MarketingRule $rule): Builder
+    {
+        $daysAfter = max(1, (int) ($rule->trigger_config['days_after'] ?? 1));
+        [$start, $end] = $this->dayRange(CarbonImmutable::today()->subDays($daysAfter));
+
+        return $this->withoutAgentSubordinates(User::query())
+            ->where('banned', false)
+            ->whereNotNull('email')
+            ->whereNotNull('plan_id')
+            ->whereBetween('expired_at', [$start, $end]);
+    }
+
+    private function inactivePreviewQuery(MarketingRule $rule): Builder
+    {
+        $inactiveDays = max(1, (int) ($rule->trigger_config['inactive_days'] ?? 7));
+        [$start, $end] = $this->dayRange(CarbonImmutable::today()->subDays($inactiveDays));
+
+        return $this->withoutAgentSubordinates(User::query())
+            ->where('banned', false)
+            ->whereNotNull('email')
+            ->whereRaw('COALESCE(last_login_at, created_at) BETWEEN ? AND ?', [$start, $end]);
+    }
+
+    private function previewPendingOrderRule(
+        MarketingRule $rule,
+        ?int $siteId,
+        bool $globalOnly,
+        int $sampleLimit
+    ): array {
+        $delayMinutes = max(5, (int) ($rule->trigger_config['delay_minutes'] ?? 30));
+        $deadline = time() - ($delayMinutes * 60);
+
+        $query = Order::query()
+            ->where('status', Order::STATUS_PENDING)
+            ->where('created_at', '<=', $deadline)
+            ->whereHas('user', function (Builder $users) use ($siteId, $globalOnly): void {
+                $this->withoutAgentSubordinates($users)
+                    ->where('banned', false)
+                    ->whereNotNull('email');
+                $this->applyPreviewUserScope($users, $siteId, $globalOnly);
+            });
+
+        $matchedCount = (clone $query)->count();
+        $samples = (clone $query)
+            ->with(['user.plan:id,name'])
+            ->orderBy('id')
+            ->limit($sampleLimit)
+            ->get()
+            ->map(function (Order $order) use ($rule): array {
+                $sample = $this->previewUserSample($rule, $order->user);
+                $sample['reference'] = (string) $order->trade_no;
+                $sample['order_id'] = (int) $order->id;
+
+                return $sample;
+            })
+            ->values()
+            ->all();
+
+        return [
+            'rule_id' => (int) $rule->id,
+            'rule_code' => (string) $rule->code,
+            'scene' => (string) $rule->scene,
+            'matched_count' => $matchedCount,
+            'sample_limit' => $sampleLimit,
+            'samples' => $samples,
+            'scope_type' => $siteId ? MarketingTemplate::SCOPE_SITE : ($globalOnly ? MarketingTemplate::SCOPE_GLOBAL : 'all'),
+            'site_id' => $siteId,
+            'agent_subordinates_excluded' => true,
+        ];
+    }
+
+    private function applyPreviewUserScope(Builder $query, ?int $siteId, bool $globalOnly): Builder
+    {
+        if ($siteId) {
+            return $query->where('site_id', $siteId);
+        }
+
+        if ($globalOnly) {
+            return $query->whereNull('site_id');
+        }
+
+        return $query;
+    }
+
+    private function previewUserSample(MarketingRule $rule, ?User $user): array
+    {
+        if (!$user) {
+            return [];
+        }
+
+        return [
+            'user_id' => (int) $user->id,
+            'email' => (string) $user->email,
+            'site_id' => $user->site_id !== null ? (int) $user->site_id : null,
+            'plan_name' => (string) ($user->plan?->name ?? ''),
+            'expired_at' => $user->expired_at !== null ? (int) $user->expired_at : null,
+            'last_login_at' => $user->last_login_at !== null ? (int) $user->last_login_at : null,
+            'email_ready' => (bool) ($rule->email_enabled && $rule->email_template_id && $user->email),
+            'telegram_ready' => (bool) ($rule->telegram_enabled && $rule->telegram_template_id && $user->telegram_id),
+            'reference' => null,
+        ];
     }
 
     public function scanEnabledRules(): array

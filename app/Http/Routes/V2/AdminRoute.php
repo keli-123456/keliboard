@@ -356,8 +356,12 @@ class AdminRoute
                 $router->get('/overview', [MarketingController::class, 'overview']);
                 $router->get('/rules', [MarketingController::class, 'rules']);
                 $router->post('/rule/update', [MarketingController::class, 'updateRule']);
+                $router->get('/rule/audience-preview', [MarketingController::class, 'audiencePreview']);
                 $router->get('/templates', [MarketingController::class, 'templates']);
                 $router->post('/template/save', [MarketingController::class, 'saveTemplate']);
+                $router->post('/template/test', [MarketingController::class, 'testTemplate']);
+                $router->any('/tasks', [MarketingController::class, 'tasks']);
+                $router->post('/tasks/cancel', [MarketingController::class, 'cancelTasks']);
                 $router->any('/logs', [MarketingController::class, 'logs']);
                 $router->post('/log/note', [MarketingController::class, 'saveLogNote']);
             });

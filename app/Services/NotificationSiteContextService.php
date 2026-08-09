@@ -32,6 +32,15 @@ class NotificationSiteContextService
         return $this->resolve($user, $request ?: $this->currentRequest());
     }
 
+    public function forSite(?int $siteId): array
+    {
+        $siteContext = $siteId && $siteId > 0
+            ? $this->sitePayloadForId($siteId)
+            : null;
+
+        return $this->resolve(null, null, null, $siteContext);
+    }
+
     public function forTicket(Ticket $ticket, ?User $user = null): array
     {
         $user = $user ?: ($ticket->relationLoaded('user') && $ticket->user instanceof User

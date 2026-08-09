@@ -431,6 +431,196 @@ final class AdminMarketingSiteScopeTest extends TestCase
         $this->assertSame('marketing rule or channel disabled', $claimedTask->last_error);
     }
 
+    public function test_audience_preview_respects_site_scope_and_excludes_agent_subordinates(): void
+    {
+        $this->createOrderTable();
+        $firstSite = $this->createSite('first', 'First Site', 'first.example.test');
+        $secondSite = $this->createSite('second', 'Second Site', 'second.example.test');
+        $createdAt = CarbonImmutable::today()->subDay()->timestamp + 60;
+        $expected = $this->createUser('expected@example.test', [
+            'site_id' => $firstSite->id,
+            'created_at' => $createdAt,
+        ]);
+        $this->createUser('other-site@example.test', [
+            'site_id' => $secondSite->id,
+            'created_at' => $createdAt,
+        ]);
+        $agent = $this->createUser('agent-preview@example.test', ['site_id' => $firstSite->id]);
+        $subordinate = $this->createUser('subordinate-preview@example.test', [
+            'site_id' => $firstSite->id,
+            'created_at' => $createdAt,
+        ]);
+        AgentUser::query()->create([
+            'agent_user_id' => $agent->id,
+            'sub_user_id' => $subordinate->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        $template = $this->createTemplate('preview_registered_email', 'Preview Registered');
+        $rule = MarketingRule::query()->create([
+            'code' => 'preview_registered',
+            'scene' => MarketingRule::SCENE_REGISTERED_NO_PURCHASE_1D,
+            'name' => 'Preview Registered',
+            'message_type' => MarketingRule::TYPE_MARKETING,
+            'description' => 'Preview Registered',
+            'enabled' => true,
+            'email_enabled' => true,
+            'telegram_enabled' => false,
+            'email_template_id' => $template->id,
+            'telegram_template_id' => null,
+            'priority' => 100,
+            'cooldown_hours' => 24,
+            'daily_user_limit' => 1,
+            'trigger_config' => ['delay_days' => 1],
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $payload = $this->responsePayload(app(MarketingController::class)->audiencePreview(Request::create(
+            '/admin/marketing/rule/audience-preview',
+            'GET',
+            [
+                'id' => $rule->id,
+                'scope_type' => 'site',
+                'site_id' => $firstSite->id,
+                'sample_limit' => 10,
+            ]
+        )));
+
+        $this->assertSame(1, $payload['data']['matched_count']);
+        $this->assertSame([$expected->id], collect($payload['data']['samples'])->pluck('user_id')->all());
+        $this->assertTrue($payload['data']['agent_subordinates_excluded']);
+        $this->assertSame($firstSite->id, $payload['data']['site_id']);
+        $this->assertSame(0, MessageDispatchTask::query()->count());
+    }
+
+    public function test_template_test_is_queued_with_selected_site_branding(): void
+    {
+        $site = $this->createSite('first', 'First Site', 'first.example.test');
+        $template = $this->createTemplate('site_test_email', 'Site Test', [
+            'subject' => 'Hello {{app_name}}',
+            'content' => 'Visit {{app_url}}',
+            'scope_type' => MarketingTemplate::SCOPE_SITE,
+            'site_id' => $site->id,
+        ]);
+
+        $payload = $this->responsePayload(app(MarketingController::class)->testTemplate(Request::create(
+            '/admin/marketing/template/test',
+            'POST',
+            [
+                'template_id' => $template->id,
+                'target' => 'test-recipient@example.test',
+                'site_id' => $site->id,
+            ]
+        )));
+
+        $task = MessageDispatchTask::query()->firstOrFail();
+        $this->assertSame($task->id, $payload['data']['task']['id']);
+        $this->assertSame(MessageDispatchTask::STATE_PENDING, $task->state);
+        $this->assertSame('site', $task->scope_type);
+        $this->assertSame($site->id, (int) $task->site_id);
+        $this->assertSame('Hello First Site', $task->subject);
+        $this->assertSame(
+            'Visit https://first.example.test',
+            $task->payload['template_value']['content'] ?? null
+        );
+        $this->assertTrue((bool) ($task->context['marketing_test'] ?? false));
+    }
+
+    public function test_tasks_can_be_filtered_and_cancelled_within_selected_site(): void
+    {
+        $firstSite = $this->createSite('first', 'First Site', 'first.example.test');
+        $secondSite = $this->createSite('second', 'Second Site', 'second.example.test');
+        $defaults = [
+            'channel' => MarketingTemplate::CHANNEL_EMAIL,
+            'message_type' => MarketingRule::TYPE_MARKETING,
+            'priority' => 100,
+            'state' => MessageDispatchTask::STATE_PENDING,
+            'scope_type' => MarketingTemplate::SCOPE_SITE,
+            'scheduled_at' => time(),
+            'available_at' => time(),
+            'attempt_count' => 0,
+            'max_attempts' => 3,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ];
+        $firstTask = MessageDispatchTask::query()->create(array_merge($defaults, [
+            'site_id' => $firstSite->id,
+            'dedupe_key' => 'site-task-first',
+            'to_address' => 'first-task@example.test',
+        ]));
+        $secondTask = MessageDispatchTask::query()->create(array_merge($defaults, [
+            'site_id' => $secondSite->id,
+            'dedupe_key' => 'site-task-second',
+            'to_address' => 'second-task@example.test',
+        ]));
+
+        $listPayload = $this->responsePayload(app(MarketingController::class)->tasks(Request::create(
+            '/admin/marketing/tasks',
+            'GET',
+            [
+                'scope_type' => 'site',
+                'site_id' => $firstSite->id,
+                'state' => 'active',
+            ]
+        )));
+        $this->assertSame([$firstTask->id], collect($listPayload['data']['items'])->pluck('id')->all());
+
+        $cancelPayload = $this->responsePayload(app(MarketingController::class)->cancelTasks(Request::create(
+            '/admin/marketing/tasks/cancel',
+            'POST',
+            [
+                'ids' => [$firstTask->id, $secondTask->id],
+                'scope_type' => 'site',
+                'site_id' => $firstSite->id,
+            ]
+        )));
+
+        $this->assertSame(1, $cancelPayload['data']['cancelled']);
+        $this->assertSame(MessageDispatchTask::STATE_CANCELLED, $firstTask->fresh()->state);
+        $this->assertSame('cancelled by admin', $firstTask->fresh()->last_error);
+        $this->assertSame(MessageDispatchTask::STATE_PENDING, $secondTask->fresh()->state);
+    }
+
+    public function test_task_scope_requires_site_id_before_listing_or_cancelling(): void
+    {
+        $site = $this->createSite('first', 'First Site', 'first.example.test');
+        $task = MessageDispatchTask::query()->create([
+            'channel' => MarketingTemplate::CHANNEL_EMAIL,
+            'message_type' => MarketingRule::TYPE_MARKETING,
+            'priority' => 100,
+            'state' => MessageDispatchTask::STATE_PENDING,
+            'scope_type' => MarketingTemplate::SCOPE_SITE,
+            'site_id' => $site->id,
+            'dedupe_key' => 'site-task-scope-guard',
+            'to_address' => 'scope-guard@example.test',
+            'scheduled_at' => time(),
+            'available_at' => time(),
+            'attempt_count' => 0,
+            'max_attempts' => 3,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $listResponse = app(MarketingController::class)->tasks(Request::create(
+            '/admin/marketing/tasks',
+            'GET',
+            ['scope_type' => 'site']
+        ));
+        $cancelResponse = app(MarketingController::class)->cancelTasks(Request::create(
+            '/admin/marketing/tasks/cancel',
+            'POST',
+            [
+                'ids' => [$task->id],
+                'scope_type' => 'site',
+            ]
+        ));
+
+        $this->assertSame(422, $listResponse->getStatusCode());
+        $this->assertSame(422, $cancelResponse->getStatusCode());
+        $this->assertSame(MessageDispatchTask::STATE_PENDING, $task->fresh()->state);
+    }
+
     private function createMarketingTables(): void
     {
         $this->database->schema()->create('v2_marketing_template', function (Blueprint $table): void {

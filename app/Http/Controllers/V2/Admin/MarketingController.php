@@ -90,6 +90,33 @@ class MarketingController extends Controller
         return $this->success(true);
     }
 
+    public function audiencePreview(Request $request)
+    {
+        if ($response = $this->ensureMessageOpsEnabled()) {
+            return $response;
+        }
+        $data = $request->validate([
+            'id' => 'required|integer|exists:v2_marketing_rule,id',
+            'sample_limit' => 'nullable|integer|min:1|max:50',
+            'scope_type' => 'nullable|in:all,global,site',
+            'site_id' => 'nullable|integer',
+        ]);
+        $scope = $this->scopeFromRequest($request);
+        if ($scope['type'] === 'site' && !$scope['site_id']) {
+            return $this->fail([422, '站点不能为空']);
+        }
+
+        $rule = MarketingRule::query()->findOrFail($data['id']);
+        $preview = $this->marketingService->previewRule(
+            $rule,
+            $scope['type'] === 'site' ? $scope['site_id'] : null,
+            $scope['type'] === 'global',
+            (int) ($data['sample_limit'] ?? 12)
+        );
+
+        return $this->success($preview);
+    }
+
     public function templates(Request $request)
     {
         if ($response = $this->ensureMessageOpsEnabled()) {
@@ -147,6 +174,130 @@ class MarketingController extends Controller
         $template->save();
 
         return $this->success($template);
+    }
+
+    public function testTemplate(Request $request)
+    {
+        if ($response = $this->ensureMessageOpsEnabled()) {
+            return $response;
+        }
+        $data = $request->validate([
+            'template_id' => 'required|integer|exists:v2_marketing_template,id',
+            'target' => 'required|string|max:191',
+            'site_id' => 'nullable|integer',
+        ]);
+        $template = MarketingTemplate::query()->findOrFail($data['template_id']);
+        $target = trim((string) $data['target']);
+
+        if ($template->channel === MarketingTemplate::CHANNEL_EMAIL && !filter_var($target, FILTER_VALIDATE_EMAIL)) {
+            return $this->fail([422, '请输入有效的测试邮箱']);
+        }
+        if ($template->channel === MarketingTemplate::CHANNEL_TELEGRAM && (!ctype_digit($target) || (int) $target <= 0)) {
+            return $this->fail([422, '请输入有效的 Telegram 用户 ID']);
+        }
+
+        $siteId = $this->positiveIntOrNull($data['site_id'] ?? null)
+            ?? $this->positiveIntOrNull($template->site_id);
+        $task = $this->marketingService->queueTemplateTest(
+            $template,
+            $target,
+            $siteId,
+            $request->user()?->id
+        );
+
+        return $this->success([
+            'task' => $task,
+            'message' => '测试消息已加入发送队列',
+        ]);
+    }
+
+    public function tasks(Request $request)
+    {
+        if ($response = $this->ensureMessageOpsEnabled()) {
+            return $response;
+        }
+        $current = max(1, (int) $request->input('current', 1));
+        $pageSize = max(1, min(100, (int) $request->input('pageSize', 20)));
+        $target = trim((string) $request->input('target', ''));
+        $state = trim((string) $request->input('state', ''));
+        $channel = trim((string) $request->input('channel', ''));
+        $ruleId = $this->positiveIntOrNull($request->input('rule_id'));
+        $scope = $this->scopeFromRequest($request);
+        if ($scope['type'] === 'site' && !$scope['site_id']) {
+            return $this->fail([422, '站点不能为空']);
+        }
+
+        $query = MessageDispatchTask::query()
+            ->with([
+                'user:id,email,site_id',
+                'rule:id,code,name',
+                'template:id,code,name',
+            ])
+            ->orderByDesc('id');
+        $this->applyStrictScope($query, 'v2_message_dispatch_task', $scope);
+
+        if ($target !== '') {
+            $query->where('to_address', 'like', '%' . $target . '%');
+        }
+        if ($state === 'active') {
+            $query->whereIn('state', [MessageDispatchTask::STATE_PENDING, MessageDispatchTask::STATE_SENDING]);
+        } elseif (in_array($state, [
+            MessageDispatchTask::STATE_PENDING,
+            MessageDispatchTask::STATE_SENDING,
+            MessageDispatchTask::STATE_SENT,
+            MessageDispatchTask::STATE_FAILED,
+            MessageDispatchTask::STATE_CANCELLED,
+        ], true)) {
+            $query->where('state', $state);
+        }
+        if (in_array($channel, [MarketingTemplate::CHANNEL_EMAIL, MarketingTemplate::CHANNEL_TELEGRAM], true)) {
+            $query->where('channel', $channel);
+        }
+        if ($ruleId) {
+            $query->where('rule_id', $ruleId);
+        }
+
+        return $this->paginate($query->paginate($pageSize, ['*'], 'page', $current));
+    }
+
+    public function cancelTasks(Request $request)
+    {
+        if ($response = $this->ensureMessageOpsEnabled()) {
+            return $response;
+        }
+        $data = $request->validate([
+            'ids' => 'required|array|min:1|max:100',
+            'ids.*' => 'required|integer',
+            'scope_type' => 'nullable|in:all,global,site',
+            'site_id' => 'nullable|integer',
+        ]);
+        $ids = collect($data['ids'])
+            ->map(fn ($id): int => (int) $id)
+            ->filter(fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+        if ($ids === []) {
+            return $this->fail([422, '请选择待取消的任务']);
+        }
+
+        $scope = $this->scopeFromRequest($request);
+        if ($scope['type'] === 'site' && !$scope['site_id']) {
+            return $this->fail([422, '站点不能为空']);
+        }
+
+        $query = MessageDispatchTask::query()
+            ->whereIn('id', $ids)
+            ->whereIn('state', [MessageDispatchTask::STATE_PENDING, MessageDispatchTask::STATE_SENDING]);
+        $this->applyStrictScope($query, 'v2_message_dispatch_task', $scope);
+        $cancelled = $query->update([
+            'state' => MessageDispatchTask::STATE_CANCELLED,
+            'reserved_at' => null,
+            'last_error' => 'cancelled by admin',
+            'updated_at' => time(),
+        ]);
+
+        return $this->success(['cancelled' => $cancelled]);
     }
 
     public function logs(Request $request)
