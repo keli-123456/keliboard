@@ -47,6 +47,11 @@ class SiteNavigationService
         $context = $resolvedUser
             ? app(NotificationSiteContextService::class)->forUser($resolvedUser, $request)
             : app(NotificationSiteContextService::class)->forRequest($request);
+        if (!empty($context['agent_user_id'])) {
+            return !empty($context['agent_domain_id'])
+                ? $this->httpsUrl((string) ($context['app_url'] ?? ''))
+                : null;
+        }
         $siteId = (int) ($context['site_id'] ?? 0);
 
         return $this->urlForSiteId($siteId > 0 ? $siteId : null);

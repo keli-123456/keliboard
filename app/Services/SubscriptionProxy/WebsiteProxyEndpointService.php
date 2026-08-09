@@ -19,6 +19,9 @@ class WebsiteProxyEndpointService
         $context = $resolvedUser
             ? app(NotificationSiteContextService::class)->forUser($resolvedUser, $request)
             : app(NotificationSiteContextService::class)->forRequest($request);
+        if (!empty($context['agent_user_id'])) {
+            return null;
+        }
         $siteId = (int) ($context['site_id'] ?? 0);
 
         return $this->urlForSiteId($siteId > 0 ? $siteId : null);

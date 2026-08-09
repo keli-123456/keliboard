@@ -16,6 +16,8 @@ use App\Jobs\SendEmailJob;
 use App\Services\Auth\MailLinkService;
 use App\Services\MarketingAutomationService;
 use App\Services\NotificationSiteContextService;
+use App\Services\SiteNavigationService;
+use App\Services\SubscriptionProxy\WebsiteProxyEndpointService;
 use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Http\Request;
 use Tests\Support\InteractsWithInMemoryDatabase;
@@ -111,6 +113,40 @@ final class NotificationSiteContextServiceTest extends TestCase
         $this->assertSame($agent->id, $context['agent_user_id']);
         $this->assertSame($domain->id, $context['agent_domain_id']);
         $this->assertSame('agent', $context['brand_source']);
+
+        $request = Request::create('https://agent.example.test/sub/token', 'GET');
+        $this->assertSame(
+            'https://agent.example.test',
+            app(SiteNavigationService::class)->urlForSubscription($user, $request)
+        );
+        $this->assertNull(
+            app(WebsiteProxyEndpointService::class)->urlForSubscription($user, $request)
+        );
+    }
+
+    public function test_agent_without_active_domain_does_not_receive_a_shared_site_entry(): void
+    {
+        $site = $this->createSite('second', 'Second Site', 'second.example.test', false);
+        $agent = $this->createUser('agent-without-domain@example.test', $site->id);
+        $user = $this->createUser('customer-without-agent-domain@example.test', $site->id);
+        AgentUser::query()->create([
+            'agent_user_id' => $agent->id,
+            'sub_user_id' => $user->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $context = app(NotificationSiteContextService::class)->forUser($user);
+        $request = Request::create('https://second.example.test/sub/token', 'GET');
+
+        $this->assertSame('agent', $context['brand_source']);
+        $this->assertNull($context['agent_domain_id']);
+        $this->assertNull(
+            app(SiteNavigationService::class)->urlForSubscription($user, $request)
+        );
+        $this->assertNull(
+            app(WebsiteProxyEndpointService::class)->urlForSubscription($user, $request)
+        );
     }
 
     public function test_template_and_dispatch_context_expose_the_same_tenant_source_fields(): void
