@@ -30,6 +30,7 @@ use App\Http\Controllers\V2\Admin\OrderUpgradeQuoteController;
 use App\Http\Controllers\V2\Admin\SubscriptionControlController;
 use App\Http\Controllers\V2\Admin\MarketingController;
 use App\Http\Controllers\V2\Admin\SpamRegistrationController;
+use App\Http\Controllers\V2\Admin\DomainHealthController;
 use Illuminate\Contracts\Routing\Registrar;
 
 class AdminRoute
@@ -81,6 +82,16 @@ class AdminRoute
                 $router->post('/commerce/save', [SiteController::class, 'saveCommerce']);
                 $router->get('/navigation/fetch', [SiteNavigationController::class, 'fetch']);
                 $router->post('/navigation/save', [SiteNavigationController::class, 'save']);
+            });
+
+            // Domain health monitoring
+            $router->group([
+                'prefix' => 'domain-monitor'
+            ], function ($router) {
+                $router->get('/overview', [DomainHealthController::class, 'overview']);
+                $router->post('/settings', [DomainHealthController::class, 'saveSettings']);
+                $router->post('/check', [DomainHealthController::class, 'check']);
+                $router->post('/check-all', [DomainHealthController::class, 'checkAll']);
             });
 
             // Server
