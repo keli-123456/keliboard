@@ -10,6 +10,10 @@ class SubscriptionProxyProbeService
     private const HEALTH_TOKEN_PREFIX = '__xboard_subproxy_probe_';
     private const HEALTH_RESPONSE = 'xboard-subproxy-health-ok';
 
+    private bool $availableEndpointResolved = false;
+
+    private ?array $availableEndpoint = null;
+
     public function healthToken(): string
     {
         $key = (string) config('app.key', '');
@@ -111,6 +115,12 @@ class SubscriptionProxyProbeService
 
     public function selectAvailableEndpoint(): ?array
     {
+        if ($this->availableEndpointResolved) {
+            return $this->availableEndpoint;
+        }
+
+        $this->availableEndpointResolved = true;
+
         if (!$this->canUseMachineTable() || !(bool) admin_setting('subscription_proxy_enable', false)) {
             return null;
         }
@@ -156,7 +166,7 @@ class SubscriptionProxyProbeService
             ];
         });
 
-        return $candidates[0];
+        return $this->availableEndpoint = $candidates[0];
     }
 
     private function storeProbeState(ServerMachine $machine, array $probe): array

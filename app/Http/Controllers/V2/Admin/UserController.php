@@ -16,6 +16,7 @@ use App\Models\User;
 use App\Services\AgentCenterService;
 use App\Services\AuthService;
 use App\Services\NotificationSiteContextService;
+use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use App\Services\TicketCleanupService;
 use App\Services\UserService;
 use App\Services\UserOnlineService;
@@ -336,12 +337,14 @@ class UserController extends Controller
                 ->get()
                 ->keyBy('user_id')
             : collect();
+        $subscriptionProxyService = app(SubscriptionProxyProbeService::class);
 
-        $users->getCollection()->transform(function ($user) use ($onlineCounts, $agentOwnerships, $agentProfiles): array {
+        $users->getCollection()->transform(function ($user) use ($onlineCounts, $agentOwnerships, $agentProfiles, $subscriptionProxyService): array {
             $data = self::transformUserData(
                 $user,
                 $agentOwnerships->get($user->id),
-                $agentProfiles->get($user->id)
+                $agentProfiles->get($user->id),
+                $subscriptionProxyService
             );
             $data['online_ip_count'] = $onlineCounts[$user->id] ?? 0;
             return $data;
@@ -356,12 +359,23 @@ class UserController extends Controller
      * @param User $user
      * @return array<string, mixed>
      */
-    public static function transformUserData(User $user, ?AgentUser $ownership = null, ?AgentProfile $profile = null): array
+    public static function transformUserData(
+        User $user,
+        ?AgentUser $ownership = null,
+        ?AgentProfile $profile = null,
+        ?SubscriptionProxyProbeService $subscriptionProxyService = null
+    ): array
     {
         $user = $user->toArray();
         $user['balance'] = $user['balance'] / 100;
         $user['commission_balance'] = $user['commission_balance'] / 100;
         $user['subscribe_url'] = Helper::getSubscribeUrl($user['token']);
+        if ($subscriptionProxyService !== null) {
+            $subscriptionProxy = $subscriptionProxyService->userPayload((string) $user['token']);
+            if (!empty($subscriptionProxy['subscribe_url'])) {
+                $user['accelerated_subscribe_url'] = $subscriptionProxy['subscribe_url'];
+            }
+        }
         $user['agent_ownership'] = $ownership ? [
             'agent_user_id' => (int) $ownership->agent_user_id,
             'agent_email' => $ownership->agent?->email,

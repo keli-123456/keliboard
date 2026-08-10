@@ -9,6 +9,7 @@ use App\Http\Requests\Admin\UserSendMail;
 use App\Http\Requests\Admin\UserUpdate;
 use App\Jobs\SendEmailJob;
 use App\Models\User;
+use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
@@ -144,6 +145,37 @@ final class AdminUserControllerRegressionTest extends TestCase
             'status' => 'active',
             'is_default' => false,
         ], $user['site']);
+    }
+
+    public function test_transform_user_data_includes_accelerated_subscribe_url_when_available(): void
+    {
+        $user = User::create([
+            'email' => 'accelerated@example.com',
+            'password' => 'secret',
+            'token' => 'accelerated-user-token',
+            'uuid' => 'accelerated-user-uuid',
+        ]);
+        $subscriptionProxy = $this->createMock(SubscriptionProxyProbeService::class);
+        $subscriptionProxy->expects($this->once())
+            ->method('userPayload')
+            ->with('accelerated-user-token')
+            ->willReturn([
+                'available' => true,
+                'subscribe_url' => 'https://proxy.example.test/sub/panel/accelerated-user-token',
+            ]);
+
+        $payload = UserController::transformUserData(
+            $user,
+            null,
+            null,
+            $subscriptionProxy
+        );
+
+        $this->assertNotSame('', $payload['subscribe_url']);
+        $this->assertSame(
+            'https://proxy.example.test/sub/panel/accelerated-user-token',
+            $payload['accelerated_subscribe_url']
+        );
     }
 
     public function test_update_can_clear_agent_owner_and_agent_profile(): void
