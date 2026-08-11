@@ -27,6 +27,7 @@ use App\Http\Controllers\V2\Admin\ThemeController;
 use App\Http\Controllers\V2\Admin\TrafficResetController;
 use App\Http\Controllers\V2\Admin\StaffSitesController;
 use App\Http\Controllers\V2\Admin\OrderUpgradeQuoteController;
+use App\Http\Controllers\V2\Admin\OperationTaskController;
 use App\Http\Controllers\V2\Admin\SubscriptionControlController;
 use App\Http\Controllers\V2\Admin\MarketingController;
 use App\Http\Controllers\V2\Admin\SpamRegistrationController;
@@ -325,6 +326,13 @@ class AdminRoute
             $router->group([
                 'prefix' => 'system'
             ], function ($router) {
+                $router->get('/operation-tasks', [OperationTaskController::class, 'index']);
+                $router->post('/operation-tasks', [OperationTaskController::class, 'store']);
+                $router->get('/operation-tasks/{taskId}', [OperationTaskController::class, 'show']);
+                $router->post('/operation-tasks/{taskId}/cancel', [OperationTaskController::class, 'cancel']);
+                $router->post('/operation-tasks/{taskId}/retry', [OperationTaskController::class, 'retry']);
+                $router->post('/operation-tasks/{taskId}/dismiss', [OperationTaskController::class, 'dismiss']);
+                $router->get('/operation-tasks/{taskId}/failures.csv', [OperationTaskController::class, 'exportFailures']);
                 $router->get('/getSystemStatus', [SystemController::class, 'getSystemStatus']);
                 $router->get('/getHealthDiagnostics', [SystemController::class, 'getHealthDiagnostics']);
                 $router->get('/getQueueStats', [SystemController::class, 'getQueueStats']);
