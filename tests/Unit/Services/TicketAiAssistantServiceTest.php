@@ -137,10 +137,12 @@ final class TicketAiAssistantServiceTest extends TestCase
 
         Http::assertSent(function ($request) {
             $payload = $request->data();
-            $content = $payload['messages'][1]['content'] ?? '';
+            $content = $payload['messages'][array_key_last($payload['messages'])]['content'] ?? '';
+            $securityPrompt = $payload['messages'][0]['content'] ?? '';
 
             return $request->hasHeader('Authorization', 'Bearer sk-test')
                 && $payload['model'] === 'test-model'
+                && str_contains($securityPrompt, '不可信资料')
                 && str_contains($content, 'Windows 客户端无法连接')
                 && str_contains($content, 'Windows 客户端连接排查');
         });

@@ -161,6 +161,52 @@ final class TicketAiProviderClientTest extends TestCase
     }
 
     /** @param array<string, mixed> $overrides */
+    #[DataProvider('unsafeEndpointProvider')]
+    public function test_protected_provider_endpoints_are_rejected(string $url): void
+    {
+        $client = new TicketAiProviderClient();
+
+        $this->assertSame('unsafe_endpoint', $client->endpointSafetyReason($url));
+    }
+
+    public static function unsafeEndpointProvider(): array
+    {
+        return [
+            'loopback' => ['http://127.0.0.1:11434/v1'],
+            'private address' => ['http://10.0.0.2/v1'],
+            'local hostname' => ['http://localhost/v1'],
+            'cloud metadata' => ['http://169.254.169.254/latest'],
+            'url credentials' => ['https://admin:secret@ai.example.test/v1'],
+        ];
+    }
+
+    public function test_private_provider_requires_explicit_opt_in(): void
+    {
+        $client = new TicketAiProviderClient();
+
+        $this->assertNull($client->endpointSafetyReason('http://127.0.0.1:11434/v1', true));
+        $this->assertSame(
+            'unsafe_endpoint',
+            $client->endpointSafetyReason('http://169.254.169.254/latest', true)
+        );
+    }
+
+    public function test_unsafe_endpoint_is_blocked_before_an_http_request_is_sent(): void
+    {
+        Http::fake();
+
+        try {
+            (new TicketAiProviderClient())->complete($this->settings([
+                'base_url' => 'http://127.0.0.1:11434/v1',
+            ]), [['role' => 'user', 'content' => 'x']]);
+            $this->fail('Expected unsafe endpoint exception.');
+        } catch (TicketAiProviderException $exception) {
+            $this->assertSame('unsafe_endpoint', $exception->errorCode());
+        }
+
+        Http::assertNothingSent();
+    }
+
     private function settings(array $overrides = []): array
     {
         return array_merge([

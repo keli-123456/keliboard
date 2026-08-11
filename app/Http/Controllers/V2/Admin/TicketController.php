@@ -676,6 +676,9 @@ class TicketController extends Controller
             'id' => 'required|integer',
             'ticket_id' => 'required|integer',
             'status' => 'required|in:inserted,discarded',
+            'quality_rating' => 'nullable|in:exact,minor_edit,major_edit,discarded,unsafe',
+            'reason' => 'nullable|in:knowledge_missing,knowledge_outdated,wrong_scope,incorrect,unsafe_promise,tone,other',
+            'note' => 'nullable|string|max:1000',
         ]);
 
         try {
@@ -683,7 +686,10 @@ class TicketController extends Controller
                 (int) $params['id'],
                 (int) $params['ticket_id'],
                 $request->user()?->id,
-                (string) $params['status']
+                (string) $params['status'],
+                $params['quality_rating'] ?? null,
+                $params['reason'] ?? null,
+                $params['note'] ?? null
             ));
         } catch (\RuntimeException $e) {
             return $this->fail([422, $e->getMessage()]);

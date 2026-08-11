@@ -11,6 +11,7 @@ class TicketAiSuggestion extends Model
     public const STATUS_INSERTED = 'inserted';
     public const STATUS_DISCARDED = 'discarded';
     public const STATUS_SENT = 'sent';
+    public const STATUS_SUPERSEDED = 'superseded';
 
     protected $table = 'v2_ticket_ai_suggestion';
     protected $dateFormat = 'U';
@@ -25,6 +26,14 @@ class TicketAiSuggestion extends Model
         'needs_human' => 'boolean',
         'confidence' => 'float',
         'edited' => 'boolean',
+        'feedback_admin_id' => 'integer',
+        'feedback_at' => 'integer',
+        'draft_chars' => 'integer',
+        'final_chars' => 'integer',
+        'similarity_score' => 'float',
+        'edit_ratio' => 'float',
+        'knowledge_hit_count' => 'integer',
+        'knowledge_gap' => 'boolean',
         'inserted_at' => 'integer',
         'discarded_at' => 'integer',
         'sent_at' => 'integer',

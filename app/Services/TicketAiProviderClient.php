@@ -24,6 +24,10 @@ class TicketAiProviderClient
         if ($apiKey === '') {
             throw new TicketAiProviderException('authentication');
         }
+        $safetyReason = $this->endpointSafetyReason($baseUrl, (bool) ($settings['allow_private_provider'] ?? false));
+        if ($safetyReason !== null) {
+            throw new TicketAiProviderException($safetyReason);
+        }
 
         $timeout = max(5, min(120, (int) ($settings['timeout'] ?? 30)));
         $maxTokens = max(128, min(4096, (int) ($settings['max_tokens'] ?? 800)));
@@ -41,6 +45,7 @@ class TicketAiProviderClient
         try {
             $response = Http::acceptJson()
                 ->withToken($apiKey)
+                ->withOptions(['allow_redirects' => false])
                 ->timeout($timeout)
                 ->post($this->endpoint($baseUrl), $payload);
         } catch (ConnectionException $exception) {
@@ -85,6 +90,55 @@ class TicketAiProviderClient
         ];
     }
 
+
+    public function endpointSafetyReason(string $baseUrl, bool $allowPrivate = false): ?string
+    {
+        $parts = parse_url(trim($baseUrl));
+        $scheme = strtolower((string) (is_array($parts) ? ($parts['scheme'] ?? '') : ''));
+        $host = (string) (is_array($parts) ? ($parts['host'] ?? '') : '');
+        if (
+            !in_array($scheme, ['http', 'https'], true)
+            || $host === ''
+            || (is_array($parts) && (isset($parts['user']) || isset($parts['pass'])))
+        ) {
+            return 'unsafe_endpoint';
+        }
+
+        $host = strtolower(trim($host, '[]'));
+        if (in_array($host, ['169.254.169.254', 'metadata.google.internal', 'metadata.azure.internal'], true)) {
+            return 'unsafe_endpoint';
+        }
+
+        if ($allowPrivate) {
+            return null;
+        }
+
+        if ($host === 'localhost' || str_ends_with($host, '.local') || str_ends_with($host, '.internal')) {
+            return 'unsafe_endpoint';
+        }
+
+        if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
+            return $this->isPublicIp($host) ? null : 'unsafe_endpoint';
+        }
+
+        $resolved = gethostbynamel($host) ?: [];
+        foreach ($resolved as $ip) {
+            if (!$this->isPublicIp((string) $ip)) {
+                return 'unsafe_endpoint';
+            }
+        }
+
+        return null;
+    }
+
+    private function isPublicIp(string $ip): bool
+    {
+        return filter_var(
+            $ip,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        ) !== false;
+    }
     private function endpoint(string $baseUrl): string
     {
         return str_ends_with($baseUrl, '/chat/completions')

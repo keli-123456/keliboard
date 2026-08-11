@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Services;
 
 use App\Exceptions\TicketAiProviderException;
+use App\Models\Knowledge;
 use App\Models\Site;
 use App\Models\SiteDomain;
 use App\Models\SiteSetting;
@@ -145,11 +146,20 @@ final class TicketAiAssistantV2Test extends TestCase
         $this->assertSame((int) $site->id, $log->site_id);
         $this->assertSame('ai.example.test', $log->provider_host);
         $this->assertFalse(Schema::hasColumn('v2_ticket_ai_request_log', 'response_body'));
+        $stats = (new TicketAiAssistantService())->stats(7);
+        $this->assertCount(1, $stats['scope_breakdown']);
+        $this->assertSame('站点 · 秒速云', $stats['scope_breakdown'][0]['label']);
+        $this->assertSame(0, $stats['scope_breakdown'][0]['generated']);
+        $this->assertSame(1, $stats['scope_breakdown'][0]['requests']);
     }
 
     public function test_connection_test_and_extended_stats_expose_only_operational_metrics(): void
     {
         $this->bindReadySettings();
+        app(\App\Support\Setting::class)->save([
+            'ticket_ai_input_price_per_million' => 10,
+            'ticket_ai_output_price_per_million' => 20,
+        ]);
         Http::fake(['*' => Http::response($this->providerResponse('{"draft":"ok"}', 4, 2))]);
 
         $connection = (new TicketAiAssistantService())->testConnection(5);
@@ -168,7 +178,108 @@ final class TicketAiAssistantV2Test extends TestCase
         $this->assertSame(2, $stats['requests']);
         $this->assertSame(0.5, $stats['success_rate']);
         $this->assertSame(6, $stats['total_tokens']);
+        $this->assertEqualsWithDelta(0.00008, $stats['estimated_cost'], 0.000001);
+        $this->assertSame('CNY', $stats['estimated_cost_currency']);
         $this->assertSame('timeout', $stats['top_errors'][0]['error_code']);
+    }
+
+    public function test_knowledge_and_references_are_limited_to_the_ticket_site(): void
+    {
+        $this->bindReadySettings();
+        app(\App\Support\Setting::class)->save(['ticket_ai_knowledge_enable' => true]);
+        [$ticket, , $site] = $this->siteTicket();
+        $otherSite = Site::query()->create([
+            'code' => 'other-' . uniqid(),
+            'name' => '其他站点',
+            'status' => Site::STATUS_ACTIVE,
+            'is_default' => false,
+        ]);
+        $global = Knowledge::query()->create([
+            'title' => '全局订阅排查',
+            'category' => '订阅',
+            'body' => '订阅导入失败时重新导入。',
+            'show' => true,
+            'scope_type' => Knowledge::SCOPE_GLOBAL,
+        ]);
+        $current = Knowledge::query()->create([
+            'title' => '秒速云订阅排查',
+            'category' => '订阅',
+            'body' => '秒速云订阅导入失败处理。',
+            'show' => true,
+            'scope_type' => Knowledge::SCOPE_SITE,
+            'site_id' => $site->id,
+        ]);
+        $other = Knowledge::query()->create([
+            'title' => '其他站点订阅排查',
+            'category' => '订阅',
+            'body' => '其他站点专用订阅导入失败处理。',
+            'show' => true,
+            'scope_type' => Knowledge::SCOPE_SITE,
+            'site_id' => $otherSite->id,
+        ]);
+        $platform = Knowledge::query()->create([
+            'title' => '主站订阅排查',
+            'category' => '订阅',
+            'body' => '仅主站处理订阅导入失败。',
+            'show' => true,
+            'scope_type' => Knowledge::SCOPE_PLATFORM,
+        ]);
+        Http::fake(['*' => Http::response($this->providerResponse(json_encode([
+            'draft' => '请重新导入订阅。',
+            'category' => '订阅与节点',
+            'risk' => 'low',
+            'knowledge_refs' => [$global->id, $current->id, $other->id, $platform->id, 999999],
+        ], JSON_UNESCAPED_UNICODE)))]);
+
+        $result = (new TicketAiAssistantService())->suggest($ticket, null, 8);
+
+        $this->assertSame([(int) $global->id, (int) $current->id], $result['knowledge_refs']);
+        $this->assertSame(
+            ['全局订阅排查', '秒速云订阅排查'],
+            array_column($result['matched_knowledge'], 'title')
+        );
+        Http::assertSent(function ($request) use ($other, $platform): bool {
+            $messages = $request->data()['messages'];
+            $content = (string) ($messages[array_key_last($messages)]['content'] ?? '');
+
+            return !str_contains($content, (string) $other->title)
+                && !str_contains($content, (string) $platform->title);
+        });
+    }
+
+    public function test_regeneration_supersedes_old_draft_and_scope_stats_use_the_active_draft(): void
+    {
+        $this->bindReadySettings();
+        [$ticket] = $this->siteTicket();
+        Http::fake(['*' => Http::sequence()
+            ->push($this->providerResponse('{"draft":"第一次草稿","risk":"low"}', 4, 2))
+            ->push($this->providerResponse('{"draft":"第二次草稿","risk":"low"}', 4, 2))]);
+        $service = new TicketAiAssistantService();
+
+        $first = $service->suggest($ticket, null, 9);
+        $second = $service->suggest($ticket, null, 9);
+        $stats = $service->stats(7);
+
+        $this->assertSame(
+            TicketAiSuggestion::STATUS_SUPERSEDED,
+            TicketAiSuggestion::query()->findOrFail($first['suggestion_id'])->status
+        );
+        $this->assertSame(
+            TicketAiSuggestion::STATUS_GENERATED,
+            TicketAiSuggestion::query()->findOrFail($second['suggestion_id'])->status
+        );
+        $this->assertSame(1, $stats['generated']);
+        $this->assertSame('站点 · 秒速云', $stats['scope_breakdown'][0]['label']);
+        $this->assertSame(1, $stats['scope_breakdown'][0]['generated']);
+        $this->assertSame(2, $stats['scope_breakdown'][0]['requests']);
+        $this->assertSame(12, $stats['scope_breakdown'][0]['total_tokens']);
+
+        try {
+            $service->recordFeedback($first['suggestion_id'], (int) $ticket->id, 9, TicketAiSuggestion::STATUS_INSERTED);
+            $this->fail('Expected a superseded draft to remain terminal.');
+        } catch (\RuntimeException $exception) {
+            $this->assertStringContainsString('替代', $exception->getMessage());
+        }
     }
 
     private function bindReadySettings(): void
@@ -287,6 +398,10 @@ final class TicketAiAssistantV2Test extends TestCase
             $table->string('category')->nullable();
             $table->text('body')->nullable();
             $table->boolean('show')->default(true);
+            $table->string('scope_type')->default(Knowledge::SCOPE_GLOBAL);
+            $table->integer('site_id')->nullable();
+            $table->integer('agent_user_id')->nullable();
+            $table->integer('agent_domain_id')->nullable();
             $table->integer('created_at')->nullable();
             $table->integer('updated_at')->nullable();
         });
