@@ -8,8 +8,12 @@ use App\Http\Controllers\V2\Admin\Server\MachineController;
 use App\Models\Server;
 use App\Models\ServerMachine;
 use App\Services\NodeRealtime\NodeRealtimePublisher;
+use App\Services\ServerMachine\BatchBindingService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
+use Illuminate\Translation\ArrayLoader;
+use Illuminate\Translation\Translator;
+use Illuminate\Validation\Factory as ValidatorFactory;
 use Illuminate\Support\Facades\Schema;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
@@ -27,10 +31,27 @@ final class ServerMachineBatchBindNodesTest extends TestCase
         $this->setUpInMemoryDatabase();
         app()->instance('db.schema', $this->database->getConnection()->getSchemaBuilder());
         $this->bindJsonResponseFactory();
+        app()->instance('validator', new ValidatorFactory(new Translator(new ArrayLoader(), 'en'), app()));
         $this->bindPublisher();
         $this->createTables();
     }
 
+    public function test_batch_binding_service_accepts_the_legacy_payload_shape(): void
+    {
+        $machine = $this->machine('edge-service');
+        $node = $this->node();
+
+        $result = app(BatchBindingService::class)->bind([
+            'mode' => 'replace',
+            'allow_transfer' => false,
+            'items' => [
+                ['machine_id' => $machine->id, 'node_ids' => [$node->id]],
+            ],
+        ]);
+
+        $this->assertSame(1, $result['summary']['machines']);
+        $this->assertSame($machine->id, Server::find($node->id)->machine_id);
+    }
     public function test_replace_mode_replaces_each_machine_nodes_and_reports_summary(): void
     {
         $firstMachine = $this->machine('edge-a');
@@ -151,9 +172,13 @@ final class ServerMachineBatchBindNodesTest extends TestCase
 
     private function bindPublisher(): void
     {
-        $this->publisher = new class {
+        $this->publisher = new class extends NodeRealtimePublisher {
             /** @var array<int, array{0: array<int>, 1: string}> */
             public array $calls = [];
+
+            public function __construct()
+            {
+            }
 
             public function invalidateConfigForMachines(array $machineIds, string $reason = 'config.updated', array $payload = []): void
             {
@@ -229,6 +254,7 @@ final class ServerMachineBatchBindNodesTest extends TestCase
         Schema::create('v2_server', function (Blueprint $table): void {
             $table->id();
             $table->string('type');
+            $table->string('runtime')->default('generic');
             $table->string('name')->nullable();
             $table->unsignedBigInteger('machine_id')->nullable();
             $table->integer('sort')->default(0);

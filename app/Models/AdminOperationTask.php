@@ -24,6 +24,7 @@ class AdminOperationTask extends Model
         'skipped' => 'integer',
         'cancelled' => 'integer',
         'cancel_requested_at' => 'timestamp',
+        'dismissed_at' => 'timestamp',
         'started_at' => 'timestamp',
         'finished_at' => 'timestamp',
         'created_at' => 'timestamp',

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\V2\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\AdminAuditLog;
+use App\Services\AdminOperationTaskService;
 use App\Services\SystemHealthEvaluator;
 use App\Utils\CacheKey;
 use Illuminate\Http\Request;
@@ -116,6 +117,7 @@ class SystemController extends Controller
             CacheKey::get('ADMIN_QUEUE_STATS_SNAPSHOT'),
             fn() => [
                 'failedJobs' => app(JobRepository::class)->countRecentlyFailed(),
+                'operationTasks' => app(AdminOperationTaskService::class)->healthSummary(),
                 'jobsPerMinute' => app(MetricsRepository::class)->jobsProcessedPerMinute(),
                 'pausedMasters' => $this->totalPausedMasters(),
                 'periods' => [

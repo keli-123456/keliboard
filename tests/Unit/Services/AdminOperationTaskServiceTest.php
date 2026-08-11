@@ -157,6 +157,91 @@ final class AdminOperationTaskServiceTest extends TestCase
         $this->assertSame(1, AdminOperationTask::query()->count());
         $this->assertSame(2, AdminOperationTaskItem::query()->count());
     }
+    public function test_single_item_task_exposes_its_result_for_compatible_batch_feedback(): void
+    {
+        $task = $this->createTask(['batch']);
+        $executor = $this->createMock(AdminOperationExecutor::class);
+        $executor->method('execute')->willReturn([
+            'skipped' => false,
+            'result' => ['summary' => ['machines' => 2, 'bound' => 5, 'skipped' => 1]],
+        ]);
+        $executor->method('riskLevel')->willReturn('warning');
+        $service = new AdminOperationTaskService($executor);
+
+        $service->process((string) $task->id);
+        $serialized = $service->serialize($task->fresh());
+
+        $this->assertSame(2, $serialized['result']['summary']['machines']);
+        $this->assertSame(5, $serialized['result']['summary']['bound']);
+        $this->assertSame('warning', $serialized['risk_level']);
+        $this->assertNotNull($serialized['retention_until']);
+    }
+    public function test_health_summary_reports_stale_and_recent_failed_tasks(): void
+    {
+        config()->set('admin_operations.stale_after_seconds', 1800);
+        $now = time();
+        $staleTask = $this->createTask(['41']);
+        $failedTask = $this->createTask(['42']);
+
+        DB::table('v2_admin_operation_task')->where('id', $staleTask->id)->update([
+            'status' => AdminOperationTask::STATUS_RUNNING,
+            'created_at' => $now - 5000,
+            'updated_at' => $now - 4000,
+        ]);
+        DB::table('v2_admin_operation_task')->where('id', $failedTask->id)->update([
+            'status' => AdminOperationTask::STATUS_FAILED,
+            'completed' => 1,
+            'failed' => 1,
+            'finished_at' => $now - 60,
+            'updated_at' => $now - 60,
+        ]);
+
+        $summary = (new AdminOperationTaskService($this->createMock(AdminOperationExecutor::class)))->healthSummary();
+
+        $this->assertTrue($summary['available']);
+        $this->assertSame('critical', $summary['status']);
+        $this->assertSame(1, $summary['running']);
+        $this->assertSame(1, $summary['stale']);
+        $this->assertSame(1, $summary['failed_recent']);
+        $this->assertGreaterThanOrEqual(5000, $summary['oldest_active_seconds']);
+    }
+
+    public function test_cleanup_expired_uses_longer_retention_for_failed_tasks(): void
+    {
+        config()->set('admin_operations.history_retention_days', 30);
+        config()->set('admin_operations.failure_retention_days', 90);
+        $now = time();
+
+        $expiredSuccess = $this->createTask(['51']);
+        $expiredFailure = $this->createTask(['52']);
+        $recentSuccess = $this->createTask(['53']);
+        $retainedFailure = $this->createTask(['54']);
+
+        foreach ([
+            [$expiredSuccess, AdminOperationTask::STATUS_SUCCEEDED, $now - (31 * 86400)],
+            [$expiredFailure, AdminOperationTask::STATUS_FAILED, $now - (91 * 86400)],
+            [$recentSuccess, AdminOperationTask::STATUS_SUCCEEDED, $now - (29 * 86400)],
+            [$retainedFailure, AdminOperationTask::STATUS_FAILED, $now - (31 * 86400)],
+        ] as [$task, $status, $updatedAt]) {
+            DB::table('v2_admin_operation_task')->where('id', $task->id)->update([
+                'status' => $status,
+                'completed' => 1,
+                'succeeded' => $status === AdminOperationTask::STATUS_SUCCEEDED ? 1 : 0,
+                'failed' => $status === AdminOperationTask::STATUS_FAILED ? 1 : 0,
+                'finished_at' => $updatedAt,
+                'updated_at' => $updatedAt,
+            ]);
+        }
+
+        $deleted = (new AdminOperationTaskService($this->createMock(AdminOperationExecutor::class)))->cleanupExpired();
+
+        $this->assertSame(2, $deleted);
+        $this->assertFalse(AdminOperationTask::query()->whereKey($expiredSuccess->id)->exists());
+        $this->assertFalse(AdminOperationTask::query()->whereKey($expiredFailure->id)->exists());
+        $this->assertTrue(AdminOperationTask::query()->whereKey($recentSuccess->id)->exists());
+        $this->assertTrue(AdminOperationTask::query()->whereKey($retainedFailure->id)->exists());
+        $this->assertSame(2, AdminOperationTaskItem::query()->count());
+    }
     private function createTask(array $keys): AdminOperationTask
     {
         $now = time();

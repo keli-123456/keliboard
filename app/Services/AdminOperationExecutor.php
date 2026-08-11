@@ -9,6 +9,7 @@ use App\Models\Plan;
 use App\Models\Server;
 use App\Models\User;
 use App\Services\NodeRealtime\NodeRealtimePublisher;
+use App\Services\ServerMachine\BatchBindingService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
@@ -24,6 +25,7 @@ class AdminOperationExecutor
     public const USER_RESET_TRAFFIC = 'user.reset_traffic';
     public const USER_DELETE = 'user.delete';
     public const SERVER_SAVE = 'server.save';
+    public const MACHINE_BATCH_BIND = 'machine.batch_bind';
 
     public const SUPPORTED_OPERATIONS = [
         self::USER_SET_PLAN,
@@ -34,12 +36,14 @@ class AdminOperationExecutor
         self::USER_RESET_TRAFFIC,
         self::USER_DELETE,
         self::SERVER_SAVE,
+        self::MACHINE_BATCH_BIND,
     ];
 
     public function __construct(
         private readonly TrafficResetService $trafficResetService,
         private readonly TicketCleanupService $ticketCleanupService,
         private readonly NodeRealtimePublisher $nodeRealtimePublisher,
+        private readonly BatchBindingService $batchBindingService,
     ) {
     }
 
@@ -47,6 +51,10 @@ class AdminOperationExecutor
     {
         if (!in_array($operation, self::SUPPORTED_OPERATIONS, true)) {
             throw ValidationException::withMessages(['operation' => ['Unsupported operation type.']]);
+        }
+
+        if ($operation === self::MACHINE_BATCH_BIND) {
+            return $this->batchBindingService->normalizePayload($payload);
         }
 
         $rules = match ($operation) {
@@ -99,6 +107,7 @@ class AdminOperationExecutor
             ),
             self::USER_DELETE => $this->deleteUser((int) $item->item_key),
             self::SERVER_SAVE => $this->saveServer($item),
+            self::MACHINE_BATCH_BIND => $this->machineBatchBind($taskPayload),
             default => throw new RuntimeException('Unsupported operation type.'),
         };
     }
@@ -204,6 +213,29 @@ class AdminOperationExecutor
         }
 
         return $this->succeeded(['server_id' => $serverId]);
+    }
+
+    public function riskLevel(string $operation, array $payload = []): string
+    {
+        if ($operation === self::USER_DELETE) {
+            return 'danger';
+        }
+        if ($operation === self::MACHINE_BATCH_BIND && (bool) ($payload['allow_transfer'] ?? false)) {
+            return 'danger';
+        }
+        if ($operation === self::USER_RESET_TRAFFIC) {
+            return 'warning';
+        }
+        if ($operation === self::MACHINE_BATCH_BIND && ($payload['mode'] ?? 'replace') === 'replace') {
+            return 'warning';
+        }
+
+        return 'normal';
+    }
+
+    private function machineBatchBind(array $payload): array
+    {
+        return $this->succeeded($this->batchBindingService->bind($payload));
     }
 
     private function normalizeIds(array $values): array

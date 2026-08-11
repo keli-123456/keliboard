@@ -7,6 +7,8 @@ use App\Models\Server;
 use App\Models\ServerMachine;
 use App\Models\ServerMachineLoadHistory;
 use App\Services\NodeRealtime\NodeRealtimePublisher;
+use App\Services\ServerMachine\BatchBindingException;
+use App\Services\ServerMachine\BatchBindingService;
 use App\Services\ServerMachine\MachineReleaseDistributionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -270,142 +272,11 @@ class MachineController extends Controller
             'items.*.node_ids.*' => 'integer',
         ]);
 
-        $mode = ($params['mode'] ?? 'replace') === 'append' ? 'append' : 'replace';
-        $allowTransfer = (bool) ($params['allow_transfer'] ?? false);
-        $items = $this->normalizeBatchBindItems($params['items'] ?? []);
-        if (empty($items)) {
-            return $this->fail([422, '请选择需要关联的机器']);
-        }
-
-        $duplicateNodeId = $this->findBatchBindDuplicateNodeId($items);
-        if ($duplicateNodeId !== null) {
-            return $this->fail([422, '同一个节点不能在一次批量关联中分配给多台机器']);
-        }
-
-        $machineIds = array_column($items, 'machine_id');
-        if (count($machineIds) !== count(array_unique($machineIds))) {
-            return $this->fail([422, '同一台机器不能重复提交']);
-        }
-
-        $existingMachineIds = ServerMachine::query()
-            ->whereIn('id', $machineIds)
-            ->pluck('id')
-            ->map(fn ($id): int => (int) $id)
-            ->all();
-        if (count($existingMachineIds) !== count($machineIds)) {
-            return $this->fail([400202, '机器不存在']);
-        }
-
-        $requestedNodeIds = $this->collectBatchBindNodeIds($items);
-        $nodes = empty($requestedNodeIds)
-            ? collect()
-            : Server::query()
-                ->whereIn('id', $requestedNodeIds)
-                ->get(['id', 'machine_id'])
-                ->keyBy('id');
-        if ($nodes->count() !== count($requestedNodeIds)) {
-            return $this->fail([400202, '节点不存在']);
-        }
-
         try {
-            DB::beginTransaction();
-
-            $summary = [
-                'machines' => count($items),
-                'bound' => 0,
-                'unbound' => 0,
-                'transferred' => 0,
-                'skipped' => 0,
-            ];
-            $results = [];
-            $affectedMachineIds = $machineIds;
-            $affectedServerIds = [];
-            $currentMachineByNode = $nodes
-                ->mapWithKeys(fn ($node, $id): array => [(int) $id => $node->machine_id === null ? null : (int) $node->machine_id])
-                ->all();
-            $oldNodeIdsByMachine = Server::query()
-                ->whereIn('machine_id', $machineIds)
-                ->get(['id', 'machine_id'])
-                ->groupBy(fn ($node): int => (int) $node->machine_id)
-                ->map(fn ($rows): array => $rows->pluck('id')->map(fn ($id): int => (int) $id)->all())
-                ->all();
-
-            foreach ($items as $item) {
-                $machineId = (int) $item['machine_id'];
-                $requestedIds = $item['node_ids'];
-                $bindableIds = [];
-                $skippedIds = [];
-                $transferredIds = [];
-                $newlyBoundIds = [];
-
-                foreach ($requestedIds as $nodeId) {
-                    $currentMachineId = $currentMachineByNode[$nodeId] ?? null;
-                    if ($currentMachineId === null || $currentMachineId === $machineId || $allowTransfer) {
-                        $bindableIds[] = $nodeId;
-                        if ($currentMachineId !== null && $currentMachineId !== $machineId) {
-                            $transferredIds[] = $nodeId;
-                            $affectedMachineIds[] = $currentMachineId;
-                        }
-                        if ($currentMachineId !== $machineId) {
-                            $newlyBoundIds[] = $nodeId;
-                        }
-                        continue;
-                    }
-
-                    $skippedIds[] = $nodeId;
-                }
-
-                $oldNodeIds = $oldNodeIdsByMachine[$machineId] ?? [];
-                $unboundIds = [];
-                if ($mode === 'replace') {
-                    $unboundIds = array_values(array_diff($oldNodeIds, $bindableIds));
-                    if (!empty($unboundIds)) {
-                        Server::query()
-                            ->whereIn('id', $unboundIds)
-                            ->update(['machine_id' => null]);
-                    }
-                }
-
-                if (!empty($bindableIds)) {
-                    Server::query()
-                        ->whereIn('id', $bindableIds)
-                        ->update(['machine_id' => $machineId]);
-                }
-
-                $summary['bound'] += count($newlyBoundIds);
-                $summary['unbound'] += count($unboundIds);
-                $summary['transferred'] += count($transferredIds);
-                $summary['skipped'] += count($skippedIds);
-                $affectedServerIds = array_merge($affectedServerIds, $requestedIds, $unboundIds);
-
-                $results[] = [
-                    'machine_id' => $machineId,
-                    'requested_node_ids' => $requestedIds,
-                    'bound_node_ids' => $bindableIds,
-                    'skipped_node_ids' => $skippedIds,
-                    'unbound_node_ids' => $unboundIds,
-                    'transferred_node_ids' => $transferredIds,
-                ];
-            }
-
-            DB::commit();
-
-            $affectedMachineIds = array_values(array_unique(array_filter(array_map('intval', $affectedMachineIds))));
-            $affectedServerIds = array_values(array_unique(array_filter(array_map('intval', $affectedServerIds))));
-            app(NodeRealtimePublisher::class)->invalidateConfigForMachines($affectedMachineIds, 'admin.server_machine.batch_bound', [
-                'server_ids' => $affectedServerIds,
-                'mode' => $mode,
-                'allow_transfer' => $allowTransfer,
-            ]);
-
-            return $this->success([
-                'mode' => $mode,
-                'allow_transfer' => $allowTransfer,
-                'summary' => $summary,
-                'items' => $results,
-            ]);
+            return $this->success(app(BatchBindingService::class)->bind($params));
+        } catch (BatchBindingException $e) {
+            return $this->fail([(int) $e->getCode(), $e->getMessage()]);
         } catch (\Throwable $e) {
-            DB::rollBack();
             Log::error($e);
             return $this->fail([500, '保存失败']);
         }

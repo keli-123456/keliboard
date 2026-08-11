@@ -10,6 +10,7 @@ use App\Models\User;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
@@ -317,6 +318,103 @@ class AdminOperationTaskService
         return $tasks->count();
     }
 
+    public function healthSummary(): array
+    {
+        if (!Schema::hasTable('v2_admin_operation_task')) {
+            return ['available' => false];
+        }
+
+        try {
+            $now = time();
+            $staleAfter = (int) config('admin_operations.stale_after_seconds', 1800);
+            $activeStatuses = [AdminOperationTask::STATUS_QUEUED, AdminOperationTask::STATUS_RUNNING];
+            $counts = AdminOperationTask::query()
+                ->whereIn('status', $activeStatuses)
+                ->selectRaw('status, COUNT(*) AS aggregate')
+                ->groupBy('status')
+                ->pluck('aggregate', 'status');
+            $stale = AdminOperationTask::query()
+                ->whereIn('status', $activeStatuses)
+                ->where('updated_at', '<=', $now - $staleAfter)
+                ->count();
+            $oldestActiveAt = AdminOperationTask::query()
+                ->whereIn('status', $activeStatuses)
+                ->min('created_at');
+            $recentFailureStatuses = [
+                AdminOperationTask::STATUS_PARTIAL,
+                AdminOperationTask::STATUS_FAILED,
+                AdminOperationTask::STATUS_INTERRUPTED,
+            ];
+            $failedRecent = AdminOperationTask::query()
+                ->whereIn('status', $recentFailureStatuses)
+                ->where('updated_at', '>=', $now - 86400)
+                ->count();
+            $completedRecent = AdminOperationTask::query()
+                ->whereIn('status', AdminOperationTask::TERMINAL_STATUSES)
+                ->where('updated_at', '>=', $now - 86400)
+                ->count();
+
+            return [
+                'available' => true,
+                'status' => $stale > 0 ? 'critical' : ($failedRecent > 0 ? 'warning' : 'healthy'),
+                'queue' => (string) config('admin_operations.queue', 'admin_operations'),
+                'queued' => (int) ($counts[AdminOperationTask::STATUS_QUEUED] ?? 0),
+                'running' => (int) ($counts[AdminOperationTask::STATUS_RUNNING] ?? 0),
+                'stale' => (int) $stale,
+                'failed_recent' => (int) $failedRecent,
+                'completed_recent' => (int) $completedRecent,
+                'oldest_active_seconds' => $oldestActiveAt ? max(0, $now - (int) $oldestActiveAt) : 0,
+                'stale_after_seconds' => $staleAfter,
+                'history_retention_days' => (int) config('admin_operations.history_retention_days', 30),
+                'failure_retention_days' => (int) config('admin_operations.failure_retention_days', 90),
+            ];
+        } catch (Throwable) {
+            return ['available' => false];
+        }
+    }
+
+    public function cleanupExpired(int $limit = 2000): int
+    {
+        if (!Schema::hasTable('v2_admin_operation_task')) {
+            return 0;
+        }
+
+        $now = time();
+        $historyCutoff = $now - ((int) config('admin_operations.history_retention_days', 30) * 86400);
+        $failureCutoff = $now - ((int) config('admin_operations.failure_retention_days', 90) * 86400);
+        $failureStatuses = [
+            AdminOperationTask::STATUS_PARTIAL,
+            AdminOperationTask::STATUS_FAILED,
+            AdminOperationTask::STATUS_INTERRUPTED,
+        ];
+        $normalStatuses = [
+            AdminOperationTask::STATUS_SUCCEEDED,
+            AdminOperationTask::STATUS_CANCELLED,
+        ];
+        $ids = AdminOperationTask::query()
+            ->where(function ($query) use ($failureStatuses, $normalStatuses, $historyCutoff, $failureCutoff): void {
+                $query->where(function ($normal) use ($normalStatuses, $historyCutoff): void {
+                    $normal->whereIn('status', $normalStatuses)->where('updated_at', '<=', $historyCutoff);
+                })->orWhere(function ($failed) use ($failureStatuses, $failureCutoff): void {
+                    $failed->whereIn('status', $failureStatuses)->where('updated_at', '<=', $failureCutoff);
+                });
+            })
+            ->orderBy('updated_at')
+            ->limit(max(1, min($limit, 10000)))
+            ->pluck('id')
+            ->all();
+
+        if ($ids === []) {
+            return 0;
+        }
+
+        DB::transaction(function () use ($ids): void {
+            AdminOperationTaskItem::query()->whereIn('task_id', $ids)->delete();
+            AdminOperationTask::query()->whereIn('id', $ids)->delete();
+        });
+
+        return count($ids);
+    }
     public function serialize(AdminOperationTask $task, int $failureLimit = 50): array
     {
         $failures = $task->items()
@@ -329,6 +427,17 @@ class AdminOperationTaskService
                 'label' => $item->label,
                 'message' => $item->error_message ?: 'Operation failed.',
             ])->values()->all();
+
+        $singleResult = null;
+        if ((int) $task->total === 1) {
+            $singleResult = $task->items()
+                ->whereIn('status', [AdminOperationTaskItem::STATUS_SUCCEEDED, AdminOperationTaskItem::STATUS_SKIPPED])
+                ->first(['result'])?->result;
+        }
+        $taskPayload = is_array($task->payload) ? $task->payload : [];
+        $updatedAt = (int) $task->getRawOriginal('updated_at');
+        $isStale = in_array($task->status, [AdminOperationTask::STATUS_QUEUED, AdminOperationTask::STATUS_RUNNING], true)
+            && $updatedAt <= time() - (int) config('admin_operations.stale_after_seconds', 1800);
 
         return [
             'id' => (string) $task->id,
@@ -347,6 +456,10 @@ class AdminOperationTaskService
             'can_retry' => (int) $task->failed > 0 && $task->status !== AdminOperationTask::STATUS_RUNNING,
             'can_cancel' => in_array($task->status, [AdminOperationTask::STATUS_QUEUED, AdminOperationTask::STATUS_RUNNING], true),
             'last_error' => $task->last_error,
+            'result' => $singleResult,
+            'risk_level' => $this->executor->riskLevel((string) $task->operation, $taskPayload),
+            'is_stale' => $isStale,
+            'retention_until' => $this->retentionUntil($task),
             'created_at' => (int) $task->getRawOriginal('created_at'),
             'updated_at' => (int) $task->getRawOriginal('updated_at'),
             'started_at' => $task->getRawOriginal('started_at') !== null ? (int) $task->getRawOriginal('started_at') : null,
@@ -354,6 +467,24 @@ class AdminOperationTaskService
         ];
     }
 
+    private function retentionUntil(AdminOperationTask $task): ?int
+    {
+        if (!$task->isTerminal()) {
+            return null;
+        }
+
+        $failureStatuses = [
+            AdminOperationTask::STATUS_PARTIAL,
+            AdminOperationTask::STATUS_FAILED,
+            AdminOperationTask::STATUS_INTERRUPTED,
+        ];
+        $days = in_array($task->status, $failureStatuses, true)
+            ? (int) config('admin_operations.failure_retention_days', 90)
+            : (int) config('admin_operations.history_retention_days', 30);
+        $base = $task->getRawOriginal('finished_at') ?? $task->getRawOriginal('updated_at');
+
+        return $base === null ? null : (int) $base + ($days * 86400);
+    }
     private function dispatch(AdminOperationTask $task): void
     {
         ProcessAdminOperationTaskJob::dispatch((string) $task->id)
