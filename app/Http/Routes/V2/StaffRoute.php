@@ -4,6 +4,7 @@ namespace App\Http\Routes\V2;
 use App\Http\Controllers\V2\Staff\SiteController;
 use App\Http\Controllers\V2\Staff\TicketController;
 use App\Http\Controllers\V2\Staff\UserController;
+use App\Http\Controllers\V2\Staff\AiDiagnosticController;
 use Illuminate\Contracts\Routing\Registrar;
 
 class StaffRoute
@@ -33,6 +34,13 @@ class StaffRoute
                 $router->get('/getUserInfoByEmail', [UserController::class, 'getUserInfoByEmail']);
             });
 
+            // Assigned AI diagnostic incidents (read-only evidence + staff disposition)
+            $router->group([
+                'prefix' => 'ai-diagnostics'
+            ], function ($router) {
+                $router->get('/assigned', [AiDiagnosticController::class, 'assigned']);
+                $router->post('/update', [AiDiagnosticController::class, 'update']);
+            });
             // Sites (read-only config for staff desk)
             $router->group([
                 'prefix' => 'site'

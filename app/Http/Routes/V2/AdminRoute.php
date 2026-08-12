@@ -32,6 +32,7 @@ use App\Http\Controllers\V2\Admin\SubscriptionControlController;
 use App\Http\Controllers\V2\Admin\MarketingController;
 use App\Http\Controllers\V2\Admin\SpamRegistrationController;
 use App\Http\Controllers\V2\Admin\DomainHealthController;
+use App\Http\Controllers\V2\Admin\AiDiagnosticController;
 use Illuminate\Contracts\Routing\Registrar;
 
 class AdminRoute
@@ -83,6 +84,19 @@ class AdminRoute
                 $router->post('/commerce/save', [SiteController::class, 'saveCommerce']);
                 $router->get('/navigation/fetch', [SiteNavigationController::class, 'fetch']);
                 $router->post('/navigation/save', [SiteNavigationController::class, 'save']);
+            });
+
+            // Read-only local AI diagnostics
+            $router->group([
+                'prefix' => 'ai-diagnostics'
+            ], function ($router) {
+                $router->get('/overview', [AiDiagnosticController::class, 'overview']);
+                $router->get('/history', [AiDiagnosticController::class, 'history']);
+                $router->get('/detail', [AiDiagnosticController::class, 'detail']);
+                $router->post('/settings', [AiDiagnosticController::class, 'saveSettings']);
+                $router->post('/run', [AiDiagnosticController::class, 'run']);
+                $router->post('/disposition', [AiDiagnosticController::class, 'saveDisposition']);
+                $router->post('/incident', [AiDiagnosticController::class, 'updateIncident']);
             });
 
             // Domain health monitoring

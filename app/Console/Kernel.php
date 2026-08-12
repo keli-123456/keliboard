@@ -53,6 +53,7 @@ class Kernel extends ConsoleKernel
         $schedule->command('spam-registration:scan')->hourly()->onOneServer()->withoutOverlapping(50);
         $schedule->command('subscription-proxy:probe')->everyMinute()->onOneServer()->withoutOverlapping(2);
         $schedule->command('domain-health:scan')->everyFiveMinutes()->onOneServer()->withoutOverlapping(10);
+        $schedule->command('ai-diagnostics:scan')->hourly()->onOneServer()->withoutOverlapping(50);
         // send
         $schedule->command('send:remindMail', ['--force'])->dailyAt('11:30')->onOneServer();
         // horizon metrics
