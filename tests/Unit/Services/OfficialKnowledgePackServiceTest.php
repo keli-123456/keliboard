@@ -50,6 +50,7 @@ final class OfficialKnowledgePackServiceTest extends TestCase
     public function test_sync_installs_the_pack_idempotently(): void
     {
         $first = $this->service->sync();
+        $this->assertSame('官方使用文档', $first['status']['title']);
         $this->assertSame(12, $first['summary']['created']);
         $this->assertSame(0, $first['summary']['updated']);
         $this->assertSame(12, Knowledge::query()->where('source_type', Knowledge::SOURCE_OFFICIAL)->count());
@@ -57,6 +58,10 @@ final class OfficialKnowledgePackServiceTest extends TestCase
         $second = $this->service->sync();
         $this->assertSame(12, $second['summary']['unchanged']);
         $this->assertSame(12, $second['status']['summary']['current']);
+        $this->assertSame(
+            '快速开始',
+            Knowledge::query()->where('source_key', 'client-guides/keliboard-getting-started')->value('title')
+        );
     }
 
     public function test_sync_preserves_locally_modified_official_articles(): void

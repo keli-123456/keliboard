@@ -7,6 +7,7 @@ use App\Http\Resources\KnowledgeResource;
 use App\Models\Knowledge;
 use App\Models\User;
 use App\Services\KnowledgeContextService;
+use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use App\Services\UserService;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
@@ -17,7 +18,8 @@ class KnowledgeController extends Controller
 
     public function __construct(
         UserService $userService,
-        private KnowledgeContextService $knowledgeContextService
+        private KnowledgeContextService $knowledgeContextService,
+        private SubscriptionProxyProbeService $subscriptionProxyProbeService
     ) {
         $this->userService = $userService;
     }
@@ -99,7 +101,8 @@ class KnowledgeController extends Controller
         if (!$this->userService->isAvailable($user)) {
             $this->formatAccessData($knowledge['body']);
         }
-        $subscribeUrl = Helper::getSubscribeUrl($user['token']);
+        $subscriptionProxy = $this->subscriptionProxyProbeService->userPayload((string) $user['token']);
+        $subscribeUrl = (string) ($subscriptionProxy['subscribe_url'] ?: Helper::getSubscribeUrl($user['token']));
         $knowledge['body'] = $this->replacePlaceholders($knowledge['body'], $subscribeUrl, $context);
 
         return $knowledge;

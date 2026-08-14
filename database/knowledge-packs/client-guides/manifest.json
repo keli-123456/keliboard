@@ -1,14 +1,14 @@
 {
   "name": "client-guides",
-  "version": "2026.08.14",
-  "description": "KeliBoard 官方使用文档，包含项目流程、订阅管理与客户端教程。",
+  "version": "2026.08.15",
+  "description": "官方使用文档，包含站点流程、订阅管理与客户端教程。",
   "category": "客户端教程",
   "language": "zh-CN",
   "asset_base_url": "/knowledge-assets/clients",
   "articles": [
     {
       "slug": "keliboard-getting-started",
-      "title": "KeliBoard 快速开始",
+      "title": "快速开始",
       "category": "使用指南",
       "language": "zh-CN",
       "sort": 10,
@@ -133,5 +133,5 @@
       "assets": []
     }
   ],
-  "title": "KeliBoard 官方使用文档"
+  "title": "官方使用文档"
 }

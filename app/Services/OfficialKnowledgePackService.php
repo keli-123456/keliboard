@@ -239,7 +239,7 @@ class OfficialKnowledgePackService
 
         return [
             'name' => $name,
-            'title' => trim((string) ($manifest['title'] ?? 'KeliBoard 官方使用文档')),
+            'title' => trim((string) ($manifest['title'] ?? '官方使用文档')),
             'version' => $version,
             'description' => trim((string) ($manifest['description'] ?? '')),
             'articles' => $resolvedArticles,
