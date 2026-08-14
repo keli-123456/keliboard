@@ -160,7 +160,7 @@ final class TicketAiAssistantV2Test extends TestCase
             'ticket_ai_input_price_per_million' => 10,
             'ticket_ai_output_price_per_million' => 20,
         ]);
-        Http::fake(['*' => Http::response($this->providerResponse('{"draft":"ok"}', 4, 2))]);
+        Http::fake(['*' => Http::response($this->providerResponse('{"ping":"ok"}', 4, 2))]);
 
         $connection = (new TicketAiAssistantService())->testConnection(5);
         $this->assertTrue($connection['ok']);

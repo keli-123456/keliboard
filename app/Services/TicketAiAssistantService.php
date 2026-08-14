@@ -161,7 +161,7 @@ class TicketAiAssistantService
         $startedAt = hrtime(true);
 
         try {
-            $completion = $this->providerClient->complete($providerSettings, $messages);
+            $completion = $this->providerClient->complete($providerSettings, $messages, false);
             $this->circuitBreaker->success($settings['base_url'], $settings['model']);
             $this->recordRequestLog(array_merge(
                 $this->platformScopeFields(),

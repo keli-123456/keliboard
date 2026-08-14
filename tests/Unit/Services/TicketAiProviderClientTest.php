@@ -82,6 +82,21 @@ final class TicketAiProviderClientTest extends TestCase
         $this->assertSame('请让用户重新导入订阅。', $result['content']);
     }
 
+    public function test_connection_probe_accepts_json_without_a_ticket_draft_schema(): void
+    {
+        Http::fake(['*' => Http::response($this->responsePayload('{"ping":"ok"}'))]);
+
+        $result = (new TicketAiProviderClient())->complete(
+            $this->settings(),
+            [['role' => 'user', 'content' => '{"ping":"ok"}']],
+            false
+        );
+
+        $this->assertSame('{"ping":"ok"}', $result['content']);
+        $this->assertFalse($result['structured']);
+        $this->assertNull($result['decoded']);
+    }
+
     public function test_request_clamps_controls_and_enables_optional_json_mode(): void
     {
         Http::fake(['*' => Http::response($this->responsePayload('{"draft":"ok"}'))]);
@@ -99,6 +114,24 @@ final class TicketAiProviderClientTest extends TestCase
                 && $request->hasHeader('Authorization', 'Bearer sk-test')
                 && $payload['max_tokens'] === 4096
                 && $payload['response_format'] === ['type' => 'json_object'];
+        });
+    }
+
+    public function test_reasoning_models_use_modern_chat_completion_parameters(): void
+    {
+        Http::fake(['*' => Http::response($this->responsePayload('{"draft":"ok"}'))]);
+
+        (new TicketAiProviderClient())->complete($this->settings([
+            'model' => 'gpt-5.6-luna',
+            'max_tokens' => 99999,
+        ]), [['role' => 'user', 'content' => 'hello']]);
+
+        Http::assertSent(function ($request): bool {
+            $payload = $request->data();
+
+            return $payload['max_completion_tokens'] === 4096
+                && !array_key_exists('max_tokens', $payload)
+                && !array_key_exists('temperature', $payload);
         });
     }
 

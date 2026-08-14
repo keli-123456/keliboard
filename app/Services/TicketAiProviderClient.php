@@ -13,7 +13,7 @@ class TicketAiProviderClient
      * @param array<int, array{role:string, content:string}> $messages
      * @return array<string, mixed>
      */
-    public function complete(array $settings, array $messages): array
+    public function complete(array $settings, array $messages, bool $validateStructuredContent = true): array
     {
         $baseUrl = rtrim(trim((string) ($settings['base_url'] ?? '')), '/');
         $model = trim((string) ($settings['model'] ?? ''));
@@ -33,10 +33,14 @@ class TicketAiProviderClient
         $maxTokens = max(128, min(4096, (int) ($settings['max_tokens'] ?? 800)));
         $payload = [
             'model' => $model,
-            'temperature' => max(0.0, min(1.0, (float) ($settings['temperature'] ?? 0.2))),
-            'max_tokens' => $maxTokens,
             'messages' => $messages,
         ];
+        if ($this->usesReasoningModelParameters($model)) {
+            $payload['max_completion_tokens'] = $maxTokens;
+        } else {
+            $payload['temperature'] = max(0.0, min(1.0, (float) ($settings['temperature'] ?? 0.2)));
+            $payload['max_tokens'] = $maxTokens;
+        }
         if ((bool) ($settings['json_mode'] ?? false)) {
             $payload['response_format'] = ['type' => 'json_object'];
         }
@@ -69,7 +73,7 @@ class TicketAiProviderClient
             throw new TicketAiProviderException('invalid_response');
         }
         $content = trim($content);
-        $decoded = $this->decodeStructuredContent($content);
+        $decoded = $validateStructuredContent ? $this->decodeStructuredContent($content) : null;
         $inputTokens = max(0, (int) data_get($response->json(), 'usage.prompt_tokens', 0));
         $outputTokens = max(0, (int) data_get($response->json(), 'usage.completion_tokens', 0));
         $reportedTotal = max(0, (int) data_get($response->json(), 'usage.total_tokens', 0));
@@ -144,6 +148,11 @@ class TicketAiProviderClient
         return str_ends_with($baseUrl, '/chat/completions')
             ? $baseUrl
             : $baseUrl . '/chat/completions';
+    }
+
+    private function usesReasoningModelParameters(string $model): bool
+    {
+        return preg_match('/^(?:gpt-5(?:[.-]|$)|o[134](?:[.-]|$))/i', trim($model)) === 1;
     }
 
     private function httpErrorCode(int $status): string
