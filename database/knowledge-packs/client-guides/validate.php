@@ -64,7 +64,8 @@ foreach ($manifest['articles'] as $index => $article) {
         fail("article {$slug} body is empty");
     }
 
-    if (!str_contains($body, '{{subscribeUrl}}')) {
+    $requiresSubscriptionUrl = (bool) ($article['requires_subscription_url'] ?? true);
+    if ($requiresSubscriptionUrl && !str_contains($body, '{{subscribeUrl}}')) {
         fail("article {$slug} must include {{subscribeUrl}}");
     }
 

@@ -2,12 +2,11 @@
 
 namespace App\Http\Controllers\V1\User;
 
-use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\KnowledgeResource;
 use App\Models\Knowledge;
 use App\Models\User;
-use App\Services\Plugin\HookManager;
+use App\Services\KnowledgeContextService;
 use App\Services\UserService;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
@@ -16,8 +15,10 @@ class KnowledgeController extends Controller
 {
     private UserService $userService;
 
-    public function __construct(UserService $userService)
-    {
+    public function __construct(
+        UserService $userService,
+        private KnowledgeContextService $knowledgeContextService
+    ) {
         $this->userService = $userService;
     }
 
@@ -36,7 +37,10 @@ class KnowledgeController extends Controller
 
     private function fetchSingle(Request $request)
     {
-        $knowledge = $this->buildKnowledgeQuery()
+        /** @var User $user */
+        $user = $request->user();
+        $context = $this->knowledgeContextService->resolve($request, $user);
+        $knowledge = $this->buildKnowledgeQuery(['*'], $context)
             ->where('id', $request->input('id'))
             ->first();
 
@@ -44,15 +48,17 @@ class KnowledgeController extends Controller
             return $this->fail([500, __('Article does not exist')]);
         }
 
-        $knowledge = $knowledge->toArray();
-        $knowledge = $this->processKnowledgeContent($knowledge, $request->user());
+        $knowledge = $this->processKnowledgeContent($knowledge->toArray(), $user, $context);
 
         return $this->success(KnowledgeResource::make($knowledge));
     }
 
     private function fetchList(Request $request)
     {
-        $builder = $this->buildKnowledgeQuery(['id', 'category', 'title', 'updated_at', 'body'])
+        /** @var User $user */
+        $user = $request->user();
+        $context = $this->knowledgeContextService->resolve($request, $user);
+        $builder = $this->buildKnowledgeQuery(['id', 'category', 'title', 'updated_at', 'body'], $context)
             ->where('language', $request->input('language'))
             ->orderBy('sort', 'ASC');
 
@@ -65,9 +71,8 @@ class KnowledgeController extends Controller
         }
 
         $knowledges = $builder->get()
-            ->map(function ($knowledge) use ($request) {
-                $knowledge = $knowledge->toArray();
-                $knowledge = $this->processKnowledgeContent($knowledge, $request->user());
+            ->map(function ($knowledge) use ($user, $context) {
+                $knowledge = $this->processKnowledgeContent($knowledge->toArray(), $user, $context);
                 return KnowledgeResource::make($knowledge);
             })
             ->groupBy('category');
@@ -75,12 +80,17 @@ class KnowledgeController extends Controller
         return $this->success($knowledges);
     }
 
-    private function buildKnowledgeQuery(array $select = ['*'])
+    private function buildKnowledgeQuery(array $select = ['*'], array $context = [])
     {
-        return Knowledge::select($select)->where('show', 1);
+        $query = Knowledge::select($select)->where('show', 1);
+        if (!$this->hasScopeColumns()) {
+            return $query;
+        }
+
+        return $this->knowledgeContextService->applyScope($query, $context);
     }
 
-    private function processKnowledgeContent(array $knowledge, User $user): array
+    private function processKnowledgeContent(array $knowledge, User $user, array $context): array
     {
         if (!isset($knowledge['body'])) {
             return $knowledge;
@@ -90,7 +100,7 @@ class KnowledgeController extends Controller
             $this->formatAccessData($knowledge['body']);
         }
         $subscribeUrl = Helper::getSubscribeUrl($user['token']);
-        $knowledge['body'] = $this->replacePlaceholders($knowledge['body'], $subscribeUrl);
+        $knowledge['body'] = $this->replacePlaceholders($knowledge['body'], $subscribeUrl, $context);
 
         return $knowledge;
     }
@@ -108,33 +118,34 @@ class KnowledgeController extends Controller
         $this->applyReplacementRules($body, $rules);
     }
 
-    private function replacePlaceholders(string $body, string $subscribeUrl): string
+    private function replacePlaceholders(string $body, string $subscribeUrl, array $context): string
     {
-        $rules = [
-            [
-                'type' => 'string',
-                'search' => '{{siteName}}',
-                'replacement' => admin_setting('app_name', 'XBoard')
-            ],
-            [
-                'type' => 'string',
-                'search' => '{{subscribeUrl}}',
-                'replacement' => $subscribeUrl
-            ],
-            [
-                'type' => 'string',
-                'search' => '{{urlEncodeSubscribeUrl}}',
-                'replacement' => urlencode($subscribeUrl)
-            ],
-            [
-                'type' => 'string',
-                'search' => '{{safeBase64SubscribeUrl}}',
-                'replacement' => str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($subscribeUrl))
-            ]
+        $replacements = [
+            '{{siteName}}' => e((string) ($context['site_name'] ?? admin_setting('app_name', 'XBoard'))),
+            '{{siteUrl}}' => e((string) ($context['site_url'] ?? '')),
+            '{{supportName}}' => e((string) ($context['support_name'] ?? '')),
+            '{{supportUrl}}' => e((string) ($context['support_url'] ?? '')),
+            '{{telegramUrl}}' => e((string) ($context['telegram_url'] ?? '')),
+            '{{subscribeUrl}}' => $subscribeUrl,
+            '{{urlEncodeSubscribeUrl}}' => urlencode($subscribeUrl),
+            '{{safeBase64SubscribeUrl}}' => str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($subscribeUrl)),
         ];
 
-        $this->applyReplacementRules($body, $rules);
-        return $body;
+        return str_replace(array_keys($replacements), array_values($replacements), $body);
+    }
+
+    private function hasScopeColumns(): bool
+    {
+        try {
+            $schema = app('db')->connection()->getSchemaBuilder();
+
+            return $schema->hasColumn('v2_knowledge', 'scope_type')
+                && $schema->hasColumn('v2_knowledge', 'site_id')
+                && $schema->hasColumn('v2_knowledge', 'agent_user_id')
+                && $schema->hasColumn('v2_knowledge', 'agent_domain_id');
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     private function applyReplacementRules(string &$body, array $rules): void

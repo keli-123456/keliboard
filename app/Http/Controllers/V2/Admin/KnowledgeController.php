@@ -9,8 +9,10 @@ use App\Models\AgentDomain;
 use App\Models\AgentProfile;
 use App\Models\Knowledge;
 use App\Models\Site;
+use App\Services\OfficialKnowledgePackService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Throwable;
 
 class KnowledgeController extends Controller
 {
@@ -26,6 +28,9 @@ class KnowledgeController extends Controller
         $columns = ['title', 'id', 'updated_at', 'category', 'show'];
         if ($this->hasScopeColumns()) {
             array_push($columns, 'scope_type', 'site_id', 'agent_user_id', 'agent_domain_id');
+        }
+        if ($this->hasSourceColumns()) {
+            array_push($columns, 'source_type', 'source_key', 'source_version', 'source_hash', 'source_synced_at');
         }
         $data = Knowledge::select($columns)
             ->orderBy('sort', 'ASC')
@@ -78,6 +83,26 @@ class KnowledgeController extends Controller
             'sites' => $sites,
             'agents' => $agents,
         ]);
+    }
+
+    public function officialStatus(OfficialKnowledgePackService $service)
+    {
+        try {
+            return $this->success($service->status());
+        } catch (Throwable $exception) {
+            \Log::error($exception);
+            return $this->fail([500, $exception->getMessage()]);
+        }
+    }
+
+    public function officialSync(OfficialKnowledgePackService $service)
+    {
+        try {
+            return $this->success($service->sync());
+        } catch (Throwable $exception) {
+            \Log::error($exception);
+            return $this->fail([500, $exception->getMessage()]);
+        }
     }
 
     public function save(KnowledgeSave $request)
@@ -177,6 +202,21 @@ class KnowledgeController extends Controller
                 && $schema->hasColumn('v2_knowledge', 'agent_user_id')
                 && $schema->hasColumn('v2_knowledge', 'agent_domain_id');
         } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    private function hasSourceColumns(): bool
+    {
+        try {
+            $schema = app('db')->connection()->getSchemaBuilder();
+
+            return $schema->hasColumn('v2_knowledge', 'source_type')
+                && $schema->hasColumn('v2_knowledge', 'source_key')
+                && $schema->hasColumn('v2_knowledge', 'source_version')
+                && $schema->hasColumn('v2_knowledge', 'source_hash')
+                && $schema->hasColumn('v2_knowledge', 'source_synced_at');
+        } catch (Throwable) {
             return false;
         }
     }

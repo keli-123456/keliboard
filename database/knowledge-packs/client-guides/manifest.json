@@ -1,17 +1,63 @@
 {
   "name": "client-guides",
-  "version": "2026.06.11",
-  "description": "HTML client setup guides for the Keli user knowledge base.",
+  "version": "2026.08.14",
+  "description": "KeliBoard 官方使用文档，包含项目流程、订阅管理与客户端教程。",
   "category": "客户端教程",
   "language": "zh-CN",
   "asset_base_url": "/knowledge-assets/clients",
   "articles": [
     {
+      "slug": "keliboard-getting-started",
+      "title": "KeliBoard 快速开始",
+      "category": "使用指南",
+      "language": "zh-CN",
+      "sort": 10,
+      "show": true,
+      "scope_type": "global",
+      "body": "articles/keliboard-getting-started.html",
+      "assets": []
+    },
+    {
+      "slug": "subscription-management",
+      "title": "订阅导入、加速与重置",
+      "category": "使用指南",
+      "language": "zh-CN",
+      "sort": 20,
+      "show": true,
+      "scope_type": "global",
+      "body": "articles/subscription-management.html",
+      "assets": []
+    },
+    {
+      "slug": "plans-traffic-renewal",
+      "title": "套餐、流量与续费说明",
+      "category": "使用指南",
+      "language": "zh-CN",
+      "sort": 30,
+      "show": true,
+      "scope_type": "global",
+      "body": "articles/plans-traffic-renewal.html",
+      "assets": [],
+      "requires_subscription_url": false
+    },
+    {
+      "slug": "tickets-account-security",
+      "title": "工单、账号与安全说明",
+      "category": "使用指南",
+      "language": "zh-CN",
+      "sort": 40,
+      "show": true,
+      "scope_type": "global",
+      "body": "articles/tickets-account-security.html",
+      "assets": [],
+      "requires_subscription_url": false
+    },
+    {
       "slug": "karing",
       "title": "Karing 使用教程",
       "category": "客户端教程",
       "language": "zh-CN",
-      "sort": 10,
+      "sort": 110,
       "show": true,
       "body": "articles/karing.html",
       "assets": []
@@ -21,7 +67,7 @@
       "title": "Clash Verge Rev 使用教程",
       "category": "客户端教程",
       "language": "zh-CN",
-      "sort": 20,
+      "sort": 120,
       "show": true,
       "body": "articles/clash-verge-rev.html",
       "assets": []
@@ -31,7 +77,7 @@
       "title": "FlClash 使用教程",
       "category": "客户端教程",
       "language": "zh-CN",
-      "sort": 30,
+      "sort": 130,
       "show": true,
       "body": "articles/flclash.html",
       "assets": []
@@ -41,7 +87,7 @@
       "title": "Hiddify 使用教程",
       "category": "客户端教程",
       "language": "zh-CN",
-      "sort": 40,
+      "sort": 140,
       "show": true,
       "body": "articles/hiddify.html",
       "assets": []
@@ -51,7 +97,7 @@
       "title": "v2rayN 使用教程",
       "category": "客户端教程",
       "language": "zh-CN",
-      "sort": 50,
+      "sort": 150,
       "show": true,
       "body": "articles/v2rayn.html",
       "assets": []
@@ -61,7 +107,7 @@
       "title": "v2rayNG 使用教程",
       "category": "客户端教程",
       "language": "zh-CN",
-      "sort": 60,
+      "sort": 160,
       "show": true,
       "body": "articles/v2rayng.html",
       "assets": []
@@ -71,7 +117,7 @@
       "title": "Shadowrocket 使用教程",
       "category": "客户端教程",
       "language": "zh-CN",
-      "sort": 70,
+      "sort": 170,
       "show": true,
       "body": "articles/shadowrocket.html",
       "assets": []
@@ -81,10 +127,11 @@
       "title": "Stash 使用教程",
       "category": "客户端教程",
       "language": "zh-CN",
-      "sort": 80,
+      "sort": 180,
       "show": true,
       "body": "articles/stash.html",
       "assets": []
     }
-  ]
+  ],
+  "title": "KeliBoard 官方使用文档"
 }

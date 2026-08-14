@@ -10,6 +10,8 @@ class Knowledge extends Model
     public const SCOPE_PLATFORM = 'platform';
     public const SCOPE_SITE = 'site';
     public const SCOPE_AGENT = 'agent';
+    public const SOURCE_CUSTOM = 'custom';
+    public const SOURCE_OFFICIAL = 'official';
     public const SCOPE_TYPES = [
         self::SCOPE_GLOBAL,
         self::SCOPE_PLATFORM,
@@ -26,6 +28,7 @@ class Knowledge extends Model
         'site_id' => 'integer',
         'agent_user_id' => 'integer',
         'agent_domain_id' => 'integer',
+        'source_synced_at' => 'timestamp',
         'created_at' => 'timestamp',
         'updated_at' => 'timestamp',
     ];

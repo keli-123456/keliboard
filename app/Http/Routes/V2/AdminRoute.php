@@ -289,6 +289,8 @@ class AdminRoute
                 $router->get('/fetch', [KnowledgeController::class, 'fetch']);
                 $router->get('/getCategory', [KnowledgeController::class, 'getCategory']);
                 $router->get('/scopeOptions', [KnowledgeController::class, 'scopeOptions']);
+                $router->get('/official/status', [KnowledgeController::class, 'officialStatus']);
+                $router->post('/official/sync', [KnowledgeController::class, 'officialSync']);
                 $router->post('/save', [KnowledgeController::class, 'save']);
                 $router->post('/show', [KnowledgeController::class, 'show']);
                 $router->post('/drop', [KnowledgeController::class, 'drop']);
