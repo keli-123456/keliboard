@@ -63,6 +63,8 @@ class StatController extends Controller
             $request->boolean('refresh')
         );
 
+        $data = $this->withFreshOnlineOverview($data);
+
         return $this->statSuccess($data);
     }
 
@@ -395,6 +397,8 @@ class StatController extends Controller
             fn (): array => $this->buildStatsPayload(),
             $request->boolean('refresh')
         );
+
+        $data = $this->withFreshOnlineOverview($data);
 
         return $this->statSuccess($data);
     }
@@ -974,6 +978,28 @@ class StatController extends Controller
                 ->where('t', '>=', time() - 600)
                 ->count(),
         ];
+    }
+
+    private function withFreshOnlineOverview(array $data, ?array $overview = null): array
+    {
+        $overview ??= $this->getOnlineOverview();
+        $onlineDevices = (int) ($overview['online_devices'] ?? 0);
+        $onlineUsers = (int) ($overview['online_users'] ?? 0);
+
+        if (array_key_exists('onlineDevices', $data)) {
+            $data['onlineDevices'] = $onlineDevices;
+        }
+        if (array_key_exists('onlineUsers', $data)) {
+            $data['onlineUsers'] = $onlineUsers;
+        }
+        if (array_key_exists('online_devices', $data)) {
+            $data['online_devices'] = $onlineDevices;
+        }
+        if (array_key_exists('online_users', $data)) {
+            $data['online_users'] = $onlineUsers;
+        }
+
+        return $data;
     }
 
     private function getOnlineNodeCount(): int
