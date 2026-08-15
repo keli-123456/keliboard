@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Services;
 
+use App\Models\AgentDomain;
+use App\Models\AgentUser;
 use App\Models\Site;
 use App\Models\SiteDomain;
 use App\Models\User;
@@ -40,6 +42,7 @@ final class SiteAuthFlowTest extends TestCase
         ]);
         $this->createUserTable();
         $this->createSiteTenantTables();
+        $this->createAgentCenterTables();
         $this->createAgentCommerceTables();
 
         $this->secondSite = $this->siteWithDomain('second', 'second.example.test', false);
@@ -108,6 +111,60 @@ final class SiteAuthFlowTest extends TestCase
         $this->assertTrue(password_verify('new-secret', $secondUser->fresh()->password));
     }
 
+    public function test_login_on_agent_domain_selects_agent_owned_user_across_site_scope(): void
+    {
+        $this->createUser('shared@example.test', 'platform-secret', null);
+        $expected = $this->createUser('shared@example.test', 'agent-secret', $this->secondSite);
+        $agent = $this->createUser('agent@example.test', 'agent-password', null);
+        $this->assignUserToAgentDomain($agent, $expected, 'agent.example.test');
+        app()->instance('request', $this->authRequest('agent.example.test', 'login'));
+
+        [$success, $result] = app(LoginService::class)->login('shared@example.test', 'agent-secret');
+
+        $this->assertTrue($success);
+        $this->assertSame($expected->id, $result->id);
+        $this->assertSame($this->secondSite->id, $result->site_id);
+    }
+
+    public function test_reset_password_on_agent_domain_updates_only_agent_owned_user(): void
+    {
+        $platformUser = $this->createUser('shared@example.test', 'platform-secret', null);
+        $agentUser = $this->createUser('shared@example.test', 'agent-secret', $this->secondSite);
+        $agent = $this->createUser('agent@example.test', 'agent-password', null);
+        $this->assignUserToAgentDomain($agent, $agentUser, 'agent.example.test');
+        app()->instance('request', $this->authRequest('agent.example.test', 'forget'));
+
+        Cache::put(CacheKey::get('EMAIL_VERIFY_CODE', 'agent:' . $agent->id . ':shared@example.test'), '123456', 300);
+
+        [$success, $result] = app(LoginService::class)->resetPassword(
+            'shared@example.test',
+            '123456',
+            'new-agent-secret'
+        );
+
+        $this->assertTrue($success);
+        $this->assertTrue($result);
+        $this->assertTrue(password_verify('platform-secret', $platformUser->fresh()->password));
+        $this->assertTrue(password_verify('new-agent-secret', $agentUser->fresh()->password));
+    }
+
+    public function test_agent_domain_verification_cache_is_isolated_from_platform(): void
+    {
+        $agent = $this->createUser('agent@example.test', 'agent-password', null);
+        $subordinate = $this->createUser('shared@example.test', 'agent-secret', $this->secondSite);
+        $this->assignUserToAgentDomain($agent, $subordinate, 'agent.example.test');
+        $scope = app(\App\Services\SiteUserScopeService::class);
+
+        $this->assertSame(
+            'agent:' . $agent->id . ':shared@example.test',
+            $scope->cacheIdentity('shared@example.test', $this->authRequest('agent.example.test', 'forget'))
+        );
+        $this->assertSame(
+            'site:platform:shared@example.test',
+            $scope->cacheIdentity('shared@example.test', $this->authRequest('main.example.test', 'forget'))
+        );
+    }
+
     private function siteWithDomain(string $code, string $host, bool $default): Site
     {
         $site = Site::query()->create([
@@ -139,6 +196,25 @@ final class SiteAuthFlowTest extends TestCase
             'site_id' => $site?->id,
             'uuid' => ($site?->code ?: 'platform') . '-uuid-' . str_replace('@', '-', $email),
             'token' => ($site?->code ?: 'platform') . '-token-' . str_replace('@', '-', $email),
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+    }
+
+    private function assignUserToAgentDomain(User $agent, User $subordinate, string $domain): void
+    {
+        AgentUser::query()->create([
+            'agent_user_id' => $agent->id,
+            'sub_user_id' => $subordinate->id,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => $domain,
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'is_primary' => true,
             'created_at' => time(),
             'updated_at' => time(),
         ]);

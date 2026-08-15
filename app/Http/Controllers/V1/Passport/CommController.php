@@ -6,7 +6,6 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Passport\CommSendEmailVerify;
 use App\Jobs\SendEmailJob;
 use App\Models\InviteCode;
-use App\Models\User;
 use App\Services\CaptchaService;
 use App\Services\NotificationSiteContextService;
 use App\Services\SiteUserScopeService;
@@ -31,9 +30,7 @@ class CommController extends Controller
         // 检查白名单后缀限制
         if ((int) admin_setting('email_whitelist_enable', 0)) {
             $isRegisteredEmail = app(SiteUserScopeService::class)
-                ->scopeUserQuery(User::query(), $request)
-                ->where('email', $email)
-                ->exists();
+                ->findAuthenticatableUserByEmail($email, $request) !== null;
             if (!$isRegisteredEmail) {
                 $allowedSuffixes = Helper::getEmailSuffix();
                 $emailSuffix = substr(strrchr($email, '@'), 1);

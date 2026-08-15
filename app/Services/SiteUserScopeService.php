@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\AgentUser;
 use App\Models\User;
 use App\Utils\CacheKey;
 use Illuminate\Database\Eloquent\Builder;
@@ -80,6 +81,27 @@ class SiteUserScopeService
             ->first();
     }
 
+    public function findAuthenticatableUserByEmail(string $email, ?Request $request = null): ?User
+    {
+        $request = $request ?: $this->currentRequest();
+        $agentContext = $request ? app(AgentDomainResolver::class)->resolveRequest($request) : null;
+
+        if (!empty($agentContext['agent_user_id'])) {
+            if (!$this->hasTable('v2_agent_user')) {
+                return null;
+            }
+
+            return User::query()
+                ->where('email', $email)
+                ->whereIn('id', AgentUser::query()
+                    ->select('sub_user_id')
+                    ->where('agent_user_id', (int) $agentContext['agent_user_id']))
+                ->first();
+        }
+
+        return $this->findUserByEmail($email, $request);
+    }
+
     public function userAttributes(?Request $request = null): array
     {
         $context = $this->context($request);
@@ -97,9 +119,15 @@ class SiteUserScopeService
 
     public function cacheIdentity(string $email, ?Request $request = null): string
     {
+        $request = $request ?: $this->currentRequest();
         $context = $this->context($request);
         if (empty($context['enabled'])) {
             return $email;
+        }
+
+        $agentContext = $request ? app(AgentDomainResolver::class)->resolveRequest($request) : null;
+        if (!empty($agentContext['agent_user_id'])) {
+            return 'agent:' . (int) $agentContext['agent_user_id'] . ':' . $email;
         }
 
         if (empty($context['site_id'])) {

@@ -32,7 +32,7 @@ class MailLinkService
             return [false, [429, __('Sending frequently, please try again later')]];
         }
 
-        $user = $siteScope->findUserByEmail($email, $request);
+        $user = $siteScope->findAuthenticatableUserByEmail($email, $request);
         if (!$user) {
             return [true, true]; // 成功但用户不存在，保护用户隐私
         }

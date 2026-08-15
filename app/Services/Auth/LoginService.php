@@ -83,7 +83,7 @@ class LoginService
         }
 
         // 查找用户
-        $user = $siteScope->findUserByEmail($email, $req);
+        $user = $siteScope->findAuthenticatableUserByEmail($email, $req);
         if (!$user) {
             RiskEventService::record('login_failed', [
                 'ip' => $requestIp,
@@ -194,7 +194,7 @@ class LoginService
         }
 
         // 查找用户
-        $user = $siteScope->findUserByEmail($email, $req);
+        $user = $siteScope->findAuthenticatableUserByEmail($email, $req);
         if (!$user) {
             return [false, [400, __('This email is not registered in the system')]];
         }
