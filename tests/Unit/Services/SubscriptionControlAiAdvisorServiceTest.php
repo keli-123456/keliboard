@@ -77,6 +77,19 @@ final class SubscriptionControlAiAdvisorServiceTest extends TestCase
                 'repeat_affected_users' => 8,
                 'code_counts' => ['subscription_leak_guard' => 12000],
                 'action_counts' => ['reset_token_uuid' => 300],
+                'code_breakdown' => [
+                    'subscription_leak_guard' => [
+                        'event_count' => 12000,
+                        'affected_users' => 20,
+                        'repeat_affected_users' => 8,
+                        'field_event_counts' => [
+                            'risk_score' => 12000,
+                            'ip_count' => 11800,
+                            'ua_categories' => 11500,
+                            'regions' => 11000,
+                        ],
+                    ],
+                ],
                 'average_risk_score' => 72.5,
                 'maximum_risk_score' => 96,
                 'hosting_source_count' => 900,
@@ -95,10 +108,57 @@ final class SubscriptionControlAiAdvisorServiceTest extends TestCase
         $this->assertFalse($metrics['operational_telemetry']['comparable_to_event_evidence']);
         $this->assertTrue($metrics['data_limits']['all_consumer_users_aggregated']);
         $this->assertTrue($metrics['data_limits']['event_totals_cover_full_window']);
+        $this->assertSame('triggered_evidence_available', $metrics['rule_evidence']['leak_guard_score_threshold']['status']);
+        $this->assertSame(12000, $metrics['rule_evidence']['leak_guard_score_threshold']['field_evidence_count']);
+        $this->assertSame('not_triggered_in_window', $metrics['rule_evidence']['online_ip_threshold']['status']);
 
         $encoded = json_encode($metrics, JSON_THROW_ON_ERROR);
         $this->assertStringNotContainsString('sample@example.test', $encoded);
         $this->assertStringNotContainsString('198.51.100.20', $encoded);
+    }
+
+
+    public function test_expected_analysis_boundaries_are_not_exposed_as_rule_problems(): void
+    {
+        $findings = $this->invoke('findings', [
+            [
+                'severity' => 'high',
+                'title' => '无法评估泄露保护分数阈值',
+                'evidence' => 'scored_event_count 为空，average_risk_score 无法计算。',
+                'recommendation' => '补充风险分数据。',
+            ],
+            [
+                'severity' => 'medium',
+                'title' => '重复触发用户占比较高',
+                'evidence' => '受影响用户中有一半重复触发。',
+                'recommendation' => '复核重复触发最多的规则。',
+            ],
+            [
+                'severity' => 'low',
+                'title' => '全量用户基线可用',
+                'evidence' => '全量用户基线已经加载。',
+                'recommendation' => '继续观察。',
+            ],
+            [
+                'severity' => 'medium',
+                'title' => '回放样本达到上限',
+                'evidence' => 'replay_sample_count 为 5000，样本受限。',
+                'recommendation' => '扩大样本。',
+            ],
+            [
+                'severity' => 'medium',
+                'title' => '缺少处置效果对照',
+                'evidence' => '无法判断处置效果。',
+                'recommendation' => '增加对照组。',
+            ],
+        ], [
+            'population' => ['available' => true],
+            'event_evidence' => ['full_window_aggregated' => true],
+            'code_breakdown' => [],
+        ]);
+
+        $this->assertCount(1, $findings);
+        $this->assertSame('重复触发用户占比较高', $findings[0]['title']);
     }
 
     public function test_suggestions_only_accept_allowlisted_in_range_changed_thresholds(): void

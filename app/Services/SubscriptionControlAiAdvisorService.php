@@ -117,7 +117,7 @@ class SubscriptionControlAiAdvisorService
                 'summary' => mb_substr(trim((string) ($decoded['summary'] ?? '')), 0, 2000),
                 'current_config' => $config,
                 'metrics' => $metrics,
-                'findings' => $this->findings((array) ($decoded['findings'] ?? [])),
+                'findings' => $this->findings((array) ($decoded['findings'] ?? []), $metrics),
                 'suggestions' => $suggestions,
                 'replay' => $this->replay($suggestions, $events, $config),
                 'error_code' => null,
@@ -412,6 +412,10 @@ class SubscriptionControlAiAdvisorService
         $fullActionCounts = is_array($evidence['action_counts'] ?? null)
             ? $evidence['action_counts']
             : $actions;
+        $codeBreakdown = is_array($evidence['code_breakdown'] ?? null)
+            ? $evidence['code_breakdown']
+            : [];
+        $ruleEvidence = $this->ruleEvidence($codeBreakdown);
 
         return [
             'window_days' => $days,
@@ -421,6 +425,8 @@ class SubscriptionControlAiAdvisorService
             'repeat_user_count' => $repeatUsers,
             'code_counts' => $fullCodeCounts,
             'action_counts' => $fullActionCounts,
+            'code_breakdown' => $codeBreakdown,
+            'rule_evidence' => $ruleEvidence,
             'top_signals' => $sampleSignals,
             'average_risk_score' => $evidence['average_risk_score']
                 ?? ($riskScores === [] ? null : round(array_sum($riskScores) / count($riskScores), 2)),
@@ -454,11 +460,47 @@ class SubscriptionControlAiAdvisorService
                 'replay_sample_limit' => 5000,
                 'replay_sample_count' => count($events),
                 'top_signals_are_sampled' => true,
+                'missing_rule_fields_are_scoped_per_rule' => true,
+                'risk_scores_only_apply_to_scored_rules' => true,
                 'operational_telemetry_is_non_comparable' => true,
                 'personal_data_sent' => false,
                 'excluded_accounts' => 'administrators_and_staff',
             ],
         ];
+    }
+
+    /** @param array<string, array<string, mixed>> $codeBreakdown */
+    private function ruleEvidence(array $codeBreakdown): array
+    {
+        $result = [];
+        foreach (self::RULES as $key => $rule) {
+            $stats = is_array($codeBreakdown[$rule['code']] ?? null)
+                ? $codeBreakdown[$rule['code']]
+                : [];
+            $eventCount = (int) ($stats['event_count'] ?? 0);
+            $fieldCounts = is_array($stats['field_event_counts'] ?? null)
+                ? $stats['field_event_counts']
+                : [];
+            $fieldEventCount = (int) ($fieldCounts[$rule['field']] ?? 0);
+            $status = $eventCount === 0
+                ? 'not_triggered_in_window'
+                : ($fieldEventCount === 0 ? 'triggered_without_rule_field' : 'triggered_evidence_available');
+
+            $result[$key] = [
+                'label' => $rule['label'],
+                'code' => $rule['code'],
+                'field' => $rule['field'],
+                'status' => $status,
+                'triggered_event_count' => $eventCount,
+                'affected_users' => (int) ($stats['affected_users'] ?? 0),
+                'repeat_affected_users' => (int) ($stats['repeat_affected_users'] ?? 0),
+                'field_evidence_count' => $fieldEventCount,
+                'field_coverage_rate' => $eventCount > 0 ? round($fieldEventCount / $eventCount, 6) : 0.0,
+                'evidence_scope' => 'triggered_events_only',
+            ];
+        }
+
+        return $result;
     }
 
     /** @return array<int, array{role:string,content:string}> */
@@ -486,13 +528,16 @@ class SubscriptionControlAiAdvisorService
                 'replay_sample_does_not_limit_population_or_event_totals' => true,
                 'operational_telemetry_must_not_be_compared_with_event_evidence' => true,
                 'prefer_no_change_when_evidence_is_weak' => true,
+                'not_triggered_rule_is_neutral' => true,
+                'optional_field_gaps_are_not_findings' => true,
+                'user_facing_chinese_only' => true,
             ],
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
 
         return [
             [
                 'role' => 'system',
-                'content' => '你是订阅风控规则顾问。只分析匿名聚合统计，不直接执行封禁。population 是所有普通用户的全量基线，event_evidence 是时间窗口内全部已触发事件的聚合证据；replay_sample_count 只限制事件回放和 top_signals_sample，不限制用户总体或事件总数。operational_telemetry 仅供运行参考，不得与 event_evidence 直接对比。当 population.available=true 时，不得声称缺少全量用户基线。只能从 rule_catalog 建议整数阈值，不得建议关闭规则、修改动作、名单、代码或访问外部地址。证据不足时不要调参。只输出 JSON：summary, health_score, findings[{severity,title,evidence,recommendation}], suggestions[{key,suggested_value,reason,confidence,risk,expected_impact}]。severity/risk 只能是 low/medium/high，confidence 为 0-1，最多 6 条建议。',
+                'content' => '你是订阅风控规则顾问。只分析匿名聚合统计，不直接执行封禁。population 是所有普通用户的全量基线，event_evidence 是时间窗口内全部已触发事件的聚合证据，code_breakdown 是按触发类型拆分的完整统计，rule_evidence 明确每个可调阈值是否有对应字段证据。rule_evidence.status=not_triggered_in_window 表示该规则本周期没有触发，是中性状态，不是数据故障，不得因此降低健康分或生成问题；风险分只属于需要评分的规则，其他固定拦截事件没有风险分属于正常现象。replay_sample_count 只限制事件回放和抽样信号，不限制用户总体、事件总数或按类型统计。operational_telemetry 仅供运行参考，不得与 event_evidence 直接对比。当 population.available=true 时不得声称缺少全量用户基线。findings 只写有完整聚合证据支持、管理员能够处理的异常，不要把回放上限、没有对照组、可选字段为空、某规则未触发、全量基线可用等分析边界列为问题。summary、findings、suggestions 必须使用面向管理员的自然中文，不得暴露 JSON 键名、英文字段名或内部状态码。只能从 rule_catalog 建议整数阈值，不得建议关闭规则、修改动作、名单、代码或访问外部地址；证据不足时保持当前阈值。只输出 JSON：summary, health_score, findings[{severity,title,evidence,recommendation}], suggestions[{key,suggested_value,reason,confidence,risk,expected_impact}]。severity/risk 只能是 low/medium/high，confidence 为 0-1，最多 6 条建议。',
             ],
             ['role' => 'user', 'content' => $payload],
         ];
@@ -510,8 +555,8 @@ class SubscriptionControlAiAdvisorService
         return is_array($decoded) && !array_is_list($decoded) ? $decoded : null;
     }
 
-    /** @param array<int, mixed> $items */
-    private function findings(array $items): array
+    /** @param array<int, mixed> $items @param array<string, mixed> $metrics */
+    private function findings(array $items, array $metrics = []): array
     {
         $result = [];
         foreach (array_slice($items, 0, 8) as $item) {
@@ -526,12 +571,69 @@ class SubscriptionControlAiAdvisorService
                 'evidence' => mb_substr(trim((string) ($item['evidence'] ?? '')), 0, 800),
                 'recommendation' => mb_substr(trim((string) ($item['recommendation'] ?? '')), 0, 800),
             ];
-            if ($finding['title'] !== '') {
+            if ($finding['title'] !== '' && !$this->isExpectedEvidenceLimitation($finding, $metrics)) {
                 $result[] = $finding;
             }
         }
 
         return $result;
+    }
+
+    /** @param array<string, string> $finding @param array<string, mixed> $metrics */
+    private function isExpectedEvidenceLimitation(array $finding, array $metrics): bool
+    {
+        $title = mb_strtolower((string) ($finding['title'] ?? ''));
+        $text = mb_strtolower(implode(' ', [
+            $title,
+            (string) ($finding['evidence'] ?? ''),
+            (string) ($finding['recommendation'] ?? ''),
+        ]));
+        $population = is_array($metrics['population'] ?? null) ? $metrics['population'] : [];
+        $evidence = is_array($metrics['event_evidence'] ?? null) ? $metrics['event_evidence'] : [];
+        $codeBreakdown = is_array($metrics['code_breakdown'] ?? null) ? $metrics['code_breakdown'] : [];
+        $leakGuard = is_array($codeBreakdown['subscription_leak_guard'] ?? null)
+            ? $codeBreakdown['subscription_leak_guard']
+            : [];
+        $limitationWords = ['缺少', '不足', '无法', '为空', '上限', '限制', '不完整', '未提供'];
+        $mentionsLimitation = false;
+        foreach ($limitationWords as $word) {
+            if (str_contains($text, $word)) {
+                $mentionsLimitation = true;
+                break;
+            }
+        }
+
+        if (($population['available'] ?? false) === true
+            && str_contains($text, '全量用户基线')
+            && ($mentionsLimitation || str_contains($title, '可用'))) {
+            return true;
+        }
+
+        if (($evidence['full_window_aggregated'] ?? false) === true
+            && $mentionsLimitation
+            && (str_contains($text, '回放样本') || str_contains($text, 'replay_sample'))) {
+            return true;
+        }
+
+        if ((int) ($leakGuard['event_count'] ?? 0) === 0
+            && $mentionsLimitation
+            && (str_contains($text, '泄露保护')
+                || str_contains($text, 'risk_score')
+                || str_contains($text, 'scored_event_count')
+                || str_contains($text, 'average_risk_score')
+                || str_contains($text, 'maximum_risk_score'))) {
+            return true;
+        }
+
+        if ($mentionsLimitation
+            && (str_contains($text, 'top_signals')
+                || str_contains($text, '处置效果')
+                || str_contains($text, '对照组')
+                || str_contains($text, '未触发事件'))) {
+            return true;
+        }
+
+        return false;
     }
 
     /** @param array<int, mixed> $items @param array<string, int> $config */

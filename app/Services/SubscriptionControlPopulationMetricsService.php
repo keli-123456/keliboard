@@ -141,6 +141,7 @@ final class SubscriptionControlPopulationMetricsService
             'agent_affected_users' => $this->agentAffectedUsers($cutoff),
             'code_counts' => $this->groupedCounts($events, 'code', 16),
             'action_counts' => $this->groupedCounts($events, 'action', 12),
+            'code_breakdown' => $this->codeBreakdown($events),
             'full_window_aggregated' => true,
         ];
     }
@@ -284,6 +285,74 @@ final class SubscriptionControlPopulationMetricsService
             ->where('events.created_at', '>=', $cutoff)
             ->distinct()
             ->count('events.user_id');
+    }
+
+    /** @return array<string, array<string, mixed>> */
+    private function codeBreakdown(Builder $events): array
+    {
+        $rows = (clone $events)
+            ->whereNotNull('code')
+            ->selectRaw(
+                "code, COUNT(*) AS event_count, "
+                . "COUNT(DISTINCT user_id) AS affected_users, "
+                . "SUM(CASE WHEN action IN ('reset_token', 'reset_token_uuid', 'block', 'empty', 'throttle') THEN 1 ELSE 0 END) AS enforcement_event_count, "
+                . "SUM(CASE WHEN action IN ('reset_token', 'reset_token_uuid') THEN 1 ELSE 0 END) AS credential_reset_event_count, "
+                . "SUM(CASE WHEN risk_score IS NOT NULL THEN 1 ELSE 0 END) AS risk_score_event_count, "
+                . "AVG(risk_score) AS average_risk_score, "
+                . "MAX(risk_score) AS maximum_risk_score, "
+                . "SUM(CASE WHEN source_user_count IS NOT NULL THEN 1 ELSE 0 END) AS source_user_count_event_count, "
+                . "SUM(CASE WHEN online_ip_count IS NOT NULL THEN 1 ELSE 0 END) AS online_ip_count_event_count, "
+                . "SUM(CASE WHEN ip_count IS NOT NULL THEN 1 ELSE 0 END) AS ip_count_event_count, "
+                . "SUM(CASE WHEN ua_categories IS NOT NULL THEN 1 ELSE 0 END) AS ua_categories_event_count, "
+                . "SUM(CASE WHEN regions IS NOT NULL THEN 1 ELSE 0 END) AS regions_event_count, "
+                . "SUM(CASE WHEN online_regions IS NOT NULL THEN 1 ELSE 0 END) AS online_regions_event_count, "
+                . "SUM(CASE WHEN signals IS NOT NULL THEN 1 ELSE 0 END) AS signals_event_count"
+            )
+            ->groupBy('code')
+            ->orderByDesc('event_count')
+            ->limit(20)
+            ->get();
+
+        $repeatUsers = DB::query()->fromSub(
+            (clone $events)
+                ->whereNotNull('code')
+                ->whereNotNull('user_id')
+                ->where('user_id', '>', 0)
+                ->selectRaw('code, user_id, COUNT(*) AS hit_count')
+                ->groupBy('code', 'user_id')
+                ->havingRaw('COUNT(*) > 1'),
+            'repeat_code_users'
+        )
+            ->selectRaw('code, COUNT(*) AS repeat_affected_users')
+            ->groupBy('code')
+            ->pluck('repeat_affected_users', 'code')
+            ->all();
+
+        return $rows->mapWithKeys(static function ($row) use ($repeatUsers): array {
+            $code = (string) $row->code;
+            $eventCount = (int) ($row->event_count ?? 0);
+            $scoredCount = (int) ($row->risk_score_event_count ?? 0);
+
+            return [$code => [
+                'event_count' => $eventCount,
+                'affected_users' => (int) ($row->affected_users ?? 0),
+                'repeat_affected_users' => (int) ($repeatUsers[$code] ?? 0),
+                'enforcement_event_count' => (int) ($row->enforcement_event_count ?? 0),
+                'credential_reset_event_count' => (int) ($row->credential_reset_event_count ?? 0),
+                'average_risk_score' => $scoredCount > 0 ? round((float) ($row->average_risk_score ?? 0), 2) : null,
+                'maximum_risk_score' => $scoredCount > 0 ? (int) ($row->maximum_risk_score ?? 0) : null,
+                'field_event_counts' => [
+                    'risk_score' => $scoredCount,
+                    'source_user_count' => (int) ($row->source_user_count_event_count ?? 0),
+                    'online_ip_count' => (int) ($row->online_ip_count_event_count ?? 0),
+                    'ip_count' => (int) ($row->ip_count_event_count ?? 0),
+                    'ua_categories' => (int) ($row->ua_categories_event_count ?? 0),
+                    'regions' => (int) ($row->regions_event_count ?? 0),
+                    'online_regions' => (int) ($row->online_regions_event_count ?? 0),
+                    'signals' => (int) ($row->signals_event_count ?? 0),
+                ],
+            ]];
+        })->all();
     }
 
     /** @return array<string, int> */

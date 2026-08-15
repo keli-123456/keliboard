@@ -27,6 +27,13 @@ final class SubscriptionControlPopulationMetricsServiceTest extends TestCase
             $table->string('code', 64);
             $table->string('action', 32);
             $table->integer('risk_score')->nullable();
+            $table->integer('source_user_count')->nullable();
+            $table->integer('online_ip_count')->nullable();
+            $table->integer('ip_count')->nullable();
+            $table->json('ua_categories')->nullable();
+            $table->json('regions')->nullable();
+            $table->json('online_regions')->nullable();
+            $table->json('signals')->nullable();
             $table->string('ip_type', 32)->nullable();
             $table->integer('created_at');
         });
@@ -149,6 +156,11 @@ final class SubscriptionControlPopulationMetricsServiceTest extends TestCase
         $this->assertSame(2, $metrics['event_evidence']['code_counts']['subscription_leak_guard']);
         $this->assertSame(2, $metrics['event_evidence']['hosting_source_count']);
         $this->assertSame(1, $metrics['event_evidence']['proxy_source_count']);
+        $this->assertSame(2, $metrics['event_evidence']['code_breakdown']['subscription_leak_guard']['event_count']);
+        $this->assertSame(1, $metrics['event_evidence']['code_breakdown']['subscription_leak_guard']['affected_users']);
+        $this->assertSame(1, $metrics['event_evidence']['code_breakdown']['subscription_leak_guard']['repeat_affected_users']);
+        $this->assertSame(2, $metrics['event_evidence']['code_breakdown']['subscription_leak_guard']['field_event_counts']['risk_score']);
+        $this->assertSame(0, $metrics['event_evidence']['code_breakdown']['multi_region_pull']['field_event_counts']['regions']);
 
         $encoded = json_encode($metrics, JSON_THROW_ON_ERROR);
         $this->assertStringNotContainsString('last_login_ip', $encoded);
