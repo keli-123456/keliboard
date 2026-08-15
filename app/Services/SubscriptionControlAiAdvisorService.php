@@ -251,8 +251,25 @@ class SubscriptionControlAiAdvisorService
             'generated_at' => $review->generated_at,
             'applied_at' => $review->applied_at,
             'rolled_back_at' => $review->rolled_back_at,
-            'created_at' => $review->created_at?->timestamp,
+            'created_at' => $this->timestamp($review->created_at),
         ];
+    }
+
+    private function timestamp(mixed $value): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if (is_numeric($value)) {
+            return (int) $value;
+        }
+
+        if ($value instanceof \DateTimeInterface) {
+            return $value->getTimestamp();
+        }
+
+        return null;
     }
 
     /** @return array<string, array<string, mixed>> */

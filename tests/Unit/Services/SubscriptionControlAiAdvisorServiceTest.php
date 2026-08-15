@@ -4,12 +4,29 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Services;
 
+use App\Models\SubscriptionControlAiReview;
 use App\Services\SubscriptionControlAiAdvisorService;
 use ReflectionMethod;
 use Tests\TestCase;
 
 final class SubscriptionControlAiAdvisorServiceTest extends TestCase
 {
+    public function test_review_serialization_accepts_integer_timestamp_casts(): void
+    {
+        $review = new SubscriptionControlAiReview();
+        $review->forceFill([
+            'id' => 8,
+            'status' => 'pending',
+            'window_days' => 7,
+            'event_count' => 0,
+            'created_at' => 1786765527,
+        ]);
+
+        $serialized = (new SubscriptionControlAiAdvisorService())->serialize($review);
+
+        $this->assertSame(1786765527, $serialized['created_at']);
+    }
+
     public function test_anonymous_metrics_do_not_expose_personal_fields(): void
     {
         $metrics = $this->invoke('metrics', [[
