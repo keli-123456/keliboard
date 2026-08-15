@@ -83,7 +83,8 @@ class SubscriptionControlAiAdvisorService
         try {
             $config = $this->currentConfig();
             $events = $this->events((int) $review->window_days);
-            $metrics = $this->metrics($events, (int) $review->window_days);
+            $populationMetrics = (new SubscriptionControlPopulationMetricsService())->collect((int) $review->window_days);
+            $metrics = $this->metrics($events, (int) $review->window_days, $populationMetrics);
             $providerSettings = $this->ai()->providerSettingsForInternalUse();
             if (
                 !(bool) ($providerSettings['enabled'] ?? false)
@@ -329,7 +330,7 @@ class SubscriptionControlAiAdvisorService
     }
 
     /** @param array<int, array<string, mixed>> $events */
-    private function metrics(array $events, int $days): array
+    private function metrics(array $events, int $days, array $aggregate = []): array
     {
         $codes = [];
         $actions = [];
@@ -387,27 +388,75 @@ class SubscriptionControlAiAdvisorService
             ];
         }
 
+        $population = is_array($aggregate['population'] ?? null) ? $aggregate['population'] : [];
+        $evidence = is_array($aggregate['event_evidence'] ?? null) ? $aggregate['event_evidence'] : [];
+        $eventCount = (int) ($evidence['total_event_count'] ?? count($events));
+        $affectedUsers = (int) ($evidence['unique_affected_users'] ?? count($users));
+        $repeatUsers = (int) ($evidence['repeat_affected_users']
+            ?? count(array_filter($userHits, static fn (int $count): bool => $count > 1)));
+        $totalUsers = (int) ($population['total_users'] ?? 0);
+        $activeUsers = (int) ($population['active_users'] ?? 0);
+        if ($population !== []) {
+            $population['affected_user_rate'] = $totalUsers > 0
+                ? round($affectedUsers / $totalUsers, 6)
+                : 0.0;
+            $population['active_affected_upper_bound_rate'] = $activeUsers > 0
+                ? round(min($affectedUsers, $activeUsers) / $activeUsers, 6)
+                : 0.0;
+        }
+
+        $sampleSignals = array_slice($signals, 0, 12, true);
+        $fullCodeCounts = is_array($evidence['code_counts'] ?? null)
+            ? $evidence['code_counts']
+            : array_slice($codes, 0, 12, true);
+        $fullActionCounts = is_array($evidence['action_counts'] ?? null)
+            ? $evidence['action_counts']
+            : $actions;
+
         return [
             'window_days' => $days,
-            'event_count' => count($events),
-            'unique_affected_users' => count($users),
-            'repeat_user_count' => count(array_filter($userHits, static fn (int $count): bool => $count > 1)),
-            'pull_count' => $pulls,
-            'allowed_count' => $allowed,
-            'blocked_count' => $blocked,
-            'block_rate' => $pulls > 0 ? round($blocked / $pulls, 4) : null,
-            'code_counts' => array_slice($codes, 0, 12, true),
-            'action_counts' => $actions,
-            'top_signals' => array_slice($signals, 0, 12, true),
-            'average_risk_score' => $riskScores === [] ? null : round(array_sum($riskScores) / count($riskScores), 2),
-            'maximum_risk_score' => $riskScores === [] ? null : max($riskScores),
-            'hosting_source_count' => $hosting,
-            'proxy_source_count' => $proxy,
-            'daily' => $daily,
+            'event_count' => $eventCount,
+            'sample_event_count' => count($events),
+            'unique_affected_users' => $affectedUsers,
+            'repeat_user_count' => $repeatUsers,
+            'code_counts' => $fullCodeCounts,
+            'action_counts' => $fullActionCounts,
+            'top_signals' => $sampleSignals,
+            'average_risk_score' => $evidence['average_risk_score']
+                ?? ($riskScores === [] ? null : round(array_sum($riskScores) / count($riskScores), 2)),
+            'maximum_risk_score' => $evidence['maximum_risk_score']
+                ?? ($riskScores === [] ? null : max($riskScores)),
+            'hosting_source_count' => (int) ($evidence['hosting_source_count'] ?? $hosting),
+            'proxy_source_count' => (int) ($evidence['proxy_source_count'] ?? $proxy),
+            'population' => $population,
+            'event_evidence' => array_merge($evidence, [
+                'total_event_count' => $eventCount,
+                'unique_affected_users' => $affectedUsers,
+                'repeat_affected_users' => $repeatUsers,
+                'code_counts' => $fullCodeCounts,
+                'action_counts' => $fullActionCounts,
+                'replay_sample_count' => count($events),
+                'top_signals_sample' => $sampleSignals,
+            ]),
+            'operational_telemetry' => [
+                'pulls' => $pulls,
+                'allowed' => $allowed,
+                'blocked' => $blocked,
+                'block_rate' => $pulls > 0 ? round($blocked / $pulls, 4) : null,
+                'daily' => $daily,
+                'quality' => 'informational_only',
+                'comparable_to_event_evidence' => false,
+            ],
             'data_limits' => [
+                'all_consumer_users_aggregated' => ($population['available'] ?? false) === true,
+                'event_totals_cover_full_window' => ($evidence['full_window_aggregated'] ?? false) === true,
                 'events_are_triggered_only' => true,
-                'maximum_events' => 5000,
+                'replay_sample_limit' => 5000,
+                'replay_sample_count' => count($events),
+                'top_signals_are_sampled' => true,
+                'operational_telemetry_is_non_comparable' => true,
                 'personal_data_sent' => false,
+                'excluded_accounts' => 'administrators_and_staff',
             ],
         ];
     }
@@ -431,7 +480,11 @@ class SubscriptionControlAiAdvisorService
             'aggregated_metrics' => $metrics,
             'constraints' => [
                 'manual_approval_required' => true,
+                'population_is_full_consumer_baseline' => true,
+                'event_evidence_is_full_window_aggregate' => true,
                 'historical_events_are_triggered_only' => true,
+                'replay_sample_does_not_limit_population_or_event_totals' => true,
+                'operational_telemetry_must_not_be_compared_with_event_evidence' => true,
                 'prefer_no_change_when_evidence_is_weak' => true,
             ],
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
@@ -439,7 +492,7 @@ class SubscriptionControlAiAdvisorService
         return [
             [
                 'role' => 'system',
-                'content' => '你是订阅风控规则顾问。只分析匿名聚合统计，不直接执行封禁。只能从 rule_catalog 建议整数阈值，不得建议关闭规则、修改动作、名单、代码或访问外部地址。数据只含已触发事件，证据不足时不要调参。只输出 JSON：summary, health_score, findings[{severity,title,evidence,recommendation}], suggestions[{key,suggested_value,reason,confidence,risk,expected_impact}]。severity/risk 只能是 low/medium/high，confidence 为 0-1，最多 6 条建议。',
+                'content' => '你是订阅风控规则顾问。只分析匿名聚合统计，不直接执行封禁。population 是所有普通用户的全量基线，event_evidence 是时间窗口内全部已触发事件的聚合证据；replay_sample_count 只限制事件回放和 top_signals_sample，不限制用户总体或事件总数。operational_telemetry 仅供运行参考，不得与 event_evidence 直接对比。当 population.available=true 时，不得声称缺少全量用户基线。只能从 rule_catalog 建议整数阈值，不得建议关闭规则、修改动作、名单、代码或访问外部地址。证据不足时不要调参。只输出 JSON：summary, health_score, findings[{severity,title,evidence,recommendation}], suggestions[{key,suggested_value,reason,confidence,risk,expected_impact}]。severity/risk 只能是 low/medium/high，confidence 为 0-1，最多 6 条建议。',
             ],
             ['role' => 'user', 'content' => $payload],
         ];

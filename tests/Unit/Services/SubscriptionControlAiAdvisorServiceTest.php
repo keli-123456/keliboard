@@ -54,6 +54,53 @@ final class SubscriptionControlAiAdvisorServiceTest extends TestCase
         $this->assertFalse($metrics['data_limits']['personal_data_sent']);
     }
 
+    public function test_full_population_and_full_window_evidence_override_replay_sample_counts(): void
+    {
+        $metrics = $this->invoke('metrics', [[
+            'user_id' => 7,
+            'email' => 'sample@example.test',
+            'client_ip' => '198.51.100.20',
+            'code' => 'sample_only',
+            'action' => 'allow',
+            'signals' => ['sample_signal'],
+        ]], 7, [
+            'population' => [
+                'available' => true,
+                'total_users' => 1000,
+                'active_users' => 800,
+                'excluded_accounts' => 'administrators_and_staff',
+            ],
+            'event_evidence' => [
+                'available' => true,
+                'total_event_count' => 32000,
+                'unique_affected_users' => 20,
+                'repeat_affected_users' => 8,
+                'code_counts' => ['subscription_leak_guard' => 12000],
+                'action_counts' => ['reset_token_uuid' => 300],
+                'average_risk_score' => 72.5,
+                'maximum_risk_score' => 96,
+                'hosting_source_count' => 900,
+                'proxy_source_count' => 120,
+                'full_window_aggregated' => true,
+            ],
+        ]);
+
+        $this->assertSame(32000, $metrics['event_count']);
+        $this->assertSame(1, $metrics['sample_event_count']);
+        $this->assertSame(20, $metrics['unique_affected_users']);
+        $this->assertSame(8, $metrics['repeat_user_count']);
+        $this->assertSame(0.02, $metrics['population']['affected_user_rate']);
+        $this->assertSame(['subscription_leak_guard' => 12000], $metrics['code_counts']);
+        $this->assertSame(1, $metrics['event_evidence']['replay_sample_count']);
+        $this->assertFalse($metrics['operational_telemetry']['comparable_to_event_evidence']);
+        $this->assertTrue($metrics['data_limits']['all_consumer_users_aggregated']);
+        $this->assertTrue($metrics['data_limits']['event_totals_cover_full_window']);
+
+        $encoded = json_encode($metrics, JSON_THROW_ON_ERROR);
+        $this->assertStringNotContainsString('sample@example.test', $encoded);
+        $this->assertStringNotContainsString('198.51.100.20', $encoded);
+    }
+
     public function test_suggestions_only_accept_allowlisted_in_range_changed_thresholds(): void
     {
         $config = [
