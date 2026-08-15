@@ -125,6 +125,19 @@ class TicketAiAssistantService
         return $data;
     }
 
+    /**
+     * Internal provider settings shared by guarded AI workflows.
+     * Never expose the returned API key through an HTTP response.
+     *
+     * @return array<string, mixed>
+     */
+    public function providerSettingsForInternalUse(): array
+    {
+        return array_merge($this->settings(), [
+            'api_key' => $this->apiKey(),
+        ]);
+    }
+
 
     /** @return array<int, string> */
     private function publicAutoReplyCategories(): array

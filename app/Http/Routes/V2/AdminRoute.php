@@ -384,6 +384,10 @@ class AdminRoute
                 $router->get('/subscription-control/overview', [SubscriptionControlController::class, 'overview']);
                 $router->get('/subscription-control/source-ip-blocks', [SubscriptionControlController::class, 'sourceIpBlocks']);
                 $router->post('/subscription-control/source-ip-blocks/unblock', [SubscriptionControlController::class, 'unblockSourceIp']);
+                $router->get('/subscription-control/ai-advisor', [SubscriptionControlController::class, 'aiAdvisor']);
+                $router->post('/subscription-control/ai-advisor/analyze', [SubscriptionControlController::class, 'analyzeWithAi']);
+                $router->post('/subscription-control/ai-advisor/{reviewId}/apply', [SubscriptionControlController::class, 'applyAiSuggestions']);
+                $router->post('/subscription-control/ai-advisor/{reviewId}/rollback', [SubscriptionControlController::class, 'rollbackAiSuggestions']);
             });
 
             $router->group([

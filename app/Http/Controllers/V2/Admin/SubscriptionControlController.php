@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\V2\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\GenerateSubscriptionControlAiReviewJob;
+use App\Services\SubscriptionControlAiAdvisorService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -51,6 +53,60 @@ class SubscriptionControlController extends Controller
         ]);
 
         return $this->success($service->unblock((string) $data['entry']));
+    }
+
+    public function aiAdvisor(SubscriptionControlAiAdvisorService $service): JsonResponse
+    {
+        return $this->success($service->overview());
+    }
+
+    public function analyzeWithAi(Request $request, SubscriptionControlAiAdvisorService $service): JsonResponse
+    {
+        $data = $request->validate([
+            'window_days' => ['nullable', 'integer', 'min:3', 'max:30'],
+        ]);
+
+        try {
+            $review = $service->create((int) ($request->user()?->id ?? 0), (int) ($data['window_days'] ?? 7));
+            GenerateSubscriptionControlAiReviewJob::dispatch((int) $review->id)->afterResponse();
+
+            return $this->success($service->serialize($review));
+        } catch (\RuntimeException $exception) {
+            return $this->advisorFailure($exception->getMessage());
+        }
+    }
+
+    public function applyAiSuggestions(Request $request, int $reviewId, SubscriptionControlAiAdvisorService $service): JsonResponse
+    {
+        $data = $request->validate([
+            'suggestion_ids' => ['required', 'array', 'min:1', 'max:9'],
+            'suggestion_ids.*' => ['required', 'string', 'max:64'],
+        ]);
+
+        try {
+            return $this->success($service->serialize($service->apply($reviewId, $data['suggestion_ids'])));
+        } catch (\RuntimeException $exception) {
+            return $this->advisorFailure($exception->getMessage());
+        }
+    }
+
+    public function rollbackAiSuggestions(int $reviewId, SubscriptionControlAiAdvisorService $service): JsonResponse
+    {
+        try {
+            return $this->success($service->serialize($service->rollback($reviewId)));
+        } catch (\RuntimeException $exception) {
+            return $this->advisorFailure($exception->getMessage());
+        }
+    }
+
+    private function advisorFailure(string $code): JsonResponse
+    {
+        return response()->json([
+            'status' => 'fail',
+            'message' => $code,
+            'data' => null,
+            'error' => $code,
+        ], 422);
     }
 
     private function recentEventsFromCache(int $limit, string $email = ''): array

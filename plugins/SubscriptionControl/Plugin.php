@@ -43,7 +43,7 @@ class Plugin extends AbstractPlugin
     {
         $schedule
             ->call(function (): void {
-                (new SubscriptionControlEventStore())->prune(3);
+                (new SubscriptionControlEventStore())->prune($this->eventRetentionDays());
             })
             ->name('plugin:subscription_control:prune_events')
             ->daily()
@@ -89,6 +89,8 @@ class Plugin extends AbstractPlugin
             if (!$user) {
                 return $servers;
             }
+
+            $this->recordPullTelemetry('pulls');
 
             $riskConfig = $this->riskAnalyzerConfig();
             $ipInfo = (new SubscriptionClientIpResolver($riskConfig))->resolve($request);
@@ -215,10 +217,13 @@ class Plugin extends AbstractPlugin
                 }
             }
 
+            $this->recordPullTelemetry('allowed');
+
         } catch (InterceptResponseException $e) {
             // 交由全局异常处理器返回 403
             throw $e;
         } catch (\Throwable $e) {
+            $this->recordPullTelemetry('errors');
             Log::error('[SubscriptionControl] 检查失败: ' . $e->getMessage());
         }
 
@@ -1211,6 +1216,22 @@ class Plugin extends AbstractPlugin
         }
 
         Cache::put(self::RECENT_EVENTS_KEY, $events, 60 * 60 * 24 * 3);
-        (new SubscriptionControlEventStore())->append($event, 3);
+        (new SubscriptionControlEventStore())->append($event, $this->eventRetentionDays());
+    }
+
+    private function eventRetentionDays(): int
+    {
+        return max(3, min(30, (int) $this->getConfig('event_retention_days', 14)));
+    }
+
+    private function recordPullTelemetry(string $metric): void
+    {
+        if (!in_array($metric, ['pulls', 'allowed', 'errors'], true)) {
+            return;
+        }
+
+        $key = 'subscription_control:telemetry:' . $metric . ':' . date('Y-m-d');
+        Cache::add($key, 0, 60 * 60 * 24 * 31);
+        Cache::increment($key);
     }
 }
