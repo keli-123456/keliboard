@@ -16,6 +16,25 @@ if [ -f "/.dockerenv" ]; then
   IN_DOCKER=1
 fi
 
+read_local_app_key() {
+  if [ ! -f ".env" ]; then
+    return 0
+  fi
+
+  sed -n 's/^APP_KEY=//p' .env | sed -n '1p'
+}
+
+APP_KEY_BEFORE="$(read_local_app_key)"
+
+assert_app_key_unchanged() {
+  current_app_key="$(read_local_app_key)"
+  if [ -n "${APP_KEY_BEFORE}" ] && [ "${current_app_key}" != "${APP_KEY_BEFORE}" ]; then
+    echo "ERROR: APP_KEY changed during update. Restore the previous APP_KEY before starting services."
+    echo "Encrypted settings such as the AI API Key cannot be read with a different APP_KEY."
+    exit 1
+  fi
+}
+
 git config --global --add safe.directory "$(pwd)" >/dev/null 2>&1 || true
 
 OLD_HEAD="$(git rev-parse HEAD)"
@@ -32,6 +51,8 @@ else
     fi
   done
 fi
+
+assert_app_key_unchanged
 
 NEW_HEAD="$(git rev-parse HEAD)"
 if [ "${XBOARD_UPDATE_REEXEC:-0}" != "1" ] && [ "${OLD_HEAD}" != "${NEW_HEAD}" ]; then
@@ -138,6 +159,8 @@ else
   php artisan config:cache || true
   php artisan horizon:terminate || true
 fi
+
+assert_app_key_unchanged
 
 if [ -f "/etc/init.d/bt" ] || [ -f "/.dockerenv" ]; then
   chown -R www:www "$(pwd)" || true

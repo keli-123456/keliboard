@@ -49,6 +49,8 @@ class TicketAiAssistantService
     private TicketAiQualityService $qualityService;
     private TicketAiCircuitBreaker $circuitBreaker;
     private TicketAiPolicyService $policyService;
+    /** @var array{status:string,key:string}|null */
+    private ?array $apiKeyState = null;
 
     public function __construct(
         ?TicketAiContextService $contextService = null,
@@ -69,6 +71,7 @@ class TicketAiAssistantService
     public function publicSettings(): array
     {
         $settings = $this->settings();
+        $apiKeyState = $this->apiKeyState();
 
         return [
             'ticket_ai_enable' => $settings['enabled'],
@@ -91,13 +94,15 @@ class TicketAiAssistantService
             'ticket_ai_cooldown_minutes' => $settings['cooldown_minutes'],
             'ticket_ai_scope_policies' => $settings['scope_policies'],
             'ticket_ai_policy_targets' => $this->policyService->targets(),
-            'ticket_ai_api_key_set' => $this->apiKey() !== '',
+            'ticket_ai_api_key_set' => $apiKeyState['status'] === 'ready',
+            'ticket_ai_api_key_status' => $apiKeyState['status'],
         ];
     }
 
     public function prepareSettingsForSave(array $data): array
     {
         if (array_key_exists(self::API_KEY_SETTING, $data)) {
+            $this->apiKeyState = null;
             $value = trim((string) ($data[self::API_KEY_SETTING] ?? ''));
             unset($data[self::API_KEY_SETTING]);
 
@@ -118,6 +123,7 @@ class TicketAiAssistantService
     public function capabilities(): array
     {
         $settings = $this->settings();
+        $apiKeyState = $this->apiKeyState();
         $circuit = $this->circuitBreaker->state($settings['base_url'], $settings['model']);
         $reason = null;
         if (!$settings['enabled']) {
@@ -126,7 +132,9 @@ class TicketAiAssistantService
             $reason = 'missing_base_url';
         } elseif ($settings['model'] === '') {
             $reason = 'missing_model';
-        } elseif ($this->apiKey() === '') {
+        } elseif ($apiKeyState['status'] === 'decrypt_failed') {
+            $reason = 'api_key_decrypt_failed';
+        } elseif ($apiKeyState['status'] !== 'ready') {
             $reason = 'missing_api_key';
         } elseif ($this->providerClient->endpointSafetyReason($settings['base_url'], $settings['allow_private_provider']) !== null) {
             $reason = 'unsafe_endpoint';
@@ -136,7 +144,7 @@ class TicketAiAssistantService
 
         $configured = $settings['base_url'] !== ''
             && $settings['model'] !== ''
-            && $this->apiKey() !== '';
+            && $apiKeyState['status'] === 'ready';
 
         return [
             'enabled' => $settings['enabled'],
@@ -525,15 +533,30 @@ class TicketAiAssistantService
 
     private function apiKey(): string
     {
+        return $this->apiKeyState()['key'];
+    }
+
+    /** @return array{status:string,key:string} */
+    private function apiKeyState(): array
+    {
+        if ($this->apiKeyState !== null) {
+            return $this->apiKeyState;
+        }
+
         $value = (string) admin_setting(self::API_KEY_SETTING, '');
         if ($value === '') {
-            return '';
+            return $this->apiKeyState = ['status' => 'missing', 'key' => ''];
         }
 
         try {
-            return trim(Crypt::decryptString($value));
+            $key = trim(Crypt::decryptString($value));
+
+            return $this->apiKeyState = [
+                'status' => $key === '' ? 'missing' : 'ready',
+                'key' => $key,
+            ];
         } catch (\Throwable) {
-            return '';
+            return $this->apiKeyState = ['status' => 'decrypt_failed', 'key' => ''];
         }
     }
 
@@ -818,6 +841,7 @@ class TicketAiAssistantService
         throw new RuntimeException(match ($capabilities['reason']) {
             'disabled' => 'AI 工单助手未启用',
             'missing_api_key' => 'AI API Key 未配置',
+            'api_key_decrypt_failed' => '已保存的 AI API Key 无法解密。请确认升级前后的 APP_KEY 未变化，或重新填写 API Key。',
             'missing_base_url' => 'AI 接口地址未配置',
             'missing_model' => 'AI 模型未配置',
             'unsafe_endpoint' => 'AI 接口地址指向受保护的内网或元数据端点',
