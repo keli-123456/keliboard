@@ -3,6 +3,7 @@ namespace App\Services;
 
 
 use App\Exceptions\ApiException;
+use App\Jobs\ProcessTicketAiAutoReplyJob;
 use App\Jobs\SendEmailJob;
 use App\Models\Ticket;
 use App\Models\TicketMessage;
@@ -102,6 +103,9 @@ class TicketService
                 throw new \Exception();
             }
             DB::commit();
+            if ((int) $userId === (int) $ticket->user_id && $autoReplied === null) {
+                $this->dispatchAiAutoReply((int) $ticket->id, (int) $ticketMessage->id, false);
+            }
             return $ticketMessage;
         } catch (\Exception $e) {
             DB::rollback();
@@ -281,6 +285,9 @@ class TicketService
             }
 
             DB::commit();
+            if ($autoReplied === null) {
+                $this->dispatchAiAutoReply((int) $ticket->id, (int) $ticketMessage->id, true);
+            }
             return $ticket;
         } catch (\Exception $e) {
             DB::rollBack();
@@ -293,6 +300,125 @@ class TicketService
                 }
             }
             throw $e;
+        }
+    }
+
+
+    public function replyByAiAutomation(
+        int $ticketId,
+        int $sourceMessageId,
+        int $suggestionId,
+        string $category,
+        string $message
+    ): ?TicketMessage {
+        $ticket = null;
+        $ticketMessage = DB::transaction(function () use (
+            $ticketId,
+            $sourceMessageId,
+            $suggestionId,
+            $category,
+            $message,
+            &$ticket
+        ): ?TicketMessage {
+            $ticket = Ticket::query()->where('id', $ticketId)->lockForUpdate()->first();
+            if (!$ticket || (int) $ticket->status !== Ticket::STATUS_OPENING) {
+                return null;
+            }
+            if ((int) $ticket->reply_status !== Ticket::REPLY_STATUS_WAITING_ADMIN) {
+                return null;
+            }
+            if (!(bool) admin_setting('ticket_ai_auto_reply_enable', false)) {
+                return null;
+            }
+
+            $sourceMessage = TicketMessage::query()
+                ->where('id', $sourceMessageId)
+                ->where('ticket_id', $ticketId)
+                ->where('user_id', $ticket->user_id)
+                ->first();
+            if (!$sourceMessage || $sourceMessage->attachments()->exists()) {
+                return null;
+            }
+
+            $latestMessageId = (int) TicketMessage::query()
+                ->where('ticket_id', $ticketId)
+                ->max('id');
+            if ($latestMessageId !== $sourceMessageId) {
+                return null;
+            }
+
+            $maxPerTicket = max(1, min(10, (int) admin_setting('ticket_ai_auto_reply_max_per_ticket', 1)));
+            $sentCount = TicketMessage::query()
+                ->where('ticket_id', $ticketId)
+                ->where('is_auto_reply', 1)
+                ->where('auto_reply_rule', 'like', 'ai:%')
+                ->count();
+            if ($sentCount >= $maxPerTicket) {
+                return null;
+            }
+
+            $senderId = $this->resolveAutoReplySenderId((int) $ticket->user_id);
+            if ($senderId === null) {
+                return null;
+            }
+
+            $ticketMessage = TicketMessage::create([
+                'user_id' => $senderId,
+                'ticket_id' => $ticketId,
+                'message' => $message,
+                'is_auto_reply' => 1,
+                'auto_reply_rule' => 'ai:' . mb_substr($category, 0, 100, 'UTF-8'),
+            ]);
+            if (!$ticketMessage) {
+                throw new ApiException('AI ticket auto-reply failed');
+            }
+
+            $ticket->reply_status = Ticket::REPLY_STATUS_AUTO_REPLIED;
+            $ticket->auto_reply_count = max(0, (int) ($ticket->auto_reply_count ?? 0)) + 1;
+            $ticket->auto_reply_last_at = time();
+            $ticket->last_auto_reply_rule = $ticketMessage->auto_reply_rule;
+            if (!$ticket->save()) {
+                throw new ApiException('AI ticket auto-reply state update failed');
+            }
+
+            app(TicketAiAssistantService::class)->markSent(
+                $suggestionId,
+                $ticketId,
+                $senderId,
+                $ticketMessage,
+                $message
+            );
+
+            return $ticketMessage;
+        });
+
+        if (!$ticket || !$ticketMessage) {
+            return null;
+        }
+
+        HookManager::call('ticket.reply.admin.after', [$ticket, $ticketMessage]);
+        $this->sendEmailNotify($ticket, $ticketMessage);
+
+        return $ticketMessage;
+    }
+
+    private function dispatchAiAutoReply(int $ticketId, int $sourceMessageId, bool $isNewTicket): void
+    {
+        if (!(bool) admin_setting('ticket_ai_auto_reply_enable', false)) {
+            return;
+        }
+        if (!$isNewTicket && !(bool) admin_setting('ticket_ai_auto_reply_on_user_reply', true)) {
+            return;
+        }
+
+        try {
+            ProcessTicketAiAutoReplyJob::dispatch($ticketId, $sourceMessageId, $isNewTicket)->afterResponse();
+        } catch (\Throwable $e) {
+            Log::warning('ticket AI auto-reply dispatch failed', [
+                'ticket_id' => $ticketId,
+                'source_message_id' => $sourceMessageId,
+                'message' => $e->getMessage(),
+            ]);
         }
     }
 

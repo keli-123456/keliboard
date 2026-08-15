@@ -75,6 +75,12 @@ class TicketAiAssistantService
 
         return [
             'ticket_ai_enable' => $settings['enabled'],
+            'ticket_ai_auto_reply_enable' => (bool) admin_setting('ticket_ai_auto_reply_enable', false),
+            'ticket_ai_auto_reply_on_user_reply' => (bool) admin_setting('ticket_ai_auto_reply_on_user_reply', true),
+            'ticket_ai_auto_reply_min_confidence' => max(0.5, min(1.0, (float) admin_setting('ticket_ai_auto_reply_min_confidence', 0.9))),
+            'ticket_ai_auto_reply_require_knowledge' => (bool) admin_setting('ticket_ai_auto_reply_require_knowledge', true),
+            'ticket_ai_auto_reply_allowed_categories' => $this->publicAutoReplyCategories(),
+            'ticket_ai_auto_reply_max_per_ticket' => max(1, min(10, (int) admin_setting('ticket_ai_auto_reply_max_per_ticket', 1))),
             'ticket_ai_base_url' => $settings['base_url'],
             'ticket_ai_allow_private_provider' => $settings['allow_private_provider'],
             'ticket_ai_model' => $settings['model'],
@@ -117,6 +123,25 @@ class TicketAiAssistantService
         }
 
         return $data;
+    }
+
+
+    /** @return array<int, string> */
+    private function publicAutoReplyCategories(): array
+    {
+        $value = admin_setting('ticket_ai_auto_reply_allowed_categories', ['客户端连接', '订阅与节点']);
+        if (is_string($value)) {
+            $decoded = json_decode($value, true);
+            $value = is_array($decoded) ? $decoded : [];
+        }
+
+        $allowed = ['客户端连接', '订阅与节点', '套餐订单', '流量异常', '其他'];
+        $categories = array_values(array_unique(array_filter(
+            is_array($value) ? array_map('strval', $value) : [],
+            static fn (string $category): bool => in_array($category, $allowed, true)
+        )));
+
+        return $categories;
     }
 
     /** @return array{enabled:bool,configured:bool,available:bool,reason:?string} */
@@ -402,6 +427,30 @@ class TicketAiAssistantService
             foreach ($this->qualityService->compare((string) $suggestion->draft, $finalMessage) as $field => $value) {
                 $suggestion->{$field} = $value;
             }
+        }
+        $suggestion->save();
+    }
+
+
+    public function discardAutomationSuggestion(?int $suggestionId, int $ticketId): void
+    {
+        if (!$suggestionId) {
+            return;
+        }
+
+        $suggestion = TicketAiSuggestion::query()
+            ->where('id', $suggestionId)
+            ->where('ticket_id', $ticketId)
+            ->where('status', TicketAiSuggestion::STATUS_GENERATED)
+            ->first();
+        if (!$suggestion) {
+            return;
+        }
+
+        $suggestion->status = TicketAiSuggestion::STATUS_DISCARDED;
+        $suggestion->discarded_at = time();
+        if ($this->hasQualityColumns()) {
+            $suggestion->quality_rating = 'discarded';
         }
         $suggestion->save();
     }
