@@ -99,7 +99,7 @@ final class SubscriptionControlEventStore
 
     private function normalizeForInsert(array $event, int $createdAt, int $now): array
     {
-        return [
+        $normalized = [
             'event_id' => $this->stringOrNull($event['id'] ?? null) ?? uniqid('sc_', true),
             'user_id' => $this->intOrNull($event['user_id'] ?? null),
             'email' => $this->stringOrNull($event['email'] ?? null),
@@ -142,6 +142,14 @@ final class SubscriptionControlEventStore
             'created_at' => $createdAt,
             'updated_at' => $this->intOrNull($event['updated_at'] ?? null) ?? $now,
         ];
+
+        foreach (['source_ip_deny_match_type', 'source_ip_deny_match'] as $field) {
+            if (Schema::hasColumn(self::TABLE, $field)) {
+                $normalized[$field] = $this->stringOrNull($event[$field] ?? null);
+            }
+        }
+
+        return $normalized;
     }
 
     private function rowToEvent(array $row): array

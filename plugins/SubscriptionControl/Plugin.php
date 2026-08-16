@@ -1198,6 +1198,8 @@ class Plugin extends AbstractPlugin
             'ip_org' => $meta['ip_org'] ?? null,
             'ip_type' => $meta['ip_type'] ?? null,
             'ip_risk_tags' => $meta['ip_risk_tags'] ?? null,
+            'source_ip_deny_match_type' => $meta['source_ip_deny_match_type'] ?? null,
+            'source_ip_deny_match' => $meta['source_ip_deny_match'] ?? null,
             'user_agent' => $meta['user_agent'] ?? null,
             'ua_category' => $meta['ua_category'] ?? null,
             'ua_categories' => $meta['ua_categories'] ?? null,

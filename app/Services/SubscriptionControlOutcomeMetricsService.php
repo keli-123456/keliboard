@@ -17,6 +17,7 @@ final class SubscriptionControlOutcomeMetricsService
     private const OUTCOME_HORIZON_SECONDS = 86400;
     private const ENFORCEMENT_ACTIONS = ['reset_token', 'reset_token_uuid', 'block', 'empty', 'throttle'];
 
+
     private const FIELD_SPECS = [
         'subscription_leak_guard' => [
             'risk_score' => 'number',
@@ -39,11 +40,13 @@ final class SubscriptionControlOutcomeMetricsService
     /** @return array<string, mixed> */
     public function collect(int $cutoff): array
     {
+        $sourceDenyAttribution = (new SubscriptionControlSourceDenyAttributionService())->collect($cutoff);
         if (!Schema::hasTable(self::EVENT_TABLE)) {
             return [
                 'field_distributions' => [],
                 'post_action_outcomes' => $this->unavailableOutcome(),
                 'appeal_signals' => $this->unavailableAppeals(),
+                'source_ip_deny_attribution' => $sourceDenyAttribution,
             ];
         }
 
@@ -53,6 +56,7 @@ final class SubscriptionControlOutcomeMetricsService
             'field_distributions' => $this->fieldDistributions($events),
             'post_action_outcomes' => $this->postActionOutcomes($events),
             'appeal_signals' => $this->appealSignals($cutoff),
+            'source_ip_deny_attribution' => $sourceDenyAttribution,
         ];
     }
 
@@ -277,6 +281,7 @@ final class SubscriptionControlOutcomeMetricsService
             'personal_data_included' => false,
         ];
     }
+
 
     /** @return array<string, mixed> */
     private function unavailableOutcome(): array

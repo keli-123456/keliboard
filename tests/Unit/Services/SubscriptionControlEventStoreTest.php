@@ -75,6 +75,8 @@ final class SubscriptionControlEventStoreTest extends TestCase
             'ip_asn' => 45090,
             'ip_type' => 'hosting',
             'ip_risk_tags' => ['cloud_provider'],
+            'source_ip_deny_match_type' => 'cidr',
+            'source_ip_deny_match' => '2.2.2.0/24',
             'ua_categories' => ['script', 'unknown'],
             'signals' => ['risky_ua'],
             'created_at' => $now,
@@ -87,6 +89,8 @@ final class SubscriptionControlEventStoreTest extends TestCase
         $this->assertSame(45090, $events[0]['ip_asn']);
         $this->assertSame('hosting', $events[0]['ip_type']);
         $this->assertSame(['cloud_provider'], $events[0]['ip_risk_tags']);
+        $this->assertSame('cidr', $events[0]['source_ip_deny_match_type']);
+        $this->assertSame('2.2.2.0/24', $events[0]['source_ip_deny_match']);
         $this->assertSame(['script', 'unknown'], $events[0]['ua_categories']);
         $this->assertSame(['risky_ua'], $events[0]['signals']);
         $this->assertSame(1, $this->database->table('v2_subscription_control_event')->count());
@@ -143,6 +147,8 @@ final class SubscriptionControlEventStoreTest extends TestCase
             $table->string('ip_org', 191)->nullable();
             $table->string('ip_type', 32)->nullable();
             $table->json('ip_risk_tags')->nullable();
+            $table->string('source_ip_deny_match_type', 32)->nullable();
+            $table->string('source_ip_deny_match', 191)->nullable();
             $table->text('user_agent')->nullable();
             $table->string('ua_category', 64)->nullable();
             $table->json('ua_categories')->nullable();

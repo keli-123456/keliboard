@@ -131,6 +131,9 @@ final class SubscriptionControlPopulationMetricsService
         $outcomes = is_array($supporting['post_action_outcomes'] ?? null)
             ? $supporting['post_action_outcomes']
             : [];
+        $sourceDenyAttribution = is_array($supporting['source_ip_deny_attribution'] ?? null)
+            ? $supporting['source_ip_deny_attribution']
+            : [];
         $outcomesByCode = is_array($outcomes['by_code'] ?? null) ? $outcomes['by_code'] : [];
         foreach ($codeBreakdown as $code => &$stats) {
             $codeDistributions = is_array($distributions[$code] ?? null) ? $distributions[$code] : [];
@@ -145,6 +148,9 @@ final class SubscriptionControlPopulationMetricsService
             $stats['post_action_outcome'] = is_array($outcomesByCode[$code] ?? null)
                 ? $outcomesByCode[$code]
                 : [];
+            if ($code === 'source_ip_denylist') {
+                $stats['source_attribution'] = $sourceDenyAttribution;
+            }
         }
         unset($stats);
 
@@ -170,6 +176,7 @@ final class SubscriptionControlPopulationMetricsService
             'appeal_signals' => is_array($supporting['appeal_signals'] ?? null)
                 ? $supporting['appeal_signals']
                 : [],
+            'source_ip_deny_attribution' => $sourceDenyAttribution,
             'full_window_aggregated' => true,
         ];
     }

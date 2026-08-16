@@ -44,6 +44,90 @@ final class SubscriptionControlOutcomeMetricsServiceTest extends TestCase
         $this->assertSame('absence_of_repeat_is_not_confirmed_recovery', $outcomes['interpretation']);
     }
 
+    public function test_source_ip_deny_attribution_is_anonymous_and_distinguishes_rule_sources(): void
+    {
+        $this->setUpInMemoryDatabase();
+        $this->createEventTable();
+        $now = time();
+        DB::table('v2_subscription_control_event')->insert([
+            [
+                'user_id' => 99,
+                'code' => 'ua_blacklist',
+                'action' => 'block',
+                'client_ip' => '203.0.113.9',
+                'source_ip_deny_match_type' => null,
+                'source_ip_deny_match' => null,
+                'ip_org' => 'Amazon Technologies Inc.',
+                'created_at' => $now - 300000,
+            ],
+            [
+                'user_id' => 1,
+                'code' => 'source_ip_denylist',
+                'action' => 'block',
+                'client_ip' => '203.0.113.9',
+                'source_ip_deny_match_type' => 'cidr',
+                'source_ip_deny_match' => '203.0.113.9',
+                'ip_org' => 'Amazon Technologies Inc.',
+                'created_at' => $now - 200000,
+            ],
+            [
+                'user_id' => 1,
+                'code' => 'source_ip_denylist',
+                'action' => 'block',
+                'client_ip' => '203.0.113.9',
+                'source_ip_deny_match_type' => 'cidr',
+                'source_ip_deny_match' => '203.0.113.9',
+                'ip_org' => 'Amazon Technologies Inc.',
+                'created_at' => $now - 190000,
+            ],
+            [
+                'user_id' => 2,
+                'code' => 'source_ip_denylist',
+                'action' => 'block',
+                'client_ip' => '198.51.100.8',
+                'source_ip_deny_match_type' => 'cidr',
+                'source_ip_deny_match' => '198.51.0.0/16',
+                'ip_org' => null,
+                'created_at' => $now - 180000,
+            ],
+            [
+                'user_id' => 3,
+                'code' => 'source_ip_denylist',
+                'action' => 'block',
+                'client_ip' => '192.0.2.8',
+                'source_ip_deny_match_type' => 'org',
+                'source_ip_deny_match' => 'microsoft',
+                'ip_org' => 'Microsoft Azure',
+                'created_at' => $now - 170000,
+            ],
+        ]);
+
+        $attribution = (new SubscriptionControlOutcomeMetricsService())
+            ->collect($now - 604800)['source_ip_deny_attribution'];
+
+        $this->assertTrue($attribution['available']);
+        $this->assertSame(4, $attribution['total_event_count']);
+        $this->assertSame(4, $attribution['attributed_event_count']);
+        $this->assertSame(2, $attribution['source_class_counts']['automatic_ua_ip']['event_count']);
+        $this->assertSame(1, $attribution['source_class_counts']['automatic_ua_ip']['repeat_affected_users']);
+        $this->assertSame(1, $attribution['source_class_counts']['configured_cidr']['event_count']);
+        $this->assertSame(1, $attribution['source_class_counts']['configured_organization']['event_count']);
+        $this->assertSame(2, $attribution['provider_counts']['aws']['event_count']);
+        $this->assertSame(1, $attribution['provider_counts']['azure']['event_count']);
+        $this->assertSame(2, $attribution['prefix_scope_counts']['exact_ipv4']['event_count']);
+        $this->assertMatchesRegularExpression(
+            '/^[a-f0-9]{16}$/',
+            $attribution['top_anonymous_rules'][0]['rule_fingerprint']
+        );
+        $this->assertFalse($attribution['exact_rule_values_included']);
+        $this->assertFalse($attribution['personal_data_included']);
+
+        $encoded = json_encode($attribution, JSON_THROW_ON_ERROR);
+        $this->assertStringNotContainsString('203.0.113.9', $encoded);
+        $this->assertStringNotContainsString('198.51.0.0/16', $encoded);
+        $this->assertStringNotContainsString('Microsoft Azure', $encoded);
+    }
+
     public function test_appeal_signals_only_return_anonymous_aggregate_counts(): void
     {
         $this->setUpInMemoryDatabase();
@@ -80,6 +164,10 @@ final class SubscriptionControlOutcomeMetricsServiceTest extends TestCase
             $table->integer('user_id')->nullable();
             $table->string('code', 64);
             $table->string('action', 32);
+            $table->string('client_ip', 64)->nullable();
+            $table->string('ip_org', 191)->nullable();
+            $table->string('source_ip_deny_match_type', 32)->nullable();
+            $table->string('source_ip_deny_match', 191)->nullable();
             $table->integer('risk_score')->nullable();
             $table->integer('source_user_count')->nullable();
             $table->integer('online_ip_count')->nullable();

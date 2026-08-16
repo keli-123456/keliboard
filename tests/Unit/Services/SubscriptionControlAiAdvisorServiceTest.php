@@ -155,6 +155,27 @@ final class SubscriptionControlAiAdvisorServiceTest extends TestCase
                     'confirmed_false_positive' => false,
                     'personal_data_included' => false,
                 ],
+                'source_ip_deny_attribution' => [
+                    'available' => true,
+                    'total_event_count' => 900,
+                    'source_class_counts' => [
+                        'configured_asn' => [
+                            'event_count' => 700,
+                            'affected_users' => 12,
+                            'repeat_affected_users' => 5,
+                        ],
+                    ],
+                    'top_anonymous_rules' => [
+                        [
+                            'rule_fingerprint' => '1234567890abcdef',
+                            'match_type' => 'asn',
+                            'event_count' => 700,
+                            'affected_users' => 12,
+                        ],
+                    ],
+                    'exact_rule_values_included' => false,
+                    'personal_data_included' => false,
+                ],
                 'full_window_aggregated' => true,
             ],
         ]);
@@ -175,6 +196,9 @@ final class SubscriptionControlAiAdvisorServiceTest extends TestCase
         $this->assertSame(0.222222, $metrics['rule_evidence']['leak_guard_score_threshold']['post_action_outcome']['repeat_within_horizon_rate']);
         $this->assertSame(3, $metrics['appeal_signals']['matching_ticket_count']);
         $this->assertSame(18, $metrics['post_action_outcomes']['eligible_user_rule_pairs']);
+        $this->assertSame(900, $metrics['source_ip_deny_attribution']['total_event_count']);
+        $this->assertFalse($metrics['source_ip_deny_attribution']['exact_rule_values_included']);
+        $this->assertTrue($metrics['data_limits']['source_ip_deny_attribution_is_anonymous']);
         $this->assertTrue($metrics['data_limits']['field_distributions_are_triggered_only']);
         $this->assertTrue($metrics['data_limits']['quiet_after_horizon_is_not_confirmed_recovery']);
         $this->assertTrue($metrics['data_limits']['appeal_signals_are_inferred_not_confirmed']);

@@ -31,6 +31,8 @@ return new class extends Migration {
             $table->string('ip_org', 191)->nullable();
             $table->string('ip_type', 32)->nullable()->index();
             $table->json('ip_risk_tags')->nullable();
+            $table->string('source_ip_deny_match_type', 32)->nullable()->index();
+            $table->string('source_ip_deny_match', 191)->nullable();
             $table->text('user_agent')->nullable();
             $table->string('ua_category', 64)->nullable()->index();
             $table->json('ua_categories')->nullable();
