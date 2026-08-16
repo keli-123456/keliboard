@@ -47,6 +47,14 @@ final class SubscriptionControlHighRiskUserServiceTest extends TestCase
             $table->json('regions')->nullable();
             $table->integer('online_ip_count')->nullable();
             $table->integer('threshold')->nullable();
+            $table->integer('source_user_count')->nullable();
+            $table->integer('risk_score')->nullable();
+            $table->string('ip_type', 32)->nullable();
+            $table->string('ip_org')->nullable();
+            $table->json('signals')->nullable();
+            $table->boolean('active_plan_user')->nullable();
+            $table->bigInteger('used_traffic')->nullable();
+            $table->bigInteger('transfer_enable')->nullable();
             $table->integer('created_at');
         });
     }
@@ -61,8 +69,18 @@ final class SubscriptionControlHighRiskUserServiceTest extends TestCase
             ['id' => 12, 'site_id' => null, 'email' => 'admin@example.test', 'is_admin' => 1, 'is_staff' => 0],
         ]);
         DB::table('v2_subscription_control_event')->insert([
-            $this->event(10, 'source_ip_denylist', 'block', $now - 30, '203.0.113.8', 'scanner', 'SG'),
-            $this->event(10, 'ua_reset', 'reset_token_uuid', $now - 20, '198.51.100.9', 'legacy', 'JP', 8, 3),
+            $this->event(10, 'source_ip_denylist', 'block', $now - 600, '203.0.113.8', 'scanner', 'SG'),
+            $this->event(10, 'ua_reset', 'reset_token_uuid', $now - 500, '198.51.100.9', 'legacy', 'JP', 8, 3),
+            $this->event(10, 'subscription_leak_guard', 'block', $now - 300, '198.51.100.10', 'script', 'US', null, null, [
+                'source_user_count' => 12,
+                'risk_score' => 92,
+                'ip_type' => 'hosting',
+                'ip_org' => 'Example Cloud',
+                'signals' => json_encode(['many_pull_ips', 'active_plan_low_usage_with_many_ips', 'ip_intelligence_hosting']),
+                'active_plan_user' => 1,
+                'used_traffic' => 1024,
+                'transfer_enable' => 107374182400,
+            ]),
             $this->event(11, 'behavior_baseline_observation', 'observe', $now - 10, '192.0.2.1', 'client', 'US'),
             $this->event(12, 'source_ip_denylist', 'reset_token_uuid', $now - 5, '192.0.2.2', 'scanner', 'US'),
         ]);
@@ -80,11 +98,47 @@ final class SubscriptionControlHighRiskUserServiceTest extends TestCase
         $this->assertSame(5, $item['site_id']);
         $this->assertSame('Pianyi', $item['site_name']);
         $this->assertSame('high', $item['risk_level']);
-        $this->assertSame(2, $item['blocking_event_count']);
+        $this->assertSame(3, $item['blocking_event_count']);
         $this->assertSame(1, $item['reset_count']);
         $this->assertContains('source_ip_denylist', $item['event_codes']);
         $this->assertContains('203.0.113.8', $item['client_ips']);
         $this->assertContains('scanner', $item['ua_categories']);
+        $this->assertGreaterThanOrEqual(75, $item['suspicion_score']);
+        $this->assertSame('high', $item['confidence']);
+        $this->assertSame('probable_subscription_leak', $item['verdict']);
+        $this->assertSame(1, $item['post_reset_retrigger_count']);
+        $this->assertContains('post_reset_retrigger', $item['case_evidence']);
+        $this->assertContains('source_sharing', $item['case_evidence']);
+        $this->assertContains('infrastructure_source', $item['case_evidence']);
+        $this->assertTrue($item['requires_manual_review']);
+        $this->assertFalse($item['automatic_enforcement']);
+    }
+
+    public function testDenylistOnlyEventsRemainLowConfidence(): void
+    {
+        $now = time();
+        DB::table('v2_user')->insert([
+            'id' => 20,
+            'site_id' => null,
+            'email' => 'shared-network@example.test',
+            'is_admin' => 0,
+            'is_staff' => 0,
+        ]);
+        DB::table('v2_subscription_control_event')->insert([
+            $this->event(20, 'source_ip_denylist', 'block', $now - 120, '203.0.113.20', 'client', 'CN'),
+            $this->event(20, 'source_ip_denylist', 'block', $now - 60, '203.0.113.20', 'client', 'CN'),
+        ]);
+
+        $result = (new SubscriptionControlHighRiskUserService())->collect(7, 20);
+        $item = collect($result['items'])->firstWhere('user_id', 20);
+
+        $this->assertIsArray($item);
+        $this->assertLessThanOrEqual(45, $item['suspicion_score']);
+        $this->assertSame('low', $item['confidence']);
+        $this->assertSame('watch_required', $item['verdict']);
+        $this->assertContains('denylist_only', $item['false_positive_factors']);
+        $this->assertTrue($item['requires_manual_review']);
+        $this->assertFalse($item['automatic_enforcement']);
     }
 
     /** @return array<string, mixed> */
@@ -97,9 +151,10 @@ final class SubscriptionControlHighRiskUserServiceTest extends TestCase
         string $uaCategory,
         string $region,
         ?int $onlineIpCount = null,
-        ?int $threshold = null
+        ?int $threshold = null,
+        array $extra = []
     ): array {
-        return [
+        return array_replace([
             'user_id' => $userId,
             'code' => $code,
             'reason' => $code,
@@ -112,7 +167,15 @@ final class SubscriptionControlHighRiskUserServiceTest extends TestCase
             'regions' => json_encode([$region]),
             'online_ip_count' => $onlineIpCount,
             'threshold' => $threshold,
+            'source_user_count' => null,
+            'risk_score' => null,
+            'ip_type' => null,
+            'ip_org' => null,
+            'signals' => null,
+            'active_plan_user' => null,
+            'used_traffic' => null,
+            'transfer_enable' => null,
             'created_at' => $createdAt,
-        ];
+        ], $extra);
     }
 }
