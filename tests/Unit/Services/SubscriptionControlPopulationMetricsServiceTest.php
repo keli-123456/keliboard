@@ -160,7 +160,13 @@ final class SubscriptionControlPopulationMetricsServiceTest extends TestCase
         $this->assertSame(1, $metrics['event_evidence']['code_breakdown']['subscription_leak_guard']['affected_users']);
         $this->assertSame(1, $metrics['event_evidence']['code_breakdown']['subscription_leak_guard']['repeat_affected_users']);
         $this->assertSame(2, $metrics['event_evidence']['code_breakdown']['subscription_leak_guard']['field_event_counts']['risk_score']);
+        $this->assertSame(2, $metrics['event_evidence']['code_breakdown']['subscription_leak_guard']['field_distributions']['risk_score']['evidence_count']);
+        $this->assertSame(60, $metrics['event_evidence']['code_breakdown']['subscription_leak_guard']['field_distributions']['risk_score']['p50']);
+        $this->assertSame([], $metrics['event_evidence']['code_breakdown']['subscription_leak_guard']['post_action_outcome']);
         $this->assertSame(0, $metrics['event_evidence']['code_breakdown']['multi_region_pull']['field_event_counts']['regions']);
+        $this->assertTrue($metrics['event_evidence']['post_action_outcomes']['available']);
+        $this->assertSame(0, $metrics['event_evidence']['post_action_outcomes']['eligible_user_rule_pairs']);
+        $this->assertFalse($metrics['event_evidence']['appeal_signals']['available']);
 
         $encoded = json_encode($metrics, JSON_THROW_ON_ERROR);
         $this->assertStringNotContainsString('last_login_ip', $encoded);

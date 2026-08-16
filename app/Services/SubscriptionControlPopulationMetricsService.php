@@ -123,6 +123,30 @@ final class SubscriptionControlPopulationMetricsService
         $unique = (int) ($row->unique_affected_users ?? 0);
         $enforced = (int) ($row->enforcement_event_count ?? 0);
         $scored = (int) ($row->scored_event_count ?? 0);
+        $codeBreakdown = $this->codeBreakdown($events);
+        $supporting = (new SubscriptionControlOutcomeMetricsService())->collect($cutoff);
+        $distributions = is_array($supporting['field_distributions'] ?? null)
+            ? $supporting['field_distributions']
+            : [];
+        $outcomes = is_array($supporting['post_action_outcomes'] ?? null)
+            ? $supporting['post_action_outcomes']
+            : [];
+        $outcomesByCode = is_array($outcomes['by_code'] ?? null) ? $outcomes['by_code'] : [];
+        foreach ($codeBreakdown as $code => &$stats) {
+            $codeDistributions = is_array($distributions[$code] ?? null) ? $distributions[$code] : [];
+            foreach ($codeDistributions as $field => &$distribution) {
+                $evidenceCount = (int) ($stats['field_event_counts'][$field] ?? 0);
+                $distribution['evidence_count'] = $evidenceCount;
+                $distribution['sampled'] = (bool) ($distribution['sampled'] ?? false)
+                    || (int) ($distribution['sample_count'] ?? 0) < $evidenceCount;
+            }
+            unset($distribution);
+            $stats['field_distributions'] = $codeDistributions;
+            $stats['post_action_outcome'] = is_array($outcomesByCode[$code] ?? null)
+                ? $outcomesByCode[$code]
+                : [];
+        }
+        unset($stats);
 
         return [
             'available' => true,
@@ -141,7 +165,11 @@ final class SubscriptionControlPopulationMetricsService
             'agent_affected_users' => $this->agentAffectedUsers($cutoff),
             'code_counts' => $this->groupedCounts($events, 'code', 16),
             'action_counts' => $this->groupedCounts($events, 'action', 12),
-            'code_breakdown' => $this->codeBreakdown($events),
+            'code_breakdown' => $codeBreakdown,
+            'post_action_outcomes' => $outcomes,
+            'appeal_signals' => is_array($supporting['appeal_signals'] ?? null)
+                ? $supporting['appeal_signals']
+                : [],
             'full_window_aggregated' => true,
         ];
     }

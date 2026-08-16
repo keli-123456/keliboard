@@ -410,6 +410,12 @@ class SubscriptionControlAiAdvisorService
         $behaviorBaseline = is_array($codeBreakdown['behavior_baseline_observation'] ?? null)
             ? $codeBreakdown['behavior_baseline_observation']
             : [];
+        $postActionOutcomes = is_array($evidence['post_action_outcomes'] ?? null)
+            ? $evidence['post_action_outcomes']
+            : [];
+        $appealSignals = is_array($evidence['appeal_signals'] ?? null)
+            ? $evidence['appeal_signals']
+            : [];
 
         return [
             'window_days' => $days,
@@ -428,6 +434,8 @@ class SubscriptionControlAiAdvisorService
                 'repeat_affected_users' => (int) ($behaviorBaseline['repeat_affected_users'] ?? 0),
                 'enforcement_count' => 0,
             ],
+            'post_action_outcomes' => $postActionOutcomes,
+            'appeal_signals' => $appealSignals,
             'top_signals' => $sampleSignals,
             'average_risk_score' => $evidence['average_risk_score']
                 ?? ($riskScores === [] ? null : round(array_sum($riskScores) / count($riskScores), 2)),
@@ -460,6 +468,9 @@ class SubscriptionControlAiAdvisorService
                 'events_are_triggered_only' => true,
                 'behavior_baseline_is_observe_only' => true,
                 'behavior_baseline_never_enforces' => true,
+                'field_distributions_are_triggered_only' => true,
+                'quiet_after_horizon_is_not_confirmed_recovery' => true,
+                'appeal_signals_are_inferred_not_confirmed' => true,
                 'replay_sample_limit' => 5000,
                 'replay_sample_count' => count($events),
                 'top_signals_are_sampled' => true,
@@ -485,6 +496,15 @@ class SubscriptionControlAiAdvisorService
                 ? $stats['field_event_counts']
                 : [];
             $fieldEventCount = (int) ($fieldCounts[$rule['field']] ?? 0);
+            $fieldDistributions = is_array($stats['field_distributions'] ?? null)
+                ? $stats['field_distributions']
+                : [];
+            $distribution = is_array($fieldDistributions[$rule['field']] ?? null)
+                ? $fieldDistributions[$rule['field']]
+                : [];
+            $postActionOutcome = is_array($stats['post_action_outcome'] ?? null)
+                ? $stats['post_action_outcome']
+                : [];
             $status = $eventCount === 0
                 ? 'not_triggered_in_window'
                 : ($fieldEventCount === 0 ? 'triggered_without_rule_field' : 'triggered_evidence_available');
@@ -499,6 +519,8 @@ class SubscriptionControlAiAdvisorService
                 'repeat_affected_users' => (int) ($stats['repeat_affected_users'] ?? 0),
                 'field_evidence_count' => $fieldEventCount,
                 'field_coverage_rate' => $eventCount > 0 ? round($fieldEventCount / $eventCount, 6) : 0.0,
+                'triggered_value_distribution' => $distribution,
+                'post_action_outcome' => $postActionOutcome,
                 'evidence_scope' => 'triggered_events_only',
             ];
         }
@@ -535,6 +557,9 @@ class SubscriptionControlAiAdvisorService
                 'optional_field_gaps_are_not_findings' => true,
                 'behavior_baseline_is_supporting_evidence_only' => true,
                 'behavior_baseline_must_not_be_reported_as_enforcement' => true,
+                'field_distributions_cover_triggered_events_only' => true,
+                'quiet_after_24h_is_not_confirmed_recovery' => true,
+                'appeal_signals_are_keyword_inference_not_confirmed_false_positives' => true,
                 'user_facing_chinese_only' => true,
             ],
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
@@ -542,7 +567,7 @@ class SubscriptionControlAiAdvisorService
         return [
             [
                 'role' => 'system',
-                'content' => '你是订阅风控规则顾问。只分析匿名聚合统计，不直接执行封禁。population 是所有普通用户的全量基线，event_evidence 是时间窗口内全部已触发事件的聚合证据，code_breakdown 是按触发类型拆分的完整统计，rule_evidence 明确每个可调阈值是否有对应字段证据。behavior_baseline 是逐个订阅用户的匿名习惯偏离聚合，只用于辅助判断；其事件固定为 observe_only，不会拦截、重置凭证或通知用户，不得把它描述为已经处罚。rule_evidence.status=not_triggered_in_window 表示该规则本周期没有触发，是中性状态，不是数据故障，不得因此降低健康分或生成问题；风险分只属于需要评分的规则，其他固定拦截事件没有风险分属于正常现象。replay_sample_count 只限制事件回放和抽样信号，不限制用户总体、事件总数或按类型统计。operational_telemetry 仅供运行参考，不得与 event_evidence 直接对比。当 population.available=true 时不得声称缺少全量用户基线。findings 只写有完整聚合证据支持、管理员能够处理的异常，不要把回放上限、没有对照组、可选字段为空、某规则未触发、全量基线可用等分析边界列为问题。summary、findings、suggestions 必须使用面向管理员的自然中文，不得暴露 JSON 键名、英文字段名或内部状态码。只能从 rule_catalog 建议整数阈值，不得建议关闭规则、修改动作、名单、代码或访问外部地址；证据不足时保持当前阈值。只输出 JSON：summary, health_score, findings[{severity,title,evidence,recommendation}], suggestions[{key,suggested_value,reason,confidence,risk,expected_impact}]。severity/risk 只能是 low/medium/high，confidence 为 0-1，最多 6 条建议。',
+                'content' => '你是订阅风控规则顾问。只分析匿名聚合统计，不直接执行封禁。population 是所有普通用户的全量基线，event_evidence 是时间窗口内全部已触发事件的聚合证据，code_breakdown 是按触发类型拆分的完整统计，rule_evidence 明确每个可调阈值是否有对应字段证据。behavior_baseline 是逐个订阅用户的匿名习惯偏离聚合，只用于辅助判断；其事件固定为 observe_only，不会拦截、重置凭证或通知用户，不得把它描述为已经处罚。triggered_value_distribution 只描述已经触发规则的数值分布，不能代表未触发用户；post_action_outcome 的 quiet_after_horizon 只表示 24 小时内未再次触发，不等于用户已经恢复；appeal_signals 只是风控事件后工单关键词的匿名聚合，不等于已确认误报。rule_evidence.status=not_triggered_in_window 表示该规则本周期没有触发，是中性状态，不是数据故障，不得因此降低健康分或生成问题；风险分只属于需要评分的规则，其他固定拦截事件没有风险分属于正常现象。replay_sample_count 只限制事件回放和抽样信号，不限制用户总体、事件总数或按类型统计。operational_telemetry 仅供运行参考，不得与 event_evidence 直接对比。当 population.available=true 时不得声称缺少全量用户基线。findings 只写有完整聚合证据支持、管理员能够处理的异常，不要把回放上限、没有对照组、可选字段为空、某规则未触发、全量基线可用等分析边界列为问题。summary、findings、suggestions 必须使用面向管理员的自然中文，不得暴露 JSON 键名、英文字段名或内部状态码。只能从 rule_catalog 建议整数阈值，不得建议关闭规则、修改动作、名单、代码或访问外部地址；只有规则字段覆盖、触发值分布、重复触发结果与疑似申诉信号共同提供足够证据时才建议调整，证据不足时保持当前阈值。只输出 JSON：summary, health_score, findings[{severity,title,evidence,recommendation}], suggestions[{key,suggested_value,reason,confidence,risk,expected_impact}]。severity/risk 只能是 low/medium/high，confidence 为 0-1，最多 6 条建议。',
             ],
             ['role' => 'user', 'content' => $payload],
         ];

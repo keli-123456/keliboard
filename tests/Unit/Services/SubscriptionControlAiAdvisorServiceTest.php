@@ -120,12 +120,41 @@ final class SubscriptionControlAiAdvisorServiceTest extends TestCase
                             'ua_categories' => 11500,
                             'regions' => 11000,
                         ],
+                        'field_distributions' => [
+                            'risk_score' => [
+                                'sample_count' => 12000,
+                                'p50' => 70,
+                                'p90' => 88,
+                                'p95' => 92,
+                                'scope' => 'triggered_events_only',
+                            ],
+                        ],
+                        'post_action_outcome' => [
+                            'eligible_pairs' => 18,
+                            'repeat_within_horizon_pairs' => 4,
+                            'quiet_after_horizon_pairs' => 14,
+                            'repeat_within_horizon_rate' => 0.222222,
+                        ],
                     ],
                 ],
                 'average_risk_score' => 72.5,
                 'maximum_risk_score' => 96,
                 'hosting_source_count' => 900,
                 'proxy_source_count' => 120,
+                'post_action_outcomes' => [
+                    'available' => true,
+                    'eligible_user_rule_pairs' => 18,
+                    'repeat_within_horizon_pairs' => 4,
+                    'quiet_after_horizon_pairs' => 14,
+                    'interpretation' => 'absence_of_repeat_is_not_confirmed_recovery',
+                ],
+                'appeal_signals' => [
+                    'available' => true,
+                    'matching_ticket_count' => 3,
+                    'matching_user_count' => 2,
+                    'confirmed_false_positive' => false,
+                    'personal_data_included' => false,
+                ],
                 'full_window_aggregated' => true,
             ],
         ]);
@@ -142,6 +171,13 @@ final class SubscriptionControlAiAdvisorServiceTest extends TestCase
         $this->assertTrue($metrics['data_limits']['event_totals_cover_full_window']);
         $this->assertSame('triggered_evidence_available', $metrics['rule_evidence']['leak_guard_score_threshold']['status']);
         $this->assertSame(12000, $metrics['rule_evidence']['leak_guard_score_threshold']['field_evidence_count']);
+        $this->assertSame(88, $metrics['rule_evidence']['leak_guard_score_threshold']['triggered_value_distribution']['p90']);
+        $this->assertSame(0.222222, $metrics['rule_evidence']['leak_guard_score_threshold']['post_action_outcome']['repeat_within_horizon_rate']);
+        $this->assertSame(3, $metrics['appeal_signals']['matching_ticket_count']);
+        $this->assertSame(18, $metrics['post_action_outcomes']['eligible_user_rule_pairs']);
+        $this->assertTrue($metrics['data_limits']['field_distributions_are_triggered_only']);
+        $this->assertTrue($metrics['data_limits']['quiet_after_horizon_is_not_confirmed_recovery']);
+        $this->assertTrue($metrics['data_limits']['appeal_signals_are_inferred_not_confirmed']);
         $this->assertSame('not_triggered_in_window', $metrics['rule_evidence']['online_ip_threshold']['status']);
 
         $encoded = json_encode($metrics, JSON_THROW_ON_ERROR);
