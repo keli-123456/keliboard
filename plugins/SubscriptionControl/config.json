@@ -194,6 +194,36 @@
             "label": "同源批量命中策略",
             "description": "固定按 reset_token_uuid 处理：命中后同时重置订阅 token 和节点 uuid。历史值 observe / throttle / empty / block / reset_token 会统一按 reset_token_uuid 处理"
         },
+        "enable_behavior_baseline_observation": {
+            "type": "boolean",
+            "default": true,
+            "label": "启用用户行为基线观察",
+            "description": "分析所有订阅用户近期常用客户端、地区、IP 指纹和拉取节奏。只记录匿名偏离样本，不拦截请求、不重置凭证、不发送通知"
+        },
+        "behavior_baseline_min_observations": {
+            "type": "number",
+            "default": 8,
+            "label": "行为基线最少样本数",
+            "description": "用户积累达到该次数后才判断习惯偏离，建议保持 8 次或以上"
+        },
+        "behavior_baseline_score_threshold": {
+            "type": "number",
+            "default": 45,
+            "label": "行为偏离观察分数",
+            "description": "组合偏离达到该分数后记录观察事件；无论分数多少都不会自动处罚"
+        },
+        "behavior_baseline_window_seconds": {
+            "type": "number",
+            "default": 2592000,
+            "label": "行为基线保留时间（秒）",
+            "description": "用户停止拉取后保留匿名行为基线的时间，默认 30 天"
+        },
+        "behavior_baseline_event_cooldown_seconds": {
+            "type": "number",
+            "default": 1800,
+            "label": "行为观察事件冷却时间（秒）",
+            "description": "同一用户相同偏离组合在冷却时间内只记录一次，避免观察日志刷屏"
+        },
         "enable_leak_guard": {
             "type": "boolean",
             "default": true,

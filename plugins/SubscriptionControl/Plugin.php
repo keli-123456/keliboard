@@ -751,6 +751,11 @@ class Plugin extends AbstractPlugin
                 'user_agent' => $userAgent,
             ]);
 
+            if ($action === 'observe') {
+                $this->recordRiskEvent($code, $reason, (int) $user->id, $user, $meta);
+                continue;
+            }
+
             if ($action !== 'block') {
                 $meta['action'] = 'reset_token_uuid';
                 $this->resetSubscriptionCredentials($user);
@@ -867,6 +872,9 @@ class Plugin extends AbstractPlugin
 
     private function normalizeRiskAction(string $action, string $code = ''): string
     {
+        if ($code === 'behavior_baseline_observation') {
+            return 'observe';
+        }
         if (in_array($code, ['source_ip_denylist', 'ua_blacklist', 'ua_block_only'], true)) {
             return 'block';
         }
@@ -891,33 +899,38 @@ class Plugin extends AbstractPlugin
     {
         $action = $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid'), $code);
         $meta['action'] = $action;
-        Cache::increment('subscription_control:blocked_count:' . date('Y-m-d'));
+        $observationOnly = $action === 'observe';
+        if (!$observationOnly) {
+            Cache::increment('subscription_control:blocked_count:' . date('Y-m-d'));
+        }
 
         // 记录最近一次拦截事件，便于用户在面板中定位原因
         if ($userId) {
-            $eventTtl = 60 * 60 * 24 * 3;
-            Cache::put("subscription_control:last_event:{$userId}", [
-                'code' => $code,
-                'action' => $action,
-                'reason' => $reason,
-                'at' => time(),
-                'online_ip_count' => isset($meta['online_ip_count']) ? (int) $meta['online_ip_count'] : null,
-                'source_user_count' => isset($meta['source_user_count']) ? (int) $meta['source_user_count'] : null,
-                'risk_score' => isset($meta['risk_score']) ? (int) $meta['risk_score'] : null,
-                'hit_count' => isset($meta['hit_count']) ? (int) $meta['hit_count'] : null,
-                'signals' => $meta['signals'] ?? null,
-                'active_plan_user' => isset($meta['active_plan_user']) ? (bool) $meta['active_plan_user'] : null,
-                'used_traffic' => isset($meta['used_traffic']) ? (int) $meta['used_traffic'] : null,
-                'transfer_enable' => isset($meta['transfer_enable']) ? (int) $meta['transfer_enable'] : null,
-                'threshold' => isset($meta['threshold']) ? (int) $meta['threshold'] : null,
-                'ip_asn' => isset($meta['ip_asn']) ? (int) $meta['ip_asn'] : null,
-                'ip_prefix' => $meta['ip_prefix'] ?? null,
-                'ip_country' => $meta['ip_country'] ?? null,
-                'ip_registry' => $meta['ip_registry'] ?? null,
-                'ip_org' => $meta['ip_org'] ?? null,
-                'ip_type' => $meta['ip_type'] ?? null,
-                'ip_risk_tags' => $meta['ip_risk_tags'] ?? null,
-            ], $eventTtl);
+            if (!$observationOnly) {
+                $eventTtl = 60 * 60 * 24 * 3;
+                Cache::put("subscription_control:last_event:{$userId}", [
+                    'code' => $code,
+                    'action' => $action,
+                    'reason' => $reason,
+                    'at' => time(),
+                    'online_ip_count' => isset($meta['online_ip_count']) ? (int) $meta['online_ip_count'] : null,
+                    'source_user_count' => isset($meta['source_user_count']) ? (int) $meta['source_user_count'] : null,
+                    'risk_score' => isset($meta['risk_score']) ? (int) $meta['risk_score'] : null,
+                    'hit_count' => isset($meta['hit_count']) ? (int) $meta['hit_count'] : null,
+                    'signals' => $meta['signals'] ?? null,
+                    'active_plan_user' => isset($meta['active_plan_user']) ? (bool) $meta['active_plan_user'] : null,
+                    'used_traffic' => isset($meta['used_traffic']) ? (int) $meta['used_traffic'] : null,
+                    'transfer_enable' => isset($meta['transfer_enable']) ? (int) $meta['transfer_enable'] : null,
+                    'threshold' => isset($meta['threshold']) ? (int) $meta['threshold'] : null,
+                    'ip_asn' => isset($meta['ip_asn']) ? (int) $meta['ip_asn'] : null,
+                    'ip_prefix' => $meta['ip_prefix'] ?? null,
+                    'ip_country' => $meta['ip_country'] ?? null,
+                    'ip_registry' => $meta['ip_registry'] ?? null,
+                    'ip_org' => $meta['ip_org'] ?? null,
+                    'ip_type' => $meta['ip_type'] ?? null,
+                    'ip_risk_tags' => $meta['ip_risk_tags'] ?? null,
+                ], $eventTtl);
+            }
             try {
                 if (!$user) {
                     $user = User::query()->select(['id', 'email', 'telegram_id'])->find($userId);
@@ -937,7 +950,7 @@ class Plugin extends AbstractPlugin
             'telegram_sent' => false,
         ];
 
-        if ($user) {
+        if ($user && !$observationOnly) {
             try {
                 $notificationResult = $this->sendRiskNotifications($user, $code, $reason, $meta);
             } catch (\Throwable $e) {

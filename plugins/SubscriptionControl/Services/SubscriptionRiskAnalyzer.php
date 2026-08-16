@@ -360,6 +360,41 @@ TEXT;
             }
         }
 
+        if ($this->configBool('enable_behavior_baseline_observation', false)) {
+            $region = $this->resolveRegionKey($clientIp);
+            $onlineRegions = $this->resolveOnlineRegions((array) ($context['online_ips'] ?? []));
+            $whitelistedClient = $this->isWhitelistedClient($client, $userAgent);
+            $trustedClient = $whitelistedClient && !(bool) ($client['risky'] ?? false);
+            $observation = (new SubscriptionBehaviorBaseline($this->config))->observe(
+                $userId,
+                $token,
+                filter_var($clientIp, FILTER_VALIDATE_IP) ? hash('sha256', trim($clientIp)) : 'invalid',
+                (string) ($client['category'] ?? 'unknown'),
+                $region,
+                $onlineRegions,
+                $trustedEgress,
+                (bool) ($client['risky'] ?? false),
+                $trustedClient
+            );
+
+            // Deterministic rules retain priority. Baseline anomalies are recorded only
+            // when the same request was otherwise allowed, and never change its result.
+            if ($observation !== null && $decisions === []) {
+                $decisions[] = $this->decision(
+                    'behavior_baseline_observation',
+                    '用户订阅行为偏离近期习惯，已记录观察样本',
+                    'observe',
+                    array_merge($observation, [
+                        'trusted_egress' => $trustedEgress,
+                        'trusted_client' => $trustedClient,
+                        'active_plan_user' => $this->isActivePlanUser($context),
+                        'used_traffic' => $this->contextInt($context, 'used_traffic', 0),
+                        'transfer_enable' => $this->contextInt($context, 'transfer_enable', 0),
+                    ])
+                );
+            }
+        }
+
         if (!empty($decisions) && $ipIntelligence === null) {
             $ipIntelligence = $this->resolveIpIntelligence($clientIp, $trustedEgress);
         }

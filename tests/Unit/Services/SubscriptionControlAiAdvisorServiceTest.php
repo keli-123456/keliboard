@@ -54,6 +54,38 @@ final class SubscriptionControlAiAdvisorServiceTest extends TestCase
         $this->assertFalse($metrics['data_limits']['personal_data_sent']);
     }
 
+    public function test_behavior_baseline_metrics_are_explicitly_observe_only(): void
+    {
+        $metrics = $this->invoke('metrics', [[
+            'user_id' => 88,
+            'code' => 'behavior_baseline_observation',
+            'action' => 'observe',
+            'signals' => ['behavior_new_region', 'behavior_combined_deviation'],
+        ]], 7, [
+            'event_evidence' => [
+                'total_event_count' => 4,
+                'unique_affected_users' => 2,
+                'repeat_affected_users' => 1,
+                'code_breakdown' => [
+                    'behavior_baseline_observation' => [
+                        'event_count' => 4,
+                        'affected_users' => 2,
+                        'repeat_affected_users' => 1,
+                    ],
+                ],
+                'full_window_aggregated' => true,
+            ],
+        ]);
+
+        $this->assertSame('observe_only', $metrics['behavior_baseline']['mode']);
+        $this->assertSame(4, $metrics['behavior_baseline']['event_count']);
+        $this->assertSame(2, $metrics['behavior_baseline']['affected_users']);
+        $this->assertSame(1, $metrics['behavior_baseline']['repeat_affected_users']);
+        $this->assertSame(0, $metrics['behavior_baseline']['enforcement_count']);
+        $this->assertTrue($metrics['data_limits']['behavior_baseline_is_observe_only']);
+        $this->assertTrue($metrics['data_limits']['behavior_baseline_never_enforces']);
+    }
+
     public function test_full_population_and_full_window_evidence_override_replay_sample_counts(): void
     {
         $metrics = $this->invoke('metrics', [[
