@@ -110,6 +110,8 @@ final class SubscriptionControlHighRiskUserServiceTest extends TestCase
         $this->assertContains('post_reset_retrigger', $item['case_evidence']);
         $this->assertContains('source_sharing', $item['case_evidence']);
         $this->assertContains('infrastructure_source', $item['case_evidence']);
+        $this->assertNotEmpty($item['evidence_timeline']);
+        $this->assertSame('subscription_leak_guard', $item['evidence_timeline'][0]['code']);
         $this->assertTrue($item['requires_manual_review']);
         $this->assertFalse($item['automatic_enforcement']);
     }

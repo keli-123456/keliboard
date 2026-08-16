@@ -5,6 +5,7 @@ namespace App\Http\Controllers\V2\Admin;
 use App\Http\Controllers\Controller;
 use App\Jobs\GenerateSubscriptionControlAiReviewJob;
 use App\Services\SubscriptionControlAiAdvisorService;
+use App\Services\SubscriptionControlCaseReviewService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -99,6 +100,38 @@ class SubscriptionControlController extends Controller
         }
     }
 
+    public function reviewHighRiskCase(
+        Request $request,
+        int $userId,
+        SubscriptionControlCaseReviewService $service
+    ): JsonResponse {
+        $data = $request->validate([
+            'status' => ['required', 'string', 'in:watching,confirmed_leak,false_positive,cleared'],
+            'note' => ['nullable', 'string', 'max:1000'],
+            'suspicion_score' => ['nullable', 'integer', 'min:0', 'max:100'],
+            'verdict' => ['nullable', 'string', 'max:64'],
+            'confidence' => ['nullable', 'string', 'max:32'],
+            'case_evidence' => ['nullable', 'array', 'max:16'],
+            'case_evidence.*' => ['string', 'max:64'],
+            'false_positive_factors' => ['nullable', 'array', 'max:12'],
+            'false_positive_factors.*' => ['string', 'max:64'],
+            'post_reset_retrigger_count' => ['nullable', 'integer', 'min:0', 'max:100000'],
+            'last_trigger_at' => ['nullable', 'integer', 'min:0'],
+            'model_version' => ['nullable', 'string', 'max:32'],
+        ]);
+
+        try {
+            return $this->success($service->review(
+                $userId,
+                (string) $data['status'],
+                isset($data['note']) ? (string) $data['note'] : null,
+                (int) ($request->user()?->id ?? 0),
+                $data
+            ));
+        } catch (\RuntimeException $exception) {
+            return $this->advisorFailure($exception->getMessage());
+        }
+    }
     private function advisorFailure(string $code): JsonResponse
     {
         return response()->json([

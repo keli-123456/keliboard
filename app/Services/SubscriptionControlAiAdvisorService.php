@@ -97,6 +97,7 @@ class SubscriptionControlAiAdvisorService
             $events = $this->events((int) $review->window_days);
             $populationMetrics = (new SubscriptionControlPopulationMetricsService())->collect((int) $review->window_days);
             $metrics = $this->metrics($events, (int) $review->window_days, $populationMetrics);
+            $metrics['manual_case_review_calibration'] = (new SubscriptionControlCaseReviewService())->calibrationMetrics();
             $providerSettings = $this->ai()->providerSettingsForInternalUse();
             if (
                 !(bool) ($providerSettings['enabled'] ?? false)

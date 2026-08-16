@@ -13,7 +13,7 @@ final class SubscriptionControlHighRiskUserService
     private const EVENT_TABLE = 'v2_subscription_control_event';
     private const USER_TABLE = 'v2_user';
     private const SITE_TABLE = 'v2_site';
-    private const CASE_MODEL_VERSION = '1.0.0';
+    private const CASE_MODEL_VERSION = '1.1.0';
     private const BLOCKING_ACTIONS = ['block', 'empty', 'throttle', 'reset_token', 'reset_token_uuid'];
     private const RESET_ACTIONS = ['reset_token', 'reset_token_uuid'];
     private const STRONG_EVENT_CODES = [
@@ -46,11 +46,13 @@ final class SubscriptionControlHighRiskUserService
             return $this->unavailable($days);
         }
 
-        return Cache::remember(
+        $overview = Cache::remember(
             sprintf('subscription_control:high_risk_users:%s:%d:%d', self::CASE_MODEL_VERSION, $days, $limit),
             60,
             fn(): array => $this->aggregate($days, $limit)
         );
+
+        return (new SubscriptionControlCaseReviewService())->attachOverview($overview);
     }
 
     /** @return array<string, mixed> */
@@ -244,6 +246,10 @@ final class SubscriptionControlHighRiskUserService
                     'risk_score' => is_numeric($row->risk_score ?? null) ? (int) $row->risk_score : null,
                     'source_user_count' => is_numeric($row->source_user_count ?? null) ? (int) $row->source_user_count : null,
                     'ip_type' => trim((string) ($row->ip_type ?? '')),
+                    'client_ip' => trim((string) ($row->client_ip ?? '')),
+                    'ua_category' => trim((string) ($row->ua_category ?? '')),
+                    'region' => trim((string) ($row->region ?? '')),
+                    'reason' => mb_substr(trim((string) ($row->reason ?? '')), 0, 240),
                     'signals' => $this->decodeJsonValues($row->signals ?? null),
                 ];
             });
@@ -262,6 +268,22 @@ final class SubscriptionControlHighRiskUserService
         unset($item['_case_events']);
         usort($events, static fn(array $left, array $right): int =>
             (($left['created_at'] ?? 0) <=> ($right['created_at'] ?? 0))
+        );
+        $evidenceTimeline = array_map(
+            static fn(array $event): array => [
+                'code' => (string) ($event['code'] ?? ''),
+                'action' => (string) ($event['action'] ?? ''),
+                'created_at' => $event['created_at'] ?? null,
+                'risk_score' => $event['risk_score'] ?? null,
+                'source_user_count' => $event['source_user_count'] ?? null,
+                'ip_type' => (string) ($event['ip_type'] ?? ''),
+                'client_ip' => (string) ($event['client_ip'] ?? ''),
+                'ua_category' => (string) ($event['ua_category'] ?? ''),
+                'region' => (string) ($event['region'] ?? ''),
+                'reason' => (string) ($event['reason'] ?? ''),
+                'signals' => array_values((array) ($event['signals'] ?? [])),
+            ],
+            array_slice(array_reverse($events), 0, 12)
         );
 
         $resetTimes = [];
@@ -397,6 +419,7 @@ final class SubscriptionControlHighRiskUserService
         $item['recommended_action'] = $recommendedAction;
         $item['requires_manual_review'] = true;
         $item['automatic_enforcement'] = false;
+        $item['evidence_timeline'] = $evidenceTimeline;
 
         return $item;
     }
