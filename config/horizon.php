@@ -189,6 +189,16 @@ return [
                 'tries' => 1,
                 'balanceCooldown' => 3,
             ],
+            'RiskAI' => [
+                'connection' => 'redis_ai',
+                'queue' => ['risk_ai'],
+                'balance' => false,
+                'minProcesses' => 1,
+                'maxProcesses' => 1,
+                'tries' => 1,
+                'timeout' => 210,
+                'memory' => 256,
+            ],
             'AdminOperations' => [
                 'connection' => 'redis',
                 'queue' => ['admin_operations'],
@@ -230,6 +240,16 @@ return [
                 'maxProcesses' => 20,
                 'tries' => 1,
                 'balanceCooldown' => 3,
+            ],
+            'RiskAI' => [
+                'connection' => 'redis_ai',
+                'queue' => ['risk_ai'],
+                'balance' => false,
+                'minProcesses' => 1,
+                'maxProcesses' => 1,
+                'tries' => 1,
+                'timeout' => 210,
+                'memory' => 256,
             ],
             'AdminOperations' => [
                 'connection' => 'redis',

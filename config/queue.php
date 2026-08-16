@@ -66,6 +66,15 @@ return [
             'block_for' => null,
         ],
 
+        'redis_ai' => [
+            'driver' => 'redis',
+            'connection' => 'default',
+            'queue' => 'risk_ai',
+            'retry_after' => max(240, (int) env('RISK_AI_QUEUE_RETRY_AFTER', 240)),
+            'block_for' => null,
+            'after_commit' => false,
+        ],
+
         'redis_backup' => [
             'driver' => 'redis',
             'connection' => 'default',

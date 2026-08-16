@@ -15,6 +15,7 @@ class SubscriptionControlAiAdvisorService
     private const PLUGIN = 'subscription_control';
     private const EVENT_TABLE = 'v2_subscription_control_event';
     private const REVIEW_TABLE = 'v2_subscription_control_ai_review';
+    private const PENDING_STALE_SECONDS = 240;
 
     /** @var array<string, array{label:string,min:int,max:int,code:string,field:string,operator:string}> */
     private const RULES = [
@@ -39,6 +40,7 @@ class SubscriptionControlAiAdvisorService
     /** @return array<string, mixed> */
     public function overview(): array
     {
+        $this->recoverStalePendingReviews();
         $settings = $this->ai()->publicSettings();
         $latest = $this->tableAvailable()
             ? SubscriptionControlAiReview::query()->latest('id')->first()
@@ -71,6 +73,8 @@ class SubscriptionControlAiAdvisorService
             throw new RuntimeException('migration_required');
         }
 
+        $this->recoverStalePendingReviews();
+
         return SubscriptionControlAiReview::query()->create([
             'status' => 'pending',
             'window_days' => max(3, min(30, $days)),
@@ -84,6 +88,9 @@ class SubscriptionControlAiAdvisorService
         if (!$review || $review->status !== 'pending') {
             return;
         }
+
+        // Start the stale timer when a worker actually claims this review.
+        $review->touch();
 
         try {
             $config = $this->currentConfig();
@@ -911,6 +918,39 @@ class SubscriptionControlAiAdvisorService
             'error_code' => mb_substr($code, 0, 64),
             'generated_at' => time(),
         ])->save();
+    }
+
+    public function failPendingReview(int $reviewId, string $code): void
+    {
+        $review = SubscriptionControlAiReview::query()
+            ->whereKey($reviewId)
+            ->where('status', 'pending')
+            ->first();
+
+        if ($review) {
+            $this->fail($review, $code !== '' ? $code : 'job_failed');
+        }
+    }
+
+    public function recoverStalePendingReviews(?int $now = null): int
+    {
+        if (!$this->tableAvailable()) {
+            return 0;
+        }
+
+        $timestamp = $now ?? time();
+        $reviews = SubscriptionControlAiReview::query()
+            ->where('status', 'pending')
+            ->where('updated_at', '<=', $timestamp - self::PENDING_STALE_SECONDS)
+            ->orderBy('id')
+            ->limit(50)
+            ->get();
+
+        foreach ($reviews as $review) {
+            $this->fail($review, 'review_stalled');
+        }
+
+        return $reviews->count();
     }
 
     private function tableAvailable(): bool
