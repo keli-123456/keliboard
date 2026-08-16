@@ -43,6 +43,10 @@ class SubscriptionControlAiAdvisorService
         $latest = $this->tableAvailable()
             ? SubscriptionControlAiReview::query()->latest('id')->first()
             : null;
+        $highRiskUsers = (new SubscriptionControlHighRiskUserService())->collect(
+            $latest ? (int) $latest->window_days : 7,
+            20
+        );
 
         return [
             'available' => $this->tableAvailable(),
@@ -52,6 +56,7 @@ class SubscriptionControlAiAdvisorService
                 && trim((string) ($settings['ticket_ai_model'] ?? '')) !== '',
             'managed_rules' => $this->catalog(),
             'latest_review' => $latest ? $this->serialize($latest) : null,
+            'high_risk_users' => $highRiskUsers,
             'safety' => [
                 'direct_enforcement' => false,
                 'manual_approval_required' => true,
