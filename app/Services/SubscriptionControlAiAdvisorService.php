@@ -95,19 +95,10 @@ class SubscriptionControlAiAdvisorService
                 throw new RuntimeException('ai_disabled');
             }
 
-            $completion = $this->provider()->complete(
-                array_merge($providerSettings, [
-                    'json_mode' => true,
-                    'temperature' => 0.1,
-                    'max_tokens' => 1400,
-                ]),
-                $this->messages($config, $metrics),
-                false
+            $decoded = $this->requestReview(
+                $providerSettings,
+                $this->messages($config, $metrics)
             );
-            $decoded = $this->decode((string) ($completion['content'] ?? ''));
-            if ($decoded === null) {
-                throw new RuntimeException('invalid_response');
-            }
             $suggestions = $this->suggestions((array) ($decoded['suggestions'] ?? []), $config);
 
             $review->forceFill([
@@ -557,18 +548,141 @@ class SubscriptionControlAiAdvisorService
         ];
     }
 
+    /**
+     * @param array<string, mixed> $providerSettings
+     * @param array<int, array{role:string, content:string}> $messages
+     * @return array<string, mixed>
+     */
+    private function requestReview(array $providerSettings, array $messages): array
+    {
+        foreach ([3200, 4096] as $attempt => $maxTokens) {
+            $attemptMessages = $messages;
+            if ($attempt > 0 && isset($attemptMessages[0]['content'])) {
+                $attemptMessages[0]['content'] .= ' 上一次响应无法解析。请重新生成一个完整 JSON 对象，不要使用 Markdown 代码块，不要添加任何解释文字，所有数组和字符串必须正确闭合。';
+            }
+
+            try {
+                $completion = $this->provider()->complete(
+                    array_merge($providerSettings, [
+                        'json_mode' => true,
+                        'temperature' => 0.1,
+                        'max_tokens' => $maxTokens,
+                    ]),
+                    $attemptMessages,
+                    false
+                );
+            } catch (TicketAiProviderException $exception) {
+                if ($exception->errorCode() !== 'invalid_response' || $attempt === 1) {
+                    throw $exception;
+                }
+
+                continue;
+            }
+            $decoded = $this->decode((string) ($completion['content'] ?? ''));
+            if ($decoded !== null) {
+                return $decoded;
+            }
+        }
+
+        throw new RuntimeException('invalid_response');
+    }
+
     /** @return array<string, mixed>|null */
     private function decode(string $content): ?array
     {
-        $content = trim($content);
-        if (preg_match('/^```(?:json)?\s*(.*?)\s*```$/isu', $content, $matches) === 1) {
-            $content = trim((string) $matches[1]);
+        $content = trim(preg_replace('/^\xEF\xBB\xBF/', '', $content) ?? $content);
+        $decoded = $this->decodeReviewObject($content);
+        if ($decoded !== null) {
+            return $decoded;
         }
-        $decoded = json_decode($content, true);
 
-        return is_array($decoded) && !array_is_list($decoded) ? $decoded : null;
+        $wrapped = json_decode($content, true);
+        if (is_string($wrapped)) {
+            $decoded = $this->decodeReviewObject($wrapped);
+            if ($decoded !== null) {
+                return $decoded;
+            }
+        }
+
+        if (preg_match('/\x60{3}(?:json)?\s*(.*?)\s*\x60{3}/isu', $content, $matches) === 1) {
+            $decoded = $this->decodeReviewObject((string) $matches[1]);
+            if ($decoded !== null) {
+                return $decoded;
+            }
+        }
+
+        $candidate = $this->firstBalancedObject($content);
+
+        return $candidate === null ? null : $this->decodeReviewObject($candidate);
     }
 
+    /** @return array<string, mixed>|null */
+    private function decodeReviewObject(string $content): ?array
+    {
+        $decoded = json_decode(trim($content), true);
+        if (!is_array($decoded) || array_is_list($decoded)) {
+            return null;
+        }
+        if (
+            !is_string($decoded['summary'] ?? null)
+            || trim((string) $decoded['summary']) === ''
+            || !is_numeric($decoded['health_score'] ?? null)
+        ) {
+            return null;
+        }
+        foreach (['findings', 'suggestions'] as $field) {
+            if (array_key_exists($field, $decoded) && !is_array($decoded[$field])) {
+                return null;
+            }
+            $decoded[$field] ??= [];
+        }
+
+        return $decoded;
+    }
+
+    private function firstBalancedObject(string $content): ?string
+    {
+        $length = strlen($content);
+        for ($start = 0; $start < $length; $start++) {
+            if ($content[$start] !== '{') {
+                continue;
+            }
+
+            $depth = 0;
+            $quoted = false;
+            $escaped = false;
+            for ($index = $start; $index < $length; $index++) {
+                $character = $content[$index];
+                if ($quoted) {
+                    if ($escaped) {
+                        $escaped = false;
+                        continue;
+                    }
+                    if ($character === '\\') {
+                        $escaped = true;
+                        continue;
+                    }
+                    if ($character === '"') {
+                        $quoted = false;
+                    }
+                    continue;
+                }
+
+                if ($character === '"') {
+                    $quoted = true;
+                } elseif ($character === '{') {
+                    $depth++;
+                } elseif ($character === '}') {
+                    $depth--;
+                    if ($depth === 0) {
+                        return substr($content, $start, $index - $start + 1);
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
     /** @param array<int, mixed> $items @param array<string, mixed> $metrics */
     private function findings(array $items, array $metrics = []): array
     {

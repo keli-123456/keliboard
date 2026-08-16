@@ -240,6 +240,91 @@ final class SubscriptionControlAiAdvisorServiceTest extends TestCase
         $this->assertSame('triggered_events_only', $replay[0]['coverage']);
     }
 
+    public function test_review_request_retries_once_with_a_larger_output_budget(): void
+    {
+        $provider = new class extends \App\Services\TicketAiProviderClient
+        {
+            public array $calls = [];
+
+            public function complete(array $settings, array $messages, bool $validateStructuredContent = true): array
+            {
+                $this->calls[] = ['settings' => $settings, 'messages' => $messages];
+
+                return count($this->calls) === 1
+                    ? ['content' => '{"summary":"被截断"']
+                    : ['content' => '{"summary":"重试成功","health_score":91,"findings":[],"suggestions":[]}'];
+            }
+        };
+        $service = new SubscriptionControlAiAdvisorService($provider);
+        $method = new ReflectionMethod(SubscriptionControlAiAdvisorService::class, 'requestReview');
+        $method->setAccessible(true);
+
+        $decoded = $method->invoke($service, ['enabled' => true], [
+            ['role' => 'system', 'content' => '只输出 JSON'],
+            ['role' => 'user', 'content' => '{}'],
+        ]);
+
+        $this->assertSame('重试成功', $decoded['summary']);
+        $this->assertCount(2, $provider->calls);
+        $this->assertSame(3200, $provider->calls[0]['settings']['max_tokens']);
+        $this->assertSame(4096, $provider->calls[1]['settings']['max_tokens']);
+        $this->assertStringContainsString('上一次响应无法解析', $provider->calls[1]['messages'][0]['content']);
+    }
+    public function test_review_request_retries_an_empty_provider_response(): void
+    {
+        $provider = new class extends \App\Services\TicketAiProviderClient
+        {
+            public int $calls = 0;
+
+            public function complete(array $settings, array $messages, bool $validateStructuredContent = true): array
+            {
+                $this->calls++;
+                if ($this->calls === 1) {
+                    throw new \App\Exceptions\TicketAiProviderException('invalid_response');
+                }
+
+                return ['content' => '{"summary":"空响应重试成功","health_score":90,"findings":[],"suggestions":[]}'];
+            }
+        };
+        $service = new SubscriptionControlAiAdvisorService($provider);
+        $method = new ReflectionMethod(SubscriptionControlAiAdvisorService::class, 'requestReview');
+        $method->setAccessible(true);
+
+        $decoded = $method->invoke($service, ['enabled' => true], [
+            ['role' => 'system', 'content' => '只输出 JSON'],
+            ['role' => 'user', 'content' => '{}'],
+        ]);
+
+        $this->assertSame('空响应重试成功', $decoded['summary']);
+        $this->assertSame(2, $provider->calls);
+    }
+    public function test_review_json_decoder_accepts_common_provider_wrappers(): void
+    {
+        $json = '{"summary":"规则健康，说明中含有 {括号}","health_score":88,"findings":[],"suggestions":[]}';
+        $fence = str_repeat(chr(96), 3);
+        $cases = [
+            $json,
+            "{$fence}json\n{$json}\n{$fence}",
+            "分析完成，结果如下：\n{$json}\n请人工确认。",
+            json_encode($json, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+            "\xEF\xBB\xBF{$json}",
+        ];
+
+        foreach ($cases as $content) {
+            $decoded = $this->invoke('decode', $content);
+
+            $this->assertIsArray($decoded);
+            $this->assertSame(88, $decoded['health_score']);
+            $this->assertSame('规则健康，说明中含有 {括号}', $decoded['summary']);
+        }
+    }
+
+    public function test_review_json_decoder_rejects_truncated_or_wrong_schema_responses(): void
+    {
+        $this->assertNull($this->invoke('decode', '{"summary":"未闭合"'));
+        $this->assertNull($this->invoke('decode', '{"message":"缺少必要字段"}'));
+        $this->assertNull($this->invoke('decode', '{"summary":"结论","health_score":70,"findings":"none"}'));
+    }
     private function invoke(string $method, mixed ...$arguments): mixed
     {
         $reflection = new ReflectionMethod(SubscriptionControlAiAdvisorService::class, $method);
