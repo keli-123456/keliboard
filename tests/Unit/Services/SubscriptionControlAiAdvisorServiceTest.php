@@ -199,6 +199,8 @@ final class SubscriptionControlAiAdvisorServiceTest extends TestCase
         $this->assertSame(900, $metrics['source_ip_deny_attribution']['total_event_count']);
         $this->assertFalse($metrics['source_ip_deny_attribution']['exact_rule_values_included']);
         $this->assertTrue($metrics['data_limits']['source_ip_deny_attribution_is_anonymous']);
+        $this->assertTrue($metrics['data_limits']['historical_source_events_may_be_unattributed']);
+        $this->assertTrue($metrics['data_limits']['source_class_and_provider_are_parallel_dimensions']);
         $this->assertTrue($metrics['data_limits']['field_distributions_are_triggered_only']);
         $this->assertTrue($metrics['data_limits']['quiet_after_horizon_is_not_confirmed_recovery']);
         $this->assertTrue($metrics['data_limits']['appeal_signals_are_inferred_not_confirmed']);

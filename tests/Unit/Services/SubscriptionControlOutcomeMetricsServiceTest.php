@@ -100,20 +100,35 @@ final class SubscriptionControlOutcomeMetricsServiceTest extends TestCase
                 'ip_org' => 'Microsoft Azure',
                 'created_at' => $now - 170000,
             ],
+            [
+                'user_id' => 4,
+                'code' => 'source_ip_denylist',
+                'action' => 'block',
+                'client_ip' => '192.0.2.9',
+                'source_ip_deny_match_type' => null,
+                'source_ip_deny_match' => null,
+                'ip_org' => 'Google LLC',
+                'created_at' => $now - 160000,
+            ],
         ]);
 
         $attribution = (new SubscriptionControlOutcomeMetricsService())
             ->collect($now - 604800)['source_ip_deny_attribution'];
 
         $this->assertTrue($attribution['available']);
-        $this->assertSame(4, $attribution['total_event_count']);
+        $this->assertSame(5, $attribution['total_event_count']);
         $this->assertSame(4, $attribution['attributed_event_count']);
+        $this->assertSame(0.8, $attribution['attribution_coverage_rate']);
+        $this->assertSame(1, $attribution['legacy_unattributed_event_count']);
+        $this->assertSame(1, $attribution['source_class_counts']['legacy_unattributed']['event_count']);
+        $this->assertSame(1, $attribution['match_type_counts']['legacy_unattributed']['event_count']);
         $this->assertSame(2, $attribution['source_class_counts']['automatic_ua_ip']['event_count']);
         $this->assertSame(1, $attribution['source_class_counts']['automatic_ua_ip']['repeat_affected_users']);
         $this->assertSame(1, $attribution['source_class_counts']['configured_cidr']['event_count']);
         $this->assertSame(1, $attribution['source_class_counts']['configured_organization']['event_count']);
         $this->assertSame(2, $attribution['provider_counts']['aws']['event_count']);
         $this->assertSame(1, $attribution['provider_counts']['azure']['event_count']);
+        $this->assertSame(1, $attribution['provider_counts']['google_cloud']['event_count']);
         $this->assertSame(2, $attribution['prefix_scope_counts']['exact_ipv4']['event_count']);
         $this->assertMatchesRegularExpression(
             '/^[a-f0-9]{16}$/',

@@ -71,6 +71,9 @@ final class SubscriptionControlSourceDenyAttributionService
             $createdAt = (int) ($row->created_at ?? 0);
             $type = $this->normalizeMatchType((string) ($row->source_ip_deny_match_type ?? ''));
             $match = trim((string) ($row->source_ip_deny_match ?? ''));
+            if ($type === 'unknown' && $match === '') {
+                $type = 'legacy_unattributed';
+            }
             $sourceClass = $this->sourceClass($type, $match, $createdAt, $autoLearnedIps);
             $provider = $this->provider($match, (string) ($row->ip_org ?? ''));
             $prefixScope = $this->prefixScope($type, $match);
@@ -120,19 +123,29 @@ final class SubscriptionControlSourceDenyAttributionService
             ?: ($right['affected_users'] <=> $left['affected_users'])
         );
 
+        $totalEventCount = $rows->count();
+        $attributedEventCount = $rows->filter(static fn($row): bool =>
+            trim((string) ($row->source_ip_deny_match ?? '')) !== ''
+        )->count();
+        $legacyUnattributedEventCount = (int) ($sourceClasses['legacy_unattributed']['event_count'] ?? 0);
+
         return [
             'available' => true,
             'scope' => 'source_ip_denylist_events_only',
-            'total_event_count' => $rows->count(),
-            'attributed_event_count' => $rows->filter(static fn($row): bool =>
-                trim((string) ($row->source_ip_deny_match ?? '')) !== ''
-            )->count(),
+            'total_event_count' => $totalEventCount,
+            'attributed_event_count' => $attributedEventCount,
+            'attribution_coverage_rate' => $totalEventCount > 0
+                ? round($attributedEventCount / $totalEventCount, 6)
+                : 0.0,
+            'legacy_unattributed_event_count' => $legacyUnattributedEventCount,
             'source_class_counts' => $this->finalizeBuckets($sourceClasses),
             'match_type_counts' => $this->finalizeBuckets($matchTypes),
             'provider_counts' => $this->finalizeBuckets($providers),
             'prefix_scope_counts' => $this->finalizeBuckets($prefixScopes),
             'top_anonymous_rules' => array_slice($anonymousRules, 0, 12),
             'automatic_ua_ip_detection' => 'best_effort_within_retained_event_window',
+            'legacy_unattributed_interpretation' => 'pre_attribution_history_not_unknown_origin',
+            'source_class_and_provider_are_parallel_dimensions' => true,
             'exact_rule_values_included' => false,
             'personal_data_included' => false,
         ];
@@ -166,6 +179,10 @@ final class SubscriptionControlSourceDenyAttributionService
     /** @param array<string, int> $autoLearnedIps */
     private function sourceClass(string $type, string $match, int $createdAt, array $autoLearnedIps): string
     {
+        if ($type === 'legacy_unattributed') {
+            return 'legacy_unattributed';
+        }
+
         if ($type === 'cidr') {
             if (filter_var($match, FILTER_VALIDATE_IP) !== false) {
                 $learnedAt = $autoLearnedIps[$match] ?? null;
