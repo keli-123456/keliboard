@@ -19,6 +19,7 @@ use App\Services\TicketAiContextService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Tests\Support\InteractsWithInMemoryDatabase;
@@ -43,6 +44,7 @@ final class TicketAiAssistantV2Test extends TestCase
         $this->createKnowledgeTable();
         $this->createSuggestionTable();
         $this->createRequestLogTable();
+        $this->createSubscriptionControlEventTable();
     }
 
     public function test_capabilities_distinguish_disabled_incomplete_and_ready_states(): void
@@ -83,6 +85,7 @@ final class TicketAiAssistantV2Test extends TestCase
             'category' => '订阅与节点',
             'sentiment' => '焦急',
             'risk' => 'low',
+            'risk_explanation' => '近期没有发现可核验的风控事件。',
             'needs_human' => false,
             'confidence' => 0.8,
             'draft' => '请重新导入订阅。',
@@ -100,11 +103,13 @@ final class TicketAiAssistantV2Test extends TestCase
         $this->assertSame((int) $site->id, $log->site_id);
         $this->assertSame(30, $log->total_tokens);
         $this->assertSame('site', $result['scope']['type']);
+        $this->assertSame('近期没有发现可核验的风控事件。', $result['risk_explanation']);
 
         Http::assertSent(function ($request) use ($user): bool {
             $payload = json_encode($request->data(), JSON_UNESCAPED_UNICODE);
 
             return str_contains($payload, '秒速云 AI')
+                && str_contains($payload, 'risk_explanation_field')
                 && !str_contains($payload, 'Keli 面板')
                 && !str_contains($payload, $user->email)
                 && !str_contains($payload, $user->token)
@@ -125,6 +130,47 @@ final class TicketAiAssistantV2Test extends TestCase
         $this->assertFalse($result['structured_output']);
         $this->assertFalse($suggestion->structured_output);
         $this->assertSame('建议用户重新导入订阅。', $result['draft']);
+    }
+
+    public function test_risk_question_draft_includes_verified_evidence_when_model_omits_it(): void
+    {
+        $this->bindReadySettings();
+        [$ticket, $user] = $this->siteTicket();
+        $ticket->forceFill(['subject' => '为什么我的订阅被风控重置'])->save();
+        DB::table('v2_subscription_control_event')->insert([
+            'event_id' => 'risk-ticket-1',
+            'user_id' => $user->id,
+            'email' => $user->email,
+            'code' => 'multi_region_pull',
+            'reason' => 'internal reason must not be copied',
+            'action' => 'reset_token_uuid',
+            'client_ip' => '203.0.113.88',
+            'regions' => json_encode(['SG', 'JP', 'US']),
+            'risk_score' => 72,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        Http::fake([
+            '*' => Http::response($this->providerResponse(json_encode([
+                'summary' => '用户询问风控原因',
+                'category' => '订阅与节点',
+                'sentiment' => '疑问',
+                'risk' => 'medium',
+                'needs_human' => false,
+                'confidence' => 0.8,
+                'draft' => '您好，我们已经查询您的账号。',
+                'knowledge_refs' => [],
+            ], JSON_UNESCAPED_UNICODE))),
+        ]);
+
+        $result = (new TicketAiAssistantService())->suggest($ticket, null, 7);
+
+        $this->assertStringContainsString('经查询，近期风控依据如下：', $result['draft']);
+        $this->assertStringContainsString('短时从多个地区拉取订阅', $result['draft']);
+        $this->assertStringContainsString('近期触发 1 次', $result['draft']);
+        $this->assertStringContainsString('已重置订阅凭证', $result['draft']);
+        $this->assertStringNotContainsString('203.0.113.88', $result['draft']);
+        $this->assertSame('multi_region_pull', $result['risk_evidence'][0]['code']);
     }
 
     public function test_provider_failure_creates_sanitized_failure_log(): void
@@ -369,6 +415,29 @@ final class TicketAiAssistantV2Test extends TestCase
         Schema::create('v2_plan', function (Blueprint $table): void {
             $table->id();
             $table->string('name');
+            $table->integer('created_at')->nullable();
+            $table->integer('updated_at')->nullable();
+        });
+    }
+
+    private function createSubscriptionControlEventTable(): void
+    {
+        Schema::create('v2_subscription_control_event', function (Blueprint $table): void {
+            $table->id();
+            $table->string('event_id')->nullable();
+            $table->integer('user_id')->nullable();
+            $table->string('email')->nullable();
+            $table->string('code')->nullable();
+            $table->text('reason')->nullable();
+            $table->string('action')->nullable();
+            $table->string('client_ip')->nullable();
+            $table->text('ua_categories')->nullable();
+            $table->text('regions')->nullable();
+            $table->integer('online_ip_count')->nullable();
+            $table->integer('source_user_count')->nullable();
+            $table->integer('ip_count')->nullable();
+            $table->integer('risk_score')->nullable();
+            $table->integer('hit_count')->nullable();
             $table->integer('created_at')->nullable();
             $table->integer('updated_at')->nullable();
         });

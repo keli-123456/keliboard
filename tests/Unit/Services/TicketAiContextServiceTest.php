@@ -82,6 +82,14 @@ final class TicketAiContextServiceTest extends TestCase
             'email' => $user->email,
             'code' => 'multi_ip',
             'action' => 'reset_token_uuid',
+            'reason' => '同一订阅短时从多个地址访问，超过内部观察范围',
+            'ua_category' => 'clash',
+            'ua_categories' => json_encode(['clash', 'sing-box']),
+            'region' => 'SG',
+            'regions' => json_encode(['SG', 'JP']),
+            'online_ip_count' => 18,
+            'ip_count' => 5,
+            'hit_count' => 3,
             'client_ip' => '203.0.113.9',
             'risk_score' => 72,
             'created_at' => time(),
@@ -99,6 +107,13 @@ final class TicketAiContextServiceTest extends TestCase
         $this->assertSame('high', $context['risk']['risk_level']);
         $this->assertSame(1, $context['risk']['event_count']);
         $this->assertSame(1, $context['risk']['reset_count']);
+        $this->assertSame('multi_ip', $context['risk']['evidence'][0]['code']);
+        $this->assertSame('多地址访问异常', $context['risk']['evidence'][0]['label']);
+        $this->assertSame(1, $context['risk']['evidence'][0]['event_count']);
+        $this->assertContains('观察到最多 18 个在线地址', $context['risk']['evidence'][0]['facts']);
+        $this->assertContains('涉及 2 类客户端', $context['risk']['evidence'][0]['facts']);
+        $this->assertContains('涉及 2 个地区', $context['risk']['evidence'][0]['facts']);
+        $this->assertContains('已重置订阅凭证', $context['risk']['evidence'][0]['action_labels']);
         $this->assertStringNotContainsString($user->email, $serialized);
         $this->assertStringNotContainsString($user->token, $serialized);
         $this->assertStringNotContainsString($user->uuid, $serialized);
@@ -435,6 +450,14 @@ final class TicketAiContextServiceTest extends TestCase
             $table->string('code')->nullable();
             $table->string('action')->nullable();
             $table->string('client_ip')->nullable();
+            $table->text('reason')->nullable();
+            $table->string('ua_category')->nullable();
+            $table->text('ua_categories')->nullable();
+            $table->string('region')->nullable();
+            $table->text('regions')->nullable();
+            $table->integer('online_ip_count')->nullable();
+            $table->integer('ip_count')->nullable();
+            $table->integer('hit_count')->nullable();
             $table->integer('risk_score')->nullable();
             $table->integer('created_at');
             $table->integer('updated_at');

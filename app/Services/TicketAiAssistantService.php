@@ -267,6 +267,28 @@ class TicketAiAssistantService
                 is_array($completion['decoded']) ? $completion['decoded'] : null,
                 (bool) $completion['structured']
             );
+            $riskEvidence = array_values(array_filter(
+                (array) ($context['risk']['evidence'] ?? []),
+                static fn (mixed $item): bool => is_array($item)
+            ));
+            $result['risk_evidence'] = $riskEvidence;
+            if ($result['risk_explanation'] === '' && $riskEvidence !== []) {
+                $result['risk_explanation'] = $this->summarizeRiskEvidence($riskEvidence);
+            }
+            if ($this->ticketAsksForRiskExplanation($context)) {
+                if ($riskEvidence === []) {
+                    $result['risk_explanation'] = '没有查询到可核验的近期风控事件，暂时无法判断具体原因，需要人工核查。';
+                    $result['needs_human'] = true;
+                } elseif (!$this->draftCoversRiskEvidence($result['draft'], $riskEvidence)) {
+                    $result['draft'] = $this->sanitizer->sanitize(
+                        rtrim($result['draft'])
+                        . "\n\n经查询，近期风控依据如下：\n"
+                        . $result['risk_explanation']
+                        . "\n如需申诉，请由客服结合账号实际使用情况进一步人工复核。",
+                        5000
+                    );
+                }
+            }
             $suggestion = DB::transaction(function () use ($scopeFields, $ticket, $adminId, $settings, $result, $instruction) {
                 $this->supersedeDrafts((int) $ticket->id, $adminId);
                 $attributes = array_merge($scopeFields, [
@@ -771,6 +793,7 @@ class TicketAiAssistantService
                 'fields' => ['summary', 'category', 'sentiment', 'risk', 'needs_human', 'confidence', 'draft', 'knowledge_refs'],
                 'risk_values' => ['low', 'medium', 'high'],
                 'review_required' => true,
+                'risk_explanation_field' => 'Return risk_explanation using only ticket_context.risk.evidence when the ticket concerns risk control.',
             ],
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
@@ -784,6 +807,7 @@ class TicketAiAssistantService
                 ),
             ],
         ];
+        $messages[] = ['role' => 'system', 'content' => '风控解释规则：用户询问为何被风控、拦截或重置订阅时，只能使用 ticket_context.risk.evidence。risk_explanation 和 draft 必须说明触发类型、近期次数、最近时间、可安全展示的行为特征及已执行动作；没有证据时明确说明需要人工核查。不得输出完整 IP、完整 UA、名单原值或精确阈值，不得猜测。JSON 可额外返回 risk_explanation 字符串。'];
         $policy = (array) ($settings['active_policy'] ?? []);
         if (($policy['tone'] ?? null) !== null
             || ($policy['extra_instruction'] ?? '') !== ''
@@ -847,6 +871,7 @@ class TicketAiAssistantService
 
         return [
             'summary' => $this->sanitizer->sanitize(trim((string) ($decoded['summary'] ?? '')), 1000),
+            'risk_explanation' => $this->sanitizer->sanitize(trim((string) ($decoded['risk_explanation'] ?? '')), 2000),
             'category' => $category,
             'sentiment' => $this->sanitizer->sanitize(trim((string) ($decoded['sentiment'] ?? '')), 100),
             'risk' => $risk,
@@ -861,6 +886,79 @@ class TicketAiAssistantService
             ], $matchedKnowledge),
             'structured_output' => $structured,
         ];
+    }
+
+    /** @param array<int, array<string, mixed>> $evidence */
+    private function summarizeRiskEvidence(array $evidence): string
+    {
+        $lines = [];
+        foreach (array_slice($evidence, 0, 4) as $item) {
+            $parts = [];
+            $count = max(0, (int) ($item['event_count'] ?? 0));
+            if ($count > 0) {
+                $parts[] = '近期触发 ' . $count . ' 次';
+            }
+            $lastTriggerAt = (int) ($item['last_trigger_at'] ?? 0);
+            if ($lastTriggerAt > 0) {
+                $parts[] = '最近一次 ' . date('Y-m-d H:i:s', $lastTriggerAt);
+            }
+            foreach (array_slice((array) ($item['facts'] ?? []), 0, 4) as $fact) {
+                $fact = $this->sanitizer->sanitize(trim((string) $fact), 120);
+                if ($fact !== '') {
+                    $parts[] = $fact;
+                }
+            }
+            foreach (array_slice((array) ($item['action_labels'] ?? []), 0, 2) as $action) {
+                $action = $this->sanitizer->sanitize(trim((string) $action), 80);
+                if ($action !== '') {
+                    $parts[] = $action;
+                }
+            }
+
+            $label = $this->sanitizer->sanitize((string) ($item['label'] ?? '订阅风控事件'), 120);
+            $description = $this->sanitizer->sanitize((string) ($item['description'] ?? ''), 300);
+            $lines[] = $label . '：' . $description
+                . ($parts === [] ? '' : '（' . implode('；', array_values(array_unique($parts))) . '）');
+        }
+
+        return $this->sanitizer->sanitize(implode("\n", $lines), 2000);
+    }
+
+    /** @param array<string, mixed> $context */
+    private function ticketAsksForRiskExplanation(array $context): bool
+    {
+        $parts = [(string) ($context['ticket']['subject'] ?? '')];
+        foreach ((array) ($context['conversation'] ?? []) as $message) {
+            if (is_array($message)) {
+                $parts[] = (string) ($message['content'] ?? '');
+            }
+        }
+        $text = mb_strtolower(implode("\n", $parts));
+        foreach ([
+            '为什么风控', '为何风控', '风控原因', '触发风控', '被风控',
+            '为什么被封', '为何封禁', '被封禁', '误封', '申诉',
+            '订阅被重置', '重置订阅', '凭证被重置', '订阅失效',
+            '被拦截', '访问被禁止', '403',
+        ] as $keyword) {
+            if (str_contains($text, $keyword)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** @param array<int, array<string, mixed>> $evidence */
+    private function draftCoversRiskEvidence(string $draft, array $evidence): bool
+    {
+        foreach ($evidence as $item) {
+            $label = trim((string) ($item['label'] ?? ''));
+            if ($label !== '' && str_contains($draft, $label)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function normalizeCategory(string $category): string

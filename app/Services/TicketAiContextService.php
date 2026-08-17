@@ -312,6 +312,7 @@ class TicketAiContextService
             'last_trigger_at' => null,
             'event_codes' => [],
             'actions' => [],
+            'evidence' => [],
         ];
         if (!$user) {
             return $empty;
@@ -349,7 +350,181 @@ class TicketAiContextService
             'last_trigger_at' => (int) ($events[0]['created_at'] ?? 0) ?: null,
             'event_codes' => $this->uniqueStrings(array_column($events, 'code')),
             'actions' => $this->uniqueStrings(array_column($events, 'action')),
+            'evidence' => $this->riskEvidence($events),
         ];
+    }
+
+    /**
+     * Build support evidence without exposing raw IPs, user agents, credentials,
+     * deny-list entries, or exact rule thresholds.
+     *
+     * @param array<int, array<string, mixed>> $events
+     * @return array<int, array<string, mixed>>
+     */
+    private function riskEvidence(array $events): array
+    {
+        $groups = [];
+        foreach ($events as $event) {
+            $code = trim((string) ($event['code'] ?? '')) ?: 'unknown';
+            if (!isset($groups[$code])) {
+                $groups[$code] = [
+                    'code' => $this->sanitizer->sanitize($code, 80),
+                    'label' => $this->riskEventLabel($code),
+                    'description' => $this->riskEventDescription($code),
+                    'event_count' => 0,
+                    'last_trigger_at' => null,
+                    'actions' => [],
+                    'action_labels' => [],
+                    'ua_categories' => [],
+                    'regions' => [],
+                    '_online_ip_count' => 0,
+                    '_source_user_count' => 0,
+                    '_ip_count' => 0,
+                    '_hit_count' => 0,
+                    '_risk_score' => 0,
+                ];
+            }
+
+            $group = &$groups[$code];
+            $group['event_count']++;
+            $createdAt = (int) ($event['created_at'] ?? 0);
+            $group['last_trigger_at'] = max((int) ($group['last_trigger_at'] ?? 0), $createdAt) ?: null;
+
+            $action = trim((string) ($event['action'] ?? ''));
+            $this->appendUniqueValue($group['actions'], $action, 6);
+            $this->appendUniqueValue($group['action_labels'], $this->riskActionLabel($action), 6);
+            foreach ($this->eventValues($event, 'ua_category', 'ua_categories') as $value) {
+                $this->appendUniqueValue($group['ua_categories'], $value, 6);
+            }
+            foreach ($this->eventValues($event, 'region', 'regions') as $value) {
+                $this->appendUniqueValue($group['regions'], $value, 6);
+            }
+
+            foreach ([
+                '_online_ip_count' => 'online_ip_count',
+                '_source_user_count' => 'source_user_count',
+                '_ip_count' => 'ip_count',
+                '_hit_count' => 'hit_count',
+                '_risk_score' => 'risk_score',
+            ] as $target => $source) {
+                $group[$target] = max((int) $group[$target], max(0, (int) ($event[$source] ?? 0)));
+            }
+            unset($group);
+        }
+
+        return array_values(array_map(function (array $group): array {
+            $facts = [];
+            if ($group['_online_ip_count'] > 0) {
+                $facts[] = '观察到最多 ' . $group['_online_ip_count'] . ' 个在线地址';
+            }
+            if ($group['_source_user_count'] > 0) {
+                $facts[] = '同一来源关联 ' . $group['_source_user_count'] . ' 个账号';
+            }
+            if ($group['_ip_count'] > 0) {
+                $facts[] = '短时拉取涉及 ' . $group['_ip_count'] . ' 个地址';
+            }
+            if (count($group['ua_categories']) > 0) {
+                $facts[] = '涉及 ' . count($group['ua_categories']) . ' 类客户端';
+            }
+            if (count($group['regions']) > 0) {
+                $facts[] = '涉及 ' . count($group['regions']) . ' 个地区';
+            }
+            if ($group['_hit_count'] > 0) {
+                $facts[] = '规则累计命中 ' . $group['_hit_count'] . ' 次';
+            }
+            if ($group['_risk_score'] > 0) {
+                $facts[] = '最高风险分 ' . $group['_risk_score'];
+            }
+
+            return [
+                'code' => $group['code'],
+                'label' => $group['label'],
+                'description' => $group['description'],
+                'event_count' => $group['event_count'],
+                'last_trigger_at' => $group['last_trigger_at'],
+                'actions' => $group['actions'],
+                'action_labels' => $group['action_labels'],
+                'facts' => array_slice($facts, 0, 6),
+            ];
+        }, array_slice($groups, 0, 8, true)));
+    }
+
+    private function riskEventLabel(string $code): string
+    {
+        return match ($code) {
+            'source_ip_denylist' => '订阅来源命中风险名单',
+            'ua_blacklist' => '恶意或扫描客户端特征',
+            'ua_block_only' => '禁止的客户端特征',
+            'client_ua_not_allowed' => '客户端类型不在允许范围',
+            'multi_ua_pull' => '短时使用多类客户端拉取',
+            'multi_region_pull' => '短时从多个地区拉取订阅',
+            'multi_region_online' => '多个地区同时在线',
+            'online_ip_threshold' => '在线地址数量异常',
+            'subscription_leak_guard' => '订阅泄露综合风险',
+            'same_source_batch_pull', 'source_batch_pull' => '同一来源批量拉取多个账号',
+            'behavior_baseline_observation' => '行为偏离历史基线',
+            'multi_ip' => '多地址访问异常',
+            default => '订阅风控事件',
+        };
+    }
+
+    private function riskEventDescription(string $code): string
+    {
+        return match ($code) {
+            'source_ip_denylist' => '订阅请求来源被风险网段、云厂商或已维护的来源名单识别。',
+            'ua_blacklist' => '订阅请求的客户端特征命中明确的恶意扫描名单。',
+            'ua_block_only' => '订阅请求使用了当前策略明确禁止访问的客户端类型。',
+            'client_ua_not_allowed' => '订阅请求使用了当前站点未允许的客户端类型。',
+            'multi_ua_pull' => '同一订阅在短时间内被多种客户端类别重复拉取。',
+            'multi_region_pull' => '同一订阅在短时间内从多个地区重复拉取。',
+            'multi_region_online' => '同一账号在观察窗口内从多个地区同时在线。',
+            'online_ip_threshold' => '同一账号在观察窗口内出现较多在线地址。',
+            'subscription_leak_guard' => '多个异常信号共同达到订阅泄露保护条件。',
+            'same_source_batch_pull', 'source_batch_pull' => '同一网络来源在短时间内拉取了多个账号的订阅。',
+            'behavior_baseline_observation' => '近期订阅行为与该账号的历史使用习惯存在明显差异。',
+            'multi_ip' => '同一订阅在观察窗口内从多个地址访问。',
+            default => '系统记录到与该规则相关的异常订阅行为。',
+        };
+    }
+
+    private function riskActionLabel(string $action): string
+    {
+        return match ($action) {
+            'block' => '已拦截本次请求',
+            'reset_token', 'reset_token_uuid' => '已重置订阅凭证',
+            'notify' => '已发送风险通知',
+            'observe', 'empty', 'none', '' => '仅记录观察',
+            default => '已记录处理动作',
+        };
+    }
+
+    /** @return array<int, string> */
+    private function eventValues(array $event, string $single, string $multiple): array
+    {
+        $values = [];
+        $this->appendUniqueValue($values, (string) ($event[$single] ?? ''), 6);
+        $items = $event[$multiple] ?? [];
+        if (is_string($items)) {
+            $decoded = json_decode($items, true);
+            $items = is_array($decoded) ? $decoded : [$items];
+        }
+        if (is_array($items)) {
+            foreach ($items as $item) {
+                $this->appendUniqueValue($values, (string) $item, 6);
+            }
+        }
+
+        return $values;
+    }
+
+    /** @param array<int, string> $values */
+    private function appendUniqueValue(array &$values, string $value, int $limit): void
+    {
+        $value = $this->sanitizer->sanitize(trim($value), 80);
+        if ($value === '' || in_array($value, $values, true) || count($values) >= $limit) {
+            return;
+        }
+        $values[] = $value;
     }
 
     /** @return array<int, array{role:string, content:string}> */
