@@ -13,7 +13,7 @@ final class SubscriptionControlHighRiskUserService
     private const EVENT_TABLE = 'v2_subscription_control_event';
     private const USER_TABLE = 'v2_user';
     private const SITE_TABLE = 'v2_site';
-    private const CASE_MODEL_VERSION = '1.1.0';
+    private const CASE_MODEL_VERSION = '1.2.0';
     private const BLOCKING_ACTIONS = ['block', 'empty', 'throttle', 'reset_token', 'reset_token_uuid'];
     private const RESET_ACTIONS = ['reset_token', 'reset_token_uuid'];
     private const STRONG_EVENT_CODES = [
@@ -52,7 +52,10 @@ final class SubscriptionControlHighRiskUserService
             fn(): array => $this->aggregate($days, $limit)
         );
 
-        return (new SubscriptionControlCaseReviewService())->attachOverview($overview);
+        $reviewService = new SubscriptionControlCaseReviewService();
+        $overview = $reviewService->calibrateOverview($overview, $limit);
+
+        return $reviewService->attachOverview($overview);
     }
 
     /** @return array<string, mixed> */
@@ -148,14 +151,12 @@ final class SubscriptionControlHighRiskUserService
             ($right['suspicion_score'] <=> $left['suspicion_score'])
             ?: ($right['last_trigger_at'] <=> $left['last_trigger_at'])
         );
-        $items = array_slice($items, 0, $limit);
-
         return [
             'available' => true,
             'window_days' => $days,
             'total' => $total,
             'items' => $items,
-            'calculation' => 'deterministic_local_insider_case_queue',
+            'calculation' => 'deterministic_local_insider_case_queue_with_review_calibration',
             'case_model_version' => self::CASE_MODEL_VERSION,
             'sent_to_ai' => false,
             'automatic_enforcement' => false,

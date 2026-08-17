@@ -103,6 +103,71 @@ final class SubscriptionControlCaseReviewServiceTest extends TestCase
         $this->assertSame(0.0, $metrics['false_positive_rate']);
     }
 
+    public function test_evidence_outcomes_conservatively_calibrate_candidate_ranking(): void
+    {
+        $service = new SubscriptionControlCaseReviewService();
+        $now = time();
+        for ($offset = 0; $offset < 10; $offset++) {
+            $userId = 100 + $offset;
+            DB::table('v2_user')->insert(['id' => $userId, 'email' => "review{$userId}@example.test"]);
+            DB::table('v2_subscription_control_event')->insert($this->event($userId, $now - 60));
+            $evidence = $offset < 5 ? 'source_sharing' : 'infrastructure_source';
+            $confirmed = $offset < 4 || $offset === 5;
+            $service->review($userId, $confirmed ? 'confirmed_leak' : 'false_positive', null, 1, [
+                'suspicion_score' => 70,
+                'case_evidence' => [$evidence],
+                'model_version' => '1.2.0',
+            ]);
+        }
+
+        $overview = $service->calibrateOverview([
+            'items' => [
+                ['user_id' => 105, 'suspicion_score' => 70, 'case_evidence' => ['infrastructure_source'], 'last_trigger_at' => $now],
+                ['user_id' => 100, 'suspicion_score' => 70, 'case_evidence' => ['source_sharing'], 'last_trigger_at' => $now],
+            ],
+        ], 20);
+
+        $this->assertSame(100, $overview['items'][0]['user_id']);
+        $this->assertSame(1, $overview['items'][0]['calibration_adjustment']);
+        $this->assertSame(71, $overview['items'][0]['calibrated_ranking_score']);
+        $this->assertSame(-1, $overview['items'][1]['calibration_adjustment']);
+        $this->assertSame(69, $overview['items'][1]['calibrated_ranking_score']);
+        $this->assertSame(10, $overview['case_review_calibration']['labeled_users']);
+        $this->assertSame(2, $overview['case_review_calibration']['eligible_rule_count']);
+        $this->assertTrue($overview['case_review_calibration']['affects_ranking_only']);
+        $this->assertFalse($overview['case_review_calibration']['automatic_enforcement']);
+    }
+
+    public function test_evidence_outcomes_below_minimum_sample_do_not_change_ranking(): void
+    {
+        $service = new SubscriptionControlCaseReviewService();
+        $now = time();
+        for ($offset = 0; $offset < 4; $offset++) {
+            $userId = 200 + $offset;
+            DB::table('v2_user')->insert(['id' => $userId, 'email' => "limited{$userId}@example.test"]);
+            DB::table('v2_subscription_control_event')->insert($this->event($userId, $now - 60));
+            $service->review($userId, 'confirmed_leak', null, 1, [
+                'suspicion_score' => 70,
+                'case_evidence' => ['limited_evidence'],
+                'model_version' => '1.2.0',
+            ]);
+        }
+
+        $overview = $service->calibrateOverview([
+            'items' => [[
+                'user_id' => 200,
+                'suspicion_score' => 70,
+                'case_evidence' => ['limited_evidence'],
+                'last_trigger_at' => $now,
+            ]],
+        ], 20);
+
+        $this->assertSame(0, $overview['items'][0]['calibration_adjustment']);
+        $this->assertSame(70, $overview['items'][0]['calibrated_ranking_score']);
+        $this->assertFalse($overview['items'][0]['calibration_applied']);
+        $this->assertSame(0, $overview['case_review_calibration']['eligible_rule_count']);
+    }
+
     /** @return array<string, mixed> */
     private function event(int $userId, int $createdAt): array
     {

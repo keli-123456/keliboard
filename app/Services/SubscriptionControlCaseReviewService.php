@@ -14,6 +14,9 @@ final class SubscriptionControlCaseReviewService
     private const EVENT_TABLE = 'v2_subscription_control_event';
     private const USER_TABLE = 'v2_user';
     private const BLOCKING_ACTIONS = ['block', 'empty', 'throttle', 'reset_token', 'reset_token_uuid'];
+    private const CALIBRATION_VERSION = '1.0.0';
+    private const MIN_CALIBRATION_SAMPLES = 5;
+    private const MAX_TOTAL_ADJUSTMENT = 12;
     private const STRONG_EVENT_CODES = [
         'subscription_leak_guard',
         'source_batch_pull',
@@ -104,14 +107,140 @@ final class SubscriptionControlCaseReviewService
         return $overview;
     }
 
+    /** @param array<string, mixed> $overview @return array<string, mixed> */
+    public function calibrateOverview(array $overview, int $limit): array
+    {
+        $limit = max(1, min(50, $limit));
+        $profile = $this->calibrationProfile();
+        $rules = collect($profile['evidence_rules'] ?? [])->keyBy('evidence');
+        $items = is_array($overview['items'] ?? null) ? $overview['items'] : [];
+
+        foreach ($items as $index => $item) {
+            $baseScore = max(0, min(100, (int) ($item['suspicion_score'] ?? 0)));
+            $adjustment = 0;
+            $matches = [];
+            foreach ($this->stringList($item['case_evidence'] ?? [], 16) as $evidence) {
+                $rule = $rules->get($evidence);
+                if (!is_array($rule) || !($rule['eligible'] ?? false)) {
+                    continue;
+                }
+                $adjustment += (int) ($rule['adjustment'] ?? 0);
+                $matches[] = $rule;
+            }
+
+            $adjustment = max(-self::MAX_TOTAL_ADJUSTMENT, min(self::MAX_TOTAL_ADJUSTMENT, $adjustment));
+            $items[$index]['base_suspicion_score'] = $baseScore;
+            $items[$index]['calibrated_ranking_score'] = max(0, min(100, $baseScore + $adjustment));
+            $items[$index]['calibration_adjustment'] = $adjustment;
+            $items[$index]['calibration_applied'] = $adjustment !== 0;
+            $items[$index]['calibration_matches'] = $matches;
+        }
+
+        usort($items, static fn(array $left, array $right): int =>
+            ((int) ($right['calibrated_ranking_score'] ?? 0) <=> (int) ($left['calibrated_ranking_score'] ?? 0))
+            ?: ((int) ($right['suspicion_score'] ?? 0) <=> (int) ($left['suspicion_score'] ?? 0))
+            ?: ((int) ($right['last_trigger_at'] ?? 0) <=> (int) ($left['last_trigger_at'] ?? 0))
+        );
+
+        $overview['items'] = array_slice($items, 0, $limit);
+        $overview['case_review_calibration'] = $profile;
+
+        return $overview;
+    }
+
     /** @return array<string, mixed> */
     public function calibrationMetrics(): array
     {
         if (!$this->available()) {
-            return $this->emptySummary();
+            return array_merge($this->emptySummary(), [
+                'evidence_calibration' => $this->emptyCalibration(),
+            ]);
         }
 
-        return $this->summary();
+        return array_merge($this->summary(), [
+            'evidence_calibration' => $this->calibrationProfile(),
+        ]);
+    }
+
+    /** @return array<string, mixed> */
+    private function calibrationProfile(): array
+    {
+        if (!$this->available()) {
+            return $this->emptyCalibration();
+        }
+
+        $latestIds = DB::table(self::REVIEW_TABLE)
+            ->groupBy('user_id')
+            ->selectRaw('MAX(id) as id')
+            ->pluck('id')
+            ->map(static fn(mixed $id): int => (int) $id)
+            ->all();
+        if ($latestIds === []) {
+            $profile = $this->emptyCalibration();
+            $profile['available'] = true;
+            return $profile;
+        }
+
+        $reviews = SubscriptionControlCaseReview::query()
+            ->whereIn('id', $latestIds)
+            ->whereIn('status', [
+                SubscriptionControlCaseReview::STATUS_CONFIRMED_LEAK,
+                SubscriptionControlCaseReview::STATUS_FALSE_POSITIVE,
+            ])
+            ->get();
+        $counts = [];
+        foreach ($reviews as $review) {
+            $snapshot = is_array($review->evidence_snapshot) ? $review->evidence_snapshot : [];
+            foreach ($this->stringList($snapshot['case_evidence'] ?? [], 16) as $evidence) {
+                $counts[$evidence] ??= ['confirmed' => 0, 'false_positive' => 0];
+                $key = $review->status === SubscriptionControlCaseReview::STATUS_CONFIRMED_LEAK
+                    ? 'confirmed'
+                    : 'false_positive';
+                $counts[$evidence][$key]++;
+            }
+        }
+
+        $rules = [];
+        foreach ($counts as $evidence => $count) {
+            $confirmed = (int) $count['confirmed'];
+            $falsePositive = (int) $count['false_positive'];
+            $sampleCount = $confirmed + $falsePositive;
+            $eligible = $sampleCount >= self::MIN_CALIBRATION_SAMPLES;
+            $confirmationRate = $sampleCount > 0 ? round($confirmed / $sampleCount, 4) : 0.0;
+            $falsePositiveRate = $sampleCount > 0 ? round($falsePositive / $sampleCount, 4) : 0.0;
+            $smoothedRate = ($confirmed + 2) / ($sampleCount + 4);
+            $sampleStrength = min(1.0, $sampleCount / 10);
+            $adjustment = $eligible
+                ? (int) round(($smoothedRate - 0.5) * 8 * $sampleStrength)
+                : 0;
+
+            $rules[] = [
+                'evidence' => (string) $evidence,
+                'sample_count' => $sampleCount,
+                'confirmed_count' => $confirmed,
+                'false_positive_count' => $falsePositive,
+                'confirmation_rate' => $confirmationRate,
+                'false_positive_rate' => $falsePositiveRate,
+                'eligible' => $eligible,
+                'adjustment' => max(-4, min(4, $adjustment)),
+            ];
+        }
+        usort($rules, static fn(array $left, array $right): int =>
+            ($right['sample_count'] <=> $left['sample_count'])
+            ?: strcmp((string) $left['evidence'], (string) $right['evidence'])
+        );
+
+        return [
+            'available' => true,
+            'version' => self::CALIBRATION_VERSION,
+            'minimum_samples' => self::MIN_CALIBRATION_SAMPLES,
+            'maximum_total_adjustment' => self::MAX_TOTAL_ADJUSTMENT,
+            'labeled_users' => $reviews->count(),
+            'eligible_rule_count' => count(array_filter($rules, static fn(array $rule): bool => (bool) $rule['eligible'])),
+            'evidence_rules' => $rules,
+            'affects_ranking_only' => true,
+            'automatic_enforcement' => false,
+        ];
     }
 
     private function available(): bool
@@ -277,6 +406,22 @@ final class SubscriptionControlCaseReviewService
             'last_new_event_at' => isset($newEvents['last_new_event_at']) ? (int) $newEvents['last_new_event_at'] : null,
             'needs_re_review' => $newEventCount > 0,
             'history_count' => max(1, $historyCount),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function emptyCalibration(): array
+    {
+        return [
+            'available' => false,
+            'version' => self::CALIBRATION_VERSION,
+            'minimum_samples' => self::MIN_CALIBRATION_SAMPLES,
+            'maximum_total_adjustment' => self::MAX_TOTAL_ADJUSTMENT,
+            'labeled_users' => 0,
+            'eligible_rule_count' => 0,
+            'evidence_rules' => [],
+            'affects_ranking_only' => true,
+            'automatic_enforcement' => false,
         ];
     }
 
