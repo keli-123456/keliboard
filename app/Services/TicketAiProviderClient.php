@@ -37,6 +37,9 @@ class TicketAiProviderClient
         ];
         if ($this->usesReasoningModelParameters($model)) {
             $payload['max_completion_tokens'] = $maxTokens;
+            if ($this->isOfficialOpenAiEndpoint($baseUrl)) {
+                $payload['reasoning_effort'] = 'low';
+            }
         } else {
             $payload['temperature'] = max(0.0, min(1.0, (float) ($settings['temperature'] ?? 0.2)));
             $payload['max_tokens'] = $maxTokens;
@@ -68,15 +71,18 @@ class TicketAiProviderClient
             throw new TicketAiProviderException($this->httpErrorCode($response->status()));
         }
 
-        $content = data_get($response->json(), 'choices.0.message.content');
-        if (!is_string($content) || trim($content) === '') {
+        $responsePayload = $response->json();
+        $content = is_array($responsePayload) ? $this->extractContent($responsePayload) : null;
+        if ($content === null || trim($content) === '') {
             throw new TicketAiProviderException('invalid_response');
         }
         $content = trim($content);
         $decoded = $validateStructuredContent ? $this->decodeStructuredContent($content) : null;
-        $inputTokens = max(0, (int) data_get($response->json(), 'usage.prompt_tokens', 0));
-        $outputTokens = max(0, (int) data_get($response->json(), 'usage.completion_tokens', 0));
-        $reportedTotal = max(0, (int) data_get($response->json(), 'usage.total_tokens', 0));
+        $inputTokens = max(0, (int) (data_get($responsePayload, 'usage.prompt_tokens')
+            ?? data_get($responsePayload, 'usage.input_tokens', 0)));
+        $outputTokens = max(0, (int) (data_get($responsePayload, 'usage.completion_tokens')
+            ?? data_get($responsePayload, 'usage.output_tokens', 0)));
+        $reportedTotal = max(0, (int) data_get($responsePayload, 'usage.total_tokens', 0));
 
         return [
             'content' => $content,
@@ -94,6 +100,57 @@ class TicketAiProviderClient
         ];
     }
 
+    /** @param array<string, mixed> $payload */
+    private function extractContent(array $payload): ?string
+    {
+        foreach ([
+            data_get($payload, 'choices.0.message.content'),
+            data_get($payload, 'choices.0.text'),
+            data_get($payload, 'output_text'),
+            data_get($payload, 'output'),
+        ] as $candidate) {
+            $content = $this->contentValue($candidate);
+            if ($content !== null && trim($content) !== '') {
+                return $content;
+            }
+        }
+
+        return null;
+    }
+
+    private function contentValue(mixed $value): ?string
+    {
+        if (is_string($value)) {
+            return $value;
+        }
+        if (!is_array($value)) {
+            return null;
+        }
+
+        if (array_is_list($value)) {
+            $parts = [];
+            foreach ($value as $item) {
+                $part = $this->contentValue($item);
+                if ($part !== null && $part !== '') {
+                    $parts[] = $part;
+                }
+            }
+
+            return $parts === [] ? null : implode('', $parts);
+        }
+
+        foreach (['text', 'output_text', 'content', 'value'] as $key) {
+            if (!array_key_exists($key, $value)) {
+                continue;
+            }
+            $content = $this->contentValue($value[$key]);
+            if ($content !== null && trim($content) !== '') {
+                return $content;
+            }
+        }
+
+        return null;
+    }
 
     public function endpointSafetyReason(string $baseUrl, bool $allowPrivate = false): ?string
     {
@@ -155,6 +212,13 @@ class TicketAiProviderClient
         return preg_match('/^(?:gpt-5(?:[.-]|$)|o[134](?:[.-]|$))/i', trim($model)) === 1;
     }
 
+    private function isOfficialOpenAiEndpoint(string $baseUrl): bool
+    {
+        $host = parse_url(trim($baseUrl), PHP_URL_HOST);
+
+        return is_string($host) && strtolower($host) === 'api.openai.com';
+    }
+
     private function httpErrorCode(int $status): string
     {
         return match (true) {
@@ -186,18 +250,38 @@ class TicketAiProviderClient
     }
 
     /** @return array<string, mixed>|null */
-    private function decodeJsonObject(string $value): ?array
+    private function decodeJsonObject(string $value, int $depth = 0): ?array
     {
+        if ($depth > 3) {
+            return null;
+        }
+
         $decoded = json_decode(trim($value), true);
+        if (is_string($decoded)) {
+            return $this->decodeJsonObject($decoded, $depth + 1);
+        }
 
         if (!is_array($decoded) || array_is_list($decoded)) {
             return null;
         }
-        if (!$this->isValidStructuredPayload($decoded)) {
-            throw new TicketAiProviderException('invalid_response');
+        if ($this->isValidStructuredPayload($decoded)) {
+            return $decoded;
         }
 
-        return $decoded;
+        foreach (['result', 'data', 'response', 'output'] as $wrapper) {
+            $candidate = $decoded[$wrapper] ?? null;
+            if (is_string($candidate)) {
+                $unwrapped = $this->decodeJsonObject($candidate, $depth + 1);
+                if ($unwrapped !== null) {
+                    return $unwrapped;
+                }
+            }
+            if (is_array($candidate) && !array_is_list($candidate) && $this->isValidStructuredPayload($candidate)) {
+                return $candidate;
+            }
+        }
+
+        throw new TicketAiProviderException('invalid_response');
     }
 
     /** @param array<string, mixed> $decoded */

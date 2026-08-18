@@ -40,7 +40,53 @@ final class TicketAiProviderClientTest extends TestCase
             'direct' => [$json],
             'fenced' => ["```json\n{$json}\n```"],
             'embedded' => ["分析完成，结果如下：{$json}\n请人工确认。"],
+            'double encoded' => ['"{\\"category\\":\\"订阅问题\\",\\"draft\\":\\"请重新导入\\"}"'],
+            'wrapped' => ['{"result":{"category":"订阅问题","draft":"请重新导入"}}'],
         ];
+    }
+
+    public function test_typed_chat_content_blocks_are_concatenated(): void
+    {
+        Http::fake(['*' => Http::response([
+            'choices' => [[
+                'message' => ['content' => [
+                    ['type' => 'output_text', 'text' => '{"category":"订阅问题","draft":"请重新'],
+                    ['type' => 'output_text', 'text' => '导入"}'],
+                ]],
+            ]],
+        ])]);
+
+        $result = (new TicketAiProviderClient())->complete($this->settings(), [
+            ['role' => 'user', 'content' => '请分析工单'],
+        ]);
+
+        $this->assertSame('请重新导入', $result['decoded']['draft']);
+    }
+
+    public function test_responses_style_output_and_usage_are_supported(): void
+    {
+        Http::fake(['*' => Http::response([
+            'output' => [[
+                'type' => 'message',
+                'content' => [[
+                    'type' => 'output_text',
+                    'text' => '{"category":"订阅问题","draft":"请重新导入"}',
+                ]],
+            ]],
+            'usage' => [
+                'input_tokens' => 11,
+                'output_tokens' => 7,
+            ],
+        ])]);
+
+        $result = (new TicketAiProviderClient())->complete($this->settings(), [
+            ['role' => 'user', 'content' => '请分析工单'],
+        ]);
+
+        $this->assertSame('请重新导入', $result['decoded']['draft']);
+        $this->assertSame(11, $result['input_tokens']);
+        $this->assertSame(7, $result['output_tokens']);
+        $this->assertSame(18, $result['total_tokens']);
     }
 
     #[DataProvider('invalidStructuredContentProvider')]
@@ -123,6 +169,7 @@ final class TicketAiProviderClientTest extends TestCase
 
         (new TicketAiProviderClient())->complete($this->settings([
             'model' => 'gpt-5.6-luna',
+            'base_url' => 'https://api.openai.com/v1',
             'max_tokens' => 99999,
         ]), [['role' => 'user', 'content' => 'hello']]);
 
@@ -130,6 +177,7 @@ final class TicketAiProviderClientTest extends TestCase
             $payload = $request->data();
 
             return $payload['max_completion_tokens'] === 4096
+                && $payload['reasoning_effort'] === 'low'
                 && !array_key_exists('max_tokens', $payload)
                 && !array_key_exists('temperature', $payload);
         });
