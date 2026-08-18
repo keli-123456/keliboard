@@ -680,7 +680,7 @@ class TicketAiAssistantService
 
     private function defaultSystemPrompt(): string
     {
-        return '你是当前站点的客服工单助手。你只生成给管理员审核的回复草稿，不直接代表站点承诺退款、补偿、封号、解封或支付处理结果。遇到支付、退款、账号安全、封禁、隐私、法律或大面积故障，必须建议人工核查。category 必须从固定分类中选择，risk 只能是 low、medium、high。回答要简洁、礼貌、可执行。请只输出 JSON：summary, category, sentiment, risk, needs_human, confidence, draft, knowledge_refs。';
+        return '你是当前站点的客服工单助手。先识别用户真正的问题，再用后端核验事实和命中的知识库给出明确、具体、可执行的答复。回复第一句应直接回答问题，不要用空泛套话；不要重复询问上下文中已经存在的信息。没有可靠依据时，明确说明缺少哪项数据并转人工，不得用“请检查网络”“稍后重试”等通用建议填充答案。你只生成给管理员审核的回复草稿，不直接代表站点承诺退款、补偿、封号、解封或支付处理结果。遇到支付、退款、账号安全、封禁、隐私、法律或大面积故障，必须建议人工核查。category 必须从固定分类中选择，risk 只能是 low、medium、high。回答要简洁、礼貌、可执行。请只输出 JSON：summary, category, sentiment, risk, needs_human, confidence, draft, knowledge_refs。';
     }
 
     private function mandatorySecurityPrompt(): string
@@ -693,7 +693,14 @@ class TicketAiAssistantService
      */
     private function findRelevantKnowledge(Ticket $ticket, array $scope): array
     {
-        $needle = mb_strtolower($ticket->subject . "\n" . $ticket->messages->pluck('message')->implode("\n"));
+        $recentMessages = $ticket->messages
+            ->sortByDesc(fn ($message) => (int) $message->id)
+            ->take(6)
+            ->sortBy(fn ($message) => (int) $message->id)
+            ->pluck('message')
+            ->implode("\n");
+        $needle = mb_strtolower($ticket->subject . "\n" . $recentMessages);
+        $keywords = $this->keywords($needle);
 
         $query = Knowledge::query()
             ->where('show', 1)
@@ -704,14 +711,11 @@ class TicketAiAssistantService
         }
 
         return $query->get()
-            ->map(function (Knowledge $item) use ($needle) {
-                $text = mb_strtolower((string) $item->title . "\n" . (string) $item->category . "\n" . strip_tags((string) $item->body));
-                $score = 0;
-                foreach ($this->keywords($needle) as $keyword) {
-                    if ($keyword !== '' && str_contains($text, $keyword)) {
-                        $score++;
-                    }
-                }
+            ->map(function (Knowledge $item) use ($keywords) {
+                $title = mb_strtolower((string) $item->title);
+                $category = mb_strtolower((string) $item->category);
+                $body = mb_strtolower(strip_tags((string) $item->body));
+                $score = $this->knowledgeScore($title, $category, $body, $keywords);
 
                 return [
                     'id' => (int) $item->id,
@@ -796,9 +800,96 @@ class TicketAiAssistantService
      */
     private function keywords(string $text): array
     {
-        $parts = preg_split('/[\s,，。！？!?:：;；、\/\\\\\[\]\(\)（）]+/u', mb_strtolower($text)) ?: [];
+        $text = mb_strtolower(strip_tags($text));
+        $keywords = [];
+        $stopWords = [
+            '怎么', '如何', '什么', '为什么', '可以', '一下', '帮我', '这个', '那个',
+            '问题', '提示', '一直', '目前', '现在', '还是', '没有', '不能', '无法',
+            '用户', '我的', '请问', '麻烦',
+        ];
+        $append = static function (string $value) use (&$keywords, $stopWords): void {
+            $value = trim($value);
+            if (mb_strlen($value) < 2 || in_array($value, $stopWords, true)) {
+                return;
+            }
+            $keywords[$value] = true;
+        };
 
-        return array_values(array_filter(array_unique(array_map('trim', $parts)), fn (string $part) => mb_strlen($part) >= 2));
+        foreach (preg_split('/[^\p{L}\p{N}._+-]+/u', $text) ?: [] as $part) {
+            $part = trim($part);
+            if ($part !== '' && mb_strlen($part) <= 24) {
+                $append($part);
+            }
+        }
+
+        preg_match_all('/[\p{Han}]{2,}/u', $text, $matches);
+        foreach ((array) ($matches[0] ?? []) as $run) {
+            $characters = preg_split('//u', mb_substr($run, 0, 40), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+            foreach ([2, 3, 4] as $size) {
+                for ($index = 0; $index <= count($characters) - $size; $index++) {
+                    $append(implode('', array_slice($characters, $index, $size)));
+                }
+            }
+        }
+
+        foreach ($this->knowledgeTopicTerms($text) as $term) {
+            $append($term);
+        }
+
+        return array_slice(array_keys($keywords), 0, 160);
+    }
+
+    /**
+     * @param array<int, string> $keywords
+     */
+    private function knowledgeScore(string $title, string $category, string $body, array $keywords): int
+    {
+        $score = 0;
+        foreach ($keywords as $keyword) {
+            $lengthBoost = min(4, max(0, mb_strlen($keyword) - 1));
+            if (str_contains($title, $keyword)) {
+                $score += 10 + $lengthBoost;
+            }
+            if (str_contains($category, $keyword)) {
+                $score += 6 + $lengthBoost;
+            }
+            if (str_contains($body, $keyword)) {
+                $score += 1 + $lengthBoost;
+            }
+        }
+
+        return $score;
+    }
+
+    /** @return array<int, string> */
+    private function knowledgeTopicTerms(string $text): array
+    {
+        $topics = [
+            ['needles' => ['订阅', '导入', '链接', '二维码', '更新配置'], 'terms' => ['订阅', '导入', '更新', '重置']],
+            ['needles' => ['节点', '连接', '超时', '延迟', '测速'], 'terms' => ['节点', '连接', '排查']],
+            ['needles' => ['流量', '到期', '续费', '套餐'], 'terms' => ['套餐', '流量', '续费', '到期']],
+            ['needles' => ['登录', '密码', '验证码', '邮箱', '账号'], 'terms' => ['账号', '密码', '安全']],
+            ['needles' => ['karing'], 'terms' => ['karing']],
+            ['needles' => ['clash verge', 'clashverge'], 'terms' => ['clash verge']],
+            ['needles' => ['flclash'], 'terms' => ['flclash']],
+            ['needles' => ['hiddify'], 'terms' => ['hiddify']],
+            ['needles' => ['v2rayn'], 'terms' => ['v2rayn']],
+            ['needles' => ['v2rayng'], 'terms' => ['v2rayng']],
+            ['needles' => ['小火箭', 'shadowrocket'], 'terms' => ['shadowrocket']],
+            ['needles' => ['stash'], 'terms' => ['stash']],
+        ];
+        $terms = [];
+        foreach ($topics as $topic) {
+            foreach ($topic['needles'] as $needle) {
+                if (!str_contains($text, $needle)) {
+                    continue;
+                }
+                $terms = array_merge($terms, $topic['terms']);
+                break;
+            }
+        }
+
+        return array_values(array_unique($terms));
     }
 
     /**
@@ -851,6 +942,13 @@ class TicketAiAssistantService
                 . '。涉及流量、到期、订单状态和可售套餐时只能引用这里的值，不得自行计算或补全。'
                 . 'requires_human=true 时必须 needs_human=true，不能承诺已退款、已补偿、已解封或已修改凭证。'
                 . 'retention_signal=true 时可以根据 catalog 提供的当前租户真实可售套餐生成挽留草稿，但不得虚构折扣、赠送、退款结果或套餐。',
+        ];
+        $messages[] = [
+            'role' => 'system',
+            'content' => '答复质量规则：先给结论，再给最多 3 个与当前问题直接相关的步骤。'
+                . '所有套餐、流量、到期、订单和风控结论必须来自后端核验字段；知识库只用于说明操作方法。'
+                . '不得重复询问 ticket_context 中已有的事实。若核验数据或知识依据不足，必须指出具体缺失项并设置 needs_human=true，'
+                . '不得输出看似正确但无法核验的通用答案。',
         ];
         $messages[] = ['role' => 'system', 'content' => '风控解释规则：用户询问为何被风控、拦截或重置订阅时，只能使用 ticket_context.risk.evidence。risk_explanation 和 draft 必须说明触发类型、近期次数、最近时间、可安全展示的行为特征及已执行动作；没有证据时明确说明需要人工核查。不得输出完整 IP、完整 UA、名单原值或精确阈值，不得猜测。JSON 可额外返回 risk_explanation 字符串。'];
         $policy = (array) ($settings['active_policy'] ?? []);

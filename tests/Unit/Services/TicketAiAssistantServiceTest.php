@@ -168,6 +168,38 @@ final class TicketAiAssistantServiceTest extends TestCase
         });
     }
 
+    public function test_chinese_natural_language_is_segmented_for_knowledge_matching(): void
+    {
+        $service = new TicketAiAssistantService();
+        $keywordsMethod = new \ReflectionMethod($service, 'keywords');
+        $scoreMethod = new \ReflectionMethod($service, 'knowledgeScore');
+
+        $keywords = $keywordsMethod->invoke(
+            $service,
+            '我在手机上导入以后一直不能使用，应该怎样重新添加订阅？'
+        );
+
+        $this->assertContains('订阅', $keywords);
+        $this->assertContains('导入', $keywords);
+        $this->assertNotContains('不能', $keywords);
+
+        $relevantScore = $scoreMethod->invoke(
+            $service,
+            '订阅导入、加速与重置',
+            '使用指南',
+            '复制订阅后重新导入客户端。',
+            $keywords
+        );
+        $unrelatedScore = $scoreMethod->invoke(
+            $service,
+            '套餐、流量与续费说明',
+            '使用指南',
+            '查看套餐到期和剩余流量。',
+            $keywords
+        );
+
+        $this->assertGreaterThan($unrelatedScore, $relevantScore);
+    }
     public function test_feedback_and_sent_state_track_ai_draft_adoption(): void
     {
         $user = User::create([
