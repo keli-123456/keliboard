@@ -47,7 +47,21 @@ final class TicketAiAutoReplyServiceTest extends TestCase
             'matched_knowledge' => [],
         ])));
         $this->assertSame('category_not_allowed', $service->rejectionReason($this->safeResult([
-            'category' => '套餐订单',
+            'category' => '支付退款',
+        ])));
+    }
+
+    public function test_backend_grounded_reply_does_not_require_a_knowledge_article(): void
+    {
+        $this->bindSettings();
+
+        $this->assertNull($this->service()->rejectionReason($this->safeResult([
+            'matched_knowledge' => [],
+            'system_grounded' => true,
+        ])));
+        $this->assertSame('knowledge_not_matched', $this->service()->rejectionReason($this->safeResult([
+            'matched_knowledge' => [],
+            'system_grounded' => false,
         ])));
     }
 
@@ -64,8 +78,12 @@ final class TicketAiAutoReplyServiceTest extends TestCase
     {
         $horizon = require dirname(__DIR__, 3) . '/config/horizon.php';
 
+        $job = new \App\Jobs\ProcessTicketAiAutoReplyJob(1, 2, true);
+
         $this->assertContains('ticket_ai', $horizon['environments']['production']['Xboard']['queue']);
         $this->assertContains('ticket_ai', $horizon['environments']['local']['Xboard']['queue']);
+        $this->assertSame(3, $job->tries);
+        $this->assertSame([10, 30], $job->backoff);
     }
 
     private function service(): TicketAiAutoReplyService
@@ -92,7 +110,7 @@ final class TicketAiAutoReplyServiceTest extends TestCase
         $values = array_merge([
             'ticket_ai_auto_reply_min_confidence' => 0.9,
             'ticket_ai_auto_reply_require_knowledge' => true,
-            'ticket_ai_auto_reply_allowed_categories' => ['客户端连接', '订阅与节点'],
+            'ticket_ai_auto_reply_allowed_categories' => ['客户端连接', '订阅与节点', '套餐订单'],
         ], $overrides);
 
         app()->instance(Setting::class, new class($values) extends Setting {

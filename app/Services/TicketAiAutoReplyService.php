@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Exceptions\TicketAiProviderException;
 use App\Models\Ticket;
 use App\Models\TicketMessage;
 use Illuminate\Support\Facades\Cache;
@@ -9,7 +10,7 @@ use Illuminate\Support\Facades\Log;
 
 class TicketAiAutoReplyService
 {
-    private const DEFAULT_ALLOWED_CATEGORIES = ['客户端连接', '订阅与节点'];
+    private const DEFAULT_ALLOWED_CATEGORIES = ['客户端连接', '订阅与节点', '套餐订单'];
 
     public function __construct(
         private ?TicketAiAssistantService $assistant = null,
@@ -41,6 +42,10 @@ class TicketAiAutoReplyService
                 'source_message_id' => $sourceMessageId,
                 'message' => $e->getMessage(),
             ]);
+
+            if ($this->shouldRetry($e)) {
+                throw $e;
+            }
         }
     }
 
@@ -67,6 +72,7 @@ class TicketAiAutoReplyService
         if (
             (bool) admin_setting('ticket_ai_auto_reply_require_knowledge', true)
             && count((array) ($result['matched_knowledge'] ?? [])) === 0
+            && !(bool) ($result['system_grounded'] ?? false)
         ) {
             return 'knowledge_not_matched';
         }
@@ -166,5 +172,16 @@ class TicketAiAutoReplyService
             static fn (mixed $category): string => trim((string) $category),
             is_array($value) ? $value : []
         ))));
+    }
+
+    private function shouldRetry(\Throwable $exception): bool
+    {
+        if (!$exception instanceof TicketAiProviderException) {
+            return false;
+        }
+
+        return in_array($exception->errorCode(), [
+            'connection', 'timeout', 'rate_limited', 'upstream',
+        ], true);
     }
 }

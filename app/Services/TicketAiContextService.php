@@ -13,10 +13,14 @@ use Plugin\SubscriptionControl\Services\SubscriptionControlEventStore;
 class TicketAiContextService
 {
     private TicketAiContentSanitizer $sanitizer;
+    private TicketAiBusinessContextService $businessContext;
 
-    public function __construct(?TicketAiContentSanitizer $sanitizer = null)
-    {
+    public function __construct(
+        ?TicketAiContentSanitizer $sanitizer = null,
+        ?TicketAiBusinessContextService $businessContext = null
+    ) {
         $this->sanitizer = $sanitizer ?? new TicketAiContentSanitizer();
+        $this->businessContext = $businessContext ?? new TicketAiBusinessContextService($this->sanitizer);
     }
 
     /**
@@ -29,6 +33,8 @@ class TicketAiContextService
         $scope = $this->scope($ticket);
         $orders = $this->recentOrders($user, $scope);
         unset($scope['_orders_allowed']);
+        $subscription = $this->subscriptionSummary($user);
+        $conversation = $this->conversation($ticket, $maxMessages);
 
         return [
             'scope' => $scope,
@@ -39,10 +45,11 @@ class TicketAiContextService
                 'created_at' => $this->timestamp($ticket->created_at),
             ],
             'user' => $this->userSummary($user),
-            'subscription' => $this->subscriptionSummary($user),
+            'subscription' => $subscription,
             'orders' => $orders,
             'risk' => $this->riskSummary($user),
-            'conversation' => $this->conversation($ticket, $maxMessages),
+            'conversation' => $conversation,
+            'business' => $this->businessContext->build($user, $scope, $subscription, $orders, $conversation),
             'instruction' => $this->sanitizer->sanitize((string) ($instruction ?? ''), 1000),
         ];
     }
