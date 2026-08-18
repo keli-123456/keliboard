@@ -107,12 +107,32 @@ final class TicketAiProviderClientTest extends TestCase
     public static function invalidStructuredContentProvider(): array
     {
         return [
-            'missing draft' => ['{"message":"ok"}'],
             'empty draft' => ['{"draft":"  "}'],
             'array draft' => ['{"draft":[]}'],
-            'invalid boolean field' => ['{"draft":"ok","needs_human":"no"}'],
             'invalid reference field' => ['{"draft":"ok","knowledge_refs":{"id":1}}'],
         ];
+    }
+
+    public function test_common_schema_aliases_and_scalar_types_are_normalized(): void
+    {
+        Http::fake(['*' => Http::response($this->responsePayload(json_encode([
+            'message' => '请重新导入订阅。',
+            '摘要' => '订阅导入失败',
+            'needs_human' => 'no',
+            'confidence' => '0.82',
+            'knowledge_refs' => null,
+        ], JSON_UNESCAPED_UNICODE)))]);
+
+        $result = (new TicketAiProviderClient())->complete($this->settings(), [
+            ['role' => 'user', 'content' => '订阅失败'],
+        ]);
+
+        $this->assertTrue($result['structured']);
+        $this->assertSame('请重新导入订阅。', $result['decoded']['draft']);
+        $this->assertSame('订阅导入失败', $result['decoded']['summary']);
+        $this->assertFalse($result['decoded']['needs_human']);
+        $this->assertSame(0.82, $result['decoded']['confidence']);
+        $this->assertSame([], $result['decoded']['knowledge_refs']);
     }
 
     public function test_plain_text_falls_back_without_claiming_structured_output(): void

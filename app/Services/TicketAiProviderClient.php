@@ -264,9 +264,6 @@ class TicketAiProviderClient
         if (!is_array($decoded) || array_is_list($decoded)) {
             return null;
         }
-        if ($this->isValidStructuredPayload($decoded)) {
-            return $decoded;
-        }
 
         foreach (['result', 'data', 'response', 'output'] as $wrapper) {
             $candidate = $decoded[$wrapper] ?? null;
@@ -281,7 +278,67 @@ class TicketAiProviderClient
             }
         }
 
+        $decoded = $this->normalizeStructuredPayload($decoded);
+        if ($this->isValidStructuredPayload($decoded)) {
+            return $decoded;
+        }
+
         throw new TicketAiProviderException('invalid_response');
+    }
+
+    /** @param array<string, mixed> $decoded @return array<string, mixed> */
+    private function normalizeStructuredPayload(array $decoded): array
+    {
+        $aliases = [
+            'draft' => ['reply', 'reply_text', 'answer', 'final_answer', 'message', 'content', 'response', 'response_text', 'output', 'output_text', 'text', '回复草稿', '回复', '答复'],
+            'summary' => ['摘要', '问题摘要'],
+            'category' => ['分类'],
+            'sentiment' => ['情绪'],
+            'risk' => ['风险'],
+            'needs_human' => ['需要人工', '转人工'],
+            'confidence' => ['置信度'],
+            'knowledge_refs' => ['知识库引用'],
+        ];
+        foreach ($aliases as $target => $sources) {
+            if (array_key_exists($target, $decoded)) {
+                continue;
+            }
+            foreach ($sources as $source) {
+                if (array_key_exists($source, $decoded)) {
+                    $decoded[$target] = $decoded[$source];
+                    break;
+                }
+            }
+        }
+
+        if (array_key_exists('draft', $decoded) && !is_string($decoded['draft'])) {
+            $draft = $this->contentValue($decoded['draft']);
+            if ($draft !== null) {
+                $decoded['draft'] = $draft;
+            }
+        }
+        foreach (['summary', 'category', 'sentiment', 'risk'] as $field) {
+            if (array_key_exists($field, $decoded) && $decoded[$field] === null) {
+                unset($decoded[$field]);
+            }
+        }
+
+        if (is_string($decoded['needs_human'] ?? null)) {
+            $normalized = strtolower(trim((string) $decoded['needs_human']));
+            if (in_array($normalized, ['true', '1', 'yes', '是', '需要'], true)) {
+                $decoded['needs_human'] = true;
+            } elseif (in_array($normalized, ['false', '0', 'no', '否', '不需要'], true)) {
+                $decoded['needs_human'] = false;
+            }
+        }
+        if (is_string($decoded['confidence'] ?? null) && is_numeric($decoded['confidence'])) {
+            $decoded['confidence'] = (float) $decoded['confidence'];
+        }
+        if (array_key_exists('knowledge_refs', $decoded) && $decoded['knowledge_refs'] === null) {
+            $decoded['knowledge_refs'] = [];
+        }
+
+        return $decoded;
     }
 
     /** @param array<string, mixed> $decoded */
