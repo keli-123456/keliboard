@@ -33,6 +33,7 @@ use App\Http\Controllers\V2\Admin\MarketingController;
 use App\Http\Controllers\V2\Admin\SpamRegistrationController;
 use App\Http\Controllers\V2\Admin\DomainHealthController;
 use App\Http\Controllers\V2\Admin\AiDiagnosticController;
+use App\Http\Controllers\V2\Admin\AiCenterController;
 use Illuminate\Contracts\Routing\Registrar;
 
 class AdminRoute
@@ -84,6 +85,13 @@ class AdminRoute
                 $router->post('/commerce/save', [SiteController::class, 'saveCommerce']);
                 $router->get('/navigation/fetch', [SiteNavigationController::class, 'fetch']);
                 $router->post('/navigation/save', [SiteNavigationController::class, 'save']);
+            });
+
+            // Unified AI operations overview. Existing module routes remain compatible.
+            $router->group([
+                'prefix' => 'ai-center'
+            ], function ($router) {
+                $router->get('/overview', [AiCenterController::class, 'overview']);
             });
 
             // Read-only local AI diagnostics
