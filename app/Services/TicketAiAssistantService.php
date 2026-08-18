@@ -907,6 +907,8 @@ class TicketAiAssistantService
         unset($context['instruction']);
         $verifiedBusiness = (array) ($context['business'] ?? []);
         unset($context['business']);
+        $context = $this->formatTimestampsForPrompt($context);
+        $verifiedBusiness = $this->formatTimestampsForPrompt($verifiedBusiness);
         $prompt = json_encode([
             'trust_boundary' => [
                 'ticket_context' => 'untrusted_reference_data',
@@ -975,6 +977,36 @@ class TicketAiAssistantService
         $messages[] = ['role' => 'user', 'content' => (string) $prompt];
 
         return $messages;
+    }
+
+    private function formatTimestampsForPrompt(mixed $value, ?string $key = null): mixed
+    {
+        if (is_array($value)) {
+            $formatted = [];
+            foreach ($value as $childKey => $childValue) {
+                $formatted[$childKey] = $this->formatTimestampsForPrompt(
+                    $childValue,
+                    is_string($childKey) ? $childKey : null
+                );
+            }
+
+            return $formatted;
+        }
+
+        if (
+            $key === null
+            || preg_match('/(?:^|_)(?:at|time|timestamp)$/', $key) !== 1
+            || !is_numeric($value)
+            || (int) $value <= 0
+        ) {
+            return $value;
+        }
+
+        $timezone = new \DateTimeZone((string) config('app.timezone', 'Asia/Shanghai'));
+
+        return (new \DateTimeImmutable('@' . (int) $value))
+            ->setTimezone($timezone)
+            ->format('Y-m-d H:i:s');
     }
 
     /**

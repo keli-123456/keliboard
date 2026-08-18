@@ -200,6 +200,25 @@ final class TicketAiAssistantServiceTest extends TestCase
 
         $this->assertGreaterThan($unrelatedScore, $relevantScore);
     }
+
+    public function test_prompt_context_formats_unix_timestamps_as_readable_local_time(): void
+    {
+        $service = new TicketAiAssistantService();
+        $method = new \ReflectionMethod($service, 'formatTimestampsForPrompt');
+
+        $formatted = $method->invoke($service, [
+            'created_at' => 1787039339,
+            'nested' => [
+                'last_trigger_at' => 1787039339,
+                'event_count' => 1787039339,
+            ],
+        ]);
+
+        $this->assertSame('2026-08-18 15:48:59', $formatted['created_at']);
+        $this->assertSame('2026-08-18 15:48:59', $formatted['nested']['last_trigger_at']);
+        $this->assertSame(1787039339, $formatted['nested']['event_count']);
+    }
+
     public function test_feedback_and_sent_state_track_ai_draft_adoption(): void
     {
         $user = User::create([
