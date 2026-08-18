@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Services\TicketAiAutoReplyService;
+use App\Services\TicketAiConversationService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -41,5 +42,14 @@ class ProcessTicketAiAutoReplyJob implements ShouldQueue
             'exception' => $exception ? $exception::class : null,
             'message' => $exception?->getMessage(),
         ]);
+
+        try {
+            app(TicketAiConversationService::class)->recordFailure(
+                $this->ticketId,
+                $this->sourceMessageId,
+                'provider_retries_exhausted'
+            );
+        } catch (Throwable) {
+        }
     }
 }

@@ -14,10 +14,12 @@ class TicketAiAutoReplyService
 
     public function __construct(
         private ?TicketAiAssistantService $assistant = null,
-        private ?TicketService $ticketService = null
+        private ?TicketService $ticketService = null,
+        private ?TicketAiConversationService $conversation = null
     ) {
         $this->assistant ??= app(TicketAiAssistantService::class);
         $this->ticketService ??= app(TicketService::class);
+        $this->conversation ??= app(TicketAiConversationService::class);
     }
 
     public function process(int $ticketId, int $sourceMessageId, bool $isNewTicket): void
@@ -45,6 +47,15 @@ class TicketAiAutoReplyService
 
             if ($this->shouldRetry($e)) {
                 throw $e;
+            } else {
+                try {
+                    $this->conversation->recordFailure($ticketId, $sourceMessageId, 'automation_exception');
+                } catch (\Throwable $trackingError) {
+                    Log::warning('ticket AI automation failure tracking failed', [
+                        'ticket_id' => $ticketId,
+                        'message' => $trackingError->getMessage(),
+                    ]);
+                }
             }
         }
     }
@@ -92,11 +103,26 @@ class TicketAiAutoReplyService
             return;
         }
 
-        $result = $this->assistant->suggest($ticket);
+        $preflight = $this->conversation->preflight($ticket, $sourceMessage);
+        if (!$preflight['allow']) {
+            return;
+        }
+
+        $clarification = $this->conversation->clarification($ticket, $sourceMessage);
+        $isClarification = $clarification !== null;
+        $result = $isClarification
+            ? $this->assistant->suggestClarification($ticket, $clarification)
+            : $this->assistant->suggest($ticket);
         $suggestionId = isset($result['suggestion_id']) ? (int) $result['suggestion_id'] : null;
+        if ($this->conversation->isDuplicateDraft($ticket, (string) ($result['draft'] ?? ''))) {
+            $this->assistant->discardAutomationSuggestion($suggestionId, $ticketId);
+            $this->conversation->recordRejected($ticket, $sourceMessage, $suggestionId, 'duplicate_reply');
+            return;
+        }
         $rejection = $this->rejectionReason($result);
         if ($rejection !== null) {
             $this->assistant->discardAutomationSuggestion($suggestionId, $ticketId);
+            $this->conversation->recordRejected($ticket, $sourceMessage, $suggestionId, $rejection);
             Log::info('ticket AI auto-reply held for review', [
                 'ticket_id' => $ticketId,
                 'source_message_id' => $sourceMessageId,
@@ -117,6 +143,16 @@ class TicketAiAutoReplyService
         );
         if (!$sent) {
             $this->assistant->discardAutomationSuggestion($suggestionId, $ticketId);
+            $this->conversation->recordRejected($ticket, $sourceMessage, $suggestionId, 'send_conflict');
+            return;
+        }
+        try {
+            $this->conversation->recordSent($ticket, $sourceMessage, $sent, $result, $isClarification);
+        } catch (\Throwable $trackingError) {
+            Log::warning('ticket AI sent-state tracking failed', [
+                'ticket_id' => $ticketId,
+                'message' => $trackingError->getMessage(),
+            ]);
         }
     }
 
@@ -141,9 +177,6 @@ class TicketAiAutoReplyService
             return false;
         }
         if ((int) $sourceMessage->user_id !== (int) $ticket->user_id) {
-            return false;
-        }
-        if ($sourceMessage->attachments()->exists()) {
             return false;
         }
 

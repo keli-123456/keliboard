@@ -186,6 +186,16 @@ class TicketService
                 throw new ApiException('工单回复失败');
             }
             DB::commit();
+            if ((int) $userId !== (int) $ticket->user_id) {
+                try {
+                    app(TicketAiConversationService::class)->recordHumanReply($ticket, $ticketMessage);
+                } catch (\Throwable $e) {
+                    Log::warning('ticket AI human handoff state update failed', [
+                        'ticket_id' => (int) $ticket->id,
+                        'message' => $e->getMessage(),
+                    ]);
+                }
+            }
             HookManager::call('ticket.reply.admin.after', [$ticket, $ticketMessage]);
         } catch (\Exception $e) {
             DB::rollBack();
@@ -347,7 +357,7 @@ class TicketService
                 return null;
             }
 
-            $maxPerTicket = max(1, min(10, (int) admin_setting('ticket_ai_auto_reply_max_per_ticket', 1)));
+            $maxPerTicket = max(1, min(10, (int) admin_setting('ticket_ai_auto_reply_max_per_ticket', 3)));
             $sentCount = TicketMessage::query()
                 ->where('ticket_id', $ticketId)
                 ->where('is_auto_reply', 1)

@@ -160,6 +160,11 @@ class TicketController extends Controller
         if (!$ticket->save()) {
             return $this->fail([500, __('Close failed')]);
         }
+        try {
+            app(\App\Services\TicketAiConversationService::class)->markClosed($ticket);
+        } catch (\Throwable) {
+            // Closing a ticket must not depend on optional AI tracking.
+        }
         return $this->success(true);
     }
 

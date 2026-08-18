@@ -83,7 +83,7 @@ class TicketAiAssistantService
             'ticket_ai_auto_reply_min_confidence' => max(0.5, min(1.0, (float) admin_setting('ticket_ai_auto_reply_min_confidence', 0.9))),
             'ticket_ai_auto_reply_require_knowledge' => (bool) admin_setting('ticket_ai_auto_reply_require_knowledge', true),
             'ticket_ai_auto_reply_allowed_categories' => $this->publicAutoReplyCategories(),
-            'ticket_ai_auto_reply_max_per_ticket' => max(1, min(10, (int) admin_setting('ticket_ai_auto_reply_max_per_ticket', 1))),
+            'ticket_ai_auto_reply_max_per_ticket' => max(1, min(10, (int) admin_setting('ticket_ai_auto_reply_max_per_ticket', 3))),
             'ticket_ai_base_url' => $settings['base_url'],
             'ticket_ai_allow_private_provider' => $settings['allow_private_provider'],
             'ticket_ai_model' => $settings['model'],
@@ -296,34 +296,7 @@ class TicketAiAssistantService
                     );
                 }
             }
-            $suggestion = DB::transaction(function () use ($scopeFields, $ticket, $adminId, $settings, $result, $instruction) {
-                $this->supersedeDrafts((int) $ticket->id, $adminId);
-                $attributes = array_merge($scopeFields, [
-                    'ticket_id' => (int) $ticket->id,
-                    'admin_id' => $adminId,
-                    'model' => $settings['model'],
-                    'structured_output' => $result['structured_output'],
-                    'category' => $result['category'],
-                    'sentiment' => $result['sentiment'],
-                    'risk' => $result['risk'],
-                    'needs_human' => $result['needs_human'],
-                    'confidence' => $result['confidence'],
-                    'summary' => $result['summary'],
-                    'draft' => $result['draft'],
-                    'draft_hash' => $this->messageHash($result['draft']),
-                    'instruction' => $this->sanitizer->sanitize((string) ($instruction ?? ''), 1000),
-                    'knowledge_refs' => $result['knowledge_refs'],
-                    'matched_knowledge' => $result['matched_knowledge'],
-                    'status' => TicketAiSuggestion::STATUS_GENERATED,
-                ]);
-                if ($this->hasQualityColumns()) {
-                    $attributes['draft_chars'] = mb_strlen((string) $result['draft']);
-                    $attributes['knowledge_hit_count'] = count((array) $result['matched_knowledge']);
-                    $attributes['knowledge_gap'] = $attributes['knowledge_hit_count'] === 0;
-                }
-
-                return TicketAiSuggestion::create($attributes);
-            });
+            $suggestion = $this->persistSuggestion($scopeFields, $ticket, $adminId, $settings, $result, $instruction);
 
             $this->recordRequestLog(array_merge(
                 $scopeFields,
@@ -362,6 +335,59 @@ class TicketAiAssistantService
             ]));
             throw $exception;
         }
+    }
+
+    /**
+     * Persist one deterministic clarification without spending a provider call.
+     * The reply contains no tenant data and is still tracked like any AI draft.
+     */
+    public function suggestClarification(Ticket $ticket, string $draft): array
+    {
+        $settings = $this->settings();
+        if (!$settings['enabled']) {
+            throw new RuntimeException('AI 工单助手尚未启用');
+        }
+        $context = $this->contextService->build($ticket, $settings['max_messages'], null);
+        $policy = $this->policyService->resolve((array) ($context['scope'] ?? []), $settings['scope_policies']);
+        if (!$policy['enabled']) {
+            throw new RuntimeException('当前站点或代理已停用 AI 工单助手');
+        }
+
+        $result = [
+            'structured_output' => true,
+            'category' => '客户端连接',
+            'sentiment' => 'neutral',
+            'risk' => 'low',
+            'needs_human' => false,
+            'confidence' => 1.0,
+            'summary' => '信息不足，等待用户补充客户端和错误详情',
+            'draft' => $this->sanitizer->sanitize($draft, 5000),
+            'knowledge_refs' => [],
+            'matched_knowledge' => [],
+            'risk_explanation' => '',
+            'risk_evidence' => [],
+            'system_grounded' => true,
+            'grounding_type' => 'controlled_clarification',
+        ];
+        $scopeFields = $this->scopeFields((array) ($context['scope'] ?? []));
+        $suggestion = $this->persistSuggestion(
+            $scopeFields,
+            $ticket,
+            null,
+            array_merge($settings, ['model' => 'system:clarification']),
+            $result,
+            null
+        );
+        $result['suggestion_id'] = (int) $suggestion->id;
+        $result['category_options'] = self::CATEGORY_OPTIONS;
+        $result['scope'] = $context['scope'];
+        $result['policy'] = [
+            'tone' => $policy['tone'],
+            'knowledge_enabled' => false,
+            'sources' => [],
+        ];
+
+        return $result;
     }
 
     public function recordFeedback(
@@ -585,6 +611,7 @@ class TicketAiAssistantService
             'top_categories' => $this->groupSuggestionCounts($activeQuery, 'category'),
             'top_risks' => $this->groupSuggestionCounts($activeQuery, 'risk'),
             'scope_breakdown' => $this->scopeBreakdown($activeQuery, $since),
+            'automation' => app(TicketAiConversationService::class)->stats($days),
             'requests' => (int) $requests,
             'successful_requests' => (int) $successfulRequests,
             'success_rate' => $requests > 0 ? round($successfulRequests / $requests, 4) : 0.0,
@@ -1247,6 +1274,49 @@ class TicketAiAssistantService
         }
 
         return '主站';
+    }
+
+    /**
+     * @param array<string, mixed> $scopeFields
+     * @param array<string, mixed> $settings
+     * @param array<string, mixed> $result
+     */
+    private function persistSuggestion(
+        array $scopeFields,
+        Ticket $ticket,
+        ?int $adminId,
+        array $settings,
+        array $result,
+        ?string $instruction
+    ): TicketAiSuggestion {
+        return DB::transaction(function () use ($scopeFields, $ticket, $adminId, $settings, $result, $instruction) {
+            $this->supersedeDrafts((int) $ticket->id, $adminId);
+            $attributes = array_merge($scopeFields, [
+                'ticket_id' => (int) $ticket->id,
+                'admin_id' => $adminId,
+                'model' => $settings['model'],
+                'structured_output' => $result['structured_output'],
+                'category' => $result['category'],
+                'sentiment' => $result['sentiment'],
+                'risk' => $result['risk'],
+                'needs_human' => $result['needs_human'],
+                'confidence' => $result['confidence'],
+                'summary' => $result['summary'],
+                'draft' => $result['draft'],
+                'draft_hash' => $this->messageHash($result['draft']),
+                'instruction' => $this->sanitizer->sanitize((string) ($instruction ?? ''), 1000),
+                'knowledge_refs' => $result['knowledge_refs'],
+                'matched_knowledge' => $result['matched_knowledge'],
+                'status' => TicketAiSuggestion::STATUS_GENERATED,
+            ]);
+            if ($this->hasQualityColumns()) {
+                $attributes['draft_chars'] = mb_strlen((string) $result['draft']);
+                $attributes['knowledge_hit_count'] = count((array) $result['matched_knowledge']);
+                $attributes['knowledge_gap'] = $attributes['knowledge_hit_count'] === 0;
+            }
+
+            return TicketAiSuggestion::create($attributes);
+        });
     }
 
     private function hasQualityColumns(): bool

@@ -558,6 +558,11 @@ class TicketController extends Controller
             $ticket = Ticket::findOrFail($request->input('id'));
             $ticket->status = Ticket::STATUS_CLOSED;
             $ticket->save();
+            try {
+                app(\App\Services\TicketAiConversationService::class)->markClosed($ticket);
+            } catch (\Throwable) {
+                // Closing a ticket must not depend on optional AI tracking.
+            }
             return $this->success(true);
         } catch (ModelNotFoundException $e) {
             return $this->fail([400202, '工单不存在']);
