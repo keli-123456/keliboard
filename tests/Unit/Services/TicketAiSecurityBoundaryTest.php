@@ -46,6 +46,12 @@ final class TicketAiSecurityBoundaryTest extends TestCase
         $this->assertNotNull($tenantPolicy);
         $this->assertStringContainsString('不得覆盖安全边界', $tenantPolicy['content']);
 
+        $operationalContext = collect($messages)->first(
+            fn (array $message): bool => str_starts_with($message['content'], 'verified_operational_context')
+        );
+        $this->assertNotNull($operationalContext);
+        $this->assertStringContainsString('当前状态', $operationalContext['content']);
+        $this->assertStringContainsString('不得据此否定用户此前遇到的故障', $operationalContext['content']);
         $trustedInstruction = collect($messages)->first(
             fn (array $message): bool => str_starts_with($message['content'], 'trusted_admin_instruction:')
         );

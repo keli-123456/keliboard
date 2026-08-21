@@ -32,6 +32,7 @@ class TicketAiBusinessContextService
      * @param array<string, mixed> $subscription
      * @param array<int, array<string, mixed>> $orders
      * @param array<int, array<string, mixed>> $conversation
+     * @param array<string, mixed> $operations
      * @return array<string, mixed>
      */
     public function build(
@@ -39,10 +40,12 @@ class TicketAiBusinessContextService
         array $scope,
         array $subscription,
         array $orders,
-        array $conversation
+        array $conversation,
+        array $operations = []
     ): array {
         $latestMessage = $this->latestUserMessage($conversation);
-        $requiresHuman = $this->containsSensitiveIntent($latestMessage);
+        $operationalRequiresHuman = (bool) ($operations['requires_human'] ?? false);
+        $requiresHuman = $this->containsSensitiveIntent($latestMessage) || $operationalRequiresHuman;
         $intents = $this->detectReadOnlyIntents($latestMessage);
         $retentionSignal = $this->retentionSignal($latestMessage);
         $catalog = in_array('plan_catalog', $intents, true) || $retentionSignal !== null
@@ -58,6 +61,10 @@ class TicketAiBusinessContextService
             'retention_signal' => $retentionSignal !== null,
             'retention_reason' => $retentionSignal,
             'catalog' => $catalog,
+            'operational_requires_human' => $operationalRequiresHuman,
+            'operational_reply' => $operationalRequiresHuman
+                ? trim((string) ($operations['customer_safe_summary'] ?? ''))
+                : '',
             'grounded_reply' => !$requiresHuman && $verifiedFacts !== []
                 ? $this->groundedReply($verifiedFacts)
                 : '',
@@ -76,6 +83,14 @@ class TicketAiBusinessContextService
     public function applyGuardrails(array $result, array $business): array
     {
         if ((bool) ($business['requires_human'] ?? false)) {
+            $operationalReply = trim((string) ($business['operational_reply'] ?? ''));
+            if ((bool) ($business['operational_requires_human'] ?? false) && $operationalReply !== '') {
+                $result['draft'] = $this->sanitizer->sanitize(
+                    $operationalReply . "\n客服将结合实时运行记录继续处理，请勿反复重置订阅或重复提交订单。",
+                    5000
+                );
+                $result['category'] = '服务器故障';
+            }
             $result['needs_human'] = true;
             if (($result['risk'] ?? 'low') === 'low') {
                 $result['risk'] = 'medium';

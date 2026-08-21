@@ -14,13 +14,16 @@ class TicketAiContextService
 {
     private TicketAiContentSanitizer $sanitizer;
     private TicketAiBusinessContextService $businessContext;
+    private TicketAiOperationalContextService $operationalContext;
 
     public function __construct(
         ?TicketAiContentSanitizer $sanitizer = null,
-        ?TicketAiBusinessContextService $businessContext = null
+        ?TicketAiBusinessContextService $businessContext = null,
+        ?TicketAiOperationalContextService $operationalContext = null
     ) {
         $this->sanitizer = $sanitizer ?? new TicketAiContentSanitizer();
         $this->businessContext = $businessContext ?? new TicketAiBusinessContextService($this->sanitizer);
+        $this->operationalContext = $operationalContext ?? new TicketAiOperationalContextService();
     }
 
     /**
@@ -35,6 +38,12 @@ class TicketAiContextService
         unset($scope['_orders_allowed']);
         $subscription = $this->subscriptionSummary($user);
         $conversation = $this->conversation($ticket, $maxMessages);
+        $operations = $this->operationalContext->build(
+            $user,
+            $scope,
+            $conversation,
+            (string) $ticket->subject
+        );
 
         return [
             'scope' => $scope,
@@ -49,7 +58,15 @@ class TicketAiContextService
             'orders' => $orders,
             'risk' => $this->riskSummary($user),
             'conversation' => $conversation,
-            'business' => $this->businessContext->build($user, $scope, $subscription, $orders, $conversation),
+            'operations' => $operations,
+            'business' => $this->businessContext->build(
+                $user,
+                $scope,
+                $subscription,
+                $orders,
+                $conversation,
+                $operations
+            ),
             'instruction' => $this->sanitizer->sanitize((string) ($instruction ?? ''), 1000),
         ];
     }

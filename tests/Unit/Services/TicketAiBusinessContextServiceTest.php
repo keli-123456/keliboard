@@ -177,6 +177,36 @@ final class TicketAiBusinessContextServiceTest extends TestCase
         $this->assertStringNotContainsString('主站套餐', $context['grounded_reply']);
     }
 
+    public function test_operational_failure_replaces_vague_model_reply_and_forces_human_review(): void
+    {
+        $service = $this->service([]);
+        $business = $service->build(
+            new User(),
+            ['type' => 'platform'],
+            [],
+            [],
+            [['role' => 'user', 'content' => '订阅链接一直 Network Error']],
+            [
+                'requires_human' => true,
+                'customer_safe_summary' => '订阅加速通道当前未通过健康检查，需要人工排查。',
+            ]
+        );
+        $result = $service->applyGuardrails([
+            'risk' => 'low',
+            'needs_human' => false,
+            'draft' => '请检查网络后稍后重试。',
+            'confidence' => 0.99,
+            'category' => '客户端连接',
+        ], $business);
+
+        $this->assertTrue($business['operational_requires_human']);
+        $this->assertTrue($result['needs_human']);
+        $this->assertSame('服务器故障', $result['category']);
+        $this->assertSame('medium', $result['risk']);
+        $this->assertStringContainsString('订阅加速通道当前未通过健康检查', $result['draft']);
+        $this->assertStringNotContainsString('检查网络', $result['draft']);
+        $this->assertFalse($result['system_grounded']);
+    }
     /** @param array<int, Plan> $plans */
     private function service(array $plans): TicketAiBusinessContextService
     {
