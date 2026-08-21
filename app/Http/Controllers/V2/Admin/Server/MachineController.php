@@ -67,6 +67,14 @@ class MachineController extends Controller
                 return $this->fail([400202, '机器不存在']);
             }
 
+            $previousSubproxyRouting = [
+                'is_active' => (bool) ($machine->is_active ?? true),
+                'enabled' => (bool) ($machine->subproxy_enabled ?? false),
+                'https_port' => $this->normalizeNullablePort($machine->subproxy_https_port ?? null),
+                'http_port' => $this->normalizeNullablePort($machine->subproxy_http_port ?? null),
+                'cert_domain' => $this->normalizeCertificateDomain($machine->subproxy_cert_domain ?? null),
+            ];
+
             $machine->fill([
                 'name' => $params['name'],
                 'description' => array_key_exists('description', $params) ? $params['description'] : $machine->description,
@@ -91,6 +99,16 @@ class MachineController extends Controller
                     : $this->normalizeCertificateDomain($machine->subproxy_cert_domain ?? null),
                 'sort' => array_key_exists('sort', $params) ? (int) $params['sort'] : (int) ($machine->sort ?? 0),
             ]);
+            $currentSubproxyRouting = [
+                'is_active' => (bool) $machine->is_active,
+                'enabled' => (bool) $machine->subproxy_enabled,
+                'https_port' => $this->normalizeNullablePort($machine->subproxy_https_port),
+                'http_port' => $this->normalizeNullablePort($machine->subproxy_http_port),
+                'cert_domain' => $this->normalizeCertificateDomain($machine->subproxy_cert_domain),
+            ];
+            if ($machine->exists && $previousSubproxyRouting !== $currentSubproxyRouting) {
+                $this->clearSubscriptionProxyProbe($machine);
+            }
             if (!$machine->exists) {
                 $machine->token = ServerMachine::generateToken();
             }
@@ -133,9 +151,14 @@ class MachineController extends Controller
         }
 
         try {
+            $activeChanged = (bool) $machine->is_active !== (bool) $params['is_active'];
             $machine->forceFill([
                 'is_active' => (bool) $params['is_active'],
-            ])->save();
+            ]);
+            if ($activeChanged) {
+                $this->clearSubscriptionProxyProbe($machine);
+            }
+            $machine->save();
 
             app(NodeRealtimePublisher::class)->invalidateConfigForMachines(
                 [(int) $machine->id],
@@ -778,6 +801,13 @@ class MachineController extends Controller
     private function shellQuote(string $value): string
     {
         return "'" . str_replace("'", "'\"'\"'", $value) . "'";
+    }
+
+    private function clearSubscriptionProxyProbe(ServerMachine $machine): void
+    {
+        $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
+        unset($state['probe']);
+        $machine->subproxy_cert_state = $state;
     }
 
     private function normalizeNullablePort(mixed $value): ?int

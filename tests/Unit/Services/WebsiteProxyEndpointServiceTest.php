@@ -93,6 +93,7 @@ final class WebsiteProxyEndpointServiceTest extends TestCase
                 'agent' => [
                     'subscription_proxy' => [
                         'running' => true,
+                        'mode' => 'https',
                         'https_listen' => '0.0.0.0:443',
                         'website_listens' => ['0.0.0.0:8444', '0.0.0.0:8445'],
                         'certificate_domain' => '2.56.116.39',

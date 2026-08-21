@@ -98,6 +98,9 @@ class WebsiteProxyEndpointService
         if (!is_array($proxy) || !($proxy['running'] ?? false)) {
             return false;
         }
+        if (strtolower(trim((string) ($proxy['mode'] ?? ''))) !== 'https') {
+            return false;
+        }
 
         if ($main) {
             return $this->listenPort((string) ($proxy['https_listen'] ?? '')) === $port;

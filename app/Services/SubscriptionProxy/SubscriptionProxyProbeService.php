@@ -3,10 +3,16 @@
 namespace App\Services\SubscriptionProxy;
 
 use App\Models\ServerMachine;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
+use Throwable;
 
 class SubscriptionProxyProbeService
 {
+    private const MACHINE_ONLINE_WINDOW_SECONDS = 300;
+    private const PROBE_FRESH_SECONDS = 180;
+    private const PROBE_CONNECT_TIMEOUT_SECONDS = 3;
+    private const PROBE_TIMEOUT_SECONDS = 8;
     private const HEALTH_TOKEN_PREFIX = '__xboard_subproxy_probe_';
     private const HEALTH_RESPONSE = 'xboard-subproxy-health-ok';
 
@@ -60,13 +66,14 @@ class SubscriptionProxyProbeService
     {
         $previous = $this->currentProbeState($machine);
         $siteId = $this->siteId();
-        $url = $this->buildProxySubscribeUrl($machine, $this->healthToken(), $siteId);
+        $healthToken = $this->healthToken();
+        $url = $this->buildProxySubscribeUrl($machine, $healthToken, $siteId);
         $checkedAt = now();
 
         $state = [
             'status' => 'error',
             'site_id' => $siteId,
-            'url' => $url,
+            'url' => $this->redactProbeUrl($url, $healthToken),
             'http_code' => null,
             'latency_ms' => null,
             'last_success_at' => $previous['last_success_at'] ?? null,
@@ -81,12 +88,36 @@ class SubscriptionProxyProbeService
             return $this->storeProbeState($machine, $state);
         }
 
-        // The proxy is already configured and managed by the machine itself. Do not
-        // spend outbound request quota on a synthetic health request here.
-        $state['status'] = 'ok';
-        $state['http_code'] = 200;
-        $state['latency_ms'] = 0;
-        $state['last_success_at'] = $checkedAt->timestamp;
+        $runtimeError = $this->runtimeUnavailableReason($machine);
+        if ($runtimeError !== null) {
+            $state['last_error'] = $runtimeError;
+            return $this->storeProbeState($machine, $state);
+        }
+
+        $startedAt = microtime(true);
+        try {
+            $response = Http::accept('text/plain')
+                ->withHeaders(['User-Agent' => 'Keliboard-Subscription-Proxy-Probe/1.0'])
+                ->connectTimeout(self::PROBE_CONNECT_TIMEOUT_SECONDS)
+                ->timeout(self::PROBE_TIMEOUT_SECONDS)
+                ->get($url);
+            $state['http_code'] = $response->status();
+            $state['latency_ms'] = max(1, (int) round((microtime(true) - $startedAt) * 1000));
+
+            if ($response->status() !== 200 || trim((string) $response->body()) !== self::HEALTH_RESPONSE) {
+                $state['last_error'] = sprintf(
+                    'subscription proxy health response mismatch (HTTP %d)',
+                    $response->status()
+                );
+                return $this->storeProbeState($machine, $state);
+            }
+
+            $state['status'] = 'ok';
+            $state['last_success_at'] = $checkedAt->timestamp;
+        } catch (Throwable $exception) {
+            $state['latency_ms'] = max(1, (int) round((microtime(true) - $startedAt) * 1000));
+            $state['last_error'] = $this->sanitizeProbeError($exception->getMessage(), $healthToken);
+        }
 
         return $this->storeProbeState($machine, $state);
     }
@@ -133,6 +164,11 @@ class SubscriptionProxyProbeService
             ->orderBy('sort')
             ->orderBy('id')
             ->get() as $machine) {
+            $probe = $this->currentProbeState($machine);
+            if ($this->runtimeUnavailableReason($machine) !== null || !$this->probeIsFreshAndHealthy($probe)) {
+                continue;
+            }
+
             $host = $this->resolveProxyHost($machine);
             if ($host === null) {
                 continue;
@@ -144,8 +180,8 @@ class SubscriptionProxyProbeService
                 'site_id' => $siteId,
                 'host' => $host,
                 'port' => $this->httpsPort($machine),
-                'last_success_at' => now()->timestamp,
-                'latency_ms' => 0,
+                'last_success_at' => (int) $probe['last_success_at'],
+                'latency_ms' => max(0, (int) ($probe['latency_ms'] ?? 0)),
                 'sort' => (int) ($machine->sort ?? 0),
             ];
         }
@@ -174,6 +210,8 @@ class SubscriptionProxyProbeService
         $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
         $state['probe'] = $probe;
         $machine->forceFill(['subproxy_cert_state' => $state])->save();
+        $this->availableEndpointResolved = false;
+        $this->availableEndpoint = null;
 
         return $probe;
     }
@@ -268,6 +306,69 @@ class SubscriptionProxyProbeService
     {
         $port = (int) ($machine->subproxy_https_port ?: admin_setting('subscription_proxy_https_port', 443));
         return $port > 0 && $port <= 65535 ? $port : 443;
+    }
+    private function runtimeUnavailableReason(ServerMachine $machine): ?string
+    {
+        $lastSeenAt = (int) ($machine->last_seen_at ?? 0);
+        if ($lastSeenAt <= 0 || $lastSeenAt < time() - self::MACHINE_ONLINE_WINDOW_SECONDS) {
+            return 'subscription proxy machine is offline or stale';
+        }
+
+        $runtime = data_get($machine->load_status, 'agent.subscription_proxy');
+        if (!is_array($runtime) || !($runtime['running'] ?? false)) {
+            return 'subscription proxy runtime is not running';
+        }
+
+        if (strtolower(trim((string) ($runtime['mode'] ?? ''))) !== 'https') {
+            return 'subscription proxy runtime is not serving HTTPS';
+        }
+
+        if ($this->listenPort((string) ($runtime['https_listen'] ?? '')) !== $this->httpsPort($machine)) {
+            return 'subscription proxy HTTPS listener does not match the configured port';
+        }
+
+        return null;
+    }
+
+    private function probeIsFreshAndHealthy(array $probe): bool
+    {
+        return ($probe['status'] ?? null) === 'ok'
+            && $this->timestampIsFresh((int) ($probe['last_checked_at'] ?? 0))
+            && $this->timestampIsFresh((int) ($probe['last_success_at'] ?? 0));
+    }
+
+    private function timestampIsFresh(int $timestamp): bool
+    {
+        return $timestamp > 0 && $timestamp >= time() - self::PROBE_FRESH_SECONDS;
+    }
+
+    private function listenPort(string $listen): ?int
+    {
+        $separator = strrpos($listen, ':');
+        if ($separator === false) {
+            return null;
+        }
+
+        $port = (int) substr($listen, $separator + 1);
+
+        return $port > 0 && $port <= 65535 ? $port : null;
+    }
+
+    private function redactProbeUrl(?string $url, string $healthToken): ?string
+    {
+        if ($url === null) {
+            return null;
+        }
+
+        return str_replace(rawurlencode($healthToken), '[health-token]', $url);
+    }
+
+    private function sanitizeProbeError(string $message, string $healthToken): string
+    {
+        $message = str_replace([$healthToken, rawurlencode($healthToken)], '[health-token]', $message);
+        $message = preg_replace('/\s+/', ' ', trim($message)) ?: 'subscription proxy probe failed';
+
+        return substr($message, 0, 500);
     }
 
     private function canUseMachineTable(): bool

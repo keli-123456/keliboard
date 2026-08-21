@@ -8,6 +8,7 @@ use App\Models\ServerMachine;
 use App\Services\SubscriptionProxy\SubscriptionProxyProbeService;
 use App\Support\Setting;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
@@ -32,25 +33,21 @@ final class SubscriptionProxyProbeServiceTest extends TestCase
 
     public function test_probe_success_stores_state_and_exposes_user_subscribe_url(): void
     {
-        $service = new SubscriptionProxyProbeService();
-        $machine = ServerMachine::create([
-            'name' => 'edge-a',
-            'token' => 'machine-token',
-            'is_active' => true,
-            'sort' => 10,
+        Http::fake([
+            'https://edge.example.com/*' => Http::response('xboard-subproxy-health-ok', 200),
         ]);
-        $machine->forceFill([
-            'subproxy_enabled' => true,
-            'subproxy_cert_domain' => 'edge.example.com',
-            'subproxy_cert_state' => ['status' => 'issued'],
-        ])->save();
-        $machine = $machine->fresh();
+        $service = new SubscriptionProxyProbeService();
+        $machine = $this->createHealthyMachine();
 
         $probe = $service->probeMachine($machine);
 
         $this->assertSame('ok', $probe['status']);
         $this->assertSame('sp.huhu.icu', $probe['site_id']);
         $this->assertSame(200, $probe['http_code']);
+        $this->assertSame(
+            'https://edge.example.com/sub/sp.huhu.icu/[health-token]',
+            $probe['url']
+        );
 
         $fresh = ServerMachine::find($machine->id);
         $this->assertSame('issued', $fresh?->subproxy_cert_state['status'] ?? null);
@@ -59,29 +56,37 @@ final class SubscriptionProxyProbeServiceTest extends TestCase
         $payload = $service->userPayload('user-token');
         $this->assertTrue($payload['available']);
         $this->assertSame('https://edge.example.com/sub/sp.huhu.icu/user-token', $payload['subscribe_url']);
+        Http::assertSentCount(1);
     }
 
-    public function test_enabled_proxy_is_available_without_network_probe(): void
+    public function test_failed_network_probe_prevents_proxy_url_from_being_issued(): void
     {
-        $service = new SubscriptionProxyProbeService();
-        $machine = ServerMachine::create([
-            'name' => 'edge-a',
-            'token' => 'machine-token',
-            'is_active' => true,
-            'sort' => 10,
+        Http::fake([
+            'https://edge.example.com/*' => Http::response('upstream unavailable', 503),
         ]);
-        $machine->forceFill([
-            'subproxy_enabled' => true,
-            'subproxy_cert_domain' => 'edge.example.com',
-        ])->save();
-
+        $service = new SubscriptionProxyProbeService();
+        $this->createHealthyMachine();
 
         $results = $service->probeAll();
-        $this->assertSame('ok', $results[0]['status']);
 
-        $payload = $service->userPayload('user-token');
-        $this->assertTrue($payload['available']);
-        $this->assertSame('https://edge.example.com/sub/sp.huhu.icu/user-token', $payload['subscribe_url']);
+        $this->assertSame('error', $results[0]['status']);
+        $this->assertSame(503, $results[0]['http_code']);
+        $this->assertFalse($service->userPayload('user-token')['available']);
+    }
+
+    public function test_stale_machine_is_rejected_without_sending_probe(): void
+    {
+        Http::fake();
+        $service = new SubscriptionProxyProbeService();
+        $machine = $this->createHealthyMachine();
+        $machine->forceFill(['last_seen_at' => time() - 600])->save();
+
+        $probe = $service->probeMachine($machine->fresh());
+
+        $this->assertSame('error', $probe['status']);
+        $this->assertStringContainsString('offline or stale', $probe['last_error']);
+        $this->assertFalse($service->userPayload('user-token')['available']);
+        Http::assertNothingSent();
     }
 
     public function test_health_token_is_stable_and_verifiable(): void
@@ -92,6 +97,34 @@ final class SubscriptionProxyProbeServiceTest extends TestCase
         $this->assertStringStartsWith('__xboard_subproxy_probe_', $token);
         $this->assertTrue($service->isHealthToken($token));
         $this->assertFalse($service->isHealthToken($token . 'x'));
+    }
+
+    private function createHealthyMachine(): ServerMachine
+    {
+        $machine = ServerMachine::create([
+            'name' => 'edge-a',
+            'token' => 'machine-token',
+            'is_active' => true,
+            'sort' => 10,
+        ]);
+        $machine->forceFill([
+            'subproxy_enabled' => true,
+            'subproxy_cert_domain' => 'edge.example.com',
+            'subproxy_cert_state' => ['status' => 'issued'],
+            'last_seen_at' => time(),
+            'load_status' => [
+                'agent' => [
+                    'subscription_proxy' => [
+                        'status' => 'running',
+                        'running' => true,
+                        'mode' => 'https',
+                        'https_listen' => '0.0.0.0:443',
+                    ],
+                ],
+            ],
+        ])->save();
+
+        return $machine->fresh();
     }
 
     private function createTables(): void
