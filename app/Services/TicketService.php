@@ -319,7 +319,8 @@ class TicketService
         int $sourceMessageId,
         int $suggestionId,
         string $category,
-        string $message
+        string $message,
+        bool $allowSourceAttachments = false
     ): ?TicketMessage {
         $ticket = null;
         $ticketMessage = DB::transaction(function () use (
@@ -328,6 +329,7 @@ class TicketService
             $suggestionId,
             $category,
             $message,
+            $allowSourceAttachments,
             &$ticket
         ): ?TicketMessage {
             $ticket = Ticket::query()->where('id', $ticketId)->lockForUpdate()->first();
@@ -346,7 +348,7 @@ class TicketService
                 ->where('ticket_id', $ticketId)
                 ->where('user_id', $ticket->user_id)
                 ->first();
-            if (!$sourceMessage || $sourceMessage->attachments()->exists()) {
+            if (!$sourceMessage || ($sourceMessage->attachments()->exists() && !$allowSourceAttachments)) {
                 return null;
             }
 

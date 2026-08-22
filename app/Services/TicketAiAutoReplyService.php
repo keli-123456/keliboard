@@ -175,7 +175,8 @@ class TicketAiAutoReplyService
             $sourceMessageId,
             (int) $suggestionId,
             (string) $result['category'],
-            (string) $result['draft']
+            (string) $result['draft'],
+            $isClarification
         );
         if (!$sent) {
             $this->assistant->discardAutomationSuggestion($suggestionId, $ticketId);

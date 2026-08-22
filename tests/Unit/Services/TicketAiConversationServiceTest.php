@@ -49,6 +49,34 @@ final class TicketAiConversationServiceTest extends TestCase
         $this->assertNull($service->clarification($ticket, $next));
     }
 
+    public function test_it_keeps_the_conversation_active_for_a_second_user_reply(): void
+    {
+        [$ticket, $source] = $this->ticketWithMessage('订阅导入失败');
+        $service = new TicketAiConversationService();
+        $firstReply = $this->message($ticket, 999, '请重新导入订阅后再试。', true);
+        $service->recordSent($ticket, $source, $firstReply, [
+            'draft' => $firstReply->message,
+            'suggestion_id' => 21,
+        ], false);
+
+        $ticket->reply_status = Ticket::REPLY_STATUS_WAITING_ADMIN;
+        $ticket->save();
+        $next = $this->message($ticket, (int) $ticket->user_id, '重新导入后仍然失败，提示超时。');
+
+        $this->assertTrue($service->preflight($ticket, $next)['allow']);
+
+        $secondReply = $this->message($ticket, 999, '请再确认订阅地址是否完整。', true);
+        $service->recordSent($ticket, $next, $secondReply, [
+            'draft' => $secondReply->message,
+            'suggestion_id' => 22,
+        ], false);
+
+        $state = TicketAiConversation::query()->where('ticket_id', $ticket->id)->firstOrFail();
+        $this->assertSame(TicketAiConversation::STATUS_ACTIVE, $state->status);
+        $this->assertSame(2, $state->auto_reply_count);
+        $this->assertNull($state->handoff_reason);
+    }
+
     public function test_explicit_human_request_immediately_hands_off(): void
     {
         [$ticket, $source] = $this->ticketWithMessage('不要机器人，请转人工客服');
