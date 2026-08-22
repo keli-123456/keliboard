@@ -117,6 +117,49 @@ final class TicketAiConversationServiceTest extends TestCase
         $this->assertSame('attachment', $result['reason']);
     }
 
+    public function test_broad_mode_accepts_attachments_and_asks_for_safe_details(): void
+    {
+        $this->bindSettings(['ticket_ai_auto_reply_mode' => 'broad']);
+        [$ticket, $source] = $this->ticketWithMessage('请看');
+        Schema::connection(null)->getConnection()->table('v2_ticket_message_attachment')->insert([
+            'ticket_id' => $ticket->id,
+            'ticket_message_id' => $source->id,
+            'user_id' => $ticket->user_id,
+            'disk' => 'local',
+            'path' => 'tickets/example.png',
+            'mime' => 'image/png',
+            'size' => 128,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $service = new TicketAiConversationService();
+        $this->assertTrue($service->preflight($ticket, $source)['allow']);
+        $this->assertStringContainsString('完整错误文字', (string) $service->clarification($ticket, $source));
+    }
+
+    public function test_broad_mode_resumes_policy_handoffs_but_preserves_human_requests(): void
+    {
+        [$ticket, $source] = $this->ticketWithMessage('订阅不能用');
+        $service = new TicketAiConversationService();
+        $service->recordRejected($ticket, $source, 1, 'low_confidence');
+        $next = $this->message($ticket, (int) $ticket->user_id, '还是不能用');
+        $service->recordRejected($ticket, $next, 2, 'low_confidence');
+
+        $this->bindSettings(['ticket_ai_auto_reply_mode' => 'broad']);
+        $service->resumeBroadAutomation($ticket);
+        $state = TicketAiConversation::query()->where('ticket_id', $ticket->id)->firstOrFail();
+        $this->assertSame(TicketAiConversation::STATUS_ACTIVE, $state->status);
+        $this->assertNull($state->handoff_reason);
+
+        [$humanTicket, $humanSource] = $this->ticketWithMessage('请转人工客服', 11);
+        $service->preflight($humanTicket, $humanSource);
+        $service->resumeBroadAutomation($humanTicket);
+        $humanState = TicketAiConversation::query()->where('ticket_id', $humanTicket->id)->firstOrFail();
+        $this->assertSame(TicketAiConversation::STATUS_HUMAN_REQUIRED, $humanState->status);
+        $this->assertSame('user_requested_human', $humanState->handoff_reason);
+    }
+
     public function test_stats_report_resolution_handoff_follow_up_and_failure_reasons(): void
     {
         $service = new TicketAiConversationService();
@@ -175,12 +218,21 @@ final class TicketAiConversationServiceTest extends TestCase
         ]);
     }
 
-    private function bindSettings(): void
+    private function bindSettings(array $overrides = []): void
     {
-        app()->instance(Setting::class, new class extends Setting {
+        $values = array_merge([
+            'ticket_ai_auto_reply_mode' => 'strict',
+            'ticket_ai_auto_reply_max_per_ticket' => 3,
+        ], $overrides);
+
+        app()->instance(Setting::class, new class($values) extends Setting {
+            public function __construct(private array $values)
+            {
+            }
+
             public function get(string $key, mixed $default = null): mixed
             {
-                return $key === 'ticket_ai_auto_reply_max_per_ticket' ? 3 : $default;
+                return array_key_exists($key, $this->values) ? $this->values[$key] : $default;
             }
         });
     }

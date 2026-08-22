@@ -11,6 +11,11 @@ use Illuminate\Support\Facades\Log;
 class TicketAiAutoReplyService
 {
     private const DEFAULT_ALLOWED_CATEGORIES = ['客户端连接', '订阅与节点', '套餐订单'];
+    private const MODE_BROAD = 'broad';
+    private const MODE_STRICT = 'strict';
+    private const WITHDRAWAL_PATTERNS = [
+        '提现', '提取佣金', '佣金提取', 'withdraw', 'payout', 'cash out',
+    ];
 
     public function __construct(
         private ?TicketAiAssistantService $assistant = null,
@@ -65,6 +70,12 @@ class TicketAiAutoReplyService
         if (!(bool) ($result['structured_output'] ?? false)) {
             return 'unstructured_output';
         }
+        if (trim((string) ($result['draft'] ?? '')) === '') {
+            return 'empty_draft';
+        }
+        if ($this->automationMode() === self::MODE_BROAD) {
+            return null;
+        }
         if (strtolower((string) ($result['risk'] ?? '')) !== 'low') {
             return 'risk_not_low';
         }
@@ -77,15 +88,26 @@ class TicketAiAutoReplyService
         if (!in_array((string) ($result['category'] ?? ''), $this->allowedCategories(), true)) {
             return 'category_not_allowed';
         }
-        if (trim((string) ($result['draft'] ?? '')) === '') {
-            return 'empty_draft';
-        }
         if (
             (bool) admin_setting('ticket_ai_auto_reply_require_knowledge', true)
             && count((array) ($result['matched_knowledge'] ?? [])) === 0
             && !(bool) ($result['system_grounded'] ?? false)
         ) {
             return 'knowledge_not_matched';
+        }
+
+        return null;
+    }
+
+    public function exclusionReason(Ticket $ticket, TicketMessage $sourceMessage): ?string
+    {
+        $content = mb_strtolower(trim(
+            (string) ($ticket->subject ?? '') . "\n" . (string) ($sourceMessage->message ?? '')
+        ));
+        foreach (self::WITHDRAWAL_PATTERNS as $pattern) {
+            if (str_contains($content, $pattern)) {
+                return 'withdrawal_excluded';
+            }
         }
 
         return null;
@@ -101,6 +123,20 @@ class TicketAiAutoReplyService
 
         if (!$ticket || !$sourceMessage || !$this->canGenerate($ticket, $sourceMessage)) {
             return;
+        }
+
+        $exclusion = $this->exclusionReason($ticket, $sourceMessage);
+        if ($exclusion !== null) {
+            $this->conversation->recordRejected($ticket, $sourceMessage, null, $exclusion);
+            Log::info('ticket AI auto-reply excluded by policy', [
+                'ticket_id' => $ticketId,
+                'source_message_id' => $sourceMessageId,
+                'reason' => $exclusion,
+            ]);
+            return;
+        }
+        if ($this->automationMode() === self::MODE_BROAD) {
+            $this->conversation->resumeBroadAutomation($ticket);
         }
 
         $preflight = $this->conversation->preflight($ticket, $sourceMessage);
@@ -190,6 +226,13 @@ class TicketAiAutoReplyService
     private function minimumConfidence(): float
     {
         return max(0.5, min(1.0, (float) admin_setting('ticket_ai_auto_reply_min_confidence', 0.9)));
+    }
+
+    private function automationMode(): string
+    {
+        $mode = strtolower(trim((string) admin_setting('ticket_ai_auto_reply_mode', self::MODE_BROAD)));
+
+        return $mode === self::MODE_STRICT ? self::MODE_STRICT : self::MODE_BROAD;
     }
 
     /** @return array<int, string> */

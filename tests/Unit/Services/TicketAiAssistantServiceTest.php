@@ -56,6 +56,7 @@ final class TicketAiAssistantServiceTest extends TestCase
         $this->assertSame('', $visible['ticket_ai_api_key']);
         $this->assertTrue($visible['ticket_ai_api_key_set']);
         $this->assertSame('ready', $visible['ticket_ai_api_key_status']);
+        $this->assertSame('broad', $visible['ticket_ai_auto_reply_mode']);
     }
 
     public function test_invalid_encrypted_api_key_reports_decrypt_failure(): void

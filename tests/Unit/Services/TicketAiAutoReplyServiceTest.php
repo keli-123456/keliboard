@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Services;
 
+use App\Models\Ticket;
+use App\Models\TicketMessage;
 use App\Services\TicketAiAssistantService;
 use App\Services\TicketAiAutoReplyService;
 use App\Services\TicketService;
@@ -49,6 +51,43 @@ final class TicketAiAutoReplyServiceTest extends TestCase
         $this->assertSame('category_not_allowed', $service->rejectionReason($this->safeResult([
             'category' => '支付退款',
         ])));
+    }
+
+    public function test_broad_mode_answers_all_non_withdrawal_categories(): void
+    {
+        $this->bindSettings([
+            'ticket_ai_auto_reply_mode' => 'broad',
+        ]);
+
+        $this->assertNull($this->service()->rejectionReason($this->safeResult([
+            'risk' => 'high',
+            'needs_human' => true,
+            'confidence' => 0.51,
+            'category' => '支付退款',
+            'matched_knowledge' => [],
+        ])));
+        $this->assertSame('unstructured_output', $this->service()->rejectionReason($this->safeResult([
+            'structured_output' => false,
+        ])));
+        $this->assertSame('empty_draft', $this->service()->rejectionReason($this->safeResult([
+            'draft' => ' ',
+        ])));
+    }
+
+    public function test_withdrawal_tickets_are_excluded_but_payment_questions_are_not(): void
+    {
+        $service = $this->service();
+        $ticket = (new Ticket())->forceFill(['subject' => '佣金提现申请']);
+        $message = (new TicketMessage())->forceFill(['message' => '请帮忙处理']);
+
+        $this->assertSame('withdrawal_excluded', $service->exclusionReason($ticket, $message));
+
+        $ticket->subject = '套餐支付问题';
+        $message->message = '支付后没有到账，请帮忙查询订单。';
+        $this->assertNull($service->exclusionReason($ticket, $message));
+
+        $message->message = 'I need to cash out my commission.';
+        $this->assertSame('withdrawal_excluded', $service->exclusionReason($ticket, $message));
     }
 
     public function test_backend_grounded_reply_does_not_require_a_knowledge_article(): void
@@ -108,6 +147,7 @@ final class TicketAiAutoReplyServiceTest extends TestCase
     private function bindSettings(array $overrides = []): void
     {
         $values = array_merge([
+            'ticket_ai_auto_reply_mode' => 'strict',
             'ticket_ai_auto_reply_min_confidence' => 0.9,
             'ticket_ai_auto_reply_require_knowledge' => true,
             'ticket_ai_auto_reply_allowed_categories' => ['客户端连接', '订阅与节点', '套餐订单'],

@@ -11,6 +11,10 @@ use Illuminate\Support\Facades\Log;
 
 class TicketAiConversationService
 {
+    private const TERMINAL_HANDOFF_REASONS = [
+        'attachment', 'user_requested_human', 'reply_limit_reached', 'human_replied', 'withdrawal_excluded',
+    ];
+
     private const HUMAN_REQUEST_PATTERNS = [
         '人工客服', '转人工', '找人工', '真人客服', '人工处理', '人工回复',
         '找客服', '转接客服', '客服人员', '人工接管', '不要ai', '别用ai',
@@ -47,7 +51,7 @@ class TicketAiConversationService
         if ((int) ($state->last_source_message_id ?? 0) >= (int) $sourceMessage->id) {
             return ['allow' => false, 'reason' => 'duplicate_source_message', 'handoff' => false];
         }
-        if ($sourceMessage->attachments()->exists()) {
+        if ($sourceMessage->attachments()->exists() && !$this->broadMode()) {
             $this->handoff($state, $sourceMessage, 'attachment');
             return ['allow' => false, 'reason' => 'attachment', 'handoff' => true];
         }
@@ -87,6 +91,10 @@ class TicketAiConversationService
         }
 
         $message = $this->normalizedMessage($sourceMessage);
+        if ($this->broadMode() && $sourceMessage->attachments()->exists() && mb_strlen($message) < 20) {
+            return "已收到您上传的附件。为了准确处理，请再补充截图中的完整错误文字、使用的客户端名称和版本。\n"
+                . '请不要发送订阅链接、Token、UUID、密码或验证码。';
+        }
         $subject = mb_strtolower(trim((string) $ticket->subject));
         $combined = trim($subject . ' ' . $message);
         if (!$this->containsAny($combined, self::PROBLEM_PATTERNS)) {
@@ -112,6 +120,33 @@ class TicketAiConversationService
         $hash = hash('sha256', trim($draft));
 
         return $state && $state->last_draft_hash !== null && hash_equals((string) $state->last_draft_hash, $hash);
+    }
+
+    public function resumeBroadAutomation(Ticket $ticket): void
+    {
+        if (!$this->available() || !$this->broadMode()) {
+            return;
+        }
+        $state = $this->stateFor($ticket);
+        if (
+            !$state
+            || $state->status !== TicketAiConversation::STATUS_HUMAN_REQUIRED
+            || in_array((string) ($state->handoff_reason ?? ''), self::TERMINAL_HANDOFF_REASONS, true)
+        ) {
+            return;
+        }
+
+        $previousReason = (string) ($state->handoff_reason ?? '');
+        $state->status = TicketAiConversation::STATUS_ACTIVE;
+        $state->handoff_reason = null;
+        $state->handoff_at = null;
+        $state->low_confidence_count = 0;
+        $state->last_reason = 'broad_mode_resumed';
+        $state->last_activity_at = time();
+        $state->save();
+        $this->recordEvent($state, 'resumed', 'broad_mode_resumed', [
+            'previous_reason' => $previousReason,
+        ]);
     }
 
     /** @param array<string, mixed> $result */
@@ -400,6 +435,11 @@ class TicketAiConversationService
         }
 
         return false;
+    }
+
+    private function broadMode(): bool
+    {
+        return strtolower(trim((string) admin_setting('ticket_ai_auto_reply_mode', 'broad'))) !== 'strict';
     }
 
     /** @return array<int, array{reason:string,total:int}> */

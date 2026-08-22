@@ -79,6 +79,9 @@ class TicketAiAssistantService
         return [
             'ticket_ai_enable' => $settings['enabled'],
             'ticket_ai_auto_reply_enable' => (bool) admin_setting('ticket_ai_auto_reply_enable', false),
+            'ticket_ai_auto_reply_mode' => strtolower(trim((string) admin_setting('ticket_ai_auto_reply_mode', 'broad'))) === 'strict'
+                ? 'strict'
+                : 'broad',
             'ticket_ai_auto_reply_on_user_reply' => (bool) admin_setting('ticket_ai_auto_reply_on_user_reply', true),
             'ticket_ai_auto_reply_min_confidence' => max(0.5, min(1.0, (float) admin_setting('ticket_ai_auto_reply_min_confidence', 0.9))),
             'ticket_ai_auto_reply_require_knowledge' => (bool) admin_setting('ticket_ai_auto_reply_require_knowledge', true),

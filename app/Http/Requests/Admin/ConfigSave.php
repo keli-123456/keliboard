@@ -55,6 +55,7 @@ class ConfigSave extends FormRequest
         'ticket_auto_reply_rules.*.reply' => 'nullable|string|max:5000',
         'ticket_ai_enable' => 'boolean',
         'ticket_ai_auto_reply_enable' => 'boolean',
+        'ticket_ai_auto_reply_mode' => 'nullable|string|in:broad,strict',
         'ticket_ai_auto_reply_on_user_reply' => 'boolean',
         'ticket_ai_auto_reply_min_confidence' => 'nullable|numeric|min:0.5|max:1',
         'ticket_ai_auto_reply_require_knowledge' => 'boolean',
