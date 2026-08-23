@@ -75,6 +75,7 @@ class ClashMeta extends AbstractProtocol
             ));
 
         $config = Yaml::parse($template);
+        $config = $this->applyMihomoTunCompatibility($config);
         $proxy = [];
         $proxies = [];
 
@@ -148,6 +149,38 @@ class ClashMeta extends AbstractProtocol
             ->header('subscription-userinfo', "upload={$user['u']}; download={$user['d']}; total={$user['transfer_enable']}; expire={$user['expired_at']}")
             ->header('profile-update-interval', '24')
             ->header('content-disposition', 'attachment;filename*=UTF-8\'\'' . rawurlencode($appName));
+    }
+
+    protected function applyMihomoTunCompatibility(array $config): array
+    {
+        $sniffer = isset($config['sniffer']) && is_array($config['sniffer'])
+            ? $config['sniffer']
+            : [];
+        $sniff = isset($sniffer['sniff']) && is_array($sniffer['sniff'])
+            ? $sniffer['sniff']
+            : [];
+
+        $http = isset($sniff['HTTP']) && is_array($sniff['HTTP']) ? $sniff['HTTP'] : [];
+        $http['ports'] = $http['ports'] ?? [80, '8080-8880'];
+        $http['override-destination'] = true;
+
+        $tls = isset($sniff['TLS']) && is_array($sniff['TLS']) ? $sniff['TLS'] : [];
+        $tls['ports'] = $tls['ports'] ?? [443, 8443];
+
+        $quic = isset($sniff['QUIC']) && is_array($sniff['QUIC']) ? $sniff['QUIC'] : [];
+        $quic['ports'] = $quic['ports'] ?? [443, 8443];
+
+        $sniffer['enable'] = true;
+        $sniffer['force-dns-mapping'] = true;
+        $sniffer['parse-pure-ip'] = true;
+        $sniffer['override-destination'] = true;
+        $sniffer['sniff'] = array_merge($sniff, [
+            'HTTP' => $http,
+            'TLS' => $tls,
+            'QUIC' => $quic,
+        ]);
+        $config['sniffer'] = $sniffer;
+        return $config;
     }
 
     protected function shouldExportHysteriaPortHopping(): bool

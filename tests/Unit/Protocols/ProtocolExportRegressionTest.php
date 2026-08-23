@@ -1233,6 +1233,48 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertSame('32000-33000', $mihomoConfig['ports']);
     }
 
+    public function test_clashmeta_repairs_tun_sniffer_for_custom_templates(): void
+    {
+        $protocol = new class([], [], 'mihomo', '1.19.27') extends ClashMeta {
+            public function handle()
+            {
+                return [];
+            }
+
+            public function repairTunConfig(array $config): array
+            {
+                return $this->applyMihomoTunCompatibility($config);
+            }
+        };
+
+        $config = $protocol->repairTunConfig([
+            'sniffer' => [
+                'enable' => false,
+                'force-dns-mapping' => false,
+                'parse-pure-ip' => false,
+                'override-destination' => false,
+                'skip-domain' => ['Mijia Cloud'],
+                'sniff' => [
+                    'HTTP' => [
+                        'ports' => [80],
+                        'override-destination' => false,
+                    ],
+                    'TLS' => ['ports' => [443]],
+                ],
+            ],
+        ]);
+
+        $this->assertTrue($config['sniffer']['enable']);
+        $this->assertTrue($config['sniffer']['force-dns-mapping']);
+        $this->assertTrue($config['sniffer']['parse-pure-ip']);
+        $this->assertTrue($config['sniffer']['override-destination']);
+        $this->assertTrue($config['sniffer']['sniff']['HTTP']['override-destination']);
+        $this->assertSame([80], $config['sniffer']['sniff']['HTTP']['ports']);
+        $this->assertSame([443], $config['sniffer']['sniff']['TLS']['ports']);
+        $this->assertSame([443, 8443], $config['sniffer']['sniff']['QUIC']['ports']);
+        $this->assertSame(['Mijia Cloud'], $config['sniffer']['skip-domain']);
+    }
+
     public function test_clashmeta_build_anytls_defaults_client_fingerprint_when_not_configured(): void
     {
         $config = ClashMeta::buildAnyTLS('secret', [
