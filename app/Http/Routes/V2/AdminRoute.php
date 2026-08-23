@@ -34,6 +34,7 @@ use App\Http\Controllers\V2\Admin\SpamRegistrationController;
 use App\Http\Controllers\V2\Admin\DomainHealthController;
 use App\Http\Controllers\V2\Admin\AiDiagnosticController;
 use App\Http\Controllers\V2\Admin\AiCenterController;
+use App\Http\Controllers\V2\Admin\InviteMonitorController;
 use Illuminate\Contracts\Routing\Registrar;
 
 class AdminRoute
@@ -196,6 +197,7 @@ class AdminRoute
                 'prefix' => 'user'
             ], function ($router) {
                 $router->any('/fetch', [UserController::class, 'fetch']);
+                $router->get('/invite-monitor/overview', [InviteMonitorController::class, 'overview']);
                 $router->post('/update', [UserController::class, 'update']);
                 $router->get('/getUserInfoById', [UserController::class, 'getUserInfoById']);
                 $router->get('/getOnlineDevices', [UserController::class, 'getOnlineDevices']);

@@ -8,6 +8,7 @@ use App\Models\InviteCode;
 use App\Models\Plan;
 use App\Services\AgentDomainResolver;
 use App\Services\CaptchaService;
+use App\Services\InviteTrackingService;
 use App\Services\Plugin\HookManager;
 use App\Services\SiteUserScopeService;
 use App\Services\UserService;
@@ -193,6 +194,8 @@ class RegisterService
                         'updated_at' => time(),
                     ]
                 );
+            } elseif ($inviteCode) {
+                app(InviteTrackingService::class)->attributeRegistration($request, (string) $inviteCode, $user);
             }
 
             return $user;
