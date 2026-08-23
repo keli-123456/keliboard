@@ -227,6 +227,37 @@ final class TicketAiProviderClientTest extends TestCase
         ];
     }
 
+    #[DataProvider('insufficientBalanceProvider')]
+    public function test_provider_balance_failures_are_distinguished_from_authentication(array $body, int $status): void
+    {
+        Http::fake(['*' => Http::response($body, $status)]);
+
+        try {
+            (new TicketAiProviderClient())->complete($this->settings(), [['role' => 'user', 'content' => 'x']]);
+            $this->fail('Expected provider exception.');
+        } catch (TicketAiProviderException $exception) {
+            $this->assertSame('insufficient_balance', $exception->errorCode());
+            $this->assertStringNotContainsString('Insufficient account balance', $exception->getMessage());
+        }
+    }
+
+    public static function insufficientBalanceProvider(): array
+    {
+        return [
+            'gateway top-level error' => [[
+                'code' => 'INSUFFICIENT_BALANCE',
+                'message' => 'Insufficient account balance',
+            ], 403],
+            'OpenAI-compatible nested error' => [[
+                'error' => [
+                    'code' => 'insufficient_quota',
+                    'message' => 'You exceeded your current quota.',
+                ],
+            ], 429],
+            'payment required without details' => [[], 402],
+        ];
+    }
+
     public function test_missing_content_is_an_invalid_response(): void
     {
         Http::fake(['*' => Http::response(['choices' => []])]);

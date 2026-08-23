@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Exceptions\TicketAiProviderException;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 
 class TicketAiProviderClient
@@ -68,7 +69,7 @@ class TicketAiProviderClient
         $latencyMs = (int) round((hrtime(true) - $startedAt) / 1_000_000);
 
         if (!$response->successful()) {
-            throw new TicketAiProviderException($this->httpErrorCode($response->status()));
+            throw new TicketAiProviderException($this->httpErrorCode($response));
         }
 
         $responsePayload = $response->json();
@@ -219,9 +220,34 @@ class TicketAiProviderClient
         return is_string($host) && strtolower($host) === 'api.openai.com';
     }
 
-    private function httpErrorCode(int $status): string
+    private function httpErrorCode(Response $response): string
     {
+        $status = $response->status();
+        $providerCode = strtolower(trim((string) (
+            $response->json('code')
+            ?? $response->json('error.code')
+            ?? ''
+        )));
+        $providerMessage = strtolower(trim((string) (
+            $response->json('message')
+            ?? $response->json('error.message')
+            ?? ''
+        )));
+        $quotaMarkers = [
+            'insufficient_balance',
+            'insufficient_quota',
+            'billing_hard_limit_reached',
+            'credit_balance_too_low',
+            'quota_exceeded',
+        ];
+        foreach ($quotaMarkers as $marker) {
+            if (str_contains($providerCode, $marker) || str_contains($providerMessage, str_replace('_', ' ', $marker))) {
+                return 'insufficient_balance';
+            }
+        }
+
         return match (true) {
+            $status === 402 => 'insufficient_balance',
             in_array($status, [401, 403], true) => 'authentication',
             $status === 408 => 'timeout',
             $status === 429 => 'rate_limited',
