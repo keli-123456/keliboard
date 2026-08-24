@@ -2,6 +2,7 @@
 namespace App\Http\Routes\V1;
 
 use App\Http\Controllers\V1\Guest\CommController;
+use App\Http\Controllers\V1\Guest\DomainAnalyticsController;
 use App\Http\Controllers\V1\Guest\InviteTrackingController;
 use App\Http\Controllers\V1\Guest\PaymentController;
 use App\Http\Controllers\V1\Guest\PlanController;
@@ -20,6 +21,7 @@ class GuestRoute
             $router->get('/plan/fetch', [PlanController::class, 'fetch']);
             $router->get('/site-context', [SiteContextController::class, 'show']);
             $router->post('/invite/track', [InviteTrackingController::class, 'track']);
+            $router->post('/domain/track', [DomainAnalyticsController::class, 'track']);
             // Telegram
             $router->post('/telegram/webhook', [TelegramController::class, 'webhook']);
             // Payment

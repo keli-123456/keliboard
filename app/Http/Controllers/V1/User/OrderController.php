@@ -16,6 +16,7 @@ use App\Services\AgentCommerceContextResolver;
 use App\Services\CouponService;
 use App\Services\AgentCommerceService;
 use App\Services\OrderService;
+use App\Services\DomainAnalyticsService;
 use App\Services\PaymentService;
 use App\Services\PlanService;
 use App\Services\RechargeBonusService;
@@ -96,6 +97,7 @@ class OrderController extends Controller
             $request
         );
         if ($agentOrder) {
+            app(DomainAnalyticsService::class)->recordOrderCreated($request, $agentOrder);
             return $this->success($agentOrder->trade_no);
         }
 
@@ -106,6 +108,7 @@ class OrderController extends Controller
             $request->input('coupon_code'),
             $request
         );
+        app(DomainAnalyticsService::class)->recordOrderCreated($request, $order);
 
         return $this->success($order->trade_no);
     }
@@ -131,10 +134,12 @@ class OrderController extends Controller
         $bonusAmount = app(RechargeBonusService::class)->calculateBonus($amount);
         $agentOrder = app(AgentCommerceService::class)->createRechargeOrderFromRequest($user, $amount, $bonusAmount, $request);
         if ($agentOrder) {
+            app(DomainAnalyticsService::class)->recordOrderCreated($request, $agentOrder);
             return $this->success($agentOrder->trade_no);
         }
 
         $order = app(SiteCommerceService::class)->createRechargeOrderFromRequest($user, $amount, $bonusAmount, $request);
+        app(DomainAnalyticsService::class)->recordOrderCreated($request, $order);
         return $this->success($order->trade_no);
     }
 

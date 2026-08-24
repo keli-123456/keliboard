@@ -5,6 +5,7 @@ namespace App\Http\Controllers\V1\Client;
 use App\Http\Controllers\Controller;
 use App\Models\Server;
 use App\Protocols\General;
+use App\Services\DomainAnalyticsService;
 use App\Services\Plugin\HookManager;
 use App\Services\RiskEventService;
 use App\Services\SiteNavigationService;
@@ -81,6 +82,7 @@ class ClientController extends Controller
 
         $clientInfo = $this->getClientInfo($request);
         $this->recordSubscribeEvent($request, $user, $clientInfo);
+        app(DomainAnalyticsService::class)->recordSubscriptionPull($request);
 
         $requestedTypes = $this->parseRequestedTypes($request->input('types'));
         $filterKeywords = $this->parseFilterKeywords($request->input('filter'));

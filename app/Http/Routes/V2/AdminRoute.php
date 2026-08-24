@@ -32,6 +32,7 @@ use App\Http\Controllers\V2\Admin\SubscriptionControlController;
 use App\Http\Controllers\V2\Admin\MarketingController;
 use App\Http\Controllers\V2\Admin\SpamRegistrationController;
 use App\Http\Controllers\V2\Admin\DomainHealthController;
+use App\Http\Controllers\V2\Admin\DomainAnalyticsController;
 use App\Http\Controllers\V2\Admin\AiDiagnosticController;
 use App\Http\Controllers\V2\Admin\AiCenterController;
 use App\Http\Controllers\V2\Admin\InviteMonitorController;
@@ -385,6 +386,7 @@ class AdminRoute
                 $router->post('/backup/restore-drill', [BackupController::class, 'restoreDrill']);
                 $router->post('/backup/drop', [BackupController::class, 'drop']);
                 $router->post('/backup/cleanup', [BackupController::class, 'cleanup']);
+                $router->get('/domain-analytics/overview', [DomainAnalyticsController::class, 'overview']);
             });
 
             // Risk Center (admin-only)

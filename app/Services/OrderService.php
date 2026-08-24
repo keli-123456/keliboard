@@ -374,6 +374,7 @@ class OrderService
             });
 
             if ($tradeNo) {
+                app(DomainAnalyticsService::class)->recordOrderPaid($this->order);
                 OrderHandleJob::dispatchSync($tradeNo);
             }
         } catch (\Exception $e) {

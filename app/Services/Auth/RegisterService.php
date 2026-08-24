@@ -8,6 +8,7 @@ use App\Models\InviteCode;
 use App\Models\Plan;
 use App\Services\AgentDomainResolver;
 use App\Services\CaptchaService;
+use App\Services\DomainAnalyticsService;
 use App\Services\InviteTrackingService;
 use App\Services\Plugin\HookManager;
 use App\Services\SiteUserScopeService;
@@ -202,6 +203,7 @@ class RegisterService
         });
 
         HookManager::call('user.register.after', $user);
+        app(DomainAnalyticsService::class)->recordRegistration($request);
 
         // 清除邮箱验证码
         if ((int) admin_setting('email_verify', 0)) {
