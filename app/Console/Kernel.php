@@ -62,6 +62,7 @@ class Kernel extends ConsoleKernel
         $schedule->command('cleanup:expired-online-status')->everyMinute()->onOneServer()->withoutOverlapping(4);
         $schedule->command('cleanup:ticket-ai-logs')->dailyAt('3:40')->onOneServer()->withoutOverlapping();
         $schedule->command('cleanup:ticket')->dailyAt('3:20')->onOneServer()->withoutOverlapping();
+        $schedule->command('cleanup:analytics')->dailyAt('3:25')->onOneServer()->withoutOverlapping(30);
         if (config('tickets.attachments.prewarm_schedule', false)) {
             $schedule->command('ticket:prewarm-thumbnails', [
                 '--chunk' => max(50, (int) config('tickets.attachments.prewarm_schedule_chunk', 200)),

@@ -19,6 +19,9 @@ final class SystemHealthEvaluator
             $this->evaluateLogStorage((array) ($metrics['log_storage'] ?? [])),
             $this->evaluateDatabaseCapacity((array) ($metrics['database_capacity'] ?? [])),
             $this->evaluateMigrations((array) ($metrics['migrations'] ?? [])),
+            $this->evaluateOperationTasks((array) ($metrics['operation_tasks'] ?? [])),
+            $this->evaluateBackup((array) ($metrics['backup'] ?? [])),
+            $this->evaluateExternalServices((array) ($metrics['external_services'] ?? [])),
         ];
 
         usort($checks, fn(array $left, array $right) =>
@@ -191,6 +194,144 @@ final class SystemHealthEvaluator
             'pending' => $pending,
             'applied' => max(0, (int) ($metrics['applied'] ?? 0)),
             'total' => max(0, (int) ($metrics['total'] ?? 0)),
+        ]);
+    }
+
+    public function evaluateOperationTasks(array $metrics): array
+    {
+        if (($metrics['available'] ?? false) === false) {
+            return $this->check('operation_tasks', 'warning', 'unavailable');
+        }
+
+        $stale = max(0, (int) ($metrics['stale'] ?? 0));
+        $failedRecent = max(0, (int) ($metrics['failed_recent'] ?? 0));
+        $reportedStatus = (string) ($metrics['status'] ?? '');
+
+        if ($stale > 0 || $reportedStatus === 'critical') {
+            $status = 'critical';
+            $reason = 'stale';
+        } elseif ($failedRecent > 0 || $reportedStatus === 'warning') {
+            $status = 'warning';
+            $reason = 'failed_recent';
+        } else {
+            $status = 'healthy';
+            $reason = 'healthy';
+        }
+
+        return $this->check('operation_tasks', $status, $reason, [
+            'queued' => max(0, (int) ($metrics['queued'] ?? 0)),
+            'running' => max(0, (int) ($metrics['running'] ?? 0)),
+            'stale' => $stale,
+            'failed_recent' => $failedRecent,
+            'completed_recent' => max(0, (int) ($metrics['completed_recent'] ?? 0)),
+            'oldest_active_seconds' => max(0, (int) ($metrics['oldest_active_seconds'] ?? 0)),
+        ]);
+    }
+
+    public function evaluateBackup(array $metrics): array
+    {
+        if (($metrics['available'] ?? false) === false) {
+            return $this->check('backup', 'warning', 'unavailable');
+        }
+
+        $enabled = (bool) ($metrics['enabled'] ?? false);
+        $running = max(0, (int) ($metrics['running'] ?? 0));
+        $latestStatus = trim((string) ($metrics['latest_status'] ?? ''));
+        $latestFinishedAt = (int) ($metrics['latest_finished_at'] ?? 0);
+        $now = (int) ($metrics['now'] ?? time());
+        $ageSeconds = $latestFinishedAt > 0 ? max(0, $now - $latestFinishedAt) : null;
+        $ready = (bool) ($metrics['metadata_ready'] ?? false)
+            && (bool) ($metrics['backup_path_writable'] ?? false)
+            && (bool) ($metrics['gzip_ready'] ?? false);
+
+        if (!$enabled) {
+            $status = 'warning';
+            $reason = 'disabled';
+        } elseif (!$ready) {
+            $status = 'critical';
+            $reason = 'not_ready';
+        } elseif ($running > 0 || in_array($latestStatus, ['queued', 'running'], true)) {
+            $status = 'healthy';
+            $reason = 'running';
+        } elseif ($latestStatus === '') {
+            $status = 'warning';
+            $reason = 'never_run';
+        } elseif ($latestStatus === 'failed') {
+            $status = 'critical';
+            $reason = 'failed';
+        } elseif ($ageSeconds === null || $ageSeconds >= 172800) {
+            $status = 'critical';
+            $reason = 'stale';
+        } elseif ($ageSeconds >= 108000) {
+            $status = 'warning';
+            $reason = 'delayed';
+        } else {
+            $status = 'healthy';
+            $reason = 'current';
+        }
+
+        return $this->check('backup', $status, $reason, [
+            'enabled' => $enabled,
+            'running' => $running,
+            'latest_status' => $latestStatus !== '' ? $latestStatus : null,
+            'latest_finished_at' => $latestFinishedAt ?: null,
+            'age_seconds' => $ageSeconds,
+            'metadata_ready' => (bool) ($metrics['metadata_ready'] ?? false),
+            'backup_path_writable' => (bool) ($metrics['backup_path_writable'] ?? false),
+            'gzip_ready' => (bool) ($metrics['gzip_ready'] ?? false),
+        ]);
+    }
+
+    public function evaluateExternalServices(array $metrics): array
+    {
+        if (($metrics['available'] ?? false) === false) {
+            return $this->check('external_services', 'warning', 'unavailable');
+        }
+
+        $domainsMonitored = max(0, (int) ($metrics['domains_monitored'] ?? 0));
+        $domainWarning = max(0, (int) ($metrics['domain_warning'] ?? 0));
+        $domainDown = max(0, (int) ($metrics['domain_down'] ?? 0));
+        $domainUnknown = max(0, (int) ($metrics['domain_unknown'] ?? 0));
+        $domainStale = max(0, (int) ($metrics['domain_stale'] ?? 0));
+        $proxyEnabled = (bool) ($metrics['proxy_enabled'] ?? false);
+        $proxyConfigured = max(0, (int) ($metrics['proxy_configured'] ?? 0));
+        $proxyHealthy = max(0, (int) ($metrics['proxy_healthy'] ?? 0));
+
+        if ($domainDown > 0 || ($proxyEnabled && $proxyConfigured > 0 && $proxyHealthy === 0)) {
+            $status = 'critical';
+            $reason = 'down';
+        } elseif (
+            $domainWarning > 0
+            || $domainUnknown > 0
+            || $domainStale > 0
+            || ($proxyEnabled && ($proxyConfigured === 0 || $proxyHealthy < $proxyConfigured))
+        ) {
+            $status = 'warning';
+            $reason = 'degraded';
+        } elseif ($domainsMonitored === 0 && !$proxyEnabled) {
+            $status = 'healthy';
+            $reason = 'not_configured';
+        } else {
+            $status = 'healthy';
+            $reason = 'healthy';
+        }
+
+        return $this->check('external_services', $status, $reason, [
+            'domains_monitored' => $domainsMonitored,
+            'domain_healthy' => max(0, (int) ($metrics['domain_healthy'] ?? 0)),
+            'domain_warning' => $domainWarning,
+            'domain_down' => $domainDown,
+            'domain_unknown' => $domainUnknown,
+            'domain_stale' => $domainStale,
+            'domain_last_checked_at' => isset($metrics['domain_last_checked_at'])
+                ? (int) $metrics['domain_last_checked_at']
+                : null,
+            'proxy_enabled' => $proxyEnabled,
+            'proxy_configured' => $proxyConfigured,
+            'proxy_healthy' => $proxyHealthy,
+            'proxy_last_seen_at' => isset($metrics['proxy_last_seen_at'])
+                ? (int) $metrics['proxy_last_seen_at']
+                : null,
         ]);
     }
 

@@ -45,10 +45,23 @@ class RetentionAnalyticsController extends Controller
             ->join('v2_user as u', 'u.id', '=', 'o.user_id')
             ->where('o.status', Order::STATUS_COMPLETED)
             ->whereIn('o.type', [Order::TYPE_NEW_PURCHASE, Order::TYPE_RENEWAL])
-            ->whereRaw('COALESCE(NULLIF(o.paid_at, 0), o.updated_at) >= ?', [$start]);
+            ->where(function (Builder $date) use ($start): void {
+                $date->where('o.paid_at', '>=', $start)
+                    ->orWhere(function (Builder $legacy) use ($start): void {
+                        $legacy->where(function (Builder $missing): void {
+                            $missing->whereNull('o.paid_at')->orWhere('o.paid_at', 0);
+                        })->where('o.updated_at', '>=', $start);
+                    });
+            });
         $this->applyOwnership($query, 'o.user_id', $filters);
         if (!empty($filters['site_id'])) {
-            $query->whereRaw('COALESCE(o.site_id, u.site_id) = ?', [(int) $filters['site_id']]);
+            $siteId = (int) $filters['site_id'];
+            $query->where(function (Builder $site) use ($siteId): void {
+                $site->where('o.site_id', $siteId)
+                    ->orWhere(function (Builder $legacy) use ($siteId): void {
+                        $legacy->whereNull('o.site_id')->where('u.site_id', $siteId);
+                    });
+            });
         }
         return $query;
     }

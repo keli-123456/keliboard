@@ -6,7 +6,6 @@ use App\Models\DomainMetricDaily;
 use App\Models\Order;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
 
 class DomainAnalyticsService
@@ -20,7 +19,6 @@ class DomainAnalyticsService
     {
         $host = $this->host($request);
         if ($host === '' || !$this->available()) return;
-        $this->purgeExpiredVisitorHashes();
 
         $date = date('Y-m-d');
         $inserted = DB::table('v2_domain_visitor_daily')->insertOrIgnore([
@@ -112,19 +110,6 @@ class DomainAnalyticsService
     {
         $fingerprint = implode('|', [$date, strtolower((string) $request->ip()), strtolower((string) $request->userAgent()), strtolower((string) $request->header('Accept-Language', ''))]);
         return hash_hmac('sha256', $fingerprint, (string) config('app.key', 'keliboard'));
-    }
-
-    private function purgeExpiredVisitorHashes(): void
-    {
-        try {
-            $key = 'domain_analytics_visitor_cleanup_' . date('Y-m-d');
-            if (!Cache::add($key, 1, now()->addDay())) return;
-            DB::table('v2_domain_visitor_daily')
-                ->where('record_date', '<', date('Y-m-d', strtotime('-35 days')))
-                ->delete();
-        } catch (\Throwable) {
-            // Analytics maintenance must never interrupt a user request.
-        }
     }
 
     private function available(): bool

@@ -46,7 +46,9 @@ class AlipayF2F
         } else {
             $result = (openssl_verify($data, base64_decode($sign), $publicKey) === 1);
         }
-        openssl_free_key($publicKey);
+        if (is_resource($publicKey)) {
+            openssl_free_key($publicKey);
+        }
         return $result;
     }
 
@@ -186,7 +188,9 @@ class AlipayF2F
             $signed = openssl_sign($signData, $signature, $privateId, OPENSSL_ALGO_SHA1);
         }
 
-        openssl_free_key($privateId);
+        if (is_resource($privateId)) {
+            openssl_free_key($privateId);
+        }
 
         if (!$signed) {
             throw new \Exception('支付宝应用私钥签名失败');

@@ -23,6 +23,7 @@ final class MachineReleaseControllerTest extends TestCase
         parent::setUp();
 
         $this->setUpInMemoryDatabase();
+        $this->bindJsonResponseFactory();
         app()->instance('db.schema', $this->database->getConnection()->getSchemaBuilder());
         $this->createTables();
     }

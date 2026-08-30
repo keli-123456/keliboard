@@ -8,7 +8,13 @@ use Illuminate\Cache\ArrayStore;
 use Illuminate\Cache\Repository as CacheRepository;
 use Illuminate\Config\Repository as ConfigRepository;
 use Illuminate\Container\Container;
+use Illuminate\Filesystem\FilesystemServiceProvider;
+use Illuminate\Foundation\Application;
+use Illuminate\Foundation\Providers\FoundationServiceProvider;
 use Illuminate\Support\Facades\Facade;
+use Illuminate\Translation\ArrayLoader;
+use Illuminate\Translation\Translator;
+use Illuminate\Validation\ValidationServiceProvider;
 use PHPUnit\Framework\TestCase as BaseTestCase;
 
 abstract class TestCase extends BaseTestCase
@@ -17,7 +23,7 @@ abstract class TestCase extends BaseTestCase
     {
         parent::setUp();
 
-        $app = new Container();
+        $app = new Application(dirname(__DIR__));
         Container::setInstance($app);
         Facade::clearResolvedInstances();
         Facade::setFacadeApplication($app);
@@ -27,20 +33,26 @@ abstract class TestCase extends BaseTestCase
         $app->instance(Container::class, $app);
 
         // Minimal config repository for config() helper calls.
-        $app->instance('config', new ConfigRepository([]));
+        $app->instance('config', new ConfigRepository([
+            'filesystems' => [
+                'default' => 'local',
+                'disks' => [
+                    'local' => [
+                        'driver' => 'local',
+                        'root' => $app->storagePath('app'),
+                    ],
+                ],
+            ],
+        ]));
 
-        // Minimal translator used by __()/trans() helpers in unit tests.
-        $app->instance('translator', new class {
-            public function get($key, array $replace = [], $locale = null, $fallback = true)
-            {
-                return (string) $key;
-            }
+        // Register only the filesystem bindings needed by Storage::fake().
+        (new FilesystemServiceProvider($app))->register();
 
-            public function choice($key, $number, array $replace = [], $locale = null)
-            {
-                return (string) $key;
-            }
-        });
+        // Minimal translator used by validation and __()/trans() helpers.
+        $app->instance('translator', new Translator(new ArrayLoader(), 'en'));
+
+        (new ValidationServiceProvider($app))->register();
+        (new FoundationServiceProvider($app))->registerRequestValidation();
 
         // Minimal cache manager/repository used by Setting and Cache facade.
         $cacheStore = new CacheRepository(new ArrayStore());

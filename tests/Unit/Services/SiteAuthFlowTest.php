@@ -65,6 +65,55 @@ final class SiteAuthFlowTest extends TestCase
         $this->assertSame(2, User::query()->where('email', 'shared@example.test')->count());
     }
 
+    public function test_register_on_agent_domain_allows_platform_duplicate_and_binds_only_new_user(): void
+    {
+        $platformUser = $this->createUser('shared@example.test', 'platform-secret', null);
+        $agent = $this->createUser('agent@example.test', 'agent-password', null);
+        AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => 'agent.example.test',
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'is_primary' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        [$success, $result] = app(RegisterService::class)->register(
+            $this->authRequest('agent.example.test', 'register', [
+                'email' => 'shared@example.test',
+                'password' => 'agent-secret',
+            ])
+        );
+
+        $this->assertTrue($success);
+        $this->assertInstanceOf(User::class, $result);
+        $this->assertNotSame($platformUser->id, $result->id);
+        $this->assertSame($agent->id, (int) $result->invite_user_id);
+        $this->assertSame(2, User::query()->where('email', 'shared@example.test')->count());
+        $this->assertSame($agent->id, (int) AgentUser::query()
+            ->where('sub_user_id', $result->id)
+            ->value('agent_user_id'));
+        $this->assertFalse(AgentUser::query()->where('sub_user_id', $platformUser->id)->exists());
+    }
+
+    public function test_register_on_agent_domain_rejects_duplicate_owned_by_same_agent(): void
+    {
+        $agent = $this->createUser('agent@example.test', 'agent-password', null);
+        $existing = $this->createUser('shared@example.test', 'agent-secret', $this->secondSite);
+        $this->assignUserToAgentDomain($agent, $existing, 'agent.example.test');
+
+        [$success, $result] = app(RegisterService::class)->register(
+            $this->authRequest('agent.example.test', 'register', [
+                'email' => 'shared@example.test',
+                'password' => 'replacement-secret',
+            ])
+        );
+
+        $this->assertFalse($success);
+        $this->assertSame(400201, $result[0]);
+        $this->assertSame(1, User::query()->where('email', 'shared@example.test')->count());
+    }
+
     public function test_login_selects_user_from_current_site(): void
     {
         $this->createUser('shared@example.test', 'secret-one', null);
@@ -146,6 +195,28 @@ final class SiteAuthFlowTest extends TestCase
         $this->assertTrue($result);
         $this->assertTrue(password_verify('platform-secret', $platformUser->fresh()->password));
         $this->assertTrue(password_verify('new-agent-secret', $agentUser->fresh()->password));
+    }
+
+    public function test_platform_password_reset_never_updates_agent_owned_duplicate(): void
+    {
+        $platformUser = $this->createUser('shared@example.test', 'platform-secret', null);
+        $agentUser = $this->createUser('shared@example.test', 'agent-secret', $this->secondSite);
+        $agent = $this->createUser('agent@example.test', 'agent-password', null);
+        $this->assignUserToAgentDomain($agent, $agentUser, 'agent.example.test');
+        app()->instance('request', $this->authRequest('main.example.test', 'forget'));
+
+        Cache::put(CacheKey::get('EMAIL_VERIFY_CODE', 'site:platform:shared@example.test'), '123456', 300);
+
+        [$success, $result] = app(LoginService::class)->resetPassword(
+            'shared@example.test',
+            '123456',
+            'new-platform-secret'
+        );
+
+        $this->assertTrue($success);
+        $this->assertTrue($result);
+        $this->assertTrue(password_verify('new-platform-secret', $platformUser->fresh()->password));
+        $this->assertTrue(password_verify('agent-secret', $agentUser->fresh()->password));
     }
 
     public function test_agent_domain_verification_cache_is_isolated_from_platform(): void

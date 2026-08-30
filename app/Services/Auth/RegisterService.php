@@ -102,7 +102,7 @@ class RegisterService
 
         // 检查邮箱是否存在
         $email = $request->input('email');
-        $exist = app(SiteUserScopeService::class)->findUserByEmail($email, $request);
+        $exist = app(SiteUserScopeService::class)->findAuthenticatableUserByEmail($email, $request);
         if ($exist) {
             return [false, [400201, __('Email already exists')]];
         }

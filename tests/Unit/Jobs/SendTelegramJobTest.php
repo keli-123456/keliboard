@@ -6,6 +6,7 @@ namespace Tests\Unit\Jobs;
 
 use App\Exceptions\ApiException;
 use App\Jobs\SendTelegramJob;
+use App\Services\TelegramService;
 use Mockery;
 use Illuminate\Container\Container;
 use Illuminate\Support\Facades\Facade;
@@ -32,14 +33,14 @@ final class SendTelegramJobTest extends TestCase
     public function test_it_does_not_fail_the_queue_for_a_missing_telegram_chat(): void
     {
         $job = new SendTelegramJob(621620518, '风控提醒');
-        $telegram = Mockery::mock('overload:App\\Services\\TelegramService');
+        $telegram = Mockery::mock(TelegramService::class);
         $telegram->shouldReceive('sendMessage')
             ->once()
             ->andThrow(new ApiException('Telegram 服务错误: Telegram API 错误: Bad Request: chat not found'));
 
         $exception = null;
         try {
-            $job->handle();
+            $job->handle($telegram);
         } catch (ApiException $error) {
             $exception = $error;
         }
@@ -50,12 +51,12 @@ final class SendTelegramJobTest extends TestCase
     public function test_it_still_rethrows_transient_telegram_failures(): void
     {
         $job = new SendTelegramJob(621620518, '风控提醒');
-        $telegram = Mockery::mock('overload:App\\Services\\TelegramService');
+        $telegram = Mockery::mock(TelegramService::class);
         $telegram->shouldReceive('sendMessage')
             ->once()
             ->andThrow(new ApiException('Telegram 服务错误: HTTP 请求失败: 502'));
 
         $this->expectException(ApiException::class);
-        $job->handle();
+        $job->handle($telegram);
     }
 }

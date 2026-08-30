@@ -4,7 +4,10 @@ namespace App\Http\Controllers\V2\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\AdminAuditLog;
+use App\Models\DomainHealth;
+use App\Models\ServerMachine;
 use App\Services\AdminOperationTaskService;
+use App\Services\Backup\BackupService;
 use App\Services\SystemHealthEvaluator;
 use App\Utils\CacheKey;
 use Illuminate\Http\Request;
@@ -54,6 +57,9 @@ class SystemController extends Controller
                 'log_storage' => $this->getLogStorageMetrics(),
                 'database_capacity' => $this->getDatabaseCapacityMetrics(),
                 'migrations' => $this->getMigrationMetrics(),
+                'operation_tasks' => app(AdminOperationTaskService::class)->healthSummary(),
+                'backup' => $this->getBackupHealthMetrics(),
+                'external_services' => $this->getExternalServiceHealthMetrics(),
             ]),
             self::HEALTH_SNAPSHOT_TTL_SECONDS
         );
@@ -316,6 +322,155 @@ class SystemController extends Controller
 
             return ['available' => false];
         }
+    }
+
+    private function getBackupHealthMetrics(): array
+    {
+        try {
+            $overview = app(BackupService::class)->overview();
+            $settings = (array) ($overview['settings'] ?? []);
+            $latest = (array) ($overview['latest_auto'] ?? []);
+
+            return [
+                'available' => true,
+                'now' => time(),
+                'enabled' => (bool) ($settings['enabled'] ?? false),
+                'running' => max(0, (int) ($overview['running'] ?? 0)),
+                'metadata_ready' => (bool) ($overview['metadata_ready'] ?? false),
+                'backup_path_writable' => (bool) ($overview['backup_path_writable'] ?? false),
+                'gzip_ready' => (bool) ($overview['gzip_ready'] ?? false),
+                'latest_status' => trim((string) ($latest['status'] ?? '')),
+                'latest_finished_at' => $this->normalizeTimestamp(
+                    $latest['finished_at'] ?? $latest['updated_at'] ?? null
+                ),
+            ];
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            return ['available' => false];
+        }
+    }
+
+    private function getExternalServiceHealthMetrics(): array
+    {
+        try {
+            $schema = DB::getSchemaBuilder();
+            $domainAvailable = $schema->hasTable('v2_domain_health');
+            $proxyAvailable = $schema->hasTable('v2_server_machine')
+                && $schema->hasColumn('v2_server_machine', 'subproxy_enabled')
+                && $schema->hasColumn('v2_server_machine', 'load_status');
+
+            if (!$domainAvailable && !$proxyAvailable) {
+                return ['available' => false];
+            }
+
+            $now = time();
+            $metrics = [
+                'available' => true,
+                'domains_monitored' => 0,
+                'domain_healthy' => 0,
+                'domain_warning' => 0,
+                'domain_down' => 0,
+                'domain_unknown' => 0,
+                'domain_stale' => 0,
+                'domain_last_checked_at' => null,
+                'proxy_enabled' => false,
+                'proxy_configured' => 0,
+                'proxy_healthy' => 0,
+                'proxy_last_seen_at' => null,
+            ];
+
+            if ($domainAvailable) {
+                $domain = DB::table('v2_domain_health')
+                    ->where('monitored', true)
+                    ->selectRaw('COUNT(*) AS domains_monitored')
+                    ->selectRaw(
+                        'COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS domain_healthy',
+                        [DomainHealth::STATUS_HEALTHY]
+                    )
+                    ->selectRaw(
+                        'COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS domain_warning',
+                        [DomainHealth::STATUS_WARNING]
+                    )
+                    ->selectRaw(
+                        'COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS domain_down',
+                        [DomainHealth::STATUS_DOWN]
+                    )
+                    ->selectRaw(
+                        'COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS domain_unknown',
+                        [DomainHealth::STATUS_UNKNOWN]
+                    )
+                    ->selectRaw(
+                        'COALESCE(SUM(CASE WHEN last_checked_at IS NULL OR last_checked_at = 0 '
+                        . 'OR last_checked_at < ? THEN 1 ELSE 0 END), 0) AS domain_stale',
+                        [$now - 900]
+                    )
+                    ->selectRaw('MAX(last_checked_at) AS domain_last_checked_at')
+                    ->first();
+
+                foreach ([
+                    'domains_monitored',
+                    'domain_healthy',
+                    'domain_warning',
+                    'domain_down',
+                    'domain_unknown',
+                    'domain_stale',
+                ] as $key) {
+                    $metrics[$key] = max(0, (int) ($domain->{$key} ?? 0));
+                }
+                $metrics['domain_last_checked_at'] = isset($domain->domain_last_checked_at)
+                    ? (int) $domain->domain_last_checked_at
+                    : null;
+            }
+
+            if ($proxyAvailable) {
+                $metrics['proxy_enabled'] = (bool) admin_setting('subscription_proxy_enable', false);
+                $machines = ServerMachine::query()
+                    ->where('is_active', true)
+                    ->where('subproxy_enabled', true)
+                    ->get(['last_seen_at', 'load_status']);
+                $healthy = 0;
+                $lastSeenAt = null;
+
+                foreach ($machines as $machine) {
+                    $lastSeenAt = max((int) ($lastSeenAt ?? 0), (int) ($machine->last_seen_at ?? 0)) ?: null;
+                    $runtime = data_get($machine->load_status, 'agent.subscription_proxy');
+                    if (
+                        (int) ($machine->last_seen_at ?? 0) >= $now - 300
+                        && is_array($runtime)
+                        && (bool) ($runtime['running'] ?? false)
+                    ) {
+                        $healthy++;
+                    }
+                }
+
+                $metrics['proxy_configured'] = $machines->count();
+                $metrics['proxy_healthy'] = $healthy;
+                $metrics['proxy_last_seen_at'] = $lastSeenAt;
+            }
+
+            return $metrics;
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            return ['available' => false];
+        }
+    }
+
+    private function normalizeTimestamp(mixed $value): ?int
+    {
+        if ($value instanceof \DateTimeInterface) {
+            return $value->getTimestamp();
+        }
+        if (is_numeric($value)) {
+            $timestamp = (int) $value;
+
+            return $timestamp > 0 ? $timestamp : null;
+        }
+
+        $timestamp = strtotime(trim((string) $value));
+
+        return $timestamp !== false && $timestamp > 0 ? $timestamp : null;
     }
 
     /**

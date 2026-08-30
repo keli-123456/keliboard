@@ -367,8 +367,8 @@ class UserController extends Controller
     ): array
     {
         $user = $user->toArray();
-        $user['balance'] = $user['balance'] / 100;
-        $user['commission_balance'] = $user['commission_balance'] / 100;
+        $user['balance'] = (int) ($user['balance'] ?? 0) / 100;
+        $user['commission_balance'] = (int) ($user['commission_balance'] ?? 0) / 100;
         $user['subscribe_url'] = Helper::getSubscribeUrl($user['token']);
         if ($subscriptionProxyService !== null) {
             $subscriptionProxy = $subscriptionProxyService->userPayload((string) $user['token']);

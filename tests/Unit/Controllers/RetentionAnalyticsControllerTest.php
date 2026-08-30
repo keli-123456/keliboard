@@ -54,6 +54,40 @@ final class RetentionAnalyticsControllerTest extends TestCase
         $this->assertSame(1, $subscribers['expiring_7d']);
     }
 
+    public function test_paid_order_window_preserves_legacy_timestamp_fallback_without_including_late_updates(): void
+    {
+        $now = time();
+        $start = $now - 86400;
+        DB::table('v2_user')->insert([
+            'id' => 1,
+            'site_id' => 1,
+            'email' => 'platform@example.test',
+            'plan_id' => 1,
+            'expired_at' => $now + 86400,
+            'banned' => 0,
+            'is_admin' => 0,
+            'auto_renew_enable' => 0,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('v2_order')->insert([
+            ['id' => 1, 'user_id' => 1, 'site_id' => 1, 'type' => Order::TYPE_NEW_PURCHASE, 'status' => Order::STATUS_COMPLETED, 'total_amount' => 100, 'handling_amount' => 0, 'paid_at' => $now, 'updated_at' => $start - 10],
+            ['id' => 2, 'user_id' => 1, 'site_id' => 1, 'type' => Order::TYPE_RENEWAL, 'status' => Order::STATUS_COMPLETED, 'total_amount' => 100, 'handling_amount' => 0, 'paid_at' => 0, 'updated_at' => $now],
+            ['id' => 3, 'user_id' => 1, 'site_id' => null, 'type' => Order::TYPE_RENEWAL, 'status' => Order::STATUS_COMPLETED, 'total_amount' => 100, 'handling_amount' => 0, 'paid_at' => null, 'updated_at' => $now],
+            ['id' => 4, 'user_id' => 1, 'site_id' => 1, 'type' => Order::TYPE_RENEWAL, 'status' => Order::STATUS_COMPLETED, 'total_amount' => 100, 'handling_amount' => 0, 'paid_at' => $start - 10, 'updated_at' => $now],
+            ['id' => 5, 'user_id' => 1, 'site_id' => 1, 'type' => Order::TYPE_RENEWAL, 'status' => Order::STATUS_COMPLETED, 'total_amount' => 100, 'handling_amount' => 0, 'paid_at' => 0, 'updated_at' => $start - 10],
+        ]);
+
+        $controller = app(RetentionAnalyticsController::class);
+        $paidOrders = new \ReflectionMethod($controller, 'paidOrders');
+        $ids = $paidOrders->invoke($controller, $start, [
+            'ownership' => 'platform',
+            'site_id' => 1,
+        ])->pluck('o.id')->sort()->values()->all();
+
+        $this->assertSame([1, 2, 3], $ids);
+    }
+
     private function createTables(): void
     {
         $this->database->schema()->create('v2_order', function (Blueprint $table): void {
