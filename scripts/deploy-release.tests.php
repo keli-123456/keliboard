@@ -26,6 +26,7 @@ foreach ([
     'composer install' => 'locked dependency install',
     'deployment-receipt.jsonl' => 'deployment receipt',
     'network_mode: host' => 'isolated host-network canary',
+    '$ROOT/storage/theme:/www/storage/theme:ro' => 'persisted custom themes in the canary',
     'http://127.0.0.1:$CANARY_PORT/api/v1/guest/comm/config' => 'canary-specific container health check',
 ] as $needle => $label) {
     $assert(str_contains($deploy, $needle), "deploy script is missing {$label}");
@@ -34,6 +35,11 @@ foreach ([
 $assert(!str_contains($deploy, 'composer update'), 'deploy script must not run composer update');
 $assert(!str_contains($deploy, 'rm -rf composer.lock'), 'deploy script must not delete composer.lock');
 $assert(!str_contains($deploy, 'git reset --hard origin/'), 'deploy script must resolve an exact target SHA');
+$webRoutes = (string) file_get_contents($root . '/routes/web.php');
+$assert(
+    !str_contains($webRoutes, "admin_setting(['frontend_theme' => \$theme])"),
+    'an HTTP request must not permanently replace a temporarily unavailable custom theme'
+);
 $assert(str_contains($update, 'scripts/deploy-release.sh'), 'legacy update.sh must delegate to safe deployment');
 $assert(!str_contains($update, 'composer update'), 'legacy update.sh must not update dependencies');
 $assert(str_contains($rollback, '--no-fetch --ref="$previous_sha" --image="$previous_image"'), 'rollback must deploy the recorded immutable release without a network dependency');

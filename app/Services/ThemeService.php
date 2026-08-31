@@ -212,7 +212,10 @@ class ThemeService
             }
             $this->ensurePublicThemeLocales($theme);
 
-            admin_setting(['current_theme' => $theme]);
+            admin_setting([
+                'current_theme' => $theme,
+                'frontend_theme' => $theme,
+            ]);
             return true;
 
         } catch (Exception $e) {
@@ -367,24 +370,32 @@ class ThemeService
      */
     public function refreshCurrentTheme(): bool
     {
+        $currentTheme = null;
+
         try {
-            $currentTheme = admin_setting('current_theme');
+            $currentTheme = admin_setting('frontend_theme', admin_setting('current_theme'));
             if (!$currentTheme) {
                 return false;
             }
-
-            $this->cleanupThemeFiles($currentTheme);
 
             $themePath = $this->getThemePath($currentTheme);
             if (!$themePath) {
                 throw new Exception('Current theme path not found');
             }
 
+            // Validate the source before removing the last known-good public copy.
+            if (!File::exists($this->getThemeViewPath($currentTheme))) {
+                throw new Exception('Current theme view file not found');
+            }
+
+            $this->cleanupThemeFiles($currentTheme);
+
             $targetPath = public_path('theme/' . $currentTheme);
             if (!File::copyDirectory($themePath, $targetPath)) {
                 throw new Exception('Failed to copy theme files');
             }
             $this->ensurePublicThemeLocales($currentTheme);
+            admin_setting(['current_theme' => $currentTheme]);
 
             Log::info('Refreshed current theme files', ['theme' => $currentTheme]);
             return true;

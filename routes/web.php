@@ -83,17 +83,18 @@ Route::get('/', function (Request $request) {
         }
     }
 
-    $theme = admin_setting('frontend_theme', 'Xboard');
+    $configuredTheme = admin_setting('frontend_theme', 'Xboard');
+    $theme = $configuredTheme;
     $themeService = new ThemeService();
 
     try {
         if (!$themeService->exists($theme)) {
             if ($theme !== 'Xboard') {
-                Log::warning('Theme not found, switching to default theme', ['theme' => $theme]);
+                Log::warning('Configured theme is temporarily unavailable; rendering the default theme without changing the selection', [
+                    'theme' => $theme,
+                ]);
                 $theme = 'Xboard';
-                admin_setting(['frontend_theme' => $theme]);
             }
-            $themeService->switch($theme);
         }
 
         if (!$themeService->getThemeViewPath($theme)) {

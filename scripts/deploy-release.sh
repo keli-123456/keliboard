@@ -182,6 +182,7 @@ services:
       - '$ROOT/.docker/.data/redis:/data'
       - '$ROOT/.docker/.data/redis-cache:/data-cache'
       - '$ROOT/theme:/www/theme:ro'
+      - '$ROOT/storage/theme:/www/storage/theme:ro'
     command: php artisan octane:start --port=$CANARY_PORT --host=127.0.0.1
     healthcheck:
       test: ["CMD-SHELL", "php -r 'exit(@file_get_contents(\"http://127.0.0.1:$CANARY_PORT/api/v1/guest/comm/config\") === false);'"]
