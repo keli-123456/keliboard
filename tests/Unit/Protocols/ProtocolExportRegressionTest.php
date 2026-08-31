@@ -15,6 +15,7 @@ use App\Protocols\Stash;
 use App\Protocols\SingBox;
 use App\Protocols\Surfboard;
 use App\Protocols\Surge;
+use App\Services\ServerTlsCertificateResolver;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
 
@@ -796,6 +797,34 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertStringContainsString('anytls://secret@sr-anytls.example.com:9443', $anytls);
         $this->assertStringContainsString('sni=sr-anytls-sni.example.com', $anytls);
         $this->assertStringContainsString('insecure=1', $anytls);
+    }
+
+    public function test_shadowrocket_hysteria2_exports_reported_certificate_pin(): void
+    {
+        app()->instance(ServerTlsCertificateResolver::class, new class extends ServerTlsCertificateResolver {
+            public function resolveHysteriaPinSha256(array|Server $server): ?string
+            {
+                return str_repeat('a', 64);
+            }
+        });
+
+        $hysteria = Shadowrocket::buildHysteria('secret', [
+            'id' => 69,
+            'name' => 'SR Hy2 pinned',
+            'host' => 'hy2.example.com',
+            'port' => 10000,
+            'protocol_settings' => [
+                'version' => 2,
+                'tls' => [
+                    'server_name' => 'self-signed.example.com',
+                    'allow_insecure' => false,
+                ],
+            ],
+            'ports' => '10000-20000',
+        ]);
+
+        $this->assertStringContainsString('insecure=1', $hysteria);
+        $this->assertStringContainsString('pinSHA256=' . str_repeat('a', 64), $hysteria);
     }
 
     public function test_shadowrocket_hysteria2_can_export_without_port_hopping_for_compatibility(): void

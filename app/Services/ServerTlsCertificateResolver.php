@@ -10,6 +10,18 @@ class ServerTlsCertificateResolver
 {
     public function resolvePinnedPeerCertSha256(array|Server $server): ?string
     {
+        return $this->resolveCertificateRecord($server)?->sha256_base64 ?: null;
+    }
+
+    public function resolveHysteriaPinSha256(array|Server $server): ?string
+    {
+        $sha256Hex = strtolower(trim((string) ($this->resolveCertificateRecord($server)?->sha256_hex ?? '')));
+
+        return preg_match('/^[a-f0-9]{64}$/', $sha256Hex) === 1 ? $sha256Hex : null;
+    }
+
+    private function resolveCertificateRecord(array|Server $server): ?ServerTlsCertificate
+    {
         $serverId = (int) data_get($server, 'id', 0);
         if ($serverId <= 0 || !$this->hasCertificateTable()) {
             return null;
@@ -35,7 +47,7 @@ class ServerTlsCertificateResolver
             ->orderByDesc('id')
             ->first();
 
-        return $record?->sha256_base64 ?: null;
+        return $record;
     }
 
     private function resolveServerName(array|Server $server): string

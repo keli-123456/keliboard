@@ -6,6 +6,7 @@ namespace Tests\Unit\Http;
 
 use App\Http\Controllers\V2\Admin\Server\ManageController;
 use App\Models\Server;
+use App\Services\ServerTlsCertificateResolver;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -83,6 +84,10 @@ final class ServerManageTlsCertificateTest extends TestCase
                 'reported_at' => '2026-07-05 10:01:00',
             ],
         ], $node['tls_certificates'] ?? null);
+        $this->assertSame(
+            str_repeat('a', 64),
+            app(ServerTlsCertificateResolver::class)->resolveHysteriaPinSha256($server)
+        );
     }
 
     private function createTables(): void

@@ -5,6 +5,7 @@ namespace App\Protocols;
 use App\Utils\Helper;
 use App\Support\AbstractProtocol;
 use App\Models\Server;
+use App\Services\ServerTlsCertificateResolver;
 
 class Shadowrocket extends AbstractProtocol
 {
@@ -323,6 +324,11 @@ class Shadowrocket extends AbstractProtocol
                     $params['obfs-password'] = data_get($protocol_settings, 'obfs.password');
                 }
                 $params['insecure'] = data_get($protocol_settings, 'tls.allow_insecure');
+                if ($pinSha256 = app(ServerTlsCertificateResolver::class)->resolveHysteriaPinSha256($server)) {
+                    // HY2 verifies self-signed certificates with insecure + an exact leaf certificate pin.
+                    $params['insecure'] = 1;
+                    $params['pinSHA256'] = $pinSha256;
+                }
                 $ports = self::normalizePortRangeString(data_get($server, 'ports'));
                 if ($exportPortHopping && $ports !== null) {
                     $params['mport'] = $ports;
