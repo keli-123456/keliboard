@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keli.local/contracts/release/release-manifest.schema.json",
+  "title": "Keli full-stack release manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_version",
+    "generated_at",
+    "repositories",
+    "compatibility",
+    "artifacts",
+    "gates"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "release_version": {
+      "type": "string",
+      "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "repositories": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "keliboard",
+        "keli_admin",
+        "keli_user",
+        "kelinode_rs",
+        "keli_core_rs",
+        "keli_native_client"
+      ],
+      "properties": {
+        "keliboard": { "$ref": "#/$defs/repository" },
+        "keli_admin": { "$ref": "#/$defs/repository" },
+        "keli_user": { "$ref": "#/$defs/repository" },
+        "kelinode_rs": { "$ref": "#/$defs/repository" },
+        "keli_core_rs": { "$ref": "#/$defs/repository" },
+        "keli_native_client": { "$ref": "#/$defs/repository" },
+        "legacy_kelinode": {
+          "oneOf": [
+            { "$ref": "#/$defs/repository" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_api", "embedded_core"],
+      "properties": {
+        "node_api": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["panel", "kelinode_rs", "match"],
+          "properties": {
+            "panel": { "type": "string", "minLength": 1 },
+            "kelinode_rs": { "type": "string", "minLength": 1 },
+            "match": { "type": "boolean" }
+          }
+        },
+        "embedded_core": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kelinode_rs_git_sha", "keli_core_rs_git_sha"],
+          "properties": {
+            "kelinode_rs_git_sha": { "$ref": "#/$defs/gitSha" },
+            "keli_core_rs_git_sha": { "$ref": "#/$defs/gitSha" }
+          }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admin_bundle", "user_theme", "kelinode_rs", "native_client"],
+      "properties": {
+        "admin_bundle": { "$ref": "#/$defs/artifactGroup" },
+        "user_theme": { "$ref": "#/$defs/artifactGroup" },
+        "kelinode_rs": { "$ref": "#/$defs/artifactGroup" },
+        "native_client": { "$ref": "#/$defs/artifactGroup" }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strict", "source_clean", "contracts", "artifacts"],
+      "properties": {
+        "strict": { "type": "boolean" },
+        "source_clean": { "$ref": "#/$defs/gateStatus" },
+        "contracts": { "$ref": "#/$defs/gateStatus" },
+        "artifacts": { "$ref": "#/$defs/gateStatus" }
+      }
+    }
+  },
+  "$defs": {
+    "gitSha": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "branch", "git_sha", "dirty", "dependency_locks"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "branch": { "type": "string" },
+        "git_sha": { "$ref": "#/$defs/gitSha" },
+        "dirty": { "type": "boolean" },
+        "version": { "type": ["string", "null"] },
+        "dependency_locks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/fileEvidence" }
+        }
+      }
+    },
+    "fileEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "artifactGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "source_git_sha", "files"],
+      "properties": {
+        "status": { "$ref": "#/$defs/gateStatus" },
+        "source_git_sha": { "$ref": "#/$defs/gitSha" },
+        "version": { "type": ["string", "null"] },
+        "files": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/fileEvidence" }
+        },
+        "metadata": { "type": "object" }
+      }
+    },
+    "gateStatus": {
+      "type": "string",
+      "enum": ["passed", "failed", "skipped"]
+    }
+  }
+}

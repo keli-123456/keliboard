@@ -322,11 +322,14 @@ sh update.sh
 
 This script will:
 
-- update the Git repository
-- update Composer dependencies
-- run `php artisan xboard:update`
-- restart Docker services
-- refresh config cache
+- pin the target Git commit and container image
+- validate the candidate on an isolated port
+- create and drill a database backup
+- install dependencies strictly from `composer.lock`
+- cut over services and check core HTTP/process health
+- restore the previous code and image if a critical gate fails
+
+Use `sh update.sh --plan --no-fetch --ref=HEAD` to inspect the transaction without changing anything.
 
 ## 12. Routine Maintenance
 

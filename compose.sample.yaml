@@ -1,6 +1,6 @@
 services:
   web:
-    image: ghcr.io/keli-123456/keliboard:main
+    image: ${KELIBOARD_IMAGE:-ghcr.io/keli-123456/keliboard:main}
     volumes:
       - ./.docker/.data/redis/:/data/
       - ./.docker/.data/redis-cache/:/data-cache/
@@ -18,9 +18,15 @@ services:
       - redis-cache
     network_mode: host
     command: php artisan octane:start --port=7001 --host=0.0.0.0
+    healthcheck:
+      test: ["CMD-SHELL", "php -r 'exit(@file_get_contents(\"http://127.0.0.1:7001/api/v1/guest/comm/config\") === false);'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: always
   horizon:
-    image: ghcr.io/keli-123456/keliboard:main
+    image: ${KELIBOARD_IMAGE:-ghcr.io/keli-123456/keliboard:main}
     volumes:
       - ./.docker/.data/redis/:/data/
       - ./.docker/.data/redis-cache/:/data-cache/
@@ -32,7 +38,7 @@ services:
       - redis
       - redis-cache
   ws-server:
-    image: ghcr.io/keli-123456/keliboard:main
+    image: ${KELIBOARD_IMAGE:-ghcr.io/keli-123456/keliboard:main}
     volumes:
       - ./.docker/.data/redis/:/data/
       - ./.docker/.data/redis-cache/:/data-cache/

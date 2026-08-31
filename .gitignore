@@ -34,3 +34,5 @@ bun.lockb
 compose.yaml
 .scribe
 .worktrees/
+/build/
+/storage/framework/testing/

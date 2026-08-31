@@ -8,6 +8,18 @@ param(
 
     [string]$ManifestPath = '',
 
+    [switch]$FullStack,
+
+    [string]$UserThemePath = '',
+
+    [string]$KelinodeRsManifestPath = '',
+
+    [string]$NativeClientManifestPath = '',
+
+    [string]$NativeClientArtifactPath = '',
+
+    [string]$PhpPath = '',
+
     [switch]$AllowDirty,
 
     [switch]$SkipTagCheck,
@@ -145,6 +157,38 @@ function Assert-AdminAsset {
 Assert-Version 'ReleaseVersion' $ReleaseVersion
 if ($KelinodeVersion -ne '') {
     Assert-Version 'KelinodeVersion' $KelinodeVersion
+}
+
+if ($FullStack) {
+    $keliboardPath = Resolve-Repo 'keliboard'
+    $generatorPath = Join-Path $keliboardPath 'scripts/generate-release-manifest.ps1'
+    if (-not (Test-Path -LiteralPath $generatorPath -PathType Leaf)) {
+        throw "full-stack release manifest generator not found: $generatorPath"
+    }
+
+    $generateArguments = @{
+        ReleaseVersion = $ReleaseVersion
+        WorkspaceRoot = $WorkspaceRoot
+        UserThemePath = $UserThemePath
+        KelinodeRsManifestPath = $KelinodeRsManifestPath
+        NativeClientManifestPath = $NativeClientManifestPath
+        NativeClientArtifactPath = $NativeClientArtifactPath
+    }
+    if ($ManifestPath -ne '') {
+        $generateArguments.OutputPath = $ManifestPath
+    }
+    if ($PhpPath -ne '') {
+        $generateArguments.PhpPath = $PhpPath
+    }
+    if (-not $AllowDirty) {
+        $generateArguments.Strict = $true
+    }
+
+    $fullStackManifest = & $generatorPath @generateArguments
+    Write-Host 'Full-stack release preflight passed' -ForegroundColor Green
+    Write-Host "Release: $ReleaseVersion"
+    Write-Host "Manifest: $fullStackManifest"
+    return
 }
 
 $keliboard = Resolve-Repo 'keliboard'

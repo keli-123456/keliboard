@@ -1,0 +1,7 @@
+{"schema_version":1,"deployment_id":"20260830-120000-2222222","event":"deployment_started","status":"running","release_version":"v1.2.3","release_manifest_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","previous_git_sha":"1111111111111111111111111111111111111111","target_git_sha":"2222222222222222222222222222222222222222","previous_image":"sha256:old","target_image":"ghcr.io/keli-123456/keliboard@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","at":"2026-08-30T04:00:00Z"}
+{"deployment_id":"20260830-120000-2222222","event":"preflight","status":"passed","evidence":"target_resolved","at":"2026-08-30T04:00:01Z"}
+{"deployment_id":"20260830-120000-2222222","event":"backup_verified","status":"passed","evidence":"restore_drill_passed","at":"2026-08-30T04:00:02Z"}
+{"deployment_id":"20260830-120000-2222222","event":"canary_http","status":"passed","evidence":"canary-smoke.json","at":"2026-08-30T04:00:03Z"}
+{"deployment_id":"20260830-120000-2222222","event":"cutover","status":"passed","evidence":"services_started","at":"2026-08-30T04:00:04Z"}
+{"deployment_id":"20260830-120000-2222222","event":"post_deploy_http","status":"passed","evidence":"post-deploy-smoke.json","at":"2026-08-30T04:00:05Z"}
+{"deployment_id":"20260830-120000-2222222","event":"deployment_finished","status":"succeeded","at":"2026-08-30T04:00:06Z"}

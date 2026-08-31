@@ -153,8 +153,8 @@ location ~ .* {
 # Enter site directory
 cd /www/wwwroot/your-domain
 
-# Execute update script
-git fetch --all && git reset --hard origin/master && git pull origin master
+# Preview, then execute the gated update transaction
+sh update.sh --plan --no-fetch --ref=HEAD
 sh update.sh
 
 # If Octane is enabled, restart the daemon process

@@ -336,11 +336,15 @@ sh update.sh
 
 这个脚本会自动：
 
-- 更新 Git 仓库
-- 更新 Composer 依赖
-- 执行 `php artisan xboard:update`
-- 重启 Docker 服务
-- 刷新配置缓存
+- 锁定目标 Git 提交和容器镜像
+- 在独立端口验证候选站点
+- 创建并演练数据库备份
+- 严格按 `composer.lock` 安装依赖
+- 切换服务并检查核心接口和进程
+- 失败时恢复原代码和原镜像
+
+执行前可用 `sh update.sh --plan --no-fetch --ref=HEAD` 只查看计划。部署凭证与主动回退见
+[安全部署与回滚](../operations/safe-deployment.md)。
 
 ## 12. 常用维护命令
 

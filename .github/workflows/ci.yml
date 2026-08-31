@@ -11,10 +11,13 @@ on:
       - "resources/**"
       - "routes/**"
       - "scripts/**"
+      - "contracts/**"
       - "tests/**"
       - "composer.json"
       - "composer.lock"
+      - "compose.sample.yaml"
       - "phpunit.xml"
+      - "update.sh"
       - "public/assets/admin-xboard/**"
       - ".github/workflows/ci.yml"
   pull_request:
@@ -28,10 +31,13 @@ on:
       - "resources/**"
       - "routes/**"
       - "scripts/**"
+      - "contracts/**"
       - "tests/**"
       - "composer.json"
       - "composer.lock"
+      - "compose.sample.yaml"
       - "phpunit.xml"
+      - "update.sh"
       - "public/assets/admin-xboard/**"
       - ".github/workflows/ci.yml"
 
@@ -70,6 +76,20 @@ jobs:
             -SkipTagCheck `
             -SkipAdminRepo `
             -SkipKelinodeRepo
+
+      - name: Test full-stack release manifest guards
+        run: php scripts/verify-release-manifest.tests.php
+
+      - name: Test deployment gates and receipts
+        run: |
+          php scripts/release-smoke.tests.php
+          php scripts/verify-deployment-receipt.tests.php
+          php scripts/deploy-release.tests.php
+          php scripts/deploy-release.integration.tests.php
+
+      - name: Verify full-stack release contract
+        shell: pwsh
+        run: ./scripts/release-full-stack.tests.ps1
 
       - name: Verify lock platform compatibility
         run: composer check-platform-reqs --lock --no-interaction

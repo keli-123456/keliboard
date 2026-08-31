@@ -67,14 +67,17 @@ cd /www/wwwroot/你的域名
 sh update.sh
 ```
 
-这个脚本会自动完成：
+这个脚本现在使用安全部署事务：锁定目标代码和镜像、启动独立候选站点、验证数据库备份、按
+`composer.lock` 安装依赖、切换服务并执行健康检查。任意关键步骤失败会恢复原代码和原镜像，
+完整过程保存在部署凭证中。
 
-- Git 更新
-- Composer 依赖更新
-- `php artisan xboard:update`
-- 容器拉起
-- `config:clear/config:cache`
-- `horizon` 重启
+先预览而不修改任何内容：
+
+```bash
+sh update.sh --plan --no-fetch --ref=HEAD
+```
+
+完整门禁、正式发布清单和主动回退方法见[安全部署与回滚](safe-deployment.md)。
 
 更新后建议检查：
 

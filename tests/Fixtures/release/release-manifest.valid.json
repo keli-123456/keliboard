@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "release_version": "v1.2.3",
+  "generated_at": "2026-08-30T00:00:00Z",
+  "repositories": {
+    "keliboard": {
+      "name": "keliboard",
+      "branch": "main",
+      "git_sha": "1111111111111111111111111111111111111111",
+      "dirty": false,
+      "version": "1.2.3",
+      "dependency_locks": [{"path": "keliboard/composer.lock", "bytes": 1, "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]
+    },
+    "keli_admin": {
+      "name": "keli-admin",
+      "branch": "main",
+      "git_sha": "2222222222222222222222222222222222222222",
+      "dirty": false,
+      "version": "1.2.3",
+      "dependency_locks": [{"path": "keli-admin/package-lock.json", "bytes": 1, "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]
+    },
+    "keli_user": {
+      "name": "keli-user",
+      "branch": "main",
+      "git_sha": "3333333333333333333333333333333333333333",
+      "dirty": false,
+      "version": "1.2.3",
+      "dependency_locks": [{"path": "keli-user/package-lock.json", "bytes": 1, "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]
+    },
+    "kelinode_rs": {
+      "name": "kelinode-rs",
+      "branch": "main",
+      "git_sha": "4444444444444444444444444444444444444444",
+      "dirty": false,
+      "version": "1.2.3",
+      "dependency_locks": [{"path": "kelinode-rs/Cargo.lock", "bytes": 1, "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]
+    },
+    "keli_core_rs": {
+      "name": "keli-core-rs",
+      "branch": "main",
+      "git_sha": "5555555555555555555555555555555555555555",
+      "dirty": false,
+      "version": "1.2.3",
+      "dependency_locks": [{"path": "keli-core-rs/Cargo.lock", "bytes": 1, "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]
+    },
+    "keli_native_client": {
+      "name": "keli-native-client",
+      "branch": "main",
+      "git_sha": "6666666666666666666666666666666666666666",
+      "dirty": false,
+      "version": "1.2.3",
+      "dependency_locks": [{"path": "keli-native-client/Cargo.lock", "bytes": 1, "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]
+    },
+    "legacy_kelinode": null
+  },
+  "compatibility": {
+    "node_api": {"panel": "2026-04-26", "kelinode_rs": "2026-04-26", "match": true},
+    "embedded_core": {
+      "kelinode_rs_git_sha": "4444444444444444444444444444444444444444",
+      "keli_core_rs_git_sha": "5555555555555555555555555555555555555555"
+    }
+  },
+  "artifacts": {
+    "admin_bundle": {
+      "status": "passed",
+      "source_git_sha": "2222222222222222222222222222222222222222",
+      "version": "1.2.3",
+      "files": [{"path": "artifacts/admin.zip", "bytes": 1, "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],
+      "metadata": {"source_dirty": false}
+    },
+    "user_theme": {
+      "status": "passed",
+      "source_git_sha": "3333333333333333333333333333333333333333",
+      "version": "1.2.3",
+      "files": [{"path": "artifacts/theme.zip", "bytes": 1, "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],
+      "metadata": {"source_dirty": false}
+    },
+    "kelinode_rs": {
+      "status": "passed",
+      "source_git_sha": "4444444444444444444444444444444444444444",
+      "version": "1.2.3",
+      "files": [{"path": "artifacts/node.tar.gz", "bytes": 1, "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],
+      "metadata": {
+        "kelinode_rs_git_sha": "4444444444444444444444444444444444444444",
+        "keli_core_rs_git_sha": "5555555555555555555555555555555555555555",
+        "kelinode_rs_dirty": false,
+        "keli_core_rs_dirty": false
+      }
+    },
+    "native_client": {
+      "status": "passed",
+      "source_git_sha": "6666666666666666666666666666666666666666",
+      "version": "1.2.3",
+      "files": [{"path": "artifacts/client.exe", "bytes": 1, "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],
+      "metadata": {"source_dirty": false}
+    }
+  },
+  "gates": {"strict": true, "source_clean": "passed", "contracts": "passed", "artifacts": "passed"}
+}

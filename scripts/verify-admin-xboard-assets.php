@@ -29,13 +29,19 @@ if ($indexHtml === false) {
 }
 
 $expectedAssets = [
+    'index' => [
+        'file' => $indexHtmlPath,
+        'relative_path' => 'index.html',
+    ],
     'js' => [
         'file' => $adminRoot . '/assets/index.js',
         'public_path' => '/assets/admin-xboard/assets/index.js',
+        'relative_path' => 'assets/index.js',
     ],
     'css' => [
         'file' => $adminRoot . '/assets/index.css',
         'public_path' => '/assets/admin-xboard/assets/index.css',
+        'relative_path' => 'assets/index.css',
     ],
 ];
 
@@ -47,6 +53,10 @@ foreach ($expectedAssets as $type => $asset) {
     $content = file_get_contents($asset['file']);
     if ($content === false) {
         $fail("failed to read admin {$type} asset");
+    }
+
+    if ($type === 'index') {
+        continue;
     }
 
     $expectedVersion = substr(hash('sha256', $content), 0, 12);
@@ -65,4 +75,36 @@ foreach ($expectedAssets as $type => $asset) {
     }
 }
 
-fwrite(STDOUT, "OK: admin-xboard asset versions match committed files\n");
+$buildManifestPath = $adminRoot . '/build-manifest.json';
+if (!is_file($buildManifestPath)) {
+    $fail("admin build manifest not found at {$buildManifestPath}");
+}
+
+try {
+    $buildManifest = json_decode(
+        (string) file_get_contents($buildManifestPath),
+        true,
+        flags: JSON_THROW_ON_ERROR
+    );
+} catch (JsonException $e) {
+    $fail('admin build manifest is invalid JSON: ' . $e->getMessage());
+}
+
+if (($buildManifest['component'] ?? null) !== 'keli-admin') {
+    $fail('admin build manifest component must be keli-admin');
+}
+if (preg_match('/^[a-f0-9]{40}$/', (string) ($buildManifest['source_git_sha'] ?? '')) !== 1) {
+    $fail('admin build manifest is missing a valid source_git_sha');
+}
+
+$manifestFiles = is_array($buildManifest['files'] ?? null) ? $buildManifest['files'] : [];
+foreach ($expectedAssets as $type => $asset) {
+    $relativePath = $asset['relative_path'];
+    $expectedHash = strtolower((string) ($manifestFiles[$relativePath]['sha256'] ?? ''));
+    $actualHash = strtolower((string) hash_file('sha256', $asset['file']));
+    if (preg_match('/^[a-f0-9]{64}$/', $expectedHash) !== 1 || !hash_equals($expectedHash, $actualHash)) {
+        $fail("admin {$type} asset does not match build-manifest.json");
+    }
+}
+
+fwrite(STDOUT, "OK: admin-xboard asset versions and build manifest match committed files\n");

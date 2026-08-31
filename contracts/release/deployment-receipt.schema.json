@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keli.local/contracts/release/deployment-receipt.schema.json",
+  "title": "Keli deployment receipt journal",
+  "description": "A JSON Lines journal. The first line is deployment_started, followed by gate events, and the final line is deployment_finished.",
+  "type": "array",
+  "minItems": 3,
+  "items": {
+    "type": "object",
+    "required": ["deployment_id", "event", "status", "at"],
+    "properties": {
+      "schema_version": { "const": 1 },
+      "deployment_id": { "type": "string", "minLength": 1 },
+      "event": { "type": "string", "minLength": 1 },
+      "status": { "enum": ["running", "passed", "failed", "skipped", "succeeded", "rolled_back", "rollback_failed"] },
+      "at": { "type": "string", "format": "date-time" },
+      "release_version": { "type": "string" },
+      "release_manifest_sha256": { "type": "string" },
+      "previous_git_sha": { "type": "string" },
+      "target_git_sha": { "type": "string" },
+      "previous_image": { "type": "string" },
+      "target_image": { "type": "string" },
+      "evidence": { "type": "string" },
+      "reason": { "type": "string" }
+    },
+    "additionalProperties": false
+  }
+}
