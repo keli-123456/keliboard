@@ -136,6 +136,20 @@ compose_base() {
   if [ "$COMPOSE_KIND" = plugin ]; then docker compose -f "$COMPOSE_FILE" "$@"; else docker-compose -f "$COMPOSE_FILE" "$@"; fi
 }
 
+resolve_base_web_image() {
+  compose_base config | awk '
+    /^  web:[[:space:]]*$/ { in_web = 1; next }
+    in_web && /^  [^[:space:]][^:]*:[[:space:]]*$/ { exit }
+    in_web && /^    image:[[:space:]]*/ {
+      image = $0
+      sub(/^    image:[[:space:]]*/, "", image)
+      gsub(/^[[:space:]"]+|[[:space:]"]+$/, "", image)
+      print image
+      exit
+    }
+  '
+}
+
 compose_current() {
   if [ -f "$ACTIVE_OVERRIDE" ]; then
     if [ "$COMPOSE_KIND" = plugin ]; then
@@ -294,6 +308,9 @@ on_exit() {
   if [ "$code" -ne 0 ] && [ "$ROLLBACK_NEEDED" = 1 ]; then perform_rollback || true
   elif [ "$code" -ne 0 ]; then finish_journal failed pre_cutover_gate_failed
   fi
+  if [ "$code" -ne 0 ] && [ -n "$DEPLOYMENT_DIR" ]; then
+    echo "ERROR: deployment failed (exit $code). Logs: $DEPLOYMENT_DIR" >&2
+  fi
   rmdir "$LOCK_DIR" >/dev/null 2>&1 || true
   exit "$code"
 }
@@ -338,6 +355,7 @@ if [ -z "$PREVIOUS_IMAGE" ]; then
   docker pull "$PREVIOUS_IMAGE_REF" >/dev/null
   PREVIOUS_IMAGE="$(docker image inspect --format '{{.Id}}' "$PREVIOUS_IMAGE_REF")"
 fi
+if [ -z "$TARGET_IMAGE" ]; then TARGET_IMAGE="$(resolve_base_web_image || true)"; fi
 if [ -z "$TARGET_IMAGE" ]; then TARGET_IMAGE="$PREVIOUS_IMAGE_REF"; fi
 [ -n "$TARGET_IMAGE" ] || { echo "ERROR: target image is required" >&2; exit 1; }
 case "$TARGET_IMAGE" in

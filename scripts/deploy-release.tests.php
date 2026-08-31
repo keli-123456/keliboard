@@ -42,6 +42,9 @@ $assert(
 );
 $assert(str_contains($update, 'scripts/deploy-release.sh'), 'legacy update.sh must delegate to safe deployment');
 $assert(!str_contains($update, 'composer update'), 'legacy update.sh must not update dependencies');
+$assert(str_contains($deploy, 'resolve_base_web_image'), 'legacy update must resolve the mutable web image from the base compose file');
+$assert(str_contains($deploy, 'TARGET_IMAGE="$(resolve_base_web_image || true)"'), 'legacy update must pull the configured web image instead of reusing the pinned image id');
+$assert(str_contains($deploy, 'ERROR: deployment failed (exit $code). Logs:'), 'deployment failures must show the operator where to find logs');
 $assert(str_contains($rollback, '--no-fetch --ref="$previous_sha" --image="$previous_image"'), 'rollback must deploy the recorded immutable release without a network dependency');
 $assert(substr_count($compose, '${KELIBOARD_IMAGE:-ghcr.io/keli-123456/keliboard:main}') === 3, 'all application services must share the pinned image variable');
 $assert(str_contains($compose, 'healthcheck:'), 'compose sample must expose container health');
