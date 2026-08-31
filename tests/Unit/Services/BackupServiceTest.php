@@ -16,6 +16,7 @@ use Illuminate\Support\Facades\Schema;
 use RuntimeException;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Illuminate\Contracts\Bus\Dispatcher;
+use Spatie\DbDumper\Databases\MySql;
 use Tests\TestCase;
 
 final class BackupServiceTest extends TestCase
@@ -32,6 +33,40 @@ final class BackupServiceTest extends TestCase
         app()->instance('files', new Filesystem());
         $this->createBackupRecordTable();
         $this->createSettingsTable();
+    }
+
+    public function test_mysql_dump_column_statistics_option_follows_client_capability(): void
+    {
+        config([
+            'database.connections.mysql.host' => '127.0.0.1',
+            'database.connections.mysql.port' => 3306,
+            'database.connections.mysql.database' => 'keliboard',
+            'database.connections.mysql.username' => 'keliboard',
+            'database.connections.mysql.password' => 'secret',
+        ]);
+
+        foreach ([false, true] as $supported) {
+            $service = new class($supported) extends BackupService {
+                public function __construct(private readonly bool $supported)
+                {
+                }
+
+                public function dumpCommandForTest(): string
+                {
+                    return $this->createMySqlDumper()->getDumpCommand('backup.sql', 'credentials.cnf');
+                }
+
+                protected function mysqlDumpSupportsColumnStatistics(): bool
+                {
+                    return $this->supported;
+                }
+            };
+
+            $this->assertSame(
+                $supported,
+                str_contains($service->dumpCommandForTest(), '--column-statistics=0')
+            );
+        }
     }
 
     public function test_record_restore_drill_stores_latest_summary_without_losing_options(): void

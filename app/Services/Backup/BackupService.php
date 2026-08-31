@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Schema;
 use RuntimeException;
 use Spatie\DbDumper\Databases\MySql;
 use Spatie\DbDumper\Databases\Sqlite;
+use Symfony\Component\Process\Process;
 use Throwable;
 
 class BackupService
@@ -43,6 +44,7 @@ class BackupService
     private const FTP_TIMEOUT_KEY = 'backup_remote_ftp_timeout';
     private const RESTORE_DRILL_STATUSES = ['passed', 'failed', 'incomplete'];
     private const RESTORE_DRILL_ENVIRONMENTS = ['local', 'staging', 'production_rehearsal'];
+    private ?bool $mysqlDumpColumnStatisticsSupported = null;
 
     public function queueDatabaseBackup(bool $upload = false, array $options = []): array
     {
@@ -1228,17 +1230,7 @@ class BackupService
     {
         $connection = config('database.default');
         if ($connection === 'mysql') {
-            MySql::create()
-                ->setHost(config('database.connections.mysql.host'))
-                ->setPort(config('database.connections.mysql.port'))
-                ->setDbName(config('database.connections.mysql.database'))
-                ->setUserName(config('database.connections.mysql.username'))
-                ->setPassword(config('database.connections.mysql.password'))
-                ->useSingleTransaction()
-                ->skipLockTables()
-                ->useQuick()
-                ->doNotUseColumnStatistics()
-                ->dumpToFile($path);
+            $this->createMySqlDumper()->dumpToFile($path);
             return;
         }
 
@@ -1250,6 +1242,44 @@ class BackupService
         }
 
         throw new RuntimeException("Unsupported backup database connection: {$connection}");
+    }
+
+    protected function createMySqlDumper(): MySql
+    {
+        $dumper = MySql::create()
+            ->setHost(config('database.connections.mysql.host'))
+            ->setPort(config('database.connections.mysql.port'))
+            ->setDbName(config('database.connections.mysql.database'))
+            ->setUserName(config('database.connections.mysql.username'))
+            ->setPassword(config('database.connections.mysql.password'))
+            ->useSingleTransaction()
+            ->skipLockTables()
+            ->useQuick();
+
+        if ($this->mysqlDumpSupportsColumnStatistics()) {
+            $dumper->doNotUseColumnStatistics();
+        }
+
+        return $dumper;
+    }
+
+    protected function mysqlDumpSupportsColumnStatistics(): bool
+    {
+        if ($this->mysqlDumpColumnStatisticsSupported !== null) {
+            return $this->mysqlDumpColumnStatisticsSupported;
+        }
+
+        try {
+            $process = new Process(['mysqldump', '--help']);
+            $process->setTimeout(5);
+            $process->run();
+            $help = $process->getOutput() . "\n" . $process->getErrorOutput();
+
+            return $this->mysqlDumpColumnStatisticsSupported = $process->isSuccessful()
+                && str_contains($help, 'column-statistics');
+        } catch (Throwable) {
+            return $this->mysqlDumpColumnStatisticsSupported = false;
+        }
     }
 
     private function compressGzip(string $source, string $target): void

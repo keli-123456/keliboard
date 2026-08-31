@@ -195,6 +195,7 @@ services:
       - '$CANARY_WORKTREE:/www'
       - '$ROOT/.docker/.data/redis:/data'
       - '$ROOT/.docker/.data/redis-cache:/data-cache'
+      - '$ROOT/storage/backup:/www/storage/backup'
       - '$ROOT/theme:/www/theme:ro'
       - '$ROOT/storage/theme:/www/storage/theme:ro'
     command: php artisan octane:start --port=$CANARY_PORT --host=127.0.0.1
@@ -331,7 +332,7 @@ detect_compose
 tracked_changes="$(git status --porcelain --untracked-files=no)"
 [ -z "$tracked_changes" ] || { echo "ERROR: tracked source changes must be committed or backed up before deployment" >&2; printf '%s\n' "$tracked_changes" >&2; exit 1; }
 
-mkdir -p "$STATE_ROOT/deployments" "$STATE_ROOT/candidates"
+mkdir -p "$STATE_ROOT/deployments" "$STATE_ROOT/candidates" "$ROOT/storage/backup"
 mkdir "$LOCK_DIR" 2>/dev/null || { echo "ERROR: another deployment is already running: $LOCK_DIR" >&2; exit 1; }
 
 DEPLOYMENT_ID="$(date -u '+%Y%m%d-%H%M%S')-$(printf '%s' "$TARGET_GIT_SHA" | cut -c1-7)"
@@ -380,14 +381,22 @@ CANARY_STARTED=1
 run_smoke canary "http://127.0.0.1:$CANARY_PORT" > "$DEPLOYMENT_DIR/canary-smoke.json" 2>&1
 append_event canary_http passed canary-smoke.json
 
-BACKUP_JSON="$(compose_current exec -T web php artisan backup:database --sync --trigger=manual --json)"
-printf '%s\n' "$BACKUP_JSON" > "$DEPLOYMENT_DIR/backup.json"
+if ! compose_canary exec -T web php artisan backup:database --sync --trigger=manual --json > "$DEPLOYMENT_DIR/backup.json" 2>&1; then
+  append_event backup failed backup.json backup_command_failed
+  echo "ERROR: database backup failed. See $DEPLOYMENT_DIR/backup.json" >&2
+  exit 1
+fi
+BACKUP_JSON="$(cat "$DEPLOYMENT_DIR/backup.json")"
 BACKUP_ID="$(printf '%s\n' "$BACKUP_JSON" | sed -n 's/.*"record_id":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | sed -n '1p')"
 printf '%s' "$BACKUP_ID" | grep -Eq '^[1-9][0-9]*$' || {
   echo "ERROR: database backup did not return a valid record id" >&2
   exit 1
 }
-compose_current exec -T web php artisan backup:restore-drill --id="$BACKUP_ID" --record --environment=production_rehearsal --json > "$DEPLOYMENT_DIR/backup-drill.json" 2>&1
+if ! compose_canary exec -T web php artisan backup:restore-drill --id="$BACKUP_ID" --record --environment=production_rehearsal --json > "$DEPLOYMENT_DIR/backup-drill.json" 2>&1; then
+  append_event backup_verified failed backup-drill.json restore_drill_failed
+  echo "ERROR: backup restore drill failed. See $DEPLOYMENT_DIR/backup-drill.json" >&2
+  exit 1
+fi
 append_event backup_verified passed "backup-drill.json#record=$BACKUP_ID"
 
 cleanup_canary

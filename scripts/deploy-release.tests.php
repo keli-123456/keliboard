@@ -27,6 +27,7 @@ foreach ([
     'deployment-receipt.jsonl' => 'deployment receipt',
     'network_mode: host' => 'isolated host-network canary',
     '$ROOT/storage/theme:/www/storage/theme:ro' => 'persisted custom themes in the canary',
+    '$ROOT/storage/backup:/www/storage/backup' => 'persistent production backup storage in the canary',
     'http://127.0.0.1:$CANARY_PORT/api/v1/guest/comm/config' => 'canary-specific container health check',
 ] as $needle => $label) {
     $assert(str_contains($deploy, $needle), "deploy script is missing {$label}");
@@ -45,6 +46,8 @@ $assert(!str_contains($update, 'composer update'), 'legacy update.sh must not up
 $assert(str_contains($deploy, 'resolve_base_web_image'), 'legacy update must resolve the mutable web image from the base compose file');
 $assert(str_contains($deploy, 'TARGET_IMAGE="$(resolve_base_web_image || true)"'), 'legacy update must pull the configured web image instead of reusing the pinned image id');
 $assert(str_contains($deploy, 'ERROR: deployment failed (exit $code). Logs:'), 'deployment failures must show the operator where to find logs');
+$assert(str_contains($deploy, 'compose_canary exec -T web php artisan backup:database'), 'the verified candidate must create the pre-cutover backup');
+$assert(str_contains($deploy, '> "$DEPLOYMENT_DIR/backup.json" 2>&1'), 'backup failures must be preserved in the deployment evidence');
 $assert(str_contains($rollback, '--no-fetch --ref="$previous_sha" --image="$previous_image"'), 'rollback must deploy the recorded immutable release without a network dependency');
 $assert(substr_count($compose, '${KELIBOARD_IMAGE:-ghcr.io/keli-123456/keliboard:main}') === 3, 'all application services must share the pinned image variable');
 $assert(str_contains($compose, 'healthcheck:'), 'compose sample must expose container health');
