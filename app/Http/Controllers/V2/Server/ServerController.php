@@ -60,7 +60,9 @@ class ServerController extends Controller
 
         $nodeType = (string) $node->type;
         $nodeId = $this->getNodeCacheServerId($node);
-        $cacheTime = max(300, (int) admin_setting('server_push_interval', 60) * 3);
+        $pushInterval = max(1, (int) admin_setting('server_push_interval', 60));
+        $cacheTime = max(300, $pushInterval * 3);
+        $onlineCacheTime = max(120, $pushInterval * 3);
 
         $trafficRaw = $request->input('traffic');
         $traffic = [];
@@ -79,20 +81,24 @@ class ServerController extends Controller
         }
 
         $alive = $request->input('alive');
-        if (is_array($alive) && !empty($alive)) {
+        if (is_array($alive)) {
             UpdateAliveDataJob::dispatch($alive, $nodeType, $node->id);
             Cache::put(CacheKey::get('SERVER_' . strtoupper($nodeType) . '_LAST_PUSH_AT', $nodeId), time(), 3600);
         }
 
         $online = $request->input('online');
-        if (is_array($online) && !empty($online)) {
+        if (is_array($online)) {
             $onlineUserCount = 0;
             foreach ($online as $count) {
                 if ((int) $count > 0) {
                     $onlineUserCount++;
                 }
             }
-            Cache::put(CacheKey::get('SERVER_' . strtoupper($nodeType) . '_ONLINE_USER', $nodeId), $onlineUserCount, 3600);
+            Cache::put(
+                CacheKey::get('SERVER_' . strtoupper($nodeType) . '_ONLINE_USER', $nodeId),
+                $onlineUserCount,
+                $onlineCacheTime
+            );
             Cache::put(CacheKey::get('SERVER_' . strtoupper($nodeType) . '_LAST_PUSH_AT', $nodeId), time(), 3600);
         }
 

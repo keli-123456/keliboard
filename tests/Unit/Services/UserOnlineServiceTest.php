@@ -9,7 +9,7 @@ use Tests\TestCase;
 
 final class UserOnlineServiceTest extends TestCase
 {
-    public function test_calculate_device_count_counts_every_ip_in_strict_mode(): void
+    public function test_calculate_device_count_deduplicates_repeated_ip_within_one_node_in_strict_mode(): void
     {
         $ipsArray = [
             'hysteria21' => [
@@ -21,7 +21,25 @@ final class UserOnlineServiceTest extends TestCase
 
         $count = UserOnlineService::calculateDeviceCount($ipsArray, 0);
 
-        $this->assertSame(3, $count);
+        $this->assertSame(2, $count);
+    }
+
+    public function test_calculate_device_count_counts_same_ip_once_per_node_in_strict_mode(): void
+    {
+        $ipsArray = [
+            'hysteria21' => [
+                'aliveips' => ['1.1.1.1', '1.1.1.1'],
+                'lastupdateAt' => time(),
+            ],
+            'vless2' => [
+                'aliveips' => ['1.1.1.1', '::ffff:1.1.1.1'],
+                'lastupdateAt' => time(),
+            ],
+        ];
+
+        $count = UserOnlineService::calculateDeviceCount($ipsArray, 0);
+
+        $this->assertSame(2, $count);
     }
 
     public function test_calculate_device_count_deduplicates_ips_in_loose_mode(): void
@@ -208,5 +226,34 @@ final class UserOnlineServiceTest extends TestCase
 
         $this->assertSame(2, $summary['alive_ip']);
         $this->assertSame(['123.147.236.68', '211.158.12.8'], $summary['ips']);
+    }
+
+    public function test_online_and_risk_count_deduplicates_all_node_latency_test(): void
+    {
+        $ipsArray = [
+            'trojan53' => [
+                'aliveips' => ['211.158.12.8'],
+                'lastupdateAt' => time(),
+            ],
+            'vless54' => [
+                'aliveips' => ['211.158.12.8'],
+                'lastupdateAt' => time(),
+            ],
+            'hysteria255' => [
+                'aliveips' => ['::ffff:211.158.12.8'],
+                'lastupdateAt' => time(),
+            ],
+        ];
+
+        $this->assertSame(1, UserOnlineService::calculateOnlineDeviceCount($ipsArray));
+        $this->assertSame(3, UserOnlineService::calculateDeviceCount($ipsArray, 0));
+    }
+
+    public function test_node_users_cache_key_is_stable_and_namespaced(): void
+    {
+        $this->assertSame(
+            'ALIVE_IP_NODE_USERS_HYSTERIA2_7',
+            UserOnlineService::nodeUsersCacheKey('hysteria2', 7)
+        );
     }
 }

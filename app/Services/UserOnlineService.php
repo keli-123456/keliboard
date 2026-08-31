@@ -13,6 +13,7 @@ class UserOnlineService
      * 缓存相关常量
      */
     private const CACHE_PREFIX = 'ALIVE_IP_USER_';
+    private const NODE_USERS_CACHE_PREFIX = 'ALIVE_IP_NODE_USERS_';
     private const CACHE_TTL_SECONDS = 120;
     private const REALTIME_ACTIVE_USERS_KEY = 'ALIVE_IP_ACTIVE_USERS';
     private const REALTIME_ACTIVE_COUNTS_KEY = 'ALIVE_IP_ACTIVE_COUNTS';
@@ -36,6 +37,13 @@ class UserOnlineService
     public static function aliveCacheTtlSeconds(): int
     {
         return self::CACHE_TTL_SECONDS;
+    }
+
+    public static function nodeUsersCacheKey(string $nodeType, int $nodeId): string
+    {
+        $normalizedType = strtoupper((string) preg_replace('/[^a-z0-9_:-]/i', '', $nodeType));
+
+        return self::NODE_USERS_CACHE_PREFIX . $normalizedType . '_' . max(0, $nodeId);
     }
 
     public static function supportsRealtimeIndex(): bool
@@ -362,6 +370,15 @@ class UserOnlineService
         };
     }
 
+    /**
+     * Display and risk-control counts always represent unique client IPs.
+     * Device-limit strict mode remains separate and may count the same IP once per node.
+     */
+    public static function calculateOnlineDeviceCount(array $ipsArray): int
+    {
+        return self::countUniqueAliveIps($ipsArray);
+    }
+
     public static function getDeviceLimitMode(): int
     {
         return (int) admin_setting('device_limit_mode', 0);
@@ -529,7 +546,15 @@ class UserOnlineService
                 continue;
             }
 
-            $count += count($data['aliveips']);
+            $nodeIps = [];
+            foreach ($data['aliveips'] as $ipNodeId) {
+                $ip = self::normalizeAliveIP((string) $ipNodeId);
+                if ($ip === '') {
+                    continue;
+                }
+                $nodeIps[$ip] = true;
+            }
+            $count += count($nodeIps);
         }
 
         return $count;

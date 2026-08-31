@@ -17,76 +17,136 @@ class UpdateAliveDataJob implements ShouldQueue
 {
   use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
+  private const SNAPSHOT_LOCK_KEY = 'ALIVE_IP_SNAPSHOT_UPDATE_LOCK';
+  private const SNAPSHOT_LOCK_SECONDS = 120;
+  private const SNAPSHOT_LOCK_WAIT_SECONDS = 30;
+  private ?float $reportedAt = null;
+
   public function __construct(
     private readonly array $data,
     private readonly string $nodeType,
-    private readonly int $nodeId
+    private readonly int $nodeId,
+    ?float $reportedAt = null
   ) {
+    $this->reportedAt = $reportedAt ?? microtime(true);
     $this->onQueue('online_sync');
   }
 
   public function handle(): void
   {
     try {
-      $updateAt = time();
-      $nodeKey = $this->nodeType . $this->nodeId;
-      $mode = UserOnlineService::getDeviceLimitMode();
-      $ttlSeconds = UserOnlineService::aliveCacheTtlSeconds();
-      $nodeDataExpirySeconds = $this->nodeDataExpirySeconds();
-      $ttl = now()->addSeconds($ttlSeconds);
-      $lastOnlineAt = now();
-      $cacheUpdates = [];
-      $changedOnlineUpdates = [];
-      $realtimeCounts = [];
-      $onlineIps = [];
-      $cacheKeys = [];
+      $snapshotVersion = $this->reportedAt ?? microtime(true);
+      Cache::lock(self::SNAPSHOT_LOCK_KEY, self::SNAPSHOT_LOCK_SECONDS)
+        ->block(self::SNAPSHOT_LOCK_WAIT_SECONDS, function () use ($snapshotVersion): void {
+          $versionCacheKey = $this->nodeSnapshotVersionCacheKey();
+          if ($snapshotVersion < (float) Cache::get($versionCacheKey, 0.0)) {
+            return;
+          }
 
-      foreach ($this->data as $uid => $ips) {
-        $uid = (int) $uid;
-        if ($uid <= 0) {
-          continue;
-        }
-        $onlineIps[$uid] = array_values((array) $ips);
-        $cacheKeys[$uid] = UserOnlineService::cacheKey($uid);
-      }
-
-      $cachedAliveData = $this->loadCachedAliveData($cacheKeys);
-
-      foreach ($cacheKeys as $uid => $cacheKey) {
-        $cachedUserData = $cachedAliveData[$cacheKey] ?? [];
-        $previousCount = is_array($cachedUserData) && isset($cachedUserData['alive_ip'])
-          ? (int) $cachedUserData['alive_ip']
-          : null;
-
-        $ipsArray = $this->filterFreshNodeData($cachedUserData, $updateAt, $nodeDataExpirySeconds);
-        $ipsArray[$nodeKey] = [
-          'aliveips' => $onlineIps[$uid] ?? [],
-          'lastupdateAt' => $updateAt,
-        ];
-
-        $count = UserOnlineService::calculateDeviceCount($ipsArray, $mode);
-        $ipsArray['alive_ip'] = $count;
-
-        $cacheUpdates[$cacheKey] = $ipsArray;
-        $realtimeCounts[$uid] = $count;
-        if ($previousCount !== $count) {
-          $changedOnlineUpdates[] = [
-            'id' => $uid,
-            'online_count' => $count,
-            'last_online_at' => $lastOnlineAt,
-          ];
-        }
-      }
-
-      $this->storeCachedAliveData($cacheUpdates, $ttl);
-      UserOnlineService::updateRealtimeIndex($realtimeCounts, $updateAt + $ttlSeconds);
-      $this->syncOnlineCounts($changedOnlineUpdates);
+          $this->applySnapshot();
+          Cache::put(
+            $versionCacheKey,
+            $snapshotVersion,
+            now()->addSeconds(max(600, UserOnlineService::aliveCacheTtlSeconds() * 10))
+          );
+        });
     } catch (\Throwable $e) {
       Log::error('UpdateAliveDataJob failed', [
         'error' => $e->getMessage(),
       ]);
       $this->fail($e);
     }
+  }
+
+  private function applySnapshot(): void
+  {
+    $updateAt = time();
+    $nodeKey = $this->nodeType . $this->nodeId;
+    $mode = UserOnlineService::getDeviceLimitMode();
+    $ttlSeconds = UserOnlineService::aliveCacheTtlSeconds();
+    $nodeDataExpirySeconds = $this->nodeDataExpirySeconds();
+    $ttl = now()->addSeconds($ttlSeconds);
+    $lastOnlineAt = now();
+    $cacheUpdates = [];
+    $changedOnlineUpdates = [];
+    $realtimeCounts = [];
+    $currentOnlineIps = [];
+
+    foreach ($this->data as $uid => $ips) {
+      $uid = (int) $uid;
+      if ($uid <= 0) {
+        continue;
+      }
+
+      $normalizedIps = array_values(array_unique(array_filter(
+        array_map(static fn($ip): string => trim((string) $ip), (array) $ips),
+        static fn(string $ip): bool => $ip !== ''
+      )));
+      if (empty($normalizedIps)) {
+        continue;
+      }
+      $currentOnlineIps[$uid] = $normalizedIps;
+    }
+
+    $nodeUsersCacheKey = UserOnlineService::nodeUsersCacheKey($this->nodeType, $this->nodeId);
+    $previousNodeUserIds = array_values(array_unique(array_filter(
+      array_map('intval', (array) Cache::get($nodeUsersCacheKey, [])),
+      static fn(int $uid): bool => $uid > 0
+    )));
+    $currentNodeUserIds = array_keys($currentOnlineIps);
+    sort($currentNodeUserIds, SORT_NUMERIC);
+    $affectedUserIds = array_values(array_unique(array_merge(
+      $previousNodeUserIds,
+      $currentNodeUserIds
+    )));
+
+    $cacheKeys = [];
+    foreach ($affectedUserIds as $uid) {
+      $cacheKeys[$uid] = UserOnlineService::cacheKey($uid);
+    }
+    $cachedAliveData = $this->loadCachedAliveData($cacheKeys);
+
+    foreach ($cacheKeys as $uid => $cacheKey) {
+      $cachedUserData = $cachedAliveData[$cacheKey] ?? [];
+      $previousOnlineCount = is_array($cachedUserData) && array_key_exists('online_count', $cachedUserData)
+        ? (int) $cachedUserData['online_count']
+        : null;
+
+      $ipsArray = $this->filterFreshNodeData($cachedUserData, $updateAt, $nodeDataExpirySeconds);
+      if (array_key_exists($uid, $currentOnlineIps)) {
+        $ipsArray[$nodeKey] = [
+          'aliveips' => $currentOnlineIps[$uid],
+          'lastupdateAt' => $updateAt,
+        ];
+      } else {
+        unset($ipsArray[$nodeKey]);
+      }
+
+      $deviceLimitCount = UserOnlineService::calculateDeviceCount($ipsArray, $mode);
+      $onlineCount = UserOnlineService::calculateOnlineDeviceCount($ipsArray);
+      $ipsArray['alive_ip'] = $deviceLimitCount;
+      $ipsArray['online_count'] = $onlineCount;
+
+      $cacheUpdates[$cacheKey] = $ipsArray;
+      $realtimeCounts[$uid] = $onlineCount;
+      if ($previousOnlineCount !== $onlineCount) {
+        $changedOnlineUpdates[] = [
+          'id' => $uid,
+          'online_count' => $onlineCount,
+          'last_online_at' => $lastOnlineAt,
+        ];
+      }
+    }
+
+    $this->storeCachedAliveData($cacheUpdates, $ttl);
+    Cache::put($nodeUsersCacheKey, $currentNodeUserIds, $ttl);
+    UserOnlineService::updateRealtimeIndex($realtimeCounts, $updateAt + $ttlSeconds);
+    $this->syncOnlineCounts($changedOnlineUpdates);
+  }
+
+  private function nodeSnapshotVersionCacheKey(): string
+  {
+    return UserOnlineService::nodeUsersCacheKey($this->nodeType, $this->nodeId) . ':VERSION';
   }
 
   private function filterFreshNodeData(mixed $cachedData, int $updateAt, int $expirySeconds): array
