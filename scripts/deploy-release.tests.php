@@ -41,7 +41,11 @@ $assert(
     !str_contains($webRoutes, "admin_setting(['frontend_theme' => \$theme])"),
     'an HTTP request must not permanently replace a temporarily unavailable custom theme'
 );
-$assert(str_contains($update, 'scripts/deploy-release.sh'), 'legacy update.sh must delegate to safe deployment');
+$assert(str_contains($update, 'scripts/deploy-release.sh'), 'update.sh must keep the explicit safe deployment entry');
+$assert(str_contains($update, 'if [ "$#" -gt 0 ]'), 'update.sh arguments must continue to select safe deployment');
+$assert(str_contains($update, 'compose pull'), 'no-argument update must pull the configured images');
+$assert(str_contains($update, 'composer install'), 'no-argument update must install locked dependencies');
+$assert(str_contains($update, 'KELI_UPDATE_REEXEC=1 exec sh'), 'update.sh must re-exec its newly fetched implementation');
 $assert(!str_contains($update, 'composer update'), 'legacy update.sh must not update dependencies');
 $assert(str_contains($deploy, 'resolve_base_web_image'), 'legacy update must resolve the mutable web image from the base compose file');
 $assert(str_contains($deploy, 'TARGET_IMAGE="$(resolve_base_web_image || true)"'), 'legacy update must pull the configured web image instead of reusing the pinned image id');

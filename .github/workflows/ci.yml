@@ -86,6 +86,7 @@ jobs:
           php scripts/verify-deployment-receipt.tests.php
           php scripts/deploy-release.tests.php
           php scripts/deploy-release.integration.tests.php
+          php scripts/update.integration.tests.php
 
       - name: Verify full-stack release contract
         shell: pwsh

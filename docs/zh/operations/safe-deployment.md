@@ -7,10 +7,18 @@ Keli 的正式发布由六个仓库和四组构建产物组成。发布清单回
 原有命令保持可用：
 
 ```bash
-sh update.sh
+docker compose pull && sh update.sh
 ```
 
-它现在会进入安全事务，不再删除 `composer.lock`，也不会运行 `composer update`。默认从当前 Git 上游解析目标版本，并依次执行：
+无参数的 `update.sh` 保持原有日常更新语义：拉取 Git 与 Compose 镜像、按 `composer.lock` 安装依赖、执行数据库增量更新并重建应用服务。它不会删除 `composer.lock`，也不会运行 `composer update`。
+
+需要候选环境、强制备份恢复演练和自动回滚门禁时，显式使用：
+
+```bash
+sh update.sh --safe --image ghcr.io/keli-123456/keliboard:main
+```
+
+严格安全发布会依次执行：
 
 1. 确认已跟踪源码没有本地修改。
 2. 锁定目标 Git SHA 和容器镜像 ID。
