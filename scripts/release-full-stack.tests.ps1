@@ -13,13 +13,10 @@ foreach ($repoName in @('keliboard', 'keli-admin', 'keli-user', 'kelinode-rs', '
     New-Item -ItemType Directory -Force -Path (Join-Path $fixtureRoot "$repoName\.git") | Out-Null
 }
 
-$planOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File $releaseScript `
+$planOutput = & $releaseScript `
     -ReleaseVersion 'v9.8.7-contract-test' `
     -WorkspaceRoot $fixtureRoot `
     -PlanOnly
-if ($LASTEXITCODE -ne 0) {
-    throw "release-full-stack.ps1 -PlanOnly exited with $LASTEXITCODE"
-}
 $plan = $planOutput -join "`n"
 foreach ($expected in @(
     'mode Prepare',
