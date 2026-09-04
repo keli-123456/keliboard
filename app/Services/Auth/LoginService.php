@@ -10,6 +10,7 @@ use App\Utils\CacheKey;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\RateLimiter;
 
 class LoginService
 {
@@ -54,12 +55,36 @@ class LoginService
                 'source' => $siteContext['source'] ?? null,
             ];
         }
-        $passwordErrorLimitKey = $siteScope->cacheKey('PASSWORD_ERROR_LIMIT', $email, $req);
+        $loginIpLimitKey = $this->loginIpLimitKey($siteScope, $requestIp, $req);
+        if ($loginIpLimitKey !== null) {
+            $loginIpLimitCount = max(1, (int) admin_setting('login_ip_limit_count', 60));
+            if (RateLimiter::tooManyAttempts($loginIpLimitKey, $loginIpLimitCount)) {
+                RiskEventService::record('login_failed', [
+                    'ip' => $requestIp,
+                    'ua' => $requestUa,
+                    'status_code' => 429,
+                    'meta' => array_merge([
+                        'email' => $email,
+                        'reason' => 'ip_rate_limit',
+                        'count' => RateLimiter::attempts($loginIpLimitKey),
+                    ], $baseMeta),
+                ]);
+
+                return [false, [429, __('Too many login attempts. Please try again later.')]];
+            }
+        }
+
+        $passwordErrorLimitKey = $siteScope->cacheKey(
+            'PASSWORD_ERROR_LIMIT',
+            $this->passwordLimitIdentity($email, $requestIp),
+            $req
+        );
 
         // 检查密码错误限制
         if ((int) admin_setting('password_limit_enable', true)) {
             $passwordErrorCount = (int) Cache::get($passwordErrorLimitKey, 0);
             if ($passwordErrorCount >= (int) admin_setting('password_limit_count', 5)) {
+                $this->recordLoginIpFailure($loginIpLimitKey);
                 RiskEventService::record('login_failed', [
                     'ip' => $requestIp,
                     'ua' => $requestUa,
@@ -85,6 +110,7 @@ class LoginService
         // 查找用户
         $user = $siteScope->findAuthenticatableUserByEmail($email, $req);
         if (!$user) {
+            $this->recordLoginIpFailure($loginIpLimitKey);
             RiskEventService::record('login_failed', [
                 'ip' => $requestIp,
                 'ua' => $requestUa,
@@ -106,6 +132,7 @@ class LoginService
                 $user->password
             )
         ) {
+            $this->recordLoginIpFailure($loginIpLimitKey);
             RiskEventService::record('login_failed', [
                 'user_id' => $user->id,
                 'ip' => $requestIp,
@@ -130,6 +157,7 @@ class LoginService
 
         // 检查账户状态
         if ($user->banned) {
+            $this->recordLoginIpFailure($loginIpLimitKey);
             RiskEventService::record('login_failed', [
                 'user_id' => $user->id,
                 'ip' => $requestIp,
@@ -142,6 +170,8 @@ class LoginService
             ]);
             return [false, [400, __('Your account has been suspended')]];
         }
+
+        Cache::forget($passwordErrorLimitKey);
 
         // 更新最后登录时间
         $user->last_login_at = time();
@@ -219,13 +249,49 @@ class LoginService
     private function currentRequest(): ?Request
     {
         try {
-            $request = request();
-            return $request instanceof Request ? $request : null;
+            return request();
         } catch (\Throwable) {
             return null;
         }
     }
 
+    private function loginIpLimitKey(
+        SiteUserScopeService $siteScope,
+        ?string $requestIp,
+        ?Request $request
+    ): ?string
+    {
+        $requestIp = trim((string) $requestIp);
+        if ($requestIp === '') {
+            return null;
+        }
+
+        return $siteScope->cacheKey(
+            'LOGIN_IP_LIMIT',
+            'ip:' . hash('sha256', $requestIp),
+            $request
+        );
+    }
+
+    private function passwordLimitIdentity(string $email, ?string $requestIp): string
+    {
+        $normalizedEmail = strtolower(trim($email));
+        $normalizedIp = trim((string) $requestIp);
+
+        return $normalizedEmail . ':ip:' . hash('sha256', $normalizedIp !== '' ? $normalizedIp : 'unknown');
+    }
+
+    private function recordLoginIpFailure(?string $loginIpLimitKey): void
+    {
+        if ($loginIpLimitKey === null) {
+            return;
+        }
+
+        RateLimiter::hit(
+            $loginIpLimitKey,
+            max(1, (int) admin_setting('login_ip_limit_expire_seconds', 60))
+        );
+    }
 
     /**
      * 生成临时登录令牌和快速登录URL

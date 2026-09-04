@@ -9,19 +9,7 @@ class AgentDomainResolver
 {
     public function resolveRequest(Request $request): ?array
     {
-        $hosts = [
-            (string) $request->headers->get('x-forwarded-host', ''),
-            (string) $request->headers->get('host', ''),
-        ];
-
-        foreach (array_unique(array_filter($hosts, fn (string $host): bool => trim($host) !== '')) as $host) {
-            $context = $this->resolveHost($host);
-            if ($context) {
-                return $context;
-            }
-        }
-
-        return null;
+        return $this->resolveHost(app(SiteResolver::class)->requestHost($request));
     }
 
     public function resolveHost(string $host): ?array

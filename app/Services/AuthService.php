@@ -55,13 +55,38 @@ class AuthService
 
     public static function findUserByBearerToken(string $bearerToken): ?User
     {
-        $token = str_replace('Bearer ', '', $bearerToken);
-        
+        $token = trim(preg_replace('/^Bearer\s+/i', '', trim($bearerToken)) ?? '');
+        if ($token === '') {
+            return null;
+        }
+
         $accessToken = PersonalAccessToken::findToken($token);
-        
-        $tokenable = $accessToken?->tokenable;
-        
+        if (!$accessToken || !self::tokenIsValid($accessToken)) {
+            return null;
+        }
+
+        $tokenable = $accessToken->tokenable;
+
         return $tokenable instanceof User ? $tokenable : null;
+    }
+
+    private static function tokenIsValid(PersonalAccessToken $accessToken): bool
+    {
+        if ($accessToken->expires_at && $accessToken->expires_at->isPast()) {
+            return false;
+        }
+
+        $expiration = config('sanctum.expiration');
+        if (
+            is_numeric($expiration)
+            && (int) $expiration > 0
+            && $accessToken->created_at
+            && $accessToken->created_at->lte(now()->subMinutes((int) $expiration))
+        ) {
+            return false;
+        }
+
+        return true;
     }
 
     /**

@@ -16,21 +16,20 @@ RUN CFLAGS="-O0" install-php-extensions pcntl && \
 WORKDIR /www
 
 COPY .docker /
+COPY . /www
 
-# Add build arguments
-ARG CACHEBUST
-ARG REPO_URL
-ARG BRANCH_NAME
+ARG SOURCE_GIT_SHA=unknown
+ARG BUILD_VERSION=unknown
 
-RUN echo "Attempting to clone branch: ${BRANCH_NAME} from ${REPO_URL} with CACHEBUST: ${CACHEBUST}" && \
-    rm -rf ./* && \
-    rm -rf .git && \
-    git config --global --add safe.directory /www && \
-    git clone --depth 1 --branch ${BRANCH_NAME} ${REPO_URL} .
+LABEL org.opencontainers.image.revision="${SOURCE_GIT_SHA}"
+
+ENV KELIBOARD_SOURCE_GIT_SHA="${SOURCE_GIT_SHA}" \
+    APP_VERSION="${BUILD_VERSION}"
 
 COPY .docker/supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-RUN composer install --no-cache --no-dev \
+RUN test -f composer.lock \
+    && composer install --no-cache --no-dev --prefer-dist --no-interaction --optimize-autoloader \
     && php artisan storage:link \
     && chown -R www:www /www \
     && chmod -R 775 /www \

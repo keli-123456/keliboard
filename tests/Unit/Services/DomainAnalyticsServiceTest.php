@@ -19,6 +19,7 @@ final class DomainAnalyticsServiceTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        Request::setTrustedProxies([], Request::HEADER_X_FORWARDED_HOST);
         $this->setUpInMemoryDatabase();
         config(['app.key' => 'domain-analytics-test-key']);
         $this->createContextTables();
@@ -44,11 +45,11 @@ final class DomainAnalyticsServiceTest extends TestCase
         $this->assertStringNotContainsString('203.0.113.8', (string) DB::table('v2_domain_visitor_daily')->value('visitor_hash'));
     }
 
-    public function test_business_events_share_the_normalized_domain_bucket(): void
+    public function test_business_events_ignore_untrusted_forwarded_host(): void
     {
         $service = app(DomainAnalyticsService::class);
         $request = $this->request('203.0.113.8', 'Subscription Client');
-        $request->headers->set('X-Forwarded-Host', 'DASH.EXAMPLE.TEST:443');
+        $request->headers->set('X-Forwarded-Host', 'SPOOFED.EXAMPLE.TEST:443');
 
         $service->recordRegistration($request);
         $service->recordSubscriptionPull($request);

@@ -10,19 +10,12 @@ class SiteResolver
 {
     public function resolveRequest(Request $request): array
     {
-        $hosts = [
-            (string) $request->headers->get('x-forwarded-host', ''),
-            (string) $request->headers->get('host', ''),
-        ];
+        return $this->resolveHost($this->requestHost($request));
+    }
 
-        foreach (array_unique(array_filter($hosts, fn (string $host): bool => trim($host) !== '')) as $host) {
-            $context = $this->resolveHost($host);
-            if (!empty($context['site_id'])) {
-                return $context;
-            }
-        }
-
-        return $this->platformContext();
+    public function requestHost(Request $request): string
+    {
+        return $this->normalizeHost($request->getHost());
     }
 
     public function resolveHost(string $host): array
@@ -39,7 +32,7 @@ class SiteResolver
                 })
                 ->first();
 
-            if ($row && $row->site) {
+            if ($row instanceof SiteDomain && $row->site instanceof Site) {
                 return $this->context($row->site, $row, 'domain');
             }
         }

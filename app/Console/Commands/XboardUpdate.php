@@ -52,9 +52,12 @@ class XboardUpdate extends Command
         $this->info('正在检查并安装默认插件...');
         PluginManager::installDefaultPlugins();
         $this->info('默认插件检查完成');
-        // Artisan::call('reset:traffic', ['--fix-null' => true]);
-        $this->info('正在重新计算所有用户的重置时间...');
-        Artisan::call('reset:traffic', ['--force' => true]);
+        $this->info('正在处理已到期的流量重置...');
+        Artisan::call('reset:traffic');
+        $this->info(Artisan::output());
+        $this->info('正在补全缺失的流量重置时间...');
+        Artisan::call('reset:traffic', ['--fix-null' => true]);
+        $this->info(Artisan::output());
 
         try {
             $updateService = new UpdateService();

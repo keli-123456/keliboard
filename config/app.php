@@ -217,5 +217,5 @@ return [
     | The only modification by laravel config
     |
     */
-    'version' => '1.0.73'
+    'version' => env('APP_VERSION', '1.0.73')
 ];

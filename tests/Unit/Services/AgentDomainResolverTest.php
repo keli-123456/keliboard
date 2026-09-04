@@ -19,6 +19,8 @@ final class AgentDomainResolverTest extends TestCase
     {
         parent::setUp();
 
+        Request::setTrustedProxies([], Request::HEADER_X_FORWARDED_HOST);
+
         $this->setUpInMemoryDatabase();
         $this->createUserTable();
         $this->createAgentCommerceTables();
@@ -56,7 +58,7 @@ final class AgentDomainResolverTest extends TestCase
         $this->assertNull(app(AgentDomainResolver::class)->resolveHost('shop.example.com'));
     }
 
-    public function test_resolve_request_prefers_forwarded_host_for_agent_proxy_domains(): void
+    public function test_resolve_request_uses_forwarded_host_from_trusted_proxy(): void
     {
         $agent = $this->createUser('agent@example.test');
         AgentDomain::query()->create([
@@ -68,15 +70,44 @@ final class AgentDomainResolverTest extends TestCase
         ]);
 
         $request = Request::create('/', 'GET', [], [], [], [
+            'REMOTE_ADDR' => '127.0.0.1',
             'HTTP_HOST' => 'sp.huhu.icu',
             'HTTP_X_FORWARDED_HOST' => 'Agent.Example.COM:443, proxy.local',
         ]);
+        Request::setTrustedProxies(['127.0.0.1'], Request::HEADER_X_FORWARDED_HOST);
 
         $context = app(AgentDomainResolver::class)->resolveRequest($request);
 
         $this->assertNotNull($context);
         $this->assertSame($agent->id, $context['agent_user_id']);
         $this->assertSame('agent.example.com', $context['domain']);
+    }
+
+    public function test_resolve_request_ignores_forwarded_host_from_untrusted_client(): void
+    {
+        $agent = $this->createUser('agent@example.test');
+        AgentDomain::query()->create([
+            'agent_user_id' => $agent->id,
+            'domain' => 'agent.example.com',
+            'status' => AgentDomain::STATUS_ACTIVE,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+
+        $request = Request::create('/', 'GET', [], [], [], [
+            'REMOTE_ADDR' => '203.0.113.25',
+            'HTTP_HOST' => 'sp.huhu.icu',
+            'HTTP_X_FORWARDED_HOST' => 'agent.example.com',
+        ]);
+        Request::setTrustedProxies(['127.0.0.1'], Request::HEADER_X_FORWARDED_HOST);
+
+        $this->assertNull(app(AgentDomainResolver::class)->resolveRequest($request));
+    }
+
+    protected function tearDown(): void
+    {
+        Request::setTrustedProxies([], Request::HEADER_X_FORWARDED_HOST);
+        parent::tearDown();
     }
 
     public function test_normalize_host_strips_scheme_path_and_trailing_dot(): void

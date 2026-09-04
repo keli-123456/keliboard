@@ -1,4 +1,6 @@
 /node_modules
+/.git
+/.github
 /config/v2board.php
 /public/hot
 /public/storage
@@ -15,11 +17,11 @@ Homestead.yaml
 npm-debug.log
 yarn-error.log
 composer.phar
-composer.lock
 yarn.lock
 docker-compose.yml
 .DS_Store
 /docker
+/tests
 storage/laravels.conf
 storage/laravels.pid
 storage/laravels-timer-process.pid

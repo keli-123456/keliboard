@@ -203,26 +203,66 @@ if (-not $SkipTagCheck) {
 $adminIndexPath = Join-Path $keliboard 'public/assets/admin-xboard/index.html'
 $adminJsPath = Join-Path $keliboard 'public/assets/admin-xboard/assets/index.js'
 $adminCssPath = Join-Path $keliboard 'public/assets/admin-xboard/assets/index.css'
+$adminBuildManifestPath = Join-Path $keliboard 'public/assets/admin-xboard/build-manifest.json'
 
 if (-not (Test-Path $adminIndexPath)) {
     throw "admin index.html not found: $adminIndexPath"
+}
+if (-not (Test-Path $adminBuildManifestPath)) {
+    throw "admin build manifest not found: $adminBuildManifestPath"
 }
 
 $indexHtml = Get-Content $adminIndexPath -Raw
 $adminJsVersion = Assert-AdminAsset 'js' $adminJsPath '/assets/admin-xboard/assets/index.js' $indexHtml
 $adminCssVersion = Assert-AdminAsset 'css' $adminCssPath '/assets/admin-xboard/assets/index.css' $indexHtml
 
-$adminJs = Get-Content $adminJsPath -Raw
-$bundleGitShaMatch = [regex]::Match($adminJs, 'gitSha:"([^"]+)"')
-$bundleBuildIdMatch = [regex]::Match($adminJs, 'buildId:"([^"]+)"')
-if (-not $bundleGitShaMatch.Success) {
-    throw 'bundled admin gitSha marker not found'
+try {
+    $adminBuildManifest = Get-Content $adminBuildManifestPath -Raw | ConvertFrom-Json
+}
+catch {
+    throw "admin build manifest is invalid JSON: $($_.Exception.Message)"
 }
 
-$bundleGitSha = $bundleGitShaMatch.Groups[1].Value
-$bundleBuildId = if ($bundleBuildIdMatch.Success) { $bundleBuildIdMatch.Groups[1].Value } else { '' }
-if ($bundleBuildId -match '-dirty@') {
+if ([string]$adminBuildManifest.component -ne 'keli-admin') {
+    throw 'admin build manifest component must be keli-admin'
+}
+
+$bundleSourceGitSha = ([string]$adminBuildManifest.source_git_sha).ToLowerInvariant()
+$bundleGitSha = ([string]$adminBuildManifest.source_git_short_sha).ToLowerInvariant()
+if ($bundleSourceGitSha -notmatch '^[a-f0-9]{40}$') {
+    throw 'admin build manifest is missing a valid source_git_sha'
+}
+if ($bundleGitSha -notmatch '^[a-f0-9]{7,40}$' -or -not $bundleSourceGitSha.StartsWith($bundleGitSha)) {
+    throw 'admin build manifest source_git_short_sha does not match source_git_sha'
+}
+if ($null -eq $adminBuildManifest.PSObject.Properties['source_dirty']) {
+    throw 'admin build manifest is missing source_dirty'
+}
+
+$bundleGeneratedAt = [string]$adminBuildManifest.generated_at
+$bundleIsDirty = [bool]$adminBuildManifest.source_dirty
+$bundleBuildId = "$bundleGitSha$(if ($bundleIsDirty) { '-dirty' })@$bundleGeneratedAt"
+if ($bundleIsDirty) {
     throw "bundled admin build was created from a dirty keli-admin tree: $bundleBuildId"
+}
+
+$adminManifestFiles = @{
+    'index.html' = $adminIndexPath
+    'assets/index.js' = $adminJsPath
+    'assets/index.css' = $adminCssPath
+}
+foreach ($relativePath in $adminManifestFiles.Keys) {
+    $manifestEntryProperty = $adminBuildManifest.files.PSObject.Properties[$relativePath]
+    $manifestHash = if ($null -ne $manifestEntryProperty) {
+        ([string]$manifestEntryProperty.Value.sha256).ToLowerInvariant()
+    }
+    else {
+        ''
+    }
+    $actualHash = (Get-FileHash -LiteralPath $adminManifestFiles[$relativePath] -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($manifestHash -notmatch '^[a-f0-9]{64}$' -or $manifestHash -ne $actualHash) {
+        throw "admin $relativePath does not match build-manifest.json"
+    }
 }
 
 $repos = [ordered]@{
@@ -233,8 +273,8 @@ if ($null -ne $keliAdmin) {
     Assert-CleanRepo 'keli-admin' $keliAdmin
     $repos.keli_admin = Get-RepoInfo 'keli-admin' $keliAdmin
 
-    if ($bundleGitSha -ne $repos.keli_admin.short_head) {
-        throw "bundled admin gitSha $bundleGitSha does not match keli-admin HEAD $($repos.keli_admin.short_head)"
+    if ($bundleSourceGitSha -ne $repos.keli_admin.head) {
+        throw "bundled admin source $bundleSourceGitSha does not match keli-admin HEAD $($repos.keli_admin.head)"
     }
 }
 

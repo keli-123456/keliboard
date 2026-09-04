@@ -23,12 +23,7 @@ class SiteUserScopeService
 
         $request = $request ?: $this->currentRequest();
         if (!$request) {
-            return [
-                'enabled' => false,
-                'site_id' => null,
-                'is_default' => false,
-                'source' => 'missing_request',
-            ];
+            throw new \LogicException('Site-scoped user operations require an HTTP request.');
         }
 
         $context = app(SiteContextService::class)->resolve($request);
@@ -76,9 +71,11 @@ class SiteUserScopeService
 
     public function findUserByEmail(string $email, ?Request $request = null): ?User
     {
-        return $this->scopeUserQuery(User::query(), $request)
+        $user = $this->scopeUserQuery(User::query(), $request)
             ->where('email', $email)
             ->first();
+
+        return $user instanceof User ? $user : null;
     }
 
     public function findAuthenticatableUserByEmail(string $email, ?Request $request = null): ?User
@@ -91,12 +88,14 @@ class SiteUserScopeService
                 return null;
             }
 
-            return User::query()
+            $user = User::query()
                 ->where('email', $email)
                 ->whereIn('id', AgentUser::query()
                     ->select('sub_user_id')
                     ->where('agent_user_id', (int) $agentContext['agent_user_id']))
                 ->first();
+
+            return $user instanceof User ? $user : null;
         }
 
         return $this->findUserByEmail($email, $request);
@@ -148,8 +147,7 @@ class SiteUserScopeService
     private function currentRequest(): ?Request
     {
         try {
-            $request = request();
-            return $request instanceof Request ? $request : null;
+            return request();
         } catch (\Throwable) {
             return null;
         }
@@ -157,19 +155,11 @@ class SiteUserScopeService
 
     private function hasTable(string $table): bool
     {
-        try {
-            return app('db')->connection()->getSchemaBuilder()->hasTable($table);
-        } catch (\Throwable) {
-            return false;
-        }
+        return app('db')->connection()->getSchemaBuilder()->hasTable($table);
     }
 
     private function hasColumn(string $table, string $column): bool
     {
-        try {
-            return app('db')->connection()->getSchemaBuilder()->hasColumn($table, $column);
-        } catch (\Throwable) {
-            return false;
-        }
+        return app('db')->connection()->getSchemaBuilder()->hasColumn($table, $column);
     }
 }

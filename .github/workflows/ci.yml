@@ -2,44 +2,8 @@ name: CI
 
 on:
   push:
-    paths:
-      - "artisan"
-      - "app/**"
-      - "bootstrap/**"
-      - "config/**"
-      - "database/**"
-      - "resources/**"
-      - "routes/**"
-      - "scripts/**"
-      - "contracts/**"
-      - "tests/**"
-      - "composer.json"
-      - "composer.lock"
-      - "compose.sample.yaml"
-      - "phpunit.xml"
-      - "update.sh"
-      - "public/assets/admin-xboard/**"
-      - ".github/workflows/ci.yml"
   pull_request:
     types: [opened, synchronize, reopened]
-    paths:
-      - "artisan"
-      - "app/**"
-      - "bootstrap/**"
-      - "config/**"
-      - "database/**"
-      - "resources/**"
-      - "routes/**"
-      - "scripts/**"
-      - "contracts/**"
-      - "tests/**"
-      - "composer.json"
-      - "composer.lock"
-      - "compose.sample.yaml"
-      - "phpunit.xml"
-      - "update.sh"
-      - "public/assets/admin-xboard/**"
-      - ".github/workflows/ci.yml"
 
 permissions:
   contents: read

@@ -19,6 +19,8 @@ final class SiteResolverTest extends TestCase
     {
         parent::setUp();
 
+        Request::setTrustedProxies([], Request::HEADER_X_FORWARDED_HOST);
+
         $this->setUpInMemoryDatabase();
         $this->createUserTable();
         $this->createOrderTable();
@@ -38,21 +40,47 @@ final class SiteResolverTest extends TestCase
         $this->assertSame('domain', $context['source']);
     }
 
-    public function test_resolves_request_from_forwarded_host_before_host_header(): void
+    public function test_resolves_forwarded_host_from_trusted_proxy(): void
     {
         $site = $this->createSite('forwarded', 'Forwarded Site');
         $this->createDomain($site, 'forwarded.example.test');
 
         $request = Request::create('/', 'GET', [], [], [], [
+            'REMOTE_ADDR' => '127.0.0.1',
             'HTTP_HOST' => 'plain.example.test',
             'HTTP_X_FORWARDED_HOST' => 'Forwarded.Example.Test:8443',
         ]);
+        Request::setTrustedProxies(['127.0.0.1'], Request::HEADER_X_FORWARDED_HOST);
 
         $context = app(SiteResolver::class)->resolveRequest($request);
 
         $this->assertSame($site->id, $context['site_id']);
         $this->assertSame('forwarded.example.test', $context['domain']);
         $this->assertSame('domain', $context['source']);
+    }
+
+    public function test_ignores_forwarded_host_from_untrusted_client(): void
+    {
+        $site = $this->createSite('spoofed', 'Spoofed Site');
+        $this->createDomain($site, 'spoofed.example.test');
+
+        $request = Request::create('/', 'GET', [], [], [], [
+            'REMOTE_ADDR' => '203.0.113.25',
+            'HTTP_HOST' => 'plain.example.test',
+            'HTTP_X_FORWARDED_HOST' => 'spoofed.example.test',
+        ]);
+        Request::setTrustedProxies(['127.0.0.1'], Request::HEADER_X_FORWARDED_HOST);
+
+        $context = app(SiteResolver::class)->resolveRequest($request);
+
+        $this->assertNull($context['site_id']);
+        $this->assertSame('platform', $context['source']);
+    }
+
+    protected function tearDown(): void
+    {
+        Request::setTrustedProxies([], Request::HEADER_X_FORWARDED_HOST);
+        parent::tearDown();
     }
 
     public function test_disabled_domain_falls_back_to_platform_context(): void

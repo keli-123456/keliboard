@@ -49,35 +49,7 @@ class TrafficResetService
           return false;
         }
 
-        $oldUpload = $lockedUser->u ?? 0;
-        $oldDownload = $lockedUser->d ?? 0;
-        $oldTotal = $oldUpload + $oldDownload;
-
-        $nextResetTime = $this->calculateNextResetTime($lockedUser);
-
-        $lockedUser->update([
-          'u' => 0,
-          'd' => 0,
-          'last_reset_at' => time(),
-          'reset_count' => ((int) $lockedUser->reset_count) + 1,
-          'next_reset_at' => $nextResetTime ? $nextResetTime->timestamp : null,
-        ]);
-
-        $this->recordResetLog($lockedUser, [
-          'reset_type' => $this->getResetTypeFromPlan($lockedUser->plan),
-          'trigger_source' => $triggerSource,
-          'old_upload' => $oldUpload,
-          'old_download' => $oldDownload,
-          'old_total' => $oldTotal,
-          'new_upload' => 0,
-          'new_download' => 0,
-          'new_total' => 0,
-          'metadata' => $metadata ?: null,
-        ]);
-
-        $this->clearUserCache($lockedUser);
-        HookManager::call('traffic.reset.after', $lockedUser);
-        return true;
+        return $this->resetLockedUser($lockedUser, $triggerSource, $metadata);
       });
     } catch (\Exception $e) {
       Log::error(__('traffic_reset.reset_failed'), [
@@ -96,20 +68,22 @@ class TrafficResetService
    */
   public function calculateNextResetTime(User $user): ?Carbon
   {
-    if (
-      !$user->plan
-      || $user->plan->reset_traffic_method === Plan::RESET_TRAFFIC_NEVER
-      || ($user->plan->reset_traffic_method === Plan::RESET_TRAFFIC_FOLLOW_SYSTEM
-        && (int) admin_setting('reset_traffic_method', Plan::RESET_TRAFFIC_MONTHLY) === Plan::RESET_TRAFFIC_NEVER)
-      || $user->expired_at === NULL
-    ) {
+    if (!$user->plan) {
       return null;
     }
 
-    $resetMethod = $user->plan->reset_traffic_method;
+    $resetMethod = $this->resolveResetMethod($user->plan);
+    if ($resetMethod === Plan::RESET_TRAFFIC_NEVER) {
+      return null;
+    }
 
-    if ($resetMethod === Plan::RESET_TRAFFIC_FOLLOW_SYSTEM) {
-      $resetMethod = (int) admin_setting('reset_traffic_method', Plan::RESET_TRAFFIC_MONTHLY);
+    // Calendar resets do not need an expiration anchor. Only anniversary-based
+    // monthly/yearly resets depend on expired_at.
+    if (
+      $user->expired_at === null
+      && in_array($resetMethod, [Plan::RESET_TRAFFIC_MONTHLY, Plan::RESET_TRAFFIC_YEARLY], true)
+    ) {
+      return null;
     }
 
     $now = Carbon::now(config('app.timezone'));
@@ -121,6 +95,52 @@ class TrafficResetService
       Plan::RESET_TRAFFIC_YEARLY => $this->getNextYearlyReset($user, $now),
       default => null,
     };
+  }
+
+  /**
+   * Determine whether a calendar-based reset was missed in the current period.
+   */
+  public function isCalendarResetMissed(User $user, ?Carbon $now = null): bool
+  {
+    if (!$user->isActive() || !$user->plan) {
+      return false;
+    }
+
+    $periodStart = $this->getCalendarPeriodStart($user->plan, $now);
+    if (!$periodStart) {
+      return false;
+    }
+
+    $createdAt = $this->toTimestamp($user->created_at);
+    $lastResetAt = $this->toTimestamp($user->last_reset_at);
+
+    return $createdAt !== null
+      && $createdAt < $periodStart->timestamp
+      && ($lastResetAt === null || $lastResetAt < $periodStart->timestamp);
+  }
+
+  /**
+   * Reset one user whose first-day monthly/yearly reset was skipped.
+   */
+  public function reconcileMissedCalendarReset(User $user, ?Carbon $now = null): bool
+  {
+    return DB::transaction(function () use ($user, $now) {
+      $lockedUser = User::query()
+        ->with('plan:id,reset_traffic_method')
+        ->lockForUpdate()
+        ->find($user->id);
+
+      if (!$lockedUser || !$this->isCalendarResetMissed($lockedUser, $now)) {
+        return false;
+      }
+
+      $periodStart = $this->getCalendarPeriodStart($lockedUser->plan, $now);
+
+      return $this->resetLockedUser($lockedUser, TrafficResetLog::SOURCE_CRON, [
+        'reason' => 'missed_calendar_reset',
+        'period_start' => $periodStart?->toIso8601String(),
+      ]);
+    });
   }
 
   /**
@@ -219,6 +239,74 @@ class TrafficResetService
     $target->day($targetDay);
 
     return $target;
+  }
+
+  private function resolveResetMethod(Plan $plan): int
+  {
+    if ($plan->reset_traffic_method === Plan::RESET_TRAFFIC_FOLLOW_SYSTEM) {
+      return (int) admin_setting('reset_traffic_method', Plan::RESET_TRAFFIC_MONTHLY);
+    }
+
+    return (int) $plan->reset_traffic_method;
+  }
+
+  private function getCalendarPeriodStart(Plan $plan, ?Carbon $now = null): ?Carbon
+  {
+    $current = ($now ?? Carbon::now(config('app.timezone')))
+      ->copy()
+      ->setTimezone(config('app.timezone'));
+
+    return match ($this->resolveResetMethod($plan)) {
+      Plan::RESET_TRAFFIC_FIRST_DAY_MONTH => $current->startOfMonth(),
+      Plan::RESET_TRAFFIC_FIRST_DAY_YEAR => $current->startOfYear(),
+      default => null,
+    };
+  }
+
+  private function toTimestamp(mixed $value): ?int
+  {
+    if ($value instanceof \DateTimeInterface) {
+      return $value->getTimestamp();
+    }
+
+    return is_numeric($value) ? (int) $value : null;
+  }
+
+  /**
+   * Apply a reset while the caller holds the user row lock.
+   */
+  private function resetLockedUser(User $user, string $triggerSource, array $metadata): bool
+  {
+    $oldUpload = $user->u ?? 0;
+    $oldDownload = $user->d ?? 0;
+    $oldTotal = $oldUpload + $oldDownload;
+    $nextResetTime = $this->calculateNextResetTime($user);
+    $resetTimestamp = Carbon::now(config('app.timezone'))->timestamp;
+
+    $user->update([
+      'u' => 0,
+      'd' => 0,
+      'last_reset_at' => $resetTimestamp,
+      'reset_count' => ((int) $user->reset_count) + 1,
+      'next_reset_at' => $nextResetTime?->timestamp,
+    ]);
+
+    $this->recordResetLog($user, [
+      'reset_type' => $this->getResetTypeFromPlan($user->plan),
+      'trigger_source' => $triggerSource,
+      'old_upload' => $oldUpload,
+      'old_download' => $oldDownload,
+      'old_total' => $oldTotal,
+      'new_upload' => 0,
+      'new_download' => 0,
+      'new_total' => 0,
+      'metadata' => $metadata ?: null,
+    ]);
+
+    $this->clearUserCache($user);
+    HookManager::call('traffic.reset.after', $user);
+
+    return true;
   }
 
   /**

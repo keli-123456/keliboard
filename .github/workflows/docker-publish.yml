@@ -1,16 +1,27 @@
 name: Docker Build and Publish
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: ["main", "master", "new-dev"]
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+  SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+
+concurrency:
+  group: docker-publish-${{ github.event.workflow_run.head_branch || github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   build:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -21,7 +32,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1 
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Resolve release version
+        id: release
+        run: |
+          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "build_version=$(date '+%Y%m%d')-$SHORT_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -57,24 +77,14 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
-            type=sha,format=long
-            type=raw,value=new,enable=${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
-            type=raw,value=${{ steps.get_version.outputs.version }}
+            type=raw,value=${{ env.SOURCE_BRANCH }}
+            type=raw,value=sha-${{ steps.release.outputs.short_sha }}
+            type=raw,value=new,enable=${{ env.SOURCE_BRANCH == 'master' || env.SOURCE_BRANCH == 'main' }}
+            type=raw,value=latest,enable=${{ env.SOURCE_BRANCH == 'master' || env.SOURCE_BRANCH == 'main' }}
+            type=raw,value=${{ steps.release.outputs.version }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-
-      - name: Get version
-        id: get_version
-        run: echo "version=$(git describe --tags --always)" >> $GITHUB_OUTPUT
-
-      - name: Update version in app.php
-        run: |
-          VERSION=$(date '+%Y%m%d')-$(git rev-parse --short HEAD)
-          sed -i "s/'version' => '.*'/'version' => '$VERSION'/g" config/app.php
-          echo "Updated version to: $VERSION"
+            org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
 
       - name: Build and push
         id: build-and-push
@@ -88,11 +98,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            BUILDKIT_INLINE_CACHE=1
-            BUILDKIT_MULTI_PLATFORM=1
-            CACHEBUST=${{ github.sha }}
-            REPO_URL=https://github.com/${{ github.repository }}
-            BRANCH_NAME=${{ github.ref_name }}
+            SOURCE_GIT_SHA=${{ env.SOURCE_SHA }}
+            BUILD_VERSION=${{ steps.release.outputs.build_version }}
           provenance: false
           outputs: type=registry,push=true
           allow: |

@@ -102,8 +102,7 @@ class DomainAnalyticsService
 
     private function host(Request $request): string
     {
-        $raw = (string) ($request->headers->get('x-forwarded-host') ?: $request->headers->get('host', ''));
-        return app(SiteResolver::class)->normalizeHost($raw);
+        return app(SiteResolver::class)->requestHost($request);
     }
 
     private function visitorHash(Request $request, string $date): string
