@@ -885,7 +885,7 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertStringContainsString('downmbps=240', $content);
     }
 
-    public function test_shadowrocket_build_naive_exports_https_uri(): void
+    public function test_shadowrocket_build_naive_exports_http2_uri(): void
     {
         $uri = Shadowrocket::buildNaive('user-uuid', [
             'name' => 'SR Naive',
@@ -901,7 +901,60 @@ final class ProtocolExportRegressionTest extends TestCase
             ],
         ]);
 
-        $this->assertSame("naive+https://user-uuid:user-uuid@naive.example.com:443?padding=false#SR%20Naive\r\n", $uri);
+        $encoded = base64_encode('user-uuid:user-uuid@naive.example.com:443');
+        $this->assertSame("http2://{$encoded}?peer=naive.example.com&alpn=h2&padding=0#SR%20Naive\r\n", $uri);
+    }
+
+    public function test_shadowrocket_naive_preserves_certificate_identity_separately_from_address(): void
+    {
+        foreach ([
+            ['192.0.2.10', 'cert.example.com', '192.0.2.10', 'cert.example.com'],
+            ['2001:db8::10', ' cert.example.com ', '[2001:db8::10]', 'cert.example.com'],
+            ['2001:db8::10', '', '[2001:db8::10]', '2001:db8::10'],
+            ['[2001:db8::10]', null, '[2001:db8::10]', '2001:db8::10'],
+            ['naive.example.com', ' ', 'naive.example.com', 'naive.example.com'],
+        ] as [$host, $sni, $authorityHost, $peer]) {
+            $uri = Shadowrocket::buildNaive('user-uuid', [
+                'name' => 'Naive & test', 'host' => $host, 'port' => 8443,
+                'protocol_settings' => ['tls_settings' => ['server_name' => $sni]],
+            ]);
+            $encoded = base64_encode("user-uuid:user-uuid@{$authorityHost}:8443");
+            $query = http_build_query(['peer' => $peer, 'alpn' => 'h2', 'padding' => 0], '', '&', PHP_QUERY_RFC3986);
+            $this->assertSame("http2://{$encoded}?{$query}#Naive%20%26%20test\r\n", $uri);
+            $this->assertStringNotContainsString('insecure', $uri);
+        }
+    }
+
+    public function test_shadowrocket_naive_encodes_credentials_before_base64_authority(): void
+    {
+        $password = 'user:pass@word/#?%+';
+        $uri = Shadowrocket::buildNaive($password, [
+            'name' => 'Naive', 'host' => 'naive.example.com', 'port' => 443,
+        ]);
+        $encoded = explode('?', substr(trim($uri), strlen('http2://')), 2)[0];
+        $authority = base64_decode($encoded, true);
+        $userinfo = rawurlencode($password);
+        $this->assertSame("{$userinfo}:{$userinfo}@naive.example.com:443", $authority);
+        $parts = parse_url('https://' . $authority);
+        $this->assertSame($password, rawurldecode($parts['user']));
+        $this->assertSame($password, rawurldecode($parts['pass']));
+        $this->assertSame('naive.example.com', $parts['host']);
+    }
+
+    public function test_shadowrocket_subscription_contains_importable_naive_http2_entry(): void
+    {
+        $this->bindJsonResponseFactory();
+        $protocol = new Shadowrocket([
+            'uuid' => 'user-uuid', 'u' => 0, 'd' => 0,
+            'transfer_enable' => 1024, 'expired_at' => 2000000000,
+        ], [[
+            'type' => 'naive', 'name' => 'Naive', 'host' => 'naive.example.com', 'port' => 443,
+            'password' => 'user-uuid', 'protocol_settings' => ['network' => 'tcp', 'tls' => 1],
+        ]], 'shadowrocket', '2698');
+        $content = base64_decode((string) $protocol->handle()->getContent(), true);
+        $this->assertIsString($content);
+        $this->assertStringContainsString("\r\nhttp2://" . base64_encode('user-uuid:user-uuid@naive.example.com:443'), $content);
+        $this->assertStringNotContainsString('naive+https://', $content);
     }
 
     public function test_shadowrocket_skips_unsupported_naive_modes(): void
@@ -930,6 +983,11 @@ final class ProtocolExportRegressionTest extends TestCase
 
         $this->assertSame('', Shadowrocket::buildNaive('user-uuid', $quic));
         $this->assertSame('', Shadowrocket::buildNaive('user-uuid', $insecure));
+        foreach ([0, 2] as $tls) {
+            $plain = $quic;
+            $plain['protocol_settings'] = ['network' => 'tcp', 'tls' => $tls];
+            $this->assertSame('', Shadowrocket::buildNaive('user-uuid', $plain));
+        }
     }
 
     public function test_shadowrocket_build_mieru_exports_simple_share_uri(): void

@@ -701,11 +701,11 @@ class SingBox extends AbstractProtocol
             'server_port' => $server['port'],
             'username' => $password,
             'password' => $password,
-            'tls' => new \stdClass(),
+            'tls' => ['enabled' => true],
         ];
 
         if ($serverName = data_get($protocol_settings, 'tls_settings.server_name')) {
-            $array['tls'] = ['server_name' => $serverName];
+            $array['tls']['server_name'] = $serverName;
         }
 
         if (strtolower((string) data_get($protocol_settings, 'network', 'tcp')) === 'quic') {

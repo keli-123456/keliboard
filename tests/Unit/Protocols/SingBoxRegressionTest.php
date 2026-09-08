@@ -221,6 +221,7 @@ final class SingBoxRegressionTest extends TestCase
         $this->assertSame('user-uuid', $config['password']);
         $this->assertArrayNotHasKey('quic', $config);
         $this->assertSame([
+            'enabled' => true,
             'server_name' => 'sni.example.com',
         ], $config['tls']);
     }
@@ -244,7 +245,19 @@ final class SingBoxRegressionTest extends TestCase
 
         $this->assertSame('naive', $config['type']);
         $this->assertTrue($config['quic']);
+        $this->assertTrue($config['tls']['enabled']);
         $this->assertSame('sni.example.com', $config['tls']['server_name']);
+    }
+
+    public function test_singbox_naive_without_sni_still_enables_tls(): void
+    {
+        $config = $this->makeProtocol()->buildNaiveForTest('user-uuid', [
+            'name' => 'Naive default TLS',
+            'host' => 'naive.example.com',
+            'port' => 443,
+            'protocol_settings' => ['network' => 'tcp', 'tls' => 1],
+        ]);
+        $this->assertSame(['enabled' => true], $config['tls']);
     }
 
     public function test_singbox_full_app_config_includes_naive_outbound(): void

@@ -396,9 +396,19 @@ class Shadowrocket extends AbstractProtocol
 
         $host = Helper::wrapIPv6($server['host']);
         $userinfo = rawurlencode((string) $password) . ':' . rawurlencode((string) $password);
+        $authority = base64_encode("{$userinfo}@{$host}:{$server['port']}");
+        $peer = trim((string) data_get($protocol_settings, 'tls_settings.server_name', ''));
+        if ($peer === '') {
+            $peer = trim((string) $server['host'], '[]');
+        }
+        $query = http_build_query([
+            'peer' => $peer,
+            'alpn' => 'h2',
+            'padding' => 0,
+        ], '', '&', PHP_QUERY_RFC3986);
         $name = rawurlencode($server['name']);
 
-        return "naive+https://{$userinfo}@{$host}:{$server['port']}?padding=false#{$name}\r\n";
+        return "http2://{$authority}?{$query}#{$name}\r\n";
     }
 
     public static function buildMieru($password, $server)
