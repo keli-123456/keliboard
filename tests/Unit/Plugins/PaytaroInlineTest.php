@@ -1,0 +1,142 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Unit\Plugins;
+
+use App\Exceptions\ApiException;
+use Illuminate\Support\Facades\Http;
+use PHPUnit\Framework\Attributes\DataProvider;
+use Plugin\Paytaro\Plugin;
+use Tests\TestCase;
+
+final class PaytaroInlineTest extends TestCase
+{
+    private const UUID = 'e5b62e61-1dff-41ed-b6ce-45404b0b60da';
+    private const URL = 'https://openapi.alipay.com/gateway.do?method=alipay.trade.wap.pay&sign=a%2Bb%3D%3D';
+    private Plugin $plugin;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        Http::preventStrayRequests();
+        $this->plugin = new Plugin('paytaro');
+        $this->plugin->setConfig(['app_id' => 'app-1', 'app_secret' => 'test-secret', 'method_uuid' => self::UUID]);
+    }
+
+    public function test_defaults_to_native_alipay_without_rewriting_signed_link(): void
+    {
+        Http::fake(function ($request) {
+            $this->assertSame('https://v3.paytaro.com/v1/invoice/pay', $request->url());
+            $this->assertSame(self::UUID, $request['method_uuid']);
+            $this->assertSame(10.5, $request['order_amount']);
+            $this->assertTrue($request->hasHeader('X-App-Secret', 'test-secret'));
+            return Http::response($this->invoice());
+        });
+        $result = $this->plugin->pay($this->order());
+        $this->assertSame(0, $result['type']);
+        $this->assertSame('paytaro', $result['data']['provider']);
+        $this->assertSame(self::URL, $result['data']['qr_data']);
+        $this->assertSame(self::URL, $result['data']['mobile_url']);
+        $this->assertSame('10.815', $result['data']['amount']);
+        $this->assertSame('10.50', $result['data']['fiat_amount']);
+        $this->assertSame(1800, $result['data']['expires_in']);
+        $this->assertSame('', $result['data']['address']);
+        $this->assertArrayNotHasKey('app_secret', $result['data']);
+        $this->assertArrayNotHasKey('uuid', $result['data']);
+        Http::assertSentCount(1);
+    }
+
+    public function test_pc_payment_preserves_mobile_deep_link(): void
+    {
+        $body = $this->invoice();
+        $body['payment']['link_type'] = 'pc';
+        $body['payment']['mobile_url'] = 'alipays://platformapi/startapp?appId=20000067&url=' . rawurlencode(self::URL);
+        Http::fake(['*' => Http::response($body)]);
+        $result = $this->plugin->pay($this->order());
+        $this->assertSame($body['payment']['mobile_url'], $result['data']['mobile_url']);
+    }
+
+    #[DataProvider('cryptoAmounts')]
+    public function test_crypto_address_amount_network_and_server_clock_are_returned(mixed $amount, string $expected): void
+    {
+        $body = $this->invoice();
+        $body['payment'] = ['data' => 'TTestAddress1234567890', 'pay_amount' => $amount, 'type' => 'tron',
+            'name' => 'USDT-TRC20', 'currency_type' => 'crypto', 'pay_currency' => 'USDT', 'link_type' => 'address'];
+        Http::fake(['*' => Http::response($body)]);
+        $data = $this->plugin->pay($this->order())['data'];
+        $this->assertSame($expected, $data['amount']);
+        $this->assertSame('USDT', $data['currency']);
+        $this->assertSame('TRON', $data['network']);
+        $this->assertSame('TTestAddress1234567890', $data['address']);
+        $this->assertSame($data['address'], $data['qr_data']);
+        $this->assertSame('', $data['payment_url']);
+        $this->assertSame('', $data['mobile_url']);
+        $this->assertSame(1800, $data['expires_in']);
+    }
+
+    public static function cryptoAmounts(): array
+    {
+        return [['1.123456789012345678', '1.123456789012345678'], [1.000001, '1.000001'], [0.00000012, '0.00000012'], [12, '12']];
+    }
+
+    #[DataProvider('invalidResponses')]
+    public function test_invalid_or_mismatched_native_data_is_rejected(array $invoiceChanges, array $paymentChanges): void
+    {
+        $body = array_replace($this->invoice(), $invoiceChanges);
+        $body['payment'] = array_replace($body['payment'], $paymentChanges);
+        Http::fake(['*' => Http::response($body)]);
+        $this->expectException(ApiException::class);
+        $this->plugin->pay($this->order());
+    }
+
+    public static function invalidResponses(): array
+    {
+        $cases = [];
+        foreach ([['merchant_no' => 'other'], ['order_amount' => 10], ['order_currency' => 'USD'], ['status' => 'PAID'],
+            ['uuid' => 'bad'], ['expired_at' => 1700000000], ['server_time' => null]] as $change) {
+            $cases[] = [$change, []];
+        }
+        foreach ([['link_type' => 'bad'], ['currency_type' => 'bad'], ['pay_currency' => 'USD'], ['pay_amount' => 0],
+            ['pay_amount' => -1], ['pay_amount' => []], ['pay_amount' => 'abc'], ['data' => 'javascript:alert(1)'],
+            ['data' => 'http://openapi.alipay.com/pay'], ['data' => 'https://alipay.com.evil.test/pay'],
+            ['data' => 'https://user:pass@openapi.alipay.com/pay'], ['data' => 'https://openapi.alipay.com:444/pay'],
+            ['mobile_url' => 'javascript:alert(1)'], ['mobile_url' => 'https://evil.test/pay'],
+            ['mobile_url' => 'alipays://platformapi/startapp?appId=wrong&url=' . rawurlencode(self::URL)],
+            ['mobile_url' => 'alipays://platformapi/startapp?appId=20000067&url=' . rawurlencode('https://evil.test/pay')],
+            ['mobile_url' => 'alipays://evil/startapp?appId=20000067&url=' . rawurlencode(self::URL)],
+            ['currency_type' => 'crypto', 'link_type' => 'h5'],
+            ['currency_type' => 'crypto', 'link_type' => 'address', 'type' => 'tron', 'data' => '<script>'],
+            ['data' => str_repeat('x', 3000)]] as $change) {
+            $cases[] = [[], $change];
+        }
+        return $cases;
+    }
+
+    public function test_native_mode_requires_channel_uuid_before_request(): void
+    {
+        Http::fake();
+        $this->plugin->setConfig(['app_id' => 'app-1', 'app_secret' => 'test-secret']);
+        try {
+            $this->plugin->pay($this->order());
+            $this->fail('Missing channel was accepted.');
+        } catch (ApiException $exception) {
+            $this->assertStringContainsString('UUID', $exception->getMessage());
+            Http::assertNothingSent();
+        }
+    }
+
+    private function order(): array
+    {
+        return ['trade_no' => 'trade-1', 'total_amount' => 1050, 'notify_url' => 'https://notify.example.test/notify',
+            'return_url' => 'https://agent.example.test/#/pay-success?trade_no=trade-1'];
+    }
+
+    private function invoice(): array
+    {
+        return ['merchant_no' => 'trade-1', 'uuid' => self::UUID, 'transaction_no' => 'gateway-1', 'status' => 'UNPAID',
+            'order_currency' => 'CNY', 'order_amount' => 10.5, 'expired_at' => 1700001800, 'server_time' => 1700000000,
+            'payment' => ['data' => self::URL, 'mobile_url' => self::URL, 'pay_amount' => '10.815', 'type' => 'alipay',
+                'name' => 'Alipay', 'currency_type' => 'fiat', 'pay_currency' => 'CNY', 'link_type' => 'h5']];
+    }
+}

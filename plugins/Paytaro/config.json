@@ -1,0 +1,8 @@
+{
+    "name": "PayTaro",
+    "code": "paytaro",
+    "type": "payment",
+    "version": "1.0.0",
+    "description": "PayTaro hosted checkout payment plugin",
+    "author": "KeliBoard"
+}
