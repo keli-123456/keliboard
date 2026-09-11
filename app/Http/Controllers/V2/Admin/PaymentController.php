@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Payment;
 use App\Services\PaymentService;
 use App\Services\PaymentCollectionPolicyService;
+use App\Services\PaytaroChannelService;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -49,6 +50,19 @@ class PaymentController extends Controller
             return $this->success(collect($paymentService->form()));
         } catch (\Exception $e) {
             return $this->fail([400, '支付方式不存在或未启用']);
+        }
+    }
+
+    public function getPaytaroChannels(Request $request)
+    {
+        $params = $request->validate([
+            'app_id' => ['required', 'string', 'max:128'],
+            'app_secret' => ['required', 'string', 'max:512'],
+        ]);
+        try {
+            return $this->success(app(PaytaroChannelService::class)->fetch($params['app_id'], $params['app_secret']));
+        } catch (ApiException $e) {
+            return $this->fail([400, $e->getMessage()]);
         }
     }
 

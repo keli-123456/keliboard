@@ -317,6 +317,9 @@ class AdminRoute
                 $router->get('/fetch', [PaymentController::class, 'fetch']);
                 $router->get('/getPaymentMethods', [PaymentController::class, 'getPaymentMethods']);
                 $router->post('/getPaymentForm', [PaymentController::class, 'getPaymentForm']);
+                $router->group(['middleware' => 'throttle:10,1'], function ($router) {
+                    $router->post('/getPaytaroChannels', [PaymentController::class, 'getPaytaroChannels']);
+                });
                 $router->post('/save', [PaymentController::class, 'save']);
                 $router->post('/drop', [PaymentController::class, 'drop']);
                 $router->post('/show', [PaymentController::class, 'show']);

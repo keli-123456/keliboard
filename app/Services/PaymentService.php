@@ -54,8 +54,9 @@ class PaymentService
             $paymentPlugins = $this->pluginManager->getEnabledPaymentPlugins();
             foreach ($paymentPlugins as $plugin) {
                 if ($plugin->getPluginCode() === $pluginCode) {
-                    $plugin->setConfig($this->config);
-                    $this->payment = $plugin;
+                    // Loaded plugins are shared; channel credentials must remain service-local.
+                    $this->payment = clone $plugin;
+                    $this->payment->setConfig($this->config);
                     return;
                 }
             }
