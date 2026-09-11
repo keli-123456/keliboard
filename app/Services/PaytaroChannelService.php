@@ -45,7 +45,7 @@ final class PaytaroChannelService
             throw new ApiException('PayTaro 返回的应用与 App ID 不一致，请检查 App ID 和 App Secret 是否属于同一应用。');
         }
         if (isset($data['app']['currency']) && $data['app']['currency'] !== 'CNY') {
-            throw new ApiException('PayTaro 应用订单币种须为 CNY；收款渠道可以使用 USDT。');
+            throw new ApiException('PayTaro 应用订单币种须为 CNY；收款渠道可以使用加密货币。');
         }
         $methods = $data['methods'] ?? null;
         if (!is_array($methods) || !array_is_list($methods) || count($methods) > 200) {
@@ -63,15 +63,17 @@ final class PaytaroChannelService
             $type = $this->label($method['type'] ?? '', 240);
             $currencyType = strtolower($this->label($method['currency_type'] ?? '', 16));
             $currency = strtoupper($this->label($method['pay_currency'] ?? '', 16));
+            $network = $currencyType === 'crypto' ? PaytaroNetwork::fromMethod($method, $currency) : null;
             $supported = preg_match('/\A[A-Z0-9]{2,16}\z/', $currency) === 1
                 && (($currencyType === 'fiat' && strcasecmp($type, 'alipay') === 0 && $currency === 'CNY')
-                    || $currencyType === 'crypto');
+                    || ($currencyType === 'crypto' && $network !== null));
             $channels[strtolower($uuid)] = [
                 'uuid' => strtolower($uuid),
                 'name' => $name !== '' ? $name : ($type !== '' ? $type : $currency),
                 'type' => $type,
                 'currency_type' => $currencyType,
                 'pay_currency' => $currency,
+                'network' => $network,
                 'available' => ($method['show'] ?? null) === true && $supported,
                 'unavailable_reason' => ($method['show'] ?? null) !== true ? 'hidden' : ($supported ? null : 'unsupported'),
             ];

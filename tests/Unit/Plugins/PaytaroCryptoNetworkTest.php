@@ -153,6 +153,9 @@ final class PaytaroCryptoNetworkTest extends TestCase
             [['type' => null, 'name' => 'USDT-TRC20'], 'TRON'],
             [['type' => '', 'name' => 'USDT TRC20'], 'TRON'],
             [['type' => '  ', 'name' => 'usdt-trc-20'], 'TRON'],
+            [['type' => null, 'name' => 'USDT BEP20'], 'BNB SMART CHAIN (BEP20)'],
+            [['type' => '', 'name' => 'USDT Polygon'], 'POLYGON'],
+            [['type' => null, 'name' => 'USDT Solana'], 'SOLANA'],
         ];
     }
 

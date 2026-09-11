@@ -6,6 +6,7 @@ namespace Plugin\Paytaro;
 
 use App\Contracts\PaymentInterface;
 use App\Exceptions\ApiException;
+use App\Services\PaytaroNetwork;
 use App\Services\Plugin\AbstractPlugin;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
@@ -342,7 +343,7 @@ class Plugin extends AbstractPlugin implements PaymentInterface
     private function cryptoNetwork(array $payment, string $currency, array $result): string
     {
         $rawType = $payment['type'] ?? null;
-        $network = $this->networkLabel($rawType);
+        $network = PaytaroNetwork::label($rawType);
         if ($network !== null) {
             return $network;
         }
@@ -379,44 +380,11 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             || !is_string($method['pay_currency'] ?? null) || strtoupper(trim($method['pay_currency'])) !== $currency) {
             throw $this->invalidPayment('PT_CRYPTO_NETWORK_CHANNEL', '未找到与当前订单币种匹配且已展示的加密货币渠道，请检查支付渠道 UUID', $result);
         }
-        $network = $this->networkLabel($method['type'] ?? null);
-        $missingType = !isset($method['type']) || (is_string($method['type']) && trim($method['type']) === '');
-        // The documented USDT-TRC20 method name identifies TRON explicitly, not by address shape.
-        if ($network === null && $missingType && $currency === 'USDT'
-            && is_string($method['name'] ?? null)
-            && preg_match('/\AUSDT[ _-]+TRC[ _-]?20\z/i', trim($method['name'])) === 1) {
-            $network = 'TRON';
-        }
+        $network = PaytaroNetwork::fromMethod($method, $currency);
         if ($network === null) {
             throw $this->invalidPayment('PT_CRYPTO_NETWORK', '订单及对应渠道均未返回可确认的网络名称，请在 PayTaro 核对该渠道的网络信息', $result);
         }
         return $network;
-    }
-
-    private function networkLabel(mixed $value): ?string
-    {
-        if (!is_string($value) || strlen($value) > 240 || !mb_check_encoding($value, 'UTF-8')
-            || preg_match('/[\x00-\x1f\x7f]/', $value)) {
-            return null;
-        }
-        $label = trim($value);
-        // PayTaro also identifies TRON assets as chain:network:token. The token is not the recipient.
-        if (str_contains($label, ':')) {
-            $parts = explode(':', $label);
-            if (count($parts) !== 3 || strcasecmp($parts[0], 'TRON') !== 0
-                || preg_match('/\A[A-Za-z][A-Za-z0-9_-]{0,31}\z/', $parts[1]) !== 1
-                || preg_match('/\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z/', $parts[2]) !== 1) {
-                return null;
-            }
-            return 'TRON ' . strtoupper($parts[1]);
-        }
-        // Network names are display text, not necessarily machine identifiers such as "tron".
-        if ($label === '' || mb_strlen($label, 'UTF-8') > 80
-            || preg_match('/\A[\p{L}\p{N} _().（）-]+\z/u', $label) !== 1
-            || preg_match('/[\p{L}\p{N}]/u', $label) !== 1) {
-            return null;
-        }
-        return strtoupper($label);
     }
 
     private function unixSeconds(mixed $value): ?int
