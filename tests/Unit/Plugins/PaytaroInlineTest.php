@@ -113,6 +113,113 @@ final class PaytaroInlineTest extends TestCase
         Http::assertSentCount(1);
     }
 
+    #[DataProvider('omittedCryptoLinkTypes')]
+    public function test_crypto_can_omit_link_type_without_changing_address_amount_or_network(array $hint): void
+    {
+        $body = $this->cryptoInvoice();
+        unset($body['payment']['link_type']);
+        $body['payment'] = array_replace($body['payment'], $hint);
+        Http::fake(['*' => Http::response($body)]);
+        $data = $this->plugin->pay($this->order())['data'];
+        $this->assertSame('address', $data['link_type']);
+        $this->assertSame('crypto', $data['currency_type']);
+        $this->assertSame('USDT', $data['currency']);
+        $this->assertSame('TRON', $data['network']);
+        $this->assertSame($body['payment']['data'], $data['address']);
+        $this->assertSame($body['payment']['data'], $data['qr_data']);
+        $this->assertSame($body['payment']['pay_amount'], $data['amount']);
+        $this->assertSame('', $data['payment_url']);
+        $this->assertSame('', $data['mobile_url']);
+        Http::assertSentCount(1);
+    }
+
+    public static function omittedCryptoLinkTypes(): array
+    {
+        return [[[]], [['link_type' => null]], [['link_type' => '']], [['link_type' => '  ']]];
+    }
+
+    #[DataProvider('logShapedCryptoPayments')]
+    public function test_log_shaped_crypto_response_preserves_payment_or_reports_precise_error(array $changes, ?string $reason): void
+    {
+        $body = $this->cryptoInvoice();
+        // Synthetic address: reproduce the reported length, never use a real recipient.
+        $body['payment'] = array_replace($body['payment'], [
+            'data' => 'T' . str_repeat('1', 33),
+            'pay_amount' => 16.906408,
+            'mobile_url' => null,
+        ], $changes);
+        $this->assertIsFloat($body['order_amount']);
+        $this->assertIsFloat($body['payment']['pay_amount']);
+        $this->assertIsString($body['payment']['type']);
+        $this->assertIsString($body['payment']['link_type']);
+        $this->assertSame(34, strlen($body['payment']['data']));
+        Http::fake(['*' => Http::response($body)]);
+
+        if ($reason !== null) {
+            try {
+                $this->plugin->pay($this->order());
+                $this->fail('Invalid crypto metadata was accepted.');
+            } catch (ApiException $exception) {
+                $this->assertStringContainsString($reason, $exception->getMessage());
+                Http::assertSentCount(1);
+            }
+            return;
+        }
+
+        $data = $this->plugin->pay($this->order())['data'];
+        $this->assertSame('16.906408', $data['amount']);
+        $this->assertSame('10.50', $data['fiat_amount']);
+        $this->assertSame('USDT', $data['currency']);
+        $this->assertSame('TRON', $data['network']);
+        $this->assertSame('address', $data['link_type']);
+        $this->assertSame($body['payment']['data'], $data['address']);
+        $this->assertSame($body['payment']['data'], $data['qr_data']);
+        $this->assertSame('', $data['mobile_url']);
+        $this->assertSame('', $data['payment_url']);
+        Http::assertSentCount(1);
+    }
+
+    public static function logShapedCryptoPayments(): array
+    {
+        return [
+            'documented-address-hint' => [[], null],
+            'empty-string-hint' => [['link_type' => ''], null],
+            'blank-string-hint' => [['link_type' => '  '], null],
+            'conflicting-alipay-hint' => [['link_type' => 'h5'], 'PT_CRYPTO_LINK'],
+            'empty-network-string' => [['type' => ''], 'PT_CRYPTO_NETWORK'],
+            'invalid-character-at-same-length' => [['data' => 'T' . str_repeat('1', 32) . '<'], 'PT_CRYPTO_ADDRESS'],
+        ];
+    }
+
+    #[DataProvider('invalidCryptoDetails')]
+    public function test_crypto_fallback_never_bypasses_network_address_or_explicit_type_checks(array $changes, string $reason): void
+    {
+        $body = $this->cryptoInvoice();
+        unset($body['payment']['link_type']);
+        $body['payment'] = array_replace($body['payment'], $changes);
+        Http::fake(['*' => Http::response($body)]);
+        $this->expectExceptionMessage($reason);
+        $this->plugin->pay($this->order());
+    }
+
+    public static function invalidCryptoDetails(): array
+    {
+        return [
+            [['link_type' => 'h5'], 'PT_CRYPTO_LINK'],
+            [['link_type' => 'pc'], 'PT_CRYPTO_LINK'],
+            [['link_type' => 'url'], 'PT_CRYPTO_LINK'],
+            [['link_type' => false], 'PT_CRYPTO_LINK'],
+            [['link_type' => []], 'PT_CRYPTO_LINK'],
+            [['type' => null], 'PT_CRYPTO_NETWORK'],
+            [['type' => ''], 'PT_CRYPTO_NETWORK'],
+            [['type' => 'unknown<script>'], 'PT_CRYPTO_NETWORK'],
+            [['data' => 'https://example.test/payment'], 'PT_CRYPTO_ADDRESS'],
+            [['data' => '<script>'], 'PT_CRYPTO_ADDRESS'],
+            [['data' => 'javascript:alert(1)'], 'PT_CRYPTO_ADDRESS'],
+            [['data' => str_repeat('T', 257)], 'PT_CRYPTO_ADDRESS'],
+        ];
+    }
+
     #[DataProvider('malformedUsdtInvoices')]
     public function test_usdt_rejects_invalid_data_with_a_specific_reason(array $changes, string $reason): void
     {

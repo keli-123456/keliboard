@@ -278,6 +278,12 @@ class Plugin extends AbstractPlugin implements PaymentInterface
         $linkType = is_string($payment['link_type'] ?? null) ? strtolower(trim($payment['link_type'])) : '';
         $data = $payment['data'] ?? null;
         $crypto = $currencyType === 'crypto';
+        // The official widget can render crypto addresses without an explicit link_type.
+        // Infer only a missing hint; do not reinterpret an explicit URL/Alipay type.
+        $rawLinkType = $payment['link_type'] ?? null;
+        if ($crypto && ($rawLinkType === null || (is_string($rawLinkType) && trim($rawLinkType) === ''))) {
+            $linkType = 'address';
+        }
         if ($amount === null || !preg_match('/\A[A-Z0-9]{2,16}\z/', $currency)) {
             throw $this->invalidPayment('PT_PAY_AMOUNT', '网关返回的实际应付数量或收款币种无效', $result);
         }
@@ -287,10 +293,14 @@ class Plugin extends AbstractPlugin implements PaymentInterface
 
         $mobileUrl = '';
         if ($crypto) {
-            if ($linkType !== 'address' || strlen($data) > 256
-                || !preg_match('/\A[A-Za-z0-9:_-]+\z/', $data)
-                || !preg_match('/\A[a-z0-9_-]{1,40}\z/', $paymentType)) {
-                throw $this->invalidPayment('PT_CRYPTO', '网关返回的加密货币收款地址、网络或显码类型无效', $result);
+            if ($linkType !== 'address') {
+                throw $this->invalidPayment('PT_CRYPTO_LINK', '网关返回的加密货币显码类型与收款地址不匹配', $result);
+            }
+            if (!preg_match('/\A[a-z0-9_-]{1,40}\z/', $paymentType)) {
+                throw $this->invalidPayment('PT_CRYPTO_NETWORK', '网关未返回有效的加密货币网络名称，无法确认转账网络', $result);
+            }
+            if (strlen($data) > 256 || !preg_match('/\A[A-Za-z0-9:_-]+\z/', $data)) {
+                throw $this->invalidPayment('PT_CRYPTO_ADDRESS', '网关返回的加密货币收款地址格式无效', $result);
             }
         } else {
             if ($currencyType !== 'fiat' || $paymentType !== 'alipay'
