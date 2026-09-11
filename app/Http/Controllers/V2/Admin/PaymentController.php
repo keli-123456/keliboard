@@ -6,6 +6,7 @@ use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
 use App\Models\Payment;
 use App\Services\PaymentService;
+use App\Services\PaymentCollectionPolicyService;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -26,7 +27,11 @@ class PaymentController extends Controller
     public function fetch()
     {
         $payments = Payment::orderBy('sort', 'ASC')->get();
+        $policy = app(PaymentCollectionPolicyService::class);
+        $now = $policy->now();
+        $totals = $policy->dailyTotals($payments, $now);
         foreach ($payments as $k => $v) {
+            $payments[$k]['collection_state'] = $policy->state($v, $totals[$v->id] ?? 0, $now);
             $notifyUrl = url("/api/v1/guest/payment/notify/{$v->payment}/{$v->uuid}");
             if ($v->notify_domain) {
                 $parseUrl = parse_url($notifyUrl);
@@ -70,7 +75,8 @@ class PaymentController extends Controller
             'config' => 'required',
             'notify_domain' => 'nullable|url',
             'handling_fee_fixed' => 'nullable|integer',
-            'handling_fee_percent' => 'nullable|numeric|between:0,100'
+            'handling_fee_percent' => 'nullable|numeric|between:0,100',
+            'collection_policy' => 'sometimes|nullable|array',
         ], [
             'name.required' => '显示名称不能为空',
             'payment.required' => '网关参数不能为空',
@@ -79,6 +85,9 @@ class PaymentController extends Controller
             'handling_fee_fixed.integer' => '固定手续费格式有误',
             'handling_fee_percent.between' => '百分比手续费范围须在0-100之间'
         ]);
+        if (array_key_exists('collection_policy', $params)) {
+            $params['collection_policy'] = app(PaymentCollectionPolicyService::class)->validate($params['collection_policy']);
+        }
         if ($request->input('id')) {
             $payment = Payment::find($request->input('id'));
             if (!$payment)

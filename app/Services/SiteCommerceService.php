@@ -66,21 +66,12 @@ class SiteCommerceService
 
     public function availablePaymentMethodsForRequest(Request $request)
     {
-        return Payment::select([
-            'id',
-            'name',
-            'payment',
-            'icon',
-            'handling_fee_fixed',
-            'handling_fee_percent',
-            'owner_type',
-            'owner_id',
-            'owner_domain_id',
-        ])
+        $payments = Payment::query()
             ->where('enable', 1)
             ->where('owner_type', Payment::OWNER_PLATFORM)
             ->orderBy('sort', 'ASC')
             ->get();
+        return app(PaymentCollectionPolicyService::class)->publicMethods($payments);
     }
 
     public function assertPaymentAvailableForOrder(Order $order, Payment $payment): void

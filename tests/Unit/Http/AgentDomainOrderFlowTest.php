@@ -159,6 +159,55 @@ final class AgentDomainOrderFlowTest extends TestCase
         $this->assertSame($payment->id, (int) $order->fresh()->payment_id);
     }
 
+    public function test_reached_payment_target_blocks_new_checkout_without_changing_order_binding(): void
+    {
+        [$agent, $buyer, $order] = $this->createAgentOrderFixture();
+        $payment = $this->createPayment(Payment::OWNER_AGENT, $agent->id);
+        $payment->collection_policy = ['daily_target' => 100, 'reached_action' => 'pause', 'windows' => []];
+        $payment->save();
+        $paid = $order->replicate();
+        $paid->fill(['trade_no' => 'already-paid', 'payment_id' => $payment->id, 'status' => 3, 'paid_at' => time(), 'total_amount' => 100]);
+        $paid->save();
+        $request = BaseRequest::create('/api/v1/user/order/checkout', 'POST', ['trade_no' => $order->trade_no, 'method' => $payment->id]);
+        $request->setUserResolver(static fn (): User => $buyer);
+        app()->instance('request', $request);
+        $payload = $this->responsePayload(app(OrderController::class)->checkout($request));
+        $this->assertSame('PAYMENT_METHOD_UNAVAILABLE', $payload['error']);
+        $this->assertNull($order->fresh()->payment_id);
+        $this->assertTrue($payment->fresh()->enable);
+        $this->assertSame(10000, (int) $agent->fresh()->balance);
+
+        // A previously issued payment still settles, even after the target is reached.
+        $order->payment_id = $payment->id;
+        $order->save();
+        $verify = ['trade_no' => $order->trade_no, 'callback_no' => 'late-payment', 'paid_amount' => (int) $order->total_amount];
+        $this->assertTrue($this->invokePaymentHandle($verify, $this->paymentServiceWithId($payment->id)));
+        $this->assertTrue($this->invokePaymentHandle($verify, $this->paymentServiceWithId($payment->id)));
+        $this->assertSame(Order::STATUS_COMPLETED, (int) $order->fresh()->status);
+        $policy = app(\App\Services\PaymentCollectionPolicyService::class);
+        $this->assertSame(100 + (int) $order->total_amount, $policy->dailyTotals(collect([$payment]), $policy->now())[$payment->id]);
+    }
+
+    public function test_window_boundary_blocks_stale_method_selection(): void
+    {
+        [$agent, $buyer, $order] = $this->createAgentOrderFixture();
+        $payment = $this->createPayment(Payment::OWNER_AGENT, $agent->id);
+        $payment->collection_policy = ['windows' => [['start' => '18:00', 'end' => '23:00']]];
+        $payment->save();
+        \Carbon\CarbonImmutable::setTestNow(\Carbon\CarbonImmutable::parse('2026-09-11 23:00', 'Asia/Shanghai'));
+        try {
+            $request = BaseRequest::create('/api/v1/user/order/checkout', 'POST', ['trade_no' => $order->trade_no, 'method' => $payment->id]);
+            $request->setUserResolver(static fn (): User => $buyer);
+            app()->instance('request', $request);
+            $payload = $this->responsePayload(app(OrderController::class)->checkout($request));
+            $this->assertSame('PAYMENT_METHOD_UNAVAILABLE', $payload['error']);
+            $this->assertNull($order->fresh()->payment_id);
+            $this->assertTrue($payment->fresh()->enable);
+        } finally {
+            \Carbon\CarbonImmutable::setTestNow();
+        }
+    }
+
     public function test_agent_checkout_returns_readable_error_when_payment_plugin_fails(): void
     {
         $this->bindFakePaymentGateway('支付宝当面付请求失败：访问被禁止（ACQ.ACCESS_FORBIDDEN）。');

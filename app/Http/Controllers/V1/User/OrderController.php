@@ -221,9 +221,9 @@ class OrderController extends Controller
                 'data' => true
             ]);
         }
-        $payment = Payment::find($method);
+        $payment = Payment::query()->useWritePdo()->find($method);
         if (!$payment || !$payment->enable) {
-            return $this->fail([400, __('Payment method is not available')]);
+            return $this->fail([409, __('Payment method is not available')], null, 'PAYMENT_METHOD_UNAVAILABLE');
         }
         $agentCommerce = app(AgentCommerceService::class);
         if ((int) $order->plan_id === 0 && $payment->payment === 'balance') {
@@ -235,6 +235,11 @@ class OrderController extends Controller
         }
         try {
             app(SiteCommerceService::class)->assertPaymentAvailableForOrder($order, $payment);
+            $agentCommerce->assertPaymentAvailableForOrder($order, $payment);
+            $collectionState = app(\App\Services\PaymentCollectionPolicyService::class)->checkoutState($payment);
+            if (!$collectionState['available']) {
+                return $this->fail([409, '该支付方式当前暂不可用，请刷新后重新选择支付方式'], null, 'PAYMENT_METHOD_UNAVAILABLE');
+            }
             $order = $agentCommerce->assignPaymentForCheckout($order, $payment, $handlingAmount);
             $returnBaseUrl = $agentCommerce->paymentReturnBaseUrlForOrder($order, $payment, $request);
         } catch (ApiException $exception) {

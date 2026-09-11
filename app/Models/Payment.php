@@ -17,6 +17,7 @@ class Payment extends Model
         'created_at' => 'timestamp',
         'updated_at' => 'timestamp',
         'config' => 'array',
+        'collection_policy' => 'array',
         'enable' => 'boolean',
         'owner_id' => 'integer',
         'owner_domain_id' => 'integer',

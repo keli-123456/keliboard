@@ -352,17 +352,7 @@ class AgentCommerceService
     {
         $context = $this->effectivePaymentContext($request);
 
-        return Payment::select([
-            'id',
-            'name',
-            'payment',
-            'icon',
-            'handling_fee_fixed',
-            'handling_fee_percent',
-            'owner_type',
-            'owner_id',
-            'owner_domain_id',
-        ])
+        $payments = Payment::query()
             ->where('enable', 1)
             ->when($context, function ($query) use ($context): void {
                 $agentDomainId = $context['agent_domain_id'] ?? null;
@@ -380,6 +370,7 @@ class AgentCommerceService
             })
             ->orderBy('sort', 'ASC')
             ->get();
+        return app(PaymentCollectionPolicyService::class)->publicMethods($payments);
     }
 
     public function contextForOrder(Order $order): ?AgentOrderContext

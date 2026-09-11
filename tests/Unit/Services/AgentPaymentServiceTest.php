@@ -125,6 +125,7 @@ final class AgentPaymentServiceTest extends TestCase
             'payment' => 'FAKEPAY',
             'name' => 'Agent USDT',
             'config' => ['merchant_id' => 'old-merchant', 'secret' => 'keep-secret'],
+            'collection_policy' => ['daily_target' => 300000, 'reached_action' => 'pause', 'windows' => []],
             'enable' => true,
             'created_at' => time(),
             'updated_at' => time(),
@@ -139,6 +140,7 @@ final class AgentPaymentServiceTest extends TestCase
 
         $this->assertSame('new-merchant', $updated->config['merchant_id']);
         $this->assertSame('keep-secret', $updated->config['secret']);
+        $this->assertSame($payment->collection_policy, $updated->collection_policy);
     }
 
     public function test_agent_payment_rejects_pending_domain_for_current_agent(): void

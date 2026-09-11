@@ -631,6 +631,7 @@ trait InteractsWithInMemoryDatabase
             $table->string('name');
             $table->string('icon')->nullable();
             $table->text('config')->nullable();
+            $table->json('collection_policy')->nullable();
             $table->string('notify_domain', 128)->nullable();
             $table->integer('handling_fee_fixed')->nullable();
             $table->decimal('handling_fee_percent', 5, 2)->nullable();
