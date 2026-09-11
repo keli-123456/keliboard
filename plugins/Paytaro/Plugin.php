@@ -9,6 +9,7 @@ use App\Exceptions\ApiException;
 use App\Services\Plugin\AbstractPlugin;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class Plugin extends AbstractPlugin implements PaymentInterface
 {
@@ -197,10 +198,12 @@ class Plugin extends AbstractPlugin implements PaymentInterface
     private function amountToCents(mixed $amount): ?int
     {
         if ((!is_int($amount) && !is_float($amount) && !is_string($amount))
-            || !preg_match('/\A([0-9]+)(?:\.([0-9]{1,2}))?\z/', (string) $amount, $parts)) {
+            || strlen((string) $amount) > 64
+            || !preg_match('/\A([0-9]+)(?:\.([0-9]{1,2})0*)?\z/', (string) $amount, $parts)) {
             return null;
         }
 
+        // Extra decimal places are acceptable only when they are zero; never round money.
         $cents = ltrim($parts[1] . str_pad($parts[2] ?? '', 2, '0'), '0');
         $limit = (string) PHP_INT_MAX;
         if ($cents === '' || strlen($cents) > strlen($limit)
@@ -240,44 +243,70 @@ class Plugin extends AbstractPlugin implements PaymentInterface
 
     private function inlinePayment(mixed $result, string $tradeNo, int $cents): array
     {
-        $invalid = fn () => new ApiException('PayTaro 返回的支付数据无效，请检查支付渠道配置或稍后重试。');
-        if (!is_array($result) || ($result['merchant_no'] ?? null) !== $tradeNo
-            || ($result['status'] ?? null) !== 'UNPAID' || !$this->validUuid($result['uuid'] ?? null)
-            || ($result['order_currency'] ?? null) !== 'CNY'
-            || $this->amountToCents($result['order_amount'] ?? null) !== $cents) {
-            throw $invalid();
+        if (!is_array($result)) {
+            throw $this->invalidPayment('PT_RESPONSE', '网关未返回有效的 JSON 支付数据', $result);
+        }
+        if (($result['merchant_no'] ?? null) !== $tradeNo || !$this->validUuid($result['uuid'] ?? null)) {
+            throw $this->invalidPayment('PT_ORDER', '网关返回的订单标识缺失或不匹配', $result);
+        }
+        if (($result['status'] ?? null) !== 'UNPAID') {
+            throw $this->invalidPayment('PT_STATUS', '网关订单不是待支付状态，请先检查订单状态', $result);
+        }
+        if (($result['order_currency'] ?? null) !== 'CNY') {
+            throw $this->invalidPayment('PT_CURRENCY', '应用订单币种须为 CNY；USDT 收款渠道可以继续使用，请检查 PayTaro 应用设置', $result);
+        }
+        if ($this->amountToCents($result['order_amount'] ?? null) !== $cents) {
+            throw $this->invalidPayment('PT_AMOUNT', '网关返回的原始订单金额无效或与面板不一致', $result);
         }
 
         $payment = $result['payment'] ?? null;
-        $expiresAt = $result['expired_at'] ?? null;
-        $serverTime = $result['server_time'] ?? null;
-        if (!is_array($payment) || !is_int($expiresAt) || !is_int($serverTime)
-            || $serverTime <= 0 || $expiresAt <= $serverTime) {
-            throw $invalid();
+        if (!is_array($payment)) {
+            throw $this->invalidPayment('PT_PAYMENT', '网关未返回收款信息，请检查所选渠道是否已开通并展示', $result);
+        }
+        $expiresAt = $this->unixSeconds($result['expired_at'] ?? null);
+        $serverTime = $this->unixSeconds($result['server_time'] ?? null);
+        if ($expiresAt === null || $serverTime === null) {
+            throw $this->invalidPayment('PT_TIME', '网关返回的过期时间或服务器时间无效', $result);
+        }
+        if ($expiresAt <= $serverTime) {
+            throw $this->invalidPayment('PT_EXPIRED', '网关返回的支付订单已过期，请重新发起支付', $result);
         }
         $amount = $this->decimalAmount($payment['pay_amount'] ?? null);
-        $currency = $payment['pay_currency'] ?? null;
+        $currency = is_string($payment['pay_currency'] ?? null) ? strtoupper(trim($payment['pay_currency'])) : '';
+        $currencyType = is_string($payment['currency_type'] ?? null) ? strtolower(trim($payment['currency_type'])) : '';
+        $paymentType = is_string($payment['type'] ?? null) ? strtolower(trim($payment['type'])) : '';
+        $linkType = is_string($payment['link_type'] ?? null) ? strtolower(trim($payment['link_type'])) : '';
         $data = $payment['data'] ?? null;
-        $crypto = ($payment['currency_type'] ?? null) === 'crypto';
-        if ($amount === null || !is_string($currency) || !preg_match('/\A[A-Z0-9]{2,16}\z/', $currency)
-            || !is_string($data) || $data === '' || preg_match('/[\x00-\x20\x7f]/', $data)) {
-            throw $invalid();
+        $crypto = $currencyType === 'crypto';
+        if ($amount === null || !preg_match('/\A[A-Z0-9]{2,16}\z/', $currency)) {
+            throw $this->invalidPayment('PT_PAY_AMOUNT', '网关返回的实际应付数量或收款币种无效', $result);
+        }
+        if (!is_string($data) || $data === '' || preg_match('/[\x00-\x20\x7f]/', $data)) {
+            throw $this->invalidPayment('PT_PAY_DATA', '网关未返回有效的收款地址或支付链接', $result);
         }
 
         $mobileUrl = '';
         if ($crypto) {
-            if (($payment['link_type'] ?? null) !== 'address' || strlen($data) > 256
+            if ($linkType !== 'address' || strlen($data) > 256
                 || !preg_match('/\A[A-Za-z0-9:_-]+\z/', $data)
-                || !is_string($payment['type'] ?? null) || !preg_match('/\A[a-zA-Z0-9_-]{1,40}\z/', $payment['type'])) {
-                throw $invalid();
+                || !preg_match('/\A[a-z0-9_-]{1,40}\z/', $paymentType)) {
+                throw $this->invalidPayment('PT_CRYPTO', '网关返回的加密货币收款地址、网络或显码类型无效', $result);
             }
         } else {
+            if ($currencyType !== 'fiat' || $paymentType !== 'alipay'
+                || !in_array($linkType, ['h5', 'pc'], true) || $currency !== 'CNY') {
+                throw $this->invalidPayment('PT_CHANNEL', '网关返回了不支持的支付渠道类型，请检查渠道 UUID', $result);
+            }
+            if (strlen($data) > 2800 || !$this->validAlipayUrl($data)) {
+                throw $this->invalidPayment('PT_ALIPAY_URL', '网关返回的支付宝支付链接无效', $result);
+            }
             $mobileUrl = $payment['mobile_url'] ?? '';
-            if (($payment['currency_type'] ?? null) !== 'fiat' || ($payment['type'] ?? null) !== 'alipay'
-                || !in_array($payment['link_type'] ?? null, ['h5', 'pc'], true) || $currency !== 'CNY'
-                || strlen($data) > 2800 || !$this->validAlipayUrl($data)
-                || !is_string($mobileUrl) || !$this->validAlipayMobileUrl($mobileUrl)) {
-                throw $invalid();
+            if ($mobileUrl === '') {
+                $mobileUrl = $linkType === 'h5' ? $data
+                    : 'alipays://platformapi/startapp?appId=20000067&url=' . rawurlencode($data);
+            }
+            if (!is_string($mobileUrl) || !$this->validAlipayMobileUrl($mobileUrl)) {
+                throw $this->invalidPayment('PT_MOBILE_URL', '网关返回的支付宝手机唤起链接无效', $result);
             }
         }
 
@@ -289,16 +318,50 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             'fiat_amount' => number_format($cents / 100, 2, '.', ''),
             'fiat' => 'CNY',
             'currency' => $currency,
-            'currency_type' => $payment['currency_type'],
-            'network' => $crypto ? strtoupper($payment['type']) : '',
+            'currency_type' => $currencyType,
+            'network' => $crypto ? strtoupper($paymentType) : '',
             'payment_name' => is_string($payment['name'] ?? null) ? mb_substr($payment['name'], 0, 80) : '',
             'payment_url' => $crypto ? '' : $data,
             'mobile_url' => $mobileUrl,
-            'link_type' => $payment['link_type'],
+            'link_type' => $linkType,
             'expiration_time' => $expiresAt,
             'server_time' => $serverTime,
             'expires_in' => $expiresAt - $serverTime,
         ];
+    }
+
+    private function unixSeconds(mixed $value): ?int
+    {
+        if ((!is_int($value) && !is_string($value))
+            || !preg_match('/\A[1-9][0-9]{0,9}\z/', (string) $value)) {
+            return null;
+        }
+        $seconds = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+        return is_int($seconds) ? $seconds : null;
+    }
+
+    private function invalidPayment(string $reason, string $message, mixed $result): ApiException
+    {
+        // Record field types, never API secrets, customer identifiers, addresses or signed URLs.
+        $fields = [];
+        foreach (['merchant_no', 'uuid', 'status', 'order_currency', 'order_amount', 'expired_at', 'server_time', 'payment'] as $field) {
+            $fields[$field] = get_debug_type(is_array($result) ? ($result[$field] ?? null) : null);
+        }
+        $payment = is_array($result) && is_array($result['payment'] ?? null) ? $result['payment'] : [];
+        foreach (['pay_amount', 'pay_currency', 'currency_type', 'type', 'link_type', 'data', 'mobile_url'] as $field) {
+            $fields['payment.' . $field] = get_debug_type($payment[$field] ?? null);
+        }
+        try {
+            Log::warning('PayTaro payment response rejected', [
+                'reason' => $reason,
+                'response_type' => get_debug_type($result),
+                'field_types' => $fields,
+                'payment_data_length' => is_string($payment['data'] ?? null) ? strlen($payment['data']) : null,
+            ]);
+        } catch (\Throwable) {
+            // Logging must not hide the original payment failure.
+        }
+        return new ApiException("PayTaro：{$message}（{$reason}）。");
     }
 
     private function decimalAmount(mixed $amount): ?string

@@ -189,7 +189,8 @@ final class PaytaroTest extends TestCase
 
     public static function acceptedAmounts(): array
     {
-        return [[10, 1000], [10.5, 1050], ['10.50', 1050], [0.29, 29], ['0.01', 1], ['001.01', 101], ['21474836.47', 2147483647]];
+        return [[10, 1000], [10.5, 1050], ['10.50', 1050], ['10.50000000', 1050], ['10.00000000', 1000],
+            ['0.01000000', 1], [0.29, 29], ['0.01', 1], ['001.01', 101], ['21474836.47', 2147483647]];
     }
 
     #[DataProvider('invalidCallbacks')]
@@ -202,7 +203,7 @@ final class PaytaroTest extends TestCase
     public static function invalidCallbacks(): array
     {
         $results = [];
-        foreach ([null, '', 0, -1, 10.501, true, [], '10abc', '1e2', 'NaN', ' 10 ', '0.00', '999999999999999999999999'] as $amount) {
+        foreach ([null, '', 0, -1, 10.501, '10.50000001', '0.001', true, [], '10abc', '1e2', 'NaN', ' 10 ', '0.00', '999999999999999999999999'] as $amount) {
             $results[] = [['order_amount' => $amount]];
         }
         foreach (['UNPAID', 'CANCEL', 'REFUNDED', 'paid', null, []] as $status) {

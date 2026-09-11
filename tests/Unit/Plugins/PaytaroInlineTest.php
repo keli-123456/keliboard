@@ -8,6 +8,8 @@ use App\Exceptions\ApiException;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Plugin\Paytaro\Plugin;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Tests\TestCase;
 
 final class PaytaroInlineTest extends TestCase
@@ -20,6 +22,7 @@ final class PaytaroInlineTest extends TestCase
     {
         parent::setUp();
         Http::preventStrayRequests();
+        app()->instance('log', new NullLogger());
         $this->plugin = new Plugin('paytaro');
         $this->plugin->setConfig(['app_id' => 'app-1', 'app_secret' => 'test-secret', 'method_uuid' => self::UUID]);
     }
@@ -80,6 +83,142 @@ final class PaytaroInlineTest extends TestCase
         return [['1.123456789012345678', '1.123456789012345678'], [1.000001, '1.000001'], [0.00000012, '0.00000012'], [12, '12']];
     }
 
+    public function test_usdt_accepts_exact_decimal_and_timestamp_strings_without_changing_address_or_quantity(): void
+    {
+        $body = $this->cryptoInvoice();
+        $body['order_amount'] = '10.50000000';
+        $body['expired_at'] = '1700001800';
+        $body['server_time'] = '1700000000';
+        $body['payment']['currency_type'] = ' CRYPTO ';
+        $body['payment']['type'] = ' TRON ';
+        $body['payment']['pay_currency'] = 'usdt';
+        $body['payment']['link_type'] = 'ADDRESS';
+        Http::fake(['*' => Http::response($body)]);
+
+        $data = $this->plugin->pay($this->order())['data'];
+
+        $this->assertSame('crypto', $data['currency_type']);
+        $this->assertSame('address', $data['link_type']);
+        $this->assertSame('TRON', $data['network']);
+        $this->assertSame('USDT', $data['currency']);
+        $this->assertSame('1.123456789012345678', $data['amount']);
+        $this->assertSame($body['payment']['data'], $data['qr_data']);
+        $this->assertSame($body['payment']['data'], $data['address']);
+        $this->assertSame('10.50', $data['fiat_amount']);
+        $this->assertSame(1700001800, $data['expiration_time']);
+        $this->assertSame(1700000000, $data['server_time']);
+        $this->assertSame(1800, $data['expires_in']);
+        $this->assertSame('', $data['payment_url']);
+        $this->assertSame('', $data['mobile_url']);
+        Http::assertSentCount(1);
+    }
+
+    #[DataProvider('malformedUsdtInvoices')]
+    public function test_usdt_rejects_invalid_data_with_a_specific_reason(array $changes, string $reason): void
+    {
+        Http::fake(['*' => Http::response(array_replace($this->cryptoInvoice(), $changes))]);
+        try {
+            $this->plugin->pay($this->order());
+            $this->fail('Invalid USDT data was accepted.');
+        } catch (ApiException $exception) {
+            $this->assertStringContainsString($reason, $exception->getMessage());
+            Http::assertSentCount(1);
+        }
+    }
+
+    public static function malformedUsdtInvoices(): array
+    {
+        return [
+            [['order_currency' => 'USDT'], 'PT_CURRENCY'],
+            [['order_amount' => '10.50000001'], 'PT_AMOUNT'],
+            [['order_amount' => '10.49'], 'PT_AMOUNT'],
+            [['order_amount' => '10.51'], 'PT_AMOUNT'],
+            [['order_amount' => true], 'PT_AMOUNT'],
+            [['merchant_no' => 'other'], 'PT_ORDER'],
+            [['uuid' => null], 'PT_ORDER'],
+            [['status' => 'SUCCESS'], 'PT_STATUS'],
+            [['payment' => null], 'PT_PAYMENT'],
+            [['expired_at' => '1700000000'], 'PT_EXPIRED'],
+            [['expired_at' => '1699999999'], 'PT_EXPIRED'],
+            [['expired_at' => '1700001800000'], 'PT_TIME'],
+            [['expired_at' => '1700001800.9'], 'PT_TIME'],
+            [['server_time' => true], 'PT_TIME'],
+            [['server_time' => '1700000000abc'], 'PT_TIME'],
+            [['server_time' => '1.7e9'], 'PT_TIME'],
+            [['server_time' => '99999999999999999999999'], 'PT_TIME'],
+            [['server_time' => null], 'PT_TIME'],
+        ];
+    }
+
+    public function test_currency_error_explains_cny_order_currency_does_not_disable_usdt_channel(): void
+    {
+        Http::fake(['*' => Http::response(array_replace($this->cryptoInvoice(), ['order_currency' => 'USDT']))]);
+        $this->expectExceptionMessage('应用订单币种须为 CNY；USDT 收款渠道可以继续使用');
+        $this->plugin->pay($this->order());
+    }
+
+    public function test_diagnostics_record_only_field_types_not_payment_or_customer_secrets(): void
+    {
+        $body = $this->cryptoInvoice();
+        $body['server_time'] = 'not-a-time';
+        $body['app_secret'] = 'upstream-secret';
+        $logged = null;
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->once())->method('warning')->willReturnCallback(
+            function ($message, array $context) use (&$logged): void { $logged = [$message, $context]; }
+        );
+        app()->instance('log', $logger);
+        Http::fake(['*' => Http::response($body)]);
+        try {
+            $this->plugin->pay($this->order());
+            $this->fail('Invalid timestamp was accepted.');
+        } catch (ApiException $exception) {
+            $this->assertStringContainsString('PT_TIME', $exception->getMessage());
+        }
+        $this->assertIsArray($logged);
+        $this->assertSame('PayTaro payment response rejected', $logged[0]);
+        $context = $logged[1];
+        $this->assertSame('PT_TIME', $context['reason']);
+        $this->assertSame('string', $context['field_types']['server_time']);
+        $this->assertSame('string', $context['field_types']['payment.data']);
+        $this->assertSame(strlen($body['payment']['data']), $context['payment_data_length']);
+        $serialized = json_encode($context);
+        foreach (['test-secret', 'upstream-secret', 'trade-1', self::UUID, self::URL,
+            $body['payment']['data'], '1.123456789012345678', 'not-a-time'] as $secret) {
+            $this->assertStringNotContainsString($secret, $serialized);
+        }
+    }
+
+    public function test_non_json_response_is_reported_without_exposing_the_upstream_body(): void
+    {
+        Http::fake(['*' => Http::response('<html>private-upstream-data</html>', 200)]);
+        try {
+            $this->plugin->pay($this->order());
+            $this->fail('Non-JSON response was accepted.');
+        } catch (ApiException $exception) {
+            $this->assertStringContainsString('PT_RESPONSE', $exception->getMessage());
+            $this->assertStringNotContainsString('private-upstream-data', $exception->getMessage());
+        }
+    }
+
+    #[DataProvider('absentMobileLinks')]
+    public function test_absent_alipay_mobile_link_uses_only_the_validated_signed_payment_url(string $type, mixed $mobile): void
+    {
+        $body = $this->invoice();
+        $body['payment']['link_type'] = $type;
+        $body['payment']['mobile_url'] = $mobile;
+        Http::fake(['*' => Http::response($body)]);
+        $data = $this->plugin->pay($this->order())['data'];
+        $this->assertSame(self::URL, $data['qr_data']);
+        $this->assertSame($type === 'h5' ? self::URL
+            : 'alipays://platformapi/startapp?appId=20000067&url=' . rawurlencode(self::URL), $data['mobile_url']);
+    }
+
+    public static function absentMobileLinks(): array
+    {
+        return [['h5', null], ['h5', ''], ['pc', null], ['pc', '']];
+    }
+
     #[DataProvider('invalidResponses')]
     public function test_invalid_or_mismatched_native_data_is_rejected(array $invoiceChanges, array $paymentChanges): void
     {
@@ -138,5 +277,13 @@ final class PaytaroInlineTest extends TestCase
             'order_currency' => 'CNY', 'order_amount' => 10.5, 'expired_at' => 1700001800, 'server_time' => 1700000000,
             'payment' => ['data' => self::URL, 'mobile_url' => self::URL, 'pay_amount' => '10.815', 'type' => 'alipay',
                 'name' => 'Alipay', 'currency_type' => 'fiat', 'pay_currency' => 'CNY', 'link_type' => 'h5']];
+    }
+
+    private function cryptoInvoice(): array
+    {
+        return array_replace($this->invoice(), ['payment' => [
+            'data' => 'TTestAddress1234567890', 'pay_amount' => '1.123456789012345678', 'type' => 'tron',
+            'name' => 'USDT-TRC20', 'currency_type' => 'crypto', 'pay_currency' => 'USDT', 'link_type' => 'address',
+        ]]);
     }
 }
