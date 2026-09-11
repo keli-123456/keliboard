@@ -23,6 +23,8 @@
 
 插件 1.0.2 同时兼容加密货币响应缺省 `payment.link_type`：仅当 `currency_type=crypto` 且网络、收款地址通过校验时补为 `address`，与官方显码组件对缺省字段的处理保持兼容。明确返回 `h5`、`pc`、`url` 或错误数据类型时仍拒绝，不会猜测网络或改写收款地址。
 
+插件 1.0.3 将加密货币网络字段按有长度限制的纯文本名称处理，兼容空格、括号和中文名称，不再要求只有英文标识。订单的网络字段缺失、为 null 或空白时，服务端只读查询官方 `/v1/app/methods`，严格匹配当前 App ID、配置的渠道 UUID、币种和展示状态，再读取该渠道的网络。不会取列表第一项或其他商户的渠道，也不会重试下单。渠道自身缺少网络字段时，仅兼容官方明确标注的 `USDT-TRC20` / `USDT TRC20` 名称为 TRON；只写 USDT 或出现多个网络时仍不推断。查询最多等待 5 秒，不缓存跨订单或跨商户的渠道结果。已有有效网络的响应和支付宝渠道不会额外查询。
+
 下单响应不符合要求时会附带定位码，不再统一提示“支付数据无效”：
 
 | 定位码 | 检查方向 |
@@ -34,6 +36,8 @@
 | `PT_TIME` / `PT_EXPIRED` | 时间字段格式异常或订单已过期，不使用本机时间伪造有效期 |
 | `PT_CRYPTO_LINK` | 加密货币显码类型明确返回了与地址付款不兼容的值 |
 | `PT_CRYPTO_NETWORK` | 加密货币网络名称缺失或格式异常 |
+| `PT_CRYPTO_NETWORK_LOOKUP` | 订单缺少网络，且当前应用的只读渠道查询失败或返回不匹配 |
+| `PT_CRYPTO_NETWORK_CHANNEL` | 已选渠道不存在、重复、未展示，或币种与订单不一致 |
 | `PT_CRYPTO_ADDRESS` / `PT_PAY_DATA` | 收款地址或支付数据格式异常 |
 | `PT_CHANNEL` / `PT_ALIPAY_URL` / `PT_MOBILE_URL` | 支付渠道类型或支付宝链接异常 |
 | `PT_RESPONSE` | 网关返回的不是有效 JSON 对象 |
@@ -78,6 +82,7 @@ App Secret 同时用于下单认证与回调认证，只应存放于受保护的
 ```sh
 php vendor/bin/phpunit tests/Unit/Plugins/PaytaroTest.php
 php vendor/bin/phpunit tests/Unit/Plugins/PaytaroInlineTest.php
+php vendor/bin/phpunit tests/Unit/Plugins/PaytaroCryptoNetworkTest.php
 php vendor/bin/phpunit tests/Unit/Services/PaymentOrderRegressionTest.php
 ```
 

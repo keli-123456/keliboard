@@ -292,16 +292,15 @@ class Plugin extends AbstractPlugin implements PaymentInterface
         }
 
         $mobileUrl = '';
+        $network = '';
         if ($crypto) {
             if ($linkType !== 'address') {
                 throw $this->invalidPayment('PT_CRYPTO_LINK', '网关返回的加密货币显码类型与收款地址不匹配', $result);
             }
-            if (!preg_match('/\A[a-z0-9_-]{1,40}\z/', $paymentType)) {
-                throw $this->invalidPayment('PT_CRYPTO_NETWORK', '网关未返回有效的加密货币网络名称，无法确认转账网络', $result);
-            }
             if (strlen($data) > 256 || !preg_match('/\A[A-Za-z0-9:_-]+\z/', $data)) {
                 throw $this->invalidPayment('PT_CRYPTO_ADDRESS', '网关返回的加密货币收款地址格式无效', $result);
             }
+            $network = $this->cryptoNetwork($payment, $currency, $result);
         } else {
             if ($currencyType !== 'fiat' || $paymentType !== 'alipay'
                 || !in_array($linkType, ['h5', 'pc'], true) || $currency !== 'CNY') {
@@ -329,7 +328,7 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             'fiat' => 'CNY',
             'currency' => $currency,
             'currency_type' => $currencyType,
-            'network' => $crypto ? strtoupper($paymentType) : '',
+            'network' => $network,
             'payment_name' => is_string($payment['name'] ?? null) ? mb_substr($payment['name'], 0, 80) : '',
             'payment_url' => $crypto ? '' : $data,
             'mobile_url' => $mobileUrl,
@@ -338,6 +337,76 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             'server_time' => $serverTime,
             'expires_in' => $expiresAt - $serverTime,
         ];
+    }
+
+    private function cryptoNetwork(array $payment, string $currency, array $result): string
+    {
+        $rawType = $payment['type'] ?? null;
+        $network = $this->networkLabel($rawType);
+        if ($network !== null) {
+            return $network;
+        }
+        if ($rawType !== null && (!is_string($rawType) || trim($rawType) !== '')) {
+            throw $this->invalidPayment('PT_CRYPTO_NETWORK', '网关返回的加密货币网络名称格式无效', $result);
+        }
+
+        // Resolve only the configured channel within this merchant's authenticated method list.
+        // Never retry the order POST or infer a chain from the address or currency alone.
+        try {
+            $response = Http::acceptJson()
+                ->withHeaders(['X-App-Secret' => $this->configuredString('app_secret')])
+                ->withOptions(['verify' => true])
+                ->withoutRedirecting()
+                ->connectTimeout(3)
+                ->timeout(5)
+                ->get('https://v3.paytaro.com/v1/app/methods');
+        } catch (ConnectionException) {
+            throw $this->invalidPayment('PT_CRYPTO_NETWORK_LOOKUP', '订单未返回网络名称，且渠道信息查询超时或连接失败，请稍后重试', $result);
+        }
+        $metadata = $response->json();
+        if (!$response->successful() || !is_array($metadata)
+            || !is_array($metadata['app'] ?? null)
+            || ($metadata['app']['app_id'] ?? null) !== $this->configuredString('app_id')
+            || !is_array($metadata['methods'] ?? null)) {
+            throw $this->invalidPayment('PT_CRYPTO_NETWORK_LOOKUP', '订单未返回网络名称，且无法读取当前应用的渠道信息，请检查 PayTaro 应用配置', $result);
+        }
+        $methodUuid = strtolower($this->configuredString('method_uuid'));
+        $matches = array_values(array_filter($metadata['methods'], static fn ($method) => is_array($method)
+            && is_string($method['uuid'] ?? null) && strtolower($method['uuid']) === $methodUuid));
+        $method = count($matches) === 1 ? $matches[0] : [];
+        if (($method['show'] ?? null) !== true
+            || !is_string($method['currency_type'] ?? null) || strtolower(trim($method['currency_type'])) !== 'crypto'
+            || !is_string($method['pay_currency'] ?? null) || strtoupper(trim($method['pay_currency'])) !== $currency) {
+            throw $this->invalidPayment('PT_CRYPTO_NETWORK_CHANNEL', '未找到与当前订单币种匹配且已展示的加密货币渠道，请检查支付渠道 UUID', $result);
+        }
+        $network = $this->networkLabel($method['type'] ?? null);
+        $missingType = !isset($method['type']) || (is_string($method['type']) && trim($method['type']) === '');
+        // The documented USDT-TRC20 method name identifies TRON explicitly, not by address shape.
+        if ($network === null && $missingType && $currency === 'USDT'
+            && is_string($method['name'] ?? null)
+            && preg_match('/\AUSDT[ _-]+TRC[ _-]?20\z/i', trim($method['name'])) === 1) {
+            $network = 'TRON';
+        }
+        if ($network === null) {
+            throw $this->invalidPayment('PT_CRYPTO_NETWORK', '订单及对应渠道均未返回可确认的网络名称，请在 PayTaro 核对该渠道的网络信息', $result);
+        }
+        return $network;
+    }
+
+    private function networkLabel(mixed $value): ?string
+    {
+        if (!is_string($value) || strlen($value) > 240 || !mb_check_encoding($value, 'UTF-8')
+            || preg_match('/[\x00-\x1f\x7f]/', $value)) {
+            return null;
+        }
+        $label = trim($value);
+        // Network names are display text, not necessarily machine identifiers such as "tron".
+        if ($label === '' || mb_strlen($label, 'UTF-8') > 80
+            || preg_match('/\A[\p{L}\p{N} _().（）-]+\z/u', $label) !== 1
+            || preg_match('/[\p{L}\p{N}]/u', $label) !== 1) {
+            return null;
+        }
+        return strtoupper($label);
     }
 
     private function unixSeconds(mixed $value): ?int

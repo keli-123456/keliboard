@@ -153,7 +153,10 @@ final class PaytaroInlineTest extends TestCase
         $this->assertIsString($body['payment']['type']);
         $this->assertIsString($body['payment']['link_type']);
         $this->assertSame(34, strlen($body['payment']['data']));
-        Http::fake(['*' => Http::response($body)]);
+        Http::fake([
+            'https://v3.paytaro.com/v1/invoice/pay' => Http::response($body),
+            'https://v3.paytaro.com/v1/app/methods' => Http::response([], 503),
+        ]);
 
         if ($reason !== null) {
             try {
@@ -161,7 +164,7 @@ final class PaytaroInlineTest extends TestCase
                 $this->fail('Invalid crypto metadata was accepted.');
             } catch (ApiException $exception) {
                 $this->assertStringContainsString($reason, $exception->getMessage());
-                Http::assertSentCount(1);
+                Http::assertSentCount($body['payment']['type'] === '' ? 2 : 1);
             }
             return;
         }
