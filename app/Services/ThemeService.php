@@ -158,7 +158,10 @@ class ThemeService
                 if (version_compare($newVersion, $oldVersion, '>')) {
                     $this->cleanupThemeFiles($config['name']);
                     File::deleteDirectory($targetPath);
-                    File::copyDirectory($sourcePath, $targetPath);
+                    if (!File::copyDirectory($sourcePath, $targetPath)) {
+                        throw new Exception('Failed to copy theme files');
+                    }
+                    $this->publishUploadedTheme($config['name']);
                     // 更新主题时保留用户配置
                     $this->initConfig($config['name'], true);
                     return true;
@@ -167,7 +170,10 @@ class ThemeService
                 }
             }
 
-            File::copyDirectory($sourcePath, $targetPath);
+            if (!File::copyDirectory($sourcePath, $targetPath)) {
+                throw new Exception('Failed to copy theme files');
+            }
+            $this->publishUploadedTheme($config['name']);
             $this->initConfig($config['name']);
 
             return true;
@@ -337,6 +343,43 @@ class ThemeService
 
         $file = $themePath . '/' . self::CONFIG_FILE;
         return File::exists($file) ? json_decode(File::get($file), true) : null;
+    }
+
+    public function getAssetVersion(string $theme, string $panelVersion): string
+    {
+        $config = $this->readConfigFile($theme);
+        if (!$config) {
+            return $panelVersion;
+        }
+
+        // Theme uploads must invalidate assets even when the panel release is unchanged.
+        return $panelVersion . '-' . substr(hash('sha256', json_encode($config)), 0, 20);
+    }
+
+    private function publishUploadedTheme(string $theme): void
+    {
+        $themePath = $this->getThemePath($theme);
+        if (!$themePath || !File::copyDirectory($themePath, public_path('theme/' . $theme))) {
+            throw new Exception('Failed to publish theme files');
+        }
+        $this->ensurePublicThemeLocales($theme);
+
+        // ZIP timestamps may predate compiled views, so mtime checks alone are insufficient.
+        $this->registerThemeViewPaths();
+        View::getFinder()->flush();
+        $compiler = app('blade.compiler');
+        foreach (File::allFiles($themePath) as $file) {
+            if (!str_ends_with($file->getFilename(), '.blade.php')) {
+                continue;
+            }
+            $viewName = 'theme::' . $theme . '.' . str_replace(['/', '\\'], '.', substr($file->getRelativePathname(), 0, -10));
+            $compiledPath = $compiler->getCompiledPath(View::getFinder()->find($viewName));
+            if (function_exists('opcache_invalidate')) {
+                opcache_invalidate($compiledPath, true);
+            }
+            File::delete($compiledPath);
+        }
+        View::getEngineResolver()->resolve('blade')->forgetCompiledOrNotExpired();
     }
 
     /**

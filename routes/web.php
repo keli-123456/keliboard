@@ -122,13 +122,17 @@ Route::get('/', function (Request $request) {
         $renderParams = [
             'title' => admin_setting('app_name', 'Xboard'),
             'theme' => $theme,
-            'version' => app(UpdateService::class)->getCurrentVersion(),
+            'version' => $themeService->getAssetVersion($theme, app(UpdateService::class)->getCurrentVersion()),
             'description' => admin_setting('app_description', 'Xboard is best'),
             'logo' => admin_setting('logo'),
             'theme_config' => $themeConfig,
             'hidden_api_path' => $hiddenApiPath  // 备用：直接传递
         ];
-        return view('theme::' . $theme . '.dashboard', $renderParams);
+        return response()
+            ->view('theme::' . $theme . '.dashboard', $renderParams)
+            ->header('Cache-Control', 'private, no-store, no-cache, must-revalidate, max-age=0')
+            ->header('Pragma', 'no-cache')
+            ->header('Expires', '0');
     } catch (Exception $e) {
         Log::error('Theme rendering failed', [
             'theme' => $theme,
