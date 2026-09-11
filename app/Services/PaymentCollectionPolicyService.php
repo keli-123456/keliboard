@@ -18,7 +18,7 @@ class PaymentCollectionPolicyService
     public function validate(?array $policy): array
     {
         $policy = array_replace(['daily_target' => 0, 'reached_action' => 'demote', 'windows' => []], $policy ?? []);
-        return Validator::make(['collection_policy' => $policy], [
+        $validated = Validator::make(['collection_policy' => $policy], [
             'collection_policy' => 'array:daily_target,reached_action,windows',
             'collection_policy.daily_target' => 'required|integer|min:0|max:1000000000000',
             'collection_policy.reached_action' => 'required|in:demote,pause',
@@ -27,6 +27,9 @@ class PaymentCollectionPolicyService
             'collection_policy.windows.*.start' => ['required', 'regex:/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/'],
             'collection_policy.windows.*.end' => ['required', 'regex:/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/', 'different:collection_policy.windows.*.start'],
         ])->validate()['collection_policy'];
+        // Accept legacy clients' pause value, but persist only a sorting preference.
+        $validated['reached_action'] = 'demote';
+        return $validated;
     }
 
     public function now(): CarbonImmutable
@@ -56,21 +59,22 @@ class PaymentCollectionPolicyService
         $target = $payment->payment === 'balance' ? 0 : (int) ($policy['daily_target'] ?? 0);
         $windows = $policy['windows'] ?? [];
         $reached = $target > 0 && $collected >= $target;
-        $paused = $reached && ($policy['reached_action'] ?? 'demote') === 'pause';
         $open = $this->isOpen($now, $windows);
-        $status = !$payment->enable ? 'disabled' : ($paused ? 'target_paused' : (!$open ? 'outside_window' : ($reached ? 'demoted' : 'available')));
+        $status = !$payment->enable ? 'disabled' : (!$open ? 'outside_window' : ($reached ? 'demoted' : 'available'));
         $next = null;
-        if ($payment->enable && ($paused || !$open)) {
-            $next = $this->nextOpen($paused ? $now->startOfDay()->addDay() : $now, $windows)->timestamp;
+        if ($payment->enable && ($reached || !$open)) {
+            $next = $this->nextOpen($reached ? $now->startOfDay()->addDay() : $now, $windows)->timestamp;
         }
         return [
-            'available' => (bool) $payment->enable && !$paused && $open,
+            'available' => (bool) $payment->enable,
             'status' => $status,
             'scheduled' => count($windows) > 0,
+            'in_window' => $open,
             'reached' => $reached,
             'today_amount' => $collected,
             'remaining_amount' => $target > 0 ? max(0, $target - $collected) : null,
-            'next_available_at' => $next,
+            'next_available_at' => null,
+            'next_priority_at' => $next,
             'day_ends_at' => $now->startOfDay()->addDay()->timestamp,
             'timezone' => $now->timezoneName,
         ];
@@ -89,12 +93,13 @@ class PaymentCollectionPolicyService
         $now = $this->now();
         $limited = $payments->filter(fn (Payment $payment): bool => (int) ($payment->collection_policy['daily_target'] ?? 0) > 0);
         $totals = $this->dailyTotals($limited, $now);
+        $priority = static fn (array $state): int => ($state['reached'] || !$state['in_window']) ? 2 : ($state['scheduled'] ? 0 : 1);
         return $payments->map(function (Payment $payment) use ($now, $totals): array {
             return ['payment' => $payment, 'state' => $this->state($payment, $totals[$payment->id] ?? 0, $now)];
         })->filter(fn (array $row): bool => $row['state']['available'])
-            ->sort(function (array $a, array $b): int {
-                return [$a['state']['reached'], !$a['state']['scheduled'], $a['payment']->sort ?? -1, $a['payment']->id]
-                    <=> [$b['state']['reached'], !$b['state']['scheduled'], $b['payment']->sort ?? -1, $b['payment']->id];
+            ->sort(function (array $a, array $b) use ($priority): int {
+                return [$priority($a['state']), $a['payment']->sort ?? -1, $a['payment']->id]
+                    <=> [$priority($b['state']), $b['payment']->sort ?? -1, $b['payment']->id];
             })->map(fn (array $row): Payment => (clone $row['payment'])->setVisible(self::PUBLIC_FIELDS))->values();
     }
 

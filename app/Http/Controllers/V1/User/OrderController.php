@@ -236,10 +236,7 @@ class OrderController extends Controller
         try {
             app(SiteCommerceService::class)->assertPaymentAvailableForOrder($order, $payment);
             $agentCommerce->assertPaymentAvailableForOrder($order, $payment);
-            $collectionState = app(\App\Services\PaymentCollectionPolicyService::class)->checkoutState($payment);
-            if (!$collectionState['available']) {
-                return $this->fail([409, '该支付方式当前暂不可用，请刷新后重新选择支付方式'], null, 'PAYMENT_METHOD_UNAVAILABLE');
-            }
+            // Collection targets and windows only affect ranking, not payment eligibility.
             $order = $agentCommerce->assignPaymentForCheckout($order, $payment, $handlingAmount);
             $returnBaseUrl = $agentCommerce->paymentReturnBaseUrlForOrder($order, $payment, $request);
         } catch (ApiException $exception) {

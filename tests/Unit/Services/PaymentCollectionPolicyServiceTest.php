@@ -61,12 +61,13 @@ final class PaymentCollectionPolicyServiceTest extends TestCase
     public static function orderingCases(): array
     {
         return [
-            'before window' => ['17:59:59', 100, 100, 'demote', [0]],
+            'before window' => ['17:59:59', 100, 100, 'demote', [0, 1]],
             'opening inclusive' => ['18:00:00', 100, 100, 'demote', [1, 0]],
-            'closing exclusive' => ['23:00:00', 100, 100, 'demote', [0]],
+            'closing exclusive' => ['23:00:00', 100, 100, 'demote', [0, 1]],
             'scheduled reached' => ['20:00:00', 100, 500000, 'demote', [0, 1]],
-            'both reached' => ['20:00:00', 300000, 500000, 'demote', [1, 0]],
-            'scheduled paused' => ['20:00:00', 100, 500000, 'pause', [0]],
+            'both reached' => ['20:00:00', 300000, 500000, 'demote', [0, 1]],
+            'legacy pause is demoted' => ['20:00:00', 100, 500000, 'pause', [0, 1]],
+            'outside window and both reached' => ['23:00:00', 300000, 500000, 'pause', [0, 1]],
             'one cent below' => ['20:00:00', 100, 499999, 'pause', [1, 0]],
         ];
     }
@@ -86,29 +87,52 @@ final class PaymentCollectionPolicyServiceTest extends TestCase
         $this->assertSame([$a->id => 3050, $other->id => 7777], $this->service()->dailyTotals(collect([$a, $other]), $this->service()->now()));
     }
 
+    public function test_three_priority_groups_keep_manual_order_and_id_ties_without_hiding_fallbacks(): void
+    {
+        $active = $this->payment(['sort' => 99, 'collection_policy' => ['windows' => [['start' => '18:00', 'end' => '23:00']]]]);
+        $allDay = $this->payment(['sort' => 50]);
+        $outside = $this->payment(['sort' => 1, 'collection_policy' => ['windows' => [['start' => '09:00', 'end' => '12:00']]]]);
+        $reached = $this->payment(['sort' => 1, 'collection_policy' => ['daily_target' => 100, 'reached_action' => 'pause']]);
+        $disabled = $this->payment(['sort' => 0, 'enable' => false]);
+        $this->receipt($reached, 100);
+        $this->assertSame([$active->id, $allDay->id, $outside->id, $reached->id],
+            $this->service()->publicMethods(collect([$reached, $disabled, $outside, $allDay, $active]))->pluck('id')->all());
+        $this->assertSame([$outside->id, $reached->id],
+            $this->service()->publicMethods(collect([$reached, $outside]))->pluck('id')->all());
+        $this->assertSame('pause', $reached->fresh()->collection_policy['reached_action']);
+        $this->assertSame(1, $reached->fresh()->sort);
+        $this->assertFalse($disabled->fresh()->enable);
+    }
+
     public function test_daily_reset_and_overnight_window_do_not_need_a_cron(): void
     {
         $p = $this->payment(['collection_policy' => ['daily_target' => 100, 'reached_action' => 'pause', 'windows' => [['start' => '22:00', 'end' => '06:00']]]]);
         $this->receipt($p, 100);
         CarbonImmutable::setTestNow(CarbonImmutable::parse('2026-09-11 23:00', 'Asia/Shanghai'));
         $state = $this->service()->checkoutState($p);
-        $this->assertSame('target_paused', $state['status']);
+        $this->assertSame('demoted', $state['status']);
+        $this->assertTrue($state['available']);
         $midnight = CarbonImmutable::parse('2026-09-12 00:00', 'Asia/Shanghai');
-        $this->assertSame($midnight->timestamp, $state['next_available_at']);
+        $this->assertSame($midnight->timestamp, $state['next_priority_at']);
+        $this->assertNull($state['next_available_at']);
         CarbonImmutable::setTestNow($midnight);
         $this->assertTrue($this->service()->checkoutState($p)['available']);
+        $this->assertFalse($this->service()->checkoutState($p)['reached']);
         CarbonImmutable::setTestNow($midnight->setTime(6, 0));
         $this->assertSame('outside_window', $this->service()->checkoutState($p)['status']);
+        $this->assertTrue($this->service()->checkoutState($p)['available']);
         $this->assertTrue($p->fresh()->enable);
     }
 
-    public function test_multiple_windows_resume_at_next_start_and_pause_waits_until_next_day_window(): void
+    public function test_priority_resumes_at_next_window_or_after_daily_target_resets(): void
     {
         $p = $this->payment(['collection_policy' => ['daily_target' => 100, 'reached_action' => 'pause', 'windows' => [['start' => '09:00', 'end' => '12:00'], ['start' => '21:00', 'end' => '23:00']]]]);
         $state = $this->service()->state($p, 0);
-        $this->assertSame($this->service()->now()->setTime(21, 0)->timestamp, $state['next_available_at']);
+        $this->assertSame($this->service()->now()->setTime(21, 0)->timestamp, $state['next_priority_at']);
+        $this->assertTrue($state['available']);
         $state = $this->service()->state($p, 100);
-        $this->assertSame($this->service()->now()->addDay()->setTime(9, 0)->timestamp, $state['next_available_at']);
+        $this->assertSame($this->service()->now()->addDay()->setTime(9, 0)->timestamp, $state['next_priority_at']);
+        $this->assertTrue($state['available']);
     }
 
     public function test_batch_totals_take_one_query_and_checkout_reads_new_receipts(): void
@@ -118,7 +142,8 @@ final class PaymentCollectionPolicyServiceTest extends TestCase
         $this->assertCount(15, $this->service()->publicMethods($payments));
         $this->assertCount(1, $this->database->connection()->getQueryLog());
         $this->receipt($payments->first(), 100);
-        $this->assertFalse($this->service()->checkoutState($payments->first())['available']);
+        $this->assertTrue($this->service()->checkoutState($payments->first())['available']);
+        $this->assertTrue($this->service()->checkoutState($payments->first())['reached']);
     }
 
     public function test_site_method_filter_keeps_agent_and_disabled_payments_private(): void
@@ -142,7 +167,7 @@ final class PaymentCollectionPolicyServiceTest extends TestCase
     {
         $this->assertSame(['daily_target' => 0, 'reached_action' => 'demote', 'windows' => []], $this->service()->validate(null));
         $policy = ['daily_target' => 12001, 'reached_action' => 'pause', 'windows' => [['start' => '22:00', 'end' => '06:00']]];
-        $this->assertSame($policy, $this->service()->validate($policy));
+        $this->assertSame(array_replace($policy, ['reached_action' => 'demote']), $this->service()->validate($policy));
     }
 
     #[DataProvider('invalidPolicies')]

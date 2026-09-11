@@ -30,6 +30,7 @@ final class PaymentCollectionConfigTest extends TestCase
         $policy = ['daily_target' => 300001, 'reached_action' => 'pause', 'windows' => [['start' => '22:00', 'end' => '06:00']]];
         $controller = app(PaymentController::class);
         $result = $controller->save($this->request($p, ['collection_policy' => $policy]));
+        $policy['reached_action'] = 'demote';
         $this->assertSame('success', $result->getData(true)['status']);
         $this->assertSame($policy, $p->fresh()->collection_policy);
         $result = $controller->save($this->request($p, ['name' => 'Legacy edit']));

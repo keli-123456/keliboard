@@ -159,7 +159,7 @@ final class AgentDomainOrderFlowTest extends TestCase
         $this->assertSame($payment->id, (int) $order->fresh()->payment_id);
     }
 
-    public function test_reached_payment_target_blocks_new_checkout_without_changing_order_binding(): void
+    public function test_reached_payment_target_allows_new_checkout_and_idempotent_settlement(): void
     {
         [$agent, $buyer, $order] = $this->createAgentOrderFixture();
         $payment = $this->createPayment(Payment::OWNER_AGENT, $agent->id);
@@ -172,14 +172,12 @@ final class AgentDomainOrderFlowTest extends TestCase
         $request->setUserResolver(static fn (): User => $buyer);
         app()->instance('request', $request);
         $payload = $this->responsePayload(app(OrderController::class)->checkout($request));
-        $this->assertSame('PAYMENT_METHOD_UNAVAILABLE', $payload['error']);
-        $this->assertNull($order->fresh()->payment_id);
+        $this->assertSame(0, $payload['type']);
+        $this->assertSame($payment->id, (int) $order->fresh()->payment_id);
         $this->assertTrue($payment->fresh()->enable);
         $this->assertSame(10000, (int) $agent->fresh()->balance);
 
-        // A previously issued payment still settles, even after the target is reached.
-        $order->payment_id = $payment->id;
-        $order->save();
+        // A new payment can settle after the target, without duplicate credit on replay.
         $verify = ['trade_no' => $order->trade_no, 'callback_no' => 'late-payment', 'paid_amount' => (int) $order->total_amount];
         $this->assertTrue($this->invokePaymentHandle($verify, $this->paymentServiceWithId($payment->id)));
         $this->assertTrue($this->invokePaymentHandle($verify, $this->paymentServiceWithId($payment->id)));
@@ -188,7 +186,7 @@ final class AgentDomainOrderFlowTest extends TestCase
         $this->assertSame(100 + (int) $order->total_amount, $policy->dailyTotals(collect([$payment]), $policy->now())[$payment->id]);
     }
 
-    public function test_window_boundary_blocks_stale_method_selection(): void
+    public function test_window_boundary_preserves_selected_method_and_allows_checkout(): void
     {
         [$agent, $buyer, $order] = $this->createAgentOrderFixture();
         $payment = $this->createPayment(Payment::OWNER_AGENT, $agent->id);
@@ -200,8 +198,8 @@ final class AgentDomainOrderFlowTest extends TestCase
             $request->setUserResolver(static fn (): User => $buyer);
             app()->instance('request', $request);
             $payload = $this->responsePayload(app(OrderController::class)->checkout($request));
-            $this->assertSame('PAYMENT_METHOD_UNAVAILABLE', $payload['error']);
-            $this->assertNull($order->fresh()->payment_id);
+            $this->assertSame(0, $payload['type']);
+            $this->assertSame($payment->id, (int) $order->fresh()->payment_id);
             $this->assertTrue($payment->fresh()->enable);
         } finally {
             \Carbon\CarbonImmutable::setTestNow();
@@ -227,6 +225,23 @@ final class AgentDomainOrderFlowTest extends TestCase
         $this->assertStringContainsString('支付宝当面付请求失败', $payload['message']);
         $this->assertSame(Order::STATUS_PENDING, (int) $order->fresh()->status);
         $this->assertSame(AgentBalanceHold::STATUS_PENDING, AgentBalanceHold::query()->where('order_id', $order->id)->value('status'));
+        $this->assertSame(10000, (int) $agent->fresh()->balance);
+    }
+
+    public function test_priority_preferences_do_not_enable_manually_disabled_methods(): void
+    {
+        [$agent, $buyer, $order] = $this->createAgentOrderFixture();
+        $payment = $this->createPayment(Payment::OWNER_AGENT, $agent->id);
+        $payment->enable = false;
+        $payment->collection_policy = ['daily_target' => 100, 'reached_action' => 'pause', 'windows' => [['start' => '18:00', 'end' => '23:00']]];
+        $payment->save();
+        $request = BaseRequest::create('/api/v1/user/order/checkout', 'POST', ['trade_no' => $order->trade_no, 'method' => $payment->id]);
+        $request->setUserResolver(static fn (): User => $buyer);
+        app()->instance('request', $request);
+        $payload = $this->responsePayload(app(OrderController::class)->checkout($request));
+        $this->assertSame('PAYMENT_METHOD_UNAVAILABLE', $payload['error']);
+        $this->assertNull($order->fresh()->payment_id);
+        $this->assertFalse($payment->fresh()->enable);
         $this->assertSame(10000, (int) $agent->fresh()->balance);
     }
 
