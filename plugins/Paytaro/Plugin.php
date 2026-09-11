@@ -400,6 +400,16 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             return null;
         }
         $label = trim($value);
+        // PayTaro also identifies TRON assets as chain:network:token. The token is not the recipient.
+        if (str_contains($label, ':')) {
+            $parts = explode(':', $label);
+            if (count($parts) !== 3 || strcasecmp($parts[0], 'TRON') !== 0
+                || preg_match('/\A[A-Za-z][A-Za-z0-9_-]{0,31}\z/', $parts[1]) !== 1
+                || preg_match('/\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z/', $parts[2]) !== 1) {
+                return null;
+            }
+            return 'TRON ' . strtoupper($parts[1]);
+        }
         // Network names are display text, not necessarily machine identifiers such as "tron".
         if ($label === '' || mb_strlen($label, 'UTF-8') > 80
             || preg_match('/\A[\p{L}\p{N} _().（）-]+\z/u', $label) !== 1

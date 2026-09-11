@@ -17,6 +17,7 @@ final class PaytaroCryptoNetworkTest extends TestCase
     private const METHOD = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
     private const PAY = 'https://v3.paytaro.com/v1/invoice/pay';
     private const METHODS = 'https://v3.paytaro.com/v1/app/methods';
+    private const TRON_TYPE = 'TRON:MAINNET:TR7NHQJEKQXGTCI8Q8ZY4PL8OTSZGJLJ6T';
     private Plugin $plugin;
 
     protected function setUp(): void
@@ -39,7 +40,59 @@ final class PaytaroCryptoNetworkTest extends TestCase
     public static function networkNames(): array
     {
         return [['tron', 'TRON'], [' TRON ', 'TRON'], ['Tron (TRC20)', 'TRON (TRC20)'],
-            ['波场（TRC20）', '波场（TRC20）'], ['Arbitrum One', 'ARBITRUM ONE'], ['chain_1', 'CHAIN_1']];
+            ['波场（TRC20）', '波场（TRC20）'], ['Arbitrum One', 'ARBITRUM ONE'], ['chain_1', 'CHAIN_1'],
+            [' tron:mainnet:TestToken ', 'TRON MAINNET'], ['TRON:TESTNET:TestToken', 'TRON TESTNET'],
+            ['TRON:NILE:TestToken', 'TRON NILE']];
+    }
+
+    #[DataProvider('structuredNetworkSources')]
+    public function test_structured_tron_descriptor_never_replaces_the_recipient_address(bool $fromMetadata): void
+    {
+        $invoice = $this->invoice(['currency_type' => 'CRYPTO', 'name' => 'USDT TRC20']);
+        if (!$fromMetadata) {
+            $invoice['payment']['type'] = self::TRON_TYPE;
+        }
+        $metadata = self::metadata();
+        $metadata['methods'][0] = array_replace($metadata['methods'][0], [
+            'type' => self::TRON_TYPE, 'name' => 'USDT TRC20', 'currency_type' => 'CRYPTO',
+        ]);
+        Http::fake([self::PAY => Http::response($invoice), self::METHODS => Http::response($metadata)]);
+
+        $data = $this->plugin->pay($this->order())['data'];
+
+        $this->assertSame('TRON MAINNET', $data['network']);
+        $this->assertSame('USDT', $data['currency']);
+        $this->assertSame('16.906408', $data['amount']);
+        $this->assertSame('10.50', $data['fiat_amount']);
+        $this->assertSame($invoice['payment']['data'], $data['address']);
+        $this->assertSame($invoice['payment']['data'], $data['qr_data']);
+        $this->assertSame('', $data['payment_url']);
+        $this->assertSame('', $data['mobile_url']);
+        $this->assertStringNotContainsString(explode(':', self::TRON_TYPE)[2], json_encode($data));
+        Http::assertSent(fn ($request) => $request->url() === self::PAY && $request['method_uuid'] === self::METHOD);
+        Http::assertSentCount($fromMetadata ? 2 : 1);
+    }
+
+    public static function structuredNetworkSources(): array
+    {
+        return ['order-response' => [false], 'matched-channel-metadata' => [true]];
+    }
+
+    public function test_single_structured_tron_channel_cannot_override_a_different_configured_uuid(): void
+    {
+        $metadata = self::metadata();
+        $metadata['methods'][0] = array_replace($metadata['methods'][0], [
+            'uuid' => 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'type' => self::TRON_TYPE,
+            'name' => 'USDT TRC20', 'currency_type' => 'CRYPTO',
+        ]);
+        Http::fake([self::PAY => Http::response($this->invoice()), self::METHODS => Http::response($metadata)]);
+        $this->expectExceptionMessage('PT_CRYPTO_NETWORK_CHANNEL');
+        try {
+            $this->plugin->pay($this->order());
+        } finally {
+            Http::assertSent(fn ($request) => $request->url() === self::PAY && $request['method_uuid'] === self::METHOD);
+            Http::assertSentCount(2);
+        }
     }
 
     #[DataProvider('missingTypes')]
@@ -118,7 +171,11 @@ final class PaytaroCryptoNetworkTest extends TestCase
     public static function invalidTypes(): array
     {
         return [[false], [[]], [42], ['<script>'], ['https://example.test/tron'], ["TRON\nERC20"],
-            ["TRON\u{202e}"], [str_repeat('x', 81)], [str_repeat('网', 81)], ['TRC20/ERC20']];
+            ["TRON\u{202e}"], [str_repeat('x', 81)], [str_repeat('网', 81)], ['TRC20/ERC20'],
+            ['TRON:MAINNET'], ['TRON::TestToken'], ['TRON:MAINNET:'], ['TRON:MAINNET:TestToken:extra'],
+            ['TRON:MAINNET:<script>'], ['TRON:MAINNET:https://example.test'], ['TRON:MAIN NET:TestToken'],
+            ['TRON:MAINNET:' . str_repeat('x', 129)], ['TRON:' . str_repeat('x', 33) . ':TestToken'],
+            ['https:MAINNET:TestToken'], ['javascript:MAINNET:TestToken']];
     }
 
     #[DataProvider('invalidMetadata')]
