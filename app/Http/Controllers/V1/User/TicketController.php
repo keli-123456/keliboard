@@ -38,6 +38,10 @@ class TicketController extends Controller
             $ticket['message']->each(function ($message) use ($ticket) {
                 $message['is_me'] = ($message['user_id'] == $ticket->user_id);
             });
+            $notifications = app(\App\Services\UserNotificationService::class);
+            if ($notifications->available()) {
+                $ticket->setAttribute('unread_message_ids', $notifications->unreadIds($ticket, $ticket['message']->pluck('id')->all()));
+            }
             return $this->success(TicketResource::make($ticket)->additional(['message' => true]));
         }
         $ticket = Ticket::where('user_id', $request->user()->id)

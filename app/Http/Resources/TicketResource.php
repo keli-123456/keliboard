@@ -28,6 +28,9 @@ class TicketResource extends JsonResource
             "updated_at" => $this->value('updated_at')
         ];
         if(!config('hidden_features.enable_exposed_user_count_fix')) $data['user_id']= $this->value('user_id');
+        if ($this->value('unread_message_ids') !== null) {
+            $data['unread_message_ids'] = $this->value('unread_message_ids');
+        }
         return $data;
 
     }

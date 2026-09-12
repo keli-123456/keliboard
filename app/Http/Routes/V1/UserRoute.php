@@ -111,6 +111,8 @@ class UserRoute
             $router->post('/ticket/close', [TicketController::class, 'close']);
             $router->post('/ticket/save', [TicketController::class, 'save']);
             $router->get('/ticket/fetch', [TicketController::class, 'fetch']);
+            $router->get('/notification/fetch', [\App\Http\Controllers\V1\User\NotificationController::class, 'fetch']);
+            $router->post('/ticket/read', [\App\Http\Controllers\V1\User\NotificationController::class, 'read']);
             $router->get('/ticket/attachment/{id}', [TicketController::class, 'attachment']);
             $router->post('/ticket/withdraw', [TicketController::class, 'withdraw']);
             // Server
