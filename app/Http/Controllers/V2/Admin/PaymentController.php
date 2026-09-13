@@ -27,7 +27,7 @@ class PaymentController extends Controller
 
     public function fetch()
     {
-        $payments = Payment::orderBy('sort', 'ASC')->get();
+        $payments = Payment::query()->useWritePdo()->orderBy('sort', 'ASC')->get();
         $policy = app(PaymentCollectionPolicyService::class);
         $now = $policy->now();
         $totals = $policy->dailyTotals($payments, $now);
@@ -40,7 +40,7 @@ class PaymentController extends Controller
             }
             $payments[$k]['notify_url'] = $notifyUrl;
         }
-        return $this->success($payments);
+        return $this->success($payments)->header('Cache-Control', 'private, no-store, max-age=0');
     }
 
     public function getPaymentForm(Request $request)
@@ -123,10 +123,13 @@ class PaymentController extends Controller
 
     public function drop(Request $request)
     {
-        $payment = Payment::find($request->input('id'));
+        $params = $request->validate(['id' => 'required|integer|min:1']);
+        $payment = Payment::query()->useWritePdo()->find($params['id']);
         if (!$payment)
             return $this->fail([400202, '支付方式不存在']);
-        return $this->success($payment->delete());
+        if (!$payment->delete())
+            return $this->fail([500, '删除失败，支付方式未移除']);
+        return $this->success(true);
     }
 
 
