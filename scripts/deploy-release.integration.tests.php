@@ -85,6 +85,10 @@ if [ "${1:-}" = compose ]; then
       ;;
     *" exec "*)
       case "$args" in
+        *"xboard:queue-health"*)
+          [ "${FAIL_QUEUE_HEALTH:-0}" = 1 ] && exit 43
+          echo '{"healthy":true}'
+          ;;
         *"backup:database"*)
           echo '{"status":"succeeded","record_id":42,"path":"storage/app/backups/release.sql.gz","checksum":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
           ;;
@@ -163,7 +167,7 @@ exec sh "$scenario_root/repo/scripts/deploy-release.sh" \
   --compose-file=compose.yaml
 SH;
 
-$createScenario = static function (string $name, bool $failCutover) use (
+$createScenario = static function (string $name, bool $failCutover, bool $failQueue = false) use (
     $tempRoot,
     $sourceRoot,
     $fakeDocker,
@@ -205,14 +209,19 @@ $createScenario = static function (string $name, bool $failCutover) use (
 
     $oldTarget = getenv('TARGET_GIT_SHA');
     $oldFailure = getenv('FAIL_CUTOVER');
+    $oldQueueFailure = getenv('FAIL_QUEUE_HEALTH');
     putenv('TARGET_GIT_SHA=' . $targetSha);
     putenv('FAIL_CUTOVER=' . ($failCutover ? '1' : '0'));
+    putenv('FAIL_QUEUE_HEALTH=' . ($failQueue ? '1' : '0'));
     try {
         $result = $run([$shell, $wrapperPath], $scenario, null);
     } finally {
         $oldTarget === false ? putenv('TARGET_GIT_SHA') : putenv('TARGET_GIT_SHA=' . $oldTarget);
         $oldFailure === false ? putenv('FAIL_CUTOVER') : putenv('FAIL_CUTOVER=' . $oldFailure);
+        $oldQueueFailure === false ? putenv('FAIL_QUEUE_HEALTH') : putenv('FAIL_QUEUE_HEALTH=' . $oldQueueFailure);
     }
+
+    $failCutover = $failCutover || $failQueue;
 
     if ($failCutover ? $result['exit'] === 0 : $result['exit'] !== 0) {
         throw new RuntimeException(
@@ -241,6 +250,9 @@ $createScenario = static function (string $name, bool $failCutover) use (
     if (!str_contains($dockerLog, 'backup:restore-drill --id=42')) {
         throw new RuntimeException("{$name} did not drill the exact backup record");
     }
+    if ($failQueue && !str_contains($dockerLog, 'xboard:queue-health --local --wait=30')) {
+        throw new RuntimeException('queue consumer gate was not executed');
+    }
 
     $activeOverride = (string) file_get_contents($repo . '/storage/app/releases/active-compose.override.yaml');
     $expectedImage = $failCutover
@@ -260,6 +272,7 @@ mkdir($tempRoot, 0777, true);
 try {
     $createScenario('success', false);
     $createScenario('rollback', true);
+    $createScenario('missing-consumers-rollback', false, true);
 } finally {
     $removeTree($tempRoot);
 }

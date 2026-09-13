@@ -23,6 +23,10 @@ class EventServiceProvider extends ServiceProvider
     {
         parent::boot();
 
+        $this->app['events']->listen('cache:clearing', function ($store) {
+            $this->app->make(\App\Services\CacheQueueIsolation::class)->assertSafeToClear($store);
+        });
+
         User::observe(UserObserver::class);
     }
 }

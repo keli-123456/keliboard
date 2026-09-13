@@ -84,6 +84,14 @@ final class SystemHealthEvaluatorTest extends TestCase
         $this->assertSame('stopped', $critical['reason']);
     }
 
+    public function test_running_master_with_zero_or_missing_consumers_is_critical(): void
+    {
+        foreach ([['processes' => 0], ['processes' => 4, 'missing_queues' => ['redis:send_email']]] as $metrics) {
+            $result = $this->evaluator->evaluateQueue(array_merge(['running' => true], $metrics));
+            $this->assertSame('critical', $result['status']);
+        }
+    }
+
     public function test_operation_tasks_distinguish_recent_failures_from_stale_work(): void
     {
         $warning = $this->evaluator->evaluateOperationTasks([

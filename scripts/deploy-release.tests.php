@@ -55,6 +55,10 @@ $assert(str_contains($deploy, '> "$DEPLOYMENT_DIR/backup.json" 2>&1'), 'backup f
 $assert(str_contains($rollback, '--no-fetch --ref="$previous_sha" --image="$previous_image"'), 'rollback must deploy the recorded immutable release without a network dependency');
 $assert(substr_count($compose, '${KELIBOARD_IMAGE:-ghcr.io/keli-123456/keliboard:main}') === 3, 'all application services must share the pinned image variable');
 $assert(str_contains($compose, 'healthcheck:'), 'compose sample must expose container health');
+$assert(str_contains($compose, 'xboard:queue-health'), 'Horizon health must verify consumers');
+$assert(!str_contains($update, 'optimize:clear'), 'direct updates must not flush application data');
+$assert(str_contains($update, 'xboard:queue-health --local --wait=30'), 'direct updates must verify consumers');
+$assert(str_contains($deploy, 'xboard:queue-health --local --wait=30'), 'safe cutover must verify consumers');
 
 $shell = PHP_OS_FAMILY === 'Windows' && is_file('C:/Program Files/Git/bin/bash.exe')
     ? 'C:/Program Files/Git/bin/bash.exe'

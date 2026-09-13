@@ -100,6 +100,12 @@ if [ "${1:-}" = compose ]; then
   [ "${1:-}" = version ] && exit 0
   args=" $* "
   case "$args" in
+    *"xboard:queue-health"*)
+      [ "${FAKE_QUEUE_UNHEALTHY:-0}" = 1 ] && exit 37
+      exit 0 ;;
+    *"php artisan config:cache"*)
+      [ "${FAKE_PREPARE_FAIL:-0}" = 1 ] && exit 38
+      exit 0 ;;
     *" ps -q "*) echo fake-container; exit 0 ;;
     *" pull "*|*" up "*|*" run "*|*" exec "*) exit 0 ;;
   esac
@@ -157,7 +163,29 @@ SH;
         }
     }
 
-    fwrite(STDOUT, "direct update integration test passed\n");
+    if (str_contains($dockerLog, 'optimize:clear') || str_contains($dockerLog, 'cache:clear')) {
+        throw new RuntimeException('update must preserve application cache, queues and locks');
+    }
+    if (strpos($dockerLog, 'php artisan config:cache') >= strpos($dockerLog, 'up -d --remove-orphans')) {
+        throw new RuntimeException('runtime configuration must be prepared before services start');
+    }
+    if (!str_contains($dockerLog, '--force-recreate --no-deps web horizon ws-server')
+        || !str_contains($dockerLog, 'xboard:queue-health --local --wait=30')) {
+        throw new RuntimeException('all long-lived services must reload configuration and pass the consumer gate');
+    }
+    foreach (['FAKE_QUEUE_UNHEALTHY' => 37, 'FAKE_PREPARE_FAIL' => 38] as $variable => $exitCode) {
+        $old = getenv($variable);
+        putenv($variable . '=1');
+        try {
+            $failed = $run([$shell, $tempRoot . '/run-update.sh'], $tempRoot, $exitCode);
+            if (str_contains($failed['stdout'], 'Keli update succeeded:')) {
+                throw new RuntimeException('unhealthy or unprepared runtime must not report success');
+            }
+        } finally {
+            $old === false ? putenv($variable) : putenv($variable . '=' . $old);
+        }
+    }
+    fwrite(STDOUT, "direct update integration tests passed (success, missing consumers, prepare failure)\n");
 } finally {
     $removeTree($tempRoot);
 }

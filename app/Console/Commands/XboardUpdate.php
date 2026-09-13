@@ -18,7 +18,7 @@ class XboardUpdate extends Command
      *
      * @var string
      */
-    protected $signature = 'xboard:update';
+    protected $signature = 'xboard:update {--no-restart : The deployment runner will restart Horizon}';
 
     /**
      * The console command description.
@@ -74,11 +74,15 @@ class XboardUpdate extends Command
         }
 
         try {
-            Artisan::call('horizon:terminate');
+            if (!$this->option('no-restart')) {
+                Artisan::call('horizon:terminate');
+            }
         } catch (\Throwable $e) {
             $this->warn('重启队列服务失败（可忽略）: ' . $e->getMessage());
         }
 
-        $this->info('更新完毕，队列服务已重启，你无需进行任何操作。');
+        $this->info($this->option('no-restart')
+            ? '更新步骤完成，由部署程序重启并检查队列。'
+            : '更新步骤完成，已请求队列重启；请运行 xboard:queue-health 验证消费者。');
     }
 }

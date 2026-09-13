@@ -73,6 +73,7 @@ return [
 
         'redis' => [
             'driver' => 'redis',
+            // Preserve existing installations; new .env files select the isolated cache connection.
             'connection' => env('CACHE_REDIS_CONNECTION', 'default'),
         ],
 

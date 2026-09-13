@@ -107,13 +107,7 @@ class SystemController extends Controller
 
     protected function getHorizonStatus(): bool
     {
-        if (!$masters = app(MasterSupervisorRepository::class)->all()) {
-            return false;
-        }
-
-        return collect($masters)->contains(function ($master) {
-            return $master->status === 'paused';
-        }) ? false : true;
+        return app(\App\Services\QueueConsumerHealth::class)->snapshot()['healthy'];
     }
 
     public function getQueueStats(Request $request)
@@ -207,13 +201,15 @@ class SystemController extends Controller
     private function getQueueHealthMetrics(): array
     {
         try {
+            $consumers = app(\App\Services\QueueConsumerHealth::class)->snapshot();
             $waitSeconds = collect(app(WaitTimeCalculator::class)->calculate())
                 ->map(fn($value) => (int) $value)
                 ->max() ?? 0;
 
             return [
                 'available' => true,
-                'running' => $this->getHorizonStatus(),
+                'running' => $consumers['healthy'],
+                'missing_queues' => $consumers['missing_queues'],
                 'failed_jobs' => app(JobRepository::class)->countRecentlyFailed(),
                 'wait_seconds' => $waitSeconds,
                 'paused_masters' => $this->totalPausedMasters(),

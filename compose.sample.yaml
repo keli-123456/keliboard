@@ -34,6 +34,12 @@ services:
     restart: always
     network_mode: host
     command: php artisan horizon
+    healthcheck:
+      test: ["CMD", "php", "artisan", "xboard:queue-health", "--local"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     depends_on:
       - redis
       - redis-cache

@@ -291,6 +291,11 @@ perform_rollback() {
   if ! compose_current run --rm --no-deps -T web composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader > "$DEPLOYMENT_DIR/rollback-composer.log" 2>&1; then
     append_event rollback failed composer_install_failed; finish_journal rollback_failed composer_install_failed; return 1
   fi
+  for command in route:clear view:clear event:clear config:cache; do
+    if ! compose_current run --rm --no-deps -T web php artisan "$command" >> "$DEPLOYMENT_DIR/rollback-composer.log" 2>&1; then
+      append_event rollback failed runtime_prepare_failed; finish_journal rollback_failed runtime_prepare_failed; return 1
+    fi
+  done
   if ! compose_current up -d --remove-orphans > "$DEPLOYMENT_DIR/rollback-compose.log" 2>&1; then
     append_event rollback failed services_failed; finish_journal rollback_failed services_failed; return 1
   fi
@@ -405,9 +410,13 @@ compose_current stop web horizon ws-server > "$DEPLOYMENT_DIR/cutover-stop.log" 
 git reset --hard "$TARGET_GIT_SHA" > "$DEPLOYMENT_DIR/cutover-git.log"
 write_active_override "$TARGET_IMAGE_ID"
 compose_current run --rm --no-deps -T web composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader > "$DEPLOYMENT_DIR/cutover-composer.log" 2>&1
-compose_current run --rm --no-deps -T web php artisan xboard:update > "$DEPLOYMENT_DIR/cutover-update.log" 2>&1
+compose_current run --rm --no-deps -T web php artisan xboard:update --no-restart > "$DEPLOYMENT_DIR/cutover-update.log" 2>&1
+for command in route:clear view:clear event:clear config:cache; do
+  compose_current run --rm --no-deps -T web php artisan "$command" >> "$DEPLOYMENT_DIR/cutover-update.log" 2>&1
+done
 compose_current up -d --remove-orphans > "$DEPLOYMENT_DIR/cutover-compose.log" 2>&1
 verify_services_running > "$DEPLOYMENT_DIR/cutover-services.log" 2>&1
+compose_current exec -T horizon php artisan xboard:queue-health --local --wait=30 >> "$DEPLOYMENT_DIR/cutover-services.log" 2>&1
 append_event cutover passed services_started
 
 run_smoke current "$HEALTH_URL" > "$DEPLOYMENT_DIR/post-deploy-smoke.json" 2>&1

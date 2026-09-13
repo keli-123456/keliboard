@@ -58,6 +58,7 @@ class Kernel extends ConsoleKernel
         $schedule->command('send:remindMail', ['--force'])->dailyAt('11:30')->onOneServer();
         // horizon metrics
         $schedule->command('horizon:snapshot')->everyFiveMinutes()->onOneServer();
+        $schedule->command('xboard:queue-health', ['--log' => true])->everyMinute()->onOneServer()->withoutOverlapping(1);
         $this->scheduleDatabaseBackup($schedule);
         $schedule->command('cleanup:expired-online-status')->everyMinute()->onOneServer()->withoutOverlapping(4);
         $schedule->command('cleanup:ticket-ai-logs')->dailyAt('3:40')->onOneServer()->withoutOverlapping();

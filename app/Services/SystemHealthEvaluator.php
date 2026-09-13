@@ -104,7 +104,9 @@ final class SystemHealthEvaluator
         $waitSeconds = (int) ($metrics['wait_seconds'] ?? 0);
         $pausedMasters = (int) ($metrics['paused_masters'] ?? 0);
 
-        if (!$running || $pausedMasters > 0) {
+        if (!$running || $pausedMasters > 0
+            || (array_key_exists('processes', $metrics) && (int) $metrics['processes'] <= 0)
+            || !empty($metrics['missing_queues'])) {
             $status = 'critical';
             $reason = 'stopped';
         } elseif ($waitSeconds >= 60) {
@@ -123,6 +125,7 @@ final class SystemHealthEvaluator
             'wait_seconds' => $waitSeconds,
             'paused_masters' => $pausedMasters,
             'processes' => (int) ($metrics['processes'] ?? 0),
+            'missing_queues' => (array) ($metrics['missing_queues'] ?? []),
         ]);
     }
 

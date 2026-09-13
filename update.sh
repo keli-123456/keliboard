@@ -87,13 +87,14 @@ if [ -n "$COMPOSE_KIND" ] && [ -n "$COMPOSE_FILE" ] && [ ! -f /.dockerenv ]; the
   compose pull
   compose up -d redis redis-cache
   compose run --rm --no-deps -T web composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
-  compose run --rm --no-deps -T web php artisan xboard:update
+  compose run --rm --no-deps -T web php artisan xboard:update --no-restart
+  # Clear code caches only. Application cache may share Redis with live queues and locks.
+  for command in route:clear view:clear event:clear config:cache; do
+    compose run --rm --no-deps -T web php artisan "$command"
+  done
 
   rm -f storage/app/releases/active-compose.override.yaml
-  compose up -d --remove-orphans
-  compose exec -T web php artisan optimize:clear || true
-  compose exec -T web php artisan config:cache || true
-  compose exec -T horizon php artisan horizon:terminate || true
+  compose up -d --remove-orphans --force-recreate --no-deps web horizon ws-server
 
   for service in web horizon ws-server; do
     container="$(compose ps -q "$service")"
@@ -103,13 +104,16 @@ if [ -n "$COMPOSE_KIND" ] && [ -n "$COMPOSE_FILE" ] && [ ! -f /.dockerenv ]; the
       exit 1
     }
   done
+  compose exec -T horizon php artisan xboard:queue-health --local --wait=30
 else
   command -v composer >/dev/null 2>&1 || { echo "ERROR: Composer is not installed" >&2; exit 1; }
   composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
-  php artisan xboard:update
-  php artisan optimize:clear || true
-  php artisan config:cache || true
-  php artisan horizon:terminate || true
+  php artisan xboard:update --no-restart
+  for command in route:clear view:clear event:clear config:cache; do
+    php artisan "$command"
+  done
+  php artisan horizon:terminate
+  php artisan xboard:queue-health --local --wait=30
 fi
 
 assert_app_key_unchanged
