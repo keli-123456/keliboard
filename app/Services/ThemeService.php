@@ -16,6 +16,7 @@ class ThemeService
     private const CONFIG_FILE = 'config.json';
     private const SETTING_PREFIX = 'theme_';
     private const SYSTEM_THEMES = ['Xboard', 'v2board'];
+    private static array $preparedViewVersions = [];
 
     public function __construct()
     {
@@ -354,6 +355,45 @@ class ThemeService
 
         // Theme uploads must invalidate assets even when the panel release is unchanged.
         return $panelVersion . '-' . substr(hash('sha256', json_encode($config)), 0, 20);
+    }
+
+    public function prepareThemeView(string $theme, string $assetVersion): void
+    {
+        $themePath = $this->getThemePath($theme);
+        $entry = $themePath . '/dashboard.blade.php';
+        if (!$themePath || !File::exists($entry)) {
+            throw new Exception('Theme view file not found');
+        }
+
+        // Every worker checks the on-disk revision; ZIP mtimes and upload-worker caches are not authoritative.
+        $revision = hash('sha256', $assetVersion . "\0" . File::hash($entry, 'sha256'));
+        if ((self::$preparedViewVersions[$themePath] ?? null) === $revision) {
+            return;
+        }
+
+        View::getFinder()->flush();
+        $compiler = app('blade.compiler');
+        foreach (File::allFiles($themePath) as $file) {
+            if (!str_ends_with($file->getFilename(), '.blade.php')) {
+                continue;
+            }
+            $viewName = 'theme::' . $theme . '.' . str_replace(['/', '\\'], '.', substr($file->getRelativePathname(), 0, -10));
+            $source = View::getFinder()->find($viewName);
+            // Compile replaces changed files atomically, without deleting another worker's active view.
+            $compiler->compile($source);
+            $compiledPath = $compiler->getCompiledPath($source);
+            clearstatcache(true, $compiledPath);
+            if (function_exists('opcache_invalidate')) {
+                opcache_invalidate($compiledPath, true);
+            }
+        }
+        View::getEngineResolver()->resolve('blade')->forgetCompiledOrNotExpired();
+
+        unset(self::$preparedViewVersions[$themePath]);
+        self::$preparedViewVersions[$themePath] = $revision;
+        if (count(self::$preparedViewVersions) > 64) {
+            unset(self::$preparedViewVersions[array_key_first(self::$preparedViewVersions)]);
+        }
     }
 
     private function publishUploadedTheme(string $theme): void

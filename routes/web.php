@@ -128,6 +128,7 @@ Route::get('/', function (Request $request) {
             'theme_config' => $themeConfig,
             'hidden_api_path' => $hiddenApiPath  // 备用：直接传递
         ];
+        $themeService->prepareThemeView($theme, $renderParams['version']);
         return response()
             ->view('theme::' . $theme . '.dashboard', $renderParams)
             ->header('Cache-Control', 'private, no-store, no-cache, must-revalidate, max-age=0')

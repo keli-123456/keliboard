@@ -14,6 +14,7 @@ use Illuminate\Routing\RoutingServiceProvider;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\View;
 use Illuminate\View\ViewServiceProvider;
+use Illuminate\View\Compilers\BladeCompiler;
 use Psr\Log\NullLogger;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
@@ -133,18 +134,7 @@ final class ThemeCacheTest extends TestCase
     public function test_homepage_is_not_cacheable_and_changes_legacy_asset_urls_after_upload(): void
     {
         $this->writeTheme('custom', '1.0.0');
-        $navigation = $this->createMock(SiteNavigationService::class);
-        $navigation->method('pageForRequest')->willReturn(null);
-        app()->instance(SiteNavigationService::class, $navigation);
-        $update = $this->createMock(UpdateService::class);
-        $update->method('getCurrentVersion')->willReturn('panel-1');
-        app()->instance(UpdateService::class, $update);
-        $hiddenApi = $this->createMock(HiddenApiPathService::class);
-        $hiddenApi->method('get')->willReturn('/api/v1');
-        app()->instance(HiddenApiPathService::class, $hiddenApi);
-        $request = Request::create('https://theme.example.test/');
-        app()->instance('request', $request);
-        require $this->webRoutes;
+        $request = $this->homeRequest();
         $first = app('router')->dispatch($request);
         $this->assertSame(200, $first->getStatusCode());
         $this->assertTrue($first->headers->hasCacheControlDirective('no-store'));
@@ -159,6 +149,89 @@ final class ThemeCacheTest extends TestCase
         $this->assertNotEmpty($newUrl[1] ?? null);
         $this->assertNotSame($oldUrl[1], $newUrl[1]);
         $this->assertStringContainsString('new', $second->getContent());
+    }
+
+    public function test_homepage_recovers_when_another_worker_replaces_an_old_dated_template(): void
+    {
+        $this->writeTheme('custom', '1.0.0');
+        $source = storage_path('theme/custom/dashboard.blade.php');
+        File::put($source, '<script src="/theme/custom/assets/umi.js?v=old-build"></script>');
+        $request = $this->homeRequest();
+        $this->assertStringContainsString('old-build', app('router')->dispatch($request)->getContent());
+        $compiled = app('blade.compiler')->getCompiledPath(View::getFinder()->find('theme::custom.dashboard'));
+        touch($compiled, time() + 3600);
+
+        // A different worker publishes files without touching this worker's cached view state.
+        File::put($source, '<script src="/theme/custom/assets/umi.js?v=new-build"></script>');
+        touch($source, 315532800);
+        clearstatcache();
+
+        $response = app('router')->dispatch($request);
+        $this->assertStringContainsString('new-build', $response->getContent());
+        $this->assertStringNotContainsString('old-build', $response->getContent());
+    }
+
+    public function test_theme_revision_refreshes_nested_views_without_clearing_other_themes(): void
+    {
+        $this->writeTheme('custom', '1.0.0');
+        $this->writeTheme('other', '1.0.0');
+        File::ensureDirectoryExists(storage_path('theme/custom/parts'));
+        $partial = storage_path('theme/custom/parts/status.blade.php');
+        File::put($partial, 'old-partial');
+        File::put(storage_path('theme/custom/dashboard.blade.php'), "@include('theme::custom.parts.status')");
+        $request = $this->homeRequest();
+        $this->assertStringContainsString('old-partial', app('router')->dispatch($request)->getContent());
+        view('theme::other.dashboard')->render();
+        $otherCompiled = app('blade.compiler')->getCompiledPath(View::getFinder()->find('theme::other.dashboard'));
+        $otherHash = hash_file('sha256', $otherCompiled);
+        touch($otherCompiled, 1700000000);
+
+        File::put(storage_path('theme/custom/config.json'), json_encode($this->metadata('custom', '1.0.1')));
+        File::put($partial, 'new-partial');
+        touch($partial, 315532800);
+        clearstatcache();
+
+        $this->assertStringContainsString('new-partial', app('router')->dispatch($request)->getContent());
+        $this->assertSame($otherHash, hash_file('sha256', $otherCompiled));
+        $this->assertSame(1700000000, filemtime($otherCompiled));
+        $this->assertSame('green', admin_setting('theme_custom')['accent']);
+    }
+
+    public function test_unchanged_theme_reuses_compilation_across_requests(): void
+    {
+        $this->writeTheme('custom', '1.0.0');
+        touch(storage_path('theme/custom/dashboard.blade.php'), 315532800);
+        $original = app('blade.compiler');
+        $compiler = $this->getMockBuilder(BladeCompiler::class)
+            ->setConstructorArgs([app('files'), config('view.compiled')])
+            ->onlyMethods(['compile'])
+            ->getMock();
+        $compiler->expects($this->once())->method('compile')->willReturnCallback(
+            fn ($path = null) => $original->compile($path)
+        );
+        app()->instance('blade.compiler', $compiler);
+        $request = $this->homeRequest();
+        $first = app('router')->dispatch($request)->getContent();
+        for ($i = 0; $i < 3; $i++) {
+            $this->assertSame($first, app('router')->dispatch($request)->getContent());
+        }
+    }
+
+    private function homeRequest(): Request
+    {
+        $navigation = $this->createMock(SiteNavigationService::class);
+        $navigation->method('pageForRequest')->willReturn(null);
+        app()->instance(SiteNavigationService::class, $navigation);
+        $update = $this->createMock(UpdateService::class);
+        $update->method('getCurrentVersion')->willReturn('panel-1');
+        app()->instance(UpdateService::class, $update);
+        $hiddenApi = $this->createMock(HiddenApiPathService::class);
+        $hiddenApi->method('get')->willReturn('/api/v1');
+        app()->instance(HiddenApiPathService::class, $hiddenApi);
+        $request = Request::create('https://theme.example.test/');
+        app()->instance('request', $request);
+        require $this->webRoutes;
+        return $request;
     }
 
     private function writeTheme(string $name, string $version): void
