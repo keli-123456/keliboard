@@ -5,11 +5,22 @@ declare(strict_types=1);
 namespace Tests\Unit\Services;
 
 use App\Console\Commands\QueueHealth;
+use App\Console\Kernel;
+use App\Services\Backup\BackupService;
+use App\Services\Plugin\PluginManager;
 use App\Services\QueueConsumerHealth;
+use Illuminate\Console\Application as ConsoleApplication;
+use Illuminate\Console\Scheduling\EventMutex;
+use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Console\Scheduling\SchedulingMutex;
+use Illuminate\Contracts\Events\Dispatcher;
+use Illuminate\Support\Facades\Log;
 use Laravel\Horizon\Contracts\MasterSupervisorRepository;
 use Laravel\Horizon\Contracts\SupervisorRepository;
 use Laravel\Horizon\MasterSupervisor;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\Console\Input\ArrayInput;
+use Symfony\Component\Console\Input\StringInput;
 use Symfony\Component\Console\Output\BufferedOutput;
 use Tests\TestCase;
 
@@ -92,6 +103,61 @@ final class QueueConsumerHealthTest extends TestCase
         $this->assertFalse(json_decode($output->fetch(), true)['healthy']);
         $this->repositories(['redis:send_email,order_handle' => 1]);
         $this->assertSame(0, $command->run(new ArrayInput(['--local' => true]), new BufferedOutput()));
+    }
+
+    public function test_scheduled_health_check_accepts_log_flag_without_logging_healthy_consumers(): void
+    {
+        $this->repositories(['redis:send_email,order_handle' => 1]);
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->never())->method('error');
+        Log::swap($logger);
+
+        $command = new QueueHealth();
+        $command->setLaravel(app());
+        $output = new BufferedOutput();
+        $this->assertSame(0, $command->run($this->scheduledInput(), $output));
+        $this->assertTrue(json_decode($output->fetch(), true)['healthy']);
+    }
+
+    public function test_scheduled_health_check_still_logs_missing_email_consumers(): void
+    {
+        $this->repositories(['redis:order_handle' => 1]);
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->once())->method('error')->with(
+            'Queue consumers are unhealthy',
+            $this->callback(fn (array $result) => !$result['healthy'] && $result['missing_queues'] === ['redis:send_email']),
+        );
+        Log::swap($logger);
+
+        $command = new QueueHealth();
+        $command->setLaravel(app());
+        $output = new BufferedOutput();
+        $this->assertSame(1, $command->run($this->scheduledInput(), $output));
+        $this->assertSame(['redis:send_email'], json_decode($output->fetch(), true)['missing_queues']);
+    }
+
+    private function scheduledInput(): StringInput
+    {
+        app()->instance(EventMutex::class, $this->createMock(EventMutex::class));
+        app()->instance(SchedulingMutex::class, $this->createMock(SchedulingMutex::class));
+        $backup = $this->createMock(BackupService::class);
+        $backup->method('settings')->willReturn(['enabled' => false]);
+        app()->instance(BackupService::class, $backup);
+        app()->instance(PluginManager::class, $this->createMock(PluginManager::class));
+
+        $schedule = new Schedule();
+        $kernel = new Kernel(app(), $this->createMock(Dispatcher::class));
+        (new \ReflectionMethod(Kernel::class, 'schedule'))->invoke($kernel, $schedule);
+        $prefix = ConsoleApplication::formatCommandString('xboard:queue-health');
+        $events = array_values(array_filter($schedule->events(), fn ($event) => str_starts_with($event->command ?? '', $prefix)));
+        $this->assertCount(1, $events);
+        $event = $events[0];
+        $this->assertSame('* * * * *', $event->expression);
+        $this->assertTrue($event->onOneServer);
+        $this->assertTrue($event->withoutOverlapping);
+
+        // Exercise the shell argument parser, not ArrayInput's different flag handling.
+        return new StringInput(trim(substr($event->command, strlen($prefix))));
     }
 
     private function repositories(array $processes, string $status = 'running', bool $attached = true): void
