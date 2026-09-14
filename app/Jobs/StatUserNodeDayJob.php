@@ -107,24 +107,37 @@ class StatUserNodeDayJob implements ShouldQueue
             $right['record_type'],
         ]);
 
-        foreach (array_chunk($rows, 100) as $batch) {
-            for ($attempt = 1; $attempt <= 5; $attempt++) {
-                try {
-                    $this->upsertRowsForMySqlLike($batch);
-                    break;
-                } catch (\Throwable $e) {
-                    if (!$this->isMySqlDeadlock($e) || $attempt === 5) {
-                        throw $e;
+        $batches = array_chunk($rows, 100);
+        for ($attempt = 1; $attempt <= 5; $attempt++) {
+            try {
+                // A queue retry replays the whole job, so earlier batches must roll back too.
+                DB::transaction(function () use ($batches): void {
+                    foreach ($batches as $batch) {
+                        $this->upsertRowsForMySqlLike($batch);
                     }
-
-                    Log::warning('StatUserNodeDayJob retrying MySQL deadlock', [
-                        'server_id' => $this->server['id'] ?? null,
-                        'attempt' => $attempt,
-                        'error' => $this->summarizeDatabaseError($e),
-                    ]);
-                    usleep(($attempt * 100000) + random_int(0, 150000));
+                });
+            } catch (\Throwable $e) {
+                if (!$this->isMySqlDeadlock($e) || $attempt === 5) {
+                    throw $e;
                 }
+
+                Log::warning('StatUserNodeDayJob retrying MySQL deadlock', [
+                    'server_id' => $this->server['id'] ?? null,
+                    'attempt' => $attempt,
+                    'error' => $this->summarizeDatabaseError($e),
+                ]);
+                usleep(($attempt * 100000) + random_int(0, 150000));
+                continue;
             }
+
+            if ($attempt > 1) {
+                Log::info('StatUserNodeDayJob recovered after MySQL deadlock', [
+                    'server_id' => $this->server['id'] ?? null,
+                    'attempt' => $attempt,
+                    'row_count' => count($rows),
+                ]);
+            }
+            return;
         }
     }
 

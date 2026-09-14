@@ -156,6 +156,65 @@ final class ZeroSslCertificateServiceTest extends TestCase
         $this->assertSame('ipv4:2.56.116.39', $state['agent_identity']);
     }
 
+    #[\PHPUnit\Framework\Attributes\DataProvider('legacyIdentityCases')]
+    public function test_legacy_identity_upgrade_requires_matching_certificate_evidence(
+        string $storedIdentity,
+        string $hostname,
+        string $csr,
+        string $stateDomain,
+        ?string $expectedIdentity
+    ): void {
+        Http::fake();
+        $status = $this->statusPayload(false, 'cert-1');
+        $status['system']['hostname'] = $hostname;
+        $status['ip']['public_ipv4'] = '203.0.113.10';
+        $status['agent']['subscription_proxy']['csr_pem'] = $csr;
+        $status['agent']['subscription_proxy']['cert_not_after'] = date('c', time() + 180 * 86400);
+        $original = [
+            'provider' => 'zerossl',
+            'certificate_id' => 'cert-1',
+            'domain' => $stateDomain,
+            'csr_hash' => hash('sha256', '-----BEGIN CERTIFICATE REQUEST-----test-----END CERTIFICATE REQUEST-----'),
+            'agent_identity' => $storedIdentity,
+            'status' => 'issued',
+            'expires_at' => date('c', time() + 180 * 86400),
+            'certificate_pem' => 'existing-certificate',
+            'ca_bundle_pem' => 'existing-ca-bundle',
+        ];
+        $machine = $this->createMachine(['subproxy_cert_domain' => null, 'subproxy_cert_state' => $original]);
+
+        app(ZeroSslCertificateService::class)->handleMachineStatus($machine, $status);
+
+        $state = $machine->fresh()->subproxy_cert_state;
+        $this->assertSame($expectedIdentity ?? $storedIdentity, $state['agent_identity']);
+        $this->assertSame('cert-1', $state['certificate_id']);
+        $this->assertSame('existing-certificate', $state['certificate_pem']);
+        if ($expectedIdentity === null) {
+            $this->assertSame($original, $state);
+        } else {
+            app(ZeroSslCertificateService::class)->handleMachineStatus($machine->fresh(), $status);
+            $this->assertSame($expectedIdentity, $machine->fresh()->subproxy_cert_state['agent_identity']);
+        }
+        Http::assertNothingSent();
+    }
+
+    public static function legacyIdentityCases(): array
+    {
+        $csr = '-----BEGIN CERTIFICATE REQUEST-----test-----END CERTIFICATE REQUEST-----';
+        return [
+            'old unknown placeholder with identical CSR' => ['unknown', 'unknown', $csr, '203.0.113.10', 'ipv4:203.0.113.10'],
+            'old localhost placeholder' => ['localhost', 'localhost', $csr, '203.0.113.10', 'ipv4:203.0.113.10'],
+            'old unprefixed hostname' => ['edge-a', 'Edge-A', $csr, '203.0.113.10', 'hostname:edge-a'],
+            'missing CSR remains blocked' => ['unknown', 'unknown', '', '203.0.113.10', null],
+            'different CSR remains blocked' => ['unknown', 'unknown', 'different-csr', '203.0.113.10', null],
+            'different domain remains blocked' => ['unknown', 'unknown', $csr, '203.0.113.11', null],
+            'missing old domain remains blocked' => ['unknown', 'unknown', $csr, '', null],
+            'different old hostname remains blocked' => ['edge-b', 'edge-a', $csr, '203.0.113.10', null],
+            'different modern IP remains blocked' => ['ipv4:203.0.113.11', 'unknown', $csr, '203.0.113.10', null],
+            'modern identity cannot masquerade as legacy hostname' => ['hostname:edge-b', 'hostname:edge-b', $csr, '203.0.113.10', null],
+        ];
+    }
+
     public function test_handle_machine_status_requests_validation_and_downloads_issued_certificate(): void
     {
         $machine = $this->createMachine([

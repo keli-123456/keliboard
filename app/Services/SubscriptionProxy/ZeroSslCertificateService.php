@@ -115,6 +115,10 @@ PEM;
         $csr = trim((string) data_get($proxy, 'csr_pem', ''));
         $agentIdentity = $this->machineAgentIdentity($status);
         $stateAgentIdentity = trim((string) ($state['agent_identity'] ?? ''));
+        if ($agentIdentity !== '' && $this->canUpgradeLegacyAgentIdentity($state, $status, $domain)) {
+            $stateAgentIdentity = $agentIdentity;
+            $state['agent_identity'] = $agentIdentity;
+        }
         if ($stateAgentIdentity !== '' && $agentIdentity !== '' && !hash_equals($stateAgentIdentity, $agentIdentity)) {
             Log::warning('Subscription proxy certificate report ignored from duplicate machine credentials', [
                 'machine_id' => (int) $machine->id,
@@ -264,6 +268,32 @@ PEM;
             $this->saveCertificateState($machine, $state, $domain, $hasConfiguredDomain);
             return false;
         }
+    }
+
+    private function canUpgradeLegacyAgentIdentity(array $state, array $status, string $domain): bool
+    {
+        $identity = trim((string) ($state['agent_identity'] ?? ''));
+        if ($identity === '' || str_contains($identity, ':')) {
+            return false;
+        }
+
+        // Older releases stored raw identities, including the "unknown" hostname.
+        // Only migrate the same legacy identity with the already-bound domain and CSR.
+        $csr = trim((string) data_get($status, 'agent.subscription_proxy.csr_pem', ''));
+        $reportedDomain = trim((string) data_get($status, 'agent.subscription_proxy.certificate_domain', ''));
+        if ($domain === '' || $reportedDomain !== $domain || ($state['domain'] ?? '') !== $domain
+            || $csr === '' || !hash_equals((string) ($state['csr_hash'] ?? ''), hash('sha256', $csr))) {
+            return false;
+        }
+
+        foreach (['system.hostname', 'system.machine_id', 'agent.instance_id'] as $path) {
+            $legacyIdentity = strtolower(trim((string) data_get($status, $path, '')));
+            if ($legacyIdentity !== '') {
+                return hash_equals($identity, $legacyIdentity);
+            }
+        }
+
+        return false;
     }
 
     private function machineAgentIdentity(array $status): string

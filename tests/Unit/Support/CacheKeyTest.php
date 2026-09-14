@@ -22,4 +22,16 @@ final class CacheKeyTest extends TestCase
             CacheKey::get('ADMIN_QUEUE_STATS_SNAPSHOT', 'site-1')
         );
     }
+
+    public function test_health_diagnostics_key_is_registered_without_masking_unknown_keys(): void
+    {
+        app()->instance('env', 'local');
+        $logger = $this->createMock(\Psr\Log\LoggerInterface::class);
+        $logger->expects($this->once())->method('warning')->with('Unknown cache key used: UNREGISTERED_TEST_KEY');
+        app()->instance('log', $logger);
+
+        $this->assertSame('ADMIN_SYSTEM_HEALTH_DIAGNOSTICS', CacheKey::get('ADMIN_SYSTEM_HEALTH_DIAGNOSTICS'));
+        $this->assertSame('ADMIN_SYSTEM_HEALTH_DIAGNOSTICS_site-1', CacheKey::get('ADMIN_SYSTEM_HEALTH_DIAGNOSTICS', 'site-1'));
+        $this->assertSame('UNREGISTERED_TEST_KEY', CacheKey::get('UNREGISTERED_TEST_KEY'));
+    }
 }

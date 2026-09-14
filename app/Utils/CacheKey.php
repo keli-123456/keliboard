@@ -18,6 +18,7 @@ class CacheKey
         'USER_SESSIONS' => '用户session',
         'FORGET_REQUEST_LIMIT' => '找回密码次数限制',
         'ADMIN_SYSTEM_STATUS_SNAPSHOT' => '管理端系统状态快照',
+        'ADMIN_SYSTEM_HEALTH_DIAGNOSTICS' => '管理端系统健康诊断快照',
         'ADMIN_QUEUE_STATS_SNAPSHOT' => '管理端队列统计快照'
     ];
 
