@@ -132,6 +132,46 @@ class UserNotificationTest extends TestCase
         $this->assertNull(DB::table('v2_ticket_message')->where('id', $message)->value('user_read_at'));
     }
 
+    public function test_new_support_reply_stays_after_the_legacy_question_before_and_after_reading(): void
+    {
+        $question = $this->message($this->user->id);
+        $this->migrate();
+        $reply = $this->message();
+        $controller = new TicketController();
+        $request = $this->request(['id' => $this->ticket->id]);
+
+        $detail = $controller->fetch($request)->getData(true)['data'];
+        $this->assertSame([$question, $reply], array_column($detail['message'], 'id'));
+        $this->assertSame([$reply], $detail['unread_message_ids']);
+
+        (new NotificationController())->read(
+            $this->request(['id' => $this->ticket->id, 'message_ids' => [$reply]]),
+            $this->notifications
+        );
+        $followUp = $this->message($this->user->id);
+        $detail = $controller->fetch($request)->getData(true)['data'];
+        $this->assertSame([$question, $reply, $followUp], array_column($detail['message'], 'id'));
+        $this->assertSame([], $detail['unread_message_ids']);
+    }
+
+    public function test_reading_one_same_second_reply_does_not_move_it_after_a_later_reply(): void
+    {
+        $this->migrate();
+        $question = $this->message($this->user->id);
+        $firstReply = $this->message();
+        $secondReply = $this->message();
+        DB::table('v2_ticket_message')->where('ticket_id', $this->ticket->id)
+            ->update(['created_at' => 1789350000, 'updated_at' => 1789350000]);
+        (new NotificationController())->read(
+            $this->request(['id' => $this->ticket->id, 'message_ids' => [$firstReply]]),
+            $this->notifications
+        );
+
+        $detail = (new TicketController())->fetch($this->request(['id' => $this->ticket->id]))->getData(true)['data'];
+        $this->assertSame([$question, $firstReply, $secondReply], array_column($detail['message'], 'id'));
+        $this->assertSame([$secondReply], $detail['unread_message_ids']);
+    }
+
     public function test_old_schema_is_unavailable_not_a_false_zero(): void
     {
         $response = (new NotificationController())->fetch($this->request(), $this->notifications);

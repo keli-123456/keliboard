@@ -31,8 +31,7 @@ class TicketController extends Controller
             if (!$ticket) {
                 return $this->fail([400, __('Ticket does not exist')]);
             }
-            $ticket->load('message');
-            $ticket['message'] = TicketMessage::where('ticket_id', $ticket->id)
+            $ticket['message'] = $ticket->message()
                 ->with(['ticket', 'attachments'])
                 ->get();
             $ticket['message']->each(function ($message) use ($ticket) {

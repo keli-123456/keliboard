@@ -123,6 +123,25 @@ final class TicketAiContextServiceTest extends TestCase
         $this->assertSame('assistant', $context['conversation'][1]['role']);
     }
 
+    public function test_explicit_ai_timestamp_order_still_overrides_default_relation_order(): void
+    {
+        $user = $this->createUser();
+        $ticket = $this->createTicket($user);
+        foreach ([['Later reply', 200], ['Earlier question', 100], ['Same-second follow-up', 200]] as [$message, $at]) {
+            TicketMessage::query()->create([
+                'ticket_id' => $ticket->id,
+                'user_id' => $user->id,
+                'message' => $message,
+                'created_at' => $at, 'updated_at' => $at,
+            ]);
+        }
+        $context = (new TicketAiContextService())->build($ticket, 12, null);
+        $this->assertSame(
+            ['Earlier question', 'Later reply', 'Same-second follow-up'],
+            array_column($context['conversation'], 'content')
+        );
+    }
+
     public function test_site_context_uses_site_brand_and_primary_domain(): void
     {
         $site = Site::query()->create([

@@ -380,6 +380,33 @@ final class SiteScopedUserDataTest extends TestCase
         $this->assertSame('high', app(SubscriptionRiskContextService::class)->build($user->id, $user->email)['risk_level']);
     }
 
+    public function test_admin_and_staff_ticket_details_keep_replies_in_send_order_after_read_changes(): void
+    {
+        (require base_path('database/migrations/2026_09_12_000001_add_ticket_message_user_read_at.php'))->up();
+        $site = $this->siteWithDomain('message-order', 'order.example.test', false);
+        $user = $this->createUser('order@example.test', $site);
+        $ticket = $this->createTicket($user, $site, 'Connection issue');
+        $ids = [];
+        foreach ([0, null, null] as $index => $readAt) {
+            $ids[] = $this->database->table('v2_ticket_message')->insertGetId([
+                'ticket_id' => $ticket->id,
+                'user_id' => $index === 1 ? 999 : $user->id,
+                'message' => ['Question', 'Support reply', 'Follow-up'][$index],
+                'created_at' => 1789350000, 'updated_at' => 1789350000,
+                'user_read_at' => $readAt,
+            ]);
+        }
+        foreach ([null, 1789350100] as $readAt) {
+            $this->database->table('v2_ticket_message')->where('id', $ids[1])->update(['user_read_at' => $readAt]);
+            foreach ([new AdminTicketController(), new StaffTicketController()] as $controller) {
+                $payload = $controller->fetch(Request::create('/ticket/fetch', 'POST', ['id' => $ticket->id]))->getData(true);
+                $this->assertSame('success', $payload['status']);
+                $this->assertSame($ids, array_column($payload['data']['messages'], 'id'));
+                $this->assertSame(['Question', 'Support reply', 'Follow-up'], array_column($payload['data']['messages'], 'message'));
+            }
+        }
+    }
+
     private function createSubscriptionControlEventTable(): void
     {
         $this->database->schema()->create('v2_subscription_control_event', function (Blueprint $table): void {

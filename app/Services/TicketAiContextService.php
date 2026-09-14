@@ -75,7 +75,7 @@ class TicketAiContextService
     {
         try {
             $ticket->loadMissing([
-                'messages' => fn ($query) => $query->orderBy('created_at')->orderBy('id'),
+                'messages' => fn ($query) => $query->reorder('created_at')->orderBy('id'),
                 'user.plan',
                 'site.setting',
                 'site.domains',

@@ -71,12 +71,14 @@ class Ticket extends Model
      */
     public function messages(): HasMany
     {
-        return $this->hasMany(TicketMessage::class, 'ticket_id', 'id');
+        // Read-state indexes must never determine conversation order.
+        return $this->hasMany(TicketMessage::class, 'ticket_id', 'id')
+            ->orderBy('id');
     }
     
     // 即将删除
     public function message(): HasMany
     {
-        return $this->hasMany(TicketMessage::class, 'ticket_id', 'id');
+        return $this->messages();
     }
 }
