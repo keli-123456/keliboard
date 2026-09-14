@@ -103,7 +103,9 @@ class AgentOperationsService
             $order = $context->order;
             $hold = $context->hold;
 
-            if ($context->status === AgentOrderContext::STATUS_PAID) {
+            $platformRecharge = app(AgentCollectionService::class)->isPlatform($context)
+                && ($context->pricing_snapshot['type'] ?? '') === 'recharge';
+            if ($context->status === AgentOrderContext::STATUS_PAID && !$platformRecharge) {
                 $totals['paid_sales_total'] += (int) $context->sale_amount;
             }
             if ($resolved['capture_status'] === AgentBalanceHold::STATUS_CAPTURED) {
@@ -243,7 +245,12 @@ class AgentOperationsService
         $monthCostTotal = (int) $month->cost;
         $monthCollectionFees = (int) $this->contextsForMonth($agentUserId)->reorder()->toBase()
             ->sum('pricing_snapshot->collection_fee_amount');
-        $monthMarginTotal = $monthSalesTotal - $monthCostTotal - $monthCollectionFees;
+        $recharges = $this->contextsForMonth($agentUserId)->where('pricing_snapshot->collection->mode', 'platform')
+            ->where('pricing_snapshot->type', 'recharge');
+        $rechargePrincipal = (int) (clone $recharges)->sum('sale_amount');
+        $rechargeFees = (int) (clone $recharges)->reorder()->toBase()->sum('pricing_snapshot->collection_fee_amount');
+        $monthSalesTotal -= $rechargePrincipal;
+        $monthMarginTotal = $monthSalesTotal - $monthCostTotal - $monthCollectionFees + $rechargeFees;
 
         return [
             'balance' => (int) ($agent->balance ?? 0),

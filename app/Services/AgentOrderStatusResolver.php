@@ -74,8 +74,10 @@ class AgentOrderStatusResolver
         return [
             'hold_status' => $holdStatus,
             'capture_status' => $captureStatus,
-            'margin_amount' => (int) $context->sale_amount - (int) $context->cost_amount
-                - ($platform ? app(AgentCollectionService::class)->fee((int) $context->sale_amount, app(AgentCollectionService::class)->forOrder($context)) : 0),
+            'margin_amount' => $platform && ($context->pricing_snapshot['type'] ?? '') === 'recharge' ? 0
+                : (int) $context->sale_amount - (int) $context->cost_amount
+                    - ($platform ? (int) ($context->pricing_snapshot['collection_fee_amount']
+                        ?? app(AgentCollectionService::class)->fee((int) $context->sale_amount, app(AgentCollectionService::class)->forOrder($context))) : 0),
             'abnormal_flags' => array_values(array_unique($flags)),
         ];
     }

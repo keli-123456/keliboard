@@ -24,15 +24,15 @@ class AgentCollectionService
         return AgentCollection::find($agentId) ?? $defaults;
     }
 
-    public function snapshot(int $agentId): array
+    public function snapshot(int $agentId, bool $prepaidOnly = false): array
     {
         $settings = $this->settings($agentId);
         if ($settings->mode !== 'platform') {
             return ['mode' => 'self'];
         }
-        if (!$settings->platform_enabled || empty($settings->payment_ids)
+        if (!$prepaidOnly && (!$settings->platform_enabled || empty($settings->payment_ids)
             || !Payment::where('owner_type', Payment::OWNER_PLATFORM)->where('payment', '!=', 'balance')
-                ->whereIn('id', $settings->payment_ids)->where('enable', true)->exists()) {
+                ->whereIn('id', $settings->payment_ids)->where('enable', true)->exists())) {
             throw new ApiException('平台代收暂不可用，请联系站点客服');
         }
         return [
@@ -77,6 +77,9 @@ class AgentCollectionService
             }
             if ($mode === 'platform' && (!$settings->platform_enabled || empty($settings->payment_ids))) {
                 throw new ApiException('请先由管理员开通平台代收渠道');
+            }
+            if ($mode === 'self' && $settings->mode === 'platform' && app(AgentPrepaidService::class)->hasLiabilities($agentId)) {
+                throw new ApiException('仍有代收余额或未完成订单，请先处理完毕再切换收款模式');
             }
             $settings->mode = $mode;
             $settings->updated_at = time();

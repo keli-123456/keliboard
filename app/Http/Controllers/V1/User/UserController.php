@@ -118,6 +118,7 @@ class UserController extends Controller
             return $this->fail([400, __('The user does not exist')]);
         }
         $user['avatar_url'] = 'https://cdn.v2ex.com/gravatar/' . md5($user->email) . '?s=64&d=identicon';
+        $user['agent_prepaid'] = app(\App\Services\AgentPrepaidService::class)->forRequest($request);
         return $this->success($user);
     }
 

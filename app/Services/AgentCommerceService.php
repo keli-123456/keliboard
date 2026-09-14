@@ -118,8 +118,16 @@ class AgentCommerceService
                 throw new ApiException('Agent user does not exist');
             }
             $this->activeProfile($lockedAgent);
-            if (app(AgentCollectionService::class)->settings((int) $lockedAgent->id)->mode === 'platform') {
-                throw new ApiException('平台代收暂仅支持直接购买套餐，不支持充值余额');
+            $collection = app(AgentCollectionService::class)->snapshot((int) $lockedAgent->id);
+            $platformCollection = $collection['mode'] === 'platform';
+            if ($platformCollection) {
+                if (!$this->hasTable('v2_agent_prepaid_fund') || !$this->hasTable('v2_agent_prepaid_allocation')) {
+                    throw new ApiException('请先完成代收余额数据库升级');
+                }
+                $bonusAmount = 0;
+                if ($amount <= app(AgentCollectionService::class)->fee($amount, $collection)) {
+                    throw new ApiException('充值金额不足以覆盖代收服务费');
+                }
             }
 
             $lockedUser = User::query()
@@ -165,6 +173,8 @@ class AgentCommerceService
                 'is_primary' => (bool) ($context['is_primary'] ?? false),
             ];
             $pricingSnapshot = [
+                'collection' => $collection,
+                'collection_fee_amount' => $platformCollection ? app(AgentCollectionService::class)->fee($amount, $collection) : 0,
                 'type' => 'recharge',
                 'period' => 'recharge',
                 'sale_amount' => max(0, $amount),
@@ -232,23 +242,19 @@ class AgentCommerceService
 
             OrderService::assertNoIncompleteOrder($lockedUser->id);
 
-            $collection = app(AgentCollectionService::class)->snapshot((int) $lockedAgent->id);
+            $prepaid = app(AgentPrepaidService::class);
+            $prepaidBalance = $prepaid->balance((int) $lockedUser->id, (int) $lockedAgent->id);
+            $collection = app(AgentCollectionService::class)->snapshot((int) $lockedAgent->id, $prepaidBalance >= (int) $sale['sale_amount']);
             $platformCollection = $collection['mode'] === 'platform';
-            if ($platformCollection && $useUserBalance) {
-                throw new ApiException('平台代收请直接支付套餐订单，暂不支持余额自动续费');
-            }
-            if ($platformCollection && ((int) $sale['sale_amount'] <= 0
-                || (int) $sale['sale_amount'] < (int) $cost['amount'] + app(AgentCollectionService::class)->fee((int) $sale['sale_amount'], $collection))) {
-                throw new ApiException('代收售价不足以覆盖成本与服务费');
-            }
             if (!$platformCollection && $this->availableBalance($lockedAgent) < (int) $cost['amount']) {
                 throw new ApiException(self::INSUFFICIENT_SITE_BALANCE_MESSAGE);
             }
 
             $saleAmount = (int) $sale['sale_amount'];
-            if ($useUserBalance && (int) $lockedUser->balance < $saleAmount) {
+            if ($useUserBalance && ($platformCollection ? $prepaidBalance : (int) $lockedUser->balance) < $saleAmount) {
                 throw new ApiException(__('Insufficient balance'));
             }
+            $balanceAmount = $platformCollection ? min($prepaidBalance, $saleAmount) : ($useUserBalance ? $saleAmount : 0);
 
             $now = time();
             $order = new Order([
@@ -257,14 +263,14 @@ class AgentCommerceService
                 'plan_id' => $plan->id,
                 'period' => $period,
                 'trade_no' => Helper::generateOrderNo(),
-                'total_amount' => $useUserBalance ? 0 : $saleAmount,
+                'total_amount' => $saleAmount - $balanceAmount,
                 'discount_amount' => 0,
-                'balance_amount' => $useUserBalance ? $saleAmount : 0,
+                'balance_amount' => $balanceAmount,
             ]);
             $orderService = new OrderService($order);
             $orderService->setOrderType($lockedUser);
 
-            if ($useUserBalance && $saleAmount > 0) {
+            if (!$platformCollection && $useUserBalance && $saleAmount > 0) {
                 if (!app(UserService::class)->addBalance($lockedUser->id, -$saleAmount)) {
                     throw new ApiException(__('Insufficient balance'));
                 }
@@ -295,9 +301,16 @@ class AgentCommerceService
                 throw new ApiException(__('Failed to create order'));
             }
 
+            $prepaidFee = $platformCollection ? $prepaid->reserve($order, (int) $lockedAgent->id, $balanceAmount) : 0;
+            $collectionFee = $platformCollection
+                ? $prepaidFee + ($order->total_amount > 0 ? app(AgentCollectionService::class)->fee((int) $order->total_amount, $collection) : 0) : 0;
+            if ($platformCollection && ($saleAmount <= 0 || $saleAmount < (int) $cost['amount'] + $collectionFee)) {
+                throw new ApiException('代收售价不足以覆盖成本与服务费');
+            }
             $pricingSnapshot = array_merge($sale['pricing_snapshot'], [
                 'collection' => $collection,
-                'collection_fee_amount' => $platformCollection ? app(AgentCollectionService::class)->fee($saleAmount, $collection) : 0,
+                'prepaid_amount' => $platformCollection ? $balanceAmount : 0,
+                'collection_fee_amount' => $collectionFee,
                 'platform_base_amount' => (int) $cost['platform_base_amount'],
                 'cost_base_amount' => (int) $cost['base_amount'],
                 'cost_amount' => (int) $cost['amount'],
@@ -598,11 +611,7 @@ class AgentCommerceService
             }
 
             if (app(AgentCollectionService::class)->isPlatform($context)) {
-                if ((int) $context->payment_id !== (int) $order->payment_id || !$order->payment_id
-                    || ($context->payment_snapshot['owner_type'] ?? null) !== Payment::OWNER_PLATFORM
-                    || (int) $order->balance_amount !== 0 || (int) $order->total_amount !== (int) $context->sale_amount) {
-                    throw new ApiException('平台代收订单支付来源不匹配');
-                }
+                app(AgentPrepaidService::class)->capture($order, $context);
                 $context->status = AgentOrderContext::STATUS_PAID;
                 $context->updated_at = time();
                 $context->save();
@@ -887,6 +896,7 @@ class AgentCommerceService
         $profile = AgentProfile::query()
             ->where('user_id', $agent->id)
             ->where('status', AgentCenterService::STATUS_ACTIVE)
+            ->lockForUpdate()
             ->first();
         if (!$profile) {
             throw new ApiException('Agent permission is not active');

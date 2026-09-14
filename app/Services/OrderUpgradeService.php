@@ -110,6 +110,9 @@ class OrderUpgradeService
                 throw new ApiException(__('You have an unpaid or pending order, please try again later or cancel it'));
             }
 
+            $user = User::whereKey($user->id)->lockForUpdate()->firstOrFail();
+            OrderService::assertNoIncompleteOrder((int) $user->id);
+
             $sourceOrder = Order::query()
                 ->where('id', $quote->source_order_id)
                 ->where('user_id', $user->id)
@@ -338,9 +341,23 @@ class OrderUpgradeService
         if (!array_key_exists($periodKey, $targetPlan->prices ?? [])) {
             return $this->deny(__('This payment period cannot be purchased, please choose another period'));
         }
+        if ((int) $sourceOrder->status !== Order::STATUS_COMPLETED || $sourceOrder->refund_disposed_at || (int) $sourceOrder->refund_amount > 0) {
+            return $this->deny(__('Source order does not exist'));
+        }
 
         try {
             $targetPricing = $this->resolveTargetPricing($user, $targetPlan, $periodKey, $request, $tenantContext);
+            $sourceContext = DB::getSchemaBuilder()->hasTable('v2_agent_order_context')
+                ? app(AgentCommerceService::class)->contextForOrder($sourceOrder) : null;
+            $agentId = (int) ($targetPricing['agent_context']['agent_user_id'] ?? 0);
+            if (app(AgentCollectionService::class)->isPlatform($sourceContext)
+                && ((int) $sourceContext->agent_user_id !== $agentId || ($targetPricing['source'] ?? '') !== 'agent')) {
+                throw new ApiException('代收旧订单不能跨代理抵扣');
+            }
+            if ($agentId && app(AgentCollectionService::class)->settings($agentId)->mode === 'platform'
+                && (!$sourceContext || (int) $sourceContext->agent_user_id !== $agentId || $sourceContext->status !== AgentOrderContext::STATUS_PAID)) {
+                throw new ApiException('代收升级需要可核实成本的本代理旧订单');
+            }
         } catch (ApiException $exception) {
             return $this->deny($exception->getMessage());
         }
@@ -569,12 +586,15 @@ class OrderUpgradeService
             throw new ApiException('Agent user does not exist');
         }
 
-        if (app(AgentCollectionService::class)->settings((int) $agent->id)->mode === 'platform'
-            || app(AgentCollectionService::class)->isPlatform(app(AgentCommerceService::class)->contextForOrder($sourceOrder))) {
-            throw new ApiException('平台代收暂不支持差价升级，请联系站点客服');
-        }
         $agentCommerce = app(AgentCommerceService::class);
         $targetCost = $agentCommerce->calculatePlatformCost($agent, $targetPlan, $period);
+        $prepaid = app(AgentPrepaidService::class);
+        $prepaidBalance = $prepaid->balance((int) $user->id, (int) $agent->id);
+        $collection = app(AgentCollectionService::class)->snapshot((int) $agent->id, $prepaidBalance >= $payableAmount);
+        $platformCollection = $collection['mode'] === 'platform';
+        if ($platformCollection) {
+            $prepaid->assertUpgradeSources($order, (int) $agent->id);
+        }
         $sourceCostBasis = $this->sourceCostBasisForAgent($sourceOrder, (int) $agent->id);
         $costPricing = $this->calculatePricing(
             $user,
@@ -586,7 +606,7 @@ class OrderUpgradeService
         );
         $costAmount = max(0, (int) $costPricing['final_pay_amount']);
 
-        if ($agentCommerce->availableBalance($agent) < $costAmount) {
+        if (!$platformCollection && $agentCommerce->availableBalance($agent) < $costAmount) {
             throw new ApiException(AgentCommerceService::INSUFFICIENT_SITE_BALANCE_MESSAGE);
         }
 
@@ -600,9 +620,20 @@ class OrderUpgradeService
 
         $this->syncAgentOwnership($agent, $lockedUser);
 
+        $prepaidAmount = $platformCollection ? min($prepaidBalance, $payableAmount) : 0;
+        $prepaidFee = $prepaid->reserve($order, (int) $agent->id, $prepaidAmount);
+        $externalAmount = $payableAmount - $prepaidAmount;
+        $collectionFee = $platformCollection ? $prepaidFee
+            + ($externalAmount > 0 ? app(AgentCollectionService::class)->fee($externalAmount, $collection) : 0) : 0;
+        if ($platformCollection && $payableAmount < $costAmount + $collectionFee) {
+            throw new ApiException('升级差价不足以覆盖成本与代收服务费');
+        }
+
         $now = time();
         $order->invite_user_id = $lockedUser->invite_user_id;
         $order->commission_balance = 0;
+        $order->balance_amount = $prepaidAmount;
+        $order->total_amount = $externalAmount;
         $order->updated_at = $now;
         if (!$order->save()) {
             throw new ApiException(__('Failed to create order'));
@@ -610,6 +641,9 @@ class OrderUpgradeService
 
         $domainSnapshot = $this->agentDomainSnapshot($agentContext);
         $pricingSnapshot = array_merge(is_array($targetPricing['pricing_snapshot'] ?? null) ? $targetPricing['pricing_snapshot'] : [], [
+            'collection' => $collection,
+            'prepaid_amount' => $prepaidAmount,
+            'collection_fee_amount' => $collectionFee,
             'order_type' => 'discount_upgrade',
             'sale_amount' => $payableAmount,
             'target_sale_amount' => max(0, (int) ($targetPricing['sale_amount'] ?? $payableAmount)),
@@ -625,7 +659,7 @@ class OrderUpgradeService
             'cost_pricing_detail' => $costPricing,
         ]);
 
-        $hold = AgentBalanceHold::query()->create([
+        $hold = $platformCollection ? null : AgentBalanceHold::query()->create([
             'agent_user_id' => $agent->id,
             'order_id' => $order->id,
             'trade_no' => $order->trade_no,
@@ -651,7 +685,7 @@ class OrderUpgradeService
             'payment_id' => null,
             'sale_amount' => $payableAmount,
             'cost_amount' => $costAmount,
-            'hold_id' => $hold->id,
+            'hold_id' => $hold?->id,
             'status' => AgentOrderContext::STATUS_PENDING,
             'pricing_snapshot' => $pricingSnapshot,
             'domain_snapshot' => $domainSnapshot,
@@ -668,7 +702,7 @@ class OrderUpgradeService
                 ->where('order_id', $sourceOrder->id)
                 ->where('agent_user_id', $agentUserId)
                 ->first();
-            if ($context && (int) $context->cost_amount > 0) {
+            if ($context && (int) $context->cost_amount >= 0) {
                 return (int) $context->cost_amount;
             }
         } catch (\Throwable) {

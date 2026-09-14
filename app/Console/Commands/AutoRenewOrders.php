@@ -83,7 +83,9 @@ class AutoRenewOrders extends Command
                 }
 
                 $amount = $this->getAutoRenewAmount($user, $plan, $user->auto_renew_period);
-                if ($amount > 0 && (int) $user->balance < $amount) {
+                $prepaid = app(\App\Services\AgentPrepaidService::class)->forUser($user);
+                $availableBalance = $prepaid && $prepaid['active'] ? (int) $prepaid['balance'] : (int) $user->balance;
+                if ($amount > 0 && $availableBalance < $amount) {
                     return;
                 }
 

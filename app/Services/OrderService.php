@@ -223,7 +223,9 @@ class OrderService
             HookManager::call('order.open.before', $order);
 
             if ($isRechargeOrder) {
-                $this->user->balance += (int) $order->total_amount + (int) $order->bonus_amount;
+                if (!app(AgentPrepaidService::class)->deposit($order)) {
+                    $this->user->balance += (int) $order->total_amount + (int) $order->bonus_amount;
+                }
             } else {
                 match ((string) $order->period) {
                     Plan::PERIOD_ONETIME => $this->buyByOneTime($plan),
@@ -418,7 +420,7 @@ class OrderService
                 if (!$order->save()) {
                     throw new \Exception('Failed to save order status.');
                 }
-                if ($order->balance_amount) {
+                if ($order->balance_amount && !app(AgentPrepaidService::class)->release($order)) {
                     $userService = new UserService();
                     if (!$userService->addBalance($order->user_id, $order->balance_amount)) {
                         throw new \Exception('Failed to add balance.');

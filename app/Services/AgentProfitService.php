@@ -27,18 +27,18 @@ class AgentProfitService
         if (!$order->paid_at || $order->refund_disposed_at || (int) $order->refund_amount > 0) {
             return;
         }
-        if ((int) $order->balance_amount !== 0 || (int) $order->plan_id === 0
-            || (int) $order->total_amount !== (int) $context->sale_amount
-            || (int) $order->payment_id !== (int) $context->payment_id
-            || ($context->payment_snapshot['owner_type'] ?? null) !== 'platform') {
-            throw new ApiException('平台代收资金来源校验失败，订单暂不结算');
+        if ((int) $order->plan_id === 0) {
+            return;
         }
+        if ($context->status !== \App\Models\AgentOrderContext::STATUS_PAID) {
+            throw new ApiException('代收订单尚未确认收款');
+        }
+        $fee = app(AgentPrepaidService::class)->assertFunding($order, $context);
         $wallet = $this->lockWallet((int) $context->agent_user_id);
         if (DB::table(self::PROFIT)->where('order_id', $order->id)->exists()) {
             return;
         }
         $snapshot = $collection->forOrder($context);
-        $fee = $collection->fee((int) $context->sale_amount, $snapshot);
         $amount = (int) $context->sale_amount - (int) $context->cost_amount - $fee;
         if ($amount < 0) {
             throw new ApiException('代收售价不足以覆盖成本与服务费');
@@ -82,6 +82,28 @@ class AgentProfitService
         $this->saveWallet($wallet, $before, 'order:' . $order->id . ':reverse', $actorId);
     }
 
+    public function reverseAffectedOrders(Order $order, int $actorId): void
+    {
+        $queue = [(int) $order->id];
+        $seen = [];
+        while ($queue) {
+            $id = array_shift($queue);
+            if (isset($seen[$id])) {
+                continue;
+            }
+            $seen[$id] = true;
+            $affected = Order::whereKey($id)->where('user_id', $order->user_id)->lockForUpdate()->first();
+            if (!$affected) {
+                continue;
+            }
+            $this->reverse($affected, $actorId);
+            array_push($queue, ...app(AgentPrepaidService::class)->reverseRecharge($affected));
+            $upgrades = Order::where('user_id', $order->user_id)->where('type', Order::TYPE_DISCOUNT_UPGRADE)
+                ->whereJsonContains('upgrade_source_order_ids', $id)->pluck('id')->all();
+            array_push($queue, ...$upgrades);
+        }
+    }
+
     public function settle(int $orderId): bool
     {
         return DB::transaction(function () use ($orderId) {
@@ -95,6 +117,15 @@ class AgentProfitService
             }
             if ((int) $order->status !== Order::STATUS_COMPLETED) {
                 return false;
+            }
+            $context = app(AgentCommerceService::class)->contextForOrder($order);
+            if (app(AgentCollectionService::class)->isPlatform($context)) {
+                try {
+                    app(AgentPrepaidService::class)->assertFunding($order, $context);
+                } catch (ApiException) {
+                    $this->reverse($order);
+                    return false;
+                }
             }
             $profit = DB::table(self::PROFIT)->where('order_id', $orderId)->first();
             if (!$profit || $profit->status !== 'pending' || (int) $profit->available_at > time()) {

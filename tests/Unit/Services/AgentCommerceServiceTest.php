@@ -99,7 +99,7 @@ final class AgentCommerceServiceTest extends TestCase
         $this->assertSame(Order::STATUS_PROCESSING, (int) $order->fresh()->status);
     }
 
-    public function test_platform_collection_rejects_balance_auto_renew_and_recharge(): void
+    public function test_platform_collection_rejects_unverified_balance_but_accepts_recharge_without_bonus(): void
     {
         [$agent, $buyer, $plan] = $this->platformFixture();
         AgentUser::create(['agent_user_id' => $agent->id, 'sub_user_id' => $buyer->id]);
@@ -110,22 +110,21 @@ final class AgentCommerceServiceTest extends TestCase
             app(AgentCommerceService::class)->createAutoRenewOrder($buyer, $plan, Plan::PERIOD_MONTHLY);
             $this->fail('Unverified balance must not fund platform-collected orders');
         } catch (ApiException $e) {
-            $this->assertStringContainsString('余额自动续费', $e->getMessage());
+            $this->assertSame('Insufficient balance', $e->getMessage());
         }
-        try {
-            app(AgentCommerceService::class)->createRechargeOrderFromRequest($buyer, 1000, 100, $this->requestForHost('profit.example.test'));
-            $this->fail('Recharge must not enter platform collection');
-        } catch (ApiException $e) {
-            $this->assertStringContainsString('充值余额', $e->getMessage());
-        }
-        $this->assertSame(0, Order::count());
+        $order = app(AgentCommerceService::class)->createRechargeOrderFromRequest($buyer, 1000, 100, $this->requestForHost('profit.example.test'));
+        $this->assertSame(0, (int) $order->bonus_amount);
+        $this->assertSame(1, Order::count());
         $this->assertSame(99999, (int) $buyer->fresh()->balance);
     }
 
-    private function platformFixture(): array
+    private function platformFixture(bool $prepaidSchema = true): array
     {
         $this->createPaymentTable();
         (require base_path('database/migrations/2026_09_14_190000_create_agent_profit_accounts.php'))->up();
+        if ($prepaidSchema) {
+            (require base_path('database/migrations/2026_09_14_200000_create_agent_prepaid_funds.php'))->up();
+        }
         $agent = $this->createActiveAgent('profit-agent@example.test', 0);
         $this->assignDomain($agent, 'profit.example.test');
         $buyer = $this->createUser('profit-buyer@example.test');
@@ -141,6 +140,234 @@ final class AgentCommerceServiceTest extends TestCase
             'settlement_days' => 7, 'minimum_withdrawal' => 1000, 'updated_at' => time(),
         ]);
         return [$agent, $buyer, $plan, $payment];
+    }
+
+    private function payPlatform(Order $order, \App\Models\Payment $payment): Order
+    {
+        $this->bindSynchronousBusDispatcher();
+        if ((int) $order->total_amount > 0 && (int) $order->status === Order::STATUS_PENDING) {
+            $order = app(AgentCommerceService::class)->assignPaymentForCheckout($order, $payment, null);
+        }
+        $this->assertTrue((new OrderService($order))->paid('test-' . $order->trade_no));
+        $this->assertSame(Order::STATUS_COMPLETED, (int) $order->fresh()->status);
+        return $order->fresh();
+    }
+
+    private function prepaidRecharge(User $buyer, \App\Models\Payment $payment, int $amount = 2600): Order
+    {
+        $order = app(AgentCommerceService::class)->createRechargeOrderFromRequest($buyer, $amount, 100,
+            $this->requestForHost('profit.example.test', $buyer));
+        return $this->payPlatform($order, $payment);
+    }
+
+    public function test_platform_recharge_credits_only_principal_once_and_never_accrues_profit(): void
+    {
+        [$agent, $buyer, , $payment] = $this->platformFixture();
+        $order = $this->prepaidRecharge($buyer, $payment);
+        $this->payPlatform($order, $payment);
+        $fund = DB::table('v2_agent_prepaid_fund')->first();
+        $this->assertSame(2600, (int) $fund->remaining_amount);
+        $this->assertSame(52, (int) $fund->remaining_fee);
+        $this->assertSame(0, (int) $buyer->fresh()->balance);
+        $this->assertSame(0, (int) $agent->fresh()->balance);
+        $this->assertSame(1, DB::table('v2_agent_prepaid_fund')->count());
+        $this->assertSame(0, DB::table('v2_agent_profit')->count());
+        $this->assertSame(0, app(\App\Services\AgentOperationsService::class)->agentSummary($agent)['month_margin_total']);
+        $this->assertSame(0, app(\App\Services\AgentOperationsService::class)->agentSummary($agent)['month_sales_total']);
+    }
+
+    public function test_auto_renew_uses_prepaid_principal_with_original_fee_not_current_fee(): void
+    {
+        [$agent, $buyer, $plan, $payment] = $this->platformFixture();
+        $this->prepaidRecharge($buyer, $payment);
+        \App\Models\AgentCollection::whereKey($agent->id)->update(['fee_bps' => 2000, 'fee_fixed' => 100, 'platform_enabled' => false]);
+        $order = app(AgentCommerceService::class)->createAutoRenewOrder($buyer->fresh(), $plan, Plan::PERIOD_MONTHLY);
+        $this->assertSame(1300, (int) $order->balance_amount);
+        $this->assertSame(0, (int) $order->total_amount);
+        $order = $this->payPlatform($order, $payment);
+        $this->assertSame(1300, app(\App\Services\AgentPrepaidService::class)->balance($buyer->id, $agent->id));
+        $this->assertSame(26, (int) DB::table('v2_agent_profit')->value('fee_amount'));
+        $this->assertSame(774, (int) DB::table('v2_agent_profit')->value('amount'));
+        $this->assertSame(1300, app(\App\Services\AgentOperationsService::class)->agentSummary($agent)['month_sales_total']);
+        $this->assertSame(0, (int) $agent->fresh()->balance);
+        $this->assertSame(774, app(\App\Services\AgentOrderStatusResolver::class)->resolve(AgentOrderContext::where('order_id', $order->id)->first())['margin_amount']);
+    }
+
+    public function test_scheduled_auto_renew_completes_with_zero_ordinary_balance(): void
+    {
+        [$agent, $buyer, , $payment] = $this->platformFixture();
+        $this->prepaidRecharge($buyer, $payment);
+        $buyer->refresh();
+        $buyer->auto_renew_enable = true;
+        $buyer->auto_renew_period = Plan::PERIOD_MONTHLY;
+        $buyer->save();
+        (new \App\Console\Commands\AutoRenewOrders())->handle();
+        (new \App\Console\Commands\AutoRenewOrders())->handle();
+        $this->assertSame(2, Order::count());
+        $this->assertGreaterThan(time() + 86400, (int) $buyer->fresh()->expired_at);
+        $this->assertSame(1300, app(\App\Services\AgentPrepaidService::class)->balance($buyer->id, $agent->id));
+    }
+
+    public function test_mixed_payment_apportions_recharge_fee_and_only_charges_external_remainder(): void
+    {
+        [$agent, $buyer, $plan, $payment] = $this->platformFixture();
+        \App\Models\AgentCollection::whereKey($agent->id)->update(['fee_fixed' => 100]);
+        $this->prepaidRecharge($buyer, $payment, 1000);
+        $order = app(AgentCommerceService::class)->createOrderFromRequest($buyer->fresh(), $plan, Plan::PERIOD_MONTHLY, null,
+            $this->requestForHost('profit.example.test', $buyer));
+        $this->assertSame(300, (int) $order->total_amount);
+        $this->assertSame(1000, (int) $order->balance_amount);
+        $this->payPlatform($order, $payment);
+        $this->assertSame(226, (int) DB::table('v2_agent_profit')->value('fee_amount'));
+        $this->assertSame(574, (int) DB::table('v2_agent_profit')->value('amount'));
+        $this->assertSame(0, app(\App\Services\AgentPrepaidService::class)->balance($buyer->id, $agent->id));
+    }
+
+    public function test_cancel_restores_the_same_prepaid_fund_and_fee_once(): void
+    {
+        [$agent, $buyer, $plan, $payment] = $this->platformFixture();
+        $this->prepaidRecharge($buyer, $payment);
+        $order = app(AgentCommerceService::class)->createAutoRenewOrder($buyer->fresh(), $plan, Plan::PERIOD_MONTHLY);
+        $this->assertTrue((new OrderService($order))->cancel());
+        $this->assertFalse((new OrderService($order))->cancel());
+        $this->assertSame(2600, app(\App\Services\AgentPrepaidService::class)->balance($buyer->id, $agent->id));
+        $this->assertSame(52, (int) DB::table('v2_agent_prepaid_fund')->value('remaining_fee'));
+        $this->assertSame(0, (int) $buyer->fresh()->balance);
+        $this->assertSame('released', DB::table('v2_agent_prepaid_allocation')->value('status'));
+    }
+
+    public function test_mode_switch_cannot_strand_prepaid_funds(): void
+    {
+        [$agent, $buyer, , $payment] = $this->platformFixture();
+        $this->prepaidRecharge($buyer, $payment);
+        $this->expectException(ApiException::class);
+        app(\App\Services\AgentCollectionService::class)->setMode($agent->id, 'self');
+    }
+
+    public function test_recharge_refund_revokes_unspent_funds_and_related_profit(): void
+    {
+        [$agent, $buyer, $plan, $payment] = $this->platformFixture();
+        $recharge = $this->prepaidRecharge($buyer, $payment);
+        $order = app(AgentCommerceService::class)->createAutoRenewOrder($buyer->fresh(), $plan, Plan::PERIOD_MONTHLY);
+        $this->payPlatform($order, $payment);
+        DB::transaction(fn () => app(\App\Services\AgentProfitService::class)->reverseAffectedOrders($recharge, 99));
+        DB::transaction(fn () => app(\App\Services\AgentProfitService::class)->reverseAffectedOrders($recharge, 99));
+        $this->assertSame(0, app(\App\Services\AgentPrepaidService::class)->balance($buyer->id, $agent->id));
+        $this->assertSame('reversed', DB::table('v2_agent_profit')->value('status'));
+        $this->assertEquals(0, app(\App\Services\AgentProfitService::class)->summary($agent->id)['pending']);
+    }
+
+    public function test_refunded_recharge_cannot_fund_a_reserved_order_or_reappear_on_cancel(): void
+    {
+        [$agent, $buyer, $plan, $payment] = $this->platformFixture();
+        $recharge = $this->prepaidRecharge($buyer, $payment);
+        $order = app(AgentCommerceService::class)->createAutoRenewOrder($buyer->fresh(), $plan, Plan::PERIOD_MONTHLY);
+        DB::transaction(fn () => app(\App\Services\AgentProfitService::class)->reverseAffectedOrders($recharge, 99));
+        $this->assertFalse((new OrderService($order))->paid('invalid-funding'));
+        $this->assertTrue((new OrderService($order))->cancel());
+        $this->assertSame(0, app(\App\Services\AgentPrepaidService::class)->balance($buyer->id, $agent->id));
+        $this->assertSame(0, DB::table('v2_agent_profit')->count());
+    }
+
+    public function test_prepaid_principal_cannot_be_spent_by_another_agent(): void
+    {
+        [, $buyer, , $payment] = $this->platformFixture();
+        $this->prepaidRecharge($buyer, $payment);
+        $order = new Order(['user_id' => $buyer->id]);
+        $this->expectException(ApiException::class);
+        DB::transaction(fn () => app(\App\Services\AgentPrepaidService::class)->reserve($order, 99999, 1000));
+    }
+
+    public static function upgradeFundingModes(): array
+    {
+        return ['external' => [false, false], 'prepaid' => [true, false], 'cancel_prepaid' => [true, true]];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('upgradeFundingModes')]
+    public function test_platform_discount_upgrade_uses_verified_cost_and_accrues_only_the_difference(bool $usePrepaid, bool $cancel): void
+    {
+        [$agent, $buyer, $plan, $payment] = $this->platformFixture();
+        $source = $this->payPlatform(app(AgentCommerceService::class)->createOrderFromRequest($buyer, $plan,
+            Plan::PERIOD_MONTHLY, null, $this->requestForHost('profit.example.test')), $payment);
+        if ($usePrepaid) {
+            $this->prepaidRecharge($buyer->fresh(), $payment, 5200);
+        }
+        $target = $this->createPlan('Upgrade', [Plan::PERIOD_MONTHLY => 20.00]);
+        $this->setAgentPrice($agent, $target, Plan::PERIOD_MONTHLY, 2600);
+        $plan->upgrade_to_plan_ids = [$target->id];
+        $plan->save();
+        $this->createOrderUpgradeQuoteTable();
+        $this->bindTestSettings(['upgrade_v2_enable' => true, 'plan_change_enable' => true, 'agent_center_discount_percent' => 50]);
+        $buyer->refresh();
+        $preview = app(\App\Services\OrderUpgradeService::class)->previewUpgrade($buyer, $target, Plan::PERIOD_MONTHLY);
+        $this->assertTrue($preview['allow_upgrade'], (string) $preview['reason']);
+        $order = app(\App\Services\OrderUpgradeService::class)->confirmUpgrade($buyer, $preview['quote_token']);
+        $context = AgentOrderContext::where('order_id', $order->id)->first();
+        $this->assertNull($context->hold_id);
+        $this->assertLessThan(2600, (int) $context->sale_amount);
+        $this->assertLessThan(1000, (int) $context->cost_amount);
+        $this->assertSame($plan->id, (int) $buyer->fresh()->plan_id);
+        if ($usePrepaid) {
+            $this->assertSame(0, (int) $order->total_amount);
+            $this->assertSame((int) $context->sale_amount, (int) $order->balance_amount);
+        }
+        if ($cancel) {
+            $beforeExpiry = $buyer->fresh()->expired_at;
+            $this->assertTrue((new OrderService($order))->cancel());
+            $this->assertSame($plan->id, (int) $buyer->fresh()->plan_id);
+            $this->assertSame($beforeExpiry, $buyer->fresh()->expired_at);
+            $this->assertSame(5200, app(\App\Services\AgentPrepaidService::class)->balance($buyer->id, $agent->id));
+            $this->assertSame(1, DB::table('v2_agent_profit')->count());
+            return;
+        }
+        $this->payPlatform($order, $payment);
+        $this->assertSame($target->id, (int) $buyer->fresh()->plan_id);
+        $this->assertSame(0, (int) $agent->fresh()->balance);
+        $this->assertSame(2, DB::table('v2_agent_profit')->count());
+        DB::transaction(fn () => app(\App\Services\AgentProfitService::class)->reverseAffectedOrders($source, 99));
+        $this->assertSame(2, DB::table('v2_agent_profit')->where('status', 'reversed')->count());
+    }
+
+    public function test_margin_failure_rolls_back_prepaid_reservation(): void
+    {
+        [$agent, $buyer, $plan, $payment] = $this->platformFixture();
+        \App\Models\AgentCollection::whereKey($agent->id)->update(['fee_bps' => 8000]);
+        $this->prepaidRecharge($buyer, $payment, 1300);
+        try {
+            app(AgentCommerceService::class)->createAutoRenewOrder($buyer->fresh(), $plan, Plan::PERIOD_MONTHLY);
+            $this->fail('Insufficient margin must not create an unfunded profit');
+        } catch (ApiException $e) {
+            $this->assertStringContainsString('成本', $e->getMessage());
+        }
+        $this->assertSame(1300, app(\App\Services\AgentPrepaidService::class)->balance($buyer->id, $agent->id));
+        $this->assertSame(0, DB::table('v2_agent_prepaid_allocation')->count());
+        $this->assertSame(1, Order::count());
+    }
+
+    public function test_recharge_cannot_start_before_prepaid_schema_is_ready(): void
+    {
+        [, $buyer] = $this->platformFixture(false);
+        try {
+            app(AgentCommerceService::class)->createRechargeOrderFromRequest($buyer, 1000, 0, $this->requestForHost('profit.example.test', $buyer));
+            $this->fail('Do not collect money before the prepaid ledger is ready');
+        } catch (ApiException $e) {
+            $this->assertStringContainsString('数据库升级', $e->getMessage());
+        }
+        $this->assertSame(0, Order::count());
+    }
+
+    public function test_multiple_recharge_lots_preserve_exact_total_fees(): void
+    {
+        [$agent, $buyer, $plan, $payment] = $this->platformFixture();
+        $this->prepaidRecharge($buyer, $payment, 1301);
+        $this->prepaidRecharge($buyer->fresh(), $payment, 1299);
+        for ($i = 0; $i < 2; $i++) {
+            $this->payPlatform(app(AgentCommerceService::class)->createAutoRenewOrder($buyer->fresh(), $plan, Plan::PERIOD_MONTHLY), $payment);
+        }
+        $this->assertSame(0, app(\App\Services\AgentPrepaidService::class)->balance($buyer->id, $agent->id));
+        $this->assertSame(53, (int) DB::table('v2_agent_profit')->sum('fee_amount'));
+        $this->assertSame(53, (int) DB::table('v2_agent_prepaid_fund')->sum('fee_amount'));
+        $this->assertSame(0, (int) DB::table('v2_agent_prepaid_fund')->sum('remaining_fee'));
     }
 
     public function test_agent_order_creation_fails_when_available_balance_is_insufficient(): void

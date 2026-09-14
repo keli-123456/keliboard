@@ -36,6 +36,12 @@ class CommController extends Controller
         $data = array_merge($data, app(RechargeBonusService::class)->getConfig());
         $data = app(SiteContextService::class)->applyToConfig($data, $request, $request->user());
         $data = app(AgentPublicConfigService::class)->apply($data, $request);
+        $prepaid = app(\App\Services\AgentPrepaidService::class)->forRequest($request);
+        if ($prepaid && $prepaid['active']) {
+            $data['recharge_bonus_enable'] = 0;
+            $data['recharge_bonus_rules'] = [];
+            $data['agent_prepaid'] = $prepaid;
+        }
 
         return $this->success($data)
             ->header('Cache-Control', 'no-store, private, max-age=0')
