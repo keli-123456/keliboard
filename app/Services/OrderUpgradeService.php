@@ -85,6 +85,9 @@ class OrderUpgradeService
     public function confirmUpgrade(User $user, string $quoteToken): Order
     {
         return DB::transaction(function () use ($user, $quoteToken): Order {
+            // Serialize the buyer before MySQL establishes a repeatable-read order snapshot.
+            $user = User::whereKey($user->id)->lockForUpdate()->firstOrFail();
+
             /** @var OrderUpgradeQuote|null $quote */
             $quote = OrderUpgradeQuote::query()
                 ->where('user_id', $user->id)
@@ -106,11 +109,6 @@ class OrderUpgradeService
                 throw new ApiException(__('Upgrade quote has expired'));
             }
 
-            if (app(UserService::class)->isNotCompleteOrderByUserId($user->id)) {
-                throw new ApiException(__('You have an unpaid or pending order, please try again later or cancel it'));
-            }
-
-            $user = User::whereKey($user->id)->lockForUpdate()->firstOrFail();
             OrderService::assertNoIncompleteOrder((int) $user->id);
 
             $sourceOrder = Order::query()

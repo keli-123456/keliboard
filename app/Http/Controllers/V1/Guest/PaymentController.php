@@ -69,7 +69,7 @@ class PaymentController extends Controller
 
         $orderService = new OrderService($order);
         try {
-            if (!$orderService->paid($callbackNo)) {
+            if (!$orderService->paid($callbackNo, $paymentService->getPaymentId(), (int) $verify['paid_amount'])) {
                 $this->markAgentOrderFailedIfBalanceInsufficient($order, $callbackNo);
                 return false;
             }
@@ -92,7 +92,7 @@ class PaymentController extends Controller
     private function verifyPaymentMethod(Order $order, PaymentService $paymentService): bool
     {
         $paymentId = $paymentService->getPaymentId();
-        if (!$paymentId || (int) $order->payment_id === $paymentId) {
+        if ($paymentId !== null && $paymentId > 0 && (int) $order->payment_id === $paymentId) {
             return true;
         }
 
@@ -111,7 +111,13 @@ class PaymentController extends Controller
             return false;
         }
 
-        $paidAmount = (int) $verify['paid_amount'];
+        $rawAmount = $verify['paid_amount'];
+        $paidAmount = (is_int($rawAmount) || (is_string($rawAmount) && ctype_digit($rawAmount)))
+            ? filter_var($rawAmount, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]) : false;
+        if ($paidAmount === false) {
+            Log::warning('Payment notify invalid paid amount', ['trade_no' => $order->trade_no]);
+            return false;
+        }
         $expectedAmount = (int) $order->total_amount + (int) $order->handling_amount;
         if ($paidAmount === $expectedAmount) {
             return true;

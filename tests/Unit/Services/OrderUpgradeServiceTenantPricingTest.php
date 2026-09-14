@@ -92,6 +92,28 @@ final class OrderUpgradeServiceTenantPricingTest extends TestCase
         $this->assertSame($targetPlan->id, (int) $buyer->fresh()->plan_id);
     }
 
+    public function test_upgrade_confirmation_locks_buyer_before_any_order_snapshot_read(): void
+    {
+        [$buyer, , $target] = $this->createUpgradeableSubscription();
+        $preview = app(OrderUpgradeService::class)->previewUpgrade($buyer, $target, Plan::PERIOD_MONTHLY);
+        $this->assertTrue($preview['allow_upgrade']);
+        $reads = [];
+        \Illuminate\Support\Facades\DB::connection()->beforeExecuting(function ($sql) use (&$reads): void {
+            if (str_starts_with(strtolower($sql), 'select')) {
+                foreach (['v2_user', 'v2_order'] as $table) {
+                    if (str_contains($sql, 'from "' . $table . '"')) {
+                        $reads[] = $table;
+                    }
+                }
+            }
+        });
+
+        app(OrderUpgradeService::class)->confirmUpgrade($buyer, $preview['quote_token']);
+
+        $this->assertNotEmpty($reads);
+        $this->assertSame('v2_user', $reads[0], 'Do not establish an order snapshot before serializing this buyer.');
+    }
+
     public function test_cancelled_agent_discount_upgrade_releases_pending_hold_without_deducting_agent_balance(): void
     {
         $agent = $this->createActiveAgent('cancel-upgrade-agent@example.test', 5000);

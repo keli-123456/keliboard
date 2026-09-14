@@ -205,6 +205,10 @@ class OrderService
                 $this->order = $order;
                 return;
             }
+            if ($order->refund_disposed_at || (int) $order->refund_amount > 0) {
+                $this->order = $order;
+                return;
+            }
 
             $this->order = $order;
             $this->user = User::whereKey($order->user_id)
@@ -350,10 +354,10 @@ class OrderService
             ->first();
     }
 
-    public function paid(string $callbackNo)
+    public function paid(string $callbackNo, ?int $paymentId = null, ?int $paidAmount = null)
     {
         try {
-            $tradeNo = DB::transaction(function () use ($callbackNo) {
+            $tradeNo = DB::transaction(function () use ($callbackNo, $paymentId, $paidAmount) {
                 $order = Order::whereKey($this->order->id)
                     ->lockForUpdate()
                     ->first();
@@ -361,6 +365,11 @@ class OrderService
                     throw new \RuntimeException('订单不存在');
                 }
                 $this->order = $order;
+                // Checkout may change the channel or fee after an unlocked callback validation.
+                if (($paymentId !== null && (int) $order->payment_id !== $paymentId)
+                    || ($paidAmount !== null && ((int) $order->total_amount + (int) $order->handling_amount !== $paidAmount))) {
+                    throw new ApiException('支付凭证与当前订单不匹配');
+                }
                 if ((int) $order->status !== Order::STATUS_PENDING) {
                     return null;
                 }

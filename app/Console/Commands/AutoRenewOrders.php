@@ -105,7 +105,7 @@ class AutoRenewOrders extends Command
             }
 
             $orderService = new OrderService($freshOrder);
-            if (!$orderService->paid(self::CALLBACK_NO)) {
+            if (!$orderService->paid(self::CALLBACK_NO, null, 0)) {
                 $freshOrder->refresh();
                 if ((int) $freshOrder->status === Order::STATUS_PENDING) {
                     (new OrderService($freshOrder))->cancel();

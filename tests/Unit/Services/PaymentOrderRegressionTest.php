@@ -140,6 +140,65 @@ final class PaymentOrderRegressionTest extends TestCase
         $this->assertSame('gateway-1', $order->fresh()->callback_no);
     }
 
+    public static function callbackRaceChanges(): array
+    {
+        return ['amount' => [['total_amount' => 2000]], 'channel' => [['payment_id' => 10]],
+            'handling' => [['handling_amount' => 100]]];
+    }
+
+    public static function malformedReceiptAmounts(): array
+    {
+        return ['fraction' => [1000.5, 1000], 'suffix' => ['1000invalid', 1000],
+            'boolean' => [true, 1], 'array' => [[1000], 1], 'null' => [null, 0]];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('malformedReceiptAmounts')]
+    public function test_invalid_receipt_amount_is_not_coerced_into_paid_cents(mixed $paidAmount, int $total): void
+    {
+        $user = $this->createUser(0);
+        $order = $this->createRechargeOrder($user, ['payment_id' => 9, 'total_amount' => $total]);
+        $this->assertFalse($this->invokePaymentHandle([
+            'trade_no' => $order->trade_no, 'callback_no' => 'invalid-amount', 'paid_amount' => $paidAmount,
+        ], $this->paymentServiceWithId(9)));
+        $this->assertSame(Order::STATUS_PENDING, (int) $order->fresh()->status);
+        $this->assertSame(0, (int) $user->fresh()->balance);
+    }
+
+    public function test_unidentified_callback_channel_cannot_credit_recharge(): void
+    {
+        $user = $this->createUser(0);
+        $order = $this->createRechargeOrder($user, ['payment_id' => 9]);
+        $this->assertFalse($this->invokePaymentHandle([
+            'trade_no' => $order->trade_no, 'callback_no' => 'unidentified', 'paid_amount' => 1000,
+        ], $this->paymentServiceWithId(null)));
+        $this->assertSame(Order::STATUS_PENDING, (int) $order->fresh()->status);
+        $this->assertSame(0, (int) $user->fresh()->balance);
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('callbackRaceChanges')]
+    public function test_notify_revalidates_receipt_against_locked_order(array $changes): void
+    {
+        $user = $this->createUser(0);
+        $order = $this->createRechargeOrder($user, ['payment_id' => 9]);
+        $payment = new class($order->id, $changes) extends PaymentService {
+            public function __construct(private int $orderId, private array $changes) {}
+
+            public function getPaymentId(): ?int
+            {
+                // Simulate a checkout/admin update after the callback's first unlocked order read.
+                Order::whereKey($this->orderId)->update($this->changes);
+                return 9;
+            }
+        };
+
+        $this->assertFalse($this->invokePaymentHandle([
+            'trade_no' => $order->trade_no, 'callback_no' => 'stale-receipt', 'paid_amount' => 1000,
+        ], $payment));
+        $this->assertSame(Order::STATUS_PENDING, (int) $order->fresh()->status);
+        $this->assertSame(0, (int) $user->fresh()->balance);
+        $this->assertNull($order->fresh()->paid_at);
+    }
+
     /**
      * @param array<string, mixed> $overrides
      */

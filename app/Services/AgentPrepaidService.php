@@ -55,6 +55,7 @@ class AgentPrepaidService
             return false;
         }
         if ((int) $order->bonus_amount !== 0 || (int) $order->total_amount <= 0
+            || $order->refund_disposed_at || (int) $order->refund_amount > 0
             || !$order->paid_at || $context->status !== AgentOrderContext::STATUS_PAID) {
             throw new ApiException('代收充值来源无效');
         }
@@ -126,6 +127,9 @@ class AgentPrepaidService
         }
         $external = (int) $order->total_amount;
         $prepaid = (int) $order->balance_amount;
+        if ((int) $order->handling_amount < 0) {
+            throw new ApiException('代收订单手续费不能为负数');
+        }
         if ($external < 0 || $prepaid < 0 || (int) $context->sale_amount <= 0 || $external + $prepaid !== (int) $context->sale_amount) {
             throw new ApiException('平台代收订单支付来源不匹配');
         }

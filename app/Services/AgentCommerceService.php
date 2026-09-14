@@ -494,6 +494,9 @@ class AgentCommerceService
             } else {
                 $this->assertPaymentAvailableForOrder($lockedOrder, $payment);
                 $isPlatform = app(AgentCollectionService::class)->isPlatform($context);
+                if ($isPlatform && (int) $handlingAmount < 0) {
+                    throw new ApiException('代收订单手续费不能为负数');
+                }
 
                 if (!$isPlatform && ((int) $context->cost_amount > 0 || $context->hold_id !== null)) {
                     $hold = AgentBalanceHold::query()
