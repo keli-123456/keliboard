@@ -24,7 +24,8 @@ class AgentOrderStatusResolver
         $payment = $context->payment;
         $order = $context->order;
         $flags = [];
-        $requiresHold = (int) $context->cost_amount > 0 || $context->hold_id !== null;
+        $platform = app(AgentCollectionService::class)->isPlatform($context);
+        $requiresHold = !$platform && ((int) $context->cost_amount > 0 || $context->hold_id !== null);
 
         $holdStatus = $hold?->status ?? self::HOLD_STATUS_MISSING;
         if ($hold === null) {
@@ -73,7 +74,8 @@ class AgentOrderStatusResolver
         return [
             'hold_status' => $holdStatus,
             'capture_status' => $captureStatus,
-            'margin_amount' => (int) $context->sale_amount - (int) $context->cost_amount,
+            'margin_amount' => (int) $context->sale_amount - (int) $context->cost_amount
+                - ($platform ? app(AgentCollectionService::class)->fee((int) $context->sale_amount, app(AgentCollectionService::class)->forOrder($context)) : 0),
             'abnormal_flags' => array_values(array_unique($flags)),
         ];
     }
@@ -84,10 +86,12 @@ class AgentOrderStatusResolver
         $captured = AgentOrderContext::query()->select('id')->where('status', AgentOrderContext::STATUS_PAID)
             ->where(function (Builder $q): void {
                 $q->whereHas('hold', fn (Builder $h) => $h->where('status', AgentBalanceHold::STATUS_CAPTURED))
-                    ->orWhere(fn (Builder $free) => $free->whereNull('hold_id')->where('cost_amount', '<=', 0));
+                    ->orWhere(fn (Builder $free) => $free->whereNull('hold_id')->where('cost_amount', '<=', 0))
+                    ->orWhere('pricing_snapshot->collection->mode', 'platform');
             });
         $flags = AgentOrderContext::query()->select('id')->where(function (Builder $q) use ($table, $captured): void {
             $q->where(fn (Builder $missing) => $missing->whereDoesntHave('hold')
+                ->where(fn (Builder $mode) => $mode->whereNull('pricing_snapshot->collection->mode')->orWhere('pricing_snapshot->collection->mode', '!=', 'platform'))
                 ->where(fn (Builder $required) => $required->where('cost_amount', '>', 0)->orWhereNotNull('hold_id')))
                 ->orWhereHas('hold', fn (Builder $h) => $h->where('status', AgentBalanceHold::STATUS_PENDING)
                     ->whereNotNull('expires_at')->where('expires_at', '<', time()))
@@ -108,6 +112,9 @@ class AgentOrderStatusResolver
 
     private function captureStatus(AgentOrderContext $context, ?AgentBalanceHold $hold): string
     {
+        if (app(AgentCollectionService::class)->isPlatform($context) && $context->status === AgentOrderContext::STATUS_PAID) {
+            return AgentBalanceHold::STATUS_CAPTURED;
+        }
         if ($hold === null) {
             if ((int) $context->cost_amount <= 0 && $context->hold_id === null && $context->status === AgentOrderContext::STATUS_PAID) {
                 return AgentBalanceHold::STATUS_CAPTURED;

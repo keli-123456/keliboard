@@ -118,6 +118,9 @@ class AgentCommerceService
                 throw new ApiException('Agent user does not exist');
             }
             $this->activeProfile($lockedAgent);
+            if (app(AgentCollectionService::class)->settings((int) $lockedAgent->id)->mode === 'platform') {
+                throw new ApiException('平台代收暂仅支持直接购买套餐，不支持充值余额');
+            }
 
             $lockedUser = User::query()
                 ->whereKey($user->id)
@@ -229,7 +232,16 @@ class AgentCommerceService
 
             OrderService::assertNoIncompleteOrder($lockedUser->id);
 
-            if ($this->availableBalance($lockedAgent) < (int) $cost['amount']) {
+            $collection = app(AgentCollectionService::class)->snapshot((int) $lockedAgent->id);
+            $platformCollection = $collection['mode'] === 'platform';
+            if ($platformCollection && $useUserBalance) {
+                throw new ApiException('平台代收请直接支付套餐订单，暂不支持余额自动续费');
+            }
+            if ($platformCollection && ((int) $sale['sale_amount'] <= 0
+                || (int) $sale['sale_amount'] < (int) $cost['amount'] + app(AgentCollectionService::class)->fee((int) $sale['sale_amount'], $collection))) {
+                throw new ApiException('代收售价不足以覆盖成本与服务费');
+            }
+            if (!$platformCollection && $this->availableBalance($lockedAgent) < (int) $cost['amount']) {
                 throw new ApiException(self::INSUFFICIENT_SITE_BALANCE_MESSAGE);
             }
 
@@ -284,6 +296,8 @@ class AgentCommerceService
             }
 
             $pricingSnapshot = array_merge($sale['pricing_snapshot'], [
+                'collection' => $collection,
+                'collection_fee_amount' => $platformCollection ? app(AgentCollectionService::class)->fee($saleAmount, $collection) : 0,
                 'platform_base_amount' => (int) $cost['platform_base_amount'],
                 'cost_base_amount' => (int) $cost['base_amount'],
                 'cost_amount' => (int) $cost['amount'],
@@ -300,7 +314,7 @@ class AgentCommerceService
                 'is_primary' => (bool) ($context['is_primary'] ?? false),
             ];
 
-            $hold = AgentBalanceHold::query()->create([
+            $hold = $platformCollection ? null : AgentBalanceHold::query()->create([
                 'agent_user_id' => $lockedAgent->id,
                 'order_id' => $order->id,
                 'trade_no' => $order->trade_no,
@@ -325,7 +339,7 @@ class AgentCommerceService
                 'payment_id' => null,
                 'sale_amount' => (int) $sale['sale_amount'],
                 'cost_amount' => (int) $cost['amount'],
-                'hold_id' => $hold->id,
+                'hold_id' => $hold?->id,
                 'status' => AgentOrderContext::STATUS_PENDING,
                 'pricing_snapshot' => $pricingSnapshot,
                 'domain_snapshot' => $domainSnapshot,
@@ -355,6 +369,11 @@ class AgentCommerceService
         $payments = Payment::query()
             ->where('enable', 1)
             ->when($context, function ($query) use ($context): void {
+                if (($context['collection']['mode'] ?? 'self') === 'platform') {
+                    $query->where('owner_type', Payment::OWNER_PLATFORM)->where('payment', '!=', 'balance')
+                        ->whereIn('id', $context['collection']['payment_ids'] ?? []);
+                    return;
+                }
                 $agentDomainId = $context['agent_domain_id'] ?? null;
 
                 $query->where('owner_type', Payment::OWNER_AGENT)
@@ -390,6 +409,15 @@ class AgentCommerceService
             return;
         }
 
+        if (app(AgentCollectionService::class)->isPlatform($context)) {
+            $collection = app(AgentCollectionService::class)->forOrder($context);
+            if ($payment->owner_type !== Payment::OWNER_PLATFORM || $payment->payment === 'balance'
+                || !in_array((int) $payment->id, array_map('intval', $collection['payment_ids'] ?? []), true)) {
+                throw new ApiException('This payment method is unavailable.');
+            }
+            return;
+        }
+
         if (
             $payment->owner_type !== Payment::OWNER_AGENT
             || (int) $payment->owner_id !== (int) $context->agent_user_id
@@ -405,16 +433,17 @@ class AgentCommerceService
     public function paymentReturnBaseUrlForOrder(Order $order, Payment $payment, Request $request): ?string
     {
         $context = $this->contextForOrder($order);
-        if (!$context || $payment->owner_type !== Payment::OWNER_AGENT || $payment->owner_domain_id === null) {
+        if (!$context || $context->agent_domain_id === null) {
             return null;
         }
 
-        if ((int) $payment->owner_domain_id !== (int) $context->agent_domain_id) {
+        if ($payment->owner_type === Payment::OWNER_AGENT && $payment->owner_domain_id !== null
+            && (int) $payment->owner_domain_id !== (int) $context->agent_domain_id) {
             return null;
         }
 
         $domain = AgentDomain::query()
-            ->whereKey((int) $payment->owner_domain_id)
+            ->whereKey((int) $context->agent_domain_id)
             ->where('agent_user_id', (int) $context->agent_user_id)
             ->where('status', AgentDomain::STATUS_ACTIVE)
             ->value('domain');
@@ -450,17 +479,10 @@ class AgentCommerceService
                     throw new ApiException('This payment method is unavailable.');
                 }
             } else {
-                if (
-                    $payment->owner_type !== Payment::OWNER_AGENT
-                    || (int) $payment->owner_id !== (int) $context->agent_user_id
-                ) {
-                    throw new ApiException('This payment method is unavailable.');
-                }
-                if ($payment->owner_domain_id !== null && (int) $payment->owner_domain_id !== (int) $context->agent_domain_id) {
-                    throw new ApiException('This payment method is unavailable.');
-                }
+                $this->assertPaymentAvailableForOrder($lockedOrder, $payment);
+                $isPlatform = app(AgentCollectionService::class)->isPlatform($context);
 
-                if ((int) $context->cost_amount > 0 || $context->hold_id !== null) {
+                if (!$isPlatform && ((int) $context->cost_amount > 0 || $context->hold_id !== null)) {
                     $hold = AgentBalanceHold::query()
                         ->whereKey($context->hold_id)
                         ->lockForUpdate()
@@ -519,6 +541,7 @@ class AgentCommerceService
                 $context = $this->contextForOrder($order);
 
                 return $context ? [
+                    'collection' => app(AgentCollectionService::class)->forOrder($context),
                     'agent_user_id' => (int) $context->agent_user_id,
                     'agent_domain_id' => $context->agent_domain_id !== null ? (int) $context->agent_domain_id : null,
                 ] : null;
@@ -531,6 +554,7 @@ class AgentCommerceService
         }
 
         return [
+            'collection' => app(AgentCollectionService::class)->snapshot((int) $context['agent_user_id']),
             'agent_user_id' => (int) $context['agent_user_id'],
             'agent_domain_id' => isset($context['agent_domain_id']) && $context['agent_domain_id'] !== null
                 ? (int) $context['agent_domain_id']
@@ -570,6 +594,18 @@ class AgentCommerceService
                 ->lockForUpdate()
                 ->first();
             if (!$context) {
+                return;
+            }
+
+            if (app(AgentCollectionService::class)->isPlatform($context)) {
+                if ((int) $context->payment_id !== (int) $order->payment_id || !$order->payment_id
+                    || ($context->payment_snapshot['owner_type'] ?? null) !== Payment::OWNER_PLATFORM
+                    || (int) $order->balance_amount !== 0 || (int) $order->total_amount !== (int) $context->sale_amount) {
+                    throw new ApiException('平台代收订单支付来源不匹配');
+                }
+                $context->status = AgentOrderContext::STATUS_PAID;
+                $context->updated_at = time();
+                $context->save();
                 return;
             }
 

@@ -47,6 +47,102 @@ final class AgentCommerceServiceTest extends TestCase
         ]);
     }
 
+    public function test_platform_collection_fulfills_and_accrues_without_debiting_agent_balance(): void
+    {
+        [$agent, $buyer, $plan, $payment] = $this->platformFixture();
+        $commerce = app(AgentCommerceService::class);
+        $order = $commerce->createOrderFromRequest($buyer, $plan, Plan::PERIOD_MONTHLY, null, $this->requestForHost('profit.example.test'));
+        $this->assertSame(0, AgentBalanceHold::count());
+        $this->assertSame(0, (int) $agent->fresh()->balance);
+        $settings = \App\Models\AgentCollection::find($agent->id);
+        $settings->mode = 'self';
+        $settings->fee_bps = 9000;
+        $settings->save();
+        $order = $commerce->assignPaymentForCheckout($order, $payment, null);
+        DB::transaction(function () use ($commerce, $order) {
+            $commerce->captureForPaidOrder($order);
+            $order->status = Order::STATUS_PROCESSING;
+            $order->paid_at = time();
+            $order->save();
+        });
+        (new OrderService($order))->open();
+        (new OrderService($order->fresh()))->open();
+        $this->assertSame(Order::STATUS_COMPLETED, (int) $order->fresh()->status);
+        $this->assertGreaterThan((int) $buyer->expired_at, (int) $buyer->fresh()->expired_at);
+        $this->assertEquals(774, app(\App\Services\AgentProfitService::class)->summary($agent->id)['pending']);
+        $this->assertSame(774, app(\App\Services\AgentOperationsService::class)->agentSummary($agent)['month_margin_total']);
+        $this->assertSame(1, DB::table('v2_agent_profit')->count());
+        $this->assertSame(0, (int) $agent->fresh()->balance);
+        $resolver = app(\App\Services\AgentOrderStatusResolver::class);
+        $this->assertSame([], $resolver->resolve(AgentOrderContext::first())['abnormal_flags']);
+        $this->assertSame(0, $resolver->filterAbnormal(AgentOrderContext::query())->count());
+    }
+
+    public function test_platform_collection_does_not_accrue_when_fulfillment_fails(): void
+    {
+        [$agent, $buyer, $plan, $payment] = $this->platformFixture();
+        $commerce = app(AgentCommerceService::class);
+        $order = $commerce->createOrderFromRequest($buyer, $plan, Plan::PERIOD_MONTHLY, null, $this->requestForHost('profit.example.test'));
+        $order = $commerce->assignPaymentForCheckout($order, $payment, null);
+        $commerce->captureForPaidOrder($order);
+        $order->status = Order::STATUS_PROCESSING;
+        $order->paid_at = time();
+        $order->save();
+        $plan->delete();
+        try {
+            (new OrderService($order))->open();
+            $this->fail('Missing plan must prevent fulfillment');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('套餐不存在', $e->getMessage());
+        }
+        $this->assertSame(0, DB::table('v2_agent_profit')->count());
+        $this->assertSame(Order::STATUS_PROCESSING, (int) $order->fresh()->status);
+    }
+
+    public function test_platform_collection_rejects_balance_auto_renew_and_recharge(): void
+    {
+        [$agent, $buyer, $plan] = $this->platformFixture();
+        AgentUser::create(['agent_user_id' => $agent->id, 'sub_user_id' => $buyer->id]);
+        $buyer->invite_user_id = $agent->id;
+        $buyer->balance = 99999;
+        $buyer->save();
+        try {
+            app(AgentCommerceService::class)->createAutoRenewOrder($buyer, $plan, Plan::PERIOD_MONTHLY);
+            $this->fail('Unverified balance must not fund platform-collected orders');
+        } catch (ApiException $e) {
+            $this->assertStringContainsString('余额自动续费', $e->getMessage());
+        }
+        try {
+            app(AgentCommerceService::class)->createRechargeOrderFromRequest($buyer, 1000, 100, $this->requestForHost('profit.example.test'));
+            $this->fail('Recharge must not enter platform collection');
+        } catch (ApiException $e) {
+            $this->assertStringContainsString('充值余额', $e->getMessage());
+        }
+        $this->assertSame(0, Order::count());
+        $this->assertSame(99999, (int) $buyer->fresh()->balance);
+    }
+
+    private function platformFixture(): array
+    {
+        $this->createPaymentTable();
+        (require base_path('database/migrations/2026_09_14_190000_create_agent_profit_accounts.php'))->up();
+        $agent = $this->createActiveAgent('profit-agent@example.test', 0);
+        $this->assignDomain($agent, 'profit.example.test');
+        $buyer = $this->createUser('profit-buyer@example.test');
+        $plan = $this->createPlan('Profit Plan', [Plan::PERIOD_MONTHLY => 10.00]);
+        $buyer->plan_id = $plan->id;
+        $buyer->expired_at = time() + 86400;
+        $buyer->save();
+        $this->setAgentPrice($agent, $plan, Plan::PERIOD_MONTHLY, 1300);
+        $payment = \App\Models\Payment::create(['name' => 'Official', 'uuid' => 'test-official', 'payment' => 'EPay', 'owner_type' => 'platform', 'enable' => true]);
+        \App\Models\AgentCollection::create([
+            'agent_user_id' => $agent->id, 'mode' => 'platform', 'platform_enabled' => true,
+            'payment_ids' => [$payment->id], 'fee_bps' => 200, 'fee_fixed' => 0,
+            'settlement_days' => 7, 'minimum_withdrawal' => 1000, 'updated_at' => time(),
+        ]);
+        return [$agent, $buyer, $plan, $payment];
+    }
+
     public function test_agent_order_creation_fails_when_available_balance_is_insufficient(): void
     {
         $agent = $this->createActiveAgent('agent@example.test', 499);

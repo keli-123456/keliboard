@@ -244,6 +244,8 @@ class OrderService
                 throw new \RuntimeException('订单信息保存失败');
             }
 
+            app(AgentProfitService::class)->accrue($order);
+
             $eventId = match ((int) $order->type) {
                 Order::TYPE_NEW_PURCHASE => admin_setting('new_order_event_id', 0),
                 Order::TYPE_RENEWAL => admin_setting('renew_order_event_id', 0),

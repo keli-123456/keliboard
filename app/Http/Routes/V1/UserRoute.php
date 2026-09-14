@@ -63,6 +63,11 @@ class UserRoute
             $router->post('/agent/domains', [AgentCommerceController::class, 'saveDomain']);
             $router->post('/agent/domains/{id}/verify', [AgentCommerceController::class, 'verifyDomain']);
             $router->post('/agent/domains/{id}/delete', [AgentCommerceController::class, 'deleteDomain']);
+            $router->get('/agent/profit', [\App\Http\Controllers\V1\User\AgentProfitController::class, 'overview']);
+            $router->post('/agent/profit/mode', [\App\Http\Controllers\V1\User\AgentProfitController::class, 'mode']);
+            $router->get('/agent/profit/earnings', [\App\Http\Controllers\V1\User\AgentProfitController::class, 'earnings']);
+            $router->get('/agent/profit/withdrawals', [\App\Http\Controllers\V1\User\AgentProfitController::class, 'withdrawals']);
+            $router->post('/agent/profit/withdrawals', [\App\Http\Controllers\V1\User\AgentProfitController::class, 'withdraw']);
             $router->get('/agent/payment-methods/available', [AgentCommerceController::class, 'availablePaymentMethods']);
             $router->get('/agent/payments', [AgentCommerceController::class, 'payments']);
             $router->post('/agent/payments/form', [AgentCommerceController::class, 'paymentForm']);

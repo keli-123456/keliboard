@@ -241,7 +241,9 @@ class AgentOperationsService
             ->selectRaw('COALESCE(SUM(sale_amount), 0) AS sales, COALESCE(SUM(cost_amount), 0) AS cost')->first();
         $monthSalesTotal = (int) $month->sales;
         $monthCostTotal = (int) $month->cost;
-        $monthMarginTotal = $monthSalesTotal - $monthCostTotal;
+        $monthCollectionFees = (int) $this->contextsForMonth($agentUserId)->reorder()->toBase()
+            ->sum('pricing_snapshot->collection_fee_amount');
+        $monthMarginTotal = $monthSalesTotal - $monthCostTotal - $monthCollectionFees;
 
         return [
             'balance' => (int) ($agent->balance ?? 0),
@@ -399,6 +401,11 @@ class AgentOperationsService
 
     private function enabledPaymentCount(int $agentUserId): int
     {
+        $collection = app(AgentCollectionService::class)->settings($agentUserId);
+        if ($collection->mode === 'platform') {
+            return Payment::where('owner_type', Payment::OWNER_PLATFORM)->where('payment', '!=', 'balance')
+                ->whereIn('id', $collection->platform_enabled ? ($collection->payment_ids ?? []) : [])->where('enable', true)->count();
+        }
         return (int) Payment::query()
             ->where('owner_type', Payment::OWNER_AGENT)
             ->where('owner_id', $agentUserId)

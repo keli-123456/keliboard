@@ -30,6 +30,12 @@ class AgentCommerceDiagnosticsService
             ->where('owner_type', Payment::OWNER_AGENT)
             ->where('owner_id', $agent->id)
             ->get();
+        $collection = app(AgentCollectionService::class)->settings((int) $agent->id);
+        $platformCollection = $collection->mode === 'platform';
+        if ($platformCollection) {
+            $payments = Payment::where('owner_type', Payment::OWNER_PLATFORM)->where('payment', '!=', 'balance')
+                ->whereIn('id', $collection->platform_enabled ? ($collection->payment_ids ?? []) : [])->get();
+        }
         $plans = (new PlanService(new Plan()))->getAvailablePlans();
         $allPrices = AgentPlanPrice::query()
             ->where('agent_user_id', $agent->id)
@@ -86,7 +92,9 @@ class AgentCommerceDiagnosticsService
                 $availablePaymentContextCount
             ),
             'prices' => $this->priceCheck($planDiagnostics),
-            'balance' => $this->balanceCheck($availableBalance, $minimumCost, $maximumCost, $hasConfiguredCost),
+            'balance' => $platformCollection
+                ? $this->check(self::STATUS_OK, 'balance', '平台代收', '套餐成本从订单收款中扣除，不占用经营余额。')
+                : $this->balanceCheck($availableBalance, $minimumCost, $maximumCost, $hasConfiguredCost),
         ];
 
         $storefrontConfigured = $domains->isNotEmpty()

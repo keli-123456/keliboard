@@ -51,6 +51,7 @@ class OrderRefundDispositionService
                 throw new \InvalidArgumentException('只能处置已支付或已完成的订单');
             }
 
+            app(AgentProfitService::class)->reverse($lockedOrder, $adminId);
             $reversedAmount = $this->reverseCommissionLogs($lockedOrder, $adminId);
             $now = time();
 

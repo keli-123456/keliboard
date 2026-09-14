@@ -36,6 +36,7 @@ class Kernel extends ConsoleKernel
         // check
         $schedule->command('check:order')->everyMinute()->onOneServer();
         $schedule->command('check:commission')->everyMinute()->onOneServer();
+        $schedule->command('agent-profit:settle')->everyFiveMinutes()->onOneServer()->withoutOverlapping(10);
         $schedule->command('check:ticket')->everyMinute()->onOneServer();
         $schedule->command('renew:auto')->everyMinute()->onOneServer()->withoutOverlapping(5);
         $schedule->command('message-dispatch:release', ['--limit' => 200])->everyMinute()->onOneServer()->withoutOverlapping(1);

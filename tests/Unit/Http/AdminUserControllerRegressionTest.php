@@ -34,6 +34,30 @@ final class AdminUserControllerRegressionTest extends TestCase
         $this->createPersonalAccessTokenTable();
     }
 
+    public function test_destroy_preserves_platform_collection_order_evidence(): void
+    {
+        $this->createOrderTable();
+        $this->createAgentCommerceTables();
+        (require base_path('database/migrations/2026_09_14_190000_create_agent_profit_accounts.php'))->up();
+        $user = User::create(['email' => 'retained@example.test', 'password' => 'secret', 'token' => 'retained', 'uuid' => 'retained']);
+        $order = \App\Models\Order::create([
+            'user_id' => $user->id, 'plan_id' => 1, 'trade_no' => 'retained-order',
+            'period' => 'monthly', 'total_amount' => 1000, 'status' => 0,
+        ]);
+        \App\Models\AgentOrderContext::create([
+            'order_id' => $order->id, 'trade_no' => $order->trade_no, 'agent_user_id' => 999,
+            'sale_amount' => 1000, 'cost_amount' => 500, 'status' => 'pending',
+            'pricing_snapshot' => ['collection' => ['mode' => 'platform']],
+        ]);
+        $cleanup = $this->createMock(\App\Services\TicketCleanupService::class);
+        $cleanup->expects($this->never())->method('collectAttachmentsByTicketIds');
+        $response = (new UserController())->destroy(Request::create('/user/destroy', 'POST', ['id' => $user->id]), $cleanup);
+        $this->assertStringContainsString('平台代收', json_encode($response->getData(true), JSON_UNESCAPED_UNICODE));
+        $this->assertNotNull($user->fresh());
+        $this->assertNotNull($order->fresh());
+        $this->assertSame(0, DB::transactionLevel());
+    }
+
     public function test_update_without_invite_user_email_preserves_existing_inviter(): void
     {
         $inviter = User::create([

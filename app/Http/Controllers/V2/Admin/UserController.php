@@ -948,6 +948,12 @@ class UserController extends Controller
         try {
             DB::beginTransaction();
 
+            User::whereKey($user->id)->lockForUpdate()->firstOrFail();
+            if (app(\App\Services\AgentProfitService::class)->hasCollectionHistory((int) $user->id)) {
+                DB::rollBack();
+                return $this->fail([400, '该用户关联平台代收账务，请保留订单及提现凭证，使用封禁或停用代替删除']);
+            }
+
             $ticketIds = $user->tickets()->pluck('id')->map(fn ($id) => (int) $id)->all();
             $ticketAttachments = $ticketCleanupService->collectAttachmentsByTicketIds($ticketIds);
             $user->orders()->delete();

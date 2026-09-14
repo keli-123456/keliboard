@@ -569,6 +569,10 @@ class OrderUpgradeService
             throw new ApiException('Agent user does not exist');
         }
 
+        if (app(AgentCollectionService::class)->settings((int) $agent->id)->mode === 'platform'
+            || app(AgentCollectionService::class)->isPlatform(app(AgentCommerceService::class)->contextForOrder($sourceOrder))) {
+            throw new ApiException('平台代收暂不支持差价升级，请联系站点客服');
+        }
         $agentCommerce = app(AgentCommerceService::class);
         $targetCost = $agentCommerce->calculatePlatformCost($agent, $targetPlan, $period);
         $sourceCostBasis = $this->sourceCostBasisForAgent($sourceOrder, (int) $agent->id);
