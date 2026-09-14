@@ -1,4 +1,10 @@
 {
+    "An active plan cannot be replaced with a different plan": "当前套餐仍在有效期内，暂不支持更换不同套餐。请续费原套餐或到期后再更换。",
+    "Agent permission is disabled": "代理权限已被停用，请联系管理员处理。",
+    "Agent permission is not active": "代理权限尚未开通或已停用，请联系管理员处理。",
+    "Agent application requires platform review": "代理申请需要平台审核，请等待管理员处理。",
+    "Invalid operation request key": "操作标识无效，请刷新页面后重试。",
+    "Operation request key was already used for different data": "该操作标识已用于其他请求，请重新确认操作内容。",
     "The user does not exist": "该用户不存在",
     "The old password is wrong": "旧密码有误",
     "Save failed": "保存失败",

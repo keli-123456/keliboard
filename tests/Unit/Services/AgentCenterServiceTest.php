@@ -131,7 +131,7 @@ final class AgentCenterServiceTest extends TestCase
         $this->assertNull($profile->cost_site_id);
     }
 
-    public function test_apply_with_platform_request_clears_existing_cost_site(): void
+    public function test_pending_application_cannot_change_existing_cost_site(): void
     {
         $this->createSiteTenantTables();
         $this->siteWithDomain('default', 'main.example.test', true);
@@ -151,7 +151,7 @@ final class AgentCenterServiceTest extends TestCase
 
         $profile = AgentProfile::query()->where('user_id', $user->id)->first();
         $this->assertNotNull($profile);
-        $this->assertNull($profile->cost_site_id);
+        $this->assertSame($oldSite->id, (int) $profile->cost_site_id);
     }
 
     public function test_agent_subordinate_cannot_unlock_without_platform_review(): void
@@ -723,6 +723,144 @@ final class AgentCenterServiceTest extends TestCase
         $this->assertSame(0, (int) $subordinate->u);
         $this->assertSame(0, (int) $subordinate->d);
         $this->assertSame(0, (int) $result['ledger']['amount']);
+    }
+
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('blockedActivationStates')]
+    public function test_unlock_cannot_override_platform_review_or_suspension(string $status): void
+    {
+        $agent = $this->createActiveAgent('blocked@example.test', 10000);
+        AgentProfile::where('user_id', $agent->id)->update(['status' => $status]);
+        try {
+            app(AgentCenterService::class)->unlock($agent);
+            $this->fail('Platform-controlled status must not be self-activated.');
+        } catch (ApiException) {
+            $this->assertSame($status, AgentProfile::where('user_id', $agent->id)->value('status'));
+        }
+    }
+
+    public static function blockedActivationStates(): array
+    {
+        return [['disabled'], ['pending']];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('reservedBalanceActions')]
+    public function test_manual_operations_cannot_spend_pending_order_reserves(string $action): void
+    {
+        $this->createAgentCommerceTables();
+        $this->bindAgentSettings(['agent_center_bonus_day_price' => 2000]);
+        $agent = $this->createActiveAgent('reserve@example.test', 10000);
+        $plan = $this->createPlan('Monthly', ['monthly' => 20.00, 'reset_traffic' => 20.00], 100, 1);
+        $buyer = $this->createOwnedSubordinate($agent, 'buyer@example.test', [
+            'plan_id' => $plan->id, 'expired_at' => time() + 86400, 'u' => 123,
+        ]);
+        $order = \App\Models\Order::create([
+            'user_id' => $buyer->id, 'period' => 'monthly', 'trade_no' => 'RESERVED',
+            'status' => 0, 'total_amount' => 10000,
+        ]);
+        \App\Models\AgentBalanceHold::create([
+            'agent_user_id' => $agent->id, 'order_id' => $order->id,
+            'trade_no' => $order->trade_no, 'amount' => 9000, 'status' => 'pending',
+        ]);
+        try {
+            $service = app(AgentCenterService::class);
+            match ($action) {
+                'create' => $service->createSubordinate($agent, ['email' => 'new@example.test', 'password' => 'secret123', 'plan_id' => $plan->id, 'period' => 'monthly']),
+                'assign' => $service->assignPlan($agent, $buyer->id, ['plan_id' => $plan->id, 'period' => 'monthly']),
+                'reset' => $service->resetTraffic($agent, $buyer->id),
+                'bonus' => $service->grantBonusDays($agent, $buyer->id, ['bonus_days' => 1]),
+            };
+            $this->fail('Only 1000 cents are available, not the nominal 10000.');
+        } catch (ApiException $error) {
+            $this->assertSame('Insufficient balance', $error->getMessage());
+            $this->assertSame(10000, (int) $agent->fresh()->balance);
+            $this->assertSame(123, (int) $buyer->fresh()->u);
+            $this->assertSame(0, $this->tableCount('v2_agent_ledger'));
+            $this->assertFalse(User::where('email', 'new@example.test')->exists());
+        }
+    }
+
+    public static function reservedBalanceActions(): array
+    {
+        return [['create'], ['assign'], ['reset'], ['bonus']];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('activeExpirations')]
+    public function test_cross_plan_assignment_preserves_unexpired_entitlement(?int $days): void
+    {
+        $agent = $this->createActiveAgent('upgrade@example.test', 10000);
+        $old = $this->createPlan('Old', ['yearly' => 12.00], 10, 1);
+        $next = $this->createPlan('New', ['monthly' => 20.00], 1000, 2);
+        $expires = $days === null ? null : time() + $days * 86400;
+        $buyer = $this->createOwnedSubordinate($agent, 'buyer@example.test', ['plan_id' => $old->id, 'expired_at' => $expires]);
+        foreach (['previewAssignPlan', 'assignPlan'] as $method) {
+            try {
+                app(AgentCenterService::class)->$method($agent, $buyer->id, ['plan_id' => $next->id, 'period' => 'monthly']);
+                $this->fail('An active different plan cannot be replaced.');
+            } catch (ApiException $error) {
+                $this->assertSame('An active plan cannot be replaced with a different plan', $error->getMessage());
+            }
+        }
+        $this->assertSame($old->id, (int) $buyer->fresh()->plan_id);
+        $this->assertSame($expires, $buyer->fresh()->expired_at);
+        $this->assertSame(10000, (int) $agent->fresh()->balance);
+    }
+
+    public static function activeExpirations(): array
+    {
+        return [[365], [null]];
+    }
+
+    public function test_expired_plan_can_be_replaced_without_inheriting_old_time(): void
+    {
+        $agent = $this->createActiveAgent('expired-agent@example.test', 10000);
+        $old = $this->createPlan('Old', ['yearly' => 12.00], 10, 1);
+        $next = $this->createPlan('New', ['monthly' => 20.00], 1000, 2);
+        $buyer = $this->createOwnedSubordinate($agent, 'expired-buyer@example.test',
+            ['plan_id' => $old->id, 'expired_at' => time() - 86400]);
+        app(AgentCenterService::class)->assignPlan($agent, $buyer->id, ['plan_id' => $next->id, 'period' => 'monthly']);
+        $this->assertSame($next->id, (int) $buyer->fresh()->plan_id);
+        $this->assertEqualsWithDelta(time() + 30 * 86400, $buyer->fresh()->expired_at, 2);
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('reservedBalanceActions')]
+    public function test_paid_operation_retry_only_charges_once(string $action): void
+    {
+        (require base_path('database/migrations/2026_09_14_180100_create_agent_operations_table.php'))->up();
+        $this->bindAgentSettings(['agent_center_bonus_day_price' => 2000]);
+        $agent = $this->createActiveAgent('retry-agent@example.test', 10000);
+        $plan = $this->createPlan('Monthly', ['monthly' => 20.00, 'reset_traffic' => 20.00], 100, 1);
+        $buyer = $this->createOwnedSubordinate($agent, 'retry-buyer@example.test',
+            ['plan_id' => $plan->id, 'expired_at' => time() + 86400, 'u' => 123]);
+        $service = app(AgentCenterService::class);
+        $operation = fn () => match ($action) {
+            'create' => $service->createSubordinate($agent, ['email' => 'new@example.test', 'password' => 'secret123', 'plan_id' => $plan->id, 'period' => 'monthly']),
+            'assign' => $service->assignPlan($agent, $buyer->id, ['plan_id' => $plan->id, 'period' => 'monthly']),
+            'reset' => $service->resetTraffic($agent, $buyer->id),
+            'bonus' => $service->grantBonusDays($agent, $buyer->id, ['bonus_days' => 1]),
+        };
+        $runner = app(\App\Services\AgentOperationService::class);
+        $first = $runner->execute($agent, 'repeat-operation-key', $action, [], $operation);
+        $again = $runner->execute($agent, 'repeat-operation-key', $action, [], $operation);
+        $this->assertEquals($first, $again);
+        $this->assertSame(8000, (int) $agent->fresh()->balance);
+        $this->assertSame(1, $this->tableCount('v2_agent_ledger'));
+    }
+
+    public function test_general_balance_debit_cannot_spend_agent_hold(): void
+    {
+        $this->createAgentCommerceTables();
+        $agent = $this->createActiveAgent('balance-agent@example.test', 10000);
+        $order = \App\Models\Order::create(['user_id' => $agent->id, 'period' => 'monthly',
+            'trade_no' => 'reserve-balance', 'status' => 0, 'total_amount' => 10000]);
+        \App\Models\AgentBalanceHold::create(['agent_user_id' => $agent->id, 'order_id' => $order->id,
+            'trade_no' => $order->trade_no, 'amount' => 9000, 'status' => 'pending']);
+        $service = app(\App\Services\UserService::class);
+        $this->assertFalse($service->addBalance($agent->id, -2000));
+        $this->assertSame(10000, (int) $agent->fresh()->balance);
+        $this->assertTrue($service->addBalance($agent->id, -1000));
+        $this->assertSame(9000, (int) $agent->fresh()->balance);
+        $this->assertTrue($service->addBalance($agent->id, 1000));
     }
 
     private function createPlanTable(): void

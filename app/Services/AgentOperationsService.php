@@ -57,28 +57,23 @@ class AgentOperationsService
      */
     public function adminSummary(): array
     {
-        $agents = $this->adminAgents(['page_size' => 100])['data'];
-
-        return [
-            'active_agent_count' => count($agents),
-            'pending_hold_total' => array_sum(array_map(
-                static fn (array $row): int => (int) $row['pending_hold_total'],
-                $agents
-            )),
-            'abnormal_order_count' => array_sum(array_map(
-                static fn (array $row): int => (int) $row['abnormal_order_count'],
-                $agents
-            )),
-            'insufficient_balance_agent_count' => count(array_filter(
-                $agents,
-                static fn (array $row): bool => (int) $row['available_balance'] <= 0
-                    && (int) $row['pending_hold_total'] > 0
-            )),
-            'no_active_payment_agent_count' => count(array_filter(
-                $agents,
-                static fn (array $row): bool => (int) $row['enabled_payment_count'] === 0
-            )),
+        $totals = [
+            'active_agent_count' => 0,
+            'pending_hold_total' => 0,
+            'abnormal_order_count' => 0,
+            'insufficient_balance_agent_count' => 0,
+            'no_active_payment_agent_count' => 0,
         ];
+        $agents = User::query()->whereIn('id', AgentOrderContext::query()->select('agent_user_id')->distinct())->lazyById(100);
+        foreach ($agents as $agent) {
+            $hold = app(AgentCommerceService::class)->activePendingHoldTotal((int) $agent->id);
+            $totals['active_agent_count']++;
+            $totals['pending_hold_total'] += $hold;
+            $totals['abnormal_order_count'] += $this->abnormalOrderCount((int) $agent->id);
+            $totals['insufficient_balance_agent_count'] += $hold > 0 && (int) $agent->balance <= $hold ? 1 : 0;
+            $totals['no_active_payment_agent_count'] += $this->enabledPaymentCount((int) $agent->id) === 0 ? 1 : 0;
+        }
+        return $totals;
     }
 
     /**
@@ -98,9 +93,9 @@ class AgentOperationsService
         ];
 
         $contexts = AgentOrderContext::query()
-            ->with(['order', 'hold'])
+            ->with(['order', 'hold', 'payment'])
             ->orderBy('id')
-            ->get();
+            ->lazyById(250);
 
         foreach ($contexts as $context) {
             $totals['context_count']++;
@@ -242,17 +237,11 @@ class AgentOperationsService
         $agentUserId = (int) $agent->id;
         $pendingHoldTotal = app(AgentCommerceService::class)->activePendingHoldTotal($agentUserId);
 
-        $paidContexts = $this->contextsForMonth($agentUserId)->get();
-        $monthSalesTotal = 0;
-        $monthCostTotal = 0;
-        $monthMarginTotal = 0;
-
-        foreach ($paidContexts as $context) {
-            $resolved = $this->statusResolver->resolve($context);
-            $monthSalesTotal += (int) $context->sale_amount;
-            $monthCostTotal += (int) $context->cost_amount;
-            $monthMarginTotal += (int) $resolved['margin_amount'];
-        }
+        $month = $this->contextsForMonth($agentUserId)->reorder()->toBase()
+            ->selectRaw('COALESCE(SUM(sale_amount), 0) AS sales, COALESCE(SUM(cost_amount), 0) AS cost')->first();
+        $monthSalesTotal = (int) $month->sales;
+        $monthCostTotal = (int) $month->cost;
+        $monthMarginTotal = $monthSalesTotal - $monthCostTotal;
 
         return [
             'balance' => (int) ($agent->balance ?? 0),
@@ -287,10 +276,7 @@ class AgentOperationsService
 
     private function abnormalOrderCount(int $agentUserId): int
     {
-        return $this->orderQuery($agentUserId)
-            ->get()
-            ->filter(fn (AgentOrderContext $context): bool => $this->hasAbnormalFlag($context))
-            ->count();
+        return $this->statusResolver->filterAbnormal($this->orderQuery($agentUserId))->count();
     }
 
     private function orderQuery(int $agentUserId): Builder
@@ -313,23 +299,19 @@ class AgentOperationsService
         $pageSize = min(100, $this->positiveInt($filters['page_size'] ?? 20, 20));
         $this->applyOrderFilters($query, $filters);
 
-        $rows = $query->get()
-            ->map(fn (AgentOrderContext $context): array => $this->orderRow($context));
-
         if (array_key_exists('abnormal', $filters)) {
             $expectAbnormal = filter_var($filters['abnormal'], FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE);
             if ($expectAbnormal !== null) {
-                $rows = $rows->filter(
-                    static fn (array $row): bool => (count($row['abnormal_flags']) > 0) === $expectAbnormal
-                );
+                $this->statusResolver->filterAbnormal($query, $expectAbnormal);
             }
         }
 
-        $rows = $rows->values();
-        $total = $rows->count();
+        $total = (clone $query)->count();
+        $rows = $query->forPage($page, $pageSize)->get()
+            ->map(fn (AgentOrderContext $context): array => $this->orderRow($context));
 
         return [
-            'data' => $rows->forPage($page, $pageSize)->values()->all(),
+            'data' => $rows->values()->all(),
             'total' => $total,
             'page' => $page,
             'page_size' => $pageSize,
@@ -405,11 +387,6 @@ class AgentOperationsService
             'created_at' => $context->created_at,
             'updated_at' => $context->updated_at,
         ];
-    }
-
-    private function hasAbnormalFlag(AgentOrderContext $context): bool
-    {
-        return count($this->statusResolver->resolve($context)['abnormal_flags']) > 0;
     }
 
     private function activeDomainCount(int $agentUserId): int

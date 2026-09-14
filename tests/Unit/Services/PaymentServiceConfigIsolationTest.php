@@ -105,6 +105,55 @@ final class PaymentServiceConfigIsolationTest extends TestCase
         Http::assertNothingSent();
     }
 
+    #[\PHPUnit\Framework\Attributes\DataProvider('retirementModes')]
+    public function test_retired_channel_only_verifies_its_existing_orders(bool $deleted): void
+    {
+        $this->createOrderTable();
+        $channel = $this->payment(self::ALIPAY, 'alipay');
+        $order = \App\Models\Order::create(['user_id' => 1, 'period' => 'monthly',
+            'trade_no' => 'trade-test', 'payment_id' => $channel->id, 'total_amount' => 1050,
+            'status' => \App\Models\Order::STATUS_COMPLETED]);
+        $deleted ? $channel->delete() : $channel->update(['enable' => false]);
+        $callback = new PaymentService('PayTaro', null, $channel->uuid);
+        $body = ['app_id' => 'app-alipay', 'merchant_no' => 'trade-test', 'transaction_no' => 'gateway-test',
+            'status' => 'PAID', 'order_currency' => 'CNY', 'order_amount' => 10.5];
+        $request = Request::create('/notify', 'POST', [], [], [], [
+            'CONTENT_TYPE' => 'application/json', 'HTTP_X_APP_SECRET' => 'secret-alipay',
+        ], json_encode($body));
+        app()->instance('request', $request);
+        $verified = $callback->notify([]);
+        $this->assertIsArray($verified);
+        $handle = new \ReflectionMethod(\App\Http\Controllers\V1\Guest\PaymentController::class, 'handle');
+        $controller = new \App\Http\Controllers\V1\Guest\PaymentController();
+        $this->assertTrue($handle->invoke($controller, $verified, $callback));
+        $this->assertFalse($handle->invoke($controller, array_replace($verified, ['paid_amount' => 1]), $callback));
+        $request->headers->set('X-App-Secret', 'wrong-secret');
+        $this->assertFalse($callback->notify([]));
+        $request->headers->set('X-App-Secret', 'secret-alipay');
+        $order->update(['payment_id' => $channel->id + 1]);
+        $this->assertFalse($callback->notify([]));
+        $this->assertFalse($handle->invoke($controller, $verified, $callback));
+        $order->delete();
+        $this->assertFalse($callback->notify([]));
+        if ($deleted) {
+            $this->assertNull(Payment::find($channel->id));
+        }
+        $this->expectExceptionMessage('gate is not enable');
+        $callback->pay($this->order());
+    }
+
+    public static function retirementModes(): array
+    {
+        return [[false], [true]];
+    }
+
+    public function test_callback_cannot_select_a_different_gateway_for_channel_credentials(): void
+    {
+        $channel = $this->payment(self::ALIPAY, 'alipay');
+        $this->expectExceptionMessage('payment method mismatch');
+        new PaymentService('EPay', null, $channel->uuid);
+    }
+
     private function payment(string $methodUuid, string $name): Payment
     {
         return Payment::create(['name' => $name, 'uuid' => $name, 'payment' => 'PayTaro', 'enable' => true,

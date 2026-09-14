@@ -288,7 +288,7 @@ class GiftCardService
         }
 
         $before = (int) $agent->balance;
-        if ($before < $amount) {
+        if (app(AgentCommerceService::class)->availableBalance($agent) < $amount) {
             throw new ApiException('Insufficient balance');
         }
 

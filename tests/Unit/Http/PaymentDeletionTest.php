@@ -33,7 +33,8 @@ final class PaymentDeletionTest extends TestCase
         $this->assertCount(2, $controller->fetch()->getData(true)['data']);
         $result = $controller->drop(Request::create('/payment/drop', 'POST', ['id' => $first->id]));
         $this->assertSame(true, $result->getData(true)['data']);
-        $this->assertNull($first->fresh());
+        $this->assertNull(Payment::find($first->id));
+        $this->assertTrue(Payment::withTrashed()->findOrFail($first->id)->trashed());
         $this->assertSame([$second->id], array_column($controller->fetch()->getData(true)['data'], 'id'));
     }
 

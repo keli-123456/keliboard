@@ -352,6 +352,82 @@ final class AgentOperationsServiceTest extends TestCase
         ], $reconciliation);
     }
 
+    public function test_abnormal_sql_matches_resolver_and_paginates_after_filtering(): void
+    {
+        $agent = $this->createActiveAgent('matrix@example.test', 10000);
+        $payment = $this->createPayment($agent);
+        $specs = [
+            [],
+            ['expires_at' => time() - 100],
+            ['order_status' => Order::STATUS_CANCELLED],
+            ['order_status' => Order::STATUS_COMPLETED],
+            ['order_status' => Order::STATUS_COMPLETED, 'context_status' => AgentOrderContext::STATUS_PAID, 'hold_status' => AgentBalanceHold::STATUS_CAPTURED],
+            ['order_status' => Order::STATUS_COMPLETED, 'context_status' => AgentOrderContext::STATUS_PAID, 'hold_status' => AgentBalanceHold::STATUS_RELEASED],
+            ['order_status' => Order::STATUS_COMPLETED, 'context_status' => AgentOrderContext::STATUS_PAID, 'hold_status' => AgentBalanceHold::STATUS_FAILED],
+            ['payment' => $payment],
+            ['cost_amount' => 0, 'context_status' => AgentOrderContext::STATUS_PAID, 'order_status' => Order::STATUS_COMPLETED],
+            [], [], [],
+        ];
+        $contexts = [];
+        foreach ($specs as $index => $spec) {
+            $context = $this->createAgentOrder($agent, $spec + ['trade_no' => 'matrix-' . $index, 'created_at' => time() - 10]);
+            if ($index === 8) {
+                $context->hold->delete();
+                $context->update(['hold_id' => null]);
+            } elseif ($index === 9) {
+                $context->hold->delete();
+            } elseif ($index === 10) {
+                $context->hold->update(['amount' => 1]);
+            }
+            $contexts[] = $context;
+        }
+        $payment->delete();
+        $resolver = app(\App\Services\AgentOrderStatusResolver::class);
+        foreach ([true, false] as $abnormal) {
+            $expected = array_values(array_filter(array_reverse($contexts), fn ($c) =>
+                (count($resolver->resolve($c->fresh())['abnormal_flags']) > 0) === $abnormal));
+            $expectedTrades = array_map(fn ($c) => $c->trade_no, $expected);
+            $actual = [];
+            $this->database->getConnection()->enableQueryLog();
+            for ($page = 1; $page <= (int) ceil(count($expected) / 2) + 1; $page++) {
+                $result = app(AgentOperationsService::class)->agentOrders($agent,
+                    ['abnormal' => $abnormal, 'page' => $page, 'page_size' => 2]);
+                $this->assertSame(count($expected), $result['total']);
+                $this->assertLessThanOrEqual(2, count($result['data']));
+                array_push($actual, ...array_column($result['data'], 'trade_no'));
+            }
+            $this->assertSame($expectedTrades, $actual);
+            $sql = implode("\n", array_column($this->database->getConnection()->getQueryLog(), 'query'));
+            $this->assertStringContainsString('limit 2 offset 2', $sql);
+        }
+    }
+
+    public function test_admin_summary_includes_agents_after_first_hundred(): void
+    {
+        for ($i = 1; $i <= 101; $i++) {
+            $user = User::create(['email' => "summary$i@example.test", 'password' => 'hash',
+                'uuid' => "uuid$i", 'token' => "token$i", 'balance' => 1000]);
+            AgentOrderContext::create(['agent_user_id' => $user->id, 'order_id' => $i,
+                'trade_no' => "summary$i", 'sale_amount' => 100, 'cost_amount' => 0, 'status' => 'pending']);
+        }
+        $summary = app(AgentOperationsService::class)->adminSummary();
+        $this->assertSame(101, $summary['active_agent_count']);
+        $this->assertSame(101, $summary['no_active_payment_agent_count']);
+    }
+
+    public function test_reconciliation_reads_every_batch(): void
+    {
+        $agent = $this->createActiveAgent('batch@example.test', 10000);
+        for ($i = 1; $i <= 251; $i++) {
+            AgentOrderContext::create(['agent_user_id' => $agent->id, 'order_id' => $i,
+                'trade_no' => "batch$i", 'sale_amount' => 100, 'cost_amount' => 0, 'status' => 'paid']);
+        }
+        $totals = app(AgentOperationsService::class)->adminReconciliation();
+        $this->assertSame(251, $totals['context_count']);
+        $this->assertSame(25100, $totals['paid_sales_total']);
+        $this->assertSame(0, $totals['abnormal_order_count']);
+    }
+
     private function createActiveAgent(string $email, int $balance): User
     {
         $agent = $this->createUser($email, $balance);

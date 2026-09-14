@@ -109,9 +109,18 @@ final class GiftCardTenantScopeServiceTest extends TestCase
         $this->assertSame(500, (int) data_get($result, 'agent_charge.amount'));
     }
 
-    public function test_agent_scoped_card_rolls_back_when_agent_balance_is_insufficient(): void
+    #[\PHPUnit\Framework\Attributes\DataProvider('insufficientBalances')]
+    public function test_agent_scoped_card_rolls_back_when_agent_balance_is_insufficient(bool $reserved): void
     {
-        $agent = $this->createActiveAgent('agent@example.test', 200);
+        $agent = $this->createActiveAgent('agent@example.test', $reserved ? 10000 : 200);
+        if ($reserved) {
+            $this->createAgentCommerceTables();
+            $this->createOrderTable();
+            $order = \App\Models\Order::create(['user_id' => $agent->id, 'period' => 'monthly',
+                'trade_no' => 'held-order', 'status' => 0, 'total_amount' => 9800]);
+            \App\Models\AgentBalanceHold::create(['agent_user_id' => $agent->id, 'order_id' => $order->id,
+                'trade_no' => $order->trade_no, 'amount' => 9800, 'status' => 'pending']);
+        }
         $user = $this->createOwnedSubordinate($agent, 'buyer@example.test');
         $code = $this->createGiftCardCode([
             'scope_type' => GiftCardTemplate::SCOPE_AGENT,
@@ -133,11 +142,16 @@ final class GiftCardTenantScopeServiceTest extends TestCase
         $user->refresh();
         $code->refresh();
 
-        $this->assertSame(200, (int) $agent->balance);
+        $this->assertSame($reserved ? 10000 : 200, (int) $agent->balance);
         $this->assertSame(0, (int) $user->balance);
         $this->assertSame(GiftCardCode::STATUS_UNUSED, (int) $code->status);
         $this->assertSame(0, GiftCardUsage::query()->count());
         $this->assertSame(0, AgentLedger::query()->count());
+    }
+
+    public static function insufficientBalances(): array
+    {
+        return [[false], [true]];
     }
 
     private function createGiftCardTables(): void

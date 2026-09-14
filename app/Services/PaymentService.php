@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Exceptions\ApiException;
 use App\Models\Payment;
+use App\Models\Order;
 use App\Services\Plugin\PluginManager;
 use App\Services\Plugin\HookManager;
 
@@ -32,7 +33,7 @@ class PaymentService
             $payment = $paymentModel->toArray();
         }
         if ($uuid) {
-            $paymentModel = Payment::where('uuid', $uuid)->first();
+            $paymentModel = Payment::withTrashed()->where('uuid', $uuid)->first();
             if (!$paymentModel) {
                 throw new ApiException('payment method is not found');
             }
@@ -41,7 +42,11 @@ class PaymentService
 
         $this->config = [];
         if (isset($payment)) {
+            if (strcasecmp((string) $payment['payment'], (string) $method) !== 0) {
+                throw new ApiException('payment method mismatch');
+            }
             $this->config = is_string($payment['config']) ? json_decode($payment['config'], true) : $payment['config'];
+            $this->config['archived'] = $paymentModel->trashed();
             $this->config['enable'] = $payment['enable'];
             $this->config['id'] = $payment['id'];
             $this->config['uuid'] = $payment['uuid'];
@@ -67,9 +72,19 @@ class PaymentService
 
     public function notify($params)
     {
-        if (!$this->config['enable'])
-            throw new ApiException('gate is not enable');
-        return $this->payment->notify($params);
+        $verified = $this->payment->notify($params);
+        if (!$verified) {
+            return false;
+        }
+        if (empty($this->config['enable']) || !empty($this->config['archived'])) {
+            // Retired credentials are valid only for already-associated orders.
+            if (!is_array($verified) || empty($verified['trade_no'])
+                || !Order::query()->where('trade_no', $verified['trade_no'])
+                    ->where('payment_id', $this->getPaymentId())->exists()) {
+                return false;
+            }
+        }
+        return $verified;
     }
 
     public function getPaymentId(): ?int
@@ -79,6 +94,9 @@ class PaymentService
 
     public function pay($order)
     {
+        if (empty($this->config['enable']) || !empty($this->config['archived'])) {
+            throw new ApiException('gate is not enable');
+        }
         // custom notify domain name
         $notifyUrl = url("/api/v1/guest/payment/notify/{$this->method}/{$this->config['uuid']}");
         if ($this->config['notify_domain']) {

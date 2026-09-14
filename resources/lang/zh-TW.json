@@ -1,4 +1,10 @@
 {
+    "An active plan cannot be replaced with a different plan": "目前方案仍在有效期內，暫不支援更換不同方案。請續費原方案或到期後再更換。",
+    "Agent permission is disabled": "代理權限已停用，請聯絡管理員處理。",
+    "Agent permission is not active": "代理權限尚未開通或已停用，請聯絡管理員處理。",
+    "Agent application requires platform review": "代理申請需要平台審核，請等待管理員處理。",
+    "Invalid operation request key": "操作識別碼無效，請重新整理頁面後重試。",
+    "Operation request key was already used for different data": "此操作識別碼已用於其他請求，請重新確認操作內容。",
     "The user does not exist": "該用戶不存在",
     "The old password is wrong": "舊密碼有誤",
     "Save failed": "保存失敗",

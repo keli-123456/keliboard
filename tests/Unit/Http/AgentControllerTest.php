@@ -114,6 +114,34 @@ final class AgentControllerTest extends TestCase
         $this->assertSame('https://example.test/s/new-token', $payload['data']['subscribe_url']);
     }
 
+    public function test_paid_endpoint_replays_header_key_without_executing_again(): void
+    {
+        $this->setUpInMemoryDatabase();
+        $this->createUserTable();
+        (require base_path('database/migrations/2026_09_14_180100_create_agent_operations_table.php'))->up();
+        $user = User::create(['email' => 'agent@example.test', 'password' => 'hash',
+            'uuid' => 'uuid', 'token' => 'token', 'balance' => 1000]);
+        $service = new class extends AgentCenterService {
+            public int $calls = 0;
+
+            public function resetTraffic(User $agent, int $subUserId): array
+            {
+                $this->calls++;
+                User::whereKey($agent->id)->decrement('balance', 100);
+                return ['target' => $subUserId, 'balance' => 900];
+            }
+        };
+        app()->instance(AgentCenterService::class, $service);
+        $request = $this->requestForUser($user->id);
+        $request->headers->set('Idempotency-Key', 'reset-request-key');
+        $controller = new AgentController();
+        $first = $controller->resetTraffic($request, 7);
+        $again = $controller->resetTraffic($request, 7);
+        $this->assertSame($first->getContent(), $again->getContent());
+        $this->assertSame(1, $service->calls);
+        $this->assertSame(900, (int) $user->fresh()->balance);
+    }
+
     private function requestForUser(int $id): Request
     {
         $request = Request::create('/user/agent/overview', 'GET');

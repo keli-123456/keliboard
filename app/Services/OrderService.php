@@ -535,7 +535,8 @@ class OrderService
      */
     protected function handleUserBalance(User $user, UserService $userService): void
     {
-        $remainingBalance = $user->balance - $this->order->total_amount;
+        $availableBalance = app(AgentCommerceService::class)->availableBalance($user);
+        $remainingBalance = $availableBalance - $this->order->total_amount;
 
         if ($remainingBalance >= 0) {
             if (!$userService->addBalance($this->order->user_id, -$this->order->total_amount)) {
@@ -544,11 +545,11 @@ class OrderService
             $this->order->balance_amount = $this->order->total_amount;
             $this->order->total_amount = 0;
         } else {
-            if (!$userService->addBalance($this->order->user_id, -$user->balance)) {
+            if (!$userService->addBalance($this->order->user_id, -$availableBalance)) {
                 throw new ApiException(__('Insufficient balance'));
             }
-            $this->order->balance_amount = $user->balance;
-            $this->order->total_amount = $this->order->total_amount - $user->balance;
+            $this->order->balance_amount = $availableBalance;
+            $this->order->total_amount -= $availableBalance;
         }
     }
 

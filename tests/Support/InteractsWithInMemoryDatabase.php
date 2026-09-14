@@ -640,6 +640,7 @@ trait InteractsWithInMemoryDatabase
             $table->integer('created_at')->nullable();
             $table->integer('updated_at')->nullable();
             $table->index(['owner_type', 'owner_id']);
+            $table->unsignedInteger('deleted_at')->nullable()->index();
         });
     }
 

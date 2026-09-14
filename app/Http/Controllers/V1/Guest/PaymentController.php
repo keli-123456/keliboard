@@ -55,16 +55,16 @@ class PaymentController extends Controller
             Log::warning('Payment notify order not found', ['trade_no' => $tradeNo]);
             return false;
         }
-        if ($order->status !== Order::STATUS_PENDING) {
-            return true;
-        }
-
         if (!$this->verifyPaymentMethod($order, $paymentService)) {
             return false;
         }
 
         if (!$this->verifyPaidAmount($order, $verify)) {
             return false;
+        }
+
+        if ($order->status !== Order::STATUS_PENDING) {
+            return true;
         }
 
         $orderService = new OrderService($order);

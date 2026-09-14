@@ -52,37 +52,33 @@ class AgentCenterService
     public function unlock(User $agent, ?Request $request = null): array
     {
         $this->assertEnabled();
-
-        $profile = $this->profileFor($agent);
-        if ($profile && $profile->status === self::STATUS_ACTIVE) {
-            return $this->overview($agent);
-        }
-
-        if ($this->subordinateOwnership($agent)) {
-            throw new ApiException('Agent application requires platform review');
-        }
-
-        if (!$this->isEligible($agent)) {
-            throw new ApiException('Agent unlock threshold has not been reached');
-        }
-
-        $now = time();
-        $status = $this->boolSetting('agent_center_auto_activate', true)
-            ? self::STATUS_ACTIVE
-            : self::STATUS_PENDING;
-
-        $profile = AgentProfile::query()->updateOrCreate(
-            ['user_id' => $agent->id],
-            [
+        DB::transaction(function () use ($agent, $request): void {
+            $agent = User::query()->lockForUpdate()->findOrFail($agent->id);
+            $profile = AgentProfile::query()->where('user_id', $agent->id)->lockForUpdate()->first();
+            if ($profile?->status === self::STATUS_ACTIVE) {
+                return;
+            }
+            if ($profile !== null) {
+                throw new ApiException(__($profile->status === self::STATUS_DISABLED
+                    ? 'Agent permission is disabled' : 'Agent application requires platform review'));
+            }
+            if ($this->subordinateOwnership($agent)) {
+                throw new ApiException('Agent application requires platform review');
+            }
+            if (!$this->isEligible($agent)) {
+                throw new ApiException('Agent unlock threshold has not been reached');
+            }
+            $status = $this->boolSetting('agent_center_auto_activate', true) ? self::STATUS_ACTIVE : self::STATUS_PENDING;
+            AgentProfile::query()->create([
+                'user_id' => $agent->id,
                 'status' => $status,
                 'level' => 'default',
-                'cost_site_id' => $this->profileCostSiteId($profile, $request, $agent),
-                'enabled_at' => $status === self::STATUS_ACTIVE ? $now : null,
+                'cost_site_id' => $this->profileCostSiteId(null, $request, $agent),
+                'enabled_at' => $status === self::STATUS_ACTIVE ? time() : null,
                 'disabled_at' => null,
-                'updated_at' => $now,
-            ]
-        );
-
+                'updated_at' => time(),
+            ]);
+        });
         return $this->overview($agent->fresh() ?: $agent);
     }
 
@@ -90,41 +86,50 @@ class AgentCenterService
     {
         $this->assertEnabled();
 
-        $profile = $this->profileFor($user);
-        if ($profile && $profile->status === self::STATUS_ACTIVE) {
-            return $this->overview($user);
-        }
+        return DB::transaction(function () use ($user, $message, $request): array {
+            $user = User::query()->lockForUpdate()->findOrFail($user->id);
+            $profile = AgentProfile::query()->where('user_id', $user->id)->lockForUpdate()->first();
+            if ($profile?->status === self::STATUS_DISABLED) {
+                throw new ApiException(__('Agent permission is disabled'));
+            }
+            if ($profile?->status === self::STATUS_PENDING) {
+                return $this->overview($user);
+            }
+            if ($profile && $profile->status === self::STATUS_ACTIVE) {
+                return $this->overview($user);
+            }
 
-        $ownership = $this->subordinateOwnership($user);
-        $ticket = app(TicketService::class)->createTicket(
-            $user->id,
-            '代理开通申请',
-            1,
-            $this->applicationTicketMessage($user, $ownership, $message),
-            [],
-            [
-                'agent_context' => [],
-                'site_context' => [],
-            ]
-        );
+            $ownership = $this->subordinateOwnership($user);
+            $ticket = app(TicketService::class)->createTicket(
+                $user->id,
+                '代理开通申请',
+                1,
+                $this->applicationTicketMessage($user, $ownership, $message),
+                [],
+                [
+                    'agent_context' => [],
+                    'site_context' => [],
+                ]
+            );
 
-        $now = time();
-        AgentProfile::query()->updateOrCreate(
-            ['user_id' => $user->id],
-            [
-                'status' => self::STATUS_PENDING,
-                'level' => $profile?->level ?: 'default',
-                'cost_site_id' => $this->profileCostSiteId($profile, $request, $user),
-                'enabled_at' => null,
-                'disabled_at' => null,
-                'updated_at' => $now,
-            ]
-        );
+            $now = time();
+            AgentProfile::query()->updateOrCreate(
+                ['user_id' => $user->id],
+                [
+                    'status' => self::STATUS_PENDING,
+                    'level' => $profile?->level ?: 'default',
+                    'cost_site_id' => $this->profileCostSiteId($profile, $request, $user),
+                    'enabled_at' => null,
+                    'disabled_at' => null,
+                    'updated_at' => $now,
+                ]
+            );
 
-        $overview = $this->overview($user->fresh() ?: $user);
-        $overview['application']['ticket_id'] = (int) $ticket->id;
+            $overview = $this->overview($user->fresh() ?: $user);
+            $overview['application']['ticket_id'] = (int) $ticket->id;
 
-        return $overview;
+            return $overview;
+        });
     }
 
     public function listUsers(User $agent, ?string $keyword = null): array
@@ -183,10 +188,7 @@ class AgentCenterService
         $this->activeProfile($agent);
 
         return DB::transaction(function () use ($agent, $subUserId): array {
-            $lockedAgent = User::query()->lockForUpdate()->find($agent->id);
-            if (!$lockedAgent) {
-                throw new ApiException('Agent user does not exist');
-            }
+            $lockedAgent = $this->lockActiveAgent($agent);
 
             $ownership = $this->ownership($lockedAgent, $subUserId);
             $subordinate = User::query()->lockForUpdate()->find($ownership->sub_user_id);
@@ -244,10 +246,7 @@ class AgentCenterService
         $assignment = $this->resolveOptionalPlanPrice($agent, $payload);
 
         return DB::transaction(function () use ($agent, $email, $password, $remark, $assignment): array {
-            $lockedAgent = User::query()->lockForUpdate()->find($agent->id);
-            if (!$lockedAgent) {
-                throw new ApiException('Agent user does not exist');
-            }
+            $lockedAgent = $this->lockActiveAgent($agent);
             $this->assertUserLimit($lockedAgent);
 
             $now = time();
@@ -280,7 +279,7 @@ class AgentCenterService
             if ($assignment !== null) {
                 [$plan, $period, $baseAmount, $bonusDays, $bonusDayPrice, $bonusAmount, $amount] = $assignment;
                 $before = (int) $lockedAgent->balance;
-                if ($before < $amount) {
+                if (app(AgentCommerceService::class)->availableBalance($lockedAgent) < $amount) {
                     throw new ApiException('Insufficient balance');
                 }
 
@@ -329,10 +328,7 @@ class AgentCenterService
         $ticketAttachments = collect();
 
         $result = DB::transaction(function () use ($agent, $subUserId, &$ticketAttachments): array {
-            $lockedAgent = User::query()->lockForUpdate()->find($agent->id);
-            if (!$lockedAgent) {
-                throw new ApiException('Agent user does not exist');
-            }
+            $lockedAgent = $this->lockActiveAgent($agent);
 
             $ownership = AgentUser::query()
                 ->where('agent_user_id', $lockedAgent->id)
@@ -388,6 +384,7 @@ class AgentCenterService
         $this->activeProfile($agent);
         $ownership = $this->ownership($agent, $subUserId);
         [$plan, $period, $baseAmount, $bonusDays, $bonusDayPrice, $bonusAmount, $amount] = $this->resolvePlanPrice($agent, $payload);
+        $this->assertPlanReplacementAllowed($ownership->subordinate, $plan);
 
         return [
             'target_user' => $this->ownedUserSnapshot($ownership),
@@ -398,6 +395,7 @@ class AgentCenterService
             'bonus_day_price' => $bonusDayPrice,
             'bonus_amount' => $bonusAmount,
             'amount' => $amount,
+            'available_balance' => app(AgentCommerceService::class)->availableBalance($agent),
             'balance_after' => max(0, (int) $agent->balance - $amount),
         ];
     }
@@ -408,10 +406,7 @@ class AgentCenterService
         [$plan, $period, $baseAmount, $bonusDays, $bonusDayPrice, $bonusAmount, $amount] = $this->resolvePlanPrice($agent, $payload);
 
         return DB::transaction(function () use ($agent, $subUserId, $plan, $period, $baseAmount, $bonusDays, $bonusDayPrice, $bonusAmount, $amount): array {
-            $lockedAgent = User::query()->lockForUpdate()->find($agent->id);
-            if (!$lockedAgent) {
-                throw new ApiException('Agent user does not exist');
-            }
+            $lockedAgent = $this->lockActiveAgent($agent);
 
             $ownership = $this->ownership($lockedAgent, $subUserId);
             $subordinate = User::query()->lockForUpdate()->find($ownership->sub_user_id);
@@ -420,7 +415,7 @@ class AgentCenterService
             }
 
             $before = (int) $lockedAgent->balance;
-            if ($before < $amount) {
+            if (app(AgentCommerceService::class)->availableBalance($lockedAgent) < $amount) {
                 throw new ApiException('Insufficient balance');
             }
 
@@ -472,6 +467,7 @@ class AgentCenterService
         return [
             'target_user' => $this->ownedUserSnapshot($ownership),
             'amount' => $amount,
+            'available_balance' => app(AgentCommerceService::class)->availableBalance($agent),
             'balance_after' => max(0, (int) $agent->balance - $amount),
         ];
     }
@@ -484,10 +480,7 @@ class AgentCenterService
         }
 
         return DB::transaction(function () use ($agent, $subUserId): array {
-            $lockedAgent = User::query()->lockForUpdate()->find($agent->id);
-            if (!$lockedAgent) {
-                throw new ApiException('Agent user does not exist');
-            }
+            $lockedAgent = $this->lockActiveAgent($agent);
 
             $ownership = $this->ownership($lockedAgent, $subUserId);
             $subordinate = User::query()->lockForUpdate()->find($ownership->sub_user_id);
@@ -498,7 +491,7 @@ class AgentCenterService
             $plan = $subordinate->plan_id ? Plan::query()->find($subordinate->plan_id) : null;
             $amount = $plan ? $this->resetPrice($plan) : 0;
             $before = (int) $lockedAgent->balance;
-            if ($before < $amount) {
+            if (app(AgentCommerceService::class)->availableBalance($lockedAgent) < $amount) {
                 throw new ApiException('Insufficient balance');
             }
 
@@ -552,6 +545,7 @@ class AgentCenterService
             'bonus_days' => $bonusDays,
             'bonus_day_price' => $bonusDayPrice,
             'amount' => $amount,
+            'available_balance' => app(AgentCommerceService::class)->availableBalance($agent),
             'balance_after' => max(0, (int) $agent->balance - $amount),
             'previous_expired_at' => $previousExpiredAt,
             'new_expired_at' => $newExpiredAt,
@@ -563,10 +557,7 @@ class AgentCenterService
         $this->activeProfile($agent);
 
         return DB::transaction(function () use ($agent, $subUserId, $payload): array {
-            $lockedAgent = User::query()->lockForUpdate()->find($agent->id);
-            if (!$lockedAgent) {
-                throw new ApiException('Agent user does not exist');
-            }
+            $lockedAgent = $this->lockActiveAgent($agent);
 
             $ownership = $this->ownership($lockedAgent, $subUserId);
             $subordinate = User::query()->lockForUpdate()->find($ownership->sub_user_id);
@@ -576,7 +567,7 @@ class AgentCenterService
 
             [$plan, $bonusDays, $bonusDayPrice, $amount, $previousExpiredAt, $newExpiredAt] = $this->resolveBonusDayGrant($subordinate, $payload);
             $before = (int) $lockedAgent->balance;
-            if ($before < $amount) {
+            if (app(AgentCommerceService::class)->availableBalance($lockedAgent) < $amount) {
                 throw new ApiException('Insufficient balance');
             }
 
@@ -909,8 +900,34 @@ class AgentCenterService
         return in_array((int) $plan->id, $ids, true);
     }
 
+    private function assertPlanReplacementAllowed(?User $user, Plan $plan): void
+    {
+        if (!$user) {
+            throw new ApiException('Target user does not exist');
+        }
+        if ($user->plan_id && (int) $user->plan_id !== (int) $plan->id
+            && ($user->expired_at === null || (int) $user->expired_at > time())) {
+            throw new ApiException(__('An active plan cannot be replaced with a different plan'));
+        }
+    }
+
+    private function lockActiveAgent(User $agent): User
+    {
+        $locked = User::query()->lockForUpdate()->find($agent->id);
+        if (!$locked) {
+            throw new ApiException('Agent user does not exist');
+        }
+        $profile = AgentProfile::query()->where('user_id', $locked->id)->lockForUpdate()->first();
+        $this->assertEnabled();
+        if ($profile?->status !== self::STATUS_ACTIVE) {
+            throw new ApiException(__('Agent permission is not active'));
+        }
+        return $locked;
+    }
+
     private function applyPlan(User $user, Plan $plan, string $period, int $bonusDays = 0): void
     {
+        $this->assertPlanReplacementAllowed($user, $plan);
         $user->plan_id = $plan->id;
         $user->group_id = $plan->group_id;
         $user->transfer_enable = (int) $plan->transfer_enable * 1073741824;
@@ -993,9 +1010,12 @@ class AgentCenterService
             ->where('amount', '<', 0)
             ->where('created_at', '>=', $monthStart)
             ->sum('amount'));
+        $pendingHold = app(AgentCommerceService::class)->activePendingHoldTotal($agentId);
 
         return [
             'balance' => (int) $agent->balance,
+            'available_balance' => max(0, (int) $agent->balance - $pendingHold),
+            'pending_hold_total' => $pendingHold,
             'managed_users' => AgentUser::query()->where('agent_user_id', $agentId)->count(),
             'month_spending' => $monthSpend,
             'ledger_count' => AgentLedger::query()->where('agent_user_id', $agentId)->count(),

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\V1\User;
 
 use App\Http\Controllers\Controller;
 use App\Services\AgentCenterService;
+use App\Services\AgentOperationService;
 use Illuminate\Http\Request;
 
 class AgentController extends Controller
@@ -44,7 +45,8 @@ class AgentController extends Controller
             'bonus_days' => 'nullable|integer|min:0|max:365',
         ]);
 
-        return $this->success($this->service()->createSubordinate($request->user(), $params));
+        return $this->success($this->operation($request, 'create_user', $params,
+            fn () => $this->service()->createSubordinate($request->user(), $params)));
     }
 
     public function deleteUser(Request $request, int $id)
@@ -81,7 +83,8 @@ class AgentController extends Controller
             'bonus_days' => 'nullable|integer|min:0|max:365',
         ]);
 
-        return $this->success($this->service()->assignPlan($request->user(), $id, $params));
+        return $this->success($this->operation($request, 'assign_plan:' . $id, $params,
+            fn () => $this->service()->assignPlan($request->user(), $id, $params)));
     }
 
     public function resetTrafficPreview(Request $request, int $id)
@@ -91,7 +94,8 @@ class AgentController extends Controller
 
     public function resetTraffic(Request $request, int $id)
     {
-        return $this->success($this->service()->resetTraffic($request->user(), $id));
+        return $this->success($this->operation($request, 'reset_traffic:' . $id, [],
+            fn () => $this->service()->resetTraffic($request->user(), $id)));
     }
 
     public function bonusDaysPreview(Request $request, int $id)
@@ -109,7 +113,8 @@ class AgentController extends Controller
             'bonus_days' => 'required|integer|min:1|max:365',
         ]);
 
-        return $this->success($this->service()->grantBonusDays($request->user(), $id, $params));
+        return $this->success($this->operation($request, 'bonus_days:' . $id, $params,
+            fn () => $this->service()->grantBonusDays($request->user(), $id, $params)));
     }
 
     public function ledger(Request $request)
@@ -121,5 +126,12 @@ class AgentController extends Controller
     private function service(): AgentCenterService
     {
         return app(AgentCenterService::class);
+    }
+
+    private function operation(Request $request, string $action, array $payload, callable $operation): array
+    {
+        return app(AgentOperationService::class)->execute(
+            $request->user(), $request->header('Idempotency-Key'), $action, $payload, $operation
+        );
     }
 }

@@ -90,18 +90,14 @@ class UserService
 
     public function addBalance(int $userId, int $balance): bool
     {
-        $user = User::lockForUpdate()->find($userId);
-        if (!$user) {
-            return false;
-        }
-        $user->balance = $user->balance + $balance;
-        if ($user->balance < 0) {
-            return false;
-        }
-        if (!$user->save()) {
-            return false;
-        }
-        return true;
+        return \Illuminate\Support\Facades\DB::transaction(function () use ($userId, $balance): bool {
+            $user = User::lockForUpdate()->find($userId);
+            if (!$user || ($balance < 0 && app(AgentCommerceService::class)->availableBalance($user) < -$balance)) {
+                return false;
+            }
+            $user->balance = (int) $user->balance + $balance;
+            return $user->balance >= 0 && $user->save();
+        });
     }
 
     public function isNotCompleteOrderByUserId(int $userId): bool
