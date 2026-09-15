@@ -142,6 +142,80 @@ final class AgentCommerceServiceTest extends TestCase
         return [$agent, $buyer, $plan, $payment];
     }
 
+    private function closeGlobalCollection(): void
+    {
+        (require base_path('database/migrations/2026_09_15_100000_create_agent_collection_policy.php'))->up();
+        app(\App\Services\AgentCollectionService::class)->configurePolicy([
+            'enabled' => false, 'use_global' => true, 'platform_enabled' => false, 'payment_ids' => [],
+            'fee_bps' => 9000, 'fee_fixed' => 1000, 'settlement_days' => 30, 'minimum_withdrawal' => 1000, 'revision' => 0,
+        ], 99);
+    }
+
+    public function test_global_closure_keeps_existing_order_checkout_and_original_profit(): void
+    {
+        [$agent, $buyer, $plan, $payment] = $this->platformFixture();
+        $order = app(AgentCommerceService::class)->createOrderFromRequest($buyer, $plan, Plan::PERIOD_MONTHLY, null, $this->requestForHost('profit.example.test'));
+        $this->closeGlobalCollection();
+        $this->payPlatform($order, $payment);
+        $this->assertSame(26, (int) DB::table('v2_agent_profit')->value('fee_amount'));
+        $this->assertSame(774, (int) DB::table('v2_agent_profit')->value('amount'));
+        $this->assertSame(0, (int) $agent->fresh()->balance);
+    }
+
+    public function test_global_closure_keeps_existing_recharge_payment_and_original_funding_fee(): void
+    {
+        [$agent, $buyer, , $payment] = $this->platformFixture();
+        $order = app(AgentCommerceService::class)->createRechargeOrderFromRequest($buyer, 2600, 0, $this->requestForHost('profit.example.test', $buyer));
+        $this->closeGlobalCollection();
+        $this->payPlatform($order, $payment);
+        $this->assertSame(2600, app(\App\Services\AgentPrepaidService::class)->balance($buyer->id, $agent->id));
+        $this->assertSame(52, (int) DB::table('v2_agent_prepaid_fund')->value('remaining_fee'));
+        $this->assertSame(0, DB::table('v2_agent_profit')->count());
+    }
+
+    public function test_global_closure_keeps_prepaid_renewal_without_charging_new_fees(): void
+    {
+        [$agent, $buyer, $plan, $payment] = $this->platformFixture();
+        $this->prepaidRecharge($buyer, $payment);
+        $this->closeGlobalCollection();
+        $order = app(AgentCommerceService::class)->createAutoRenewOrder($buyer->fresh(), $plan, Plan::PERIOD_MONTHLY);
+        $this->assertSame(0, (int) $order->total_amount);
+        $this->payPlatform($order, $payment);
+        $this->assertSame(1300, app(\App\Services\AgentPrepaidService::class)->balance($buyer->id, $agent->id));
+        $this->assertSame(26, (int) DB::table('v2_agent_profit')->value('fee_amount'));
+        $this->assertSame(774, (int) DB::table('v2_agent_profit')->value('amount'));
+    }
+
+    public static function globallyBlockedPurchases(): array
+    {
+        return ['recharge' => ['recharge'], 'external' => ['external'], 'mixed' => ['mixed']];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('globallyBlockedPurchases')]
+    public function test_global_closure_rejects_new_external_funding_without_reserving_balance(string $kind): void
+    {
+        [$agent, $buyer, $plan, $payment] = $this->platformFixture();
+        if ($kind === 'mixed') {
+            $this->prepaidRecharge($buyer, $payment, 1000);
+        }
+        $count = Order::count();
+        $this->closeGlobalCollection();
+        try {
+            $service = app(AgentCommerceService::class);
+            $request = $this->requestForHost('profit.example.test', $buyer);
+            if ($kind === 'recharge') {
+                $service->createRechargeOrderFromRequest($buyer, 2600, 0, $request);
+            } else {
+                $service->createOrderFromRequest($buyer, $plan, Plan::PERIOD_MONTHLY, null, $request);
+            }
+            $this->fail('Global gate must reject new external funding');
+        } catch (ApiException $e) {
+            $this->assertSame($count, Order::count());
+            $this->assertSame(0, DB::table('v2_agent_prepaid_allocation')->count());
+            $this->assertSame($kind === 'mixed' ? 1000 : 0, app(\App\Services\AgentPrepaidService::class)->balance($buyer->id, $agent->id));
+        }
+    }
+
     private function payPlatform(Order $order, \App\Models\Payment $payment): Order
     {
         $this->bindSynchronousBusDispatcher();

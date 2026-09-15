@@ -101,6 +101,20 @@ final class AgentProfitServiceTest extends TestCase
         $this->assertEquals(3800, $this->service->summary($this->agent->id)['available']);
     }
 
+    public function test_master_closure_does_not_change_existing_profit_or_block_settlement_and_withdrawal(): void
+    {
+        (require base_path('database/migrations/2026_09_15_100000_create_agent_collection_policy.php'))->up();
+        app(AgentCollectionService::class)->configurePolicy([
+            'enabled' => false, 'use_global' => true, 'platform_enabled' => false, 'payment_ids' => [],
+            'fee_bps' => 9000, 'fee_fixed' => 1000, 'settlement_days' => 90, 'minimum_withdrawal' => 1000, 'revision' => 0,
+        ], 99);
+        $this->settled();
+        $this->assertSame(200, (int) DB::table('v2_agent_profit')->value('fee_amount'));
+        $this->assertSame(3800, (int) $this->service->summary($this->agent->id)['available']);
+        $this->withdraw();
+        $this->assertSame(1800, (int) $this->service->summary($this->agent->id)['available']);
+    }
+
     public function test_request_freezes_once_and_encrypts_account(): void
     {
         $this->settled();

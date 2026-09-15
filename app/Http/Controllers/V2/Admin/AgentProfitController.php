@@ -29,15 +29,28 @@ class AgentProfitController extends Controller
     public function configure(Request $request, int $agentUserId)
     {
         $adminId = $this->adminId($request);
-        $data = $request->validate([
-            'platform_enabled' => 'required|boolean', 'payment_ids' => 'present|array|max:100',
-            'payment_ids.*' => 'required|integer|min:1|distinct',
-            'fee_bps' => 'required|integer|min:0|max:10000',
-            'fee_fixed' => 'required|integer|min:0|max:1000000',
-            'settlement_days' => 'required|integer|min:1|max:90',
-            'minimum_withdrawal' => 'required|integer|min:1|max:100000000',
-        ]);
+        $data = $request->validate(AgentCollectionService::validationRules());
         return $this->success(app(AgentCollectionService::class)->configure($agentUserId, $data, $adminId));
+    }
+
+    public function policy(Request $request)
+    {
+        $this->adminId($request);
+        return $this->success([
+            'policy' => app(AgentCollectionService::class)->policy(),
+            'channels' => Payment::where('owner_type', Payment::OWNER_PLATFORM)->where('payment', '!=', 'balance')
+                ->orderBy('sort')->get(['id', 'name', 'enable']),
+        ]);
+    }
+
+    public function configurePolicy(Request $request)
+    {
+        $adminId = $this->adminId($request);
+        $data = $request->validate(array_merge(AgentCollectionService::validationRules(), [
+            'enabled' => 'required|boolean', 'use_global' => 'required|boolean',
+            'revision' => 'required|integer|min:0|max:4294967294', 'confirm' => 'required|accepted',
+        ]));
+        return $this->success(app(AgentCollectionService::class)->configurePolicy($data, $adminId));
     }
 
     public function withdrawals(Request $request)
