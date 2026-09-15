@@ -7,10 +7,11 @@ use App\Models\AgentOrderContext;
 use App\Models\Order;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 
 class FinancialReconciliationIssueScanner
 {
+    private FinancialReconciliationSchema $schema;
+
     public const SAMPLE_LIMIT = 240;
     private const PER_RULE_LIMIT = 40;
 
@@ -19,8 +20,10 @@ class FinancialReconciliationIssueScanner
     private int $total = 0;
     private int $highCount = 0;
 
-    public function scan(array $filters): array
+    public function scan(array $filters, ?FinancialReconciliationSchema $schema = null): array
     {
+        $this->schema = $schema ?? new FinancialReconciliationSchema();
+        $this->currentFilters = $filters;
         $this->issues = [];
         $this->breakdown = [];
         $this->total = 0;
@@ -68,12 +71,12 @@ class FinancialReconciliationIssueScanner
             $query->where('o.type', '<>', Order::TYPE_RECHARGE)->where('o.plan_id', '>', 0)->whereNull('p.id');
         });
 
-        if (Schema::hasTable('v2_payment')) {
+        if ($this->schema->hasTable('v2_payment')) {
             $this->orderRule($filters, 'completed_payment_missing', 'high', 'payment', function (Builder $query): void {
                 $query->where('o.status', Order::STATUS_COMPLETED)->whereNotNull('o.payment_id')->whereNull('pay.id');
             });
         }
-        if (Schema::hasColumn('v2_order', 'refund_disposed_at')) {
+        if ($this->schema->hasColumn('v2_order', 'refund_disposed_at')) {
             $this->orderRule($filters, 'refund_not_disposed', 'high', 'refund', function (Builder $query): void {
                 $query->where('o.refund_amount', '>', 0)->whereNull('o.refund_disposed_at');
             });
@@ -81,7 +84,7 @@ class FinancialReconciliationIssueScanner
                 $query->where('o.refund_amount', '>', 0)->where('o.commission_status', Order::COMMISSION_STATUS_VALID);
             });
         }
-        if (Schema::hasTable('v2_site_order_context')) {
+        if ($this->schema->hasTable('v2_site_order_context')) {
             $this->orderRule($filters, 'site_context_missing', 'medium', 'order', function (Builder $query): void {
                 $query->whereNotNull('o.site_id')->whereNull('soc.id');
             });
@@ -89,7 +92,7 @@ class FinancialReconciliationIssueScanner
                 $query->whereNotNull('soc.id')->whereColumn('soc.site_id', '<>', 'o.site_id');
             });
         }
-        if (Schema::hasTable('v2_agent_user') && Schema::hasTable('v2_agent_order_context')) {
+        if ($this->schema->hasTable('v2_agent_user') && $this->schema->hasTable('v2_agent_order_context')) {
             $this->orderRule($filters, 'agent_order_context_missing', 'high', 'agent', function (Builder $query): void {
                 $query->whereNotNull('au.id')->whereNull('aoc.id');
             });
@@ -99,7 +102,7 @@ class FinancialReconciliationIssueScanner
     private function scanAgentFinance(array $filters): void
     {
         if ($filters['scope'] !== 'all' && $filters['scope'] !== 'agent') return;
-        if (!Schema::hasTable('v2_agent_order_context') || !Schema::hasTable('v2_agent_balance_hold')) return;
+        if (!$this->schema->hasTable('v2_agent_order_context') || !$this->schema->hasTable('v2_agent_balance_hold')) return;
 
         $this->orderRule($filters, 'agent_hold_missing', 'high', 'agent', function (Builder $query): void {
             $this->requiringSelfCollectionHold($query);
@@ -124,7 +127,7 @@ class FinancialReconciliationIssueScanner
             $query->where('abh.status', AgentBalanceHold::STATUS_PENDING)->where('abh.expires_at', '<', time());
         });
 
-        if (Schema::hasTable('v2_agent_ledger')) {
+        if ($this->schema->hasTable('v2_agent_ledger')) {
             $query = DB::table('v2_agent_ledger as al')
                 ->leftJoin('v2_user as agent', 'agent.id', '=', 'al.agent_user_id')
                 ->leftJoin('v2_user as target', 'target.id', '=', 'al.target_user_id')
@@ -152,7 +155,7 @@ class FinancialReconciliationIssueScanner
 
     private function scanAgentProfit(array $filters): void
     {
-        if (!Schema::hasTable('v2_agent_order_context') || !Schema::hasTable('v2_agent_profit')) return;
+        if (!$this->schema->hasTable('v2_agent_order_context') || !$this->schema->hasTable('v2_agent_profit')) return;
         $this->orderRule($filters, 'agent_profit_missing', 'high', 'agent', function (Builder $query): void {
             $query->where('aoc.pricing_snapshot->collection->mode', 'platform')->where('aoc.status', 'paid')
                 ->where('o.status', Order::STATUS_COMPLETED)->where('o.paid_at', '>', 0)->where('o.plan_id', '>', 0)
@@ -187,20 +190,20 @@ class FinancialReconciliationIssueScanner
                 ->orWhereRaw('COALESCE(o.actual_commission_balance, 0) > COALESCE(o.commission_balance, 0)')
                 ->orWhereRaw('COALESCE(o.commission_balance, 0) > o.total_amount + COALESCE(o.balance_amount, 0)'));
         });
-        if (Schema::hasTable('v2_agent_order_context') || Schema::hasTable('v2_agent_user')) {
+        if ($this->schema->hasTable('v2_agent_order_context') || $this->schema->hasTable('v2_agent_user')) {
             $this->orderRule($filters, 'agent_regular_commission_conflict', 'high', 'commission', function (Builder $query): void {
                 $query->where(function (Builder $q): void {
                     $q->where('o.commission_balance', '>', 0)->orWhere('o.actual_commission_balance', '>', 0);
-                    if (Schema::hasTable('v2_commission_log')) {
+                    if ($this->schema->hasTable('v2_commission_log')) {
                         $q->orWhereExists(fn (Builder $logs) => $logs->selectRaw('1')->from('v2_commission_log as acl')
                             ->whereColumn('acl.trade_no', 'o.trade_no')->where('acl.get_amount', '>', 0));
                     }
                 })->where(function (Builder $q): void {
                     $q->whereRaw('1 = 0');
-                    if (Schema::hasTable('v2_agent_order_context')) $q->orWhereNotNull('aoc.id');
-                    if (Schema::hasTable('v2_agent_user')) {
+                    if ($this->schema->hasTable('v2_agent_order_context')) $q->orWhereNotNull('aoc.id');
+                    if ($this->schema->hasTable('v2_agent_user')) {
                         $q->orWhereNotNull('au.id')->orWhereIn('o.invite_user_id', DB::table('v2_agent_user')->select('sub_user_id'));
-                        if (Schema::hasTable('v2_commission_log')) {
+                        if ($this->schema->hasTable('v2_commission_log')) {
                             $q->orWhereExists(fn (Builder $logs) => $logs->selectRaw('1')->from('v2_commission_log as acl')
                                 ->join('v2_agent_user as recipient_agent', 'recipient_agent.sub_user_id', '=', 'acl.invite_user_id')
                                 ->whereColumn('acl.trade_no', 'o.trade_no')->where('acl.get_amount', '>', 0));
@@ -209,11 +212,11 @@ class FinancialReconciliationIssueScanner
                 });
             });
         }
-        if (!Schema::hasTable('v2_commission_log')) return;
+        if (!$this->schema->hasTable('v2_commission_log')) return;
         $query = $this->orderBase($filters)
             ->join('v2_commission_log as cl', 'cl.trade_no', '=', 'o.trade_no')
             ->groupBy('o.id', 'o.trade_no', 'o.user_id', 'u.email', 'o.site_id', 'site.name', 'o.actual_commission_balance', 'o.commission_reversed_amount', 'o.updated_at');
-        if (Schema::hasTable('v2_agent_order_context')) {
+        if ($this->schema->hasTable('v2_agent_order_context')) {
             $query->groupBy('aoc.agent_user_id', 'agent.email');
         }
 
@@ -225,7 +228,7 @@ class FinancialReconciliationIssueScanner
             ->selectRaw("'commission' status, COALESCE(o.actual_commission_balance, 0) expected_value, SUM(cl.get_amount) actual_value");
         $this->register('commission_amount_mismatch', 'high', 'commission', $mismatch, 'order');
 
-        if (Schema::hasColumn('v2_commission_log', 'reversed_at')) {
+        if ($this->schema->hasColumn('v2_commission_log', 'reversed_at')) {
             $reversal = clone $query;
             $reversal->where('o.refund_amount', '>', 0)
                 ->havingRaw('SUM(CASE WHEN cl.reversed_at IS NOT NULL THEN cl.get_amount ELSE 0 END) <> COALESCE(o.commission_reversed_amount, 0)')
@@ -239,7 +242,7 @@ class FinancialReconciliationIssueScanner
 
     private function scanGiftCards(array $filters): void
     {
-        if (!Schema::hasTable('v2_gift_card_code') || !Schema::hasTable('v2_gift_card_usage')) return;
+        if (!$this->schema->hasTable('v2_gift_card_code') || !$this->schema->hasTable('v2_gift_card_usage')) return;
         $usage = DB::table('v2_gift_card_usage')->groupBy('code_id')->select('code_id')->selectRaw('COUNT(*) actual_usage_count');
         $query = DB::table('v2_gift_card_code as gc')->leftJoinSub($usage, 'usage', 'usage.code_id', '=', 'gc.id')
             ->whereRaw('gc.usage_count <> COALESCE(usage.actual_usage_count, 0)')
@@ -282,15 +285,17 @@ class FinancialReconciliationIssueScanner
             ->leftJoin('v2_plan as p', 'p.id', '=', 'o.plan_id')
             ->leftJoin('v2_site as site', 'site.id', '=', 'o.site_id')
             ->whereBetween('o.created_at', [$filters['start_at'], $filters['end_at']]);
-        if (Schema::hasTable('v2_payment')) $query->leftJoin('v2_payment as pay', 'pay.id', '=', 'o.payment_id');
-        if (Schema::hasTable('v2_site_order_context')) $query->leftJoin('v2_site_order_context as soc', 'soc.order_id', '=', 'o.id');
-        if (Schema::hasTable('v2_agent_order_context')) {
+        if ($this->schema->hasTable('v2_payment')) $query->leftJoin('v2_payment as pay', 'pay.id', '=', 'o.payment_id');
+        if ($this->schema->hasTable('v2_site_order_context')) $query->leftJoin('v2_site_order_context as soc', 'soc.order_id', '=', 'o.id');
+        if ($this->schema->hasTable('v2_agent_order_context')) {
             $query->leftJoin('v2_agent_order_context as aoc', 'aoc.order_id', '=', 'o.id')
                 ->leftJoin('v2_user as agent', 'agent.id', '=', 'aoc.agent_user_id');
         }
-        if (Schema::hasTable('v2_agent_balance_hold')) $query->leftJoin('v2_agent_balance_hold as abh', 'abh.id', '=', 'aoc.hold_id');
-        if (Schema::hasTable('v2_agent_user')) $query->leftJoin('v2_agent_user as au', 'au.sub_user_id', '=', 'o.user_id');
-        if (Schema::hasTable('v2_agent_order_context') && Schema::hasTable('v2_agent_profit')) {
+        if ($this->schema->hasTable('v2_agent_order_context') && $this->schema->hasTable('v2_agent_balance_hold')) {
+            $query->leftJoin('v2_agent_balance_hold as abh', 'abh.id', '=', 'aoc.hold_id');
+        }
+        if ($this->schema->hasTable('v2_agent_user')) $query->leftJoin('v2_agent_user as au', 'au.sub_user_id', '=', 'o.user_id');
+        if ($this->schema->hasTable('v2_agent_order_context') && $this->schema->hasTable('v2_agent_profit')) {
             $query->leftJoin('v2_agent_profit as apf', 'apf.order_id', '=', 'o.id');
         }
         $this->applyOrderFilters($query, $filters);
@@ -299,7 +304,7 @@ class FinancialReconciliationIssueScanner
 
     private function applyOrderFilters(Builder $query, array $filters): void
     {
-        $hasAgent = Schema::hasTable('v2_agent_order_context');
+        $hasAgent = $this->schema->hasTable('v2_agent_order_context');
         if ($filters['scope'] === 'platform') {
             if ($hasAgent) $query->whereNull('aoc.id');
             $query->whereNull('o.site_id');
@@ -375,25 +380,25 @@ class FinancialReconciliationIssueScanner
 
     private function agentSelect(): string
     {
-        return Schema::hasTable('v2_agent_order_context')
+        return $this->schema->hasTable('v2_agent_order_context')
             ? 'aoc.agent_user_id, agent.email agent_email'
             : 'NULL agent_user_id, NULL agent_email';
     }
 
     private function giftScopeSelect(string $alias = 'gc'): string
     {
-        $site = Schema::hasColumn($alias === 'gc' ? 'v2_gift_card_code' : 'v2_gift_card_usage', 'site_id') ? "{$alias}.site_id" : 'NULL';
-        $agent = Schema::hasColumn($alias === 'gc' ? 'v2_gift_card_code' : 'v2_gift_card_usage', 'agent_user_id') ? "{$alias}.agent_user_id" : 'NULL';
+        $site = $this->schema->hasColumn($alias === 'gc' ? 'v2_gift_card_code' : 'v2_gift_card_usage', 'site_id') ? "{$alias}.site_id" : 'NULL';
+        $agent = $this->schema->hasColumn($alias === 'gc' ? 'v2_gift_card_code' : 'v2_gift_card_usage', 'agent_user_id') ? "{$alias}.agent_user_id" : 'NULL';
         return "{$site} site_id, NULL site_name, {$agent} agent_user_id, NULL agent_email";
     }
 
     private function applyGiftScope(Builder $query, array $filters, string $alias): void
     {
         $table = $alias === 'gc' ? 'v2_gift_card_code' : 'v2_gift_card_usage';
-        if ($filters['scope'] === 'platform' && Schema::hasColumn($table, 'site_id')) $query->whereNull("{$alias}.site_id");
-        if ($filters['scope'] === 'site' && Schema::hasColumn($table, 'site_id')) $query->whereNotNull("{$alias}.site_id");
-        if ($filters['scope'] === 'agent' && Schema::hasColumn($table, 'agent_user_id')) $query->whereNotNull("{$alias}.agent_user_id");
-        if ($filters['site_id'] && Schema::hasColumn($table, 'site_id')) $query->where("{$alias}.site_id", $filters['site_id']);
-        if ($filters['agent_user_id'] && Schema::hasColumn($table, 'agent_user_id')) $query->where("{$alias}.agent_user_id", $filters['agent_user_id']);
+        if ($filters['scope'] === 'platform' && $this->schema->hasColumn($table, 'site_id')) $query->whereNull("{$alias}.site_id");
+        if ($filters['scope'] === 'site' && $this->schema->hasColumn($table, 'site_id')) $query->whereNotNull("{$alias}.site_id");
+        if ($filters['scope'] === 'agent' && $this->schema->hasColumn($table, 'agent_user_id')) $query->whereNotNull("{$alias}.agent_user_id");
+        if ($filters['site_id'] && $this->schema->hasColumn($table, 'site_id')) $query->where("{$alias}.site_id", $filters['site_id']);
+        if ($filters['agent_user_id'] && $this->schema->hasColumn($table, 'agent_user_id')) $query->where("{$alias}.agent_user_id", $filters['agent_user_id']);
     }
 }

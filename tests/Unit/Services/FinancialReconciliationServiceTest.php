@@ -171,6 +171,142 @@ final class FinancialReconciliationServiceTest extends TestCase
             ->where('trade_no', $tradeNo)->pluck('code')->all();
     }
 
+    public function test_commission_summary_keeps_all_postings_for_in_range_orders_only(): void
+    {
+        $old = $this->now - 90 * 86400;
+        DB::table('v2_order')->insert(array_merge(
+            $this->order(7, null, 1, 'old-order', Order::STATUS_COMPLETED, 1000, 0, $old),
+            ['created_at' => $old]
+        ));
+        DB::table('v2_commission_log')->insert([
+            ['invite_user_id' => 2, 'user_id' => 1, 'trade_no' => 'main-good', 'order_amount' => 1000,
+                'get_amount' => 50, 'reversed_at' => null, 'created_at' => $old, 'updated_at' => $old],
+            ['invite_user_id' => 2, 'user_id' => 1, 'trade_no' => 'main-good', 'order_amount' => 1000,
+                'get_amount' => 25, 'reversed_at' => $this->now, 'created_at' => $this->now, 'updated_at' => $this->now],
+            ['invite_user_id' => 2, 'user_id' => 1, 'trade_no' => 'old-order', 'order_amount' => 1000,
+                'get_amount' => 900, 'reversed_at' => null, 'created_at' => $this->now, 'updated_at' => $this->now],
+        ]);
+        $overview = app(FinancialReconciliationService::class)->overview(['days' => 30, 'keyword' => 'main-good']);
+        $this->assertSame(1, $overview['summary']['order_count']);
+        $this->assertSame(75, $overview['summary']['commission_amount']);
+        $this->assertSame(25, $overview['summary']['commission_reversed_amount']);
+        $platform = collect($overview['scope_breakdown'])->firstWhere('scope_type', 'platform');
+        $this->assertSame(175, $platform['commission_amount']);
+        $this->assertSame(25, $platform['commission_reversed_amount']);
+    }
+
+    public function test_metadata_is_queried_once_per_run_and_refreshed_on_reuse(): void
+    {
+        $service = app(FinancialReconciliationService::class);
+        DB::enableQueryLog();
+        DB::flushQueryLog();
+        try {
+            $service->overview(['days' => 30]);
+            $metadata = collect(DB::getQueryLog())->filter(fn (array $query): bool =>
+                str_contains($query['query'], 'sqlite_master') || str_contains($query['query'], 'pragma_'));
+            $this->assertLessThanOrEqual(22, $metadata->count(), $metadata->pluck('query')->implode("\n"));
+        } finally {
+            DB::disableQueryLog();
+            DB::flushQueryLog();
+        }
+        (require base_path('database/migrations/2026_09_14_190000_create_agent_profit_accounts.php'))->up();
+        DB::table('v2_agent_order_context')->where('order_id', 3)->update([
+            'hold_id' => null, 'pricing_snapshot' => json_encode(['collection' => ['mode' => 'platform']]),
+        ]);
+        $overview = $service->overview(['days' => 30]);
+        $this->assertContains('agent_profit_missing', collect($overview['issues']['data'])->pluck('code')->all());
+    }
+
+    public function test_filtered_scans_and_exact_issue_totals_survive_sampling(): void
+    {
+        for ($id = 100; $id < 160; $id++) {
+            DB::table('v2_order')->insert($this->order($id, null, 1, "unpaid-$id",
+                Order::STATUS_COMPLETED, 100, 0, null));
+        }
+        $service = app(FinancialReconciliationService::class);
+        $overview = $service->overview(['category' => 'order', 'severity' => 'medium']);
+        $this->assertSame(60, $overview['issues']['total']);
+        $this->assertSame(40, $overview['issues']['sampled_count']);
+        $this->assertTrue($overview['issues']['limited']);
+        $this->assertSame(['completed_without_paid_at'], array_values(array_unique(
+            collect($overview['issues']['data'])->pluck('code')->all()
+        )));
+        $gift = $service->overview(['category' => 'gift_card', 'severity' => 'high']);
+        $this->assertSame(0, $gift['issues']['total']);
+        $gift = $service->overview(['category' => 'gift_card', 'severity' => 'medium']);
+        $this->assertSame(1, $gift['issues']['total']);
+    }
+
+    public function test_trade_lookup_migration_is_idempotent_and_preserves_split_commissions(): void
+    {
+        $migration = require base_path('database/migrations/2026_09_15_180000_add_commission_trade_lookup_index.php');
+        $before = app(FinancialReconciliationService::class)->overview([]);
+        $migration->up();
+        $migration->up();
+        $this->assertTrue($this->database->schema()->hasIndex('v2_commission_log', 'idx_commission_trade_lookup'));
+        $plan = DB::select('EXPLAIN QUERY PLAN SELECT * FROM v2_commission_log WHERE trade_no = ?', ['main-good']);
+        $this->assertStringContainsString('idx_commission_trade_lookup', json_encode($plan));
+        $after = app(FinancialReconciliationService::class)->overview([]);
+        $this->assertSame($before['summary'], $after['summary']);
+        $this->assertSame($before['issue_breakdown'], $after['issue_breakdown']);
+        DB::table('v2_commission_log')->insert([
+            'invite_user_id' => 3, 'user_id' => 1, 'trade_no' => 'refund-open',
+            'order_amount' => 800, 'get_amount' => 20, 'created_at' => $this->now, 'updated_at' => $this->now,
+        ]);
+        $this->assertSame(2, DB::table('v2_commission_log')->where('trade_no', 'refund-open')->count());
+        $migration->down();
+        $migration->down();
+        $this->assertFalse($this->database->schema()->hasIndex('v2_commission_log', 'idx_commission_trade_lookup'));
+    }
+
+    public function test_trade_lookup_migration_reuses_existing_leading_column_index(): void
+    {
+        $this->database->schema()->table('v2_commission_log', function (Blueprint $table): void {
+            $table->index(['trade_no', 'get_amount'], 'existing_trade_amount');
+        });
+        $migration = require base_path('database/migrations/2026_09_15_180000_add_commission_trade_lookup_index.php');
+        $migration->up();
+        $this->assertFalse($this->database->schema()->hasIndex('v2_commission_log', 'idx_commission_trade_lookup'));
+        $migration->down();
+        $this->assertTrue($this->database->schema()->hasIndex('v2_commission_log', 'existing_trade_amount'));
+    }
+
+    public function test_indexed_scan_preserves_results_with_a_large_unrelated_log_history(): void
+    {
+        $old = $this->now - 90 * 86400;
+        for ($batch = 0; $batch < 100; $batch++) {
+            $rows = [];
+            for ($offset = 0; $offset < 100; $offset++) {
+                $rows[] = ['invite_user_id' => 2, 'user_id' => 1,
+                    'trade_no' => 'historical-' . ($batch * 100 + $offset),
+                    'order_amount' => 1000, 'get_amount' => 100, 'created_at' => $old, 'updated_at' => $old];
+            }
+            DB::table('v2_commission_log')->insert($rows);
+        }
+        for ($id = 100; $id < 1100; $id++) {
+            DB::table('v2_order')->insert($this->order($id, null, 1, "recent-$id",
+                Order::STATUS_COMPLETED, 100, 0, $this->now));
+        }
+        $service = app(FinancialReconciliationService::class);
+        $start = microtime(true);
+        $before = $service->overview(['days' => 30]);
+        $unindexedMs = (microtime(true) - $start) * 1000;
+        (require base_path('database/migrations/2026_09_15_180000_add_commission_trade_lookup_index.php'))->up();
+        $start = microtime(true);
+        $after = $service->overview(['days' => 30]);
+        $indexedMs = (microtime(true) - $start) * 1000;
+        $this->assertSame(1006, $after['summary']['order_count']);
+        $this->assertSame(100, $after['summary']['commission_amount']);
+        $this->assertSame($before['summary'], $after['summary']);
+        $this->assertSame($before['scope_breakdown'], $after['scope_breakdown']);
+        $this->assertSame($before['issue_breakdown'], $after['issue_breakdown']);
+        $this->assertSame(10001, DB::table('v2_commission_log')->count());
+        if (getenv('RECONCILIATION_BENCHMARK') === '1') {
+            fwrite(STDERR, sprintf("\nSQLite fixture: 1006 orders, 10001 logs; without index %.1fms, with index %.1fms\n",
+                $unindexedMs, $indexedMs));
+        }
+    }
+
     private function seedLedger(): void
     {
         DB::table('v2_site')->insert([

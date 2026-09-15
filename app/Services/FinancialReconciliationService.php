@@ -5,10 +5,11 @@ namespace App\Services;
 use App\Models\Order;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 
 class FinancialReconciliationService
 {
+    private FinancialReconciliationSchema $schema;
+
     public function __construct(
         private readonly FinancialReconciliationIssueScanner $issueScanner
     ) {
@@ -16,12 +17,13 @@ class FinancialReconciliationService
 
     public function overview(array $input): array
     {
+        $this->schema = new FinancialReconciliationSchema();
         $filters = $this->normalizeFilters($input);
-        if (!Schema::hasTable('v2_order') || !Schema::hasTable('v2_user')) {
+        if (!$this->schema->hasTable('v2_order') || !$this->schema->hasTable('v2_user')) {
             return $this->emptyPayload($filters);
         }
 
-        $issues = $this->issueScanner->scan($filters);
+        $issues = $this->issueScanner->scan($filters, $this->schema);
 
         return [
             'generated_at' => time(),
@@ -96,17 +98,17 @@ class FinancialReconciliationService
             "SUM(CASE WHEN o.callback_no = 'auto_renew_balance' AND o.status = " . Order::STATUS_COMPLETED . ' THEN 1 ELSE 0 END) auto_renew_success_count',
             "SUM(CASE WHEN o.callback_no = 'auto_renew_balance' AND o.status IN (" . Order::STATUS_CANCELLED . ',' . Order::STATUS_PROCESSING . ') THEN 1 ELSE 0 END) auto_renew_failed_count',
         ];
-        if (Schema::hasTable('v2_agent_order_context')) {
+        if ($this->schema->hasTable('v2_agent_order_context')) {
             $selects[] = 'SUM(CASE WHEN aoc.id IS NOT NULL AND o.status = ' . Order::STATUS_COMPLETED . ' THEN aoc.sale_amount ELSE 0 END) agent_sales_amount';
             $selects[] = 'SUM(CASE WHEN aoc.id IS NOT NULL AND o.status = ' . Order::STATUS_COMPLETED . ' THEN aoc.cost_amount ELSE 0 END) agent_cost_amount';
         } else {
             $selects[] = '0 agent_sales_amount';
             $selects[] = '0 agent_cost_amount';
         }
-        $selects[] = Schema::hasTable('v2_agent_balance_hold')
+        $selects[] = $this->schema->hasTable('v2_agent_order_context') && $this->schema->hasTable('v2_agent_balance_hold')
             ? "SUM(CASE WHEN abh.status = 'pending' THEN abh.amount ELSE 0 END) agent_pending_hold_amount"
             : '0 agent_pending_hold_amount';
-        if (Schema::hasTable('v2_commission_log')) {
+        if ($this->schema->hasTable('v2_commission_log')) {
             $selects[] = 'SUM(COALESCE(comm.amount, 0)) commission_amount';
             $selects[] = 'SUM(COALESCE(comm.reversed_amount, 0)) commission_reversed_amount';
         } else {
@@ -140,16 +142,19 @@ class FinancialReconciliationService
         $query = DB::table('v2_order as o')
             ->leftJoin('v2_user as u', 'u.id', '=', 'o.user_id')
             ->whereBetween('o.created_at', [$filters['start_at'], $filters['end_at']]);
-        if (Schema::hasTable('v2_agent_order_context')) {
+        if ($this->schema->hasTable('v2_agent_order_context')) {
             $query->leftJoin('v2_agent_order_context as aoc', 'aoc.order_id', '=', 'o.id');
         }
-        if (Schema::hasTable('v2_agent_balance_hold')) {
+        if ($this->schema->hasTable('v2_agent_order_context') && $this->schema->hasTable('v2_agent_balance_hold')) {
             $query->leftJoin('v2_agent_balance_hold as abh', 'abh.id', '=', 'aoc.hold_id');
         }
-        if (Schema::hasTable('v2_commission_log')) {
-            $commission = DB::table('v2_commission_log')->groupBy('trade_no')
+        if ($this->schema->hasTable('v2_commission_log')) {
+            // Use order dates, not log dates: include every posting belonging to the selected orders.
+            $orders = DB::table('v2_order')->select('trade_no')
+                ->whereBetween('created_at', [$filters['start_at'], $filters['end_at']]);
+            $commission = DB::table('v2_commission_log')->whereIn('trade_no', $orders)->groupBy('trade_no')
                 ->select('trade_no')->selectRaw('SUM(get_amount) amount');
-            $commission->selectRaw(Schema::hasColumn('v2_commission_log', 'reversed_at')
+            $commission->selectRaw($this->schema->hasColumn('v2_commission_log', 'reversed_at')
                 ? 'SUM(CASE WHEN reversed_at IS NOT NULL THEN get_amount ELSE 0 END) reversed_amount'
                 : '0 reversed_amount');
             $query->leftJoinSub($commission, 'comm', 'comm.trade_no', '=', 'o.trade_no');
@@ -160,7 +165,7 @@ class FinancialReconciliationService
 
     private function applyOrderFilters(Builder $query, array $filters): void
     {
-        $hasAgentContext = Schema::hasTable('v2_agent_order_context');
+        $hasAgentContext = $this->schema->hasTable('v2_agent_order_context');
         if ($filters['scope'] === 'platform') {
             if ($hasAgentContext) $query->whereNull('aoc.id');
             $query->whereNull('o.site_id');
@@ -188,19 +193,19 @@ class FinancialReconciliationService
         $rows = [];
         $base = $this->orderQuery($scopeFilters);
         $platform = clone $base;
-        if (Schema::hasTable('v2_agent_order_context')) $platform->whereNull('aoc.id');
+        if ($this->schema->hasTable('v2_agent_order_context')) $platform->whereNull('aoc.id');
         $rows[] = $this->aggregateScope($platform->whereNull('o.site_id'), 'platform', null, '');
 
-        if (Schema::hasTable('v2_site')) {
+        if ($this->schema->hasTable('v2_site')) {
             $sites = clone $base;
-            if (Schema::hasTable('v2_agent_order_context')) $sites->whereNull('aoc.id');
+            if ($this->schema->hasTable('v2_agent_order_context')) $sites->whereNull('aoc.id');
             $siteRows = $sites->join('v2_site as scope_site', 'scope_site.id', '=', 'o.site_id')
                 ->groupBy('o.site_id', 'scope_site.name')
                 ->selectRaw("'site' scope_type, o.site_id scope_id, scope_site.name scope_name")
                 ->selectRaw($this->scopeAggregateSql())->orderByDesc('settled_amount')->get();
             foreach ($siteRows as $row) $rows[] = $this->mapScopeRow($row);
         }
-        if (Schema::hasTable('v2_agent_order_context')) {
+        if ($this->schema->hasTable('v2_agent_order_context')) {
             $agentRows = (clone $base)->whereNotNull('aoc.id')
                 ->leftJoin('v2_user as scope_agent', 'scope_agent.id', '=', 'aoc.agent_user_id')
                 ->groupBy('aoc.agent_user_id', 'scope_agent.email')
@@ -222,10 +227,10 @@ class FinancialReconciliationService
 
     private function scopeAggregateSql(bool $agent = false): string
     {
-        $commission = Schema::hasTable('v2_commission_log') ? 'SUM(COALESCE(comm.amount, 0))' : '0';
-        $reversed = Schema::hasTable('v2_commission_log') ? 'SUM(COALESCE(comm.reversed_amount, 0))' : '0';
+        $commission = $this->schema->hasTable('v2_commission_log') ? 'SUM(COALESCE(comm.amount, 0))' : '0';
+        $reversed = $this->schema->hasTable('v2_commission_log') ? 'SUM(COALESCE(comm.reversed_amount, 0))' : '0';
         $agentCost = $agent ? 'SUM(CASE WHEN o.status = ' . Order::STATUS_COMPLETED . ' THEN aoc.cost_amount ELSE 0 END)' : '0';
-        $pending = $agent && Schema::hasTable('v2_agent_balance_hold')
+        $pending = $agent && $this->schema->hasTable('v2_agent_balance_hold')
             ? "SUM(CASE WHEN abh.status = 'pending' THEN abh.amount ELSE 0 END)" : '0';
         return implode(', ', [
             'COUNT(o.id) order_count',
@@ -256,23 +261,23 @@ class FinancialReconciliationService
 
     private function giftCardUsageCount(array $filters): int
     {
-        if (!Schema::hasTable('v2_gift_card_usage')) return 0;
+        if (!$this->schema->hasTable('v2_gift_card_usage')) return 0;
         $query = DB::table('v2_gift_card_usage')->whereBetween('created_at', [$filters['start_at'], $filters['end_at']]);
-        if ($filters['site_id'] && Schema::hasColumn('v2_gift_card_usage', 'site_id')) $query->where('site_id', $filters['site_id']);
-        if ($filters['agent_user_id'] && Schema::hasColumn('v2_gift_card_usage', 'agent_user_id')) $query->where('agent_user_id', $filters['agent_user_id']);
+        if ($filters['site_id'] && $this->schema->hasColumn('v2_gift_card_usage', 'site_id')) $query->where('site_id', $filters['site_id']);
+        if ($filters['agent_user_id'] && $this->schema->hasColumn('v2_gift_card_usage', 'agent_user_id')) $query->where('agent_user_id', $filters['agent_user_id']);
         return $query->count();
     }
 
     private function siteOptions(): array
     {
-        if (!Schema::hasTable('v2_site')) return [];
+        if (!$this->schema->hasTable('v2_site')) return [];
         return DB::table('v2_site')->orderBy('name')->get(['id', 'name'])
             ->map(fn (object $site): array => ['id' => (int) $site->id, 'name' => (string) $site->name])->all();
     }
 
     private function agentOptions(): array
     {
-        if (!Schema::hasTable('v2_agent_profile')) return [];
+        if (!$this->schema->hasTable('v2_agent_profile')) return [];
         return DB::table('v2_agent_profile as ap')->join('v2_user as u', 'u.id', '=', 'ap.user_id')
             ->orderBy('u.email')->get(['u.id', 'u.email'])
             ->map(fn (object $agent): array => ['id' => (int) $agent->id, 'email' => (string) $agent->email])->all();
@@ -281,10 +286,10 @@ class FinancialReconciliationService
     private function capabilities(): array
     {
         return [
-            'site' => Schema::hasTable('v2_site_order_context'),
-            'agent' => Schema::hasTable('v2_agent_order_context') && Schema::hasTable('v2_agent_balance_hold'),
-            'commission' => Schema::hasTable('v2_commission_log'),
-            'gift_card' => Schema::hasTable('v2_gift_card_usage'),
+            'site' => $this->schema->hasTable('v2_site_order_context'),
+            'agent' => $this->schema->hasTable('v2_agent_order_context') && $this->schema->hasTable('v2_agent_balance_hold'),
+            'commission' => $this->schema->hasTable('v2_commission_log'),
+            'gift_card' => $this->schema->hasTable('v2_gift_card_usage'),
         ];
     }
 
