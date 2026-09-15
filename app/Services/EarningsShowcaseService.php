@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Models\AgentProfile;
 use App\Models\Order;
-use App\Models\Site;
 use Carbon\Carbon;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Http\Request;
@@ -114,20 +113,20 @@ class EarningsShowcaseService
     public function forUser(Request $request): array
     {
         $schema = DB::getSchemaBuilder();
-        if (!$request->user() || !$schema->hasTable('v2_agent_user') || !$schema->hasTable('v2_agent_domain')) {
+        $user = $request->user();
+        if (!$user || (int) $user->id <= 0 || !$schema->hasTable('v2_agent_user')) {
             return ['referral' => false, 'agent' => 'hidden', 'referral_earnings' => null, 'agent_earnings' => null];
         }
-        $context = app(AgentCommerceContextResolver::class)->resolveRequest($request, $request->user());
-        $site = app(SiteContextService::class)->resolve($request, $request->user());
-        $userSite = $request->user()->site_id;
-        $platformUser = !$userSite || (DB::getSchemaBuilder()->hasTable('v2_site') && Site::whereKey($userSite)->where('is_default', true)->exists());
-        $main = !$context && $platformUser && (empty($site['site_id']) || !empty($site['is_default']));
-        $enabled = $main && (bool) admin_setting('agent_center_enable', false);
+        // Entry visibility follows account ownership, not the current site or domain.
+        if (app(ReferralEligibilityService::class)->isAgentUser((int) $user->id)) {
+            return ['referral' => false, 'agent' => 'hidden', 'referral_earnings' => null, 'agent_earnings' => null];
+        }
+        $enabled = (bool) admin_setting('agent_center_enable', false);
         $active = $enabled && DB::getSchemaBuilder()->hasTable('v2_agent_profile')
-            && AgentProfile::where('user_id', $request->user()->id)->where('status', 'active')->exists();
-        $result = ['referral' => $main, 'agent' => $enabled ? ($active ? 'active' : 'available') : 'hidden',
+            && AgentProfile::where('user_id', $user->id)->where('status', 'active')->exists();
+        $result = ['referral' => true, 'agent' => $enabled ? ($active ? 'active' : 'available') : 'hidden',
             'referral_earnings' => null, 'agent_earnings' => null];
-        if ($main && (bool) admin_setting(self::SETTING, false)) {
+        if ((bool) admin_setting(self::SETTING, false)) {
             $key = 'earnings:individuals:v2:' . Carbon::now(config('app.timezone'))->format('Y-m-d') . ':' . admin_setting('currency', 'CNY')
                 . ':' . substr(hash('sha256', (string) config('app.key')), 0, 16);
             $groups = Cache::remember($key, 300, fn () => ['referral_earnings' => $this->referralEarnings(), 'agent_earnings' => $this->agentEarnings()]);

@@ -6,9 +6,7 @@ use App\Http\Controllers\V2\Admin\EarningsShowcaseController;
 use App\Models\AgentProfile;
 use App\Models\Order;
 use App\Models\User;
-use App\Services\AgentCommerceContextResolver;
 use App\Services\EarningsShowcaseService;
-use App\Services\SiteContextService;
 use App\Support\Setting;
 use Carbon\Carbon;
 use Illuminate\Database\Schema\Blueprint;
@@ -48,7 +46,7 @@ class EarningsShowcaseTest extends TestCase
         DB::getSchemaBuilder()->create('v2_agent_profit_wallet', function (Blueprint $t) { $t->integer('agent_user_id'); $t->integer('available'); });
         app('config')->set('app.timezone', 'Asia/Shanghai');
         app('config')->set('app.key', 'local-test-key-not-for-production');
-        $this->settings(); $this->scope();
+        $this->settings();
         $this->service = app(EarningsShowcaseService::class);
     }
 
@@ -63,18 +61,6 @@ class EarningsShowcaseTest extends TestCase
         app()->instance(Setting::class, new class(array_merge(['agent_center_enable' => true, 'currency' => 'CNY'], $override)) {
             public function __construct(private array $values) {}
             public function get($key) { return $this->values[$key] ?? null; }
-        });
-    }
-
-    private function scope(bool $agent = false, bool $site = false): void
-    {
-        app()->instance(AgentCommerceContextResolver::class, new class($agent) {
-            public function __construct(private bool $scoped) {}
-            public function resolveRequest(...$args) { return $this->scoped ? ['agent_user_id' => 10] : null; }
-        });
-        app()->instance(SiteContextService::class, new class($site) {
-            public function __construct(private bool $scoped) {}
-            public function resolve(...$args) { return $this->scoped ? ['site_id' => 2, 'is_default' => false] : ['site_id' => null]; }
         });
     }
 
@@ -111,9 +97,9 @@ class EarningsShowcaseTest extends TestCase
         for ($i = 1; $i <= 5; $i++) { $this->credit($i); $this->profit($i); }
     }
 
-    private function user(?int $site = null): array
+    private function user(?int $site = null, string $host = 'platform.example.test'): array
     {
-        $request = Request::create('/user/earnings-showcase');
+        $request = Request::create('https://' . $host . '/api/v1/user/earnings-showcase');
         $request->setUserResolver(fn () => (new User())->forceFill(['id' => 10, 'site_id' => $site]));
         return $this->service->forUser($request);
     }
@@ -238,16 +224,36 @@ class EarningsShowcaseTest extends TestCase
         $this->assertNull($this->user()['referral_earnings']); $this->assertNull($this->user()['agent_earnings']);
     }
 
-    public function test_groups_are_not_sent_to_subsites_or_agent_customers(): void
+    public function test_unbound_users_keep_entries_and_opt_in_groups_across_site_domains(): void
     {
         $this->seed(); $this->settings([EarningsShowcaseService::SETTING => true]);
-        foreach ([[true, false], [false, true]] as [$agent, $site]) {
-            $this->scope($agent, $site);
-            $this->assertFalse($this->user()['referral']);
-            $this->assertNull($this->user()['referral_earnings']); $this->assertNull($this->user()['agent_earnings']);
-            $this->assertSame('hidden', $this->user()['agent']);
+        DB::table('v2_agent_domain')->insert(['agent_user_id' => 30, 'domain' => 'agent.example.test', 'status' => 'active']);
+        foreach ([null, 2, 33] as $site) {
+            foreach (['platform.example.test', 'site-a.example.test', 'site-b.example.test', 'agent.example.test'] as $host) {
+                $result = $this->user($site, $host);
+                $this->assertTrue($result['referral'], $host);
+                $this->assertSame('available', $result['agent'], $host);
+                $this->assertNotNull($result['referral_earnings']);
+                $this->assertNotNull($result['agent_earnings']);
+            }
         }
-        $this->scope(); $this->assertNull($this->user(33)['referral_earnings']);
+        $this->settings([EarningsShowcaseService::SETTING => false]);
+        $result = $this->user(2, 'site-a.example.test');
+        $this->assertTrue($result['referral']); $this->assertSame('available', $result['agent']);
+        $this->assertNull($result['referral_earnings']); $this->assertNull($result['agent_earnings']);
+    }
+
+    public function test_subordinate_site_users_have_no_entries_or_groups_on_any_domain(): void
+    {
+        $this->seed(); $this->settings([EarningsShowcaseService::SETTING => true]);
+        $this->assertNotNull($this->user()['referral_earnings']);
+        DB::table('v2_agent_user')->insert(['agent_user_id' => 30, 'sub_user_id' => 10]);
+        AgentProfile::create(['user_id' => 10, 'status' => 'active']);
+        foreach ([null, 2, 33] as $site) {
+            foreach (['platform.example.test', 'site-a.example.test', 'site-b.example.test'] as $host) {
+                $this->assertSame(['referral' => false, 'agent' => 'hidden', 'referral_earnings' => null, 'agent_earnings' => null], $this->user($site, $host));
+            }
+        }
     }
 
     public function test_agent_entry_tracks_real_activation(): void
@@ -259,11 +265,9 @@ class EarningsShowcaseTest extends TestCase
         $this->assertSame('hidden', $this->user()['agent']); $this->assertTrue($this->user()['referral']);
     }
 
-    public function test_real_binding_and_domains_cannot_bypass_scope_even_with_warm_earnings_cache(): void
+    public function test_account_binding_overrides_domains_and_active_profiles_even_with_warm_earnings_cache(): void
     {
         $this->seed(); $this->settings([EarningsShowcaseService::SETTING => true]);
-        app()->instance(AgentCommerceContextResolver::class, new AgentCommerceContextResolver());
-        app()->instance(SiteContextService::class, new SiteContextService());
         $requestFor = function (string $host, int $id) {
             $request = Request::create('https://' . $host . '/api/v1/user/earnings-showcase');
             $request->setUserResolver(fn () => (new User())->forceFill(['id' => $id, 'site_id' => null]));
@@ -278,9 +282,14 @@ class EarningsShowcaseTest extends TestCase
             ['agent_user_id' => 30, 'domain' => 'other.example.test', 'status' => 'active'],
         ]);
         $restricted = ['referral' => false, 'agent' => 'hidden', 'referral_earnings' => null, 'agent_earnings' => null];
-        foreach ([['platform.example.test', 20], ['agent.example.test', 20], ['other.example.test', 20],
-            ['agent.example.test', 99], ['agent.example.test', 10]] as [$host, $id]) {
+        foreach ([['platform.example.test', 20], ['agent.example.test', 20], ['other.example.test', 20]] as [$host, $id]) {
             $this->assertSame($restricted, $this->service->forUser($requestFor($host, $id)));
+        }
+        foreach (['platform.example.test', 'agent.example.test', 'other.example.test'] as $host) {
+            $owner = $this->service->forUser($requestFor($host, 10));
+            $ordinary = $this->service->forUser($requestFor($host, 99));
+            $this->assertTrue($owner['referral']); $this->assertSame('active', $owner['agent']);
+            $this->assertTrue($ordinary['referral']); $this->assertSame('available', $ordinary['agent']);
         }
         // Even an active profile does not override a subordinate binding.
         AgentProfile::create(['user_id' => 20, 'status' => 'active']);
@@ -296,6 +305,21 @@ class EarningsShowcaseTest extends TestCase
         $this->assertNotNull($this->user()['referral_earnings']);
         DB::getSchemaBuilder()->drop('v2_agent_user');
         $this->assertSame(['referral' => false, 'agent' => 'hidden', 'referral_earnings' => null, 'agent_earnings' => null], $this->user());
+    }
+
+    public function test_domain_schema_is_not_required_to_determine_account_visibility(): void
+    {
+        DB::getSchemaBuilder()->drop('v2_agent_domain');
+        $result = $this->user(2, 'site-a.example.test');
+        $this->assertTrue($result['referral']); $this->assertSame('available', $result['agent']);
+        DB::table('v2_agent_user')->insert(['agent_user_id' => 30, 'sub_user_id' => 10]);
+        $this->assertSame(['referral' => false, 'agent' => 'hidden', 'referral_earnings' => null, 'agent_earnings' => null], $this->user(2));
+    }
+
+    public function test_unauthenticated_requests_never_receive_entries_or_groups(): void
+    {
+        $request = Request::create('/api/v1/user/earnings-showcase');
+        $this->assertSame(['referral' => false, 'agent' => 'hidden', 'referral_earnings' => null, 'agent_earnings' => null], $this->service->forUser($request));
     }
 
     public function test_unsupported_ledgers_currency_and_missing_secret_fail_closed_independently(): void
