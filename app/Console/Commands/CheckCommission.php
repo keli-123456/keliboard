@@ -2,8 +2,7 @@
 
 namespace App\Console\Commands;
 
-use App\Models\AgentOrderContext;
-use App\Models\AgentUser;
+use App\Services\ReferralEligibilityService;
 use App\Models\CommissionLog;
 use Illuminate\Console\Command;
 use App\Models\Order;
@@ -58,7 +57,8 @@ class CheckCommission extends Command
                 ->where('status', Order::STATUS_COMPLETED)
                 ->where('updated_at', '<=', strtotime('-3 day', time()));
 
-            $this->excludeAgentOrders($query)->update([
+            app(ReferralEligibilityService::class)->excludeAgentOrders($query)->whereNull('refund_disposed_at')
+                ->where(fn ($q) => $q->whereNull('refund_amount')->orWhere('refund_amount', 0))->update([
                 'commission_status' => Order::COMMISSION_STATUS_PROCESSING
             ]);
         }
@@ -70,23 +70,10 @@ class CheckCommission extends Command
             ->whereNotNull('invite_user_id')
             ->select(['id', 'trade_no', 'user_id', 'invite_user_id', 'commission_status', 'commission_balance']);
 
-        $this->excludeAgentOrders($query)->chunkById(200, function ($orders): void {
+        app(ReferralEligibilityService::class)->excludeAgentOrders($query)->chunkById(200, function ($orders): void {
             foreach ($orders as $order) {
                 try {
-                    DB::transaction(function () use ($order) {
-                        $lockedOrder = Order::whereKey($order->id)->lockForUpdate()->first();
-                        if (!$lockedOrder) return;
-                        if ((int) $lockedOrder->commission_status !== Order::COMMISSION_STATUS_PROCESSING) return;
-                        if (empty($lockedOrder->invite_user_id)) return;
-                        if ($this->isAgentOrder($lockedOrder)) return;
-
-                        if (!$this->payHandle($lockedOrder->invite_user_id, $lockedOrder)) {
-                            throw new \RuntimeException('payHandle returned false');
-                        }
-
-                        $lockedOrder->commission_status = Order::COMMISSION_STATUS_VALID;
-                        $lockedOrder->saveOrFail();
-                    }, 3);
+                    $this->payHandle($order->invite_user_id, $order);
                 } catch (\Throwable $e) {
                     Log::error('Auto pay commission failed', [
                         'order_id' => $order->id,
@@ -103,80 +90,73 @@ class CheckCommission extends Command
 
     public function payHandle($inviteUserId, Order $order)
     {
-        $level = 3;
-        if ((int)admin_setting('commission_distribution_enable', 0)) {
-            $commissionShareLevels = [
-                0 => (int)admin_setting('commission_distribution_l1'),
-                1 => (int)admin_setting('commission_distribution_l2'),
-                2 => (int)admin_setting('commission_distribution_l3')
-            ];
-        } else {
-            $commissionShareLevels = [
-                0 => 100
-            ];
-        }
-        for ($l = 0; $l < $level; $l++) {
-            $inviter = User::find($inviteUserId);
-            if (!$inviter) continue;
-            if (!isset($commissionShareLevels[$l])) continue;
-            $commissionBalance = $order->commission_balance * ($commissionShareLevels[$l] / 100);
-            if (!$commissionBalance) continue;
-            if ((int)admin_setting('withdraw_close_enable', 0)) {
-                $inviter->balance = $inviter->balance + $commissionBalance;
-            } else {
-                $inviter->commission_balance = $inviter->commission_balance + $commissionBalance;
+        return DB::transaction(function () use ($inviteUserId, $order): bool {
+            $order = Order::whereKey($order->id)->lockForUpdate()->first();
+            if (!$order || (int) $order->commission_status !== Order::COMMISSION_STATUS_PROCESSING) return false;
+            if ((int) $order->invite_user_id !== (int) $inviteUserId || !$inviteUserId
+                || !in_array((int) $order->status, [Order::STATUS_COMPLETED, Order::STATUS_DISCOUNTED], true)
+                || !$order->paid_at || $order->refund_disposed_at || (int) $order->refund_amount > 0) {
+                throw new \RuntimeException('Commission order is not eligible for settlement');
             }
-            if (!$inviter->save()) {
-                return false;
+            $eligibility = app(ReferralEligibilityService::class);
+            $participants = User::whereIn('id', [$order->user_id, $order->invite_user_id])
+                ->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            $buyer = $participants->get($order->user_id);
+            if (!$buyer || $eligibility->excludesOrder($order, true)) {
+                throw new \RuntimeException('Agent orders and subordinate referrals require review');
             }
-            CommissionLog::create([
-                'invite_user_id' => $inviteUserId,
-                'user_id' => $order->user_id,
-                'trade_no' => $order->trade_no,
-                'order_amount' => $order->total_amount,
-                'get_amount' => $commissionBalance,
-                'credited_to' => (int)admin_setting('withdraw_close_enable', 0)
-                    ? \App\Services\OrderRefundDispositionService::CREDIT_BALANCE
-                    : \App\Services\OrderRefundDispositionService::CREDIT_COMMISSION_BALANCE,
-            ]);
-            $inviteUserId = $inviter->invite_user_id;
-            // update order actual commission balance
-            $order->actual_commission_balance = $order->actual_commission_balance + $commissionBalance;
-        }
-        return true;
-    }
+            if ((int) $order->actual_commission_balance !== 0
+                || CommissionLog::where('trade_no', $order->trade_no)->lockForUpdate()->first(['id'])) {
+                throw new \RuntimeException('Commission ledger already exists; manual reconciliation required');
+            }
+            $budget = (int) $order->commission_balance;
+            $fundedAmount = (int) $order->total_amount + (int) $order->balance_amount;
+            if ($budget < 0 || $budget > $fundedAmount || $budget > intdiv(PHP_INT_MAX, 100)) {
+                throw new \RuntimeException('Commission budget exceeds funded order amount');
+            }
+            $shares = (int) admin_setting('commission_distribution_enable', 0)
+                ? [admin_setting('commission_distribution_l1', 0), admin_setting('commission_distribution_l2', 0), admin_setting('commission_distribution_l3', 0)]
+                : [100];
+            foreach ($shares as $share) {
+                if (filter_var($share, FILTER_VALIDATE_INT) === false || (int) $share < 0 || (int) $share > 100) {
+                    throw new \RuntimeException('Invalid commission distribution percentage');
+                }
+            }
+            $shares = array_map('intval', $shares);
+            if (array_sum($shares) > 100) throw new \RuntimeException('Commission distribution exceeds its budget');
 
-    private function excludeAgentOrders($query)
-    {
-        if ($this->hasTable('v2_agent_order_context')) {
-            $query->whereNotIn('id', AgentOrderContext::query()->select('order_id'));
-        }
-
-        if ($this->hasTable('v2_agent_user')) {
-            $query->whereNotIn('user_id', AgentUser::query()->select('sub_user_id'));
-        }
-
-        return $query;
-    }
-
-    private function isAgentOrder(Order $order): bool
-    {
-        if ($this->hasTable('v2_agent_order_context')
-            && AgentOrderContext::query()->where('order_id', $order->id)->exists()) {
+            // Validate the entire payable chain before touching any wallet.
+            $recipients = [];
+            $seen = [(int) $buyer->id => true];
+            foreach ($shares as $share) {
+                if (!$inviteUserId) break;
+                if (isset($seen[(int) $inviteUserId])) throw new \RuntimeException('Cyclic commission attribution');
+                $seen[(int) $inviteUserId] = true;
+                $inviter = User::whereKey($inviteUserId)->lockForUpdate()->first();
+                if (!$inviter || $eligibility->isAgentUser((int) $inviteUserId, true)) {
+                    throw new \RuntimeException('Commission recipient is missing or an agent subordinate');
+                }
+                $recipients[] = [$inviter, intdiv($budget * $share, 100)];
+                $inviteUserId = $inviter->invite_user_id;
+            }
+            $field = (int) admin_setting('withdraw_close_enable', 0) ? 'balance' : 'commission_balance';
+            $total = 0;
+            foreach ($recipients as [$inviter, $amount]) {
+                if ($amount === 0) continue;
+                $inviter->{$field} = (int) $inviter->{$field} + $amount;
+                $inviter->saveOrFail();
+                CommissionLog::create([
+                    'invite_user_id' => $inviter->id, 'user_id' => $order->user_id,
+                    'trade_no' => $order->trade_no, 'order_amount' => $order->total_amount,
+                    'get_amount' => $amount, 'credited_to' => $field,
+                ]);
+                $total += $amount;
+            }
+            $order->actual_commission_balance = $total;
+            $order->commission_status = Order::COMMISSION_STATUS_VALID;
+            $order->saveOrFail();
             return true;
-        }
-
-        return $this->hasTable('v2_agent_user')
-            && AgentUser::query()->where('sub_user_id', $order->user_id)->exists();
-    }
-
-    private function hasTable(string $table): bool
-    {
-        try {
-            return DB::connection()->getSchemaBuilder()->hasTable($table);
-        } catch (\Throwable) {
-            return false;
-        }
+        }, 3);
     }
 
 }

@@ -485,29 +485,31 @@ class OrderController extends Controller
 
         $commissionStatus = $params['commission_status'] ?? null;
 
-        $order = Order::where('trade_no', $request->input('trade_no'))
-            ->first();
-        if (!$order) {
-            return $this->fail([400202, '订单不存在']);
-        }
-
-        if ($commissionStatus !== null) {
-            if ($order->commission_status === null || (int) $order->commission_status !== 0) {
-                return $this->fail([400, '只能对待确认的佣金进行操作']);
+        return DB::transaction(function () use ($request, $params, $commissionStatus) {
+            $order = Order::where('trade_no', $request->input('trade_no'))->lockForUpdate()->first();
+            if (!$order) {
+                return $this->fail([400202, '订单不存在']);
             }
-            if (!in_array((int) $commissionStatus, [1, 3], true)) {
-                return $this->fail([400, '佣金状态格式不正确']);
+            if ($commissionStatus !== null) {
+                if ($order->commission_status === null || (int) $order->commission_status !== Order::COMMISSION_STATUS_PENDING) {
+                    return $this->fail([400, '只能对待确认的佣金进行操作']);
+                }
+                if (!in_array((int) $commissionStatus, [Order::COMMISSION_STATUS_PROCESSING, Order::COMMISSION_STATUS_INVALID], true)) {
+                    return $this->fail([400, '佣金状态格式不正确']);
+                }
+                if ((int) $commissionStatus === Order::COMMISSION_STATUS_PROCESSING) {
+                    User::whereIn('id', [$order->user_id, $order->invite_user_id])->orderBy('id')->lockForUpdate()->get();
+                    if (app(\App\Services\ReferralEligibilityService::class)->excludesOrder($order, true)
+                        || !in_array((int) $order->status, [Order::STATUS_COMPLETED, Order::STATUS_DISCOUNTED], true)
+                        || !$order->paid_at || $order->refund_disposed_at || (int) $order->refund_amount > 0
+                        || \App\Models\CommissionLog::where('trade_no', $order->trade_no)->lockForUpdate()->first(['id'])) {
+                        return $this->fail([400, '该订单佣金存在代理归属、退款或历史入账问题，请先核对账务']);
+                    }
+                }
             }
-        }
-
-        try {
             $order->update($params);
-        } catch (\Exception $e) {
-            Log::error($e);
-            return $this->fail([500, '更新失败']);
-        }
-
-        return $this->success(true);
+            return $this->success(true);
+        }, 3);
     }
 
     public function assign(OrderAssign $request)

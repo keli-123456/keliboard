@@ -23,6 +23,7 @@ class ConfigSave extends FormRequest
         'commission_distribution_l3' => 'nullable|numeric',
         // agent center
         'agent_center_enable' => 'boolean',
+        'agent_earnings_showcase_enabled' => 'boolean',
         'agent_center_unlock_mode' => 'nullable|in:balance_threshold,manual',
         'agent_center_unlock_balance' => 'integer|min:0|max:100000000',
         'agent_center_auto_activate' => 'boolean',

@@ -28,6 +28,7 @@ class FinancialReconciliationIssueScanner
 
         $this->scanOrders($filters);
         $this->scanAgentFinance($filters);
+        $this->scanAgentProfit($filters);
         $this->scanCommission($filters);
         $this->scanGiftCards($filters);
 
@@ -101,6 +102,7 @@ class FinancialReconciliationIssueScanner
         if (!Schema::hasTable('v2_agent_order_context') || !Schema::hasTable('v2_agent_balance_hold')) return;
 
         $this->orderRule($filters, 'agent_hold_missing', 'high', 'agent', function (Builder $query): void {
+            $this->requiringSelfCollectionHold($query);
             $query->whereNotNull('aoc.id')->whereIn('aoc.status', [
                 AgentOrderContext::STATUS_PENDING, AgentOrderContext::STATUS_PAID,
             ])->whereNull('abh.id');
@@ -112,6 +114,7 @@ class FinancialReconciliationIssueScanner
             $query->where('o.status', Order::STATUS_CANCELLED)->where('abh.status', AgentBalanceHold::STATUS_PENDING);
         });
         $this->orderRule($filters, 'paid_agent_order_not_captured', 'high', 'agent', function (Builder $query): void {
+            $this->requiringSelfCollectionHold($query);
             $query->where('aoc.status', AgentOrderContext::STATUS_PAID)
                 ->where(function (Builder $hold): void {
                     $hold->whereNull('abh.id')->orWhere('abh.status', '<>', AgentBalanceHold::STATUS_CAPTURED);
@@ -140,8 +143,72 @@ class FinancialReconciliationIssueScanner
         }
     }
 
+    private function requiringSelfCollectionHold(Builder $query): void
+    {
+        $query->where(fn (Builder $q) => $q->whereNull('aoc.pricing_snapshot->collection->mode')
+            ->orWhere('aoc.pricing_snapshot->collection->mode', '<>', 'platform'))
+            ->where(fn (Builder $q) => $q->where('aoc.cost_amount', '>', 0)->orWhereNotNull('aoc.hold_id'));
+    }
+
+    private function scanAgentProfit(array $filters): void
+    {
+        if (!Schema::hasTable('v2_agent_order_context') || !Schema::hasTable('v2_agent_profit')) return;
+        $this->orderRule($filters, 'agent_profit_missing', 'high', 'agent', function (Builder $query): void {
+            $query->where('aoc.pricing_snapshot->collection->mode', 'platform')->where('aoc.status', 'paid')
+                ->where('o.status', Order::STATUS_COMPLETED)->where('o.paid_at', '>', 0)->where('o.plan_id', '>', 0)
+                ->whereNull('o.refund_disposed_at')->where(fn (Builder $q) => $q->whereNull('o.refund_amount')->orWhere('o.refund_amount', 0))
+                ->whereNull('apf.id');
+        });
+        $this->orderRule($filters, 'agent_profit_amount_mismatch', 'high', 'agent', function (Builder $query): void {
+            $query->whereNotNull('apf.id')->where(function (Builder $q): void {
+                $q->whereRaw('apf.amount + apf.cost_amount + apf.fee_amount <> apf.sale_amount')
+                    ->orWhereColumn('apf.sale_amount', '<>', 'aoc.sale_amount')->orWhereColumn('apf.cost_amount', '<>', 'aoc.cost_amount')
+                    ->orWhere('apf.amount', '<', 0)->orWhere('apf.fee_amount', '<', 0)->orWhere('apf.cost_amount', '<', 0);
+            });
+        });
+        $this->orderRule($filters, 'agent_profit_source_invalid', 'high', 'agent', function (Builder $query): void {
+            $query->whereIn('apf.status', ['pending', 'available'])->where(function (Builder $q): void {
+                $q->whereNull('aoc.id')->orWhereNull('aoc.pricing_snapshot->collection->mode')
+                    ->orWhere('aoc.pricing_snapshot->collection->mode', '<>', 'platform')
+                    ->orWhere('o.plan_id', 0)->orWhere('o.type', Order::TYPE_RECHARGE)
+                    ->orWhereNotIn('o.status', [Order::STATUS_COMPLETED, Order::STATUS_DISCOUNTED])
+                    ->orWhereNull('o.paid_at')->orWhere('o.paid_at', 0)->orWhereNotNull('o.refund_disposed_at')
+                    ->orWhere('o.refund_amount', '>', 0)->orWhere('aoc.status', '<>', 'paid')
+                    ->orWhereColumn('apf.agent_user_id', '<>', 'aoc.agent_user_id')->orWhereColumn('apf.trade_no', '<>', 'o.trade_no')
+                    ->orWhereRaw('o.total_amount + COALESCE(o.balance_amount, 0) <> aoc.sale_amount');
+            });
+        });
+    }
+
     private function scanCommission(array $filters): void
     {
+        $this->orderRule($filters, 'commission_budget_exceeded', 'high', 'commission', function (Builder $query): void {
+            $query->where(fn (Builder $q) => $q->where('o.commission_balance', '<', 0)
+                ->orWhereRaw('COALESCE(o.actual_commission_balance, 0) > COALESCE(o.commission_balance, 0)')
+                ->orWhereRaw('COALESCE(o.commission_balance, 0) > o.total_amount + COALESCE(o.balance_amount, 0)'));
+        });
+        if (Schema::hasTable('v2_agent_order_context') || Schema::hasTable('v2_agent_user')) {
+            $this->orderRule($filters, 'agent_regular_commission_conflict', 'high', 'commission', function (Builder $query): void {
+                $query->where(function (Builder $q): void {
+                    $q->where('o.commission_balance', '>', 0)->orWhere('o.actual_commission_balance', '>', 0);
+                    if (Schema::hasTable('v2_commission_log')) {
+                        $q->orWhereExists(fn (Builder $logs) => $logs->selectRaw('1')->from('v2_commission_log as acl')
+                            ->whereColumn('acl.trade_no', 'o.trade_no')->where('acl.get_amount', '>', 0));
+                    }
+                })->where(function (Builder $q): void {
+                    $q->whereRaw('1 = 0');
+                    if (Schema::hasTable('v2_agent_order_context')) $q->orWhereNotNull('aoc.id');
+                    if (Schema::hasTable('v2_agent_user')) {
+                        $q->orWhereNotNull('au.id')->orWhereIn('o.invite_user_id', DB::table('v2_agent_user')->select('sub_user_id'));
+                        if (Schema::hasTable('v2_commission_log')) {
+                            $q->orWhereExists(fn (Builder $logs) => $logs->selectRaw('1')->from('v2_commission_log as acl')
+                                ->join('v2_agent_user as recipient_agent', 'recipient_agent.sub_user_id', '=', 'acl.invite_user_id')
+                                ->whereColumn('acl.trade_no', 'o.trade_no')->where('acl.get_amount', '>', 0));
+                        }
+                    }
+                });
+            });
+        }
         if (!Schema::hasTable('v2_commission_log')) return;
         $query = $this->orderBase($filters)
             ->join('v2_commission_log as cl', 'cl.trade_no', '=', 'o.trade_no')
@@ -223,6 +290,9 @@ class FinancialReconciliationIssueScanner
         }
         if (Schema::hasTable('v2_agent_balance_hold')) $query->leftJoin('v2_agent_balance_hold as abh', 'abh.id', '=', 'aoc.hold_id');
         if (Schema::hasTable('v2_agent_user')) $query->leftJoin('v2_agent_user as au', 'au.sub_user_id', '=', 'o.user_id');
+        if (Schema::hasTable('v2_agent_order_context') && Schema::hasTable('v2_agent_profit')) {
+            $query->leftJoin('v2_agent_profit as apf', 'apf.order_id', '=', 'o.id');
+        }
         $this->applyOrderFilters($query, $filters);
         return $query;
     }

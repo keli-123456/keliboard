@@ -345,6 +345,7 @@ class AdminRoute
                 'prefix' => 'agent-operations'
             ], function ($router) {
                 $router->get('/profit/settings', [\App\Http\Controllers\V2\Admin\AgentProfitController::class, 'policy']);
+                $router->get('/earnings-showcase', [\App\Http\Controllers\V2\Admin\EarningsShowcaseController::class, 'show']);
                 $router->post('/profit/settings', [\App\Http\Controllers\V2\Admin\AgentProfitController::class, 'configurePolicy']);
                 $router->get('/profit/withdrawals', [\App\Http\Controllers\V2\Admin\AgentProfitController::class, 'withdrawals']);
                 $router->post('/profit/withdrawals/{id}', [\App\Http\Controllers\V2\Admin\AgentProfitController::class, 'review']);

@@ -24,7 +24,7 @@ class InviteController extends Controller
         if (!$user) {
             throw new ApiException('未登录或登陆已过期', 403);
         }
-        if ($this->isAgentSubordinate($user)) {
+        if ($this->isAgentSubordinate($user) || app(AgentCommerceContextResolver::class)->resolveRequest($request, $user) !== null) {
             return $this->fail([403, self::AGENT_SUBORDINATE_INVITE_DISABLED_MESSAGE]);
         }
 
@@ -114,6 +114,6 @@ class InviteController extends Controller
             return false;
         }
 
-        return app(AgentCommerceContextResolver::class)->resolveUser($user) !== null;
+        return app(\App\Services\ReferralEligibilityService::class)->isAgentUser((int) $user->id);
     }
 }

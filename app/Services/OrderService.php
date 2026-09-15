@@ -312,7 +312,10 @@ class OrderService
     public function setInvite(User $user): void
     {
         $order = $this->order;
-        if (app(AgentCommerceContextResolver::class)->resolveUser($user) !== null) {
+        $eligibility = app(ReferralEligibilityService::class);
+        if ($eligibility->isAgentUser((int) $user->id)
+            || $eligibility->isAgentUser((int) $user->invite_user_id)
+            || ((int) $user->invite_user_id > 0 && (int) $user->invite_user_id === (int) $user->id)) {
             $order->invite_user_id = null;
             $order->commission_balance = 0;
             return;
@@ -340,6 +343,10 @@ class OrderService
 
         if (!$isCommission)
             return;
+        $rate = $inviter->commission_rate ?: admin_setting('invite_commission', 10);
+        if (!is_numeric($rate) || !is_finite((float) $rate) || (float) $rate < 0 || (float) $rate > 100) {
+            throw new ApiException('推广佣金比例无效，请联系管理员');
+        }
         if ($inviter->commission_rate) {
             $order->commission_balance = self::percentageOfAmount((int) $order->total_amount, $inviter->commission_rate);
         } else {

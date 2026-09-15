@@ -6,6 +6,8 @@ use App\Exceptions\ApiException;
 use App\Models\AgentUser;
 use App\Models\InviteCode;
 use App\Models\Plan;
+use App\Models\User;
+use App\Services\ReferralEligibilityService;
 use App\Services\AgentDomainResolver;
 use App\Services\CaptchaService;
 use App\Services\DomainAnalyticsService;
@@ -123,7 +125,9 @@ class RegisterService
             ->lockForUpdate()
             ->first();
 
-        if (!$inviteCodeModel) {
+        $inviter = $inviteCodeModel ? User::whereKey($inviteCodeModel->user_id)->lockForUpdate()->first() : null;
+        if (!$inviter || $inviter->banned
+            || app(ReferralEligibilityService::class)->isAgentUser((int) $inviter->id, true)) {
             if ((int) admin_setting('invite_force', 0)) {
                 throw new ApiException(__('Invalid invitation code'));
             }

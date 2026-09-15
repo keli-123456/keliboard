@@ -79,6 +79,98 @@ final class FinancialReconciliationServiceTest extends TestCase
         );
     }
 
+    public function test_platform_collection_does_not_require_a_self_collection_hold(): void
+    {
+        DB::table('v2_agent_order_context')->where('order_id', 3)->update([
+            'hold_id' => null, 'pricing_snapshot' => json_encode(['collection' => ['mode' => 'platform']]),
+        ]);
+        $codes = $this->codesFor('agent-good');
+        $this->assertNotContains('agent_hold_missing', $codes);
+        $this->assertNotContains('paid_agent_order_not_captured', $codes);
+    }
+
+    public function test_zero_cost_self_collection_does_not_require_a_hold(): void
+    {
+        DB::table('v2_agent_order_context')->where('order_id', 3)->update(['hold_id' => null, 'cost_amount' => 0]);
+        $codes = $this->codesFor('agent-good');
+        $this->assertNotContains('agent_hold_missing', $codes);
+        $this->assertNotContains('paid_agent_order_not_captured', $codes);
+    }
+
+    public function test_agent_commission_is_flagged_without_changing_historical_money(): void
+    {
+        DB::table('v2_order')->where('id', 3)->update(['invite_user_id' => 3, 'commission_balance' => 300,
+            'actual_commission_balance' => 300, 'commission_status' => Order::COMMISSION_STATUS_VALID]);
+        DB::table('v2_commission_log')->insert(['invite_user_id' => 3, 'user_id' => 4,
+            'trade_no' => 'agent-good', 'order_amount' => 3000, 'get_amount' => 300,
+            'created_at' => $this->now, 'updated_at' => $this->now]);
+        $before = DB::table('v2_order')->where('id', 3)->first();
+        $this->assertContains('agent_regular_commission_conflict', $this->codesFor('agent-good'));
+        $this->assertEquals($before, DB::table('v2_order')->where('id', 3)->first());
+        $this->assertSame(300, (int) DB::table('v2_commission_log')->where('trade_no', 'agent-good')->sum('get_amount'));
+    }
+
+    public function test_main_order_with_subordinate_recipient_requires_review(): void
+    {
+        DB::table('v2_order')->where('id', 1)->update(['invite_user_id' => 4, 'commission_balance' => 100]);
+        $this->assertContains('agent_regular_commission_conflict', $this->codesFor('main-good'));
+    }
+
+    public function test_commission_over_budget_is_reported(): void
+    {
+        DB::table('v2_order')->where('id', 1)->update(['commission_balance' => 100, 'actual_commission_balance' => 150]);
+        $this->assertContains('commission_budget_exceeded', $this->codesFor('main-good'));
+    }
+
+    public function test_platform_profit_is_checked_for_missing_and_inconsistent_rows(): void
+    {
+        (require base_path('database/migrations/2026_09_14_190000_create_agent_profit_accounts.php'))->up();
+        DB::table('v2_agent_order_context')->where('order_id', 3)->update([
+            'hold_id' => null, 'pricing_snapshot' => json_encode(['collection' => ['mode' => 'platform']]),
+        ]);
+        $this->assertContains('agent_profit_missing', $this->codesFor('agent-good'));
+        DB::table('v2_agent_profit')->insert(['agent_user_id' => 3, 'order_id' => 3, 'trade_no' => 'agent-good',
+            'sale_amount' => 3000, 'cost_amount' => 1500, 'fee_amount' => 100, 'amount' => 1500,
+            'status' => 'pending', 'available_at' => $this->now + 86400,
+            'created_at' => $this->now, 'updated_at' => $this->now]);
+        $this->assertContains('agent_profit_amount_mismatch', $this->codesFor('agent-good'));
+        DB::table('v2_agent_profit')->where('order_id', 3)->update(['amount' => 1400]);
+        $this->assertNotContains('agent_profit_amount_mismatch', $this->codesFor('agent-good'));
+        DB::table('v2_order')->where('id', 3)->update(['refund_disposed_at' => $this->now]);
+        $this->assertContains('agent_profit_source_invalid', $this->codesFor('agent-good'));
+    }
+
+    public function test_audit_command_reports_database_only_and_does_not_modify_orders(): void
+    {
+        (require base_path('database/migrations/2026_09_14_190000_create_agent_profit_accounts.php'))->up();
+        $before = DB::table('v2_order')->orderBy('id')->get();
+        $command = new \App\Console\Commands\AgentFinanceAudit();
+        $command->setLaravel(app());
+        $tester = new \Symfony\Component\Console\Tester\CommandTester($command);
+        $this->assertSame(1, $tester->execute(['--json' => true]));
+        $report = json_decode($tester->getDisplay(), true, 512, JSON_THROW_ON_ERROR);
+        $this->assertTrue($report['read_only']);
+        $this->assertFalse($report['gateway_receipts_verified']);
+        $this->assertFalse($report['mysql_concurrency_verified']);
+        $this->assertArrayNotHasKey('user_email', $report['issues']['data'][0]);
+        $this->assertEquals($before, DB::table('v2_order')->orderBy('id')->get());
+    }
+
+    public function test_audit_command_reports_incomplete_schema_as_invalid(): void
+    {
+        $command = new \App\Console\Commands\AgentFinanceAudit();
+        $command->setLaravel(app());
+        $tester = new \Symfony\Component\Console\Tester\CommandTester($command);
+        $this->assertSame(2, $tester->execute(['--json' => true]));
+        $this->assertFalse(json_decode($tester->getDisplay(), true)['ready']);
+    }
+
+    private function codesFor(string $tradeNo): array
+    {
+        return collect(app(FinancialReconciliationService::class)->overview(['keyword' => $tradeNo])['issues']['data'])
+            ->where('trade_no', $tradeNo)->pluck('code')->all();
+    }
+
     private function seedLedger(): void
     {
         DB::table('v2_site')->insert([

@@ -378,6 +378,7 @@ class ConfigController extends Controller
     {
         return [
             'agent_center_enable' => (bool) admin_setting('agent_center_enable', false),
+            'agent_earnings_showcase_enabled' => (bool) admin_setting('agent_earnings_showcase_enabled', false),
             'agent_center_unlock_mode' => $this->normalizeAgentCenterUnlockMode(
                 admin_setting('agent_center_unlock_mode', 'balance_threshold')
             ),

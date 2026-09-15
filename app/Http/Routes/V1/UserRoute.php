@@ -105,6 +105,7 @@ class UserRoute
             // Plan
             $router->get('/plan/fetch', [PlanController::class, 'fetch']);
             // Invite
+            $router->get('/earnings-showcase', [\App\Http\Controllers\V1\User\EarningsShowcaseController::class, 'show']);
             $router->get('/invite/save', [InviteController::class, 'save']);
             $router->get('/invite/fetch', [InviteController::class, 'fetch']);
             $router->get('/invite/details', [InviteController::class, 'details']);
