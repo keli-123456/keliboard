@@ -49,6 +49,7 @@ class Kernel extends ConsoleKernel
         $schedule->command('check:node-realtime-alert')->everyFiveMinutes()->onOneServer()->withoutOverlapping(4);
         // user sync (users_revision)
         $schedule->command('usersync:reconcile')->everyMinute()->onOneServer()->withoutOverlapping(2);
+        $schedule->command('traffic-batches:recover', ['--limit' => 200])->everyMinute()->onOneServer()->withoutOverlapping(1);
         $schedule->command('usersync:cleanup')->dailyAt('3:10')->onOneServer();
         $schedule->command('marketing:scan')->everyTenMinutes()->onOneServer()->withoutOverlapping(8);
         $schedule->command('spam-registration:scan')->hourly()->onOneServer()->withoutOverlapping(50);

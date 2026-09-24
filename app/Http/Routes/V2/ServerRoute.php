@@ -8,6 +8,7 @@ use App\Http\Controllers\V1\Server\UniProxyController;
 use App\Http\Controllers\V2\Server\MachineController;
 use App\Http\Controllers\V2\Server\MachineReleaseController;
 use App\Http\Controllers\V2\Server\ServerController;
+use App\Http\Controllers\V2\Server\TrafficBatchController;
 use Illuminate\Contracts\Routing\Registrar;
 
 class ServerRoute
@@ -21,6 +22,8 @@ class ServerRoute
         ], function ($route) {
             $route->match(['GET', 'POST'], NodeApiContract::ENDPOINT_HANDSHAKE, [ServerController::class, 'handshake']);
             $route->post(NodeApiContract::ENDPOINT_REPORT, [ServerController::class, 'report']);
+            $route->post(NodeApiContract::ENDPOINT_TRAFFIC_BATCH, [TrafficBatchController::class, 'report']);
+            $route->get(NodeApiContract::ENDPOINT_TRAFFIC_BATCH, [TrafficBatchController::class, 'capability']);
             $route->get(NodeApiContract::ENDPOINT_CONFIG, [UniProxyController::class, 'config']);
             $route->get(NodeApiContract::ENDPOINT_USER, [UniProxyController::class, 'user']);
             $route->get(NodeApiContract::ENDPOINT_USER_DELTA, [UniProxyController::class, 'userDelta']);

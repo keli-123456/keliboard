@@ -22,6 +22,7 @@ final class NodeApiContract
     public const ENDPOINT_STATUS = 'status';
     public const ENDPOINT_HANDSHAKE = 'handshake';
     public const ENDPOINT_REPORT = 'report';
+    public const ENDPOINT_TRAFFIC_BATCH = 'traffic/batch';
     public const ENDPOINT_MACHINE_NODES = 'nodes';
     public const ENDPOINT_MACHINE_STATUS = 'status';
 

@@ -291,6 +291,11 @@ class TrafficResetService
       'next_reset_at' => $nextResetTime?->timestamp,
     ]);
 
+    // The observer is best-effort; a reset must not commit stale node availability.
+    if (DB::getSchemaBuilder()->hasTable('user_sync_states')) {
+      app(UserSyncService::class)->syncUser($user, 'traffic_reset');
+    }
+
     $this->recordResetLog($user, [
       'reset_type' => $this->getResetTypeFromPlan($user->plan),
       'trigger_source' => $triggerSource,
