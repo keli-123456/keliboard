@@ -458,6 +458,7 @@ class Server extends Model
             self::TYPE_HYSTERIA => [
                 'version' => [2, 1],
                 'obfs.type' => ['salamander', 'gecko'],
+                'congestion_control' => ['cubic', 'bbr', 'new_reno', 'brutal'],
             ],
             self::TYPE_TUIC => [
                 'version' => [5, 4],

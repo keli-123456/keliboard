@@ -37,6 +37,12 @@ class Hysteria2Settings
             }
             return;
         }
+        if (array_key_exists('brutal_disable_loss_compensation', $network)) {
+            $disabled = $network['brutal_disable_loss_compensation'];
+            if (!is_bool($disabled) || ($disabled && ($settings['congestion_control'] ?? null) !== 'brutal')) {
+                $error('network_settings.brutal_disable_loss_compensation', '必须为 JSON 布尔值；禁用丢包补偿仅适用于 Brutal');
+            }
+        }
         if ($gecko && (!is_string(data_get($settings, 'obfs.password')) || strlen(data_get($settings, 'obfs.password')) < 4)) {
             $error('obfs.password', 'Gecko 密码至少需要 4 字节');
         }

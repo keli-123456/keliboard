@@ -83,9 +83,30 @@ final class Hysteria2ConfigurationTest extends TestCase
         foreach ($networks as $network) {
             $this->assertFalse($this->validateSettings($this->settings(['network_settings' => $network]))->passes(), json_encode($network));
         }
-        foreach ([['congestion_control' => 'brutal'], ['version' => 1], ['obfs' => ['open' => false]], ['obfs' => ['open' => true, 'type' => 'gecko', 'password' => 'abc']]] as $override) {
+        foreach ([['congestion_control' => 'unknown'], ['version' => 1], ['obfs' => ['open' => false]], ['obfs' => ['open' => true, 'type' => 'gecko', 'password' => 'abc']]] as $override) {
             $this->assertFalse($this->validateSettings($this->settings($override))->passes());
         }
+    }
+
+    public function test_brutal_round_trip_and_strict_validation(): void
+    {
+        foreach (['generic', 'v2node'] as $runtime) {
+            foreach ([[], ['brutal_disable_loss_compensation' => false], ['brutal_disable_loss_compensation' => true]] as $network) {
+                $settings = $this->settings(['congestion_control' => 'brutal', 'network_settings' => $network]);
+                $validator = $this->validateSettings($settings, $runtime);
+                $this->assertTrue($validator->passes(), json_encode($validator->errors()->all()));
+                $node = (new Server())->forceFill(['type' => 'hysteria', 'host' => 'edge.example.com', 'port' => 443, 'server_port' => 443, 'protocol_settings' => $validator->validated()['protocol_settings']]);
+                $response = (new NodeConfigService())->buildResponse($node, $runtime === 'v2node');
+                $this->assertSame('brutal', $response['congestion_control']);
+                $this->assertSame($network ?: null, $response[$runtime === 'v2node' ? 'network_settings' : 'networkSettings']);
+                $this->assertFalse($this->validateSettings(array_replace($settings, ['version' => 1]))->passes());
+            }
+        }
+        foreach ([null, 0, 1, 'true', 'false', [], (object) []] as $value) {
+            $this->assertFalse($this->validateSettings($this->settings(['congestion_control' => 'brutal', 'network_settings' => ['brutal_disable_loss_compensation' => $value]]))->passes());
+        }
+        $this->assertContains('brutal', Server::getProtocolEnums('hysteria')['congestion_control']);
+        $this->assertNotContains('brutal', Server::getProtocolEnums('tuic')['congestion_control']);
     }
 
     public function test_all_masquerade_modes_and_empty_body_survive_validation(): void
@@ -103,7 +124,9 @@ final class Hysteria2ConfigurationTest extends TestCase
 
     public function test_exports_do_not_leak_server_only_configuration(): void
     {
-        $server = ['type' => 'hysteria', 'name' => 'HY2', 'host' => 'edge.example.com', 'port' => 443, 'protocol_settings' => $this->settings()];
+        $settings = $this->settings(['congestion_control' => 'brutal']);
+        $settings['network_settings']['brutal_disable_loss_compensation'] = true;
+        $server = ['type' => 'hysteria', 'name' => 'HY2', 'host' => 'edge.example.com', 'port' => 443, 'protocol_settings' => $settings];
         $clash = ClashMeta::buildHysteria('uuid', $server, []);
         $sing = (new \ReflectionClass(SingBox::class))->newInstanceWithoutConstructor();
         $singExport = (new \ReflectionMethod(SingBox::class, 'buildHysteria'))->invoke($sing, 'uuid', $server);
@@ -116,6 +139,7 @@ final class Hysteria2ConfigurationTest extends TestCase
         $this->assertStringNotContainsString('private.example.com', $encoded);
         $this->assertStringNotContainsString('masquerade', $encoded);
         $this->assertStringNotContainsString('congestion_control', $encoded);
+        $this->assertStringNotContainsString('brutal', $encoded);
     }
 
     public function test_gecko_requires_verified_core_and_legacy_behavior_is_unchanged(): void
