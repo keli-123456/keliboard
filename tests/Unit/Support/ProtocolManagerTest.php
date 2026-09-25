@@ -74,6 +74,8 @@ final class ProtocolManagerTest extends TestCase
         ]);
 
         $this->assertSame('1.12.0', $manager->extractClientVersion('singbox 1.12.0', 'sing-box'));
+        $this->assertSame('1.14.0-alpha.26', $manager->extractClientVersion('sing-box/1.14.0-alpha.26', 'sing-box'));
+        $this->assertSame('1.19.31-beta', $manager->extractClientVersion('mihomo/v1.19.31-beta', 'mihomo'));
         $this->assertSame('1.2.8.1103', $manager->extractClientVersion('sing-box/1.2.8.1103', 'sing-box'));
         $this->assertSame('1.2.8.1103', $manager->extractClientVersion('Karing/1.2.8.1103', 'karing'));
         $this->assertSame('1.2.8.1103', $manager->extractClientVersion('Sparkle/1.2.8.1103', 'sparkle'));

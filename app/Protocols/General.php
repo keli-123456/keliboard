@@ -239,7 +239,7 @@ class General extends AbstractProtocol
         }
 
         if (data_get($protocol_settings, 'obfs.open')) {
-            $params['obfs'] = 'salamander';
+            $params['obfs'] = data_get($protocol_settings, 'obfs.type', 'salamander');
             $params['obfs-password'] = data_get($protocol_settings, 'obfs.password');
         }
         if (isset($server['ports'])) {
@@ -255,6 +255,9 @@ class General extends AbstractProtocol
         $name = rawurlencode($server['name']);
         $addr = Helper::wrapIPv6($server['host']);
 
+        if ($ech = \App\Support\Hysteria2Ech::publicConfig($protocol_settings)) {
+            $query .= '&ech=' . rawurlencode($ech);
+        }
         $uri = "hysteria2://{$password}@{$addr}:{$server['port']}?{$query}#{$name}";
         $uri .= "\r\n";
 

@@ -115,6 +115,20 @@ final class ClientControllerTest extends TestCase
         $method = new \ReflectionMethod(ClientController::class, 'getClientInfo');
         $method->setAccessible(true);
 
+        $capabilities = new \App\Support\ProtocolCapabilityService(require base_path('config/protocol_capabilities.php'));
+        $geckoServer = ['type' => 'hysteria', 'protocol_settings' => ['version' => 2, 'obfs' => ['open' => true, 'type' => 'gecko']]];
+        $echServer = ['type' => 'hysteria', 'protocol_settings' => ['version' => 2, 'ech' => ['enabled' => true]]];
+        foreach (['sing-box/1.14.0-alpha.1', 'mihomo/1.19.31-beta', 'Karing/1.2.19.2209 mihomo/1.19.31', 'sing-box'] as $flag) {
+            $info = $method->invoke($controller, Request::create('/', 'GET', ['flag' => $flag]));
+            $this->assertFalse($capabilities->supportsClient($info['name'], $info['version'], $geckoServer)->supported, $flag);
+            $this->assertFalse($capabilities->supportsClient($info['name'], $info['version'], $echServer)->supported, $flag);
+        }
+        foreach (['sing-box/1.14.0', 'mihomo/v1.19.31'] as $flag) {
+            $info = $method->invoke($controller, Request::create('/', 'GET', ['flag' => $flag]));
+            $this->assertTrue($capabilities->supportsClient($info['name'], $info['version'], $geckoServer)->supported, $flag);
+            $this->assertTrue($capabilities->supportsClient($info['name'], $info['version'], $echServer)->supported, $flag);
+        }
+
         $singBox = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'singbox 1.12.0']));
         $singBoxWrapper = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'sing-box/1.2.8.1103']));
         $bareSingBox = $method->invoke($controller, Request::create('/', 'GET', ['flag' => 'sing-box']));

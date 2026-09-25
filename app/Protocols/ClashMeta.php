@@ -495,9 +495,20 @@ class ClashMeta extends AbstractProtocol
             case 2:
                 $array['type'] = 'hysteria2';
                 $array['password'] = $password;
+                if ($ech = \App\Support\Hysteria2Ech::publicConfig($protocol_settings)) {
+                    $array['ech-opts'] = ['enable' => true, 'config' => $ech];
+                }
                 if (data_get($protocol_settings, 'obfs.open')) {
                     $array['obfs'] = data_get($protocol_settings, 'obfs.type');
                     $array['obfs-password'] = data_get($protocol_settings, 'obfs.password');
+                    if ($array['obfs'] === 'gecko') {
+                        foreach (['min', 'max'] as $bound) {
+                            $size = data_get($protocol_settings, "network_settings.gecko_{$bound}_packet_size");
+                            if ($size) {
+                                $array["obfs-{$bound}-packet-size"] = (int) $size;
+                            }
+                        }
+                    }
                 }
                 break;
         }

@@ -302,6 +302,9 @@ switch ($action) {
         break;
     case 'http': $fixture->http(); return;
     case 'snapshot': break;
+    case 'node-ech-save':
+        require __DIR__ . '/traffic_batch_ech.php';
+        exit(0);
     case 'node-configure':
     case 'node-restore':
         if ($fixture->nodeFixture === null) { throw new RuntimeException('Explicit node fixture required.'); }

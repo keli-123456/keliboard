@@ -4,6 +4,7 @@
 namespace App\Http\Requests\Admin;
 
 use App\Models\Server;
+use App\Support\Hysteria2Settings;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Validator;
 
@@ -62,10 +63,19 @@ class ServerSave extends FormRequest
             ...self::TLS_CERT_RULES,
         ],
         'hysteria' => [
-            'version' => 'required|integer',
+            'version' => 'required|integer|in:1,2',
+            'congestion_control' => 'nullable|string|in:cubic,bbr,new_reno',
+            'ech' => 'nullable|array:enabled,key_file,config',
+            'ech.enabled' => 'required_with:protocol_settings.ech|boolean',
+            'ech.key_file' => 'sometimes|string|max:4096',
+            'ech.config' => 'sometimes|string|max:16384',
+            'network_settings' => 'nullable|array:masquerade,gecko_min_packet_size,gecko_max_packet_size',
+            'network_settings.masquerade' => 'sometimes|array',
+            'network_settings.gecko_min_packet_size' => 'sometimes|integer|min:0|max:2048',
+            'network_settings.gecko_max_packet_size' => 'sometimes|integer|min:0|max:2048',
             'alpn' => 'nullable|string',
             'obfs.open' => 'nullable|boolean',
-            'obfs.type' => 'string|nullable',
+            'obfs.type' => 'string|nullable|in:salamander,gecko',
             'obfs.password' => 'string|nullable',
             'tls.server_name' => 'nullable|string',
             'tls.allow_insecure' => 'nullable|boolean',
@@ -183,6 +193,15 @@ class ServerSave extends FormRequest
 
     protected function prepareForValidation(): void
     {
+        // Empty response bodies are meaningful, even after ConvertEmptyStringsToNull.
+        $settings = $this->input('protocol_settings');
+        if ($this->input('type') === Server::TYPE_HYSTERIA && is_array($settings)
+            && data_get($settings, 'network_settings.masquerade.type') === 'string'
+            && \Illuminate\Support\Arr::has($settings, 'network_settings.masquerade.body')
+            && data_get($settings, 'network_settings.masquerade.body') === null) {
+            data_set($settings, 'network_settings.masquerade.body', '');
+            $this->merge(['protocol_settings' => $settings]);
+        }
         $runtime = strtolower(trim((string) $this->input('runtime', Server::RUNTIME_GENERIC)));
         if ($runtime === '') {
             $runtime = Server::RUNTIME_GENERIC;
@@ -196,6 +215,9 @@ class ServerSave extends FormRequest
     public function withValidator(Validator $validator): void
     {
         $validator->after(function (Validator $validator) {
+            if ($this->input('type') === Server::TYPE_HYSTERIA) {
+                Hysteria2Settings::validate((array) $this->input('protocol_settings', []), $validator);
+            }
             if ($this->input('runtime') !== Server::RUNTIME_V2NODE) {
                 return;
             }

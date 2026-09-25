@@ -27,6 +27,13 @@ class NodeConfigService
         $nodeType = (string) $node->type;
         $protocolSettings = is_array($node->protocol_settings) ? $node->protocol_settings : [];
 
+        $networkSettings = data_get($protocolSettings, 'network_settings') ?: null;
+        if ($nodeType === 'hysteria' && \App\Support\Hysteria2Ech::enabled($protocolSettings)) {
+            $networkSettings = array_merge($networkSettings ?? [], [
+                'ech_key_file' => data_get($protocolSettings, 'ech.key_file'),
+            ]);
+        }
+
         $serverPort = $node->server_port;
         $host = $node->host;
 
@@ -35,7 +42,7 @@ class NodeConfigService
             'listen_ip' => '0.0.0.0',
             'server_port' => (int) $serverPort,
             'network' => data_get($protocolSettings, 'network'),
-            'networkSettings' => data_get($protocolSettings, 'network_settings') ?: null,
+            'networkSettings' => $networkSettings,
         ];
 
         $response = match ($nodeType) {
@@ -75,13 +82,13 @@ class NodeConfigService
                 'server_port' => (int) $serverPort,
                 'version' => (int) $protocolSettings['version'],
                 'host' => $host,
-                'server_name' => $protocolSettings['tls']['server_name'],
-                'up_mbps' => (int) $protocolSettings['bandwidth']['up'],
-                'down_mbps' => (int) $protocolSettings['bandwidth']['down'],
+                'server_name' => data_get($protocolSettings, 'tls.server_name'),
+                'up_mbps' => (int) data_get($protocolSettings, 'bandwidth.up', 0),
+                'down_mbps' => (int) data_get($protocolSettings, 'bandwidth.down', 0),
                 ...match ((int) $protocolSettings['version']) {
                     1 => ['obfs' => $protocolSettings['obfs']['password'] ?? null],
                     2 => [
-                        'obfs' => $protocolSettings['obfs']['open'] ? $protocolSettings['obfs']['type'] : null,
+                        'obfs' => data_get($protocolSettings, 'obfs.open') ? data_get($protocolSettings, 'obfs.type') : null,
                         'obfs-password' => $protocolSettings['obfs']['password'] ?? null
                     ],
                     default => []
@@ -131,6 +138,10 @@ class NodeConfigService
             ],
             default => []
         };
+
+        if ($nodeType === 'hysteria' && !empty($protocolSettings['congestion_control'])) {
+            $response['congestion_control'] = $protocolSettings['congestion_control'];
+        }
 
         $response['base_config'] = [
             'push_interval' => (int) admin_setting('server_push_interval', 60),

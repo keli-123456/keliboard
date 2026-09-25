@@ -84,8 +84,7 @@ return new class($root) {
             $table->integer('parent_id')->nullable();
             $table->integer('sort')->default(0);
             $table->integer('server_port')->nullable();
-            $table->integer('created_at')->nullable();
-            $table->integer('updated_at')->nullable();
+            $table->timestamps();
         });
         Schema::table('v2_server_machine', function (Blueprint $table): void {
             $table->integer('last_seen_at')->nullable();
@@ -111,7 +110,7 @@ return new class($root) {
         });
         DB::table('v2_server')->where('id', 1)->update([
             'type' => 'hysteria', 'group_ids' => '["10"]', 'route_ids' => '[]',
-            'server_port' => $data['port'], 'created_at' => time(), 'updated_at' => time(),
+            'server_port' => $data['port'], 'created_at' => now(), 'updated_at' => now(),
             'protocol_settings' => json_encode([
                 'version' => 2, 'network' => 'hysteria', 'bandwidth' => ['up' => 0, 'down' => 0],
                 'obfs' => ['open' => false, 'type' => 'salamander', 'password' => ''],

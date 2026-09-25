@@ -203,6 +203,9 @@ class Server extends Model
         ],
         self::TYPE_HYSTERIA => [
             'version' => ['type' => 'integer', 'default' => 2],
+            'ech' => ['type' => 'array', 'default' => null],
+            'congestion_control' => ['type' => 'string', 'default' => null],
+            'network_settings' => ['type' => 'array', 'default' => null],
             'bandwidth' => [
                 'type' => 'object',
                 'fields' => [
@@ -454,7 +457,7 @@ class Server extends Model
             ],
             self::TYPE_HYSTERIA => [
                 'version' => [2, 1],
-                'obfs.type' => ['salamander'],
+                'obfs.type' => ['salamander', 'gecko'],
             ],
             self::TYPE_TUIC => [
                 'version' => [5, 4],

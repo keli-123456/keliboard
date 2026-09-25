@@ -242,10 +242,11 @@ class ProtocolManager
         $pattern = '/' . implode('[^a-z0-9]*', array_map(
             static fn (string $token): string => preg_quote($token, '/'),
             $tokens
-        )) . '[^0-9a-z]*v?(\d+(?:\.\d+)*)/i';
+        )) . '[^0-9a-z]*v?(\d+(?:\.\d+)*)([-+][0-9a-z][0-9a-z.+-]*)?/i';
 
         if (preg_match($pattern, $decodedFlag, $matches)) {
-            return $matches[1];
+            // A prerelease core must not satisfy a stable-only capability floor.
+            return $matches[1] . (in_array($candidate, ['sing-box', 'mihomo'], true) ? ($matches[2] ?? '') : '');
         }
 
         return null;

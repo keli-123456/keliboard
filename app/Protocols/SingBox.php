@@ -552,11 +552,19 @@ class SingBox extends AbstractProtocol
             ]
         };
 
-        return array_merge(
-            $baseConfig,
-            $speedConfig,
-            $versionConfig
-        );
+        if (($versionConfig['type'] ?? '') === 'hysteria2' && ($ech = \App\Support\Hysteria2Ech::publicConfig($protocol_settings))) {
+            $baseConfig['tls']['ech'] = ['enabled' => true, 'config' => [\App\Support\Hysteria2Ech::pem($ech)]];
+        }
+        if (data_get($versionConfig, 'obfs.type') === 'gecko') {
+            foreach (['min', 'max'] as $bound) {
+                $size = data_get($protocol_settings, "network_settings.gecko_{$bound}_packet_size");
+                if ($size) {
+                    $versionConfig['obfs']["{$bound}_packet_size"] = (int) $size;
+                }
+            }
+        }
+
+        return array_merge($baseConfig, $speedConfig, $versionConfig);
     }
 
     protected function buildTuic($password, $server): array

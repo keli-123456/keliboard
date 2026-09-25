@@ -74,6 +74,23 @@ class ProtocolCapabilityService
         $normalizedClientName = is_string($clientName) ? strtolower(trim($clientName)) : null;
         $family = $this->resolveClientFamily($normalizedClientName);
 
+        if ($facts['ech']) {
+            $minimum = $this->config['hy2_ech_clients'][$normalizedClientName ?? ''] ?? null;
+            if (!$minimum || !is_string($clientVersion)
+                || preg_match('/^\d+\.\d+\.\d+$/D', $clientVersion) !== 1
+                || version_compare($clientVersion, $minimum, '<')) {
+                return SupportResult::drop('ECH requires a verified compatible core version');
+            }
+        }
+        if ($this->usesGecko($facts)) {
+            $minimum = $this->config['hy2_gecko_clients'][$normalizedClientName ?? ''] ?? null;
+            if (!$minimum || !is_string($clientVersion)
+                || preg_match('/^\d+\.\d+\.\d+$/D', $clientVersion) !== 1
+                || version_compare($clientVersion, $minimum, '<')) {
+                return SupportResult::drop('Gecko requires a verified compatible core version');
+            }
+        }
+
         if (!$family) {
             return $this->supportsUnknownClient($facts);
         }
@@ -149,6 +166,25 @@ class ProtocolCapabilityService
         $facts = $this->extractFacts($server);
         $normalizedClientName = is_string($clientName) ? strtolower(trim($clientName)) : null;
         $family = $this->resolveClientFamily($normalizedClientName);
+
+        if ($facts['ech']) {
+            $minimum = $this->config['hy2_ech_clients'][$normalizedClientName ?? ''] ?? null;
+            return [
+                'family' => $family,
+                'status' => $minimum ? 'partial' : 'block',
+                'reason' => $minimum ? "ECH requires verified {$normalizedClientName} core >= {$minimum}" : 'ECH capability is unverified',
+                'matched_rule' => $minimum ? ['support' => 'yes', 'min_version' => $minimum, 'requires_core_version' => true] : null,
+            ];
+        }
+        if ($this->usesGecko($facts)) {
+            $minimum = $this->config['hy2_gecko_clients'][$normalizedClientName ?? ''] ?? null;
+            return [
+                'family' => $family,
+                'status' => $minimum ? 'partial' : 'block',
+                'reason' => $minimum ? "Gecko requires verified {$normalizedClientName} core >= {$minimum}" : 'Gecko capability is unverified',
+                'matched_rule' => $minimum ? ['support' => 'yes', 'min_version' => $minimum, 'requires_core_version' => true] : null,
+            ];
+        }
 
         if (!$family) {
             $result = $this->supportsUnknownClient($facts);
@@ -310,12 +346,14 @@ class ProtocolCapabilityService
 
         return [
             'protocol' => $type,
+            'ech' => $type === 'hysteria' && Hysteria2Ech::enabled($settings),
             'network' => match ($type) {
                 'mieru' => strtolower(trim((string) data_get($settings, 'transport', 'tcp'))),
                 'naive' => data_get($settings, 'network') ?: 'tcp',
                 default => data_get($settings, 'network'),
             },
             'cipher' => data_get($settings, 'cipher'),
+            'obfs_type' => data_get($settings, 'obfs.open') ? data_get($settings, 'obfs.type') : null,
             'congestion_control' => data_get($settings, 'congestion_control'),
             'encryption' => data_get($settings, 'encryption'),
             'tls_mode' => match ($type) {
@@ -332,6 +370,11 @@ class ProtocolCapabilityService
             'flow' => data_get($settings, 'flow'),
             'features' => $features,
         ];
+    }
+
+    private function usesGecko(array $facts): bool
+    {
+        return $facts['protocol'] === 'hysteria' && $facts['obfs_type'] === 'gecko';
     }
 
     protected function supportsUnknownClient(array $facts): SupportResult

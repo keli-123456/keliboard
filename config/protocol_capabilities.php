@@ -1,6 +1,16 @@
 <?php
 
 return [
+    // Conservative ECH subscription floors; only canonical core identities qualify.
+    'hy2_ech_clients' => [
+        'mihomo' => '1.19.31',
+        'sing-box' => '1.14.0',
+    ],
+    // Conservative verified core-version floors, not application wrapper versions.
+    'hy2_gecko_clients' => [
+        'mihomo' => '1.19.31',
+        'sing-box' => '1.14.0',
+    ],
     'runtimes' => [
         'v2node' => [
             'protocols' => [
