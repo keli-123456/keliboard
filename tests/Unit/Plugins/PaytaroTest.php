@@ -294,7 +294,14 @@ final class PaytaroTest extends TestCase
             case 'app': $body['app_id'] = 'other-app'; break;
             case 'secret': $secret = 'other-secret'; break;
             case 'unpaid': $body['status'] = 'UNPAID'; break;
-            case 'disabled': $payment->update(['enable' => false]); break;
+            case 'disabled_other_payment':
+                $payment->update(['enable' => false]);
+                $order->update(['payment_id' => $payment->id + 1]);
+                break;
+            case 'archived_other_payment':
+                $payment->delete();
+                $order->update(['payment_id' => $payment->id + 1]);
+                break;
         }
         $request = $this->bindCallback($body, $secret);
         $response = (new PaymentController())->notify('PayTaro', $payment->uuid, $request);
@@ -305,7 +312,48 @@ final class PaytaroTest extends TestCase
 
     public static function rejectedPaymentFlows(): array
     {
-        return [['amount', 400], ['payment', 400], ['unknown_order', 400], ['app', 422], ['secret', 422], ['unpaid', 422], ['disabled', 500]];
+        return [['amount', 400], ['payment', 400], ['unknown_order', 400], ['app', 422], ['secret', 422], ['unpaid', 422],
+            ['disabled_other_payment', 422], ['archived_other_payment', 422]];
+    }
+
+    #[DataProvider('retiredChannels')]
+    public function test_retired_channel_rejects_new_payments_but_settles_valid_existing_order_once(bool $archived): void
+    {
+        [$payment, $order, $user] = $this->preparePaymentFlow();
+        if ($archived) {
+            $payment->delete();
+        } else {
+            $payment->update(['enable' => false]);
+        }
+        $service = new PaymentService('PayTaro', null, $payment->uuid);
+        Http::fake();
+        try {
+            $service->pay($this->orderPayload());
+            $this->fail('Retired channel accepted a new payment.');
+        } catch (ApiException $exception) {
+            $this->assertSame('gate is not enable', $exception->getMessage());
+            Http::assertNothingSent();
+        }
+
+        foreach ([['other-secret', '10.50', 422], ['test-secret', '10.00', 400]] as [$secret, $amount, $status]) {
+            $request = $this->bindCallback(array_replace($this->callbackPayload(), ['order_amount' => $amount]), $secret);
+            $response = (new PaymentController())->notify('PayTaro', $payment->uuid, $request);
+            $this->assertSame($status, $response->getStatusCode());
+            $this->assertSame(Order::STATUS_PENDING, $order->fresh()->status);
+            $this->assertSame(100, (int) $user->fresh()->balance);
+        }
+        foreach (['PAID', 'SUCCESS'] as $status) {
+            $request = $this->bindCallback(array_replace($this->callbackPayload(), ['status' => $status]));
+            $this->assertSame('success', (new PaymentController())->notify('PayTaro', $payment->uuid, $request));
+            $this->assertSame(Order::STATUS_COMPLETED, $order->fresh()->status);
+            $this->assertSame(1300, (int) $user->fresh()->balance);
+            $this->assertSame('gateway-1', $order->fresh()->callback_no);
+        }
+    }
+
+    public static function retiredChannels(): array
+    {
+        return ['disabled' => [false], 'archived' => [true]];
     }
 
     private function orderPayload(): array
