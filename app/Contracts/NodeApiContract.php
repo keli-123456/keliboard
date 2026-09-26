@@ -25,6 +25,7 @@ final class NodeApiContract
     public const ENDPOINT_TRAFFIC_BATCH = 'traffic/batch';
     public const ENDPOINT_MACHINE_NODES = 'nodes';
     public const ENDPOINT_MACHINE_STATUS = 'status';
+    public const ENDPOINT_MACHINE_TELEMETRY = 'telemetry';
 
     public const HEADER_RESPONSE_FORMAT = 'X-Response-Format';
     public const RESPONSE_FORMAT_MSGPACK = 'msgpack';

@@ -10,6 +10,7 @@ use App\Services\NodeRealtime\NodeRealtimePublisher;
 use App\Services\ServerMachine\BatchBindingException;
 use App\Services\ServerMachine\BatchBindingService;
 use App\Services\ServerMachine\MachineReleaseDistributionService;
+use App\Services\ServerMachine\MachineTelemetryService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -33,7 +34,36 @@ class MachineController extends Controller
 
         $this->appendOnlineStatus($machines);
 
+        foreach ($machines as $machine) {
+            $snapshot = app(MachineTelemetryService::class)->snapshot($machine);
+            $machine->setAttribute('load_status', $snapshot['load_status']);
+            $machine->setAttribute('telemetry', $snapshot['telemetry']);
+        }
+
         return $this->success($machines);
+    }
+
+    public function telemetry(Request $request)
+    {
+        $params = $request->validate([
+            'ids' => 'required|array|min:1|max:200',
+            'ids.*' => 'required|integer|min:1|distinct',
+        ]);
+        $machines = ServerMachine::query()->whereIn('id', $params['ids'])
+            ->get(['id', 'token', 'last_seen_at', 'load_status']);
+        $this->appendOnlineStatus($machines);
+        return $this->success($machines->map(function ($machine) {
+            $snapshot = app(MachineTelemetryService::class)->snapshot($machine);
+            return array_merge($machine->only([
+                'id', 'last_seen_at', 'is_online', 'online_status',
+                'last_seen_age_seconds', 'online_threshold_seconds',
+            ]), [
+                'load_status' => array_intersect_key($snapshot['load_status'], array_flip([
+                    'cpu', 'mem', 'swap', 'disk', 'net', 'uptime', 'updated_at',
+                ])),
+                'telemetry' => $snapshot['telemetry'],
+            ]);
+        })->values());
     }
 
     public function save(Request $request)

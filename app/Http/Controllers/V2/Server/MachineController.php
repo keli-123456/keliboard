@@ -4,9 +4,9 @@ namespace App\Http\Controllers\V2\Server;
 
 use App\Http\Controllers\Controller;
 use App\Models\ServerMachine;
-use App\Models\ServerMachineLoadHistory;
 use App\Services\NodeRealtime\NodeRealtimeSettings;
 use App\Services\ServerMachine\MachineReleaseDistributionService;
+use App\Services\ServerMachine\MachineTelemetryService;
 use App\Services\ServerService;
 use App\Services\ServerTlsCertificateService;
 use App\Services\SubscriptionProxy\WebsiteProxyRoutingService;
@@ -14,6 +14,7 @@ use App\Services\SubscriptionProxy\ZeroSslCertificateService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 
 class MachineController extends Controller
@@ -74,6 +75,46 @@ class MachineController extends Controller
         }
 
         return $type;
+    }
+
+    public function telemetry(Request $request): JsonResponse
+    {
+        if (strlen($request->getContent()) > 8192) {
+            return response()->json(['message' => 'Telemetry payload too large'], 413);
+        }
+        $machine = $this->authenticateMachine($request, true, ['id', 'token']);
+        if (!$machine) {
+            return response()->json(['message' => 'Invalid machine credentials'], 401);
+        }
+        $validator = Validator::make($request->all(), [
+            'session' => 'required|string|max:80|regex:/^[a-zA-Z0-9-]+$/',
+            'sequence' => 'required|integer|min:1',
+            'status' => 'required|array:cpu,mem,swap,net,uptime',
+            'status.cpu' => 'required|numeric|min:0|max:100',
+            'status.mem' => 'required|array:total,used',
+            'status.swap' => 'required|array:total,used',
+            'status.mem.total' => 'required|integer|min:0',
+            'status.mem.used' => 'required|integer|min:0',
+            'status.swap.total' => 'required|integer|min:0',
+            'status.swap.used' => 'required|integer|min:0',
+            'status.net' => 'present|nullable|array:rx_bytes,tx_bytes,rx_rate,tx_rate',
+            'status.net.rx_bytes' => 'required_with:status.net|integer|min:0',
+            'status.net.tx_bytes' => 'required_with:status.net|integer|min:0',
+            'status.net.rx_rate' => 'required_with:status.net|numeric|min:0|max:1000000000000000',
+            'status.net.tx_rate' => 'required_with:status.net|numeric|min:0|max:1000000000000000',
+            'status.uptime' => 'required|integer|min:0',
+            'peaks' => 'nullable|array:cpu,rx_rate,tx_rate',
+            'peaks.cpu' => 'nullable|numeric|min:0|max:100',
+            'peaks.rx_rate' => 'nullable|numeric|min:0|max:1000000000000000',
+            'peaks.tx_rate' => 'nullable|numeric|min:0|max:1000000000000000',
+        ]);
+        if ($validator->fails()) {
+            return response()->json(['message' => 'Invalid telemetry payload'], 422);
+        }
+        if (!app(MachineTelemetryService::class)->receive($machine, $validator->validated())) {
+            return response()->json(['message' => 'Telemetry busy'], 429);
+        }
+        return response()->json(['data' => true, 'telemetry_version' => 1]);
     }
 
     public function status(Request $request): JsonResponse
@@ -166,21 +207,12 @@ class MachineController extends Controller
         ])->save();
         $upgradeCommand = $this->buildUpgradeCommand($machine, $this->resolvePanelBaseURL($request));
 
-        ServerMachineLoadHistory::create([
-            'machine_id' => (int) $machine->id,
-            'cpu' => $status['cpu'],
-            'mem_total' => $status['mem']['total'],
-            'mem_used' => $status['mem']['used'],
-            'swap_total' => $status['swap']['total'],
-            'swap_used' => $status['swap']['used'],
-            'disk_total' => $status['disk']['total'],
-            'disk_used' => $status['disk']['used'],
-            'load_status' => $status,
-        ]);
-
-        ServerMachineLoadHistory::where('machine_id', (int) $machine->id)
-            ->where('created_at', '<', now()->subDays(7))
-            ->delete();
+        try {
+            app(MachineTelemetryService::class)->recordHistory($machine, $status);
+        } catch (\Throwable $error) {
+            // Monitoring storage must not suppress a successful control heartbeat.
+            Log::warning('Machine monitoring history unavailable', ['machine_id' => (int) $machine->id, 'error_type' => get_class($error)]);
+        }
 
         return response()->json([
             'data' => true,
@@ -861,7 +893,7 @@ class MachineController extends Controller
         return 0;
     }
 
-    private function authenticateMachine(Request $request, bool $allowInactive = false): ?ServerMachine
+    private function authenticateMachine(Request $request, bool $allowInactive = false, array $columns = ['*']): ?ServerMachine
     {
         $machineId = $request->input('machine_id');
         $token = trim((string) $request->input('token', ''));
@@ -874,7 +906,7 @@ class MachineController extends Controller
             ->when(!$allowInactive, function ($query): void {
                 $query->where('is_active', true);
             })
-            ->first();
+            ->first($columns);
         if (!$machine || !hash_equals((string) $machine->token, $token)) {
             return null;
         }

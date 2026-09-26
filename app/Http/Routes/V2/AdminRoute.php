@@ -142,6 +142,7 @@ class AdminRoute
                 'prefix' => 'server/machine'
             ], function ($router) {
                 $router->get('/fetch', [MachineController::class, 'fetch']);
+                $router->get('/telemetry', [MachineController::class, 'telemetry']);
                 $router->post('/save', [MachineController::class, 'save']);
                 $router->post('/toggleActive', [MachineController::class, 'toggleActive']);
                 $router->post('/drop', [MachineController::class, 'drop']);

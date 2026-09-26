@@ -2015,6 +2015,143 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertFalse($state['rollback_succeeded']);
         $this->assertArrayNotHasKey('unknown_secret', $state);
     }
+    private function telemetryInput(ServerMachine $machine): array
+    {
+        return [
+            'machine_id' => $machine->id, 'token' => $machine->token,
+            'session' => 'test-session', 'sequence' => 1,
+            'status' => ['cpu' => 25, 'mem' => ['total' => 1000, 'used' => 400],
+                'swap' => ['total' => 0, 'used' => 0], 'uptime' => 100,
+                'net' => ['rx_bytes' => 1000, 'tx_bytes' => 500, 'rx_rate' => 100, 'tx_rate' => 50]],
+            'peaks' => ['cpu' => 95, 'rx_rate' => 900, 'tx_rate' => 500],
+        ];
+    }
+
+    public function test_monitoring_failure_does_not_break_control_heartbeat(): void
+    {
+        $this->bindSettings(['subscription_proxy_enable' => false]);
+        \Illuminate\Support\Facades\Log::shouldReceive('warning')->once();
+        app()->instance(\App\Services\ServerMachine\MachineTelemetryService::class, new class extends \App\Services\ServerMachine\MachineTelemetryService {
+            public function recordHistory(ServerMachine $machine, array $status): void
+            {
+                throw new \RuntimeException('cache unavailable');
+            }
+        });
+        $machine = ServerMachine::create(['name' => 'probe', 'token' => 'secret', 'is_active' => true]);
+        $response = (new MachineController())->status(Request::create('/', 'POST', $this->telemetryInput($machine)));
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertTrue($response->getData(true)['data']);
+        $this->assertNotNull($machine->fresh()->last_seen_at);
+        $this->assertEquals(25, $machine->fresh()->load_status['cpu']);
+    }
+
+    public function test_fast_telemetry_authenticates_and_never_updates_control_or_history(): void
+    {
+        $machine = ServerMachine::create(['name' => 'probe', 'token' => 'secret', 'is_active' => true]);
+        $input = $this->telemetryInput($machine);
+        $controller = new MachineController();
+        $bad = array_replace($input, ['token' => 'wrong']);
+        $this->assertSame(401, $controller->telemetry(Request::create('/', 'POST', $bad))->getStatusCode());
+        $response = $controller->telemetry(Request::create('/', 'POST', $input));
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame(1, $response->getData(true)['telemetry_version']);
+        $this->assertNull($machine->fresh()->last_seen_at);
+        $this->assertNull($machine->fresh()->load_status);
+        $this->assertSame(0, ServerMachineLoadHistory::count());
+        $snapshot = app(\App\Services\ServerMachine\MachineTelemetryService::class)->snapshot($machine);
+        $this->assertSame('fast', $snapshot['telemetry']['mode']);
+        $this->assertSame(25, $snapshot['load_status']['cpu']);
+        $this->assertArrayNotHasKey('token', $snapshot);
+    }
+
+    public function test_fast_telemetry_rejects_control_fields_and_large_payloads(): void
+    {
+        $machine = ServerMachine::create(['name' => 'probe', 'token' => 'secret', 'is_active' => true]);
+        $input = $this->telemetryInput($machine);
+        $input['status']['upgrade'] = ['status' => 'succeeded'];
+        $this->assertSame(422, (new MachineController())->telemetry(Request::create('/', 'POST', $input))->getStatusCode());
+        $request = Request::create('/', 'POST', [], [], [], [], str_repeat('x', 8193));
+        $this->assertSame(413, (new MachineController())->telemetry($request)->getStatusCode());
+    }
+
+    public function test_fast_telemetry_accepts_missing_network_without_losing_cpu(): void
+    {
+        $machine = ServerMachine::create(['name' => 'probe', 'token' => 'secret', 'is_active' => true]);
+        $input = $this->telemetryInput($machine);
+        $input['status']['net'] = null;
+        $response = (new MachineController())->telemetry(Request::create('/', 'POST', $input));
+        $this->assertSame(200, $response->getStatusCode());
+        $snapshot = app(\App\Services\ServerMachine\MachineTelemetryService::class)->snapshot($machine);
+        $this->assertSame(25, $snapshot['load_status']['cpu']);
+        $this->assertNull($snapshot['load_status']['net']);
+    }
+
+    public function test_fast_telemetry_replay_does_not_refresh_freshness_and_rotation_invalidates_cache(): void
+    {
+        $service = app(\App\Services\ServerMachine\MachineTelemetryService::class);
+        $machine = ServerMachine::create(['name' => 'probe', 'token' => 'secret', 'is_active' => true]);
+        try {
+            \Carbon\Carbon::setTestNow('2026-09-26 12:00:00');
+            $input = $this->telemetryInput($machine);
+            $service->receive($machine, $input);
+            \Carbon\Carbon::setTestNow('2026-09-26 12:00:20');
+            $service->receive($machine, $input);
+            $snapshot = $service->snapshot($machine);
+            $this->assertSame(20, $snapshot['telemetry']['age_seconds']);
+            $this->assertSame('delayed', $snapshot['telemetry']['state']);
+            \Carbon\Carbon::setTestNow('2026-09-26 12:01:05');
+            $this->assertSame('stale', $service->snapshot($machine)['telemetry']['state']);
+            $machine->token = 'rotated';
+            $this->assertSame('legacy', $service->snapshot($machine)['telemetry']['mode']);
+        } finally { \Carbon\Carbon::setTestNow(); }
+    }
+
+    public function test_telemetry_history_is_minute_bounded_and_preserves_peaks(): void
+    {
+        $service = app(\App\Services\ServerMachine\MachineTelemetryService::class);
+        $machine = ServerMachine::create(['name' => 'probe', 'token' => 'secret', 'is_active' => true]);
+        $input = $this->telemetryInput($machine);
+        $status = $input['status'] + ['disk' => ['total' => 5000, 'used' => 2000]];
+        try {
+            \Carbon\Carbon::setTestNow('2026-09-26 12:00:00');
+            $service->receive($machine, $input);
+            $service->recordHistory($machine, $status);
+            $summary = ServerMachineLoadHistory::first()->load_status['telemetry_summary'];
+            $this->assertSame(95, $summary['cpu_peak']);
+            $this->assertEquals(25, $summary['cpu_average']);
+            $this->assertSame(900, $summary['rx_peak']);
+            \Carbon\Carbon::setTestNow('2026-09-26 12:00:05');
+            $input['sequence'] = 2;
+            $input['status']['cpu'] = 10;
+            $service->receive($machine, $input);
+            $service->recordHistory($machine, $status);
+            $this->assertSame(1, ServerMachineLoadHistory::count());
+            \Carbon\Carbon::setTestNow('2026-09-26 12:01:00');
+            $service->recordHistory($machine, $status);
+            $this->assertSame(2, ServerMachineLoadHistory::count());
+            $summary = ServerMachineLoadHistory::orderByDesc('id')->first()->load_status['telemetry_summary'];
+            $this->assertSame(1, $summary['count']);
+            $this->assertEquals(10, $summary['cpu_average']);
+        } finally { \Carbon\Carbon::setTestNow(); }
+    }
+
+    public function test_telemetry_admin_response_is_selected_and_credential_free(): void
+    {
+        $machine = ServerMachine::create(['name' => 'probe', 'token' => 'secret', 'is_active' => true]);
+        ServerMachine::create(['name' => 'other', 'token' => 'other-secret', 'is_active' => true]);
+        $machine->load_status = ['version' => 'private-version', 'updated_at' => now()->timestamp - 30, 'cpu' => 1];
+        $machine->save();
+        app(\App\Services\ServerMachine\MachineTelemetryService::class)->receive($machine, $this->telemetryInput($machine));
+        $controller = new \App\Http\Controllers\V2\Admin\Server\MachineController();
+        $response = $controller->telemetry(Request::create('/', 'GET', ['ids' => [$machine->id]]));
+        $items = $response->getData(true)['data'];
+        $this->assertCount(1, $items);
+        $this->assertSame(25, $items[0]['load_status']['cpu']);
+        $this->assertArrayNotHasKey('token', $items[0]);
+        $this->assertArrayNotHasKey('version', $items[0]['load_status']);
+        $this->assertSame('never', $items[0]['online_status']);
+    }
+
     private function createTables(): void
     {
         Schema::create('v2_server_machine', function (Blueprint $table): void {

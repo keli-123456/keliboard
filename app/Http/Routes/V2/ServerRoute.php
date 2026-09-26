@@ -42,6 +42,7 @@ class ServerRoute
             $route->get('releases/{component}/{version}/{platform}/archive.tar.gz', [MachineReleaseController::class, 'archive']);
             $route->post(NodeApiContract::ENDPOINT_MACHINE_NODES, [MachineController::class, 'nodes']);
             $route->post(NodeApiContract::ENDPOINT_MACHINE_STATUS, [MachineController::class, 'status']);
+            $route->post(NodeApiContract::ENDPOINT_MACHINE_TELEMETRY, [MachineController::class, 'telemetry']);
         });
     }
 }

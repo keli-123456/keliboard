@@ -1,18 +1,18 @@
 {
   "schema_version": 1,
   "component": "keli-admin",
-  "source_git_sha": "4262e58edafce1d7560a90e6e3fb3d15e42a05ce",
-  "source_git_short_sha": "4262e58",
+  "source_git_sha": "e163da23bb54431da165a823cbbc0623d9ffb060",
+  "source_git_short_sha": "e163da2",
   "source_dirty": false,
-  "generated_at": "2026-09-25T08:11:27.000Z",
+  "generated_at": "2026-09-26T03:08:23.000Z",
   "files": {
     "index.html": {
       "bytes": 6902,
-      "sha256": "d2037223fbee827c7efaf4e76c98e13e9e131da5213b82dddfacc7b60ad284a4"
+      "sha256": "473b1cbd126f56ef28fc401f968611e900f33369fdf6d3e492774b2ea0f78704"
     },
     "assets/index.js": {
-      "bytes": 3514958,
-      "sha256": "6d583236d0d60914335e689236903bf25cc7941144efdf52e70e6771ffb793ca"
+      "bytes": 3519368,
+      "sha256": "7d6924271773203d9ef9ede4c239fe90bc0db68139e146c8b74f58e5d6c255ee"
     },
     "assets/index.css": {
       "bytes": 91212,
