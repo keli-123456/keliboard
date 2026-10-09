@@ -287,16 +287,26 @@ class MailService
             } else {
                 try {
                     $fromAddress = trim((string) config('mail.from.address', ''));
-                    Mail::send(
-                        $templateName,
-                        $params['template_value'],
-                        function ($message) use ($email, $subject, $fromName, $fromAddress) {
-                            if ($fromName !== '' && $fromAddress !== '') {
-                                $message->from($fromAddress, $fromName);
-                            }
-                            $message->to($email)->subject($subject);
+                    $custom = null;
+                    if (preg_match('/\Amail\.([a-zA-Z0-9_-]+)\.(remindExpire|remindTraffic|verify|mailLogin|notify)\z/', $templateName, $parts)) {
+                        $templates = app(EmailTemplateService::class);
+                        $override = $templates->override($parts[1], $parts[2]);
+                        if ($override !== null) {
+                            $custom = $templates->render($override, [...$params['template_value'], 'subject' => $subject]);
+                            $subject = $custom['subject'];
                         }
-                    );
+                    }
+                    $configure = function ($message) use ($email, $subject, $fromName, $fromAddress) {
+                        if ($fromName !== '' && $fromAddress !== '') {
+                            $message->from($fromAddress, $fromName);
+                        }
+                        $message->to($email)->subject($subject);
+                    };
+                    if ($custom !== null) {
+                        Mail::html($custom['html'], $configure);
+                    } else {
+                        Mail::send($templateName, $params['template_value'], $configure);
+                    }
                     $error = null;
                 } catch (\Throwable $e) {
                     Log::error($e);

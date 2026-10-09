@@ -60,6 +60,10 @@ class AdminRoute
                 $router->post('/save', [ConfigController::class, 'save']);
                 $router->get('/realtimeStatus', [ConfigController::class, 'realtimeStatus']);
                 $router->get('/getEmailTemplate', [ConfigController::class, 'getEmailTemplate']);
+                $router->get('/previewEmailTemplate', [ConfigController::class, 'previewEmailTemplate']);
+                $router->get('/editEmailTemplate', [ConfigController::class, 'editEmailTemplate']);
+                $router->post('/previewEmailTemplateDraft', [ConfigController::class, 'previewEmailTemplateDraft']);
+                $router->post('/saveEmailTemplate', [ConfigController::class, 'saveEmailTemplate']);
                 $router->get('/getThemeTemplate', [ConfigController::class, 'getThemeTemplate']);
                 $router->post('/setTelegramWebhook', [ConfigController::class, 'setTelegramWebhook']);
                 $router->post('/testSendMail', [ConfigController::class, 'testSendMail']);

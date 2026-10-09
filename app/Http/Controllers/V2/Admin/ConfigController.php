@@ -14,6 +14,7 @@ use App\Protocols\Stash;
 use App\Protocols\Surfboard;
 use App\Protocols\Surge;
 use App\Services\MailService;
+use App\Services\EmailTemplateService;
 use App\Services\MessageOpsSettings;
 use App\Services\NodeRealtime\NodeRealtimePublisher;
 use App\Services\NodeRealtime\NodeRealtimeSettings;
@@ -79,6 +80,49 @@ class ConfigController extends Controller
             return str_replace($path, '', $item);
         }, glob($path . '*'));
         return $this->success($files);
+    }
+
+    public function previewEmailTemplate(Request $request)
+    {
+        $input = $this->emailTemplateInput($request);
+        try {
+            $preview = app(EmailTemplateService::class)->preview($input['template'], $input['kind']);
+        } catch (\Symfony\Component\HttpKernel\Exception\NotFoundHttpException $error) {
+            return $this->fail([404, '邮件模板不存在或不支持此邮件类型']);
+        } catch (\Throwable $error) {
+            report($error);
+            return $this->fail([422, '邮件模板渲染失败，请检查模板内容']);
+        }
+
+        return $this->success($preview)->header('Cache-Control', 'no-store');
+    }
+
+    public function editEmailTemplate(Request $request)
+    {
+        $input = $this->emailTemplateInput($request);
+        return $this->success(app(EmailTemplateService::class)->editor($input['template'], $input['kind']))->header('Cache-Control', 'no-store');
+    }
+
+    public function previewEmailTemplateDraft(Request $request)
+    {
+        $input = $this->emailTemplateInput($request, true);
+        return $this->success(app(EmailTemplateService::class)->preview($input['template'], $input['kind'], $request->only('subject', 'html')))->header('Cache-Control', 'no-store');
+    }
+
+    public function saveEmailTemplate(Request $request)
+    {
+        $input = $this->emailTemplateInput($request, !$request->boolean('reset'));
+        $request->validate(['reset' => ['sometimes', 'boolean']]);
+        return $this->success(app(EmailTemplateService::class)->save($input['template'], $input['kind'], $request->boolean('reset') ? null : $request->only('subject', 'html')))->header('Cache-Control', 'no-store');
+    }
+
+    private function emailTemplateInput(Request $request, bool $document = false): array
+    {
+        return $request->validate([
+            'template' => ['required', 'string', 'max:80', 'regex:/\A[a-zA-Z0-9_-]+\z/'],
+            'kind' => ['required', 'string', 'in:' . implode(',', array_keys(EmailTemplateService::SUBJECTS))],
+            ...($document ? ['subject' => ['required', 'string', 'max:200'], 'html' => ['required', 'string', 'max:100000']] : []),
+        ]);
     }
 
     public function testSendMail(Request $request)
