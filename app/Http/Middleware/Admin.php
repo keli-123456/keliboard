@@ -21,7 +21,11 @@ class Admin
         /** @var User|null $user */
         $user = Auth::guard()->user();
         
-        if (!$user || !$user->is_admin) {
+        if (!$user) {
+            throw new ApiException('Unauthorized', 401);
+        }
+
+        if (!$user->is_admin) {
             throw new ApiException('Unauthorized', 403);
         }
         
