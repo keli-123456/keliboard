@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AgentDomain;
 use App\Models\Payment;
 use App\Services\AgentOperationsService;
+use App\Services\AdminAgentUsersService;
 use Illuminate\Http\Request;
 
 class AgentOperationsController extends Controller
@@ -34,6 +35,17 @@ class AgentOperationsController extends Controller
     public function agentOrders(Request $request, int $agentUserId)
     {
         return $this->success($this->service()->adminOrdersForAgent($agentUserId, $request->all()));
+    }
+
+    public function agentUsers(Request $request, int $agentUserId)
+    {
+        $filters = $request->validate([
+            'page' => 'sometimes|integer|min:1',
+            'page_size' => 'sometimes|integer|min:1|max:100',
+            'keyword' => 'sometimes|nullable|string|max:255',
+            'status' => 'sometimes|nullable|in:' . implode(',', AdminAgentUsersService::STATUSES),
+        ]);
+        return $this->success(app(AdminAgentUsersService::class)->fetch($agentUserId, $filters));
     }
 
     public function updateAgentCostSite(Request $request, int $agentUserId)

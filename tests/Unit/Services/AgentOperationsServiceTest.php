@@ -407,6 +407,7 @@ final class AgentOperationsServiceTest extends TestCase
         for ($i = 1; $i <= 101; $i++) {
             $user = User::create(['email' => "summary$i@example.test", 'password' => 'hash',
                 'uuid' => "uuid$i", 'token' => "token$i", 'balance' => 1000]);
+            AgentProfile::create(['user_id' => $user->id, 'status' => AgentCenterService::STATUS_ACTIVE]);
             AgentOrderContext::create(['agent_user_id' => $user->id, 'order_id' => $i,
                 'trade_no' => "summary$i", 'sale_amount' => 100, 'cost_amount' => 0, 'status' => 'pending']);
         }

@@ -9,6 +9,7 @@ use App\Models\AgentBalanceHold;
 use App\Models\AgentDomain;
 use App\Models\AgentOrderContext;
 use App\Models\AgentProfile;
+use App\Models\AgentUser;
 use App\Models\Order;
 use App\Models\Payment;
 use App\Models\Site;
@@ -64,10 +65,10 @@ class AgentOperationsService
             'insufficient_balance_agent_count' => 0,
             'no_active_payment_agent_count' => 0,
         ];
-        $agents = User::query()->whereIn('id', AgentOrderContext::query()->select('agent_user_id')->distinct())->lazyById(100);
+        $agents = $this->adminAgentQuery()->lazyById(100);
         foreach ($agents as $agent) {
             $hold = app(AgentCommerceService::class)->activePendingHoldTotal((int) $agent->id);
-            $totals['active_agent_count']++;
+            $totals['active_agent_count'] += $agent->profile_status === AgentCenterService::STATUS_ACTIVE && !$agent->banned ? 1 : 0;
             $totals['pending_hold_total'] += $hold;
             $totals['abnormal_order_count'] += $this->abnormalOrderCount((int) $agent->id);
             $totals['insufficient_balance_agent_count'] += $hold > 0 && (int) $agent->balance <= $hold ? 1 : 0;
@@ -146,12 +147,18 @@ class AgentOperationsService
         $pageSize = min(100, $this->positiveInt($filters['page_size'] ?? 20, 20));
         $keyword = trim((string) ($filters['keyword'] ?? ''));
 
-        $query = User::query()
-            ->whereIn('id', AgentOrderContext::query()->select('agent_user_id')->distinct())
-            ->orderBy('id');
+        $query = $this->adminAgentQuery()->orderBy('id');
 
         if ($keyword !== '') {
-            $query->where('email', 'like', '%' . $keyword . '%');
+            $query->where(function (Builder $search) use ($keyword): void {
+                $search->where('email', 'like', '%' . $keyword . '%');
+                if (ctype_digit($keyword)) {
+                    $search->orWhere('id', (int) $keyword);
+                }
+            });
+        }
+        if (filter_var($filters['abnormal'] ?? false, FILTER_VALIDATE_BOOL)) {
+            $query->whereIn('id', $this->statusResolver->filterAbnormal(AgentOrderContext::query())->select('agent_user_id'));
         }
 
         $total = (int) $query->count();
@@ -175,12 +182,35 @@ class AgentOperationsService
      */
     public function adminAgentDetail(int $agentUserId): array
     {
-        $agent = User::query()->find($agentUserId);
+        $agent = $this->adminAgentQuery()->find($agentUserId);
         if ($agent === null) {
             throw new ApiException('Agent not found');
         }
 
-        return $this->adminAgentRow($agent);
+        return array_merge($this->adminAgentRow($agent), [
+            'domains' => AgentDomain::query()->where('agent_user_id', $agentUserId)->orderBy('id')
+                ->get(['id', 'domain', 'status', 'is_primary'])->map(static fn ($row): array => [
+                    'id' => (int) $row->id, 'domain' => $row->domain,
+                    'status' => $row->status, 'is_primary' => (bool) $row->is_primary,
+                ])->all(),
+            'payments' => Payment::query()->where('owner_type', Payment::OWNER_AGENT)->where('owner_id', $agentUserId)->orderBy('id')
+                ->get(['id', 'name', 'payment', 'enable', 'owner_domain_id'])->map(static fn ($row): array => [
+                    'id' => (int) $row->id, 'name' => $row->name, 'payment' => $row->payment,
+                    'enable' => (bool) $row->enable, 'owner_domain_id' => $row->owner_domain_id,
+                ])->all(),
+        ]);
+    }
+
+    public function adminAgentQuery(): Builder
+    {
+        return User::query()->select('v2_user.*')->where(function (Builder $query): void {
+            $query->whereIn('id', AgentProfile::query()->select('user_id'))
+                ->orWhereIn('id', AgentOrderContext::query()->select('agent_user_id'))
+                ->orWhereIn('id', AgentUser::query()->select('agent_user_id'));
+        })->addSelect([
+            'profile_status' => AgentProfile::query()->select('status')->whereColumn('user_id', 'v2_user.id')->limit(1),
+            'subordinate_count' => AgentUser::query()->selectRaw('COUNT(*)')->whereColumn('agent_user_id', 'v2_user.id')->whereHas('subordinate'),
+        ]);
     }
 
     /**
@@ -204,7 +234,7 @@ class AgentOperationsService
         $profile->updated_at = time();
         $profile->save();
 
-        return $this->adminAgentRow($agent);
+        return $this->adminAgentDetail($agentUserId);
     }
 
     /**
@@ -215,6 +245,8 @@ class AgentOperationsService
         return array_merge([
             'agent_user_id' => (int) $agent->id,
             'agent_email' => $agent->email,
+            'status' => $agent->banned ? 'banned' : ($agent->profile_status ?? 'legacy'),
+            'subordinate_count' => (int) $agent->subordinate_count,
         ], $this->summaryForAgent($agent), [
             'active_domain_count' => $this->activeDomainCount((int) $agent->id),
             'enabled_payment_count' => $this->enabledPaymentCount((int) $agent->id),
@@ -373,6 +405,8 @@ class AgentOperationsService
         $payment = $context->payment;
 
         return [
+            'id' => (int) $context->id,
+            'order_id' => $context->order_id === null ? null : (int) $context->order_id,
             'trade_no' => $context->trade_no,
             'buyer_user_id' => $buyer?->id === null ? null : (int) $buyer->id,
             'buyer_email' => $buyer?->email,
@@ -380,16 +414,19 @@ class AgentOperationsService
             'agent_email' => $agent?->email,
             'agent_domain_id' => $context->agent_domain_id === null ? null : (int) $context->agent_domain_id,
             'domain' => $domain?->domain ?? ($context->domain_snapshot['domain'] ?? null),
+            'agent_domain' => $domain?->domain ?? ($context->domain_snapshot['domain'] ?? null),
             'plan_name' => $order?->plan?->name ?? ($context->pricing_snapshot['plan_name'] ?? null),
             'period' => $context->pricing_snapshot['period'] ?? $order?->period,
             'sale_amount' => (int) $context->sale_amount,
             'platform_cost' => (int) $context->cost_amount,
+            'cost_amount' => (int) $context->cost_amount,
             'margin_amount' => (int) $resolved['margin_amount'],
             'payment_id' => $context->payment_id === null ? null : (int) $context->payment_id,
             'payment_name' => $payment?->name ?? ($context->payment_snapshot['name'] ?? null),
             'payment_code' => $payment?->payment ?? ($context->payment_snapshot['payment'] ?? null),
             'order_status' => $order?->status === null ? null : (int) $order->status,
             'context_status' => $context->status,
+            'status' => $context->status,
             'hold_status' => $resolved['hold_status'],
             'capture_status' => $resolved['capture_status'],
             'abnormal_flags' => $resolved['abnormal_flags'],

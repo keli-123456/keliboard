@@ -62,7 +62,13 @@ final class AdminAgentOperationsControllerTest extends TestCase
         $this->assertSame(1, $agents['total']);
         $this->assertSame('agent@example.test', $agents['data'][0]['agent_email']);
         $this->assertSame(1, $detail['active_domain_count']);
+        $this->assertSame($domain->id, $detail['domains'][0]['id']);
+        $this->assertSame($payment->id, $detail['payments'][0]['id']);
+        $this->assertArrayNotHasKey('config', $detail['payments'][0]);
         $this->assertSame(['paid-agent-order'], array_column($orders['data'], 'trade_no'));
+        $this->assertSame($orders['data'][0]['platform_cost'], $orders['data'][0]['cost_amount']);
+        $this->assertSame($orders['data'][0]['context_status'], $orders['data'][0]['status']);
+        $this->assertSame($domain->domain, $orders['data'][0]['agent_domain']);
     }
 
     public function test_admin_can_disable_and_enable_agent_payment_and_disable_domain(): void

@@ -362,6 +362,7 @@ class AdminRoute
                 $router->get('/agents', [AgentOperationsController::class, 'agents']);
                 $router->get('/agents/{agentUserId}', [AgentOperationsController::class, 'agent']);
                 $router->get('/agents/{agentUserId}/orders', [AgentOperationsController::class, 'agentOrders']);
+                $router->get('/agents/{agentUserId}/users', [AgentOperationsController::class, 'agentUsers'])->whereNumber('agentUserId');
                 $router->post('/agents/{agentUserId}/cost-site', [AgentOperationsController::class, 'updateAgentCostSite']);
                 $router->post('/payments/{paymentId}/disable', [AgentOperationsController::class, 'disablePayment']);
                 $router->post('/payments/{paymentId}/enable', [AgentOperationsController::class, 'enablePayment']);
