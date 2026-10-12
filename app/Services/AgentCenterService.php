@@ -54,6 +54,9 @@ class AgentCenterService
         $this->assertEnabled();
         DB::transaction(function () use ($agent, $request): void {
             $agent = User::query()->lockForUpdate()->findOrFail($agent->id);
+            if ($agent->banned) {
+                throw new ApiException('Agent permission is disabled');
+            }
             $profile = AgentProfile::query()->where('user_id', $agent->id)->lockForUpdate()->first();
             if ($profile?->status === self::STATUS_ACTIVE) {
                 return;
@@ -88,6 +91,9 @@ class AgentCenterService
 
         return DB::transaction(function () use ($user, $message, $request): array {
             $user = User::query()->lockForUpdate()->findOrFail($user->id);
+            if ($user->banned) {
+                throw new ApiException('Agent permission is disabled');
+            }
             $profile = AgentProfile::query()->where('user_id', $user->id)->lockForUpdate()->first();
             if ($profile?->status === self::STATUS_DISABLED) {
                 throw new ApiException(__('Agent permission is disabled'));
@@ -635,6 +641,9 @@ class AgentCenterService
 
     private function activeProfile(User $agent): AgentProfile
     {
+        if ($agent->banned) {
+            throw new ApiException('Agent permission is disabled');
+        }
         $this->assertEnabled();
         $profile = $this->profileFor($agent);
         if (!$profile || $profile->status !== self::STATUS_ACTIVE) {
@@ -916,6 +925,9 @@ class AgentCenterService
         $locked = User::query()->lockForUpdate()->find($agent->id);
         if (!$locked) {
             throw new ApiException('Agent user does not exist');
+        }
+        if ($locked->banned) {
+            throw new ApiException('Agent permission is disabled');
         }
         $profile = AgentProfile::query()->where('user_id', $locked->id)->lockForUpdate()->first();
         $this->assertEnabled();

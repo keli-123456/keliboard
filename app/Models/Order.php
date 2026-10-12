@@ -69,6 +69,7 @@ class Order extends Model
         'commission_reversed_amount' => 'integer',
         'refund_disposed_at' => 'integer',
         'refund_disposed_by' => 'integer',
+        'agent_refund_disposition' => 'array',
     ];
 
     const STATUS_PENDING = 0; // 待支付

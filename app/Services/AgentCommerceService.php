@@ -896,6 +896,9 @@ class AgentCommerceService
 
     private function activeProfile(User $agent): AgentProfile
     {
+        if ($agent->banned) {
+            throw new ApiException('Agent permission is not active');
+        }
         $profile = AgentProfile::query()
             ->where('user_id', $agent->id)
             ->where('status', AgentCenterService::STATUS_ACTIVE)

@@ -5,7 +5,9 @@ namespace App\Services;
 use App\Models\CommissionLog;
 use App\Models\Order;
 use App\Models\User;
+use App\Models\UserSyncState;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class OrderRefundDispositionService
 {
@@ -13,11 +15,29 @@ class OrderRefundDispositionService
     public const CREDIT_COMMISSION_BALANCE = 'commission_balance';
 
     /**
-     * @return array<string, int|string|bool|null>
+     * @return array<string, mixed>
      */
-    public function dispose(Order $order, int $adminId): array
+    public function preview(Order $order, int $page = 1): array
     {
-        return DB::transaction(function () use ($order, $adminId): array {
+        $user = User::query()->find($order->user_id);
+        if (!$user) {
+            throw new \InvalidArgumentException('订单用户不存在');
+        }
+        if ($user->is_admin || $user->is_staff) {
+            throw new \InvalidArgumentException('不能通过退款处置封禁管理员或员工');
+        }
+        if (in_array((int) $order->status, [Order::STATUS_PENDING, Order::STATUS_CANCELLED], true)) {
+            throw new \InvalidArgumentException('只能处置已支付或已完成的订单');
+        }
+        return app(AgentRefundDispositionService::class)->preview($order, $user, $page);
+    }
+
+    public function dispose(Order $order, int $adminId, array $options = []): array
+    {
+        if ($adminId <= 0) {
+            throw new \InvalidArgumentException('管理员身份无效');
+        }
+        return DB::transaction(function () use ($order, $adminId, $options): array {
             $lockedOrder = Order::query()
                 ->whereKey($order->id)
                 ->lockForUpdate()
@@ -51,6 +71,7 @@ class OrderRefundDispositionService
                 throw new \InvalidArgumentException('只能处置已支付或已完成的订单');
             }
 
+            $agentDisposition = app(AgentRefundDispositionService::class)->apply($lockedOrder, $user, $options, $adminId);
             app(AgentProfitService::class)->reverseAffectedOrders($lockedOrder, $adminId);
             $reversedAmount = $this->reverseCommissionLogs($lockedOrder, $adminId);
             $now = time();
@@ -63,11 +84,26 @@ class OrderRefundDispositionService
             $lockedOrder->commission_reversed_amount = $reversedAmount;
             $lockedOrder->refund_disposed_at = $now;
             $lockedOrder->refund_disposed_by = $adminId;
+            if ($agentDisposition !== null) {
+                $lockedOrder->agent_refund_disposition = $agentDisposition;
+            }
             $lockedOrder->saveOrFail();
 
+            $hasSyncStates = Schema::hasTable('user_sync_states');
+            if ($hasSyncStates) {
+                UserSyncState::query()->firstOrCreate(
+                    ['user_id' => $user->id], app(UserSyncService::class)->computeSnapshot($user)
+                );
+            }
             $user->banned = true;
             $user->banned_reason = sprintf('退款订单处置：%s', $lockedOrder->trade_no);
             $user->saveOrFail();
+            if ($hasSyncStates) {
+                app(UserSyncService::class)->syncUser($user, 'refund_disposition');
+            }
+            if (Schema::hasTable('personal_access_tokens')) {
+                (new AuthService($user))->removeAllSessions();
+            }
 
             return $this->result($lockedOrder, $user, false);
         }, 3);
@@ -136,7 +172,7 @@ class OrderRefundDispositionService
     }
 
     /**
-     * @return array<string, int|string|bool|null>
+     * @return array<string, mixed>
      */
     private function result(Order $order, User $user, bool $alreadyProcessed): array
     {
@@ -147,6 +183,7 @@ class OrderRefundDispositionService
             'user_id' => (int) $user->id,
             'user_email' => (string) $user->email,
             'user_banned' => (bool) $user->banned,
+            'agent_disposition' => $order->agent_refund_disposition,
             'refund_amount' => (int) ($order->refund_amount ?? 0),
             'commission_reversed_amount' => (int) ($order->commission_reversed_amount ?? 0),
             'commission_status' => $order->commission_status !== null

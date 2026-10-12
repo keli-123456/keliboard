@@ -397,11 +397,36 @@ class OrderController extends Controller
         return $this->success(true);
     }
 
+    public function refundDisposePreview(Request $request, OrderRefundDispositionService $service)
+    {
+        $params = $request->validate([
+            'trade_no' => 'required|string|max:64',
+            'page' => 'sometimes|integer|min:1',
+        ]);
+        $order = Order::query()->where('trade_no', $params['trade_no'])->first();
+        if (!$order) {
+            return $this->fail([400202, '订单不存在']);
+        }
+        try {
+            return $this->success($service->preview($order, (int) ($params['page'] ?? 1)));
+        } catch (\InvalidArgumentException $e) {
+            return $this->fail([400, $e->getMessage()]);
+        }
+    }
+
     public function refundDispose(
         Request $request,
         OrderRefundDispositionService $refundDispositionService
     ) {
-        $tradeNo = trim((string) $request->input('trade_no', ''));
+        $options = $request->validate([
+            'trade_no' => 'required|string|max:64',
+            'agent_action' => 'sometimes|nullable|in:preserve,freeze,transfer',
+            'target_agent_email' => 'sometimes|nullable|email|max:254',
+            'preview_token' => 'sometimes|string|size:64|regex:/^[a-f0-9]+$/',
+            'acknowledged' => 'sometimes|boolean',
+            'reason' => 'sometimes|nullable|string|max:500',
+        ]);
+        $tradeNo = trim((string) $options['trade_no']);
         if ($tradeNo === '') {
             return $this->fail([400, '订单号不能为空']);
         }
@@ -417,7 +442,7 @@ class OrderController extends Controller
         }
 
         try {
-            $result = $refundDispositionService->dispose($order, $adminId);
+            $result = $refundDispositionService->dispose($order, $adminId, $options);
         } catch (\InvalidArgumentException $e) {
             return $this->fail([400, $e->getMessage()]);
         } catch (\Throwable $e) {
