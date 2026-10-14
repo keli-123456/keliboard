@@ -65,8 +65,11 @@ class ServerSave extends FormRequest
         'hysteria' => [
             'version' => 'required|integer|in:1,2',
             'congestion_control' => 'nullable|string|in:cubic,bbr,new_reno,brutal',
-            'ech' => 'nullable|array:enabled,key_file,config',
+            'ech' => 'nullable|array:enabled,key_file,config,mode,request_id,state',
             'ech.enabled' => 'required_with:protocol_settings.ech|boolean',
+            'ech.mode' => 'sometimes|in:automatic,manual',
+            'ech.request_id' => 'sometimes|string|regex:/^[a-f0-9]{32}$/D',
+            'ech.state' => 'sometimes|in:pending,prepared,ready',
             'ech.key_file' => 'sometimes|string|max:4096',
             'ech.config' => 'sometimes|string|max:16384',
             'network_settings' => 'nullable|array:masquerade,gecko_min_packet_size,gecko_max_packet_size,brutal_disable_loss_compensation',

@@ -25,6 +25,7 @@ class ServerRoute
             $route->post(NodeApiContract::ENDPOINT_TRAFFIC_BATCH, [TrafficBatchController::class, 'report']);
             $route->get(NodeApiContract::ENDPOINT_TRAFFIC_BATCH, [TrafficBatchController::class, 'capability']);
             $route->get(NodeApiContract::ENDPOINT_CONFIG, [UniProxyController::class, 'config']);
+            $route->post(NodeApiContract::ENDPOINT_ECH, [\App\Http\Controllers\V2\Server\HysteriaEchController::class, 'report']);
             $route->get(NodeApiContract::ENDPOINT_USER, [UniProxyController::class, 'user']);
             $route->get(NodeApiContract::ENDPOINT_USER_DELTA, [UniProxyController::class, 'userDelta']);
             $route->post(NodeApiContract::ENDPOINT_PUSH, [UniProxyController::class, 'push']);

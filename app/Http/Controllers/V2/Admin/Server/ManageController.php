@@ -851,6 +851,14 @@ class ManageController extends Controller
         return $this->success(true);
     }
 
+    public function echState(Request $request)
+    {
+        $input = $request->validate(['id' => 'required|integer|min:1']);
+        $server = Server::query()->find($input['id']);
+        if (!$server || $server->type !== 'hysteria') return $this->fail([404, 'HY2 node not found']);
+        return $this->success(data_get($server->protocol_settings, 'ech'));
+    }
+
     public function save(ServerSave $request)
     {
         $params = $request->validated();
@@ -861,7 +869,16 @@ class ManageController extends Controller
             }
             try {
                 $oldGroupIds = $this->normalizeIdList((array) ($server->group_ids ?? []));
-                $server->update($params);
+                if (($params['type'] ?? $server->type) === 'hysteria' && isset($params['protocol_settings'])) {
+                    \Illuminate\Support\Facades\DB::transaction(function () use (&$server, &$params): void {
+                        $server = Server::query()->lockForUpdate()->findOrFail($server->id);
+                        $params['protocol_settings'] = \App\Services\Node\HysteriaEchProvisioningService::normalize(
+                            $params['protocol_settings'], (array) $server->protocol_settings);
+                        $server->update($params);
+                    });
+                } else {
+                    $server->update($params);
+                }
                 $publisher = app(NodeRealtimePublisher::class);
                 $publisher->invalidateConfigForServers([(int) $server->id], 'admin.server.saved');
                 $newGroupIds = $this->normalizeIdList((array) ($server->group_ids ?? []));
@@ -876,6 +893,9 @@ class ManageController extends Controller
         }
 
         try {
+            if (($params['type'] ?? '') === 'hysteria' && isset($params['protocol_settings'])) {
+                $params['protocol_settings'] = \App\Services\Node\HysteriaEchProvisioningService::normalize($params['protocol_settings']);
+            }
             Server::create($params);
             return $this->success(true);
         } catch (\Exception $e) {
@@ -944,6 +964,9 @@ class ManageController extends Controller
         }
         $server->show = 0;
         $server->code = null;
+        if ($server->type === 'hysteria') {
+            $server->protocol_settings = \App\Services\Node\HysteriaEchProvisioningService::normalize((array) $server->protocol_settings);
+        }
         Server::create($server->toArray());
         return $this->success(true);
     }

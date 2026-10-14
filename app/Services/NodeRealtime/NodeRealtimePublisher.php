@@ -227,7 +227,7 @@ class NodeRealtimePublisher
 
     private function clearConfigCache(?array $serverIds = null): void
     {
-        $this->clearServerApiCacheEntries('config', ['default', 'v2node'], $serverIds);
+        $this->clearServerApiCacheEntries('config', ['default', 'v2node', 'default:ech-auto', 'v2node:ech-auto'], $serverIds);
     }
 
     private function clearUserCache(?array $serverIds = null): void

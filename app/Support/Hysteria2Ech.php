@@ -8,7 +8,18 @@ final class Hysteria2Ech
 {
     public static function enabled(array $settings): bool
     {
-        return data_get($settings, 'ech.enabled') === true;
+        return data_get($settings, 'ech.enabled') === true
+            && (!self::automatic($settings) || data_get($settings, 'ech.state') === 'ready');
+    }
+
+    public static function automatic(array $settings): bool
+    {
+        return data_get($settings, 'ech.enabled') === true && data_get($settings, 'ech.mode') === 'automatic';
+    }
+
+    public static function waiting(array $settings): bool
+    {
+        return self::automatic($settings) && data_get($settings, 'ech.state') !== 'ready';
     }
 
     public static function publicConfig(array $settings): ?string
@@ -23,7 +34,7 @@ final class Hysteria2Ech
 
     // Validate the public ECHConfigList envelope, never accept private PEM material.
     // Crypto/key-pair validation remains the node TLS backend's responsibility.
-    public static function validConfig(mixed $value): bool
+    public static function validConfig(mixed $value, ?string $expectedPublicName = null): bool
     {
         if (!is_string($value) || strlen($value) > 16384 || $value === '') {
             return false;
@@ -50,7 +61,7 @@ final class Hysteria2Ech
                 }
                 self::take($config, 1); // maximum_name_length
                 $name = self::take($config, ord(self::take($config, 1)));
-                if (!self::validName($name)) return false;
+                if (!self::validName($name) || ($expectedPublicName !== null && strcasecmp($name, $expectedPublicName) !== 0)) return false;
                 // This initial integration accepts the generator's extension-free format.
                 if (self::vector($config) !== '' || $config !== '') return false;
             }

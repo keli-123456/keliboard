@@ -58,7 +58,9 @@ class ServerService
             ->get()
             ->append(['last_check_at', 'last_push_at', 'online', 'is_online', 'available_status', 'cache_key', 'server_key']);
 
-        $servers = collect($servers)->map(function ($server) use ($user) {
+        $servers = collect($servers)->reject(static fn ($server): bool =>
+            $server->type === 'hysteria' && \App\Support\Hysteria2Ech::waiting((array) $server->protocol_settings)
+        )->map(function ($server) use ($user) {
             // 判断动态端口
             if (str_contains($server->port, '-')) {
                 $port = $server->port;
@@ -70,7 +72,7 @@ class ServerService
             $server->password = $server->generateServerPassword($user);
             $server->rate = $server->getCurrentRate();
             return $server;
-        })->toArray();
+        })->values()->toArray();
 
         return $servers;
     }

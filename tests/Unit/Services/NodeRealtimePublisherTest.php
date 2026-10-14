@@ -34,6 +34,18 @@ final class NodeRealtimePublisherTest extends TestCase
         ], $targets);
     }
 
+    public function test_config_invalidation_clears_both_capability_specific_and_legacy_cache_variants(): void
+    {
+        $keys = [];
+        foreach (['default', 'v2node', 'default:ech-auto', 'v2node:ech-auto'] as $suffix) {
+            $key = "server_api:config:7:{$suffix}";
+            $keys[] = $key; Cache::store()->put($key, ['body' => 'old'], 60);
+        }
+        $method = new ReflectionMethod(NodeRealtimePublisher::class, 'clearConfigCache');
+        $method->invoke(new NodeRealtimePublisher(new NodeRealtimeSettings()), [7]);
+        foreach ($keys as $key) $this->assertFalse(Cache::store()->has($key));
+    }
+
     public function test_build_targets_returns_null_for_empty_target_lists(): void
     {
         $method = new ReflectionMethod(NodeRealtimePublisher::class, 'buildTargets');

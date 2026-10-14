@@ -13,6 +13,23 @@ use Tests\TestCase;
 
 final class ServerSaveRequestTest extends TestCase
 {
+    public function test_automatic_ech_does_not_require_fabricated_paths_or_public_keys_and_rejects_private_fields(): void
+    {
+        $payload = ['type' => 'hysteria', 'runtime' => 'v2node', 'name' => 'HY2', 'host' => 'public.example.com',
+            'port' => 443, 'server_port' => 443, 'rate' => 1, 'protocol_settings' => ['version' => 2,
+                'tls' => ['server_name' => 'public.example.com', 'allow_insecure' => false],
+                'ech' => ['enabled' => true, 'mode' => 'automatic']]];
+        foreach ([false, true] as $private) {
+            $input = $payload;
+            if ($private) $input['protocol_settings']['ech']['private_key'] = 'untrusted';
+            $request = ServerSave::create('/api/v2/admin/server/manage/save', 'POST', $input);
+            $factory = new ValidatorFactory(new Translator(new ArrayLoader(), 'en'));
+            $validator = $factory->make($request->all(), $request->rules(), $request->messages());
+            $request->withValidator($validator);
+            $this->assertSame(!$private, $validator->passes(), json_encode($validator->errors()->all()));
+        }
+    }
+
     public function test_v2node_rejects_anytls_custom_transport_until_native_core_supports_it(): void
     {
         $request = ServerSave::create('/api/v2/admin/server/manage/save', 'POST', [

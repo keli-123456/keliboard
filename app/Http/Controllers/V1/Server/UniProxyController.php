@@ -179,6 +179,7 @@ class UniProxyController extends Controller
         $node = $this->getNodeInfo($request);
         $this->touchNodeLastCheckAt($node);
         $isV2Node = (bool) $request->attributes->get('is_v2node', false);
+        $automaticEch = $request->header('X-Keli-Automatic-ECH') === '1';
 
         $cacheTtl = (int) admin_setting('server_api_config_cache_ttl', config('server_api_cache.config_ttl', 0));
         $lockTtl = (int) admin_setting('server_api_cache_lock_ttl', config('server_api_cache.lock_ttl', 10));
@@ -196,6 +197,7 @@ class UniProxyController extends Controller
         if ($cacheTtl > 0) {
             $cache = $this->getServerApiCache();
             $cacheKeySuffix = $isV2Node ? 'v2node' : 'default';
+            if ($automaticEch) $cacheKeySuffix .= ':ech-auto';
             $cacheKey = "server_api:config:{$node->id}:{$cacheKeySuffix}";
             $cached = $cache->get($cacheKey);
             if (is_array($cached) && isset($cached['etag'], $cached['body'])) {
@@ -204,17 +206,17 @@ class UniProxyController extends Controller
 
             try {
                 $lock = $cache->lock("lock:{$cacheKey}", $lockTtl);
-                $cached = $lock->block($lockWait, function () use ($cache, $cacheKey, $cacheTtl, $node, $isV2Node) {
+                $cached = $lock->block($lockWait, function () use ($cache, $cacheKey, $cacheTtl, $node, $isV2Node, $automaticEch) {
                     $existing = $cache->get($cacheKey);
                     if (is_array($existing) && isset($existing['etag'], $existing['body'])) {
                         return $existing;
                     }
-                    $entry = $this->buildConfigCacheEntry($node, $isV2Node);
+                    $entry = $this->buildConfigCacheEntry($node, $isV2Node, $automaticEch);
                     $cache->put($cacheKey, $entry, $cacheTtl);
                     return $entry;
                 });
             } catch (Throwable) {
-                $cached = $this->buildConfigCacheEntry($node, $isV2Node);
+                $cached = $this->buildConfigCacheEntry($node, $isV2Node, $automaticEch);
                 try {
                     $cache->put($cacheKey, $cached, $cacheTtl);
                 } catch (Throwable) {
@@ -226,7 +228,7 @@ class UniProxyController extends Controller
             }
         }
 
-        return $this->respondCacheEntry($request, $this->buildConfigCacheEntry($node, $isV2Node));
+        return $this->respondCacheEntry($request, $this->buildConfigCacheEntry($node, $isV2Node, $automaticEch));
     }
 
     // 获取在线用户数据（wyx2685
@@ -315,8 +317,8 @@ class UniProxyController extends Controller
             ->header('ETag', "\"{$etag}\"");
     }
 
-    private function buildConfigCacheEntry($node, bool $isV2Node): array
+    private function buildConfigCacheEntry($node, bool $isV2Node, bool $automaticEch = false): array
     {
-        return $this->nodeConfigService->buildCacheEntry($node, $isV2Node);
+        return $this->nodeConfigService->buildCacheEntry($node, $isV2Node, $automaticEch);
     }
 }

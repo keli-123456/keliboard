@@ -1,5 +1,26 @@
 # HY2 panel configuration
 
+## Automatic ECH (2026-10-14)
+
+Requires the matching updated panel and kelinode-rs v0.1.368+ with ECH enabled
+in its build. Admin automatic completion fills blank fields only and does not
+enable ECH or obfuscation, change existing bandwidth, install certificates or
+restart nodes. A real certificate domain and certificate remain necessary.
+
+Automatic ECH requests are server-owned. The authenticated node generates real
+private material locally and reports public configuration and file path through
+`POST /api/v2/server/ech`, first prepared, then ready after runtime activation.
+Private keys are never accepted by this endpoint. Stale requests, other-node
+bindings, changed public material and ready-before-prepared are rejected.
+Pending/prepared nodes are omitted from subscriptions. Unsupported clients are
+omitted even when ready. Older nodes do not receive automatic descriptors.
+
+Initial ECH backend switching requires a planned node restart. No automatic
+restart or node upgrade is dispatched by saving these settings. Automatic mode
+uses the certificate SNI as outer public_name: it does not hide that domain.
+Use a separately verified manual configuration for an independent cover name.
+The historical evidence below is not acceptance of this automatic workflow.
+
 ## Scope
 
 The HY2 node editor now exposes optional settings implemented in the standard

@@ -10,9 +10,9 @@ use App\Utils\Helper;
 
 class NodeConfigService
 {
-    public function buildCacheEntry($node, bool $isV2Node): array
+    public function buildCacheEntry($node, bool $isV2Node, bool $automaticEch = false): array
     {
-        $response = $this->buildResponse($node, $isV2Node);
+        $response = $this->buildResponse($node, $isV2Node, $automaticEch);
         $body = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $eTag = sha1($body === false ? '' : $body);
 
@@ -22,7 +22,7 @@ class NodeConfigService
         ];
     }
 
-    public function buildResponse($node, bool $isV2Node): array
+    public function buildResponse($node, bool $isV2Node, bool $automaticEch = false): array
     {
         $nodeType = (string) $node->type;
         $protocolSettings = is_array($node->protocol_settings) ? $node->protocol_settings : [];
@@ -141,6 +141,13 @@ class NodeConfigService
 
         if ($nodeType === 'hysteria' && !empty($protocolSettings['congestion_control'])) {
             $response['congestion_control'] = $protocolSettings['congestion_control'];
+        }
+        if ($automaticEch && $nodeType === 'hysteria' && \App\Support\Hysteria2Ech::automatic($protocolSettings)) {
+            $ech = $protocolSettings['ech'];
+            $response['automatic_ech'] = ['request_id' => $ech['request_id'],
+                'public_name' => data_get($protocolSettings, 'tls.server_name'),
+                'state' => $ech['state'], 'config' => $ech['config'] ?? null,
+                'key_file' => $ech['key_file'] ?? null];
         }
 
         $response['base_config'] = [

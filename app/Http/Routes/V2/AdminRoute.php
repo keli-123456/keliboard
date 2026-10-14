@@ -170,6 +170,7 @@ class AdminRoute
                 $router->get('/getNodes', [ManageController::class, 'getNodes']);
                 $router->get('/getOptions', [ManageController::class, 'getOptions']);
                 $router->get('/getCapabilities', [ManageController::class, 'getCapabilities']);
+                $router->get('/ech', [ManageController::class, 'echState']);
                 $router->post('/sort', [ManageController::class, 'sort']);
             });
 
