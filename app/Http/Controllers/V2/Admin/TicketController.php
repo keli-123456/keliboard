@@ -209,6 +209,7 @@ class TicketController extends Controller
             return $this->fail([400202, '工单不存在']);
         }
         $result = $ticket->toArray();
+        $result['withdrawal'] = app(\App\Services\CommissionWithdrawalService::class)->ticketDetails($ticket->withdrawal, $ticket->subject);
         $result['user'] = UserController::transformUserData($ticket->user);
         $result['site'] = $this->formatSitePayload($this->resolveTicketSite($ticket));
         $result['agent'] = $this->formatAgentPayload($ticket->agent);
@@ -396,6 +397,7 @@ class TicketController extends Controller
         // 获取items然后映射转换
         $items = collect($tickets->items())->map(function ($ticket) use ($latestAiByTicket) {
             $ticketData = $ticket->toArray();
+            $ticketData['withdrawal'] = app(\App\Services\CommissionWithdrawalService::class)->ticketDetails($ticket->withdrawal, $ticket->subject);
             $ticketData['user'] = UserController::transformUserData($ticket->user);
             $ticketData['site'] = $this->formatSitePayload($this->resolveTicketSite($ticket));
             $ticketData['agent'] = $this->formatAgentPayload($ticket->agent);

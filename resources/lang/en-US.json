@@ -144,5 +144,11 @@
     "traffic_reset.source.user_access": "User Access",
     "traffic_reset.reset_success": "Traffic reset successful",
     "traffic_reset.reset_failed": "Traffic reset failed, please check logs for details",
-    "traffic_reset.user_cannot_reset": "User cannot reset traffic (user not activated or no valid plan)"
+    "traffic_reset.user_cannot_reset": "User cannot reset traffic (user not activated or no valid plan)",
+    "Withdrawal network": "Withdrawal network",
+    "Withdrawal amount": "Withdrawal amount",
+    "Please select an enabled USDT withdrawal network.": "Please select an enabled USDT withdrawal network.",
+    "The address format does not match the selected withdrawal network.": "The address format does not match the selected withdrawal network.",
+    "A network can only be selected for USDT withdrawals.": "A network can only be selected for USDT withdrawals.",
+    "Withdrawal storage is not ready. Please contact the administrator.": "Withdrawal storage is not ready. Please contact the administrator."
 }

@@ -222,19 +222,26 @@ class TicketController extends Controller
         ) {
             return $this->fail([422, __('Unsupported withdrawal method')]);
         }
+        $destination = app(\App\Services\CommissionWithdrawalService::class)->destination($request->validated());
         $user = User::find($request->user()->id);
         $limit = admin_setting('commission_withdraw_limit', 100);
         if ($limit > ($user->commission_balance / 100)) {
             return $this->fail([422, __('The current required minimum withdrawal commission is :limit', ['limit' => $limit])]);
         }
+        $destination['amount'] = (int) $user->commission_balance;
+        $destination['currency'] = (string) admin_setting('currency', 'CNY');
         try {
             $ticketService = new TicketService();
             $subject = __('[Commission Withdrawal Request] This ticket is opened by the system');
             $message = sprintf(
                 "%s\r\n%s",
-                __('Withdrawal method') . "：" . $request->input('withdraw_method'),
-                __('Withdrawal account') . "：" . $request->input('withdraw_account')
+                __('Withdrawal method') . "：" . $destination['method'],
+                __('Withdrawal account') . "：" . $destination['account']
             );
+            if ($destination['network'] !== null) {
+                $message .= "\r\n" . __('Withdrawal network') . '：' . $destination['network_name'];
+            }
+            $message .= "\r\n" . __('Withdrawal amount') . '：' . number_format($destination['amount'] / 100, 2, '.', '') . ' ' . $destination['currency'];
             $ticket = $ticketService->createTicket(
                 $request->user()->id,
                 $subject,
@@ -242,6 +249,7 @@ class TicketController extends Controller
                 $message,
                 [],
                 [
+                    'withdrawal' => $destination,
                     'agent_context' => app(AgentCommerceContextResolver::class)
                         ->resolveRequest($request, $request->user()),
                     'site_context' => app(SiteCommerceService::class)

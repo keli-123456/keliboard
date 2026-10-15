@@ -29,6 +29,7 @@ class Ticket extends Model
     protected $dateFormat = 'U';
     protected $guarded = ['id'];
     protected $casts = [
+        'withdrawal' => 'array',
         'auto_reply_count' => 'integer',
         'auto_reply_last_at' => 'integer',
         'created_at' => 'timestamp',

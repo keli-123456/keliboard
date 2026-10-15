@@ -239,6 +239,12 @@ class TicketService
                 'reply_status' => Ticket::REPLY_STATUS_WAITING_ADMIN,
             ];
             $siteScope = app(SiteDataScopeService::class);
+            if (isset($options['withdrawal'])) {
+                if (!$siteScope->hasColumn('v2_ticket', 'withdrawal')) {
+                    throw new ApiException(__('Withdrawal storage is not ready. Please contact the administrator.'), 503);
+                }
+                $ticketPayload['withdrawal'] = $options['withdrawal'];
+            }
             if ($siteScope->hasColumn('v2_ticket', 'site_id')) {
                 $siteId = $siteScope->siteIdFromContext($siteContext);
                 if ($siteId === null) {

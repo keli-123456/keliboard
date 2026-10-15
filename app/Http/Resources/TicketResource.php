@@ -21,6 +21,7 @@ class TicketResource extends JsonResource
             "reply_status" => $this->value('reply_status'),
             "status" => $this->value('status'),
             "subject" => $this->value('subject'),
+            "withdrawal" => app(\App\Services\CommissionWithdrawalService::class)->ticketDetails($this->value('withdrawal'), $this->value('subject')),
             "message" => array_key_exists('message', $this->additional) ? MessageResource::collection($this->value('message')) : null,
             "agent" => $this->formatAgent(),
             "agent_domain" => $this->formatAgentDomain(),
