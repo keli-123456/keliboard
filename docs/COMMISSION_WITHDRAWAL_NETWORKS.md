@@ -1,12 +1,12 @@
 # USDT Commission Withdrawal Networks
 
-Commission withdrawals now require an explicit receiving network when the method is USDT. Supported network IDs are `TRC20`, `ERC20`, and `BEP20`. This is still a manual withdrawal ticket workflow, not automatic crypto settlement or currency conversion.
+Commission withdrawals now require an explicit receiving network when the method is USDT. Supported network IDs are `POLYGON`, `TRC20`, `ERC20`, and `BEP20`. `POLYGON` is displayed as `Polygon PoS (POL)` and refers to Polygon mainnet (chain ID 137), not Polygon zkEVM or a testnet. POL is the network's gas token; the requested withdrawal asset remains USDT. See the [official network reference](https://docs.polygon.technology/pos/reference/rpc-endpoints). This is still a manual withdrawal ticket workflow, not automatic crypto settlement or currency conversion.
 
 ## Configuration
 
 System Settings > Invite & Commission > Withdrawal Rules contains the `commission_withdraw_usdt_networks` whitelist. Its default is an empty list. Administrators must explicitly enable the networks they accept; an empty list pauses USDT withdrawals without disabling other configured methods.
 
-Authenticated user configuration exposes only enabled networks as `withdraw_usdt_networks`. A USDT withdrawal submits the original `withdraw_method` and `withdraw_account`, plus `withdraw_network`. The server rechecks the current whitelist and basic address syntax. Address syntax cannot identify a network, prove wallet ownership, or verify exchange support. In particular, ERC20 and BEP20 addresses use the same syntax; the selected network must not be inferred or replaced.
+Authenticated user configuration exposes only enabled networks as `withdraw_usdt_networks`. A USDT withdrawal submits the original `withdraw_method` and `withdraw_account`, plus `withdraw_network`. The server rechecks the current whitelist and basic address syntax. Address syntax cannot identify a network, prove wallet ownership, or verify exchange support. In particular, Polygon, ERC20, and BEP20 addresses use the same syntax; the selected network must not be inferred or replaced. Adding Polygon support does not enable it or change existing saved destinations automatically.
 
 Each new withdrawal ticket stores a `withdrawal` snapshot containing the method, account, network ID/name, server-side commission amount in cents, and configured currency. The displayed commission amount is not a converted USDT payment amount. Non-USDT methods have no network. The separate agent profit withdrawal flow is unchanged.
 
@@ -22,6 +22,8 @@ Historical withdrawal tickets are marked as lacking recorded network information
 
 ## Verification
 
-The implementation was checked with 2,118 admin tests, 897 user tests, and 155 affected backend tests (640 assertions). Both production frontend builds, TypeScript checks, and scoped lint checks passed. Browser checks used blocked, local mock APIs for explicit selection, switching networks, empty configuration, address validation, server validation failures, saved destinations, legacy requests, English, dark mode, and mobile layout.
+The initial implementation was checked with 2,118 admin tests, 897 user tests, and 155 affected backend tests (640 assertions). Both production frontend builds, TypeScript checks, and scoped lint checks passed. Browser checks used blocked, local mock APIs for explicit selection, switching networks, empty configuration, address validation, server validation failures, saved destinations, legacy requests, English, dark mode, and mobile layout.
+
+The Polygon extension was checked with 54 affected admin tests, the complete 901-test user suite, and 157 affected backend tests (654 assertions). Both production builds and scoped lint checks passed without increasing the existing bundle limits. Local browser checks covered Polygon-only configuration, explicit selection even with one enabled network, rejection of TRON-format addresses, successful simulated submission, and a 390px mobile viewport without horizontal form overflow.
 
 These checks did not send a real payment, test on-chain transfers, apply a production migration, or deploy to a live panel.

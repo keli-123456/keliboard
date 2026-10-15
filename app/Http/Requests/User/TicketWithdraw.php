@@ -16,7 +16,7 @@ class TicketWithdraw  extends FormRequest
         return [
             'withdraw_method' => 'required|string|max:100',
             'withdraw_account' => 'required|string|max:1000',
-            'withdraw_network' => 'nullable|string|in:TRC20,ERC20,BEP20',
+            'withdraw_network' => 'nullable|string|in:POLYGON,TRC20,ERC20,BEP20',
         ];
     }
 

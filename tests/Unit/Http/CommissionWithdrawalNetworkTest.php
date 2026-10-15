@@ -91,6 +91,7 @@ final class CommissionWithdrawalNetworkTest extends TestCase
         return [
             'missing network' => ['USDT', null, $tron, 'withdraw_network'],
             'disabled network' => ['USDT', 'BEP20', $evm, 'withdraw_network'],
+            'disabled polygon' => ['USDT', 'POLYGON', $evm, 'withdraw_network'],
             'unknown network' => ['USDT', 'FAKE', $evm, 'withdraw_network'],
             'tron with evm address' => ['USDT', 'TRC20', $evm, 'withdraw_account'],
             'evm with tron address' => ['USDT', 'ERC20', $tron, 'withdraw_account'],
@@ -118,11 +119,12 @@ final class CommissionWithdrawalNetworkTest extends TestCase
         $this->assertSame(['TRC20', 'ERC20'], array_column($service->networks(true), 'id'));
         app(\App\Support\Setting::class)->save(['commission_withdraw_usdt_networks' => []]);
         $this->assertSame([], $service->networks(true));
-        $this->assertSame(3, count($service->networks()));
+        $this->assertSame(['POLYGON', 'TRC20', 'ERC20', 'BEP20'], array_column($service->networks(), 'id'));
         foreach ([['FAKE'], ['TRC20', 'TRC20'], [null], 'TRC20'] as $value) {
             $this->assertTrue(app('validator')->make(['commission_withdraw_usdt_networks' => $value], ConfigSave::RULES)->fails());
         }
         $this->assertFalse(app('validator')->make(['commission_withdraw_usdt_networks' => ['TRC20', 'BEP20']], ConfigSave::RULES)->fails());
+        $this->assertFalse(app('validator')->make(['commission_withdraw_usdt_networks' => CommissionWithdrawalService::NETWORK_IDS], ConfigSave::RULES)->fails());
     }
 
     public function test_other_methods_do_not_receive_an_invented_network(): void
@@ -131,12 +133,36 @@ final class CommissionWithdrawalNetworkTest extends TestCase
         $this->assertNull(Ticket::query()->firstOrFail()->withdrawal['network']);
     }
 
+    public function test_polygon_requests_keep_the_selected_network_after_configuration_changes(): void
+    {
+        app(\App\Support\Setting::class)->save(['commission_withdraw_usdt_networks' => ['POLYGON']]);
+        $address = '0x' . str_repeat('a', 40);
+        $response = $this->submit(['withdraw_method' => 'USDT', 'withdraw_network' => 'POLYGON', 'withdraw_account' => $address]);
+        $this->assertSame('success', $response->getData(true)['status']);
+        $ticket = Ticket::query()->firstOrFail();
+        $this->assertSame('POLYGON', $ticket->withdrawal['network']);
+        $this->assertSame('Polygon PoS (POL)', $ticket->withdrawal['network_name']);
+        $this->assertSame('USDT', $ticket->withdrawal['method']);
+        $this->assertSame($address, $ticket->withdrawal['account']);
+        $this->assertStringContainsString('Polygon PoS (POL)', TicketMessage::query()->firstOrFail()->message);
+        try {
+            app(CommissionWithdrawalService::class)->destination(['withdraw_method' => 'USDT', 'withdraw_network' => 'POLYGON', 'withdraw_account' => 'T' . str_repeat('A', 33)]);
+            $this->fail('TRON address accepted for Polygon');
+        } catch (ValidationException $exception) {
+            $this->assertArrayHasKey('withdraw_account', $exception->errors());
+        }
+        app(\App\Support\Setting::class)->save(['commission_withdraw_usdt_networks' => ['ERC20']]);
+        $details = (new TicketResource($ticket->fresh()))->toArray(Request::create('/'));
+        $this->assertSame('POLYGON', $details['withdrawal']['network']);
+        $this->assertSame('Polygon PoS (POL)', $details['withdrawal']['network_name']);
+    }
+
     public function test_evm_address_does_not_determine_or_replace_the_explicit_network(): void
     {
-        app(\App\Support\Setting::class)->save(['commission_withdraw_usdt_networks' => ['ERC20', 'BEP20']]);
+        app(\App\Support\Setting::class)->save(['commission_withdraw_usdt_networks' => ['POLYGON', 'ERC20', 'BEP20']]);
         $service = app(CommissionWithdrawalService::class);
         $address = '0x' . str_repeat('a', 40);
-        foreach (['ERC20', 'BEP20'] as $network) {
+        foreach (['POLYGON', 'ERC20', 'BEP20'] as $network) {
             $destination = $service->destination(['withdraw_method' => 'USDT', 'withdraw_network' => $network, 'withdraw_account' => $address]);
             $this->assertSame($network, $destination['network']);
             $this->assertSame($address, $destination['account']);

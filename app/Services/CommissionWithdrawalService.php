@@ -8,11 +8,12 @@ use Illuminate\Validation\ValidationException;
 
 final class CommissionWithdrawalService
 {
-    public const NETWORK_IDS = ['TRC20', 'ERC20', 'BEP20'];
+    public const NETWORK_IDS = ['POLYGON', 'TRC20', 'ERC20', 'BEP20'];
 
     public function networks(bool $configuredOnly = false): array
     {
         $options = [
+            ['id' => 'POLYGON', 'name' => 'Polygon PoS (POL)', 'kind' => 'evm'],
             ['id' => 'TRC20', 'name' => 'TRON (TRC20)', 'kind' => 'tron'],
             ['id' => 'ERC20', 'name' => 'Ethereum (ERC20)', 'kind' => 'evm'],
             ['id' => 'BEP20', 'name' => 'BNB Smart Chain (BEP20)', 'kind' => 'evm'],
