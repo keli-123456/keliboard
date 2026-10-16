@@ -2152,6 +2152,75 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame('never', $items[0]['online_status']);
     }
 
+    public function test_insight_is_scoped_credential_free_and_does_not_write_or_request_node_actions(): void
+    {
+        $machine = ServerMachine::create(['name' => 'edge', 'token' => 'do-not-expose', 'is_active' => true]);
+        $node = $this->createServer(['machine_id' => $machine->id]);
+        $this->createServer(['machine_id' => 999, 'name' => 'other-machine']);
+        $machine->load_status = ['updated_at' => now()->timestamp, 'ip' => ['public_ipv4' => '192.0.2.1'], 'metrics' => ['keli_core_rs' => ['keli_core_process_rss_bytes' => 500]]];
+        $machine->save();
+        $before = $machine->fresh()->getAttributes();
+        $realtime = $this->createMock(\App\Services\NodeRealtime\NodeRealtimeStatusService::class);
+        $realtime->expects($this->once())->method('receiptsForServers')->with([$node->id])->willReturn([
+            $node->id => ['config' => ['status' => 'applied', 'event_id' => 'event-1', 'updated_at' => date(DATE_ATOM), 'message' => 'private runtime text']],
+        ]);
+        app()->instance(\App\Services\NodeRealtime\NodeRealtimeStatusService::class, $realtime);
+        $response = (new \App\Http\Controllers\V2\Admin\Server\MachineController())->insight(Request::create('/', 'GET', ['id' => $machine->id]));
+        $data = $response->getData(true)['data'];
+        $this->assertSame($machine->id, $data['machine_id']);
+        $this->assertCount(1, $data['nodes']);
+        $this->assertSame($node->id, $data['nodes'][0]['id']);
+        $this->assertSame('applied', $data['nodes'][0]['config']['status']);
+        $this->assertNull($data['nodes'][0]['users']);
+        $this->assertNull($data['ip']['tracking_since']);
+        $this->assertSame(500, $data['process']['rss_bytes']);
+        $this->assertStringNotContainsString('do-not-expose', $response->getContent());
+        $this->assertStringNotContainsString('private runtime text', $response->getContent());
+        $this->assertStringNotContainsString('other-machine', $response->getContent());
+        $this->assertSame($before, $machine->fresh()->getAttributes());
+        $this->assertSame(0, ServerMachineLoadHistory::count());
+    }
+
+    public function test_rollout_expected_hashes_cannot_be_replaced_by_a_node_report(): void
+    {
+        $this->bindSettings([]);
+        $machine = ServerMachine::create(['name' => 'probe', 'token' => 'secret', 'is_active' => true, 'upgrade_state' => [
+            'id' => 'upgrade-1', 'rollout_id' => 'rollout-1', 'status' => 'dispatched', 'component' => 'kelinode-rs',
+            'target_version' => 'v0.1.372', 'requested_at' => now()->timestamp,
+            'expected_archive_sha256' => str_repeat('b', 64), 'expected_binary_sha256' => str_repeat('b', 64),
+        ]]);
+        (new MachineController())->status(Request::create('/', 'POST', ['machine_id' => $machine->id, 'token' => 'secret', 'status' => [
+            'version' => 'v0.1.371', 'runtime' => ['binary_sha256' => str_repeat('a', 64)],
+            'upgrade' => ['id' => 'upgrade-1', 'status' => 'running', 'expected_binary_sha256' => str_repeat('a', 64), 'expected_archive_sha256' => str_repeat('a', 64)],
+        ]]));
+        $state = $machine->fresh()->upgrade_state;
+        $this->assertSame(str_repeat('b', 64), $state['expected_archive_sha256']);
+        $this->assertSame(str_repeat('b', 64), $state['expected_binary_sha256']);
+    }
+
+    public function test_status_records_ip_changes_without_modifying_bound_node_hosts(): void
+    {
+        $this->bindSettings([]);
+        $machine = ServerMachine::create(['name' => 'edge', 'token' => 'secret', 'is_active' => false]);
+        $node = $this->createServer(['machine_id' => $machine->id, 'host' => 'cdn.example.test']);
+        $controller = new MachineController();
+        foreach (['192.0.2.1', '192.0.2.2', '192.0.2.2'] as $address) {
+            $response = $controller->status(Request::create('/', 'POST', ['machine_id' => $machine->id, 'token' => 'secret', 'status' => ['ip' => ['public_ipv4' => $address]]]));
+            $this->assertSame(200, $response->getStatusCode());
+        }
+        $history = $machine->fresh()->load_status['ip_observation'];
+        $this->assertCount(1, $history['changes']);
+        $this->assertSame('192.0.2.1', $history['changes'][0]['from']);
+        $this->assertSame('192.0.2.2', $history['changes'][0]['to']);
+        $this->assertSame('cdn.example.test', $node->fresh()->host);
+        $machine->is_active = true;
+        $machine->save();
+        $response = $controller->status(Request::create('/', 'POST', ['machine_id' => $machine->id, 'token' => 'secret', 'status' => ['ip' => ['public_ipv4' => '192.0.2.2']]]));
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertArrayNotHasKey('ip_observation', ServerMachineLoadHistory::first()->load_status);
+        $this->assertCount(1, $machine->fresh()->load_status['ip_observation']['changes']);
+    }
+
     private function createTables(): void
     {
         Schema::create('v2_server_machine', function (Blueprint $table): void {

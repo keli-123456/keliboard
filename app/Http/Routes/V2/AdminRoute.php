@@ -147,6 +147,10 @@ class AdminRoute
             ], function ($router) {
                 $router->get('/fetch', [MachineController::class, 'fetch']);
                 $router->get('/telemetry', [MachineController::class, 'telemetry']);
+                $router->get('/insight', [MachineController::class, 'insight']);
+                $router->get('/rollouts', [\App\Http\Controllers\V2\Admin\Server\MachineRolloutController::class, 'index']);
+                $router->post('/rollouts', [\App\Http\Controllers\V2\Admin\Server\MachineRolloutController::class, 'create']);
+                $router->post('/rollouts/action', [\App\Http\Controllers\V2\Admin\Server\MachineRolloutController::class, 'action']);
                 $router->post('/save', [MachineController::class, 'save']);
                 $router->post('/toggleActive', [MachineController::class, 'toggleActive']);
                 $router->post('/drop', [MachineController::class, 'drop']);

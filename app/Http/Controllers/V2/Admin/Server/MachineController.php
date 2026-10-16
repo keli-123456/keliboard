@@ -11,6 +11,8 @@ use App\Services\ServerMachine\BatchBindingException;
 use App\Services\ServerMachine\BatchBindingService;
 use App\Services\ServerMachine\MachineReleaseDistributionService;
 use App\Services\ServerMachine\MachineTelemetryService;
+use App\Services\ServerMachine\MachineInsightService;
+use App\Services\ServerMachine\MachineUpgradeQueue;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -64,6 +66,16 @@ class MachineController extends Controller
                 'telemetry' => $snapshot['telemetry'],
             ]);
         })->values());
+    }
+
+    public function insight(Request $request)
+    {
+        $params = $request->validate(['id' => 'required|integer|min:1']);
+        $machine = ServerMachine::find((int) $params['id']);
+        if (!$machine) {
+            return $this->fail([400202, '机器不存在']);
+        }
+        return $this->success(app(MachineInsightService::class)->snapshot($machine));
     }
 
     public function save(Request $request)
@@ -551,16 +563,11 @@ class MachineController extends Controller
             return $this->fail([422, '无法获取有效的目标版本']);
         }
 
-        $machine->forceFill([
-            'upgrade_state' => [
-                'id' => (string) Str::uuid(),
-                'status' => 'queued',
-                'component' => $component,
-                'target_version' => $targetVersion,
-                'requested_at' => now()->timestamp,
-                'updated_at' => now()->timestamp,
-            ],
-        ])->save();
+        try {
+            $machine = app(MachineUpgradeQueue::class)->enqueue((int) $machine->id, $component, $targetVersion, (bool) ($params['force'] ?? false));
+        } catch (\RuntimeException $error) {
+            return $this->fail([$error->getCode() ?: 409, $error->getMessage()]);
+        }
 
         return $this->success($this->withOnlineStatus($machine->fresh() ?: $machine));
     }

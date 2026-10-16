@@ -60,6 +60,28 @@ class NodeRealtimeStatusService
         ];
     }
 
+    public function receiptsForServers(array $serverIds): array
+    {
+        $allowed = array_fill_keys(array_map('intval', $serverIds), true);
+        if ($allowed === []) {
+            return [];
+        }
+        $snapshot = $this->loadSnapshot(storage_path('app/ws-server/receipts.json'));
+        $latest = [];
+        foreach ($this->normalizeReceipts((array) ($snapshot['receipts'] ?? [])) as $row) {
+            $id = $row['server_id'];
+            $topic = $row['topic'];
+            if (!isset($allowed[$id])) {
+                continue;
+            }
+            if (!isset($latest[$id][$topic]) || (strtotime((string) $row['updated_at']) ?: 0) >= (strtotime((string) $latest[$id][$topic]['updated_at']) ?: 0)) {
+                // Exclude free-text messages, which may contain runtime details.
+                $latest[$id][$topic] = array_intersect_key($row, array_flip(['status', 'event_id', 'updated_at']));
+            }
+        }
+        return $latest;
+    }
+
     private function resolveActivityWindowSeconds(): int
     {
         $minutes = (int) admin_setting('node_realtime_alert_window_minutes', 10);

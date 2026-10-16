@@ -7,6 +7,8 @@ use App\Models\ServerMachine;
 use App\Services\NodeRealtime\NodeRealtimeSettings;
 use App\Services\ServerMachine\MachineReleaseDistributionService;
 use App\Services\ServerMachine\MachineTelemetryService;
+use App\Services\ServerMachine\MachineIpHistory;
+use App\Services\ServerMachine\MachineRuntimeObservation;
 use App\Services\ServerService;
 use App\Services\ServerTlsCertificateService;
 use App\Services\SubscriptionProxy\WebsiteProxyRoutingService;
@@ -172,6 +174,19 @@ class MachineController extends Controller
             'updated_at' => now()->timestamp,
         ];
 
+        $status['ip_observation'] = app(MachineIpHistory::class)->observe(
+            is_array($machine->load_status) ? $machine->load_status : [],
+            $status['ip'],
+            $status['updated_at']
+        );
+        $observation = app(MachineRuntimeObservation::class)->normalize(data_get($status, 'runtime.observation'));
+        if (is_array($status['runtime'])) {
+            $status['runtime']['observation'] = $observation;
+        }
+        $status['runtime_observation_state'] = app(MachineRuntimeObservation::class)->track(
+            is_array($machine->load_status) ? $machine->load_status : [], $observation, $status['updated_at']
+        );
+
         if (!$machine->is_active) {
             $status['machine'] = ['is_active' => false];
             $machine->forceFill([
@@ -186,7 +201,6 @@ class MachineController extends Controller
             ]);
         }
 
-        $upgradeState = $this->resolveUpgradeState($machine, $status, data_get($payload, 'upgrade'));
         app(ServerTlsCertificateService::class)->handleMachineStatus($machine, $status);
         $reload = app(ZeroSslCertificateService::class)->handleMachineStatus(
             $machine,
@@ -200,15 +214,27 @@ class MachineController extends Controller
             $reload = true;
         }
 
-        $machine->forceFill([
-            'last_seen_at' => now()->timestamp,
-            'load_status' => $status,
-            'upgrade_state' => $upgradeState,
-        ])->save();
+        [$machine, $status] = DB::transaction(function () use ($machine, $status, $payload, $observation): array {
+            $locked = ServerMachine::query()->lockForUpdate()->findOrFail($machine->id);
+            if ($machine->isDirty('subproxy_cert_state')) {
+                $locked->subproxy_cert_state = $machine->subproxy_cert_state;
+            }
+            $previous = is_array($locked->load_status) ? $locked->load_status : [];
+            $status['ip_observation'] = app(MachineIpHistory::class)->observe($previous, $status['ip'], $status['updated_at']);
+            $status['runtime_observation_state'] = app(MachineRuntimeObservation::class)->track($previous, $observation, $status['updated_at']);
+            $locked->forceFill([
+                'last_seen_at' => now()->timestamp, 'load_status' => $status,
+                'upgrade_state' => $this->resolveUpgradeState($locked, $status, data_get($payload, 'upgrade')),
+            ])->save();
+            return [$locked, $status];
+        });
+        if (!$machine->is_active) {
+            return response()->json(['data' => true, 'reload' => false, 'upgrade' => null]);
+        }
         $upgradeCommand = $this->buildUpgradeCommand($machine, $this->resolvePanelBaseURL($request));
 
         try {
-            app(MachineTelemetryService::class)->recordHistory($machine, $status);
+            app(MachineTelemetryService::class)->recordHistory($machine, array_diff_key($status, ['ip_observation' => true]));
         } catch (\Throwable $error) {
             // Monitoring storage must not suppress a successful control heartbeat.
             Log::warning('Machine monitoring history unavailable', ['machine_id' => (int) $machine->id, 'error_type' => get_class($error)]);
@@ -399,6 +425,9 @@ class MachineController extends Controller
             'installed_binary_sha256',
             'running_binary_sha256',
         ] as $field) {
+            if (!empty($state['rollout_id']) && in_array($field, ['expected_archive_sha256', 'expected_binary_sha256'], true)) {
+                continue;
+            }
             if (!array_key_exists($field, $reported)) {
                 continue;
             }
@@ -468,7 +497,7 @@ class MachineController extends Controller
         $source = $distribution->source();
         $claimed = DB::transaction(function () use ($machine, $distribution): ?array {
             $locked = ServerMachine::query()->lockForUpdate()->find($machine->id);
-            if (!$locked) {
+            if (!$locked || !$locked->is_active) {
                 return null;
             }
 
@@ -502,6 +531,15 @@ class MachineController extends Controller
                 $targetVersion,
                 MachineReleaseDistributionService::PLATFORM_LINUX_X86_64
             );
+            if (!empty($state['rollout_id']) && ($distribution->source() !== MachineReleaseDistributionService::SOURCE_PANEL || !$release
+                || $release->sha256 !== ($state['expected_archive_sha256'] ?? '') || $release->binary_sha256 !== ($state['expected_binary_sha256'] ?? ''))) {
+                $state['status'] = 'failed';
+                $state['error'] = 'rollout_release_changed';
+                $state['finished_at'] = $now;
+                $state['updated_at'] = $now;
+                $locked->forceFill(['upgrade_state' => $state])->save();
+                return null;
+            }
             if ($release) {
                 $state['expected_archive_sha256'] = strtolower((string) $release->sha256);
                 $state['expected_binary_sha256'] = strtolower((string) $release->binary_sha256);
