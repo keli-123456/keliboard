@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Services\NodeRealtime\NodeRealtimeAuthenticator;
 use App\Services\NodeRealtime\NodeRealtimeSettings;
+use App\Services\NodeRealtime\NodeRealtimeReceipt;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
@@ -402,17 +403,23 @@ class WsServer extends Command
             return;
         }
 
-        $receiptState[$this->receiptStateKey($serverId, $topic)] = [
+        $key = $this->receiptStateKey($serverId, $topic);
+        $next = [
             'server_id' => $serverId,
             'node_id' => (string) ($connection->xboard_input_node_id ?? ''),
             'node_type' => $connection->xboard_node_type ?? null,
             'topic' => $topic,
             'event_id' => trim((string) ($payload['event_id'] ?? '')),
+            'event_ts' => max(0, (int) ($payload['event_ts'] ?? 0)),
             'reason' => trim((string) ($payload['reason'] ?? '')),
             'status' => trim((string) ($payload['status'] ?? '')),
             'message' => trim((string) ($payload['message'] ?? '')),
             'updated_at' => date(DATE_ATOM),
         ];
+        if (!NodeRealtimeReceipt::shouldReplace($receiptState[$key] ?? null, $next)) {
+            return;
+        }
+        $receiptState[$key] = $next;
 
         Log::debug('Node realtime receipt recorded', [
             'server_id' => $serverId,
@@ -452,6 +459,7 @@ class WsServer extends Command
                 'node_type' => $row['node_type'] ?? null,
                 'topic' => $topic,
                 'event_id' => (string) ($row['event_id'] ?? ''),
+                'event_ts' => max(0, (int) ($row['event_ts'] ?? 0)),
                 'reason' => (string) ($row['reason'] ?? ''),
                 'status' => (string) ($row['status'] ?? ''),
                 'message' => (string) ($row['message'] ?? ''),
@@ -471,6 +479,7 @@ class WsServer extends Command
                 'node_type' => $row['node_type'] ?? null,
                 'topic' => (string) ($row['topic'] ?? ''),
                 'event_id' => (string) ($row['event_id'] ?? ''),
+                'event_ts' => max(0, (int) ($row['event_ts'] ?? 0)),
                 'reason' => (string) ($row['reason'] ?? ''),
                 'status' => (string) ($row['status'] ?? ''),
                 'message' => (string) ($row['message'] ?? ''),

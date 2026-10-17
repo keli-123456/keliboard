@@ -76,7 +76,7 @@ class NodeRealtimeStatusService
             }
             if (!isset($latest[$id][$topic]) || (strtotime((string) $row['updated_at']) ?: 0) >= (strtotime((string) $latest[$id][$topic]['updated_at']) ?: 0)) {
                 // Exclude free-text messages, which may contain runtime details.
-                $latest[$id][$topic] = array_intersect_key($row, array_flip(['status', 'event_id', 'updated_at']));
+                $latest[$id][$topic] = array_intersect_key($row, array_flip(['status', 'event_id', 'event_ts', 'updated_at']));
             }
         }
         return $latest;
@@ -171,6 +171,7 @@ class NodeRealtimeStatusService
                 'node_type' => $row['node_type'] ?? null,
                 'topic' => $topic,
                 'event_id' => (string) ($row['event_id'] ?? ''),
+                'event_ts' => max(0, (int) ($row['event_ts'] ?? 0)),
                 'reason' => (string) ($row['reason'] ?? ''),
                 'status' => (string) ($row['status'] ?? ''),
                 'message' => (string) ($row['message'] ?? ''),
