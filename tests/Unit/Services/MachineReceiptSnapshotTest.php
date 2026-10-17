@@ -28,7 +28,8 @@ final class MachineReceiptSnapshotTest extends TestCase
         $this->assertSame([10], array_keys($result));
         $this->assertSame('new', $result[10]['config']['event_id']);
         $this->assertSame('failed', $result[10]['users']['status']);
-        $this->assertEqualsCanonicalizing(['status', 'event_id', 'updated_at'], array_keys($result[10]['config']));
+        $this->assertEqualsCanonicalizing(['status', 'event_id', 'event_ts', 'updated_at'], array_keys($result[10]['config']));
+        $this->assertSame(0, $result[10]['config']['event_ts']);
     }
 
     public function test_no_nodes_does_not_read_the_snapshot(): void
