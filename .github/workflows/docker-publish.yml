@@ -113,11 +113,18 @@ jobs:
           DIGEST: ${{ steps.build-and-push.outputs.digest }}
         run: |
           set -euo pipefail
-          for platform in linux/amd64 linux/arm64; do
-            docker run --rm --network none --platform "$platform" --entrypoint php \
-              "$IMAGE@$DIGEST" scripts/verify-php-security.php --container
-            docker run --rm --network none --platform "$platform" --entrypoint composer \
-              "$IMAGE@$DIGEST" check-platform-reqs --no-dev --no-interaction
+          manifest="$(docker buildx imagetools inspect "$IMAGE@$DIGEST" --raw)"
+          for architecture in amd64 arm64; do
+            platform_digest="$(jq -er --arg arch "$architecture" '
+              [.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest]
+              | if length == 1 then .[0] else error("Expected exactly one platform manifest") end
+            ' <<< "$manifest")"
+            [[ "$platform_digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+            echo "Verifying linux/$architecture: $platform_digest"
+            docker run --rm --network none --platform "linux/$architecture" --entrypoint php \
+              "$IMAGE@$platform_digest" scripts/verify-php-security.php --container
+            docker run --rm --network none --platform "linux/$architecture" --entrypoint composer \
+              "$IMAGE@$platform_digest" check-platform-reqs --no-dev --no-interaction
           done
 
       - name: Promote verified image
