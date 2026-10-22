@@ -100,6 +100,9 @@ if [ "${1:-}" = compose ]; then
   [ "${1:-}" = version ] && exit 0
   args=" $* "
   case "$args" in
+    *"scripts/verify-php-security.php --container"*)
+      [ "${FAKE_PHP_UNSAFE:-0}" = 1 ] && exit 39
+      exit 0 ;;
     *"xboard:queue-health"*)
       [ "${FAKE_QUEUE_UNHEALTHY:-0}" = 1 ] && exit 37
       exit 0 ;;
@@ -169,23 +172,39 @@ SH;
     if (strpos($dockerLog, 'php artisan config:cache') >= strpos($dockerLog, 'up -d --remove-orphans')) {
         throw new RuntimeException('runtime configuration must be prepared before services start');
     }
+    foreach (['web', 'horizon', 'ws-server'] as $service) {
+        $guard = "run --rm --no-deps -T {$service} php scripts/verify-php-security.php --container";
+        if (!str_contains($dockerLog, $guard)
+            || strpos($dockerLog, $guard) >= strpos($dockerLog, 'up -d redis redis-cache')) {
+            throw new RuntimeException('every application image must pass the PHP security gate before service changes');
+        }
+    }
     if (!str_contains($dockerLog, '--force-recreate --no-deps web horizon ws-server')
         || !str_contains($dockerLog, 'xboard:queue-health --local --wait=30')) {
         throw new RuntimeException('all long-lived services must reload configuration and pass the consumer gate');
     }
-    foreach (['FAKE_QUEUE_UNHEALTHY' => 37, 'FAKE_PREPARE_FAIL' => 38] as $variable => $exitCode) {
+    foreach (['FAKE_QUEUE_UNHEALTHY' => 37, 'FAKE_PREPARE_FAIL' => 38, 'FAKE_PHP_UNSAFE' => 39] as $variable => $exitCode) {
         $old = getenv($variable);
         putenv($variable . '=1');
         try {
+            file_put_contents($state . '/docker.log', '');
             $failed = $run([$shell, $tempRoot . '/run-update.sh'], $tempRoot, $exitCode);
             if (str_contains($failed['stdout'], 'Keli update succeeded:')) {
                 throw new RuntimeException('unhealthy or unprepared runtime must not report success');
+            }
+            if ($variable === 'FAKE_PHP_UNSAFE') {
+                $failedLog = (string) file_get_contents($state . '/docker.log');
+                foreach (['up -d', 'composer install', 'php artisan xboard:update'] as $forbidden) {
+                    if (str_contains($failedLog, $forbidden)) {
+                        throw new RuntimeException('unsafe PHP must stop the update before service or database changes');
+                    }
+                }
             }
         } finally {
             $old === false ? putenv($variable) : putenv($variable . '=' . $old);
         }
     }
-    fwrite(STDOUT, "direct update integration tests passed (success, missing consumers, prepare failure)\n");
+    fwrite(STDOUT, "direct update integration tests passed (success, missing consumers, prepare failure, unsafe PHP)\n");
 } finally {
     $removeTree($tempRoot);
 }

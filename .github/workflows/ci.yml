@@ -29,6 +29,11 @@ jobs:
       - name: Verify composer platform pin
         run: php scripts/verify-composer-platform.php
 
+      - name: Verify PHP security baseline
+        run: |
+          php scripts/verify-php-security.tests.php
+          php scripts/verify-php-security.php
+
       - name: Verify admin asset versions
         run: php scripts/verify-admin-xboard-assets.php
 

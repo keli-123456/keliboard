@@ -336,14 +336,28 @@ sh update.sh
 
 这个脚本会自动：
 
-- 锁定目标 Git 提交和容器镜像
-- 在独立端口验证候选站点
-- 创建并演练数据库备份
+- 获取目标 Git 提交并拉取容器镜像
+- 在变更服务前，检查 `web`、`horizon`、`ws-server` 三个镜像的 PHP 安全版本与必要扩展
 - 严格按 `composer.lock` 安装依赖
-- 切换服务并检查核心接口和进程
-- 失败时恢复原代码和原镜像
+- 执行数据库更新，准备代码缓存，但不清空业务缓存、队列和锁
+- 重建三个应用容器并检查进程与队列消费状态
+- 检查原有 `APP_KEY` 未被更改
 
-执行前可用 `sh update.sh --plan --no-fetch --ref=HEAD` 只查看计划。部署凭证与主动回退见
+普通 `sh update.sh` 不会自动创建数据库备份，也不提供自动回滚。执行前请准备数据库、`.env` 和业务文件备份，并记录原 Git 提交和容器镜像；更新期间网页与 WebSocket 会短暂切换。不要删除旧镜像或执行 `docker compose down -v`。
+
+PHP 安全更新必须等 GitHub 的 CI 与镜像发布流程全部成功后再执行。仅提交代码或重启旧容器不会升级 PHP；基础镜像已固定到包含 PHP 8.2.35 的版本，以修复 CVE-2026-109618、CVE-2026-109619。镜像发布前会分别验证 AMD64 和 ARM64；不符合安全版本的镜像不会更新正式标签。
+
+更新后分别核对实际运行版本与容器检查结果：
+
+```bash
+docker compose exec -T web php scripts/verify-php-security.php --container
+docker compose exec -T horizon php scripts/verify-php-security.php --container
+docker compose exec -T ws-server php scripts/verify-php-security.php --container
+```
+
+宿主机的 PHP-FPM 与应用容器相互独立，容器升级不会替代宿主机 PHP 安全更新。
+
+需要候选站点验证、数据库备份演练和失败回滚时，请使用安全部署流程。可用 `sh update.sh --plan --no-fetch --ref=HEAD` 只查看计划。部署凭证与主动回退见
 [安全部署与回滚](../operations/safe-deployment.md)。
 
 ## 12. 常用维护命令

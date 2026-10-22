@@ -85,6 +85,9 @@ if [ -n "$COMPOSE_KIND" ] && [ -n "$COMPOSE_FILE" ] && [ ! -f /.dockerenv ]; the
   chmod -R 777 .docker/.data || true
 
   compose pull
+  for service in web horizon ws-server; do
+    compose run --rm --no-deps -T "$service" php scripts/verify-php-security.php --container
+  done
   compose up -d redis redis-cache
   compose run --rm --no-deps -T web composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
   compose run --rm --no-deps -T web php artisan xboard:update --no-restart
@@ -106,6 +109,7 @@ if [ -n "$COMPOSE_KIND" ] && [ -n "$COMPOSE_FILE" ] && [ ! -f /.dockerenv ]; the
   done
   compose exec -T horizon php artisan xboard:queue-health --local --wait=30
 else
+  php scripts/verify-php-security.php
   command -v composer >/dev/null 2>&1 || { echo "ERROR: Composer is not installed" >&2; exit 1; }
   composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
   php artisan xboard:update --no-restart

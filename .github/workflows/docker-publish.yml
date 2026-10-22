@@ -23,6 +23,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     permissions:
       contents: read
       packages: write
@@ -86,16 +87,17 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
 
-      - name: Build and push
+      - name: Build candidate image
         id: build-and-push
         uses: docker/build-push-action@v5
         with:
           context: .
+          pull: true
           push: true
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:build-${{ env.SOURCE_SHA }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             SOURCE_GIT_SHA=${{ env.SOURCE_SHA }}
@@ -104,6 +106,33 @@ jobs:
           outputs: type=registry,push=true
           allow: |
             network.host
+
+      - name: Verify candidate PHP and dependencies on both architectures
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for platform in linux/amd64 linux/arm64; do
+            docker run --rm --network none --platform "$platform" --entrypoint php \
+              "$IMAGE@$DIGEST" scripts/verify-php-security.php --container
+            docker run --rm --network none --platform "$platform" --entrypoint composer \
+              "$IMAGE@$DIGEST" check-platform-reqs --no-dev --no-interaction
+          done
+
+      - name: Promote verified image
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          tags=()
+          while IFS= read -r tag; do
+            if [ -n "$tag" ]; then tags+=(--tag "$tag"); fi
+          done <<< "$TAGS"
+          test "${#tags[@]}" -gt 0
+          docker buildx imagetools create "${tags[@]}" "$IMAGE@$DIGEST"
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3.4.0
