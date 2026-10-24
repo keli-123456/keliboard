@@ -12,7 +12,7 @@ class HookList extends Command
 
   public function handle()
   {
-    $paths = [base_path('app'), base_path('plugins')];
+    $paths = [base_path('app'), ...app(\App\Services\Plugin\PluginManager::class)->getPluginPaths()];
     $hooks = collect();
     $pattern = '/HookManager::(call|filter|register|registerFilter)\([\'\"]([a-zA-Z0-9_.-]+)[\'\"]/';
 

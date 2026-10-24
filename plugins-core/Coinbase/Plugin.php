@@ -79,13 +79,18 @@ class Plugin extends AbstractPlugin implements PaymentInterface
 
     public function notify($params): array|bool
     {
+        $secret = $this->getConfig('coinbase_webhook_key');
+        if (!is_string($secret) || trim($secret) === '') {
+            return false;
+        }
         $payload = trim(request()->getContent());
         $json_param = json_decode($payload, true);
+        if (!is_array($json_param)) {
+            return false;
+        }
 
-        $headerName = 'X-Cc-Webhook-Signature';
-        $headers = getallheaders();
-        $signatureHeader = isset($headers[$headerName]) ? $headers[$headerName] : '';
-        $computedSignature = \hash_hmac('sha256', $payload, $this->getConfig('coinbase_webhook_key'));
+        $signatureHeader = request()->header('X-Cc-Webhook-Signature', '');
+        $computedSignature = \hash_hmac('sha256', $payload, $secret);
 
         if (!$this->hashEqual($signatureHeader, $computedSignature)) {
             throw new ApiException('HMAC signature does not match', 400);

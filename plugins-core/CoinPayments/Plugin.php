@@ -78,20 +78,25 @@ class Plugin extends AbstractPlugin implements PaymentInterface
 
     public function notify($params): array|string
     {
-        if (!isset($params['merchant']) || $params['merchant'] != trim($this->getConfig('coinpayments_merchant_id'))) {
+        $secret = $this->getConfig('coinpayments_ipn_secret');
+        $merchant = $this->getConfig('coinpayments_merchant_id');
+        if (!is_string($secret) || trim($secret) === '' || !is_string($merchant) || trim($merchant) === ''
+            || !is_array($params) || !is_string($params['merchant'] ?? null) || $params['merchant'] !== trim($merchant)) {
             throw new ApiException('No or incorrect Merchant ID passed');
         }
-
-        $headers = getallheaders();
+        foreach ($params as $value) {
+            if (!is_string($value) && !is_int($value)) {
+                throw new ApiException('Invalid IPN payload');
+            }
+        }
 
         ksort($params);
         reset($params);
         $request = stripslashes(http_build_query($params));
 
-        $headerName = 'Hmac';
-        $signHeader = isset($headers[$headerName]) ? $headers[$headerName] : '';
+        $signHeader = request()->header('Hmac', '');
 
-        $hmac = hash_hmac("sha512", $request, trim($this->getConfig('coinpayments_ipn_secret')));
+        $hmac = hash_hmac("sha512", $request, trim($secret));
 
         if (!hash_equals($hmac, $signHeader)) {
             throw new ApiException('HMAC signature does not match', 400);

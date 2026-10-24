@@ -17,8 +17,8 @@ use Illuminate\Support\Facades\Log;
 
 class GiftCardService
 {
-    protected readonly GiftCardCode $code;
-    protected readonly GiftCardTemplate $template;
+    protected GiftCardCode $code;
+    protected GiftCardTemplate $template;
     protected ?User $user = null;
 
     public function __construct(string $code)
@@ -124,21 +124,15 @@ class GiftCardService
         }
 
         return DB::transaction(function () use ($options) {
-            // 在事务内再次验证，防止并发问题
-            // 重新加载兑换码和用户数据（带行锁）
-            $this->code->refresh();
-            $this->user->refresh();
-            
-            // 再次检查兑换码是否可用
-            if (!$this->code->isAvailable()) {
-                throw new ApiException('兑换码已被使用或不可用');
-            }
-            
-            // 再次检查用户资格（防止check和redeem之间状态变化）
-            $eligibility = $this->checkUserEligibility();
-            if (!$eligibility['can_redeem']) {
-                throw new ApiException($eligibility['reason']);
-            }
+            // Lock current rows before checking limits or granting any rewards.
+            $this->code = GiftCardCode::query()->whereKey($this->code->id)->lockForUpdate()->first()
+                ?? throw new ApiException('兑换码不存在');
+            $this->template = GiftCardTemplate::query()->whereKey($this->code->template_id)->lockForUpdate()->first()
+                ?? throw new ApiException('该礼品卡类型不存在');
+            $this->code->setRelation('template', $this->template);
+            $this->user = User::query()->whereKey($this->user->id)->lockForUpdate()->first()
+                ?? throw new ApiException('用户信息未提供');
+            $this->validate();
             
             $actualRewards = $this->template->calculateActualRewards($this->user);
 
@@ -155,7 +149,9 @@ class GiftCardService
                 $inviteRewards = $this->giveInviteRewards($actualRewards);
             }
 
-            $this->code->markAsUsed($this->user);
+            if (!$this->code->markAsUsed($this->user)) {
+                throw new ApiException('兑换记录保存失败');
+            }
 
             GiftCardUsage::createRecord(
                 $this->code,
@@ -566,7 +562,7 @@ class GiftCardService
             return null;
         }
 
-        $inviteUser = User::find($this->user->invite_user_id);
+        $inviteUser = User::query()->lockForUpdate()->find($this->user->invite_user_id);
         if (!$inviteUser) {
             Log::warning('邀请人不存在', [
                 'user_id' => $this->user->id,
@@ -593,13 +589,10 @@ class GiftCardService
         if (isset($rewards['balance']) && $rewards['balance'] > 0) {
             $inviteBalance = intval($rewards['balance'] * $rate);
             if ($inviteBalance > 0) {
-                if ($userService->addBalance($inviteUser->id, $inviteBalance)) {
-                    $inviteRewards['balance'] = $inviteBalance;
-                    Log::info('邀请人获得余额奖励', [
-                        'invite_user_id' => $inviteUser->id,
-                        'balance' => $inviteBalance,
-                    ]);
+                if (!$userService->addBalance($inviteUser->id, $inviteBalance)) {
+                    throw new ApiException('邀请人余额发放失败');
                 }
+                $inviteRewards['balance'] = $inviteBalance;
             }
         }
 
@@ -608,13 +601,10 @@ class GiftCardService
             $inviteTransfer = intval($rewards['transfer_enable'] * $rate);
             if ($inviteTransfer > 0) {
                 $inviteUser->transfer_enable = ($inviteUser->transfer_enable ?? 0) + $inviteTransfer;
-                if ($inviteUser->save()) {
-                    $inviteRewards['transfer_enable'] = $inviteTransfer;
-                    Log::info('邀请人获得流量奖励', [
-                        'invite_user_id' => $inviteUser->id,
-                        'transfer_enable' => $inviteTransfer,
-                    ]);
+                if (!$inviteUser->save()) {
+                    throw new ApiException('邀请人流量发放失败');
                 }
+                $inviteRewards['transfer_enable'] = $inviteTransfer;
             }
         }
 

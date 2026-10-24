@@ -154,6 +154,112 @@ final class GiftCardTenantScopeServiceTest extends TestCase
         return [[false], [true]];
     }
 
+    public function test_redeem_requests_row_locks_before_granting_rewards(): void
+    {
+        $user = $this->createUser('locked@example.test');
+        $code = $this->createGiftCardCode();
+        $service = (new GiftCardService($code->code))->setUser($user);
+        $connection = $this->database->getConnection();
+        $connection->setQueryGrammar(new class($connection) extends \Illuminate\Database\Query\Grammars\SQLiteGrammar {
+            protected function compileLock(\Illuminate\Database\Query\Builder $query, $value)
+            {
+                return $value ? '/* row-lock */' : '';
+            }
+        });
+        $connection->enableQueryLog();
+        $service->redeem();
+
+        foreach (['v2_gift_card_code', 'v2_gift_card_template', 'v2_user'] as $table) {
+            $queries = array_filter($connection->getQueryLog(), static fn (array $entry): bool =>
+                str_starts_with($entry['query'], 'select') && str_contains($entry['query'], '"' . $table . '"')
+                && str_contains($entry['query'], '/* row-lock */'));
+            $this->assertNotEmpty($queries, 'Expected a locking read for ' . $table);
+        }
+    }
+
+    public function test_single_use_card_cannot_reward_two_preloaded_services(): void
+    {
+        $first = $this->createUser('first@example.test');
+        $second = $this->createUser('second@example.test');
+        $code = $this->createGiftCardCode();
+        $a = (new GiftCardService($code->code))->setUser($first)->validate();
+        $b = (new GiftCardService($code->code))->setUser($second)->validate();
+        $a->redeem();
+        try {
+            $b->redeem();
+            $this->fail('The spent card must not grant another reward.');
+        } catch (ApiException) {
+            $this->assertSame(100, (int) $first->fresh()->balance);
+            $this->assertSame(0, (int) $second->fresh()->balance);
+            $this->assertSame(1, GiftCardUsage::query()->count());
+            $this->assertSame(1, (int) $code->fresh()->usage_count);
+        }
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('templateChanges')]
+    public function test_redeem_rechecks_the_locked_template(array $changes): void
+    {
+        $user = $this->createUser('changed@example.test', ['site_id' => 1]);
+        $code = $this->createGiftCardCode();
+        $service = (new GiftCardService($code->code))->setUser($user)->validate();
+        GiftCardTemplate::query()->whereKey($code->template_id)->update($changes);
+        try {
+            $service->redeem();
+            $this->fail('A changed template must be revalidated before issuing rewards.');
+        } catch (ApiException) {
+            $this->assertSame(0, (int) $user->fresh()->balance);
+            $this->assertSame(0, GiftCardUsage::query()->count());
+            $this->assertSame(0, (int) $code->fresh()->usage_count);
+        }
+    }
+
+    public static function templateChanges(): array
+    {
+        return [[['status' => false]], [['conditions' => json_encode(['require_invite' => true])]]];
+    }
+
+    public function test_inviter_reward_failure_rolls_back_recipient_rewards_and_card_usage(): void
+    {
+        $inviter = $this->createUser('inviter@example.test');
+        $user = $this->createUser('invited@example.test', ['invite_user_id' => $inviter->id]);
+        $code = $this->createGiftCardCode(['rewards' => ['balance' => 100, 'invite_reward_rate' => 0.2]]);
+        app()->instance(\App\Services\UserService::class, new class($inviter->id) extends \App\Services\UserService {
+            public function __construct(private int $failedUserId) {}
+
+            public function addBalance(int $userId, int $balance): bool
+            {
+                return $userId === $this->failedUserId ? false : parent::addBalance($userId, $balance);
+            }
+        });
+        try {
+            (new GiftCardService($code->code))->setUser($user)->redeem();
+            $this->fail('A failed inviter reward must roll back the redemption.');
+        } catch (ApiException) {
+            $this->assertSame(0, (int) $user->fresh()->balance);
+            $this->assertSame(0, (int) $inviter->fresh()->balance);
+            $this->assertSame(0, GiftCardUsage::query()->count());
+            $this->assertSame(0, (int) $code->fresh()->usage_count);
+        }
+    }
+
+    public function test_card_write_failure_rolls_back_previously_granted_rewards(): void
+    {
+        $user = $this->createUser('failed-card@example.test');
+        $code = $this->createGiftCardCode();
+        \Illuminate\Database\Eloquent\Model::setEventDispatcher(new \Illuminate\Events\Dispatcher(app()));
+        GiftCardCode::saving(static fn (GiftCardCode $model): bool => (int) $model->usage_count === 0);
+        try {
+            (new GiftCardService($code->code))->setUser($user)->redeem();
+            $this->fail('A rejected card write must roll back every reward.');
+        } catch (ApiException) {
+            $this->assertSame(0, (int) $user->fresh()->balance);
+            $this->assertSame(0, (int) $code->fresh()->usage_count);
+            $this->assertSame(0, GiftCardUsage::query()->count());
+        } finally {
+            \Illuminate\Database\Eloquent\Model::unsetEventDispatcher();
+        }
+    }
+
     private function createGiftCardTables(): void
     {
         $this->database->schema()->create('v2_gift_card_template', function (Blueprint $table): void {

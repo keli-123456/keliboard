@@ -372,58 +372,7 @@ class XboardInstall extends Command
      */
     public static function restoreProtectedPlugins(Command $console = null)
     {
-        exec("git config core.filemode false", $output, $returnVar);
-        $cmd = "git status --porcelain plugins/ 2>/dev/null";
-        exec($cmd, $output, $returnVar);
-        if (!empty($output)) {
-            $hasNonNewFiles = false;
-            foreach ($output as $line) {
-                $status = trim(substr($line, 0, 2));
-                if ($status !== 'A') {
-                    $hasNonNewFiles = true;
-                    break;
-                }
-            }
-            if ($hasNonNewFiles) {
-                if ($console)
-                    $console->info("检测到 plugins 目录有变更，正在还原...");
-
-                foreach ($output as $line) {
-                    $status = trim(substr($line, 0, 2));
-                    $filePath = trim(substr($line, 3));
-
-                    if (strpos($filePath, 'plugins/') === 0 && $status !== 'A') {
-                        $relativePath = substr($filePath, 8);
-                        if ($console) {
-                            $action = match ($status) {
-                                'M' => '修改',
-                                'D' => '删除',
-                                'R' => '重命名',
-                                'C' => '复制',
-                                default => '变更'
-                            };
-                            $console->info("还原插件文件 [{$relativePath}] ({$action})");
-                        }
-
-                        $cmd = "git checkout HEAD -- {$filePath}";
-                        exec($cmd, $gitOutput, $gitReturnVar);
-
-                        if ($gitReturnVar === 0) {
-                            if ($console)
-                                $console->info("插件文件 [{$relativePath}] 已还原。");
-                        } else {
-                            if ($console)
-                                $console->error("插件文件 [{$relativePath}] 还原失败。");
-                        }
-                    }
-                }
-            } else {
-                if ($console)
-                    $console->info("plugins 目录状态正常，无需还原。");
-            }
-        } else {
-            if ($console)
-                $console->info("plugins 目录状态正常，无需还原。");
-        }
+        // Retain the legacy entrypoint without restoring or deleting user files.
+        $console?->info('内置插件由系统版本管理，用户插件目录保持不变。');
     }
 }

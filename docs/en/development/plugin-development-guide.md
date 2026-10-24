@@ -1,5 +1,14 @@
 # XBoard Plugin Development Guide
 
+## Bundled And Uploaded Plugins
+
+- `plugins-core/` contains plugins shipped with the application release. Their code is updated with the application, not through ZIP uploads.
+- `plugins/` contains administrator-uploaded plugins. Existing uploaded plugins and their files remain in place during upgrades.
+- Both use the `Plugin\\` namespace. Composer searches `plugins-core/` first; the plugin manager also selects the bundled directory when an older copy exists in `plugins/`.
+- Configuration, installation and enabled state remain in the database. Moving bundled code does not reset these values. Bundled plugins may be disabled or uninstalled, but their files cannot be deleted or replaced through the plugin API.
+- Plugin discovery, README/configuration, routes, schedules, assets and database migrations resolve through the plugin manager. Use `getPluginPath($code)` rather than hard-coding the source directory.
+- After updating, regenerate the Composer autoloader and restart long-running workers through the normal deployment process. Do not delete old plugin copies before reviewing any local modifications; bundled copies take precedence without removing those files.
+
 ## 📦 Plugin Structure
 
 Each plugin is an independent directory with the following structure:

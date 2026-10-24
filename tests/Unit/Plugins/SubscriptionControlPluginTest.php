@@ -153,7 +153,7 @@ final class SubscriptionControlPluginTest extends TestCase
 
     public function test_default_ua_blacklist_excludes_social_platform_preview_user_agents(): void
     {
-        $configPath = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $configPath = dirname(__DIR__, 3) . '/plugins-core/SubscriptionControl/config.json';
         $config = json_decode((string) file_get_contents($configPath), true);
         $defaultBlacklist = (string) ($config['config']['ua_blacklist']['default'] ?? '');
         $defaultBlockOnly = (string) ($config['config']['ua_block_only_keywords']['default'] ?? '');
@@ -187,7 +187,7 @@ final class SubscriptionControlPluginTest extends TestCase
 
     public function test_default_ua_blacklist_matches_scanner_user_agents(): void
     {
-        $configPath = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $configPath = dirname(__DIR__, 3) . '/plugins-core/SubscriptionControl/config.json';
         $config = json_decode((string) file_get_contents($configPath), true);
         $defaultBlacklist = (string) ($config['config']['ua_blacklist']['default'] ?? '');
 
@@ -495,7 +495,7 @@ final class SubscriptionControlPluginTest extends TestCase
 
     public function test_default_browser_ua_block_only_matches_common_browsers(): void
     {
-        $configPath = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $configPath = dirname(__DIR__, 3) . '/plugins-core/SubscriptionControl/config.json';
         $config = json_decode((string) file_get_contents($configPath), true);
         $defaultBlockOnly = (string) ($config['config']['ua_block_only_keywords']['default'] ?? '');
 
@@ -525,7 +525,7 @@ final class SubscriptionControlPluginTest extends TestCase
 
     public function test_default_ua_reset_matches_legacy_clients_without_matching_modern_clients(): void
     {
-        $configPath = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $configPath = dirname(__DIR__, 3) . '/plugins-core/SubscriptionControl/config.json';
         $config = json_decode((string) file_get_contents($configPath), true);
         $defaultReset = (string) ($config['config']['ua_reset_keywords']['default'] ?? '');
         $defaultResetExclude = (string) ($config['config']['ua_reset_exclude_keywords']['default'] ?? '');

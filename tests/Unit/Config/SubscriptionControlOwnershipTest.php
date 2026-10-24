@@ -29,7 +29,7 @@ final class SubscriptionControlOwnershipTest extends TestCase
 
     public function test_subscription_control_source_denylist_defaults_cover_major_clouds(): void
     {
-        $path = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $path = dirname(__DIR__, 3) . '/plugins-core/SubscriptionControl/config.json';
         $config = json_decode((string) file_get_contents($path), true);
 
         $this->assertIsArray($config);
@@ -50,7 +50,7 @@ final class SubscriptionControlOwnershipTest extends TestCase
 
     public function test_subscription_control_source_denylist_is_enabled_by_default(): void
     {
-        $path = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $path = dirname(__DIR__, 3) . '/plugins-core/SubscriptionControl/config.json';
         $config = json_decode((string) file_get_contents($path), true);
 
         $this->assertIsArray($config);
@@ -64,7 +64,7 @@ final class SubscriptionControlOwnershipTest extends TestCase
 
     public function test_subscription_control_default_config_enables_anti_gfw_baseline(): void
     {
-        $path = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $path = dirname(__DIR__, 3) . '/plugins-core/SubscriptionControl/config.json';
         $config = json_decode((string) file_get_contents($path), true);
 
         $this->assertIsArray($config);
@@ -105,7 +105,7 @@ final class SubscriptionControlOwnershipTest extends TestCase
 
     public function test_subscription_control_malicious_ua_blacklist_defaults_are_explicit(): void
     {
-        $path = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $path = dirname(__DIR__, 3) . '/plugins-core/SubscriptionControl/config.json';
         $config = json_decode((string) file_get_contents($path), true);
 
         $this->assertIsArray($config);
@@ -145,7 +145,7 @@ final class SubscriptionControlOwnershipTest extends TestCase
 
     public function test_subscription_control_default_ua_policy_uses_negative_rules_not_whitelist(): void
     {
-        $path = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $path = dirname(__DIR__, 3) . '/plugins-core/SubscriptionControl/config.json';
         $config = json_decode((string) file_get_contents($path), true);
 
         $this->assertIsArray($config);
@@ -208,7 +208,7 @@ final class SubscriptionControlOwnershipTest extends TestCase
 
     public function test_subscription_control_legacy_ua_reset_defaults_are_explicit(): void
     {
-        $path = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $path = dirname(__DIR__, 3) . '/plugins-core/SubscriptionControl/config.json';
         $config = json_decode((string) file_get_contents($path), true);
 
         $this->assertIsArray($config);
@@ -271,7 +271,7 @@ final class SubscriptionControlOwnershipTest extends TestCase
 
     public function test_subscription_control_ua_keyword_lists_use_multiline_inputs(): void
     {
-        $path = dirname(__DIR__, 3) . '/plugins/SubscriptionControl/config.json';
+        $path = dirname(__DIR__, 3) . '/plugins-core/SubscriptionControl/config.json';
         $config = json_decode((string) file_get_contents($path), true);
 
         $this->assertIsArray($config);

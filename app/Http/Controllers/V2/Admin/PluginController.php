@@ -75,17 +75,21 @@ class PluginController extends Controller
             ->keyBy('code')
             ->toArray();
 
-        $pluginPath = base_path('plugins');
         $plugins = [];
 
-        if (File::exists($pluginPath)) {
-            $directories = File::directories($pluginPath);
+        $directories = $this->pluginManager->getPluginDirectories();
+        if ($directories !== []) {
             foreach ($directories as $directory) {
                 $pluginName = basename($directory);
                 $configFile = $directory . '/config.json';
                 if (File::exists($configFile)) {
                     $config = json_decode(File::get($configFile), true);
+                    if (!is_array($config) || !is_string($config['code'] ?? null)
+                        || realpath($directory) !== realpath($this->pluginManager->getPluginPath($config['code']))) {
+                        continue;
+                    }
                     $code = $config['code'];
+                    $isCore = $this->pluginManager->isCorePlugin($code);
                     $pluginType = $config['type'] ?? Plugin::TYPE_FEATURE;
 
                     // 如果指定了类型，过滤插件
@@ -116,8 +120,9 @@ class PluginController extends Controller
                         'type' => $pluginType,
                         'is_installed' => $installed,
                         'is_enabled' => $installed ? $installedPlugins[$code]['is_enabled'] : false,
-                        'is_protected' => in_array($code, Plugin::PROTECTED_PLUGINS),
-                        'can_be_deleted' => !in_array($code, Plugin::PROTECTED_PLUGINS),
+                        'is_core' => $isCore,
+                        'is_protected' => $isCore || in_array($code, Plugin::PROTECTED_PLUGINS, true),
+                        'can_be_deleted' => !$isCore && !in_array($code, Plugin::PROTECTED_PLUGINS, true),
                         'config' => $pluginConfig,
                         'readme' => $readmeContent,
                         'need_upgrade' => $needUpgrade,
@@ -294,7 +299,7 @@ class PluginController extends Controller
         $code = $request->input('code');
 
         // 检查是否为受保护的插件
-        if (in_array($code, Plugin::PROTECTED_PLUGINS)) {
+        if ($this->pluginManager->isCorePlugin($code) || in_array($code, Plugin::PROTECTED_PLUGINS, true)) {
             return $this->pluginFail('该插件为系统默认插件，不允许删除', 403);
         }
 

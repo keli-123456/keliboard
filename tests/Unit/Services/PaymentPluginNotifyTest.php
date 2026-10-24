@@ -13,9 +13,10 @@ final class PaymentPluginNotifyTest extends TestCase
     public function test_epay_notify_returns_paid_amount_in_cents_only_for_success_status(): void
     {
         $plugin = new EpayPlugin('Epay');
-        $plugin->setConfig(['key' => 'secret']);
+        $plugin->setConfig(['key' => 'secret', 'pid' => 'merchant-1']);
 
         $params = [
+            'pid' => 'merchant-1',
             'out_trade_no' => 'trade-1',
             'trade_no' => 'gateway-1',
             'trade_status' => 'TRADE_SUCCESS',

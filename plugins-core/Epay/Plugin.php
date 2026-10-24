@@ -80,18 +80,33 @@ class Plugin extends AbstractPlugin implements PaymentInterface
 
     public function notify($params): array|bool
     {
-        $sign = $params['sign'] ?? '';
+        $secret = $this->getConfig('key');
+        $pid = $this->getConfig('pid');
+        if (!is_string($secret) || trim($secret) === '' || !is_array($params)
+            || (!is_string($pid) && !is_int($pid)) || trim((string) $pid) === '') {
+            return false;
+        }
+        foreach ($params as $value) {
+            if (!is_string($value) && !is_int($value)) {
+                return false;
+            }
+        }
+        if (!is_string($params['sign'] ?? null) || !preg_match('/\A[0-9a-f]{32}\z/', $params['sign'])
+            || !is_string($params['out_trade_no'] ?? null) || trim($params['out_trade_no']) === ''
+            || !is_string($params['trade_no'] ?? null) || trim($params['trade_no']) === ''
+            || (string) ($params['pid'] ?? '') !== (string) $pid
+            || strtoupper((string) ($params['sign_type'] ?? 'MD5')) !== 'MD5'
+            || ($params['trade_status'] ?? null) !== 'TRADE_SUCCESS'
+            || !preg_match('/\A[0-9]+(?:\.[0-9]{1,2}0*)?\z/', (string) ($params['money'] ?? ''))) {
+            return false;
+        }
+
+        $sign = $params['sign'];
         unset($params['sign'], $params['sign_type']);
         ksort($params);
-        $str = stripslashes(urldecode(http_build_query($params))) . $this->getConfig('key');
+        $str = stripslashes(urldecode(http_build_query($params))) . $secret;
 
-        if ($sign !== md5($str)) {
-            return false;
-        }
-        if (($params['trade_status'] ?? null) !== 'TRADE_SUCCESS') {
-            return false;
-        }
-        if (empty($params['out_trade_no']) || empty($params['trade_no']) || !isset($params['money'])) {
+        if (!hash_equals(md5($str), $sign)) {
             return false;
         }
 

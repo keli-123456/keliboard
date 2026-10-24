@@ -132,15 +132,24 @@ class Plugin extends AbstractPlugin implements PaymentInterface
 
     public function notify($params): array|bool
     {
+        $secret = $this->getConfig('bepusdt_apitoken');
+        if (!is_string($secret) || trim($secret) === '' || !is_array($params)) {
+            return false;
+        }
+        foreach ($params as $value) {
+            if (!is_string($value) && !is_int($value)) {
+                return false;
+            }
+        }
         $signature = $params['signature'] ?? null;
-        if (!$signature) {
+        if (!is_string($signature) || !preg_match('/\A[0-9a-f]{32}\z/', $signature)) {
             return false;
         }
 
         $paramsForSign = $params;
         unset($paramsForSign['signature']);
         ksort($paramsForSign);
-        $signString = stripslashes(urldecode(http_build_query($paramsForSign))) . $this->getConfig('bepusdt_apitoken');
+        $signString = stripslashes(urldecode(http_build_query($paramsForSign))) . $secret;
 
         $generatedSignature = md5($signString);
         if (!hash_equals($generatedSignature, (string) $signature)) {
@@ -151,7 +160,9 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             return false;
         }
 
-        if (empty($params['order_id']) || empty($params['trade_id']) || !isset($params['amount'])) {
+        if (!is_string($params['order_id'] ?? null) || trim($params['order_id']) === ''
+            || !is_string($params['trade_id'] ?? null) || trim($params['trade_id']) === ''
+            || !preg_match('/\A[0-9]+(?:\.[0-9]{1,2}0*)?\z/', (string) ($params['amount'] ?? ''))) {
             return false;
         }
 

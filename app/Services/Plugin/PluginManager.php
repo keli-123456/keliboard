@@ -20,23 +20,25 @@ class PluginManager
     private const ENABLED_PLUGINS_CACHE_KEY = 'plugins:enabled:list';
 
     protected string $pluginPath;
+    protected string $corePluginPath;
     protected array $loadedPlugins = [];
     protected bool $pluginsInitialized = false;
     protected array $configTypesCache = [];
 
     public function __construct()
     {
-        $this->pluginPath = $this->resolvePluginPath();
+        $this->pluginPath = $this->resolvePluginRoot('plugins');
+        $this->corePluginPath = $this->resolvePluginRoot('plugins-core');
     }
 
-    private function resolvePluginPath(): string
+    private function resolvePluginRoot(string $directory): string
     {
         try {
-            return base_path('plugins');
+            return base_path($directory);
         } catch (\Throwable) {
             // Unit tests bootstrap a bare Container (without Application::basePath()).
             // Fallback to repository-root-relative plugins directory in this runtime.
-            return dirname(__DIR__, 3) . '/plugins';
+            return dirname(__DIR__, 3) . '/' . $directory;
         }
     }
 
@@ -53,7 +55,36 @@ class PluginManager
      */
     public function getPluginPath(string $pluginCode): string
     {
-        return $this->pluginPath . '/' . Str::studly($pluginCode);
+        return $this->isCorePlugin($pluginCode)
+            ? $this->corePluginPath . '/' . Str::studly($pluginCode)
+            : $this->pluginPath . '/' . Str::studly($pluginCode);
+    }
+
+    public function isCorePlugin(string $pluginCode): bool
+    {
+        return is_dir($this->corePluginPath . '/' . Str::studly($pluginCode));
+    }
+
+    public function getPluginPaths(): array
+    {
+        return [$this->corePluginPath, $this->pluginPath];
+    }
+
+    public function getPluginDirectories(): array
+    {
+        $directories = [];
+        foreach ($this->getPluginPaths() as $root) {
+            if (!File::isDirectory($root)) {
+                continue;
+            }
+            foreach (File::directories($root) as $directory) {
+                $name = basename($directory);
+                if (preg_match('/\A[A-Za-z][A-Za-z0-9_]*\z/', $name)) {
+                    $directories[strtolower(Str::studly($name))] ??= $directory;
+                }
+            }
+        }
+        return array_values($directories);
     }
 
     /**
@@ -67,20 +98,27 @@ class PluginManager
 
         $pluginClass = $this->getPluginNamespace($pluginCode) . '\\Plugin';
 
-        if (!class_exists($pluginClass)) {
-            $pluginFile = $this->getPluginPath($pluginCode) . '/Plugin.php';
+        $pluginFile = $this->getPluginPath($pluginCode) . '/Plugin.php';
+        if (!class_exists($pluginClass, false)) {
             if (!File::exists($pluginFile)) {
                 Log::warning("Plugin class file not found: {$pluginFile}");
-                Plugin::query()->where('code', $pluginCode)->delete();
-                $this->flushEnabledPluginsCache();
+                if (!$this->isCorePlugin($pluginCode)) {
+                    Plugin::query()->where('code', $pluginCode)->delete();
+                    $this->flushEnabledPluginsCache();
+                }
                 return null;
             }
             require_once $pluginFile;
         }
 
-        if (!class_exists($pluginClass)) {
+        if (!class_exists($pluginClass, false)) {
             Log::error("Plugin class not found: {$pluginClass}");
             return null;
+        }
+
+        if ($this->isCorePlugin($pluginCode)
+            && realpath((new \ReflectionClass($pluginClass))->getFileName()) !== realpath($pluginFile)) {
+            throw new \RuntimeException('A bundled plugin was loaded from an unexpected directory; restart the workers.');
         }
 
         $plugin = new $pluginClass($pluginCode);
@@ -247,7 +285,8 @@ class PluginManager
 
         if (File::exists($migrationsPath)) {
             Artisan::call('migrate', [
-                '--path' => "plugins/" . Str::studly($pluginCode) . "/database/migrations",
+                '--path' => $migrationsPath,
+                '--realpath' => true,
                 '--force' => true
             ]);
         }
@@ -262,7 +301,8 @@ class PluginManager
 
         if (File::exists($migrationsPath)) {
             Artisan::call('migrate:rollback', [
-                '--path' => "plugins/" . Str::studly($pluginCode) . "/database/migrations",
+                '--path' => $migrationsPath,
+                '--realpath' => true,
                 '--force' => true
             ]);
         }
@@ -412,6 +452,9 @@ class PluginManager
      */
     public function delete(string $pluginCode): bool
     {
+        if ($this->isCorePlugin($pluginCode) || in_array($pluginCode, Plugin::PROTECTED_PLUGINS, true)) {
+            throw new \Exception('内置插件随系统版本更新，不允许删除文件');
+        }
         // 先卸载插件
         if (Plugin::where('code', $pluginCode)->exists()) {
             $this->uninstall($pluginCode);
@@ -929,6 +972,10 @@ class PluginManager
             $config = json_decode(File::get($pluginPath . '/config.json'), true);
             if (!$this->validateConfig($config)) {
                 throw new \Exception('插件配置文件格式错误');
+            }
+
+            if ($this->isCorePlugin($config['code'])) {
+                throw new \Exception('内置插件随系统版本更新，不允许上传同名插件覆盖');
             }
 
             $targetPath = $this->pluginPath . '/' . Str::studly($config['code']);

@@ -103,8 +103,13 @@ class Plugin extends AbstractPlugin implements PaymentInterface
 
     public function notify($params): array|bool
     {
-        if ($params['trade_status'] !== 'TRADE_SUCCESS')
+        $appId = $this->getConfig('app_id');
+        $publicKey = $this->getConfig('public_key');
+        if (!is_string($appId) || trim($appId) === '' || !is_string($publicKey) || trim($publicKey) === ''
+            || !is_array($params) || !is_string($params['app_id'] ?? null) || $params['app_id'] !== $appId
+            || ($params['trade_status'] ?? null) !== 'TRADE_SUCCESS') {
             return false;
+        }
 
         $gateway = new AlipayF2F();
         $gateway->setAppId($this->getConfig('app_id'));

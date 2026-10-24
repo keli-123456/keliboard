@@ -44,7 +44,7 @@ final class PaytaroTest extends TestCase
         $this->assertSame(['name' => 'EPay'], $methods['EPay']);
         $this->assertSame('paytaro', $methods['PayTaro']['plugin_code']);
         $this->assertSame(['app_id', 'app_secret', 'checkout_mode', 'method_uuid'], array_keys($this->plugin->form()));
-        $metadata = json_decode(file_get_contents(base_path('plugins/Paytaro/config.json')), true, 512, JSON_THROW_ON_ERROR);
+        $metadata = json_decode(file_get_contents(base_path('plugins-core/Paytaro/config.json')), true, 512, JSON_THROW_ON_ERROR);
         $this->assertSame('payment', $metadata['type']);
         $this->assertSame('paytaro', $metadata['code']);
 

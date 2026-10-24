@@ -81,13 +81,18 @@ class Plugin extends AbstractPlugin implements PaymentInterface
 
     public function notify($params): array|bool
     {
+        $secret = $this->getConfig('btcpay_webhook_key');
+        if (!is_string($secret) || trim($secret) === '') {
+            return false;
+        }
         $payload = trim(request()->getContent());
-        $headers = getallheaders();
-        $headerName = 'Btcpay-Sig';
-        $signraturHeader = isset($headers[$headerName]) ? $headers[$headerName] : '';
+        $signraturHeader = request()->header('Btcpay-Sig', '');
         $json_param = json_decode($payload, true);
+        if (!is_array($json_param) || !is_string($json_param['invoiceId'] ?? null) || trim($json_param['invoiceId']) === '') {
+            return false;
+        }
 
-        $computedSignature = "sha256=" . \hash_hmac('sha256', $payload, $this->getConfig('btcpay_webhook_key'));
+        $computedSignature = "sha256=" . \hash_hmac('sha256', $payload, $secret);
 
         if (!$this->hashEqual($signraturHeader, $computedSignature)) {
             throw new ApiException('HMAC signature does not match', 400);

@@ -72,3 +72,59 @@ jobs:
 
       - name: Run unit tests
         run: vendor/bin/phpunit --testsuite Unit --colors=always
+
+  giftcard-mysql-acceptance:
+    name: Gift card MySQL (${{ matrix.isolation }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        isolation: ["REPEATABLE READ", "READ COMMITTED"]
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: keli_acceptance_giftcard
+          MYSQL_USER: keli_acceptance
+          MYSQL_PASSWORD: ephemeral-ci-fixture-only
+          MYSQL_ROOT_PASSWORD: ephemeral-ci-root-only
+        ports:
+          - 127.0.0.1::3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=24
+    env:
+      KELI_GIFTCARD_MYSQL_ACCEPTANCE: "1"
+      KELI_GIFTCARD_DB_HOST: "127.0.0.1"
+      KELI_GIFTCARD_DB_PORT: ${{ job.services.mysql.ports[3306] }}
+      KELI_GIFTCARD_DB_NAME: keli_acceptance_giftcard
+      KELI_GIFTCARD_DB_USER: keli_acceptance
+      KELI_GIFTCARD_DB_PASSWORD: ephemeral-ci-fixture-only
+      KELI_GIFTCARD_ISOLATION: ${{ matrix.isolation }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          extensions: pdo_mysql, pdo_sqlite, mbstring, openssl
+          tools: composer:v2
+          coverage: none
+      - name: Install test dependencies without application startup
+        run: composer install --no-interaction --no-progress --prefer-dist --no-scripts
+      - name: Verify packaged plugin loading
+        run: php scripts/verify-plugin-layout.php
+      - name: Exercise real concurrent redemptions against the disposable database
+        run: |
+          mkdir -p artifacts
+          vendor/bin/phpunit -c phpunit-mysql.xml --log-junit artifacts/giftcard-mysql.xml
+      - name: Preserve acceptance results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: giftcard-mysql-${{ strategy.job-index }}
+          path: artifacts/giftcard-mysql.xml
+          if-no-files-found: ignore
+          retention-days: 7

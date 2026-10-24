@@ -154,6 +154,20 @@ final class PaymentServiceConfigIsolationTest extends TestCase
         new PaymentService('EPay', null, $channel->uuid);
     }
 
+    #[\PHPUnit\Framework\Attributes\DataProvider('invalidChannelConfigs')]
+    public function test_invalid_saved_configuration_is_rejected_before_loading_the_plugin(?string $config): void
+    {
+        $channel = $this->payment(self::ALIPAY, 'invalid-config');
+        $this->database->table('v2_payment')->where('id', $channel->id)->update(['config' => $config]);
+        $this->expectExceptionMessage('invalid payment config');
+        new PaymentService('PayTaro', null, $channel->uuid);
+    }
+
+    public static function invalidChannelConfigs(): array
+    {
+        return [[null], ['null'], ['true'], ['42'], ['"not-a-map"'], ['{invalid']];
+    }
+
     private function payment(string $methodUuid, string $name): Payment
     {
         return Payment::create(['name' => $name, 'uuid' => $name, 'payment' => 'PayTaro', 'enable' => true,

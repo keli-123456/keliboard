@@ -6,6 +6,11 @@ on:
     types: [completed]
     branches: ["main", "master", "new-dev"]
   workflow_dispatch:
+    inputs:
+      candidate_only:
+        description: "Build and verify an immutable candidate without promoting release aliases"
+        type: boolean
+        default: true
 
 env:
   REGISTRY: ghcr.io
@@ -125,9 +130,12 @@ jobs:
               "$IMAGE@$platform_digest" scripts/verify-php-security.php --container
             docker run --rm --network none --platform "linux/$architecture" --entrypoint composer \
               "$IMAGE@$platform_digest" check-platform-reqs --no-dev --no-interaction
+            docker run --rm --network none --platform "linux/$architecture" --entrypoint php \
+              "$IMAGE@$platform_digest" scripts/verify-plugin-layout.php
           done
 
       - name: Promote verified image
+        if: github.event_name != 'workflow_dispatch' || !inputs.candidate_only
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           DIGEST: ${{ steps.build-and-push.outputs.digest }}

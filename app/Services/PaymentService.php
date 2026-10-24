@@ -46,6 +46,9 @@ class PaymentService
                 throw new ApiException('payment method mismatch');
             }
             $this->config = is_string($payment['config']) ? json_decode($payment['config'], true) : $payment['config'];
+            if (!is_array($this->config)) {
+                throw new ApiException('invalid payment config');
+            }
             $this->config['archived'] = $paymentModel->trashed();
             $this->config['enable'] = $payment['enable'];
             $this->config['id'] = $payment['id'];
