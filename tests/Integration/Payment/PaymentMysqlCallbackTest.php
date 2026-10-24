@@ -43,7 +43,7 @@ final class PaymentMysqlCallbackTest extends TestCase
     public function test_valid_signed_http_callbacks_credit_the_order_only_once(): void
     {
         foreach ([1, 2] as $attempt) {
-            $response = $this->callback($this->payload());
+            $response = $this->dispatchCallback($this->payload());
             $this->assertSame(200, $response->getStatusCode());
             $this->assertSame('success', $response->getContent());
             $this->assertSame(1234, (int) $this->user->fresh()->balance);
@@ -54,7 +54,7 @@ final class PaymentMysqlCallbackTest extends TestCase
     #[DataProvider('invalidReceipts')]
     public function test_invalid_receipts_never_credit_the_order(array $changes): void
     {
-        $response = $this->callback($this->payload($changes));
+        $response = $this->dispatchCallback($this->payload($changes));
         $this->assertGreaterThanOrEqual(400, $response->getStatusCode());
         $this->assertSame(0, (int) $this->user->fresh()->balance);
         $this->assertSame(Order::STATUS_PENDING, (int) $this->order->fresh()->status);
@@ -69,7 +69,7 @@ final class PaymentMysqlCallbackTest extends TestCase
 
     public function test_callback_path_cannot_select_a_different_gateway_for_the_channel(): void
     {
-        $response = $this->callback($this->payload(), 'MGate');
+        $response = $this->dispatchCallback($this->payload(), 'MGate');
         $this->assertGreaterThanOrEqual(400, $response->getStatusCode());
         $this->assertSame(0, (int) $this->user->fresh()->balance);
         $this->assertSame(Order::STATUS_PENDING, (int) $this->order->fresh()->status);
@@ -87,7 +87,7 @@ final class PaymentMysqlCallbackTest extends TestCase
         return $params;
     }
 
-    private function callback(array $params, string $method = 'EPay'): \Symfony\Component\HttpFoundation\Response
+    private function dispatchCallback(array $params, string $method = 'EPay'): \Symfony\Component\HttpFoundation\Response
     {
         $request = Request::create('/api/v1/guest/payment/notify/' . $method . '/' . $this->channel->uuid, 'POST', $params);
         app()->instance('request', $request);
