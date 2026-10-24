@@ -99,7 +99,6 @@ jobs:
     env:
       KELI_GIFTCARD_MYSQL_ACCEPTANCE: "1"
       KELI_GIFTCARD_DB_HOST: "127.0.0.1"
-      KELI_GIFTCARD_DB_PORT: ${{ job.services.mysql.ports[3306] }}
       KELI_GIFTCARD_DB_NAME: keli_acceptance_giftcard
       KELI_GIFTCARD_DB_USER: keli_acceptance
       KELI_GIFTCARD_DB_PASSWORD: ephemeral-ci-fixture-only
@@ -117,6 +116,8 @@ jobs:
       - name: Verify packaged plugin loading
         run: php scripts/verify-plugin-layout.php
       - name: Exercise real concurrent redemptions against the disposable database
+        env:
+          KELI_GIFTCARD_DB_PORT: ${{ job.services.mysql.ports[3306] }}
         run: |
           mkdir -p artifacts
           vendor/bin/phpunit -c phpunit-mysql.xml --log-junit artifacts/giftcard-mysql.xml
