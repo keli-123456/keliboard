@@ -27,10 +27,13 @@ final class WebsiteProxyProbeServiceTest extends TestCase
 
     public function test_matches_tenant_identity_and_pins_verified_https_to_a_public_address(): void
     {
-        $this->fakeHealthy();
         $options = [];
-        Http::beforeSending(function ($request, $sentOptions) use (&$options): void {
+        Http::fake(function ($request, $sentOptions) use (&$options) {
             $options[] = $sentOptions;
+            $this->assertSame(['identity'], $request->header('Accept-Encoding'));
+            return str_contains($request->url(), '/api/')
+                ? Http::response(['data' => ['site_context' => ['site_id' => 2, 'site_code' => 'branch']]], 200)
+                : $this->page();
         });
         $target = $this->target();
         $result = $this->service()->probeTarget($target);
@@ -39,6 +42,7 @@ final class WebsiteProxyProbeServiceTest extends TestCase
         $this->assertTrue(WebsiteProxyHealth::firstOrFail()->eligibleFor($target));
         $this->assertGreaterThanOrEqual(1, $result['latency_ms']);
         Http::assertSentCount(2);
+        $this->assertCount(2, $options);
         foreach ($options as $option) {
             $this->assertTrue($option['verify']);
             $this->assertFalse($option['decode_content']);
