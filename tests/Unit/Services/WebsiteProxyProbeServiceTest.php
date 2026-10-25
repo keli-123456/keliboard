@@ -41,6 +41,7 @@ final class WebsiteProxyProbeServiceTest extends TestCase
         Http::assertSentCount(2);
         foreach ($options as $option) {
             $this->assertTrue($option['verify']);
+            $this->assertFalse($option['decode_content']);
             $this->assertFalse($option['allow_redirects']);
             $this->assertSame('', $option['proxy']);
             $this->assertSame(['edge.example.com:8444:1.1.1.1'], $option['curl'][CURLOPT_RESOLVE]);

@@ -136,8 +136,10 @@ class WebsiteProxyProbeService
         $response = Http::withHeaders([
             'User-Agent' => 'Keliboard-Website-Proxy-Probe/1.0',
             'Cache-Control' => 'no-cache, no-store',
+            'Accept-Encoding' => 'identity',
         ])->withoutRedirecting()->connectTimeout(2)->timeout(4)->withOptions([
             'verify' => true,
+            'decode_content' => false,
             'proxy' => '',
             'curl' => [CURLOPT_RESOLVE => [$host . ':' . $port . ':' . $address], CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4],
             'progress' => static function ($total, $downloaded): void {
