@@ -9,6 +9,26 @@ class WebsiteProxyRoutingService
 {
     private const FIRST_BRANCH_PORT = 8443;
 
+    public function targetsForPort(int $mainHttpsPort): array
+    {
+        $targets = [[
+            'site_id' => 0,
+            'site_code' => 'platform',
+            'port' => $this->validPort($mainHttpsPort, 443),
+            'upstream_url' => rtrim((string) admin_setting('app_url', config('app.url', '')), '/'),
+        ]];
+        foreach ($this->branchRoutes($mainHttpsPort) as $route) {
+            $targets[] = [
+                'site_id' => $route['site_id'],
+                'site_code' => $route['site_code'],
+                'port' => $route['port'],
+                'upstream_url' => $route['profile']['upstream_base_url'],
+            ];
+        }
+
+        return $targets;
+    }
+
     public function build(string $mainBaseUrl, string $mainSiteId, string $mainHttpsListen): array
     {
         $mainProfiles = [[
@@ -73,6 +93,7 @@ class WebsiteProxyRoutingService
 
             $routes[] = [
                 'site_id' => (int) $site->id,
+                'site_code' => (string) $site->code,
                 'port' => $port,
                 'profile' => $profile,
             ];

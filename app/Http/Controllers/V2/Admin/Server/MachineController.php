@@ -35,11 +35,14 @@ class MachineController extends Controller
             ->get();
 
         $this->appendOnlineStatus($machines);
+        $websiteHealth = app(\App\Services\SubscriptionProxy\WebsiteProxyEndpointService::class)
+            ->adminHealthPayloads($machines->modelKeys());
 
         foreach ($machines as $machine) {
             $snapshot = app(MachineTelemetryService::class)->snapshot($machine);
             $machine->setAttribute('load_status', $snapshot['load_status']);
             $machine->setAttribute('telemetry', $snapshot['telemetry']);
+            $machine->setAttribute('website_proxy_health', $websiteHealth[$machine->id] ?? []);
         }
 
         return $this->success($machines);

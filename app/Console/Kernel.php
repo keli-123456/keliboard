@@ -55,6 +55,7 @@ class Kernel extends ConsoleKernel
         $schedule->command('marketing:scan')->everyTenMinutes()->onOneServer()->withoutOverlapping(8);
         $schedule->command('spam-registration:scan')->hourly()->onOneServer()->withoutOverlapping(50);
         $schedule->command('subscription-proxy:probe')->everyMinute()->onOneServer()->withoutOverlapping(2);
+        $schedule->command('website-proxy:probe')->everyMinute()->onOneServer()->withoutOverlapping(2);
         $schedule->command('domain-health:scan')->everyFiveMinutes()->onOneServer()->withoutOverlapping(10);
         $schedule->command('ai-diagnostics:scan')->hourly()->onOneServer()->withoutOverlapping(50);
         // send

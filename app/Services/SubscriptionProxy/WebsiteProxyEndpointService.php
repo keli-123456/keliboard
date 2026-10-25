@@ -4,9 +4,9 @@ namespace App\Services\SubscriptionProxy;
 
 use App\Models\ServerMachine;
 use App\Models\User;
+use App\Models\WebsiteProxyHealth;
 use App\Services\NotificationSiteContextService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
 
 class WebsiteProxyEndpointService
@@ -34,68 +34,119 @@ class WebsiteProxyEndpointService
 
     public function urlsForSiteId(?int $siteId): array
     {
-        if (!(bool) admin_setting('website_proxy_enable', false)) {
+        if (!(bool) admin_setting('website_proxy_enable', false) || !$this->healthTableExists()) {
             return [];
         }
 
-        $siteId = max(0, (int) $siteId);
-        $cached = Cache::remember(
-            'website_proxy_endpoint:v2:site:' . $siteId,
-            30,
-            fn (): array => ['urls' => $this->resolveUrlsForSiteId($siteId)]
-        );
-
-        if (!is_array($cached) || !is_array($cached['urls'] ?? null)) {
-            return [];
-        }
-
-        return array_values(array_filter(
-            $cached['urls'],
-            fn (mixed $url): bool => is_string($url) && $url !== ''
-        ));
+        return $this->resolveUrlsForSiteId(max(0, (int) $siteId));
     }
 
     private function resolveUrlsForSiteId(int $siteId): array
     {
-        if (!$this->canUseMachineTable()) {
-            return [];
-        }
-
+        $targets = array_values(array_filter($this->configuredTargets(),
+            fn (array $target): bool => $target['site_id'] === $siteId && $target['runtime_error'] === null));
+        $health = WebsiteProxyHealth::query()->where('site_id', $siteId)
+            ->whereIn('machine_id', array_column($targets, 'machine_id'))->get()->keyBy('machine_id');
         $urls = [];
-        foreach (ServerMachine::query()
-            ->where('is_active', true)
-            ->where('webproxy_enabled', true)
-            ->orderBy('sort')
-            ->orderBy('id')
-            ->get() as $machine) {
-            $mainPort = $this->httpsPort($machine);
-            $port = $siteId > 0
-                ? app(WebsiteProxyRoutingService::class)->branchPortForSite($siteId, $mainPort)
-                : $mainPort;
-            if ($port === null || !$this->runtimeServesPort($machine, $port, $siteId === 0)) {
-                continue;
+        foreach ($targets as $target) {
+            $probe = $health->get($target['machine_id']);
+            if ($probe instanceof WebsiteProxyHealth && $probe->eligibleFor($target)) {
+                $urls[] = $target['url'];
             }
-
-            $host = $this->resolveProxyHost($machine);
-            if ($host === null) {
-                continue;
-            }
-
-            $urls[] = 'https://' . $host . ($port === 443 ? '' : ':' . $port);
         }
 
         return array_values(array_unique($urls));
     }
 
+    public function configuredTargets(?int $machineId = null): array
+    {
+        if (!$this->canUseMachineTable()) {
+            return [];
+        }
+        $machines = ServerMachine::query()
+            ->where('is_active', true)
+            ->where('webproxy_enabled', true)
+            ->when($machineId !== null, fn ($query) => $query->where('id', $machineId))
+            ->orderBy('sort')
+            ->orderBy('id')
+            ->get();
+        $routesByPort = [];
+        $targets = [];
+        foreach ($machines as $machine) {
+            $host = $this->resolveProxyHost($machine);
+            if ($host === null) {
+                continue;
+            }
+            $mainPort = $this->httpsPort($machine);
+            $routesByPort[$mainPort] ??= app(WebsiteProxyRoutingService::class)->targetsForPort($mainPort);
+            foreach ($routesByPort[$mainPort] as $route) {
+                $target = [
+                    'machine_id' => (int) $machine->id,
+                    'site_id' => (int) $route['site_id'],
+                    'site_code' => $route['site_code'],
+                    'upstream_url' => $route['upstream_url'],
+                    'url' => 'https://' . $host . ($route['port'] === 443 ? '' : ':' . $route['port']),
+                ];
+                $target['route_fingerprint'] = hash('sha256', json_encode($target, JSON_THROW_ON_ERROR));
+                $target['runtime_error'] = $this->runtimeServesPort($machine, $route['port'], $route['site_id'] === 0)
+                    ? null : 'runtime_unavailable';
+                $targets[] = $target;
+            }
+        }
+
+        return $targets;
+    }
+
+    public function adminHealthPayloads(array $machineIds): array
+    {
+        if (!$this->healthTableExists()) {
+            return [];
+        }
+        $health = WebsiteProxyHealth::query()->whereIn('machine_id', $machineIds)->get()
+            ->keyBy(fn ($row): string => $row->machine_id . ':' . $row->site_id);
+        $payloads = [];
+        foreach ($this->configuredTargets() as $target) {
+            if (!in_array($target['machine_id'], $machineIds, true)) {
+                continue;
+            }
+            $probe = $health->get($target['machine_id'] . ':' . $target['site_id']);
+            $matching = $probe && hash_equals((string) $probe->route_fingerprint, $target['route_fingerprint']);
+            $eligible = $matching && $target['runtime_error'] === null && $probe->eligibleFor($target);
+            $status = !$matching ? 'unverified' : ($target['runtime_error'] !== null ? 'error'
+                : (!$probe->last_checked_at || $probe->last_checked_at <= time() - WebsiteProxyHealth::FRESH_SECONDS
+                    || $probe->last_checked_at > time() + 5 ? 'stale' : $probe->status));
+            $payloads[$target['machine_id']][] = [
+                'site_id' => $target['site_id'], 'site_code' => $target['site_code'], 'url' => $target['url'],
+                'status' => $status, 'reason' => $matching ? ($target['runtime_error'] ?? $probe->reason) : 'unverified',
+                'eligible' => $eligible, 'published' => $eligible && (bool) admin_setting('website_proxy_enable', false),
+                'last_checked_at' => $matching ? $probe->last_checked_at : null,
+                'http_status' => $matching ? $probe->http_status : null,
+                'context_http_status' => $matching ? $probe->context_http_status : null,
+            ];
+        }
+
+        return $payloads;
+    }
+
+    public function healthTableExists(): bool
+    {
+        try {
+            return Schema::hasTable('v2_website_proxy_health');
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
     private function runtimeServesPort(ServerMachine $machine, int $port, bool $main): bool
     {
         $lastSeenAt = (int) ($machine->last_seen_at ?? 0);
-        if ($lastSeenAt <= 0 || $lastSeenAt < time() - self::MACHINE_ONLINE_WINDOW_SECONDS) {
+        if ($lastSeenAt <= 0 || $lastSeenAt < time() - self::MACHINE_ONLINE_WINDOW_SECONDS || $lastSeenAt > time() + 5) {
             return false;
         }
 
         $proxy = data_get($machine->load_status, 'agent.subscription_proxy');
-        if (!is_array($proxy) || !($proxy['running'] ?? false)) {
+        if (!is_array($proxy) || !($proxy['running'] ?? false)
+            || !is_numeric($proxy['website_profiles'] ?? null) || (int) $proxy['website_profiles'] <= 0) {
             return false;
         }
         if (strtolower(trim((string) ($proxy['mode'] ?? ''))) !== 'https') {
