@@ -345,7 +345,7 @@ class ConfigController extends Controller
                 'website_proxy_max_request_body_bytes' => (int) admin_setting('website_proxy_max_request_body_bytes', 104857600),
                 'website_proxy_max_response_bytes' => (int) admin_setting('website_proxy_max_response_bytes', 104857600),
                 'zerossl_access_key' => (string) admin_setting('zerossl_access_key', ''),
-                'subscription_proxy_certificate_provider' => (string) admin_setting('subscription_proxy_certificate_provider', 'zerossl'),
+                'subscription_proxy_certificate_provider' => (string) admin_setting('subscription_proxy_certificate_provider', 'auto'),
                 'letsencrypt_email' => (string) admin_setting('letsencrypt_email', ''),
                 'letsencrypt_renew_hours' => (int) admin_setting('letsencrypt_renew_hours', 48),
                 'subscription_proxy_renew_days' => (int) admin_setting('subscription_proxy_renew_days', 20),

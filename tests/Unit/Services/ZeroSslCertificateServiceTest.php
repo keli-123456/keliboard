@@ -783,6 +783,7 @@ final class ZeroSslCertificateServiceTest extends TestCase
 
     private function bindSettings(array $values): void
     {
+        $values += ['subscription_proxy_certificate_provider' => 'zerossl'];
         app()->instance(Setting::class, new class($values) extends Setting {
             private array $values;
 

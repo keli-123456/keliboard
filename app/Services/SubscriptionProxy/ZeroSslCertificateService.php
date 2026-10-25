@@ -105,6 +105,9 @@ PEM;
         }
 
         $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
+        if (is_array($state['pending_certificate'] ?? null)) {
+            $state = $state['pending_certificate'];
+        }
         $configuredDomain = trim((string) ($machine->subproxy_cert_domain ?? ''));
         $reportedDomain = trim((string) data_get($proxy, 'certificate_domain', ''));
         $hasConfiguredDomain = $configuredDomain !== '' && !$this->shouldIgnoreConfiguredCertificateDomain($configuredDomain, $state);
@@ -132,7 +135,7 @@ PEM;
         }
 
         $accessKey = trim((string) admin_setting('zerossl_access_key', ''));
-        $provider = $this->certificateProvider($state, $accessKey);
+        $provider = $this->certificateProvider($state, $accessKey, $domain);
         if ($provider === 'zerossl' && $accessKey === '') {
             $this->saveDiagnosticState(
                 $machine,
@@ -171,6 +174,7 @@ PEM;
             return false;
         }
 
+        $providerRequestInProgress = false;
         try {
             $previousState = $state;
             if ($this->shouldDeferToCertificateOwner($proxy, $currentSiteId)) {
@@ -193,14 +197,31 @@ PEM;
             }
 
             $csrHash = hash('sha256', $csr);
+            $retryAt = strtotime((string) ($state['retry_at'] ?? '')) ?: 0;
+            if (($state['provider'] ?? '') === $provider && $retryAt > time()) {
+                return false;
+            }
             $renewWindow = $provider === 'letsencrypt'
                 ? max(12, min(120, (int) admin_setting('letsencrypt_renew_hours', 48))) * 3600
                 : max(1, min(60, (int) admin_setting('subscription_proxy_renew_days', 20))) * 86400;
 
             if ($this->shouldCreateCertificate($state, $provider, $domain, $csrHash, $renewWindow)) {
+                $replacementId = ($state['provider'] ?? '') === 'zerossl'
+                    ? $this->replacementCertificateId($state, $renewWindow) : null;
+                // Record the attempted provider even if the first API call fails.
+                // The currently served certificate is retained separately on save.
+                $state = [
+                    'provider' => $provider,
+                    'domain' => $domain,
+                    'csr_hash' => $csrHash,
+                    'status' => 'requesting',
+                    'agent_identity' => $agentIdentity,
+                ];
+                $providerRequestInProgress = true;
                 $state = $provider === 'letsencrypt'
                     ? $this->createLetsEncryptCertificate($domain, $csrHash)
-                    : $this->createCertificate($accessKey, $domain, $csr, $csrHash, $this->replacementCertificateId($state, $renewWindow));
+                    : $this->createCertificate($accessKey, $domain, $csr, $csrHash, $replacementId);
+                $providerRequestInProgress = false;
             }
             if ($agentIdentity !== '') {
                 $state['agent_identity'] = $agentIdentity;
@@ -220,22 +241,32 @@ PEM;
                     $this->notifyAgentConfigChanged($machine, $state);
                     return true;
                 }
+                $providerRequestInProgress = true;
                 $state = $provider === 'letsencrypt'
                     ? $this->requestLetsEncryptValidation($state)
                     : $this->maybeRequestValidation($accessKey, $state);
+                $providerRequestInProgress = false;
             }
 
             if (!empty($state['certificate_id']) && ($state['status'] ?? '') !== 'issued') {
+                $providerRequestInProgress = true;
                 $state = $provider === 'letsencrypt'
                     ? $this->refreshLetsEncryptCertificate($state, $csr)
                     : $this->refreshCertificate($accessKey, $state);
+                $providerRequestInProgress = false;
             }
 
             if ($this->shouldDownloadIssuedCertificate($state)) {
+                $providerRequestInProgress = true;
                 $state = $provider === 'letsencrypt'
                     ? $this->downloadLetsEncryptCertificate($state)
                     : $this->downloadCertificate($accessKey, $state);
+                if (!$this->hasUsableCertificateChain($state)) {
+                    throw new \RuntimeException((string) ($state['last_error'] ?? 'Certificate chain is incomplete.'));
+                }
+                $providerRequestInProgress = false;
             }
+            unset($state['provider_failure'], $state['failed_at'], $state['retry_at']);
 
             $notifyAgent = $this->shouldNotifyAgent($state, $proxy);
             $agentConfigSignature = $this->agentConfigSignature($state);
@@ -252,19 +283,27 @@ PEM;
             }
             return $shouldReload;
         } catch (\Throwable $e) {
+            $message = str_replace($accessKey !== '' ? $accessKey : "\0", '[redacted]', $e->getMessage());
+            $message = preg_replace('/([?&](?:access_key|machine_token|token|key|secret|password)=)[^&\s]+/i', '$1[redacted]', $message) ?? 'Certificate operation failed.';
+            $message = mb_substr($message, 0, 900);
             Log::warning('Subscription proxy certificate automation failed', [
                 'machine_id' => (int) $machine->id,
                 'provider' => $provider ?? 'unknown',
-                'error' => $e->getMessage(),
+                'error' => $message,
             ]);
-            if ($provider === 'letsencrypt') {
-                $state['status'] = 'error';
+            if ($providerRequestInProgress) {
+                if (($state['status'] ?? '') !== 'issued') {
+                    $state['status'] = 'error';
+                }
+                $state['provider'] = $provider;
+                $state['provider_failure'] = true;
                 $state['failed_at'] = now()->toIso8601String();
+                $state['retry_at'] = now()->addMinutes(5)->toIso8601String();
             }
             if (trim((string) ($state['status'] ?? '')) === '') {
                 $state['status'] = 'error';
             }
-            $state['last_error'] = $e->getMessage();
+            $state['last_error'] = $message;
             $this->saveCertificateState($machine, $state, $domain, $hasConfiguredDomain);
             return false;
         }
@@ -324,9 +363,9 @@ PEM;
             || (bool) $machine->getAttribute('webproxy_enabled');
     }
 
-    private function certificateProvider(array $state, string $zeroSslAccessKey): string
+    private function certificateProvider(array $state, string $zeroSslAccessKey, string $domain): string
     {
-        $configured = strtolower(trim((string) admin_setting('subscription_proxy_certificate_provider', 'zerossl')));
+        $configured = strtolower(trim((string) admin_setting('subscription_proxy_certificate_provider', 'auto')));
         if (in_array($configured, ['zerossl', 'letsencrypt'], true)) {
             return $configured;
         }
@@ -335,7 +374,12 @@ PEM;
         if ($current === 'letsencrypt') {
             return 'letsencrypt';
         }
-        if ($current === 'zerossl' && trim((string) ($state['last_error'] ?? '')) !== '') {
+        if ($this->isIPv6Address($domain)) {
+            return 'letsencrypt';
+        }
+        $error = (string) ($state['last_error'] ?? '');
+        $legacyProviderFailure = str_starts_with($error, 'ZeroSSL ') && str_contains($error, ' failed:');
+        if ($current === 'zerossl' && (($state['provider_failure'] ?? false) || $legacyProviderFailure)) {
             return 'letsencrypt';
         }
 
@@ -474,6 +518,22 @@ PEM;
     private function saveCertificateState(ServerMachine $machine, array $state, string $domain, bool $hasConfiguredDomain): void
     {
         $state['domain_source'] = $hasConfiguredDomain ? 'manual' : 'auto';
+        $active = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
+        unset($active['pending_certificate']);
+        $replacementReady = ($state['status'] ?? '') === 'issued' && $this->hasUsableCertificateChain($state);
+        $canKeepActive = ($active['status'] ?? '') === 'issued'
+            && $this->hasUsableCertificateChain($active)
+            && (strtotime((string) ($active['expires_at'] ?? '')) ?: 0) > time()
+            && ($active['domain'] ?? '') === $domain
+            && !empty($active['csr_hash']) && ($active['csr_hash'] ?? '') === ($state['csr_hash'] ?? '')
+            && !in_array($state['status'] ?? '', ['delegated', 'unsupported_certificate_domain', 'missing_access_key'], true);
+        if (!$replacementReady && $canKeepActive) {
+            // Keep public availability and the old chain until a complete new
+            // chain exists. Pending challenge metadata is sent independently.
+            $active['pending_certificate'] = $state;
+            $active['last_error'] = $state['last_error'] ?? null;
+            $state = $active;
+        }
         $payload = [
             'subproxy_cert_domain' => $hasConfiguredDomain ? $domain : null,
             'subproxy_cert_state' => $this->withUpdatedAt($state),

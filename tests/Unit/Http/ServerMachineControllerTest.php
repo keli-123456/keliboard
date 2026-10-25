@@ -1046,6 +1046,83 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertTrue($payload['reload']);
     }
 
+    public function test_status_drift_detection_preserves_first_certificate_provider_failure(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscription_proxy_enable' => true,
+            'subscription_proxy_site_id' => 'panel-a',
+            'subscription_proxy_certificate_provider' => 'auto',
+            'zerossl_access_key' => 'test-key',
+        ]);
+        \Illuminate\Support\Facades\Log::swap(new \Psr\Log\NullLogger());
+        Http::fake(fn () => Http::response(['success' => false], 503));
+        Http::preventStrayRequests();
+        $machine = ServerMachine::create(['name' => 'edge-a', 'token' => 'machine-token', 'is_active' => true]);
+        $machine->forceFill(['subproxy_enabled' => true])->save();
+
+        $response = (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status',
+            'POST',
+            [
+                'machine_id' => $machine->id,
+                'token' => 'machine-token',
+                'status' => ['agent' => ['subscription_proxy' => [
+                    'enabled' => true,
+                    'certificate_domain' => '198.51.100.20',
+                    'csr_pem' => '-----BEGIN CERTIFICATE REQUEST-----test-----END CERTIFICATE REQUEST-----',
+                ]]],
+            ],
+            [],
+            [],
+            ['REMOTE_ADDR' => '198.51.100.20']
+        ));
+
+        $this->assertTrue($response->getData(true)['data']);
+        $state = $machine->fresh()->subproxy_cert_state;
+        $this->assertSame('zerossl', $state['provider']);
+        $this->assertSame('error', $state['status']);
+        $this->assertTrue($state['provider_failure']);
+        $this->assertNotEmpty($state['retry_at']);
+        Http::assertSentCount(1);
+    }
+
+    public function test_pending_replacement_challenge_does_not_cause_endless_drift_reload(): void
+    {
+        $this->bindSettings([
+            'app_url' => 'https://panel.example.test',
+            'subscription_proxy_enable' => true,
+            'subscription_proxy_site_id' => 'panel-a',
+        ]);
+        $machine = ServerMachine::create(['name' => 'edge-a', 'token' => 'machine-token', 'is_active' => true]);
+        $machine->forceFill([
+            'subproxy_enabled' => true,
+            'subproxy_cert_state' => [
+                'provider' => 'zerossl', 'status' => 'issued', 'certificate_id' => 'old-issued',
+                'domain' => '198.51.100.20', 'certificate_pem' => 'old-leaf', 'ca_bundle_pem' => 'old-chain',
+                'pending_certificate' => [
+                    'provider' => 'letsencrypt', 'status' => 'draft', 'certificate_id' => 'new-order',
+                    'domain' => '198.51.100.20', 'validation_path' => '/.well-known/acme-challenge/token',
+                    'validation_content' => 'challenge-value',
+                ],
+            ],
+        ])->save();
+        $request = Request::create('https://panel.example.test/api/v2/server/machine/status', 'POST', [], [], [], ['REMOTE_ADDR' => '198.51.100.20']);
+        $controller = new MachineController();
+        $build = new \ReflectionMethod($controller, 'buildSubscriptionProxyConfig');
+        $desired = $build->invoke($controller, $request, $machine);
+        $reported = [
+            'enabled' => true, 'certificate_domain' => '198.51.100.20',
+            'profiles' => count($desired['profiles']), 'website_profiles' => 0, 'website_listeners' => 0,
+            'certificate_id' => 'new-order', 'validation_ready' => true,
+        ];
+        $drift = new \ReflectionMethod($controller, 'shouldRequestReloadForSubscriptionProxyDrift');
+        $this->assertTrue($drift->invoke($controller, $request, $machine, ['agent' => ['subscription_proxy' => $reported]]));
+        $this->assertFalse($drift->invoke($controller, $request, $machine, ['agent' => ['subscription_proxy' => $reported]]));
+        $reported['certificate_id'] = 'old-issued';
+        $this->assertTrue($drift->invoke($controller, $request, $machine, ['agent' => ['subscription_proxy' => $reported]]));
+    }
+
     public function test_status_response_requests_one_reload_when_subscription_proxy_desired_config_changes(): void
     {
         $this->bindSettings([

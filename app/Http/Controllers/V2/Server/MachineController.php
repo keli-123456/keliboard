@@ -207,6 +207,17 @@ class MachineController extends Controller
             $status,
             $this->resolveSubscriptionProxySiteId($this->resolvePanelBaseURL($request))
         );
+        if ($machine->subproxy_enabled || $machine->webproxy_enabled) {
+            // Certificate automation saves through a fresh, locked model. Drift
+            // detection must not overwrite that state with this older instance.
+            $saved = ServerMachine::query()->find($machine->id, ['id', 'subproxy_cert_state', 'subproxy_cert_domain']);
+            if ($saved) {
+                foreach (['subproxy_cert_state', 'subproxy_cert_domain'] as $attribute) {
+                    $machine->setAttribute($attribute, $saved->getAttribute($attribute));
+                    $machine->syncOriginalAttribute($attribute);
+                }
+            }
+        }
         if (!$reload && $this->shouldRequestReloadForMachineConfigDrift($machine, $status)) {
             $reload = true;
         }
@@ -217,7 +228,13 @@ class MachineController extends Controller
         [$machine, $status] = DB::transaction(function () use ($machine, $status, $payload, $observation): array {
             $locked = ServerMachine::query()->lockForUpdate()->findOrFail($machine->id);
             if ($machine->isDirty('subproxy_cert_state')) {
-                $locked->subproxy_cert_state = $machine->subproxy_cert_state;
+                $state = is_array($locked->subproxy_cert_state) ? $locked->subproxy_cert_state : [];
+                // Only drift metadata belongs to this request. A concurrent CA
+                // update or public probe may have saved newer certificate data.
+                $locked->subproxy_cert_state = array_replace($state, array_intersect_key(
+                    (array) $machine->subproxy_cert_state,
+                    ['config_signature' => true, 'config_signature_at' => true]
+                ));
             }
             $previous = is_array($locked->load_status) ? $locked->load_status : [];
             $status['ip_observation'] = app(MachineIpHistory::class)->observe($previous, $status['ip'], $status['updated_at']);
@@ -774,6 +791,9 @@ class MachineController extends Controller
         }
 
         $state = is_array($machine->subproxy_cert_state) ? $machine->subproxy_cert_state : [];
+        if (is_array($state['pending_certificate'] ?? null)) {
+            $state = $state['pending_certificate'];
+        }
         $certificateId = trim((string) ($state['certificate_id'] ?? ''));
         $certificateStatus = trim((string) ($state['status'] ?? ''));
         if ($certificateId === '' || $certificateStatus === '' || $certificateStatus === 'delegated') {
@@ -1184,14 +1204,15 @@ class MachineController extends Controller
             ];
         }
 
+        $pending = is_array($state['pending_certificate'] ?? null) ? $state['pending_certificate'] : $state;
         $config = [
-            'status' => (string) ($state['status'] ?? 'idle'),
-            'certificate_id' => (string) ($state['certificate_id'] ?? ''),
+            'status' => (string) ($pending['status'] ?? 'idle'),
+            'certificate_id' => (string) ($pending['certificate_id'] ?? ''),
             'domain' => (string) ($state['domain'] ?? ''),
             'domain_source' => (string) ($state['domain_source'] ?? ''),
-            'validation_path' => (string) ($state['validation_path'] ?? ''),
-            'validation_content' => $state['validation_content'] ?? null,
-            'validation_requested_at' => (string) ($state['validation_requested_at'] ?? ''),
+            'validation_path' => (string) ($pending['validation_path'] ?? ''),
+            'validation_content' => $pending['validation_content'] ?? null,
+            'validation_requested_at' => (string) ($pending['validation_requested_at'] ?? ''),
             'expires_at' => (string) ($state['expires_at'] ?? ''),
             'last_error' => $state['last_error'] ?? null,
             'updated_at' => (string) ($state['updated_at'] ?? ''),
