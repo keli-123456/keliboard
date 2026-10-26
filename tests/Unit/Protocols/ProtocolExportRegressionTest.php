@@ -1856,7 +1856,7 @@ final class ProtocolExportRegressionTest extends TestCase
         $this->assertTrue($socks['skip-cert-verify']);
     }
 
-    public function test_trojan_ws_exports_do_not_synthesize_host_when_ws_host_is_empty(): void
+    public function test_trojan_ws_exports_follow_xray_sni_fallback_when_host_is_empty(): void
     {
         $server = [
             'name' => 'Trojan CF',
@@ -1880,11 +1880,14 @@ final class ProtocolExportRegressionTest extends TestCase
         parse_str((string) parse_url(trim($generalUri), PHP_URL_QUERY), $generalQuery);
         $shadowrocketUri = Shadowrocket::buildTrojan('secret', $server);
 
-        $this->assertArrayNotHasKey('headers', $clash['ws-opts']);
-        $this->assertArrayNotHasKey('headers', $clashMeta['ws-opts']);
+        $this->assertSame($clash['sni'], $clash['ws-opts']['headers']['Host']);
+        $this->assertSame($clashMeta['sni'], $clashMeta['ws-opts']['headers']['Host']);
         $this->assertArrayNotHasKey('ip-version', $clashMeta);
-        $this->assertArrayNotHasKey('headers', $stash['ws-opts']);
-        $this->assertArrayNotHasKey('host', $generalQuery);
+        $this->assertSame($stash['sni'], $stash['ws-opts']['headers']['Host']);
+        $this->assertSame($generalQuery['sni'], $generalQuery['host']);
+        $shadowrocketQuery = [];
+        parse_str((string) parse_url(trim($shadowrocketUri), PHP_URL_QUERY), $shadowrocketQuery);
+        $this->assertStringContainsString('obfs-host=' . $shadowrocketQuery['peer'] . ';', $shadowrocketQuery['plugin']);
         $this->assertStringNotContainsString('obfs-host=null.123903.xyz', $shadowrocketUri);
     }
 

@@ -33,7 +33,7 @@ final class LoonRegressionTest extends TestCase
         $this->assertStringContainsString('tls-name=sni.example.com', $uri);
     }
 
-    public function test_trojan_websocket_does_not_synthesize_host_from_sni(): void
+    public function test_trojan_websocket_uses_sni_when_host_is_missing(): void
     {
         $uri = Loon::buildTrojan('secret', [
             'name' => 'Loon Trojan WS',
@@ -50,6 +50,6 @@ final class LoonRegressionTest extends TestCase
 
         $this->assertStringContainsString('transport=ws', $uri);
         $this->assertStringContainsString('path=/trojan-ws', $uri);
-        $this->assertStringNotContainsString('host=sni.example.com', $uri);
+        $this->assertStringContainsString('host=sni.example.com', $uri);
     }
 }

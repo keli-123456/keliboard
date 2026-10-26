@@ -352,7 +352,7 @@ class QuantumultX extends AbstractProtocol
         if (data_get($protocol_settings, 'network') === 'ws') {
             // When using websocket over tls you should not set over-tls and tls-host options anymore
             $config[] = 'obfs=wss';
-            if ($host = data_get($protocol_settings, 'network_settings.headers.Host') ?: $serverName) {
+            if ($host = Helper::resolveTrojanWebSocketHost($server, (string) $serverName)) {
                 $config[] = "obfs-host={$host}";
             }
             if ($path = data_get($protocol_settings, 'network_settings.path')) {

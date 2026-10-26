@@ -376,7 +376,7 @@ class Stash extends AbstractProtocol
             case 'ws':
                 $array['network'] = 'ws';
                 $array['ws-opts']['path'] = data_get($protocol_settings, 'network_settings.path');
-                if ($host = data_get($protocol_settings, 'network_settings.headers.Host')) {
+                if ($host = Helper::resolveTrojanWebSocketHost($server, $serverName)) {
                     $array['ws-opts']['headers'] = ['Host' => $host];
                 }
                 break;

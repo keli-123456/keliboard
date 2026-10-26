@@ -180,11 +180,7 @@ class Loon extends AbstractProtocol
                 $config[] = "path={$path}";
             }
 
-            $host = data_get($wsSettings, 'headers.Host');
-            if (is_array($host)) {
-                $host = collect($host)->first(fn ($value) => trim((string) $value) !== '');
-            }
-            $host = trim((string) $host);
+            $host = Helper::resolveTrojanWebSocketHost($server, $serverName);
             if ($host !== '') {
                 $config[] = "host={$host}";
             }

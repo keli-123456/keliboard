@@ -204,7 +204,7 @@ class General extends AbstractProtocol
                 $array['type'] = 'ws';
                 if ($path = data_get($protocol_settings, 'network_settings.path'))
                     $array['path'] = $path;
-                if ($host = data_get($protocol_settings, 'network_settings.headers.Host'))
+                if ($host = Helper::resolveTrojanWebSocketHost($server, $serverName))
                     $array['host'] = $host;
                 break;
             case 'grpc':

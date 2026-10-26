@@ -206,6 +206,16 @@ class Helper
         return implode('.', $labels);
     }
 
+    public static function resolveTrojanWebSocketHost(array $server, string $resolvedServerName): string
+    {
+        $host = data_get($server, 'protocol_settings.network_settings.headers.Host');
+        if (is_array($host)) {
+            $host = collect($host)->first(fn ($value) => is_string($value) && trim($value) !== '');
+        }
+        // Match Xray's fallback and reuse the resolved SNI, including dynamic names.
+        return is_string($host) && trim($host) !== '' ? trim($host) : $resolvedServerName;
+    }
+
     public static function getIpByDomainName($domain) {
         return gethostbynamel($domain) ?: [];
     }
