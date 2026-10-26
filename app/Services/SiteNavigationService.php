@@ -7,6 +7,7 @@ use App\Models\SiteDomain;
 use App\Models\SiteNavigation;
 use App\Models\SiteNavigationDomain;
 use App\Models\SiteNavigationLink;
+use App\Models\SiteSetting;
 use App\Models\User;
 use App\Services\SubscriptionProxy\WebsiteProxyEndpointService;
 use Illuminate\Http\Request;
@@ -198,14 +199,93 @@ class SiteNavigationService
             ? trim((string) ($siteSetting?->logo_url ?? ''))
             : trim((string) admin_setting('logo', ''));
 
+        $destinations = $this->destinationsForSiteId($siteId, $navigation);
+
         return [
             'title' => $title,
             'description' => $description,
             'announcement' => trim((string) ($navigation->announcement ?? '')),
             'logo_url' => $this->httpsUrl($logoUrl),
-            'destinations' => $this->destinationsForSiteId($siteId, $navigation),
+            'destinations' => $destinations,
             'updated_at' => $this->timestampValue($navigation->updated_at),
+            ...$this->pageInformation($siteId, $siteSetting, $destinations),
         ];
+    }
+
+    private function pageInformation(?int $siteId, ?SiteSetting $setting, array $destinations): array
+    {
+        $baseUrl = null;
+        foreach (['site', 'proxy'] as $kind) {
+            foreach ($destinations as $destination) {
+                if ($destination['kind'] === $kind && ($url = $this->publicUrl($destination['url'])) !== null) {
+                    $baseUrl = $url;
+                    break 2;
+                }
+            }
+        }
+
+        $opportunities = [];
+        $helpLinks = [];
+        if ($baseUrl !== null) {
+            if ((int) admin_setting('invite_gen_limit', 5) > 0 && (float) admin_setting('invite_commission', 10) > 0) {
+                $opportunities[] = [
+                    'kind' => 'referral', 'title' => '邀请返利',
+                    'description' => '分享邀请链接，好友的符合规则订单可产生邀请佣金。',
+                    'detail' => '佣金比例与结算条件以账户规则为准',
+                    'url' => $this->storefrontUrl($baseUrl, 'referral-center'), 'action' => '查看返利规则',
+                ];
+            }
+            if ((bool) admin_setting('agent_center_enable', false)) {
+                $detail = '提交代理申请，由平台审核开通';
+                if ((string) admin_setting('agent_center_unlock_mode', 'balance_threshold') === 'balance_threshold') {
+                    $threshold = max(0, (int) admin_setting('agent_center_unlock_balance', 0));
+                    $detail = $threshold > 0
+                        ? '账户余额达到 ' . (string) admin_setting('currency_symbol', '¥') . number_format($threshold / 100, 2) . ' 可申请开通'
+                        : '登录代理中心，查看开通条件';
+                }
+                $opportunities[] = [
+                    'kind' => 'agent', 'title' => '代理合作',
+                    'description' => '集中管理下级账户、套餐分配与后续服务。',
+                    'detail' => $detail,
+                    'url' => $this->storefrontUrl($baseUrl, 'agent-center'), 'action' => '了解代理合作',
+                ];
+            }
+            $helpLinks[] = ['kind' => 'help', 'label' => '帮助中心', 'url' => $this->storefrontUrl($baseUrl, 'help-center')];
+        }
+
+        // Branch contact information must never fall back to the platform's contacts.
+        $supportUrl = $siteId ? $setting?->support_url : admin_setting('customer_service_url', '');
+        $supportName = $siteId ? $setting?->support_name : admin_setting('customer_service_name', '');
+        $communityUrl = $siteId ? $setting?->telegram_discuss_link : admin_setting('telegram_discuss_link', '');
+        foreach ([
+            ['kind' => 'support', 'label' => trim((string) $supportName) ?: '联系客服', 'url' => $supportUrl],
+            ['kind' => 'community', 'label' => 'Telegram 社群', 'url' => $communityUrl],
+            ['kind' => 'terms', 'label' => '服务条款', 'url' => $siteId ? null : admin_setting('tos_url', '')],
+        ] as $link) {
+            if (($url = $this->publicUrl($link['url'])) !== null) {
+                $helpLinks[] = [...$link, 'url' => $url];
+            }
+        }
+
+        return ['opportunities' => $opportunities, 'help_links' => $helpLinks];
+    }
+
+    private function publicUrl(mixed $value): ?string
+    {
+        if (!is_string($value) || !filter_var($value, FILTER_VALIDATE_URL)) {
+            return null;
+        }
+        $parts = parse_url($value);
+        return $parts !== false && strtolower($parts['scheme'] ?? '') === 'https'
+            && !isset($parts['user']) && !isset($parts['pass']) ? $value : null;
+    }
+
+    private function storefrontUrl(string $baseUrl, string $route): string
+    {
+        $parts = parse_url($baseUrl);
+        return 'https://' . $parts['host'] . (isset($parts['port']) ? ':' . $parts['port'] : '')
+            . rtrim($parts['path'] ?? '', '/') . '/'
+            . (isset($parts['query']) ? '?' . $parts['query'] : '') . '#/' . $route;
     }
 
     private function httpsUrl(string $value): ?string
