@@ -247,6 +247,49 @@ final class SiteNavigationServiceTest extends TestCase
         return $page;
     }
 
+    public function test_custom_recommendation_retains_storefront_and_does_not_redirect_account_actions(): void
+    {
+        $this->navigationPage();
+        SiteNavigation::query()->where('scope_key', 'platform')->update([
+            'recommended_label' => '站点推荐', 'recommended_url' => 'https://recommended.example.test',
+        ]);
+        $page = $this->navigationPage();
+        $this->assertSame([
+            'label' => '站点推荐', 'url' => 'https://recommended.example.test', 'kind' => 'manual', 'recommended' => true,
+        ], $page['destinations'][0]);
+        $this->assertSame('https://main.example.test', $page['destinations'][1]['url']);
+        $this->assertSame('站点入口', $page['destinations'][1]['label']);
+        $this->assertFalse($page['destinations'][1]['recommended']);
+        $this->assertSame(1, count(array_filter($page['destinations'], fn ($entry) => $entry['recommended'])));
+        $this->assertSame('https://main.example.test/#/referral-center', $page['opportunities'][0]['url']);
+        $this->assertSame('https://main.example.test/#/help-center', $page['help_links'][0]['url']);
+    }
+
+    public function test_same_storefront_recommendation_is_deduplicated_without_losing_account_links(): void
+    {
+        $this->navigationPage();
+        SiteNavigation::query()->where('scope_key', 'platform')->update([
+            'recommended_label' => '自选入口', 'recommended_url' => 'https://main.example.test/',
+        ]);
+        $page = $this->navigationPage();
+        $this->assertCount(2, $page['destinations']);
+        $this->assertSame('自选入口', $page['destinations'][0]['label']);
+        $this->assertSame('site', $page['destinations'][0]['kind']);
+        $this->assertSame('https://main.example.test/#/referral-center', $page['opportunities'][0]['url']);
+    }
+
+    public function test_name_only_and_cleared_recommendations_use_site_defaults(): void
+    {
+        $this->navigationPage();
+        $navigation = SiteNavigation::query()->where('scope_key', 'platform')->firstOrFail();
+        $navigation->update(['recommended_label' => '站点推荐']);
+        $this->assertSame('站点推荐', $this->navigationPage()['destinations'][0]['label']);
+        $navigation->update(['recommended_label' => null, 'recommended_url' => null]);
+        $page = $this->navigationPage();
+        $this->assertSame('推荐入口', $page['destinations'][0]['label']);
+        $this->assertSame('https://main.example.test', $page['destinations'][0]['url']);
+    }
+
     private function createTables(): void
     {
         Schema::create('v2_site', function (Blueprint $table): void {
@@ -284,6 +327,8 @@ final class SiteNavigationServiceTest extends TestCase
             $table->string('title')->nullable();
             $table->string('description')->nullable();
             $table->string('announcement')->nullable();
+            $table->string('recommended_label', 120)->nullable();
+            $table->string('recommended_url', 1000)->nullable();
             $table->timestamps();
         });
         Schema::create('v2_site_navigation_domain', function (Blueprint $table): void {

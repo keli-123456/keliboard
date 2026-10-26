@@ -147,6 +147,67 @@ final class AdminSiteNavigationControllerTest extends TestCase
         );
     }
 
+    public function test_recommendation_can_be_saved_changed_and_cleared_without_changing_app_url(): void
+    {
+        $saved = $this->saveRecommendation(['recommended_label' => '  站点推荐  ', 'recommended_url' => 'https://preferred.example.test']);
+        $this->assertSame('站点推荐', $saved['recommended_label']);
+        $this->assertSame('https://preferred.example.test', $saved['recommended_url']);
+        $this->assertSame('https://preferred.example.test', $saved['destinations'][0]['url']);
+        $this->assertSame('https://main.example.test', admin_setting('app_url'));
+        $changed = $this->saveRecommendation(['recommended_label' => '新入口', 'recommended_url' => 'https://other.example.test/path']);
+        $this->assertSame('新入口', $changed['destinations'][0]['label']);
+        $this->assertSame('https://other.example.test/path', $changed['destinations'][0]['url']);
+        $legacy = $this->saveRecommendation([]);
+        $this->assertSame('新入口', $legacy['recommended_label']);
+        $this->assertSame('https://other.example.test/path', $legacy['recommended_url']);
+        $cleared = $this->saveRecommendation(['recommended_label' => null, 'recommended_url' => null]);
+        $this->assertSame('', $cleared['recommended_label']);
+        $this->assertSame('', $cleared['recommended_url']);
+        $this->assertSame('https://main.example.test', $cleared['destinations'][0]['url']);
+        $this->assertSame('推荐入口', $cleared['destinations'][0]['label']);
+    }
+
+    public function test_recommendations_remain_independent_for_platform_and_branch(): void
+    {
+        $site = Site::query()->create(['code' => 'branch-recommended', 'name' => 'Branch', 'status' => Site::STATUS_ACTIVE, 'is_default' => false]);
+        $this->saveRecommendation(['recommended_label' => '主站推荐', 'recommended_url' => 'https://platform-entry.example.test']);
+        $this->saveRecommendation(['site_id' => $site->id, 'recommended_label' => '分站推荐', 'recommended_url' => 'https://branch-entry.example.test']);
+        $fetched = $this->responsePayload(app(SiteNavigationController::class)->fetch(app(SiteNavigationService::class)))['data'];
+        $this->assertSame('https://platform-entry.example.test', $fetched[0]['recommended_url']);
+        $this->assertSame('主站推荐', $fetched[0]['destinations'][0]['label']);
+        $this->assertSame('https://branch-entry.example.test', $fetched[1]['recommended_url']);
+        $this->assertSame('分站推荐', $fetched[1]['destinations'][0]['label']);
+    }
+
+    public function test_rejects_unsafe_recommendations_and_navigation_loops_before_saving(): void
+    {
+        $this->saveRecommendation(['recommended_url' => 'https://safe.example.test']);
+        foreach (['http://unsafe.example.test', 'javascript:alert(1)', 'https://user:secret@example.test', 'https://nav.example.test', 'https://NAV.example.test./path'] as $url) {
+            try {
+                $this->saveRecommendation([
+                    'recommended_url' => $url,
+                    'domains' => [['domain' => 'nav.example.test', 'status' => 'active', 'is_primary' => true]],
+                ]);
+                $this->fail('Unsafe recommended entry was accepted.');
+            } catch (ApiException $exception) {
+                $this->assertContains($exception->getMessage(), [
+                    'Recommended entry must use a valid HTTPS URL',
+                    'Recommended entry cannot point to a navigation domain',
+                ]);
+            }
+            $this->assertSame('https://safe.example.test', SiteNavigation::query()->where('scope_key', 'platform')->value('recommended_url'));
+        }
+    }
+
+    private function saveRecommendation(array $extra): array
+    {
+        return $this->responsePayload(app(SiteNavigationController::class)->save(
+            Request::create('/admin/site/navigation/save', 'POST', array_replace([
+                'enabled' => false, 'domains' => [], 'links' => [],
+            ], $extra)), app(SiteNavigationService::class)
+        ))['data'];
+    }
+
     private function createTables(): void
     {
         Schema::create('v2_site', function (Blueprint $table): void {
@@ -181,6 +242,8 @@ final class AdminSiteNavigationControllerTest extends TestCase
             $table->string('title')->nullable();
             $table->string('description')->nullable();
             $table->string('announcement')->nullable();
+            $table->string('recommended_label', 120)->nullable();
+            $table->string('recommended_url', 1000)->nullable();
             $table->timestamps();
         });
         Schema::create('v2_site_navigation_domain', function (Blueprint $table): void {

@@ -133,6 +133,8 @@ class SiteNavigationService
             ];
         }
 
+        $destinations = $this->recommendedEntry($destinations, $navigation);
+
         if ($navigation) {
             foreach ($navigation->links->where('enabled', true)->sortBy([
                 ['sort', 'asc'],
@@ -156,6 +158,37 @@ class SiteNavigationService
             $seen[$key] = true;
             return true;
         }));
+    }
+
+    private function recommendedEntry(array $destinations, ?SiteNavigation $navigation): array
+    {
+        $label = trim((string) ($navigation?->recommended_label ?? '')) ?: '推荐入口';
+        $url = $this->publicUrl(trim((string) ($navigation?->recommended_url ?? '')));
+        if ($url === null) {
+            foreach ($destinations as &$destination) {
+                if ($destination['recommended']) {
+                    $destination['label'] = $label;
+                }
+            }
+            unset($destination);
+            return $destinations;
+        }
+
+        $kind = 'manual';
+        foreach ($destinations as &$destination) {
+            // Retain the real storefront identity only when this is the same URL.
+            if ($destination['kind'] === 'site'
+                && strtolower(rtrim($destination['url'], '/')) === strtolower(rtrim($url, '/'))) {
+                $kind = 'site';
+            }
+            if ($destination['recommended']) {
+                $destination['recommended'] = false;
+                $destination['label'] = '站点入口';
+            }
+        }
+        unset($destination);
+        array_unshift($destinations, ['label' => $label, 'url' => $url, 'kind' => $kind, 'recommended' => true]);
+        return $destinations;
     }
 
     public function navigationForSiteId(?int $siteId): ?SiteNavigation

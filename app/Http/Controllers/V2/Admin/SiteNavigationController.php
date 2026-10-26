@@ -53,6 +53,8 @@ class SiteNavigationController extends Controller
             'title' => 'nullable|string|max:120',
             'description' => 'nullable|string|max:500',
             'announcement' => 'nullable|string|max:1000',
+            'recommended_label' => 'nullable|string|max:120',
+            'recommended_url' => 'nullable|string|max:1000',
             'domains' => 'nullable|array|max:10',
             'domains.*.id' => 'nullable|integer|min:1',
             'domains.*.domain' => 'required|string|max:255',
@@ -82,6 +84,18 @@ class SiteNavigationController extends Controller
             ->first();
         $domains = $this->normalizeDomains((array) ($params['domains'] ?? []));
         $links = $this->normalizeLinks((array) ($params['links'] ?? []));
+        $recommendedUrl = $this->nullableString(array_key_exists('recommended_url', $params)
+            ? $params['recommended_url'] : $existing?->recommended_url);
+        if ($recommendedUrl !== null) {
+            if (!$this->validHttpsUrl($recommendedUrl)) {
+                throw new ApiException('Recommended entry must use a valid HTTPS URL');
+            }
+            $host = app(SiteResolver::class)->normalizeHost((string) parse_url($recommendedUrl, PHP_URL_HOST));
+            if (in_array($host, array_column($domains, 'domain'), true)
+                || SiteNavigationDomain::query()->where('domain', $host)->exists()) {
+                throw new ApiException('Recommended entry cannot point to a navigation domain');
+            }
+        }
         if ((bool) $params['enabled'] && !collect($domains)->contains('status', SiteNavigationDomain::STATUS_ACTIVE)) {
             throw new ApiException('At least one active navigation domain is required');
         }
@@ -92,7 +106,8 @@ class SiteNavigationController extends Controller
             $scopeKey,
             $existing,
             $domains,
-            $links
+            $links,
+            $recommendedUrl
         ): SiteNavigation {
             $navigation = $existing ?: new SiteNavigation();
             $now = time();
@@ -105,6 +120,10 @@ class SiteNavigationController extends Controller
             $navigation->title = $this->nullableString($params['title'] ?? null);
             $navigation->description = $this->nullableString($params['description'] ?? null);
             $navigation->announcement = $this->nullableString($params['announcement'] ?? null);
+            if (array_key_exists('recommended_label', $params)) {
+                $navigation->recommended_label = $this->nullableString($params['recommended_label']);
+            }
+            $navigation->recommended_url = $recommendedUrl;
             $navigation->updated_at = $now;
             $navigation->save();
 
@@ -268,6 +287,8 @@ class SiteNavigationController extends Controller
             'title' => (string) ($navigation?->title ?? ''),
             'description' => (string) ($navigation?->description ?? ''),
             'announcement' => (string) ($navigation?->announcement ?? ''),
+            'recommended_label' => (string) ($navigation?->recommended_label ?? ''),
+            'recommended_url' => (string) ($navigation?->recommended_url ?? ''),
             'domains' => $domains->map(fn (SiteNavigationDomain $domain): array => [
                 'id' => (int) $domain->id,
                 'domain' => (string) $domain->domain,
