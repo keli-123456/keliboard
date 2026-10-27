@@ -112,7 +112,11 @@ class ClientController extends Controller
             'user' => $user,
             'servers' => $serversFiltered,
             'clientName' => $clientInfo['name'] ?? null,
-            'clientVersion' => $clientInfo['version'] ?? null
+            'clientVersion' => $clientInfo['version'] ?? null,
+            'subscriptionInfo' => [
+                'navigation_url' => $navigationUrl,
+                'website_url' => $websiteUrl,
+            ],
         ]);
 
         $response = $protocolInstance->handle();

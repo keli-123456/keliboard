@@ -23,6 +23,7 @@ use Illuminate\Http\Response;
 use Illuminate\Translation\ArrayLoader;
 use Illuminate\Translation\Translator;
 use Illuminate\Validation\Factory as ValidatorFactory;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
 
@@ -338,6 +339,60 @@ final class ClientControllerTest extends TestCase
             ],
             json_decode($response->getContent(), true)['names']
         );
+    }
+
+    public static function shadowrocketWebsiteCases(): array
+    {
+        return [
+            'main-both-entries' => ['https://nav.example.test', 'https://192.0.2.10', false],
+            'branch-only-own-website' => [null, 'https://192.0.2.10:8444', false],
+            'navigation-only' => ['https://nav.example.test', null, false],
+            'both-with-no-compatible-nodes' => ['https://nav.example.test', 'https://192.0.2.10', true],
+        ];
+    }
+
+    #[DataProvider('shadowrocketWebsiteCases')]
+    public function test_shadowrocket_status_and_headers_receive_the_same_scoped_website_entries(
+        ?string $navigationUrl,
+        ?string $websiteUrl,
+        bool $emptyServers
+    ): void {
+        $this->bindProtocolManager([Shadowrocket::class]);
+        app()->instance('protocols.capabilities', new TestClientCapabilityFilter());
+        app()->instance(SiteNavigationService::class, new class($navigationUrl) extends SiteNavigationService {
+            public function __construct(private ?string $url) {}
+            public function urlForSubscription(mixed $user, Request $request): ?string { return $this->url; }
+        });
+        app()->instance(WebsiteProxyEndpointService::class, new class($websiteUrl) extends WebsiteProxyEndpointService {
+            public function __construct(private ?string $url) {}
+            public function urlForSubscription(mixed $user, Request $request): ?string { return $this->url; }
+        });
+        $response = (new ClientController())->doSubscribe(
+            Request::create('https://main.example.test/sub/fixture', 'GET', ['flag' => 'Shadowrocket/2698']),
+            ['u' => 0, 'd' => 0, 'transfer_enable' => 1073741824, 'expired_at' => 1823566071],
+            $emptyServers ? [] : [['type' => 'trojan', 'name' => 'Real node', 'host' => 'edge.example.test',
+                'port' => 443, 'password' => 'test-only', 'protocol_settings' => ['network' => 'tcp',
+                    'server_name' => 'tls.example.test', 'allow_insecure' => false]]]
+        );
+        $raw = base64_decode($response->getContent(), true);
+        $this->assertIsString($raw);
+        $status = explode("\r\n", $raw, 2)[0];
+        $this->assertStringStartsWith('STATUS=', $status);
+        $this->assertSame($navigationUrl ?? $websiteUrl, $response->headers->get('profile-web-page-url'));
+        $this->assertSame($websiteUrl ?? $navigationUrl, $response->headers->get('support-url'));
+        if ($navigationUrl !== null) {
+            $this->assertStringContainsString('官网导航：' . $navigationUrl, $status);
+            if (!$emptyServers) {
+                $this->assertStringContainsString(rawurlencode('官网导航：' . $navigationUrl), $raw);
+            }
+        } else {
+            $this->assertStringNotContainsString('nav.example.test', $raw);
+            $this->assertStringNotContainsString('官网导航', $status);
+        }
+        if ($websiteUrl !== null) {
+            $this->assertStringContainsString('官网/续费入口：' . $websiteUrl, $status);
+        }
+        $this->assertSame($emptyServers ? 0 : 1 + (int) ($navigationUrl !== null) + (int) ($websiteUrl !== null), substr_count($raw, 'trojan://'));
     }
 
     private function bindProtocolManager(array $classes): void

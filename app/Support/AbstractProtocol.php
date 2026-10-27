@@ -28,6 +28,8 @@ abstract class AbstractProtocol
      */
     protected $clientVersion;
 
+    protected array $subscriptionInfo;
+
     /**
      * @var array 协议标识
      */
@@ -50,13 +52,15 @@ abstract class AbstractProtocol
      * @param array $servers 服务器信息
      * @param string|null $clientName 客户端名称
      * @param string|null $clientVersion 客户端版本
+     * @param array $subscriptionInfo 当前站点的订阅入口信息
      */
-    public function __construct($user, $servers, $clientName = null, $clientVersion = null)
+    public function __construct($user, $servers, $clientName = null, $clientVersion = null, array $subscriptionInfo = [])
     {
         $this->user = $user;
         $this->servers = $servers;
         $this->clientName = is_string($clientName) ? strtolower(trim($clientName)) : $clientName;
         $this->clientVersion = $clientVersion;
+        $this->subscriptionInfo = $subscriptionInfo;
         $this->protocolRequirements = $this->normalizeProtocolRequirements($this->protocolRequirements);
         $this->servers = HookManager::filter('protocol.servers.filtered', $this->filterServersByVersion());
     }

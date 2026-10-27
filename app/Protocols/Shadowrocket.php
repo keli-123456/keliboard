@@ -40,7 +40,26 @@ class Shadowrocket extends AbstractProtocol
         $download = round($user['d'] / (1024 * 1024 * 1024), 2);
         $totalTraffic = round($user['transfer_enable'] / (1024 * 1024 * 1024), 2);
         $expiredDate = date('Y-m-d', $user['expired_at']);
-        $uri .= "STATUS=🚀↑:{$upload}GB,↓:{$download}GB,TOT:{$totalTraffic}GB💡Expires:{$expiredDate}\r\n";
+        $status = "🚀↑:{$upload}GB,↓:{$download}GB,TOT:{$totalTraffic}GB💡Expires:{$expiredDate}";
+        // Keep site entries visible even when clients merge duplicate connection entries.
+        $seenUrls = [];
+        foreach (['navigation_url' => '官网导航', 'website_url' => '官网/续费入口'] as $key => $label) {
+            $url = $this->subscriptionInfo[$key] ?? null;
+            if (!is_string($url) || preg_match('/[\x00-\x20\x7f]/', $url)
+                || !filter_var($url, FILTER_VALIDATE_URL)
+                || parse_url($url, PHP_URL_SCHEME) !== 'https'
+                || parse_url($url, PHP_URL_USER) !== null
+                || parse_url($url, PHP_URL_PASS) !== null) {
+                continue;
+            }
+            $urlKey = strtolower(rtrim($url, '/'));
+            if (isset($seenUrls[$urlKey])) {
+                continue;
+            }
+            $seenUrls[$urlKey] = true;
+            $status .= " | {$label}：{$url}";
+        }
+        $uri .= "STATUS={$status}\r\n";
         foreach ($servers as $item) {
             if ($item['type'] === Server::TYPE_SHADOWSOCKS) {
                 $uri .= self::buildShadowsocks($item['password'], $item);
