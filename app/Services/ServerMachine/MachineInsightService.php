@@ -68,7 +68,7 @@ class MachineInsightService
         if (!$row) {
             return null;
         }
-        $status = in_array($row['status'] ?? '', ['applied', 'received', 'queued', 'scheduled', 'ignored', 'error', 'failed'], true)
+        $status = in_array($row['status'] ?? '', ['applied', 'received', 'queued', 'scheduled', 'restart_required', 'ignored', 'error', 'failed'], true)
             ? $row['status'] : 'unknown';
         return ['status' => $status, 'event_id' => substr((string) ($row['event_id'] ?? ''), 0, 128), 'updated_at' => $row['updated_at'] ?? null];
     }

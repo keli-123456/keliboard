@@ -187,12 +187,23 @@ class ServerSave extends FormRequest
     {
         $type = $this->input('type');
         $rules = $this->getBaseRules();
+        $rules['expected_config_hash'] = 'nullable|string|regex:/^[a-f0-9]{64}$/D';
+        $rules['expected_draft_hash'] = 'nullable|string|regex:/^[a-f0-9]{64}$/D';
 
         foreach (self::PROTOCOL_RULES[$type] ?? [] as $field => $rule) {
             $rules['protocol_settings.' . $field] = $rule;
         }
 
         return $rules;
+    }
+
+    public static function validateSnapshot(array $payload): array
+    {
+        $request = static::create('/', 'POST', $payload);
+        $request->prepareForValidation();
+        $validator = app('validator')->make($request->all(), $request->rules(), $request->messages());
+        $request->withValidator($validator);
+        return $validator->validate();
     }
 
     protected function prepareForValidation(): void

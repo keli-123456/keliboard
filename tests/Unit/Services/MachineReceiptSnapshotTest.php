@@ -43,4 +43,16 @@ final class MachineReceiptSnapshotTest extends TestCase
         File::shouldReceive('exists')->once()->andReturn(false);
         $this->assertSame([], (new NodeRealtimeStatusService(new NodeRealtimeSettings()))->receiptsForServers([10]));
     }
+
+    public function test_machine_insight_retains_manual_restart_required_without_free_text(): void
+    {
+        $method = new \ReflectionMethod(\App\Services\ServerMachine\MachineInsightService::class, 'receipt');
+        $receipt = $method->invoke(new \App\Services\ServerMachine\MachineInsightService(), [
+            'status' => 'restart_required', 'event_id' => 'exact-config-event', 'message' => 'private runtime text',
+            'updated_at' => '2026-10-27T00:00:00Z',
+        ]);
+        $this->assertSame('restart_required', $receipt['status']);
+        $this->assertSame('exact-config-event', $receipt['event_id']);
+        $this->assertArrayNotHasKey('message', $receipt);
+    }
 }

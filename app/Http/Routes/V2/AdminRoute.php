@@ -10,6 +10,7 @@ use App\Http\Controllers\V2\Admin\Server\MachineController;
 use App\Http\Controllers\V2\Admin\Server\MachineReleaseManagementController;
 use App\Http\Controllers\V2\Admin\Server\RouteController;
 use App\Http\Controllers\V2\Admin\Server\ManageController;
+use App\Http\Controllers\V2\Admin\Server\ConfigHistoryController;
 use App\Http\Controllers\V2\Admin\OrderController;
 use App\Http\Controllers\V2\Admin\UserController;
 use App\Http\Controllers\V2\Admin\StatController;
@@ -175,6 +176,10 @@ class AdminRoute
                 $router->get('/getOptions', [ManageController::class, 'getOptions']);
                 $router->get('/getCapabilities', [ManageController::class, 'getCapabilities']);
                 $router->get('/ech', [ManageController::class, 'echState']);
+                $router->get('/config-history', [ConfigHistoryController::class, 'history']);
+                $router->post('/config-preview', [ConfigHistoryController::class, 'preview']);
+                $router->post('/restore-preview', [ConfigHistoryController::class, 'restorePreview']);
+                $router->post('/restore-config', [ConfigHistoryController::class, 'restore']);
                 $router->post('/sort', [ManageController::class, 'sort']);
             });
 
@@ -215,6 +220,8 @@ class AdminRoute
                 $router->post('/update', [UserController::class, 'update']);
                 $router->get('/getUserInfoById', [UserController::class, 'getUserInfoById']);
                 $router->get('/getOnlineDevices', [UserController::class, 'getOnlineDevices']);
+                $router->get('/subscription-diagnostics', [\App\Http\Controllers\V2\Admin\UserInsightController::class, 'subscription']);
+                $router->get('/business-timeline', [\App\Http\Controllers\V2\Admin\UserInsightController::class, 'timeline']);
                 $router->post('/generate', [UserController::class, 'generate']);
                 $router->post('/dumpCSV', [UserController::class, 'dumpCSV']);
                 $router->post('/sendMail', [UserController::class, 'sendMail']);

@@ -861,49 +861,18 @@ class ManageController extends Controller
 
     public function save(ServerSave $request)
     {
-        $params = $request->validated();
-        if ($request->input('id')) {
-            $server = Server::find($request->input('id'));
-            if (!$server) {
-                return $this->fail([400202, '服务器不存在']);
-            }
-            try {
-                $oldGroupIds = $this->normalizeIdList((array) ($server->group_ids ?? []));
-                if (($params['type'] ?? $server->type) === 'hysteria' && isset($params['protocol_settings'])) {
-                    \Illuminate\Support\Facades\DB::transaction(function () use (&$server, &$params): void {
-                        $server = Server::query()->lockForUpdate()->findOrFail($server->id);
-                        $params['protocol_settings'] = \App\Services\Node\HysteriaEchProvisioningService::normalize(
-                            $params['protocol_settings'], (array) $server->protocol_settings);
-                        $server->update($params);
-                    });
-                } else {
-                    $server->update($params);
-                }
-                $publisher = app(NodeRealtimePublisher::class);
-                $publisher->invalidateConfigForServers([(int) $server->id], 'admin.server.saved');
-                $newGroupIds = $this->normalizeIdList((array) ($server->group_ids ?? []));
-                if ($oldGroupIds !== $newGroupIds) {
-                    $publisher->invalidateUsersForServers([(int) $server->id], 'admin.server.groups_saved');
-                }
-                return $this->success(true);
-            } catch (\Exception $e) {
-                Log::error($e);
-                return $this->fail([500, '保存失败']);
-            }
-        }
-
         try {
-            if (($params['type'] ?? '') === 'hysteria' && isset($params['protocol_settings'])) {
-                $params['protocol_settings'] = \App\Services\Node\HysteriaEchProvisioningService::normalize($params['protocol_settings']);
-            }
-            Server::create($params);
+            $request->validate(['id' => 'nullable|integer|min:1']);
+            app(\App\Services\Node\ServerConfigHistoryService::class)->persist(
+                $request->input('id') ? $request->integer('id') : null,
+                $request->validated(), $request->user()?->id);
             return $this->success(true);
+        } catch (\Illuminate\Validation\ValidationException | \Symfony\Component\HttpKernel\Exception\HttpException $e) {
+            throw $e;
         } catch (\Exception $e) {
-            Log::error($e);
-            return $this->fail([500, '创建失败']);
+            Log::error('Node configuration save failed', ['server_id' => $request->integer('id'), 'exception' => get_class($e)]);
+            return $this->fail([500, '保存失败，未完成的事务已回退']);
         }
-
-
     }
 
     public function update(Request $request)
@@ -921,10 +890,10 @@ class ManageController extends Controller
         if ($request->has('enabled')) {
             $updates['enabled'] = (int) $request->enabled ? 1 : 0;
         }
-        if (empty($updates) || !Server::where('id', $request->id)->update($updates)) {
+        if (empty($updates)) {
             return $this->fail([500, '保存失败']);
         }
-        app(NodeRealtimePublisher::class)->invalidateConfigForServers([(int) $request->id], 'admin.server.updated');
+        app(\App\Services\Node\ServerConfigHistoryService::class)->persist($request->integer('id'), $updates, $request->user()?->id);
         return $this->success(true);
     }
 

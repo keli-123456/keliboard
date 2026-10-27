@@ -18,14 +18,6 @@ use Illuminate\Http\Request;
 
 class ClientController extends Controller
 {
-    private const DEFAULT_CLIENT_VERSIONS = [
-        'sing-box' => '1.12.0',
-    ];
-
-    private const CLIENT_CORE_VERSION_OVERRIDES = [
-        'karing' => '1.13.0',
-    ];
-
     /**
      * Protocol prefix mapping for server names
      */
@@ -223,43 +215,7 @@ class ClientController extends Controller
 
     private function getClientInfo(Request $request): array
     {
-        $flag = strtolower($request->input('flag') ?? $request->header('User-Agent', ''));
-        $protocolManager = app('protocols.manager');
-
-        // Prefer matching against the full user-agent/flag string first.
-        // This avoids partial token matches like "Mozilla/5.0" being treated as client versions.
-        $clientName = $protocolManager->matchClientFlag($flag);
-        $clientVersion = $clientName
-            ? $protocolManager->extractClientVersion($flag, $clientName)
-            : null;
-
-        // Fallback to first-token detection when full-string matching cannot identify the client.
-        if (!$clientName && preg_match('/([a-zA-Z0-9\-_]+)[\/\s]+(v?[0-9]+(?:\.[0-9]+)*)/', $flag, $matches)) {
-            $potentialName = strtolower($matches[1]);
-            $matchedName = $protocolManager->matchClientFlag($potentialName);
-            if ($matchedName) {
-                $clientName = $matchedName;
-                $clientVersion = preg_replace('/^v/', '', $matches[2]) ?: null;
-            }
-        }
-
-        if ($clientName && !$clientVersion && preg_match('/(?:^|[^0-9])v?(\d+(?:\.\d+)+)(?=$|[^0-9])/', $flag, $matches)) {
-            $clientVersion = $matches[1];
-        }
-
-        if ($clientName && isset(self::CLIENT_CORE_VERSION_OVERRIDES[$clientName])) {
-            $clientVersion = self::CLIENT_CORE_VERSION_OVERRIDES[$clientName];
-        }
-
-        if ($clientName && !$clientVersion && isset(self::DEFAULT_CLIENT_VERSIONS[$clientName])) {
-            $clientVersion = self::DEFAULT_CLIENT_VERSIONS[$clientName];
-        }
-
-        return [
-            'flag' => $flag,
-            'name' => $clientName,
-            'version' => $clientVersion
-        ];
+        return app(\App\Services\SubscriptionClientProfileService::class)->resolve($request);
     }
 
     private function setSubscribeInfoToServers(&$servers, $user, $rejectServerCount = 0)

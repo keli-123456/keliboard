@@ -30,7 +30,9 @@ class RequestLog
                 'method' => strtoupper($request->method()),
                 'uri' => $request->getRequestUri(),
                 'request_data' => json_encode(
-                    $this->sanitizePayload($request->all()),
+                    $this->sanitizePayload(preg_match('#/server/manage/(save|config-preview)$#', $request->path())
+                        ? array_replace($request->all(), ['protocol_settings' => '[REDACTED]', 'ips' => '[REDACTED]', 'excludes' => '[REDACTED]'])
+                        : $request->all()),
                     JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR
                 ),
                 'ip' => $request->getClientIp(),

@@ -82,6 +82,17 @@ abstract class AbstractProtocol
      */
     abstract public function handle();
 
+    public static function filterServersForPreview(array $servers, ?string $clientName, ?string $clientVersion): array
+    {
+        // Reuse export rules without running plugin hooks or rendering credentials.
+        $instance = (new \ReflectionClass(static::class))->newInstanceWithoutConstructor();
+        $instance->servers = $servers;
+        $instance->clientName = $clientName ? strtolower(trim($clientName)) : null;
+        $instance->clientVersion = $clientVersion;
+        $instance->protocolRequirements = $instance->normalizeProtocolRequirements($instance->protocolRequirements);
+        return $instance->filterServersByVersion();
+    }
+
     /**
      * 根据客户端版本过滤不兼容的服务器
      *
