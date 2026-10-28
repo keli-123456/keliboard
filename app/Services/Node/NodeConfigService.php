@@ -28,7 +28,7 @@ class NodeConfigService
         $protocolSettings = is_array($node->protocol_settings) ? $node->protocol_settings : [];
 
         $networkSettings = data_get($protocolSettings, 'network_settings') ?: null;
-        if ($nodeType === 'hysteria' && \App\Support\Hysteria2Ech::enabled($protocolSettings)) {
+        if (in_array($nodeType, ['hysteria', 'trusttunnel'], true) && \App\Support\Hysteria2Ech::enabled($protocolSettings)) {
             $networkSettings = array_merge($networkSettings ?? [], [
                 'ech_key_file' => data_get($protocolSettings, 'ech.key_file'),
             ]);
@@ -116,6 +116,12 @@ class NodeConfigService
                 'tls' => (int) data_get($protocolSettings, 'tls', 0),
                 'tls_settings' => data_get($protocolSettings, 'tls_settings') ?: [],
             ],
+            'trusttunnel' => [
+                ...$baseConfig,
+                'network' => 'tcp',
+                'tls' => 1,
+                'tls_settings' => data_get($protocolSettings, 'tls_settings') ?: [],
+            ],
             'naive' => [
                 ...$baseConfig,
                 'server_port' => (int) $serverPort,
@@ -142,10 +148,10 @@ class NodeConfigService
         if ($nodeType === 'hysteria' && !empty($protocolSettings['congestion_control'])) {
             $response['congestion_control'] = $protocolSettings['congestion_control'];
         }
-        if ($automaticEch && $nodeType === 'hysteria' && \App\Support\Hysteria2Ech::automatic($protocolSettings)) {
+        if ($automaticEch && in_array($nodeType, ['hysteria', 'trusttunnel'], true) && \App\Support\Hysteria2Ech::automatic($protocolSettings)) {
             $ech = $protocolSettings['ech'];
             $response['automatic_ech'] = ['request_id' => $ech['request_id'],
-                'public_name' => data_get($protocolSettings, 'tls.server_name'),
+                'public_name' => data_get($protocolSettings, $nodeType === 'trusttunnel' ? 'tls_settings.server_name' : 'tls.server_name'),
                 'state' => $ech['state'], 'config' => $ech['config'] ?? null,
                 'key_file' => $ech['key_file'] ?? null];
         }
@@ -286,7 +292,7 @@ class NodeConfigService
     {
         return match ($nodeType) {
             'vmess', 'vless', 'socks', 'naive', 'http' => (int) data_get($protocolSettings, 'tls', 0),
-            'trojan', 'hysteria', 'tuic' => 1,
+            'trojan', 'hysteria', 'tuic', 'trusttunnel' => 1,
             'anytls' => $this->resolveAnyTlsMode($protocolSettings),
             'shadowsocks' => 0,
             default => null,

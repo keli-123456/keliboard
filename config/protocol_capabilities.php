@@ -1,6 +1,7 @@
 <?php
 
 return [
+    'experimental' => ['trusttunnel' => (bool) env('TRUSTTUNNEL_ENABLED', false)],
     // Conservative ECH subscription floors; only canonical core identities qualify.
     'hy2_ech_clients' => [
         'mihomo' => '1.19.31',
@@ -44,6 +45,7 @@ return [
                 'naive' => [
                     'networks' => ['tcp', 'quic'],
                 ],
+                'trusttunnel' => ['networks' => ['tcp'], 'tls_modes' => [1]],
                 'http' => [],
                 'mieru' => [
                     'networks' => ['tcp'],
@@ -124,7 +126,7 @@ return [
             'unknown_version_policy' => 'conservative',
             'core_version_wrappers' => ['sparkle'],
             'core_version_aliases' => ['mihomo'],
-            'protocols' => ['shadowsocks', 'vmess', 'trojan', 'vless', 'hysteria', 'tuic', 'anytls', 'socks', 'http', 'mieru'],
+            'protocols' => ['shadowsocks', 'vmess', 'trojan', 'vless', 'hysteria', 'tuic', 'anytls', 'socks', 'http', 'mieru', 'trusttunnel'],
             'variants' => [
                 'nekobox' => [
                     'supports' => [
@@ -170,6 +172,9 @@ return [
                 ],
             ],
             'supports' => [
+                'trusttunnel' => [
+                    ['when' => [], 'min_version' => '1.19.33', 'requires_core_version' => true, 'support' => 'yes'],
+                ],
                 'vless' => [
                     ['when' => ['network' => ['tcp', 'ws', 'grpc', 'http', 'h2']], 'support' => 'yes'],
                     ['when' => ['network' => 'xhttp'], 'min_version' => '1.19.22', 'requires_core_version' => true, 'support' => 'yes'],

@@ -22,6 +22,17 @@ class SubscriptionClientProfileService
         if ($name && !$version && preg_match('/(?:^|[^0-9])v?(\d+(?:\.\d+)+)(?=$|[^0-9])/', $flag, $matches)) {
             $version = $matches[1];
         }
+        // A format-only import flag must not hide a canonical core User-Agent.
+        // Keep other requested formats and composite wrapper identities unchanged.
+        if (in_array($name, (array) config('protocol_capabilities.clients.mihomo.aliases', []), true)) {
+            $agent = $request->filled('flag') ? strtolower(trim((string) $request->header('User-Agent', ''))) : $flag;
+            $agent = preg_replace('/^clash\.meta(?=[\/\s]|$)/', 'mihomo', $agent);
+            if (preg_match('/^mihomo(?:[\/\s]|$)/', $agent) === 1
+                && ($coreVersion = $manager->extractClientVersion($agent, 'mihomo'))) {
+                $name = 'mihomo';
+                $version = $coreVersion;
+            }
+        }
         if ($name === 'karing') {
             $version = '1.13.0';
         }

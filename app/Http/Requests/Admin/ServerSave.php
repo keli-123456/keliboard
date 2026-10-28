@@ -22,6 +22,7 @@ class ServerSave extends FormRequest
         Server::TYPE_NAIVE,
         Server::TYPE_HTTP,
         Server::TYPE_MIERU,
+        Server::TYPE_TRUSTTUNNEL,
     ];
 
     private const V2NODE_REALITY_UNSUPPORTED_NETWORKS = [
@@ -109,6 +110,19 @@ class ServerSave extends FormRequest
             'tls_settings.allow_insecure' => 'nullable|boolean',
             'tls_settings.alpn' => 'nullable|array',
             ...self::TLS_CERT_RULES,
+        ],
+        'trusttunnel' => [
+            'network' => 'required|in:tcp',
+            'tls' => 'required|integer|in:1',
+            'tls_settings.server_name' => 'required|string|max:253',
+            'tls_settings.allow_insecure' => 'nullable|boolean|declined',
+            'tls_settings.alpn' => 'required|array|min:1|max:2',
+            'tls_settings.alpn.*' => 'required|distinct|in:h2,h3',
+            'ech' => 'nullable|array',
+            ...self::TLS_CERT_RULES,
+            'tls_settings.cert_mode' => 'required|in:file,dns,http',
+            'tls_settings.cert_file' => 'nullable|string|required_if:protocol_settings.tls_settings.cert_mode,file',
+            'tls_settings.key_file' => 'nullable|string|required_if:protocol_settings.tls_settings.cert_mode,file',
         ],
         'naive' => [
             'network' => 'nullable|string|in:tcp,quic',
@@ -230,6 +244,27 @@ class ServerSave extends FormRequest
     public function withValidator(Validator $validator): void
     {
         $validator->after(function (Validator $validator) {
+            if ($this->input('type') === Server::TYPE_TRUSTTUNNEL) {
+                if (!config('protocol_capabilities.experimental.trusttunnel', false)) {
+                    $validator->errors()->add('type', 'TrustTunnel 尚未启用实验性接入');
+                }
+                if ($this->input('runtime') !== Server::RUNTIME_V2NODE) {
+                    $validator->errors()->add('runtime', 'TrustTunnel 需要启用独立功能的 kelinode-rs 构建');
+                }
+                $settings = (array) $this->input('protocol_settings', []);
+                foreach (array_diff(array_keys($settings), ['network', 'tls', 'tls_settings', 'ech']) as $field) {
+                    $validator->errors()->add('protocol_settings.' . $field, 'TrustTunnel 不支持此配置项');
+                }
+                $tlsSettings = (array) data_get($settings, 'tls_settings', []);
+                \App\Support\EchSettings::validate($settings, $validator, 'tls_settings');
+                foreach (array_diff(array_keys($tlsSettings), ['server_name', 'alpn', 'allow_insecure', 'cert_mode', 'cert_file', 'key_file', 'provider', 'dns_env', 'reject_unknown_sni']) as $field) {
+                    $validator->errors()->add('protocol_settings.tls_settings.' . $field, 'TrustTunnel 不支持此 TLS 配置项');
+                }
+                if (filter_var($this->input('port'), FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 65535]]) === false
+                    || filter_var($this->input('server_port'), FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 65535]]) === false) {
+                    $validator->errors()->add('port', 'TrustTunnel 仅支持单个有效端口');
+                }
+            }
             if ($this->input('type') === Server::TYPE_HYSTERIA) {
                 Hysteria2Settings::validate((array) $this->input('protocol_settings', []), $validator);
             }

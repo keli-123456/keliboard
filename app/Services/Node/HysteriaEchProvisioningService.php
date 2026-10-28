@@ -13,11 +13,11 @@ use InvalidArgumentException;
 final class HysteriaEchProvisioningService
 {
     // Managed fields are server-owned, never trusted from an admin form round trip.
-    public static function normalize(array $settings, ?array $previous = null): array
+    public static function normalize(array $settings, ?array $previous = null, string $tlsKey = 'tls'): array
     {
         if (!Hysteria2Ech::automatic($settings)) return $settings;
         if ($previous && Hysteria2Ech::automatic($previous)
-            && data_get($previous, 'tls.server_name') === data_get($settings, 'tls.server_name')
+            && data_get($previous, $tlsKey . '.server_name') === data_get($settings, $tlsKey . '.server_name')
             && preg_match('/^[a-f0-9]{32}$/D', (string) data_get($previous, 'ech.request_id'))) {
             $settings['ech'] = $previous['ech'];
         } else {
@@ -27,14 +27,14 @@ final class HysteriaEchProvisioningService
         return $settings;
     }
 
-    public static function applyReport(array $settings, array $report): array
+    public static function applyReport(array $settings, array $report, string $tlsKey = 'tls'): array
     {
         $ech = $settings['ech'] ?? [];
         if (!Hysteria2Ech::automatic($settings)
             || !hash_equals((string) ($ech['request_id'] ?? ''), $report['request_id'])) {
             throw new InvalidArgumentException('ECH request is no longer active');
         }
-        if (!Hysteria2Ech::validConfig($report['config'], (string) data_get($settings, 'tls.server_name'))
+        if (!Hysteria2Ech::validConfig($report['config'], (string) data_get($settings, $tlsKey . '.server_name'))
             || !self::validPath($report['key_file'])) {
             throw new InvalidArgumentException('Invalid public ECH report');
         }
@@ -55,11 +55,11 @@ final class HysteriaEchProvisioningService
         $changed = false;
         $result = DB::transaction(function () use ($authorizedNode, $report, &$changed): array {
             $node = Server::query()->lockForUpdate()->findOrFail($authorizedNode->id);
-            if ($node->type !== 'hysteria' || !$node->enabled) {
-                throw new InvalidArgumentException('ECH report requires an active HY2 node');
+            if (!in_array($node->type, [Server::TYPE_HYSTERIA, Server::TYPE_TRUSTTUNNEL], true) || !$node->enabled) {
+                throw new InvalidArgumentException('ECH report requires an active HY2 or TrustTunnel node');
             }
             $settings = (array) $node->protocol_settings;
-            $next = self::applyReport($settings, $report);
+            $next = self::applyReport($settings, $report, $node->type === Server::TYPE_TRUSTTUNNEL ? 'tls_settings' : 'tls');
             $changed = $next !== $settings;
             if ($changed) $node->forceFill(['protocol_settings' => $next])->save();
             return ['request_id' => $report['request_id'], 'phase' => $next['ech']['state'],

@@ -71,6 +71,7 @@ class Server extends Model
     public const TYPE_NAIVE = 'naive';
     public const TYPE_HTTP = 'http';
     public const TYPE_MIERU = 'mieru';
+    public const TYPE_TRUSTTUNNEL = 'trusttunnel';
     public const STATUS_OFFLINE = 0;
     public const STATUS_ONLINE_NO_PUSH = 1;
     public const STATUS_ONLINE = 2;
@@ -109,6 +110,7 @@ class Server extends Model
         self::TYPE_NAIVE,
         self::TYPE_HTTP,
         self::TYPE_MIERU,
+        self::TYPE_TRUSTTUNNEL,
     ];
 
     public const VALID_RUNTIMES = [
@@ -309,6 +311,14 @@ class Server extends Model
                 ]
             ]
         ],
+        self::TYPE_TRUSTTUNNEL => [
+            'network' => ['type' => 'string', 'default' => 'tcp'],
+            'ech' => ['type' => 'array', 'default' => ['enabled' => false]],
+            'tls' => ['type' => 'integer', 'default' => 1],
+            'tls_settings' => ['type' => 'array', 'default' => [
+                'server_name' => null, 'cert_mode' => 'http', 'alpn' => ['h2'], 'allow_insecure' => false,
+            ]],
+        ],
         self::TYPE_NAIVE => [
             'network' => ['type' => 'string', 'default' => 'tcp'],
             'tls' => ['type' => 'integer', 'default' => 1],
@@ -470,6 +480,7 @@ class Server extends Model
                 'network' => ['tcp', 'quic'],
                 'tls' => [0, 1],
             ],
+            self::TYPE_TRUSTTUNNEL => ['network' => ['tcp'], 'tls' => [1]],
             self::TYPE_MIERU => [
                 'transport' => ['tcp', 'udp'],
                 'multiplexing' => ['MULTIPLEXING_OFF', 'MULTIPLEXING_LOW', 'MULTIPLEXING_MIDDLE', 'MULTIPLEXING_HIGH'],

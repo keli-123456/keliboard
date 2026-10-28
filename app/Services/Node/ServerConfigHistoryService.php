@@ -97,9 +97,10 @@ final class ServerConfigHistoryService
                 $this->record($server, $before, [], 'baseline', null, null, null);
             }
             $params = array_intersect_key($payload, array_flip(self::FIELDS));
-            if (($params['type'] ?? $server->type) === 'hysteria' && isset($params['protocol_settings'])) {
+            if (in_array($params['type'] ?? $server->type, ['hysteria', 'trusttunnel'], true) && isset($params['protocol_settings'])) {
                 $params['protocol_settings'] = HysteriaEchProvisioningService::normalize(
-                    $params['protocol_settings'], $id ? (array) $server->protocol_settings : null);
+                    $params['protocol_settings'], $id ? (array) $server->protocol_settings : null,
+                    ($params['type'] ?? $server->type) === 'trusttunnel' ? 'tls_settings' : 'tls');
             }
             $server->fill($params)->save();
             $after = $this->snapshot($server->fresh());

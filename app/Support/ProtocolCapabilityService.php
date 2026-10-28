@@ -41,6 +41,9 @@ class ProtocolCapabilityService
     public function supportsRuntime(string $runtime, array $server): SupportResult
     {
         $facts = $this->extractFacts($server);
+        if ($facts['protocol'] === 'trusttunnel' && !data_get($this->config, 'experimental.trusttunnel', false)) {
+            return SupportResult::drop('TrustTunnel experimental integration is disabled');
+        }
         $runtimeConfig = data_get($this->config, "runtimes.{$runtime}.protocols.{$facts['protocol']}");
 
         if ($runtimeConfig === null) {
@@ -73,6 +76,15 @@ class ProtocolCapabilityService
         $facts = $this->extractFacts($server);
         $normalizedClientName = is_string($clientName) ? strtolower(trim($clientName)) : null;
         $family = $this->resolveClientFamily($normalizedClientName);
+
+        if ($facts['protocol'] === 'trusttunnel') {
+            if ($reason = $this->trustTunnelBlockReason($server)) {
+                return SupportResult::drop($reason);
+            }
+            if (!is_string($clientVersion) || preg_match('/^\d+\.\d+\.\d+$/D', $clientVersion) !== 1) {
+                return SupportResult::drop('TrustTunnel requires a verified stable core version');
+            }
+        }
 
         if ($facts['ech']) {
             $minimum = $this->config['hy2_ech_clients'][$normalizedClientName ?? ''] ?? null;
@@ -167,7 +179,10 @@ class ProtocolCapabilityService
         $normalizedClientName = is_string($clientName) ? strtolower(trim($clientName)) : null;
         $family = $this->resolveClientFamily($normalizedClientName);
 
-        if ($facts['ech']) {
+        if ($facts['protocol'] === 'trusttunnel' && ($reason = $this->trustTunnelBlockReason($server))) {
+            return ['family' => $family, 'status' => 'block', 'reason' => $reason, 'matched_rule' => null];
+        }
+        if ($facts['ech'] && $facts['protocol'] !== 'trusttunnel') {
             $minimum = $this->config['hy2_ech_clients'][$normalizedClientName ?? ''] ?? null;
             return [
                 'family' => $family,
@@ -346,10 +361,10 @@ class ProtocolCapabilityService
 
         return [
             'protocol' => $type,
-            'ech' => $type === 'hysteria' && Hysteria2Ech::enabled($settings),
+            'ech' => in_array($type, ['hysteria', 'trusttunnel'], true) && Hysteria2Ech::enabled($settings),
             'network' => match ($type) {
                 'mieru' => strtolower(trim((string) data_get($settings, 'transport', 'tcp'))),
-                'naive' => data_get($settings, 'network') ?: 'tcp',
+                'naive', 'trusttunnel' => data_get($settings, 'network') ?: 'tcp',
                 default => data_get($settings, 'network'),
             },
             'cipher' => data_get($settings, 'cipher'),
@@ -359,7 +374,7 @@ class ProtocolCapabilityService
             'tls_mode' => match ($type) {
                 'vless' => data_get($settings, 'tls'),
                 'anytls' => data_get($settings, 'tls_mode', 1),
-                'naive' => data_get($settings, 'tls', 1),
+                'naive', 'trusttunnel' => data_get($settings, 'tls', 1),
                 default => null,
             },
             'udp_relay_mode' => data_get($settings, 'udp_relay_mode'),
@@ -377,9 +392,21 @@ class ProtocolCapabilityService
         return $facts['protocol'] === 'hysteria' && $facts['obfs_type'] === 'gecko';
     }
 
+    private function trustTunnelBlockReason(array $server): ?string
+    {
+        if (!data_get($this->config, 'experimental.trusttunnel', false)) {
+            return 'TrustTunnel experimental integration is disabled';
+        }
+        if (Hysteria2Ech::waiting((array) ($server['protocol_settings'] ?? []))) {
+            return 'TrustTunnel is waiting for node ECH activation';
+        }
+        return null;
+    }
+
     protected function supportsUnknownClient(array $facts): SupportResult
     {
         return match ($facts['protocol']) {
+            'trusttunnel' => SupportResult::drop('unknown client does not receive TrustTunnel'),
             'vless' => in_array($facts['network'], [null, 'tcp', 'ws', 'grpc'], true)
                 ? SupportResult::allow()
                 : SupportResult::drop('unknown client only gets conservative vless transports'),

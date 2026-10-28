@@ -9,6 +9,7 @@ use App\Models\ServerMachine;
 use App\Support\Setting;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
@@ -274,7 +275,7 @@ final class MachineControllerInstallCommandTest extends TestCase
             'https://api.github.com/repos/keli-123456/kelinode-rs/releases?per_page=20' => Http::response([
                 [
                     'tag_name' => 'v0.1.4',
-                    'prerelease' => true,
+                    'prerelease' => false,
                     'draft' => false,
                 ],
             ]),
@@ -314,13 +315,61 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertSame('panel', $payload['data']['source']);
     }
 
+    public function test_github_latest_skips_drafts_and_experimental_releases(): void
+    {
+        Http::fake([
+            'https://api.github.com/repos/keli-123456/kelinode-rs/releases?per_page=20' => Http::response([
+                ['tag_name' => 'v0.1.379', 'draft' => true, 'prerelease' => false],
+                ['tag_name' => 'v0.1.378-trusttunnel.1', 'draft' => false, 'prerelease' => true],
+                ['tag_name' => 'v0.1.377', 'draft' => false, 'prerelease' => false],
+            ]),
+        ]);
+        $request = $this->installRequest('https://panel.example.test/admin/server/machine/versionInfo', [
+            'component' => 'kelinode-rs', 'force' => true,
+        ]);
+        $payload = (new MachineController())->versionInfo($request)->getData(true);
+        $this->assertSame('v0.1.377', $payload['data']['latest_version']);
+    }
+
+    public function test_github_only_experimental_releases_do_not_become_an_automatic_target(): void
+    {
+        Http::fake([
+            'https://api.github.com/repos/keli-123456/kelinode-rs/releases?per_page=20' => Http::response([
+                ['tag_name' => 'v0.1.378-trusttunnel.1', 'draft' => false, 'prerelease' => true],
+            ]),
+        ]);
+        $request = $this->installRequest('https://panel.example.test/admin/server/machine/versionInfo', [
+            'component' => 'kelinode-rs', 'force' => true,
+        ]);
+        $payload = (new MachineController())->versionInfo($request)->getData(true);
+        $this->assertNull($payload['data']['latest_version']);
+    }
+
+    public function test_old_latest_cache_cannot_bypass_stable_release_selection(): void
+    {
+        Cache::put('server_machine:latest_release:github:kelinode-rs', [
+            'latest_version' => 'v0.1.378-trusttunnel.1',
+        ], 600);
+        Http::fake([
+            'https://api.github.com/repos/keli-123456/kelinode-rs/releases?per_page=20' => Http::response([
+                ['tag_name' => 'v0.1.377', 'draft' => false, 'prerelease' => false],
+            ]),
+        ]);
+        $request = $this->installRequest('https://panel.example.test/admin/server/machine/versionInfo', [
+            'component' => 'kelinode-rs',
+        ]);
+        $payload = (new MachineController())->versionInfo($request)->getData(true);
+        $this->assertSame('v0.1.377', $payload['data']['latest_version']);
+        Http::assertSentCount(1);
+    }
+
     public function test_upgrade_queues_component_specific_target_version(): void
     {
         Http::fake([
             'https://api.github.com/repos/keli-123456/keli-core-rs/releases?per_page=20' => Http::response([
                 [
                     'tag_name' => 'v0.1.1',
-                    'prerelease' => true,
+                    'prerelease' => false,
                     'draft' => false,
                 ],
             ]),
@@ -378,6 +427,27 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertSame('queued', $state['status']);
         $this->assertSame('core', $state['component']);
         $this->assertSame('v0.1.1', $state['target_version']);
+    }
+
+    public function test_explicit_experimental_target_is_not_replaced_by_automatic_latest(): void
+    {
+        Http::preventStrayRequests();
+        $machine = ServerMachine::create([
+            'name' => 'explicit-canary',
+            'token' => 'machine-token',
+            'is_active' => true,
+            'load_status' => ['version' => 'v0.1.377', 'runtime' => ['agent' => 'kelinode-rs']],
+        ]);
+        $request = $this->installRequest('https://panel.example.test/admin/server/machine/upgrade', [
+            'id' => $machine->id,
+            'component' => 'kelinode-rs',
+            'target_version' => 'v0.1.378-trusttunnel.1',
+        ]);
+        $response = (new MachineController())->upgrade($request);
+        $payload = $response->getData(true);
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('v0.1.378-trusttunnel.1', $payload['data']['upgrade_state']['target_version']);
+        Http::assertNothingSent();
     }
 
     public function test_upgrade_requires_bootstrap_for_old_native_agent_using_panel_releases(): void

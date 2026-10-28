@@ -15,7 +15,7 @@ final class HysteriaEchController extends Controller
     public function report(Request $request, HysteriaEchProvisioningService $service)
     {
         $node = $request->attributes->get('node_info');
-        if (!$node instanceof Server || $node->type !== 'hysteria') return $this->fail([403, 'HY2 node authorization required']);
+        if (!$node instanceof Server || !in_array($node->type, [Server::TYPE_HYSTERIA, Server::TYPE_TRUSTTUNNEL], true)) return $this->fail([403, 'ECH-capable node authorization required']);
         if (strlen($request->getContent()) > 24576) {
             return $this->fail([422, 'Only public ECH metadata is accepted']);
         }

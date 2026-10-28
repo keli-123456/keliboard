@@ -25,6 +25,7 @@ class ClashMeta extends AbstractProtocol
         Server::TYPE_SOCKS,
         Server::TYPE_HTTP,
         Server::TYPE_MIERU,
+        Server::TYPE_TRUSTTUNNEL,
     ];
 
     protected $protocolRequirements = [
@@ -80,6 +81,10 @@ class ClashMeta extends AbstractProtocol
         $proxies = [];
 
         foreach ($servers as $item) {
+            if ($item['type'] === Server::TYPE_TRUSTTUNNEL) {
+                $proxy[] = self::buildTrustTunnel($item['password'], $item);
+                $proxies[] = $item['name'];
+            }
             if ($item['type'] === Server::TYPE_SHADOWSOCKS) {
                 array_push($proxy, self::buildShadowsocks($item['password'], $item));
                 array_push($proxies, $item['name']);
@@ -587,6 +592,24 @@ class ClashMeta extends AbstractProtocol
         }
 
         return $array;
+    }
+
+    public static function buildTrustTunnel($password, $server): array
+    {
+        $settings = (array) data_get($server, 'protocol_settings', []);
+        $proxy = [
+            'name' => $server['name'], 'type' => 'trusttunnel',
+            'server' => $server['host'], 'port' => (int) $server['port'],
+            'username' => $password, 'password' => $password,
+            'sni' => data_get($server, 'protocol_settings.tls_settings.server_name') ?: $server['host'],
+            'quic' => !in_array('h2', (array) data_get($settings, 'tls_settings.alpn', ['h2']), true)
+                && in_array('h3', (array) data_get($settings, 'tls_settings.alpn', ['h2']), true),
+            'udp' => true, 'skip-cert-verify' => false,
+        ];
+        if ($ech = \App\Support\Hysteria2Ech::publicConfig($settings)) {
+            $proxy['ech-opts'] = ['enable' => true, 'config' => $ech];
+        }
+        return $proxy;
     }
 
     public static function buildMieru($password, $server)

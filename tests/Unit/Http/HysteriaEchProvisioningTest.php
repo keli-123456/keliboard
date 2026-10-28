@@ -89,4 +89,30 @@ final class HysteriaEchProvisioningTest extends TestCase
         $node->forceFill(['enabled' => false])->save();
         $this->assertSame(409, $controller->report($this->request($node, $body), $service)->getStatusCode());
     }
+
+    public function test_trusttunnel_uses_its_own_tls_domain_and_exports_only_ready_public_ech(): void
+    {
+        config(['protocol_capabilities.experimental.trusttunnel' => true]);
+        $settings = HysteriaEchProvisioningService::normalize([
+            'network' => 'tcp', 'tls' => 1,
+            'tls_settings' => ['server_name' => 'public.example.com', 'alpn' => ['h3'], 'allow_insecure' => false],
+            'ech' => ['enabled' => true, 'mode' => 'automatic'],
+        ], null, 'tls_settings');
+        $node = Server::create(['type' => 'trusttunnel', 'group_ids' => ['1'], 'protocol_settings' => $settings]);
+        $user = (new User())->forceFill(['group_id' => 1, 'uuid' => 'test-uuid']);
+        $this->assertSame([], ServerService::getAvailableServers($user));
+        $body = ['request_id' => $settings['ech']['request_id'], 'phase' => 'prepared',
+            'config' => Hysteria2EchTest::publicConfig(), 'key_file' => '/etc/kelinode/ech/owned/key.pem'];
+        $controller = new HysteriaEchController(); $service = new HysteriaEchProvisioningService();
+        $this->assertSame(200, $controller->report($this->request($node, $body), $service)->getStatusCode());
+        $this->assertSame([], ServerService::getAvailableServers($user));
+        $body['phase'] = 'ready';
+        $this->assertSame(200, $controller->report($this->request($node, $body), $service)->getStatusCode());
+        $available = ServerService::getAvailableServers($user);
+        $this->assertSame([$node->id], array_column($available, 'id'));
+        $export = \App\Protocols\ClashMeta::buildTrustTunnel('test-uuid', ['name' => 'TT fixture', 'host' => 'public.example.com', ...$node->fresh()->toArray()]);
+        $this->assertTrue($export['quic']);
+        $this->assertSame(['enable' => true, 'config' => $body['config']], $export['ech-opts']);
+        $this->assertArrayNotHasKey('key_file', $export);
+    }
 }

@@ -685,7 +685,7 @@ class MachineController extends Controller
         $repository = $this->upgradeComponentRepository($component);
         $distribution = $this->releaseDistribution();
         $source = $distribution->source();
-        $cacheKey = 'server_machine:latest_release:' . $source . ':' . $component;
+        $cacheKey = 'server_machine:stable_release_v2:' . $source . ':' . $component;
         if ($force) {
             Cache::forget($cacheKey);
         }
@@ -725,7 +725,7 @@ class MachineController extends Controller
 
                 $release = collect($response->json())
                     ->first(function ($release): bool {
-                        if ((bool) data_get($release, 'draft', false)) {
+                        if ((bool) data_get($release, 'draft', false) || (bool) data_get($release, 'prerelease', false)) {
                             return false;
                         }
 

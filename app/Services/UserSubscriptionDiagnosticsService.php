@@ -40,7 +40,7 @@ class UserSubscriptionDiagnosticsService
             $support = $capabilities->supportsClient($client['name'], $client['version'], $server);
             $reason = !($server['show'] ?? false) ? 'hidden'
                 : ($hasEnabled && !($server['enabled'] ?? false) ? 'disabled'
-                : ($server['type'] === Server::TYPE_HYSTERIA && Hysteria2Ech::waiting((array) $server['protocol_settings']) ? 'ech_pending'
+                : (in_array($server['type'], [Server::TYPE_HYSTERIA, Server::TYPE_TRUSTTUNNEL], true) && Hysteria2Ech::waiting((array) $server['protocol_settings']) ? 'ech_pending'
                 : (!$support->supported ? 'client_capability'
                 : (!isset($compatibleIds[$server['id']]) ? 'exporter_requirement' : 'eligible'))));
             $nodes[] = ['id' => (int) $server['id'], 'name' => $server['name'], 'protocol' => $server['type'],

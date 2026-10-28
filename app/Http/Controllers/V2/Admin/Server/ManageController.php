@@ -197,6 +197,7 @@ class ManageController extends Controller
             Server::TYPE_NAIVE,
             Server::TYPE_HTTP,
             Server::TYPE_MIERU,
+            Server::TYPE_TRUSTTUNNEL,
         ];
 
         $clientLabels = [
@@ -855,7 +856,7 @@ class ManageController extends Controller
     {
         $input = $request->validate(['id' => 'required|integer|min:1']);
         $server = Server::query()->find($input['id']);
-        if (!$server || $server->type !== 'hysteria') return $this->fail([404, 'HY2 node not found']);
+        if (!$server || !in_array($server->type, ['hysteria', 'trusttunnel'], true)) return $this->fail([404, 'ECH-capable node not found']);
         return $this->success(data_get($server->protocol_settings, 'ech'));
     }
 
@@ -933,8 +934,8 @@ class ManageController extends Controller
         }
         $server->show = 0;
         $server->code = null;
-        if ($server->type === 'hysteria') {
-            $server->protocol_settings = \App\Services\Node\HysteriaEchProvisioningService::normalize((array) $server->protocol_settings);
+        if (in_array($server->type, ['hysteria', 'trusttunnel'], true)) {
+            $server->protocol_settings = \App\Services\Node\HysteriaEchProvisioningService::normalize((array) $server->protocol_settings, null, $server->type === 'trusttunnel' ? 'tls_settings' : 'tls');
         }
         Server::create($server->toArray());
         return $this->success(true);

@@ -102,6 +102,10 @@ class UserClientCompatibilityService
             'http' => 'HTTP',
             'mieru' => 'Mieru',
             'naive' => 'Naive',
+            'trusttunnel' => 'TrustTunnel (' . implode('/', array_map(
+                static fn (string $alpn): string => strtoupper($alpn),
+                array_values(array_intersect(['h2', 'h3'], (array) Arr::get($settings, 'tls_settings.alpn', ['h2'])))
+            )) . ')',
             default => strtoupper($type),
         };
     }
