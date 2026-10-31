@@ -1,7 +1,6 @@
 <?php
 
 return [
-    'experimental' => ['trusttunnel' => (bool) env('TRUSTTUNNEL_ENABLED', false)],
     // Conservative ECH subscription floors; only canonical core identities qualify.
     'hy2_ech_clients' => [
         'mihomo' => '1.19.31',

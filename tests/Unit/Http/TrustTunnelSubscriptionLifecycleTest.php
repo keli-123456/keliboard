@@ -39,7 +39,6 @@ final class TrustTunnelSubscriptionLifecycleTest extends TestCase
         $this->bindJsonResponseFactory();
         config(['app.key' => 'base64:' . base64_encode(str_repeat('f', 32)),
             'protocol_capabilities' => require base_path('config/protocol_capabilities.php'),
-            'protocol_capabilities.experimental.trusttunnel' => true,
             'user_sync.use_state_table_for_server_users' => false]);
         app()->instance('encrypter', new Encrypter(str_repeat('f', 32), 'AES-256-CBC'));
         Schema::create('v2_server', function (Blueprint $table): void {
@@ -169,7 +168,7 @@ final class TrustTunnelSubscriptionLifecycleTest extends TestCase
         $this->assertContains('TT-synthetic', array_column($this->proxy($user)['proxies'], 'name'));
     }
 
-    public function test_visibility_group_feature_gate_and_ban_are_applied_to_the_saved_node(): void
+    public function test_visibility_group_and_ban_are_applied_without_an_experiment_gate(): void
     {
         $user = $this->user();
         $server = $this->saveNode('TT-scope', ['h3']);
@@ -181,8 +180,8 @@ final class TrustTunnelSubscriptionLifecycleTest extends TestCase
             $server->update([$field => $original]);
         }
         config(['protocol_capabilities.experimental.trusttunnel' => false]);
-        $this->assertSame([], ServerService::getAvailableServers($user));
-        config(['protocol_capabilities.experimental.trusttunnel' => true]);
+        $this->assertCount(1, ServerService::getAvailableServers($user));
+        $this->assertCount(1, $this->proxy($user)['proxies']);
         $user->update(['banned' => true]);
         $this->assertFalse((new UserService())->isAvailable($user));
         $this->assertCount(0, ServerService::getAvailableUsers($server));

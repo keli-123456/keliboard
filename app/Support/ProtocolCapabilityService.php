@@ -41,9 +41,6 @@ class ProtocolCapabilityService
     public function supportsRuntime(string $runtime, array $server): SupportResult
     {
         $facts = $this->extractFacts($server);
-        if ($facts['protocol'] === 'trusttunnel' && !data_get($this->config, 'experimental.trusttunnel', false)) {
-            return SupportResult::drop('TrustTunnel experimental integration is disabled');
-        }
         $runtimeConfig = data_get($this->config, "runtimes.{$runtime}.protocols.{$facts['protocol']}");
 
         if ($runtimeConfig === null) {
@@ -394,9 +391,6 @@ class ProtocolCapabilityService
 
     private function trustTunnelBlockReason(array $server): ?string
     {
-        if (!data_get($this->config, 'experimental.trusttunnel', false)) {
-            return 'TrustTunnel experimental integration is disabled';
-        }
         if (Hysteria2Ech::waiting((array) ($server['protocol_settings'] ?? []))) {
             return 'TrustTunnel is waiting for node ECH activation';
         }

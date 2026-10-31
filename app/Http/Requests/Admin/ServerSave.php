@@ -245,11 +245,8 @@ class ServerSave extends FormRequest
     {
         $validator->after(function (Validator $validator) {
             if ($this->input('type') === Server::TYPE_TRUSTTUNNEL) {
-                if (!config('protocol_capabilities.experimental.trusttunnel', false)) {
-                    $validator->errors()->add('type', 'TrustTunnel 尚未启用实验性接入');
-                }
                 if ($this->input('runtime') !== Server::RUNTIME_V2NODE) {
-                    $validator->errors()->add('runtime', 'TrustTunnel 需要启用独立功能的 kelinode-rs 构建');
+                    $validator->errors()->add('runtime', 'TrustTunnel 需要支持此协议的 kelinode-rs 版本');
                 }
                 $settings = (array) $this->input('protocol_settings', []);
                 foreach (array_diff(array_keys($settings), ['network', 'tls', 'tls_settings', 'ech']) as $field) {

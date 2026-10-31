@@ -39,11 +39,8 @@ final class TrustTunnelIntegrationTest extends TestCase
         return $validator->passes();
     }
 
-    public function test_opt_in_validates_tls_and_rejects_unsupported_features(): void
+    public function test_normal_configuration_validates_tls_and_rejects_unsupported_features(): void
     {
-        config(['protocol_capabilities.experimental.trusttunnel' => false]);
-        $this->assertFalse($this->valid($this->payload()));
-        config(['protocol_capabilities.experimental.trusttunnel' => true]);
         $this->assertTrue($this->valid($this->payload()));
         foreach (['runtime' => 'generic', 'port' => '443-445', 'protocol_settings.tls' => 0,
             'protocol_settings.network' => 'quic', 'protocol_settings.tls_settings.allow_insecure' => true,
@@ -62,7 +59,6 @@ final class TrustTunnelIntegrationTest extends TestCase
 
     public function test_h3_and_automatic_ech_preserve_transport_and_wait_for_node_activation(): void
     {
-        config(['protocol_capabilities.experimental.trusttunnel' => true]);
         foreach ([['h3'], ['h2', 'h3']] as $alpn) {
             $input = $this->payload();
             $input['protocol_settings']['tls_settings']['alpn'] = $alpn;
@@ -108,31 +104,35 @@ final class TrustTunnelIntegrationTest extends TestCase
     {
         $capabilities = new ProtocolCapabilityService(config('protocol_capabilities'));
         $server = $this->payload();
-        $this->assertFalse($capabilities->supportsRuntime('v2node', $server)->supported);
-        $configuration = config('protocol_capabilities');
-        data_set($configuration, 'experimental.trusttunnel', true);
-        $capabilities = new ProtocolCapabilityService($configuration);
         $this->assertTrue($capabilities->supportsRuntime('v2node', $server)->supported);
+        $this->assertFalse($capabilities->supportsRuntime('xray', $server)->supported);
         $this->assertTrue($capabilities->supportsClient('mihomo', '1.19.33', $server)->supported);
         foreach ([['mihomo', '1.19.32'], ['mihomo', null], ['verge', '99.0.0'], ['sing-box', '1.14.0'], ['shadowrocket', '2.2.92'], ['v2rayn', '7.25.6']] as [$name, $version]) {
             $this->assertFalse($capabilities->supportsClient($name, $version, $server)->supported, $name);
         }
     }
 
-    public function test_disabled_experimental_subscription_never_changes_existing_protocols(): void
+    public function test_normal_subscription_keeps_legacy_nodes_and_ignores_the_retired_experiment_flag(): void
     {
         $server = $this->payload();
         $legacy = ['id' => 2, 'type' => 'trojan', 'protocol_settings' => []];
-        $capabilities = new ProtocolCapabilityService(config('protocol_capabilities'));
-        foreach ([['mihomo', '1.19.33'], [null, null], ['unrecognized-app', '99.0.0']] as [$name, $version]) {
-            $this->assertSame([$legacy], $capabilities->filterServersForClient([$server, $legacy], $name, $version));
-            $this->assertSame('block', $capabilities->assessClientSupport($name, $server)['status']);
+        foreach ([null, false, true] as $retiredFlag) {
+            $configuration = config('protocol_capabilities');
+            if ($retiredFlag !== null) data_set($configuration, 'experimental.trusttunnel', $retiredFlag);
+            config(['protocol_capabilities' => $configuration]);
+            $capabilities = new ProtocolCapabilityService($configuration);
+            $this->assertTrue($this->valid($server));
+            $this->assertTrue($capabilities->supportsRuntime('v2node', $server)->supported);
+            $this->assertSame([$server, $legacy], $capabilities->filterServersForClient([$server, $legacy], 'mihomo', '1.19.33'));
+            foreach ([[null, null], ['unrecognized-app', '99.0.0']] as [$name, $version]) {
+                $this->assertSame([$legacy], $capabilities->filterServersForClient([$server, $legacy], $name, $version));
+                $this->assertSame('block', $capabilities->assessClientSupport($name, $server)['status']);
+            }
         }
     }
 
     public function test_unknown_clients_and_unverified_core_builds_do_not_receive_trusttunnel(): void
     {
-        config(['protocol_capabilities.experimental.trusttunnel' => true]);
         $capabilities = new ProtocolCapabilityService(config('protocol_capabilities'));
         foreach ([[null, null], ['unknown-app', '99.0.0'], ['mihomo', null], ['mihomo', '1.20.0-alpha'],
             ['mihomo', '1.19.33.999'], ['meta', '99.0.0'], ['clashmeta', '99.0.0'], ['sparkle', '99.0.0.1']] as [$name, $version]) {
@@ -152,7 +152,6 @@ final class TrustTunnelIntegrationTest extends TestCase
 
     public function test_pending_ech_stays_out_of_subscription_and_ready_keeps_the_protocol_floor(): void
     {
-        config(['protocol_capabilities.experimental.trusttunnel' => true]);
         $capabilities = new ProtocolCapabilityService(config('protocol_capabilities'));
         $server = $this->payload();
         $server['protocol_settings']['ech'] = ['enabled' => true, 'mode' => 'automatic', 'state' => 'prepared'];

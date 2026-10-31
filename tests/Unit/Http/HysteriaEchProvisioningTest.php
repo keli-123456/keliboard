@@ -92,7 +92,6 @@ final class HysteriaEchProvisioningTest extends TestCase
 
     public function test_trusttunnel_uses_its_own_tls_domain_and_exports_only_ready_public_ech(): void
     {
-        config(['protocol_capabilities.experimental.trusttunnel' => true]);
         $settings = HysteriaEchProvisioningService::normalize([
             'network' => 'tcp', 'tls' => 1,
             'tls_settings' => ['server_name' => 'public.example.com', 'alpn' => ['h3'], 'allow_insecure' => false],
