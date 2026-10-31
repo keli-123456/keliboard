@@ -822,6 +822,31 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame($server->id, ServerMachine::find($machine->id)?->load_status['tls_certificates'][0]['node_id'] ?? null);
     }
 
+    public function test_status_preserves_authenticated_trusttunnel_certificate_request_binding(): void
+    {
+        $this->bindSettings(['subscription_proxy_enable' => false]);
+        (require database_path('migrations/2026_10_31_000001_add_request_id_to_server_tls_certificate.php'))->up();
+        $machine = ServerMachine::create(['name' => 'synthetic-edge', 'token' => 'synthetic-machine-token', 'is_active' => true]);
+        $server = $this->createServer(['type' => 'trusttunnel', 'runtime' => 'v2node', 'machine_id' => $machine->id,
+            'protocol_settings' => \App\Support\TrustTunnelCertificate::normalize([
+                'tls' => 1, 'network' => 'tcp', 'tls_settings' => ['cert_mode' => 'self', 'alpn' => ['h2']],
+            ])]);
+        $requestId = \App\Support\TrustTunnelCertificate::requestId($server);
+        $row = ['node_id' => $server->id, 'machine_id' => $machine->id, 'protocol' => 'trusttunnel',
+            'sni' => 'trusttunnel.kelinode.invalid', 'request_id' => $requestId, 'status' => 'valid', 'sha256_hex' => str_repeat('a', 64)];
+        $send = fn (array $report) => (new MachineController())->status(Request::create(
+            'https://panel.example.test/api/v2/server/machine/status', 'POST',
+            ['machine_id' => $machine->id, 'token' => 'synthetic-machine-token', 'status' => ['tls_certificates' => [$report]]]
+        ));
+        $this->assertTrue($send($row)->getData(true)['data']);
+        $record = ServerTlsCertificate::query()->firstOrFail();
+        $this->assertSame($requestId, $record->request_id);
+        $this->assertSame($row['sha256_hex'], $record->sha256_hex);
+        $this->assertSame($requestId, ServerMachine::find($machine->id)->load_status['tls_certificates'][0]['request_id']);
+        $send(array_replace($row, ['request_id' => str_repeat('b', 32), 'sha256_hex' => str_repeat('c', 64)]));
+        $this->assertSame($row['sha256_hex'], $record->fresh()->sha256_hex);
+    }
+
     public function test_status_for_reactivated_machine_requests_reload_when_runtime_has_no_nodes(): void
     {
         $this->bindSettings([

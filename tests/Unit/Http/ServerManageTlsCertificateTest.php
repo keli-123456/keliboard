@@ -80,6 +80,8 @@ final class ServerManageTlsCertificateTest extends TestCase
                 'sni' => 'hy.example.test',
                 'status' => 'valid',
                 'sha256_base64' => base64_encode(hex2bin(str_repeat('a', 64))),
+                'sha256_hex' => str_repeat('a', 64),
+                'request_id' => '',
                 'changed_at' => '2026-07-05 10:00:00',
                 'reported_at' => '2026-07-05 10:01:00',
             ],

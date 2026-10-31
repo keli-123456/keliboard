@@ -73,6 +73,7 @@ class ManageController extends Controller
                 ->values();
             $item['parent'] = $item->parent_id ? $parents->get((int) $item->parent_id) : null;
             $item['tls_certificates'] = $tlsCertificatesByServer[(int) $item->id] ?? [];
+            $item['tls_pin_request_id'] = \App\Support\TrustTunnelCertificate::requestId($item);
             return $item;
         });
         return $this->success($servers);
@@ -93,6 +94,7 @@ class ManageController extends Controller
             return [];
         }
 
+        $hasRequestId = Schema::hasColumn('v2_server_tls_certificate', 'request_id');
         return DB::table('v2_server_tls_certificate')
             ->select([
                 'server_id',
@@ -101,9 +103,11 @@ class ManageController extends Controller
                 'sni',
                 'status',
                 'sha256_base64',
+                'sha256_hex',
                 'changed_at',
                 'reported_at',
             ])
+            ->when($hasRequestId, fn ($query) => $query->addSelect('request_id'))
             ->whereIn('server_id', $serverIds)
             ->orderByDesc('reported_at')
             ->orderByDesc('id')
@@ -116,6 +120,8 @@ class ManageController extends Controller
                     'sni' => (string) $row->sni,
                     'status' => (string) $row->status,
                     'sha256_base64' => $row->sha256_base64 !== null ? (string) $row->sha256_base64 : null,
+                    'sha256_hex' => $row->sha256_hex !== null ? (string) $row->sha256_hex : null,
+                    'request_id' => (string) ($row->request_id ?? ''),
                     'changed_at' => $row->changed_at !== null ? (string) $row->changed_at : null,
                     'reported_at' => $row->reported_at !== null ? (string) $row->reported_at : null,
                 ])

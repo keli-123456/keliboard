@@ -601,11 +601,16 @@ class ClashMeta extends AbstractProtocol
             'name' => $server['name'], 'type' => 'trusttunnel',
             'server' => $server['host'], 'port' => (int) $server['port'],
             'username' => $password, 'password' => $password,
-            'sni' => data_get($server, 'protocol_settings.tls_settings.server_name') ?: $server['host'],
+            'sni' => \App\Support\TrustTunnelCertificate::serverName($server),
             'quic' => !in_array('h2', (array) data_get($settings, 'tls_settings.alpn', ['h2']), true)
                 && in_array('h3', (array) data_get($settings, 'tls_settings.alpn', ['h2']), true),
             'udp' => true, 'skip-cert-verify' => false,
         ];
+        if (\App\Support\TrustTunnelCertificate::automatic($server)) {
+            $pin = app(\App\Services\ServerTlsCertificateResolver::class)->resolveTrustTunnelPinSha256($server);
+            if (!$pin) throw new \InvalidArgumentException('TrustTunnel self-signed fingerprint is not ready');
+            $proxy['fingerprint'] = $pin;
+        }
         if ($ech = \App\Support\Hysteria2Ech::publicConfig($settings)) {
             $proxy['ech-opts'] = ['enable' => true, 'config' => $ech];
         }

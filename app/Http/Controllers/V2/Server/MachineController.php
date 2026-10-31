@@ -325,6 +325,7 @@ class MachineController extends Controller
                 'sni' => $this->statusString(data_get($item, 'sni'), 255),
                 'status' => $this->statusString(data_get($item, 'status'), 32),
                 'sha256_hex' => $this->statusString(data_get($item, 'sha256_hex'), 128),
+                'request_id' => $this->statusString(data_get($item, 'request_id'), 32),
             ];
 
             if (count($out) >= 200) {

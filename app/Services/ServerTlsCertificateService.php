@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Server;
 use App\Models\ServerMachine;
 use App\Models\ServerTlsCertificate;
+use App\Support\TrustTunnelCertificate;
 use Illuminate\Support\Facades\Schema;
 
 class ServerTlsCertificateService
@@ -39,9 +40,19 @@ class ServerTlsCertificateService
                 ->where('machine_id', (int) $machine->id)
                 ->first();
 
-            if (!$server || !$this->isHysteria2Server($server)) {
+            if (!$server || !(($normalized['protocol'] === 'hysteria2' && $this->isHysteria2Server($server))
+                || ($normalized['protocol'] === 'trusttunnel' && TrustTunnelCertificate::automatic($server)))) {
                 $skipped++;
                 continue;
+            }
+            if ($normalized['protocol'] === 'trusttunnel') {
+                $expected = TrustTunnelCertificate::requestId($server);
+                if (!$expected || !hash_equals($expected, $normalized['request_id'])
+                    || $normalized['sni'] !== TrustTunnelCertificate::serverName($server)
+                    || ((int) data_get($row, 'machine_id', $machine->id) !== (int) $machine->id)) {
+                    $skipped++;
+                    continue;
+                }
             }
 
             $result = $this->storeRow($normalized);
@@ -64,9 +75,12 @@ class ServerTlsCertificateService
         if ($protocol === 'hysteria') {
             $protocol = 'hysteria2';
         }
-        if ($protocol !== 'hysteria2') {
+        if (!in_array($protocol, ['hysteria2', 'trusttunnel'], true)) {
             return null;
         }
+        $requestId = trim((string) data_get($row, 'request_id', ''));
+        if ($protocol === 'trusttunnel' && (!Schema::hasColumn('v2_server_tls_certificate', 'request_id')
+            || preg_match('/^[a-f0-9]{32}$/D', $requestId) !== 1)) return null;
 
         $status = mb_strtolower(trim((string) data_get($row, 'status', '')));
         if (!in_array($status, self::VALID_STATUSES, true)) {
@@ -74,6 +88,11 @@ class ServerTlsCertificateService
         }
 
         $sha256Hex = $this->normalizeSha256Hex(data_get($row, 'sha256_hex'));
+        if ($protocol === 'trusttunnel') {
+            $value = strtolower(trim((string) data_get($row, 'sha256_hex', '')));
+            $sha256Hex = preg_match('/^[a-f0-9]{64}$/D', $value) === 1 ? $value : null;
+            if ($status !== 'valid') $sha256Hex = null;
+        }
         if ($status === 'valid' && $sha256Hex === null) {
             return null;
         }
@@ -86,6 +105,7 @@ class ServerTlsCertificateService
             'status' => $status,
             'sha256_hex' => $sha256Hex,
             'sha256_base64' => $sha256Hex ? base64_encode(hex2bin($sha256Hex)) : null,
+            ...($protocol === 'trusttunnel' ? ['request_id' => $requestId] : []),
         ];
     }
 
@@ -98,7 +118,7 @@ class ServerTlsCertificateService
             ->where('sni', $row['sni'])
             ->first();
 
-        if ($record && $record->status === 'valid' && $row['status'] !== 'valid') {
+        if ($record && $row['protocol'] !== 'trusttunnel' && $record->status === 'valid' && $row['status'] !== 'valid') {
             return ['changed' => false, 'stored' => 0, 'skipped' => 1];
         }
 
@@ -115,6 +135,7 @@ class ServerTlsCertificateService
             'status' => $row['status'],
             'sha256_hex' => $row['sha256_hex'],
             'sha256_base64' => $row['sha256_base64'],
+            ...($row['protocol'] === 'trusttunnel' ? ['request_id' => $row['request_id']] : []),
         ];
 
         $hasChanged = !$record->exists;
@@ -126,6 +147,7 @@ class ServerTlsCertificateService
         }
 
         if (!$hasChanged) {
+            if ($row['protocol'] === 'trusttunnel') $record->forceFill(['reported_at' => now()])->save();
             return ['changed' => false, 'stored' => 0, 'skipped' => 1];
         }
 

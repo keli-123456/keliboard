@@ -391,6 +391,10 @@ class ProtocolCapabilityService
 
     private function trustTunnelBlockReason(array $server): ?string
     {
+        if (TrustTunnelCertificate::automatic($server)
+            && !app(\App\Services\ServerTlsCertificateResolver::class)->resolveTrustTunnelPinSha256($server)) {
+            return 'TrustTunnel is waiting for a matching self-signed certificate fingerprint report';
+        }
         if (Hysteria2Ech::waiting((array) ($server['protocol_settings'] ?? []))) {
             return 'TrustTunnel is waiting for node ECH activation';
         }

@@ -59,7 +59,9 @@ class ServerService
             ->append(['last_check_at', 'last_push_at', 'online', 'is_online', 'available_status', 'cache_key', 'server_key']);
 
         $servers = collect($servers)->reject(static fn ($server): bool =>
-            in_array($server->type, ['hysteria', 'trusttunnel'], true) && \App\Support\Hysteria2Ech::waiting((array) $server->protocol_settings)
+            (in_array($server->type, ['hysteria', 'trusttunnel'], true) && \App\Support\Hysteria2Ech::waiting((array) $server->protocol_settings))
+            || (\App\Support\TrustTunnelCertificate::automatic($server)
+                && !app(ServerTlsCertificateResolver::class)->resolveTrustTunnelPinSha256($server))
         )->map(function ($server) use ($user) {
             // 判断动态端口
             if (str_contains($server->port, '-')) {

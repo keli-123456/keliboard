@@ -89,6 +89,38 @@ final class TrustTunnelSubscriptionLifecycleTest extends TestCase
             ], 5)]);
     }
 
+    public function test_automatic_certificate_round_trip_omits_pending_then_exports_authenticated_pin(): void
+    {
+        (require database_path('migrations/2026_07_05_000001_create_v2_server_tls_certificate_table.php'))->up();
+        (require database_path('migrations/2026_10_31_000001_add_request_id_to_server_tls_certificate.php'))->up();
+        $user = $this->user();
+        $original = $this->saveNode('Automatic', ['h2']);
+        $snapshot = $original->toArray();
+        $snapshot['machine_id'] = 27;
+        $snapshot['protocol_settings']['tls_settings'] = ['cert_mode' => 'self', 'alpn' => ['h2'], 'allow_insecure' => false];
+        $server = (new ServerConfigHistoryService())->persist($original->id, ServerSave::validateSnapshot($snapshot), 7)->fresh();
+        $node = (new NodeConfigService())->buildResponse($server, true, true);
+        $this->assertSame('self', $node['tls_settings']['cert_mode']);
+        $this->assertSame('trusttunnel.kelinode.invalid', $node['tls_settings']['server_name']);
+        $this->assertMatchesRegularExpression('/^[a-f0-9]{32}$/', $node['tls_settings']['pin_request_id']);
+        $this->assertCount(0, $this->proxy($user)['proxies']);
+        $machine = (new \App\Models\ServerMachine())->forceFill(['id' => 27]);
+        $report = ['node_id' => $server->id, 'machine_id' => 27, 'protocol' => 'trusttunnel',
+            'sni' => $node['tls_settings']['server_name'], 'request_id' => $node['tls_settings']['pin_request_id'],
+            'status' => 'valid', 'sha256_hex' => str_repeat('b', 64)];
+        (new \App\Services\ServerTlsCertificateService())->handleMachineStatus($machine, ['tls_certificates' => [$report]]);
+        $config = $this->proxy($user);
+        $this->assertCount(1, $config['proxies']);
+        $this->assertSame(str_repeat('b', 64), $config['proxies'][0]['fingerprint']);
+        $this->assertFalse($config['proxies'][0]['skip-cert-verify']);
+        $this->assertCount(0, Yaml::parse($this->subscribe($user, 'clash')->getContent())['proxies']);
+        $snapshot = $server->toArray();
+        $snapshot['protocol_settings']['tls_settings']['server_name'] = 'new.invalid';
+        $server = (new ServerConfigHistoryService())->persist($server->id, ServerSave::validateSnapshot($snapshot), 7)->fresh();
+        $this->assertCount(0, $this->proxy($user)['proxies']);
+        $this->assertSame(0, (new \App\Services\ServerTlsCertificateService())->handleMachineStatus($machine, ['tls_certificates' => [$report]])['stored']);
+    }
+
     private function user(): User
     {
         return User::create(['uuid' => '123e4567-e89b-12d3-a456-426614174000', 'group_id' => 1,

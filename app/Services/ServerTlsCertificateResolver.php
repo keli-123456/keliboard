@@ -8,6 +8,22 @@ use Illuminate\Support\Facades\Schema;
 
 class ServerTlsCertificateResolver
 {
+    public function resolveTrustTunnelPinSha256(array|Server $server): ?string
+    {
+        $requestId = \App\Support\TrustTunnelCertificate::requestId($server);
+        $machineId = (int) data_get($server, 'machine_id');
+        if (!$requestId || $machineId <= 0 || !$this->hasCertificateTable()) return null;
+        try {
+            if (!Schema::hasColumn('v2_server_tls_certificate', 'request_id')) return null;
+        } catch (\Throwable) { return null; }
+        $record = ServerTlsCertificate::query()->where('server_id', (int) data_get($server, 'id'))
+            ->where('machine_id', $machineId)->where('protocol', 'trusttunnel')->where('status', 'valid')
+            ->where('sni', \App\Support\TrustTunnelCertificate::serverName($server))->where('request_id', $requestId)
+            ->first();
+        $hex = (string) ($record?->sha256_hex ?? '');
+        return preg_match('/^[a-f0-9]{64}$/D', $hex) === 1 ? $hex : null;
+    }
+
     public function resolvePinnedPeerCertSha256(array|Server $server): ?string
     {
         return $this->resolveCertificateRecord($server)?->sha256_base64 ?: null;

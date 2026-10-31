@@ -270,6 +270,12 @@ class NodeConfigService
         }
 
         $tlsSettings['cert_mode'] = (string) data_get($tlsSettings, 'cert_mode', 'file');
+        if ($nodeType === 'trusttunnel' && $tlsSettings['cert_mode'] === 'self') {
+            $requestId = \App\Support\TrustTunnelCertificate::requestId($node);
+            if (!$requestId) throw new \RuntimeException('Self-signed certificate request is not initialized; save this node again');
+            $tlsSettings['server_name'] = \App\Support\TrustTunnelCertificate::serverName($node);
+            $tlsSettings['pin_request_id'] = $requestId;
+        }
         $tlsSettings['cert_file'] = (string) data_get($tlsSettings, 'cert_file', '');
         $tlsSettings['key_file'] = (string) data_get($tlsSettings, 'key_file', '');
         $tlsSettings['provider'] = (string) data_get($tlsSettings, 'provider', '');

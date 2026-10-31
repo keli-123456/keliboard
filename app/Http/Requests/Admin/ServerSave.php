@@ -114,13 +114,14 @@ class ServerSave extends FormRequest
         'trusttunnel' => [
             'network' => 'required|in:tcp',
             'tls' => 'required|integer|in:1',
-            'tls_settings.server_name' => 'required|string|max:253',
+            'tls_settings.server_name' => 'required_unless:protocol_settings.tls_settings.cert_mode,self|nullable|string|max:253',
             'tls_settings.allow_insecure' => 'nullable|boolean|declined',
             'tls_settings.alpn' => 'required|array|min:1|max:2',
             'tls_settings.alpn.*' => 'required|distinct|in:h2,h3',
             'ech' => 'nullable|array',
             ...self::TLS_CERT_RULES,
-            'tls_settings.cert_mode' => 'required|in:file,dns,http',
+            'tls_settings.cert_mode' => 'required|in:self,file,dns,http',
+            'tls_settings.pin_request_id' => 'nullable|string|regex:/^[a-f0-9]{32}$/D',
             'tls_settings.cert_file' => 'nullable|string|required_if:protocol_settings.tls_settings.cert_mode,file',
             'tls_settings.key_file' => 'nullable|string|required_if:protocol_settings.tls_settings.cert_mode,file',
         ],
@@ -254,8 +255,12 @@ class ServerSave extends FormRequest
                 }
                 $tlsSettings = (array) data_get($settings, 'tls_settings', []);
                 \App\Support\EchSettings::validate($settings, $validator, 'tls_settings');
-                foreach (array_diff(array_keys($tlsSettings), ['server_name', 'alpn', 'allow_insecure', 'cert_mode', 'cert_file', 'key_file', 'provider', 'dns_env', 'reject_unknown_sni']) as $field) {
+                foreach (array_diff(array_keys($tlsSettings), ['server_name', 'alpn', 'allow_insecure', 'cert_mode', 'cert_file', 'key_file', 'provider', 'dns_env', 'reject_unknown_sni', 'pin_request_id']) as $field) {
                     $validator->errors()->add('protocol_settings.tls_settings.' . $field, 'TrustTunnel 不支持此 TLS 配置项');
+                }
+                if (($tlsSettings['cert_mode'] ?? '') === 'self'
+                    && (!empty($tlsSettings['cert_file']) || !empty($tlsSettings['key_file']) || !empty($tlsSettings['dns_env']) || !empty($tlsSettings['provider']))) {
+                    $validator->errors()->add('protocol_settings.tls_settings.cert_mode', '自动自签由节点管理证书文件，请清除手动证书路径和 DNS 授权。');
                 }
                 if (filter_var($this->input('port'), FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 65535]]) === false
                     || filter_var($this->input('server_port'), FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 65535]]) === false) {

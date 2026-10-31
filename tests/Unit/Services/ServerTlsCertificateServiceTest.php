@@ -154,6 +154,67 @@ final class ServerTlsCertificateServiceTest extends TestCase
         return [$machine, $server];
     }
 
+    public function test_trusttunnel_pin_is_machine_and_request_bound_and_invalid_report_revokes_it(): void
+    {
+        [$machine, $server] = $this->createMachineAndServer();
+        $server->update(['type' => 'trusttunnel', 'protocol_settings' => \App\Support\TrustTunnelCertificate::normalize([
+            'tls' => 1, 'tls_settings' => ['cert_mode' => 'self'],
+        ])]);
+        $server->refresh();
+        $request = \App\Support\TrustTunnelCertificate::requestId($server);
+        $row = ['node_id' => $server->id, 'machine_id' => $machine->id, 'protocol' => 'trusttunnel',
+            'sni' => \App\Support\TrustTunnelCertificate::DEFAULT_NAME, 'request_id' => $request,
+            'status' => 'valid', 'sha256_hex' => str_repeat('d', 64)];
+        $service = new ServerTlsCertificateService();
+        $resolver = new \App\Services\ServerTlsCertificateResolver();
+        $this->assertNull($resolver->resolveTrustTunnelPinSha256($server));
+        foreach (['machine_id' => 999, 'request_id' => str_repeat('e', 32), 'sni' => 'wrong.test', 'protocol' => 'hysteria2'] as $key => $value) {
+            $this->assertSame(0, $service->handleMachineStatus($machine, ['tls_certificates' => [array_replace($row, [$key => $value])]])['stored']);
+        }
+        $this->assertSame(1, $service->handleMachineStatus($machine, ['tls_certificates' => [$row]])['stored']);
+        $this->assertSame(str_repeat('d', 64), $resolver->resolveTrustTunnelPinSha256($server));
+        $export = \App\Protocols\ClashMeta::buildTrustTunnel('synthetic', $server->toArray());
+        $this->assertSame(str_repeat('d', 64), $export['fingerprint']);
+        $this->assertFalse($export['skip-cert-verify']);
+        $this->assertSame($row['sni'], $export['sni']);
+        $service->handleMachineStatus($machine, ['tls_certificates' => [array_replace($row, ['status' => 'invalid', 'sha256_hex' => ''])]]);
+        $this->assertNull($resolver->resolveTrustTunnelPinSha256($server));
+        $this->expectException(\InvalidArgumentException::class);
+        \App\Protocols\ClashMeta::buildTrustTunnel('synthetic', $server->toArray());
+    }
+
+    public function test_trusttunnel_binding_survives_ip_change_but_not_machine_or_sni_change(): void
+    {
+        [$machine, $server] = $this->createMachineAndServer();
+        $helper = \App\Support\TrustTunnelCertificate::class;
+        $settings = $helper::normalize(['tls_settings' => ['cert_mode' => 'self', 'pin_request_id' => str_repeat('a', 32)]]);
+        $this->assertNotSame(str_repeat('a', 32), $settings['tls_settings']['pin_request_id']);
+        $this->assertSame($settings, $helper::normalize($settings, $settings));
+        $server->update(['type' => 'trusttunnel', 'protocol_settings' => $settings]);
+        $old = $helper::requestId($server);
+        $server->host = '192.0.2.10';
+        $this->assertSame($old, $helper::requestId($server));
+        $server->machine_id = 999;
+        $this->assertNotSame($old, $helper::requestId($server));
+        $server->machine_id = $machine->id;
+        $settings['tls_settings']['server_name'] = 'new.invalid';
+        $server->protocol_settings = $settings;
+        $this->assertNotSame($old, $helper::requestId($server));
+        $this->assertNotSame($settings['tls_settings']['pin_request_id'], $helper::normalize($settings, ['tls_settings' => ['cert_mode' => 'file']])['tls_settings']['pin_request_id']);
+    }
+
+    public function test_trusttunnel_without_new_schema_fails_closed(): void
+    {
+        [$machine, $server] = $this->createMachineAndServer();
+        $server->update(['type' => 'trusttunnel', 'protocol_settings' => \App\Support\TrustTunnelCertificate::normalize(['tls_settings' => ['cert_mode' => 'self']])]);
+        Schema::table('v2_server_tls_certificate', fn (Blueprint $table) => $table->dropColumn('request_id'));
+        $this->assertNull((new \App\Services\ServerTlsCertificateResolver())->resolveTrustTunnelPinSha256($server));
+        $this->assertSame(0, (new ServerTlsCertificateService())->handleMachineStatus($machine, ['tls_certificates' => [[
+            'node_id' => $server->id, 'protocol' => 'trusttunnel', 'request_id' => str_repeat('a', 32),
+            'status' => 'valid', 'sha256_hex' => str_repeat('b', 64),
+        ]]])['stored']);
+    }
+
     private function certificateRow(int $serverId, int $machineId, string $sha256Hex): array
     {
         return [
@@ -208,6 +269,7 @@ final class ServerTlsCertificateServiceTest extends TestCase
             $table->unsignedBigInteger('server_id');
             $table->unsignedBigInteger('machine_id');
             $table->string('protocol', 32);
+            $table->string('request_id', 32)->nullable();
             $table->string('sni', 255)->default('');
             $table->string('status', 32)->default('valid');
             $table->string('sha256_hex', 64)->nullable();
