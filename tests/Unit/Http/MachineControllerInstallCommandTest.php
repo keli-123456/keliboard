@@ -53,6 +53,12 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertSame('kelinode', $payload['data']['default_agent']);
         $this->assertFalse($payload['data']['native_enabled']);
         $this->assertStringStartsWith("#!/usr/bin/env bash", $command);
+        $this->assertStringContainsString('keli_apt_install curl wget tar ca-certificates', $command);
+        $this->assertStringContainsString('http://archive.debian.org/debian-security bullseye-security main', $command);
+        $this->assertStringContainsString('--no-install-recommends --no-upgrade --no-remove', $command);
+        $this->assertStringContainsString('signed-by=%s check-valid-until=no', $command);
+        $this->assertStringNotContainsString('{{APT_DEPENDENCY_HELPER}}', $command);
+        $this->assertStringNotContainsString('--allow-unauthenticated', $command);
         $this->assertStringContainsString('AGENT_TYPE="kelinode"', $command);
         $this->assertStringContainsString('MACHINE_URL="https://panel.example.test"', $command);
         $this->assertStringContainsString('MACHINE_ID="' . $machine->id . '"', $command);
@@ -69,6 +75,17 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertStringContainsString('AGENT_TYPE="kelinode-rs"', $commands['kelinode-rs']['command']);
         $this->assertArrayNotHasKey('native_command', $payload['data']);
         $this->assertArrayNotHasKey('native_config', $payload['data']);
+    }
+
+    public function test_embedded_native_dependency_helper_matches_the_panel_template_helper(): void
+    {
+        $root = dirname(__DIR__, 3);
+        $canonical = trim(str_replace("\r\n", "\n", (string) file_get_contents($root . '/resources/server-machine/apt-dependencies.sh')));
+        $native = str_replace("\r\n", "\n", (string) file_get_contents($root . '/resources/server-machine/kelinode-rs-install.sh'));
+        preg_match('/# BEGIN KELI_APT_DEPENDENCIES[^\n]*\n(.*?)\n# END KELI_APT_DEPENDENCIES/s', $native, $match);
+        $this->assertSame($canonical, trim($match[1] ?? ''));
+        $this->assertStringContainsString('APT::Get::AllowUnauthenticated=false', $canonical);
+        $this->assertStringContainsString('Dir::State::lists=$work/lists', $canonical);
     }
 
     public function test_install_command_uses_native_command_as_default_when_kelinode_rs_enabled(): void

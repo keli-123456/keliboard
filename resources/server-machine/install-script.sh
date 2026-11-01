@@ -45,6 +45,8 @@ detect_pm() {
   fi
 }
 
+{{APT_DEPENDENCY_HELPER}}
+
 install_packages() {
   [ "$INSTALL_DEPS" = "1" ] || return 0
 
@@ -59,8 +61,7 @@ install_packages() {
 
   case "$pm" in
     apt)
-      as_root apt-get update -y
-      as_root apt-get install -y curl wget ca-certificates iproute2 iptables nftables kmod procps
+      keli_apt_install curl wget tar ca-certificates iproute2 iptables nftables kmod procps
       ;;
     dnf)
       as_root dnf install -y curl wget ca-certificates iproute iptables nftables kmod procps-ng

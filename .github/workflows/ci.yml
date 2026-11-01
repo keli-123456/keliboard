@@ -37,6 +37,9 @@ jobs:
       - name: Verify admin asset versions
         run: php scripts/verify-admin-xboard-assets.php
 
+      - name: Test isolated machine installer dependency handling
+        run: bash scripts/test-machine-install-apt.sh
+
       - name: Run release preflight guards
         shell: pwsh
         run: |

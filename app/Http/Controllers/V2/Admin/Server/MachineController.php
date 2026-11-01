@@ -611,6 +611,7 @@ class MachineController extends Controller
         $machineName = $machine->name ?: ('machine-' . $machine->id);
 
         return strtr($template, [
+            '{{APT_DEPENDENCY_HELPER}}' => (string) file_get_contents(dirname($this->panelInstallScriptTemplatePath()) . DIRECTORY_SEPARATOR . 'apt-dependencies.sh'),
             '{{AGENT_TYPE}}' => $this->bashString($agent),
             '{{MACHINE_URL}}' => $this->bashString($baseURL),
             '{{MACHINE_ID}}' => $this->bashString((string) ((int) $machine->id)),
