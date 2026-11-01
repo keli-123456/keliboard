@@ -22,6 +22,7 @@ use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
 
@@ -291,6 +292,183 @@ final class TicketAiAssistantV2Test extends TestCase
             return !str_contains($content, (string) $other->title)
                 && !str_contains($content, (string) $platform->title);
         });
+    }
+
+    public function test_knowledge_search_finds_late_articles_and_relevant_passages_with_source_versions(): void
+    {
+        $this->bindReadySettings();
+        app(\App\Support\Setting::class)->save(['ticket_ai_knowledge_enable' => true]);
+        Schema::table('v2_knowledge', function (Blueprint $table): void {
+            $table->string('source_version')->nullable();
+        });
+        [$ticket] = $this->siteTicket();
+        $ticket->subject = 'TrustTunnel 自签指纹配置';
+        $ticket->save();
+        foreach (range(1, 85) as $number) {
+            Knowledge::query()->create([
+                'title' => '普通资料' . $number, 'category' => '常见问题', 'body' => '注册与购买介绍',
+                'show' => true, 'scope_type' => Knowledge::SCOPE_GLOBAL,
+            ]);
+        }
+        $body = '<p>' . str_repeat('这里是一般使用说明。', 200) . '</p>'
+            . '<h2>TrustTunnel 自签证书</h2><div>订阅中的指纹需要与节点证书匹配，不能关闭证书验证。</div>';
+        $article = Knowledge::query()->create([
+            'title' => 'TrustTunnel 配置指引', 'category' => '协议', 'body' => $body,
+            'show' => true, 'scope_type' => Knowledge::SCOPE_GLOBAL, 'source_version' => '2026.11.01',
+        ]);
+        Http::fake(['*' => Http::response($this->providerResponse(json_encode([
+            'draft' => '请核对订阅里的指纹。', 'category' => '客户端连接', 'risk' => 'low',
+            'knowledge_refs' => [$article->id],
+        ], JSON_UNESCAPED_UNICODE)))]);
+
+        $result = (new TicketAiAssistantService())->suggest($ticket, null, 8);
+
+        $this->assertSame([(int) $article->id], $result['knowledge_refs']);
+        $reference = $result['matched_knowledge'][0];
+        $this->assertSame('2026.11.01', $reference['source_version']);
+        $this->assertSame(hash('sha256', $body), $reference['content_hash']);
+        $this->assertSame($result['matched_knowledge'], TicketAiSuggestion::findOrFail($result['suggestion_id'])->matched_knowledge);
+        Http::assertSent(function ($request): bool {
+            $messages = $request->data()['messages'];
+            $content = (string) $messages[array_key_last($messages)]['content'];
+            return str_contains($content, '不能关闭证书验证') && str_contains($content, '2026.11.01');
+        });
+    }
+
+    public function test_passages_keep_html_entities_inline_text_and_a_bounded_excerpt(): void
+    {
+        $method = new \ReflectionMethod(TicketAiAssistantService::class, 'knowledgePassage');
+        $html = '<h2>客户端</h2><p>普通介绍</p><div>sing-box <strong>TLS</strong> 指纹 &amp; 证书核验</div>'
+            . '<script>untrusted-script-only</script><p>' . str_repeat('无关说明。', 1000) . '</p>';
+        $passage = $method->invoke(new TicketAiAssistantService(), $html, ['sing-box', 'tls', '指纹']);
+        $this->assertStringContainsString('sing-box TLS 指纹 & 证书核验', $passage);
+        $this->assertStringNotContainsString('untrusted-script-only', $passage);
+        $this->assertLessThanOrEqual(1200, mb_strlen($passage));
+    }
+
+    public function test_sensitive_subject_also_blocks_an_automated_clarification(): void
+    {
+        $this->bindReadySettings();
+        [$ticket] = $this->siteTicket();
+        $ticket->subject = '申请退款';
+        $ticket->save();
+        $result = (new TicketAiAssistantService())->suggestClarification($ticket, '请补充客户端版本');
+        $this->assertTrue($result['needs_human']);
+        $this->assertFalse($result['system_grounded']);
+    }
+
+    public function test_fixed_clarification_keeps_its_grounded_exemption_without_knowledge(): void
+    {
+        $this->bindReadySettings();
+        [$ticket] = $this->siteTicket();
+        $ticket->messages()->update(['message' => '订阅导入失败，请帮忙排查']);
+        $ticket->unsetRelation('messages');
+        Http::fake();
+        $result = (new TicketAiAssistantService())->suggestClarification($ticket, '请补充客户端与内核版本');
+        $this->assertTrue($result['system_grounded']);
+        $this->assertFalse($result['needs_human']);
+        $this->assertSame('请补充客户端与内核版本', $result['draft']);
+        $this->assertNull((new \App\Services\TicketAiAutoReplyService())->rejectionReason($result));
+        Http::assertNothingSent();
+    }
+
+    public function test_incomplete_or_malformed_model_safety_fields_are_not_treated_as_approval(): void
+    {
+        $method = new \ReflectionMethod(TicketAiAssistantService::class, 'normalizeAiResult');
+        $safe = ['draft' => '普通指引', 'category' => '客户端连接', 'risk' => 'low', 'needs_human' => false, 'confidence' => 0.95];
+        $service = new TicketAiAssistantService();
+        $this->assertFalse($method->invoke($service, '', [], $safe)['needs_human']);
+        foreach ([null, '0.99', 1.5, -0.1, INF, NAN] as $confidence) {
+            $result = $method->invoke($service, '', [], array_merge($safe, ['confidence' => $confidence]));
+            $this->assertSame(0.0, $result['confidence']);
+        }
+        foreach ([null, 'false', 0] as $needsHuman) {
+            $result = $method->invoke($service, '', [], array_merge($safe, ['needs_human' => $needsHuman]));
+            $this->assertTrue($result['needs_human']);
+        }
+        $result = $method->invoke($service, '', [], array_merge($safe, ['risk' => 'unknown']));
+        $this->assertSame('medium', $result['risk']);
+    }
+
+    public function test_screenshot_observations_drive_scoped_knowledge_search_without_forwarding_images_to_the_drafting_step(): void
+    {
+        $this->bindReadySettings();
+        app(\App\Support\Setting::class)->save(['ticket_ai_vision_enable' => true, 'ticket_ai_knowledge_enable' => true]);
+        [$ticket] = $this->siteTicket();
+        $this->addScreenshot($ticket);
+        $article = Knowledge::create(['title' => 'sing-box TLS 排查', 'category' => '客户端',
+            'body' => '<p>sing-box TLS handshake failed 时核对内核版本与证书。</p>', 'show' => true, 'scope_type' => 'global']);
+        $vision = $this->createPartialMock(\App\Services\TicketAiVisionService::class, ['verifySupport']);
+        (new \ReflectionMethod(\App\Services\TicketAiVisionService::class, '__construct'))->invoke($vision);
+        $vision->method('verifySupport')->willReturn(['supported' => true, 'completions' => []]);
+        $imageCalls = 0;
+        Http::fake(function ($request) use ($article, &$imageCalls) {
+            $messages = $request->data()['messages'];
+            if (is_array($messages[array_key_last($messages)]['content'])) {
+                $imageCalls++;
+                return Http::response($this->providerResponse(json_encode([
+                    'readable' => true, 'confidence' => 0.98, 'sensitive' => false, 'needs_human' => false,
+                    'problem_type' => 'client_connection', 'observations' => ['client' => 'v2rayN', 'core' => 'sing-box', 'error_text' => 'TLS handshake failed'],
+                ])));
+            }
+            $payload = json_encode($request->data(), JSON_UNESCAPED_UNICODE);
+            $this->assertStringContainsString('sing-box TLS 排查', $payload);
+            $this->assertStringContainsString('TLS handshake failed', $payload);
+            $this->assertStringContainsString('untrusted_reference_data', $payload);
+            $this->assertStringNotContainsString('data:image', $payload);
+            return Http::response($this->providerResponse(json_encode(['draft' => '请按 sing-box 教程核对内核与证书。',
+                'category' => '客户端连接', 'risk' => 'low', 'needs_human' => false, 'confidence' => 0.97, 'knowledge_refs' => [$article->id]], JSON_UNESCAPED_UNICODE)));
+        });
+
+        $result = (new TicketAiAssistantService(vision: $vision))->suggest($ticket);
+        $this->assertSame(1, $imageCalls);
+        $this->assertSame('ready', $result['image_analysis']['status']);
+        $this->assertFalse($result['needs_human']);
+        $this->assertSame([(int) $article->id], $result['knowledge_refs']);
+        $this->assertSame($result['image_analysis'], TicketAiSuggestion::findOrFail($result['suggestion_id'])->image_analysis);
+        $this->assertSame(2, TicketAiRequestLog::count());
+        $this->assertStringNotContainsString('data:image', TicketAiRequestLog::all()->toJson());
+        $this->assertStringNotContainsString('data:image', TicketAiSuggestion::all()->toJson());
+    }
+
+    public function test_held_screenshot_never_calls_the_drafting_model_and_remains_reviewable(): void
+    {
+        $this->bindReadySettings();
+        app(\App\Support\Setting::class)->save(['ticket_ai_vision_enable' => true]);
+        [$ticket] = $this->siteTicket();
+        $this->addScreenshot($ticket);
+        $vision = $this->createPartialMock(\App\Services\TicketAiVisionService::class, ['verifySupport']);
+        (new \ReflectionMethod(\App\Services\TicketAiVisionService::class, '__construct'))->invoke($vision);
+        $vision->method('verifySupport')->willReturn(['supported' => false, 'completions' => []]);
+        Http::fake();
+        $result = (new TicketAiAssistantService(vision: $vision))->suggest($ticket);
+        $this->assertTrue($result['needs_human']);
+        $this->assertSame('held', $result['image_analysis']['status']);
+        $this->assertFalse($result['system_grounded']);
+        $this->assertSame('generated', TicketAiSuggestion::findOrFail($result['suggestion_id'])->status);
+        Http::assertNothingSent();
+    }
+
+    private function addScreenshot(Ticket $ticket): void
+    {
+        if (!extension_loaded('gd')) $this->markTestSkipped('GD required.');
+        (require base_path('database/migrations/2026_01_01_000001_create_v2_ticket_message_attachment_table.php'))->up();
+        (require base_path('database/migrations/2026_11_01_000001_add_image_analysis_to_ticket_ai_suggestions.php'))->up();
+        Storage::fake('local');
+        $ticket->subject = '请看截图';
+        $ticket->save();
+        $ticket->messages()->update(['message' => '请看图']);
+        $ticket->unsetRelation('messages');
+        $source = $ticket->messages()->firstOrFail();
+        $image = imagecreatetruecolor(20, 20);
+        ob_start();
+        imagepng($image);
+        $bytes = (string) ob_get_clean();
+        imagedestroy($image);
+        $path = "ticket_attachments/{$ticket->id}/{$source->id}/test.png";
+        Storage::disk('local')->put($path, $bytes);
+        \App\Models\TicketMessageAttachment::create(['ticket_id' => $ticket->id, 'ticket_message_id' => $source->id,
+            'user_id' => $ticket->user_id, 'disk' => 'local', 'path' => $path, 'mime' => 'image/png', 'size' => strlen($bytes)]);
     }
 
     public function test_regeneration_supersedes_old_draft_and_scope_stats_use_the_active_draft(): void

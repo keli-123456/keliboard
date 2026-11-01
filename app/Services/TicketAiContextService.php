@@ -65,7 +65,8 @@ class TicketAiContextService
                 $subscription,
                 $orders,
                 $conversation,
-                $operations
+                $operations,
+                (string) $ticket->subject
             ),
             'instruction' => $this->sanitizer->sanitize((string) ($instruction ?? ''), 1000),
         ];

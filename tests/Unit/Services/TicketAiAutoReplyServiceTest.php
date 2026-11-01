@@ -49,29 +49,45 @@ final class TicketAiAutoReplyServiceTest extends TestCase
             'matched_knowledge' => [],
         ])));
         $this->assertSame('category_not_allowed', $service->rejectionReason($this->safeResult([
-            'category' => '支付退款',
+            'category' => '其他',
         ])));
     }
 
-    public function test_broad_mode_answers_all_non_withdrawal_categories(): void
+    public function test_broad_mode_extends_categories_without_bypassing_safety_gates(): void
     {
         $this->bindSettings([
             'ticket_ai_auto_reply_mode' => 'broad',
         ]);
 
-        $this->assertNull($this->service()->rejectionReason($this->safeResult([
-            'risk' => 'high',
-            'needs_human' => true,
-            'confidence' => 0.51,
-            'category' => '支付退款',
-            'matched_knowledge' => [],
-        ])));
+        $service = $this->service();
+        $this->assertNull($service->rejectionReason($this->safeResult(['category' => '其他'])));
+        foreach (['支付退款', '账号安全', '服务器故障'] as $category) {
+            $this->assertSame('needs_human', $service->rejectionReason($this->safeResult(['category' => $category])));
+        }
+        foreach ([
+            [['risk' => 'high'], 'risk_not_low'],
+            [['needs_human' => true], 'needs_human'],
+            [['confidence' => 0.51], 'low_confidence'],
+            [['matched_knowledge' => []], 'knowledge_not_matched'],
+        ] as [$override, $reason]) {
+            $this->assertSame($reason, $service->rejectionReason($this->safeResult($override)));
+        }
         $this->assertSame('unstructured_output', $this->service()->rejectionReason($this->safeResult([
             'structured_output' => false,
         ])));
         $this->assertSame('empty_draft', $this->service()->rejectionReason($this->safeResult([
             'draft' => ' ',
         ])));
+    }
+
+    public function test_invalid_confidence_is_never_allowed(): void
+    {
+        $this->bindSettings(['ticket_ai_auto_reply_mode' => 'broad']);
+        foreach ([null, 'unknown', NAN, INF, -1, 1.01] as $confidence) {
+            $this->assertSame('low_confidence', $this->service()->rejectionReason(
+                $this->safeResult(['confidence' => $confidence])
+            ));
+        }
     }
 
     public function test_withdrawal_tickets_are_excluded_but_payment_questions_are_not(): void

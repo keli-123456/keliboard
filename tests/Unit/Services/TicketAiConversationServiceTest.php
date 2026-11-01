@@ -111,6 +111,14 @@ final class TicketAiConversationServiceTest extends TestCase
         $this->assertSame('low_confidence', $state->handoff_reason);
     }
 
+    public function test_an_explicit_human_request_in_the_subject_is_respected(): void
+    {
+        [$ticket, $source] = $this->ticketWithMessage('请帮忙处理');
+        $ticket->subject = '请转人工客服';
+        $ticket->save();
+        $this->assertSame('user_requested_human', (new TicketAiConversationService())->preflight($ticket, $source)['reason']);
+    }
+
     public function test_duplicate_reply_is_detected_after_a_message_is_sent(): void
     {
         [$ticket, $source] = $this->ticketWithMessage('订阅导入失败');
@@ -145,6 +153,19 @@ final class TicketAiConversationServiceTest extends TestCase
         $this->assertSame('attachment', $result['reason']);
     }
 
+    public function test_enabled_vision_routes_strict_mode_screenshots_to_recognition_instead_of_a_text_only_clarification(): void
+    {
+        $this->bindSettings(['ticket_ai_vision_enable' => true]);
+        [$ticket, $source] = $this->ticketWithMessage('请看截图');
+        Schema::connection(null)->getConnection()->table('v2_ticket_message_attachment')->insert([
+            'ticket_id' => $ticket->id, 'ticket_message_id' => $source->id, 'user_id' => $ticket->user_id,
+            'disk' => 'local', 'path' => 'synthetic.png', 'mime' => 'image/png', 'size' => 10,
+        ]);
+        $service = new TicketAiConversationService();
+        $this->assertTrue($service->preflight($ticket, $source)['allow']);
+        $this->assertNull($service->clarification($ticket, $source));
+    }
+
     public function test_broad_mode_accepts_attachments_and_asks_for_safe_details(): void
     {
         $this->bindSettings(['ticket_ai_auto_reply_mode' => 'broad']);
@@ -164,9 +185,11 @@ final class TicketAiConversationServiceTest extends TestCase
         $service = new TicketAiConversationService();
         $this->assertTrue($service->preflight($ticket, $source)['allow']);
         $this->assertStringContainsString('完整错误文字', (string) $service->clarification($ticket, $source));
+        $this->assertStringContainsString('不能直接读取图片', (string) $service->clarification($ticket, $source));
+        $this->assertStringContainsString('实际内核及版本', (string) $service->clarification($ticket, $source));
     }
 
-    public function test_broad_mode_resumes_policy_handoffs_but_preserves_human_requests(): void
+    public function test_broad_mode_only_resumes_category_handoffs_and_preserves_safety_handoffs(): void
     {
         [$ticket, $source] = $this->ticketWithMessage('订阅不能用');
         $service = new TicketAiConversationService();
@@ -177,8 +200,15 @@ final class TicketAiConversationServiceTest extends TestCase
         $this->bindSettings(['ticket_ai_auto_reply_mode' => 'broad']);
         $service->resumeBroadAutomation($ticket);
         $state = TicketAiConversation::query()->where('ticket_id', $ticket->id)->firstOrFail();
-        $this->assertSame(TicketAiConversation::STATUS_ACTIVE, $state->status);
-        $this->assertNull($state->handoff_reason);
+        $this->assertSame(TicketAiConversation::STATUS_HUMAN_REQUIRED, $state->status);
+        $this->assertSame('low_confidence', $state->handoff_reason);
+
+        [$categoryTicket, $categorySource] = $this->ticketWithMessage('其他咨询', 12);
+        $service->recordRejected($categoryTicket, $categorySource, 3, 'category_not_allowed');
+        $service->resumeBroadAutomation($categoryTicket);
+        $categoryState = TicketAiConversation::query()->where('ticket_id', $categoryTicket->id)->firstOrFail();
+        $this->assertSame(TicketAiConversation::STATUS_ACTIVE, $categoryState->status);
+        $this->assertNull($categoryState->handoff_reason);
 
         [$humanTicket, $humanSource] = $this->ticketWithMessage('请转人工客服', 11);
         $service->preflight($humanTicket, $humanSource);
@@ -186,6 +216,62 @@ final class TicketAiConversationServiceTest extends TestCase
         $humanState = TicketAiConversation::query()->where('ticket_id', $humanTicket->id)->firstOrFail();
         $this->assertSame(TicketAiConversation::STATUS_HUMAN_REQUIRED, $humanState->status);
         $this->assertSame('user_requested_human', $humanState->handoff_reason);
+    }
+
+    public function test_first_human_reply_stops_automation_and_late_results_cannot_override_it(): void
+    {
+        [$ticket, $source] = $this->ticketWithMessage('请帮忙排查');
+        $service = new TicketAiConversationService();
+        $humanReply = $this->message($ticket, 999, '我来帮您处理');
+        $service->recordHumanReply($ticket, $humanReply);
+        $service->recordRejected($ticket, $source, 1, 'send_conflict');
+        $service->recordFailure((int) $ticket->id, (int) $source->id, 'automation_exception');
+        $lateReply = $this->message($ticket, 999, '延迟的自动结果', true);
+        $service->recordSent($ticket, $source, $lateReply, ['draft' => $lateReply->message], false);
+        $this->bindSettings(['ticket_ai_auto_reply_mode' => 'broad']);
+        $service->resumeBroadAutomation($ticket);
+
+        $next = $this->message($ticket, (int) $ticket->user_id, '补充信息');
+        $this->assertSame('human_replied', $service->preflight($ticket, $next)['reason']);
+        $state = TicketAiConversation::query()->where('ticket_id', $ticket->id)->firstOrFail();
+        $this->assertSame(TicketAiConversation::STATUS_HUMAN_REQUIRED, $state->status);
+        $this->assertSame('human_replied', $state->handoff_reason);
+        $this->assertSame('human_replied', $state->last_reason);
+        $this->assertSame(0, $state->auto_reply_count);
+    }
+
+    public function test_duplicate_tracking_is_idempotent_and_closed_state_is_preserved(): void
+    {
+        [$ticket, $source] = $this->ticketWithMessage('请帮忙排查');
+        $service = new TicketAiConversationService();
+        $reply = $this->message($ticket, 999, '自动回复', true);
+        $service->recordSent($ticket, $source, $reply, ['draft' => $reply->message], false);
+        $service->recordSent($ticket, $source, $reply, ['draft' => $reply->message], false);
+        $state = TicketAiConversation::query()->where('ticket_id', $ticket->id)->firstOrFail();
+        $this->assertSame(1, $state->auto_reply_count);
+        $service->markClosed($ticket);
+        $service->recordRejected($ticket, $source, 1, 'send_conflict');
+        $this->assertSame('ticket_closed', $service->preflight($ticket, $source)['reason']);
+        $this->assertSame(TicketAiConversation::STATUS_RESOLVED, $state->fresh()->status);
+    }
+
+    public function test_missing_conversation_storage_disables_automatic_sending(): void
+    {
+        [$ticket, $source] = $this->ticketWithMessage('订阅导入失败');
+        Schema::drop('v2_ticket_ai_conversation');
+        $result = (new TicketAiConversationService())->preflight($ticket, $source);
+        $this->assertFalse($result['allow']);
+        $this->assertSame('automation_state_unavailable', $result['reason']);
+    }
+
+    public function test_historical_human_reply_is_detected_even_without_a_conversation_record(): void
+    {
+        [$ticket] = $this->ticketWithMessage('请帮忙排查');
+        $this->message($ticket, 999, '人工处理中');
+        $source = $this->message($ticket, (int) $ticket->user_id, '补充详情');
+        $result = (new TicketAiConversationService())->preflight($ticket, $source);
+        $this->assertFalse($result['allow']);
+        $this->assertSame('human_replied', $result['reason']);
     }
 
     public function test_stats_report_resolution_handoff_follow_up_and_failure_reasons(): void

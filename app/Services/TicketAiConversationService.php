@@ -11,9 +11,7 @@ use Illuminate\Support\Facades\Log;
 
 class TicketAiConversationService
 {
-    private const TERMINAL_HANDOFF_REASONS = [
-        'attachment', 'user_requested_human', 'reply_limit_reached', 'human_replied', 'withdrawal_excluded',
-    ];
+    private const RESUMABLE_HANDOFF_REASONS = ['category_not_allowed'];
 
     private const HUMAN_REQUEST_PATTERNS = [
         '人工客服', '转人工', '找人工', '真人客服', '人工处理', '人工回复',
@@ -37,25 +35,36 @@ class TicketAiConversationService
     /** @return array{allow:bool,reason:?string,handoff:bool} */
     public function preflight(Ticket $ticket, TicketMessage $sourceMessage): array
     {
-        if (!$this->available()) {
-            return ['allow' => true, 'reason' => null, 'handoff' => false];
-        }
+        return $this->withLockedState($ticket, fn (TicketAiConversation $state): array =>
+            $this->preflightState($ticket, $sourceMessage, $state)
+        ) ?? ['allow' => false, 'reason' => 'automation_state_unavailable', 'handoff' => true];
+    }
 
-        $state = $this->stateFor($ticket);
-        if (!$state) {
-            return ['allow' => true, 'reason' => null, 'handoff' => false];
+    private function preflightState(Ticket $ticket, TicketMessage $sourceMessage, TicketAiConversation $state): array
+    {
+        if ((int) $ticket->status !== Ticket::STATUS_OPENING || $state->status === TicketAiConversation::STATUS_RESOLVED) {
+            return ['allow' => false, 'reason' => 'ticket_closed', 'handoff' => false];
         }
         if ($state->status === TicketAiConversation::STATUS_HUMAN_REQUIRED) {
             return ['allow' => false, 'reason' => $state->handoff_reason ?: 'human_required', 'handoff' => true];
         }
+        $humanReply = TicketMessage::query()->where('ticket_id', $ticket->id)
+            ->where('user_id', '!=', $ticket->user_id)
+            ->where(fn ($query) => $query->where('is_auto_reply', 0)->orWhereNull('is_auto_reply'))
+            ->orderByDesc('id')->first();
+        if ($humanReply) {
+            $this->recordHumanState($state, $humanReply);
+            return ['allow' => false, 'reason' => 'human_replied', 'handoff' => true];
+        }
         if ((int) ($state->last_source_message_id ?? 0) >= (int) $sourceMessage->id) {
             return ['allow' => false, 'reason' => 'duplicate_source_message', 'handoff' => false];
         }
-        if ($sourceMessage->attachments()->exists() && !$this->broadMode()) {
+        if ($sourceMessage->attachments()->exists() && !$this->broadMode()
+            && !(bool) admin_setting('ticket_ai_vision_enable', false)) {
             $this->handoff($state, $sourceMessage, 'attachment');
             return ['allow' => false, 'reason' => 'attachment', 'handoff' => true];
         }
-        if ($this->containsAny($this->normalizedMessage($sourceMessage), self::HUMAN_REQUEST_PATTERNS)) {
+        if ($this->containsAny(mb_strtolower((string) $ticket->subject) . ' ' . $this->normalizedMessage($sourceMessage), self::HUMAN_REQUEST_PATTERNS)) {
             $this->handoff($state, $sourceMessage, 'user_requested_human');
             return ['allow' => false, 'reason' => 'user_requested_human', 'handoff' => true];
         }
@@ -91,8 +100,11 @@ class TicketAiConversationService
         }
 
         $message = $this->normalizedMessage($sourceMessage);
+        if ((bool) admin_setting('ticket_ai_vision_enable', false) && $sourceMessage->attachments()->exists()) {
+            return null;
+        }
         if ($this->broadMode() && $sourceMessage->attachments()->exists() && mb_strlen($message) < 20) {
-            return "已收到您上传的附件。为了准确处理，请再补充截图中的完整错误文字、使用的客户端名称和版本。\n"
+            return "已收到您上传的附件，但自动客服目前不能直接读取图片内容。请补充截图中的完整错误文字、客户端名称与应用版本、实际内核及版本。\n"
                 . '请不要发送订阅链接、Token、UUID、密码或验证码。';
         }
         $subject = mb_strtolower(trim((string) $ticket->subject));
@@ -105,7 +117,7 @@ class TicketAiConversationService
         }
 
         return "我先帮您定位问题，请补充以下信息：\n"
-            . "1. 使用的客户端名称和版本；\n"
+            . "1. 使用的客户端名称、应用版本，以及实际内核和版本（若能找到）；\n"
             . "2. 是订阅无法导入，还是某个节点无法连接；\n"
             . "3. 页面显示的完整错误文字（也可以附截图）。\n"
             . '请不要发送订阅链接、Token、UUID、密码或验证码。';
@@ -124,14 +136,17 @@ class TicketAiConversationService
 
     public function resumeBroadAutomation(Ticket $ticket): void
     {
-        if (!$this->available() || !$this->broadMode()) {
+        if (!$this->broadMode()) {
             return;
         }
-        $state = $this->stateFor($ticket);
+        $this->withLockedState($ticket, fn (TicketAiConversation $state) => $this->resumeState($state));
+    }
+
+    private function resumeState(TicketAiConversation $state): void
+    {
         if (
-            !$state
-            || $state->status !== TicketAiConversation::STATUS_HUMAN_REQUIRED
-            || in_array((string) ($state->handoff_reason ?? ''), self::TERMINAL_HANDOFF_REASONS, true)
+            $state->status !== TicketAiConversation::STATUS_HUMAN_REQUIRED
+            || !in_array((string) ($state->handoff_reason ?? ''), self::RESUMABLE_HANDOFF_REASONS, true)
         ) {
             return;
         }
@@ -156,13 +171,19 @@ class TicketAiConversationService
         TicketMessage $replyMessage,
         array $result,
         bool $followUp
-    ): void {
-        if (!$this->available()) {
-            return;
-        }
-        $state = $this->stateFor($ticket);
-        if (!$state) {
-            return;
+    ): bool {
+        return $this->withLockedState($ticket, fn (TicketAiConversation $state) =>
+            $this->recordSentState($state, $sourceMessage, $replyMessage, $result, $followUp)
+        ) ?? false;
+    }
+
+    private function recordSentState(
+        TicketAiConversation $state, TicketMessage $sourceMessage, TicketMessage $replyMessage,
+        array $result, bool $followUp
+    ): bool {
+        if (in_array($state->status, [TicketAiConversation::STATUS_HUMAN_REQUIRED, TicketAiConversation::STATUS_RESOLVED], true)
+            || (int) $state->last_source_message_id >= (int) $sourceMessage->id) {
+            return false;
         }
 
         $state->status = $followUp
@@ -185,6 +206,7 @@ class TicketAiConversationService
             'suggestion_id' => isset($result['suggestion_id']) ? (int) $result['suggestion_id'] : null,
             'reply_message_id' => (int) $replyMessage->id,
         ]);
+        return true;
     }
 
     public function recordRejected(
@@ -193,11 +215,16 @@ class TicketAiConversationService
         ?int $suggestionId,
         string $reason
     ): void {
-        if (!$this->available()) {
-            return;
-        }
-        $state = $this->stateFor($ticket);
-        if (!$state) {
+        $this->withLockedState($ticket, fn (TicketAiConversation $state) =>
+            $this->recordRejectedState($state, $sourceMessage, $suggestionId, $reason)
+        );
+    }
+
+    private function recordRejectedState(
+        TicketAiConversation $state, TicketMessage $sourceMessage, ?int $suggestionId, string $reason
+    ): void {
+        if (in_array($state->status, [TicketAiConversation::STATUS_HUMAN_REQUIRED, TicketAiConversation::STATUS_RESOLVED], true)
+            || (int) $state->last_source_message_id >= (int) $sourceMessage->id) {
             return;
         }
 
@@ -231,8 +258,15 @@ class TicketAiConversationService
         if (!$ticket) {
             return;
         }
-        $state = $this->stateFor($ticket);
-        if (!$state) {
+        $this->withLockedState($ticket, fn (TicketAiConversation $state) =>
+            $this->recordFailureState($state, $sourceMessageId, $reason)
+        );
+    }
+
+    private function recordFailureState(TicketAiConversation $state, int $sourceMessageId, string $reason): void
+    {
+        if (in_array($state->status, [TicketAiConversation::STATUS_HUMAN_REQUIRED, TicketAiConversation::STATUS_RESOLVED], true)
+            || ($sourceMessageId > 0 && (int) $state->last_source_message_id >= $sourceMessageId)) {
             return;
         }
 
@@ -252,11 +286,12 @@ class TicketAiConversationService
 
     public function recordHumanReply(Ticket $ticket, TicketMessage $message): void
     {
-        if (!$this->available()) {
-            return;
-        }
-        $state = TicketAiConversation::query()->where('ticket_id', $ticket->id)->first();
-        if (!$state || (int) $state->auto_reply_count < 1 || $state->handoff_at !== null) {
+        $this->withLockedState($ticket, fn (TicketAiConversation $state) => $this->recordHumanState($state, $message));
+    }
+
+    private function recordHumanState(TicketAiConversation $state, TicketMessage $message): void
+    {
+        if ($state->handoff_reason === 'human_replied') {
             return;
         }
         $state->status = TicketAiConversation::STATUS_HUMAN_REQUIRED;
@@ -272,11 +307,12 @@ class TicketAiConversationService
 
     public function markClosed(Ticket $ticket): void
     {
-        if (!$this->available()) {
-            return;
-        }
-        $state = TicketAiConversation::query()->where('ticket_id', $ticket->id)->first();
-        if (!$state || $state->status === TicketAiConversation::STATUS_RESOLVED) {
+        $this->withLockedState($ticket, fn (TicketAiConversation $state) => $this->closeState($state), false);
+    }
+
+    private function closeState(TicketAiConversation $state): void
+    {
+        if ($state->status === TicketAiConversation::STATUS_RESOLVED) {
             return;
         }
         $state->status = TicketAiConversation::STATUS_RESOLVED;
@@ -374,6 +410,21 @@ class TicketAiConversationService
             ]);
             return null;
         }
+    }
+
+    private function withLockedState(Ticket $ticket, callable $callback, bool $create = true): mixed
+    {
+        if (!$this->available()) {
+            return null;
+        }
+
+        // Serialize automation and human handoffs using the same ticket lock as message sending.
+        return DB::transaction(function () use ($ticket, $callback, $create) {
+            $locked = Ticket::query()->whereKey($ticket->id)->lockForUpdate()->first();
+            $state = $locked ? ($create ? $this->stateFor($locked)
+                : TicketAiConversation::query()->where('ticket_id', $locked->id)->first()) : null;
+            return $state ? $callback($state) : null;
+        });
     }
 
     /** @param array<string, mixed> $extra */

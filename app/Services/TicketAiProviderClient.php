@@ -11,7 +11,7 @@ class TicketAiProviderClient
 {
     /**
      * @param array<string, mixed> $settings
-     * @param array<int, array{role:string, content:string}> $messages
+     * @param array<int, array{role:string, content:string|array}> $messages
      * @return array<string, mixed>
      */
     public function complete(array $settings, array $messages, bool $validateStructuredContent = true): array
@@ -93,12 +93,28 @@ class TicketAiProviderClient
             'input_tokens' => $inputTokens,
             'output_tokens' => $outputTokens,
             'total_tokens' => $reportedTotal > 0 ? $reportedTotal : $inputTokens + $outputTokens,
-            'prompt_chars' => array_sum(array_map(
-                static fn (array $message): int => mb_strlen((string) ($message['content'] ?? '')),
-                $messages
-            )),
+            'prompt_chars' => $this->promptChars($messages),
             'response_chars' => mb_strlen($content),
         ];
+    }
+
+    /** Count text only; image bytes must never become logged prompt text. */
+    public function promptChars(array $messages): int
+    {
+        $count = 0;
+        foreach ($messages as $message) {
+            $content = $message['content'] ?? '';
+            if (is_string($content)) {
+                $count += mb_strlen($content);
+            } elseif (is_array($content)) {
+                foreach ($content as $part) {
+                    if (is_array($part) && ($part['type'] ?? null) === 'text' && is_string($part['text'] ?? null)) {
+                        $count += mb_strlen($part['text']);
+                    }
+                }
+            }
+        }
+        return $count;
     }
 
     /** @param array<string, mixed> $payload */

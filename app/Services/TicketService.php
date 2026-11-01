@@ -6,6 +6,7 @@ use App\Exceptions\ApiException;
 use App\Jobs\ProcessTicketAiAutoReplyJob;
 use App\Jobs\SendEmailJob;
 use App\Models\Ticket;
+use App\Models\TicketAiSuggestion;
 use App\Models\TicketMessage;
 use App\Models\TicketMessageAttachment;
 use App\Models\User;
@@ -185,7 +186,6 @@ class TicketService
             if (!$ticketMessage || !$ticket->save()) {
                 throw new ApiException('工单回复失败');
             }
-            DB::commit();
             if ((int) $userId !== (int) $ticket->user_id) {
                 try {
                     app(TicketAiConversationService::class)->recordHumanReply($ticket, $ticketMessage);
@@ -196,6 +196,7 @@ class TicketService
                     ]);
                 }
             }
+            DB::commit();
             HookManager::call('ticket.reply.admin.after', [$ticket, $ticketMessage]);
         } catch (\Exception $e) {
             DB::rollBack();
@@ -326,7 +327,8 @@ class TicketService
         int $suggestionId,
         string $category,
         string $message,
-        bool $allowSourceAttachments = false
+        bool $allowSourceAttachments = false,
+        array $approval = []
     ): ?TicketMessage {
         $ticket = null;
         $ticketMessage = DB::transaction(function () use (
@@ -336,6 +338,7 @@ class TicketService
             $category,
             $message,
             $allowSourceAttachments,
+            $approval,
             &$ticket
         ): ?TicketMessage {
             $ticket = Ticket::query()->where('id', $ticketId)->lockForUpdate()->first();
@@ -345,7 +348,8 @@ class TicketService
             if ((int) $ticket->reply_status !== Ticket::REPLY_STATUS_WAITING_ADMIN) {
                 return null;
             }
-            if (!(bool) admin_setting('ticket_ai_auto_reply_enable', false)) {
+            if (!(bool) admin_setting('ticket_ai_enable', false)
+                || !(bool) admin_setting('ticket_ai_auto_reply_enable', false)) {
                 return null;
             }
 
@@ -362,6 +366,55 @@ class TicketService
                 ->where('ticket_id', $ticketId)
                 ->max('id');
             if ($latestMessageId !== $sourceMessageId) {
+                return null;
+            }
+
+            $automation = app(TicketAiAutoReplyService::class);
+            if ($automation->exclusionReason($ticket, $sourceMessage) !== null
+                || app(TicketAiBusinessContextService::class)->requiresHumanReview(
+                    (string) $ticket->subject . "\n" . (string) $sourceMessage->message
+                )) {
+                return null;
+            }
+            $conversation = app(TicketAiConversationService::class);
+            if (!$conversation->preflight($ticket, $sourceMessage)['allow']) {
+                return null;
+            }
+            $suggestion = TicketAiSuggestion::query()->whereKey($suggestionId)
+                ->where('ticket_id', $ticketId)->whereNull('admin_id')
+                ->where('status', TicketAiSuggestion::STATUS_GENERATED)->lockForUpdate()->first();
+            if (!$suggestion || (int) ($approval['suggestion_id'] ?? 0) !== $suggestionId
+                || $suggestion->draft !== $message || ($approval['draft'] ?? null) !== $message
+                || $suggestion->category !== $category) {
+                return null;
+            }
+            $scope = [
+                'type' => $ticket->agent_user_id ? 'agent' : ($ticket->site_id ? 'site' : 'platform'),
+                'site_id' => $ticket->site_id, 'agent_user_id' => $ticket->agent_user_id,
+                'agent_domain_id' => $ticket->agent_domain_id,
+            ];
+            foreach (['site_id', 'agent_user_id', 'agent_domain_id'] as $field) {
+                if ((int) $suggestion->{$field} !== (int) $scope[$field]) {
+                    return null;
+                }
+            }
+            if ($suggestion->scope_type !== $scope['type']) {
+                return null;
+            }
+            $isClarification = $suggestion->model === 'system:clarification'
+                && ($approval['grounding_type'] ?? null) === 'controlled_clarification';
+            $analysis = $suggestion->image_analysis;
+            if ($analysis !== null || ($sourceMessage->attachments()->exists() && !$isClarification)) {
+                if (!(bool) admin_setting('ticket_ai_vision_enable', false) || !is_array($analysis)
+                    || $analysis !== ($approval['image_analysis'] ?? null)
+                    || !app(TicketAiVisionService::class)->sourceStillMatches($ticket, $sourceMessage, $analysis)) {
+                    return null;
+                }
+            }
+            $policy = app(TicketAiPolicyService::class)->resolve($scope, admin_setting('ticket_ai_scope_policies', []));
+            if (!$policy['enabled'] || $automation->rejectionReason(array_merge($approval, $suggestion->only([
+                'structured_output', 'risk', 'needs_human', 'confidence', 'category', 'draft', 'matched_knowledge',
+            ]))) !== null) {
                 return null;
             }
 
@@ -406,6 +459,9 @@ class TicketService
                 $ticketMessage,
                 $message
             );
+            if (!$conversation->recordSent($ticket, $sourceMessage, $ticketMessage, $approval, $isClarification)) {
+                throw new ApiException('AI ticket conversation state update failed');
+            }
 
             return $ticketMessage;
         });

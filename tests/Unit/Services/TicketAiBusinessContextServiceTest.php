@@ -104,6 +104,18 @@ final class TicketAiBusinessContextServiceTest extends TestCase
         $this->assertFalse($result['system_grounded']);
     }
 
+    public function test_subject_only_and_english_sensitive_intents_require_human_review(): void
+    {
+        $service = $this->service([]);
+        $context = $service->build(new User(), ['type' => 'platform'], [], [],
+            [['role' => 'user', 'content' => '请尽快处理']], [], '申请退款');
+        $this->assertTrue($context['requires_human']);
+        foreach (['Refund my payment', 'Please UNBAN my account', 'change email', '验证码是多少'] as $message) {
+            $this->assertTrue($service->requiresHumanReview($message));
+        }
+        $this->assertFalse($service->requiresHumanReview('How to import a subscription?'));
+    }
+
     public function test_backend_verified_reply_replaces_model_invented_values(): void
     {
         $service = $this->service([]);

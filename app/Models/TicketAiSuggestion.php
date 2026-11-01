@@ -19,6 +19,7 @@ class TicketAiSuggestion extends Model
     protected $casts = [
         'knowledge_refs' => 'array',
         'matched_knowledge' => 'array',
+        'image_analysis' => 'array',
         'site_id' => 'integer',
         'agent_user_id' => 'integer',
         'agent_domain_id' => 'integer',

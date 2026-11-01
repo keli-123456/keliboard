@@ -15,6 +15,8 @@ class TicketAiBusinessContextService
         '密码', '验证码', '修改邮箱', '更换邮箱', '注销账号', '删除账号',
         '封禁', '解封', '封号', '解除风控', '重置订阅', '重置凭证',
         'token', 'uuid', '隐私', '起诉', '律师', '报警',
+        'refund', 'chargeback', 'unauthorized payment', 'password', 'verification code',
+        'change email', 'delete account', 'unban', 'account suspension',
     ];
 
     public function __construct(
@@ -41,11 +43,12 @@ class TicketAiBusinessContextService
         array $subscription,
         array $orders,
         array $conversation,
-        array $operations = []
+        array $operations = [],
+        string $subject = ''
     ): array {
         $latestMessage = $this->latestUserMessage($conversation);
         $operationalRequiresHuman = (bool) ($operations['requires_human'] ?? false);
-        $requiresHuman = $this->containsSensitiveIntent($latestMessage) || $operationalRequiresHuman;
+        $requiresHuman = $this->requiresHumanReview($subject . "\n" . $latestMessage) || $operationalRequiresHuman;
         $intents = $this->detectReadOnlyIntents($latestMessage);
         $retentionSignal = $this->retentionSignal($latestMessage);
         $catalog = in_array('plan_catalog', $intents, true) || $retentionSignal !== null
@@ -139,8 +142,9 @@ class TicketAiBusinessContextService
         return '';
     }
 
-    private function containsSensitiveIntent(string $message): bool
+    public function requiresHumanReview(string $message): bool
     {
+        $message = mb_strtolower(trim(strip_tags($message)));
         foreach (self::SENSITIVE_PATTERNS as $pattern) {
             if (str_contains($message, $pattern)) {
                 return true;

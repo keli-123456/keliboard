@@ -73,19 +73,22 @@ class TicketAiAutoReplyService
         if (trim((string) ($result['draft'] ?? '')) === '') {
             return 'empty_draft';
         }
-        if ($this->automationMode() === self::MODE_BROAD) {
-            return null;
-        }
         if (strtolower((string) ($result['risk'] ?? '')) !== 'low') {
             return 'risk_not_low';
         }
         if ((bool) ($result['needs_human'] ?? true)) {
             return 'needs_human';
         }
-        if ((float) ($result['confidence'] ?? 0) < $this->minimumConfidence()) {
+        $confidence = $result['confidence'] ?? null;
+        if (!is_numeric($confidence) || !is_finite((float) $confidence)
+            || (float) $confidence > 1 || (float) $confidence < $this->minimumConfidence()) {
             return 'low_confidence';
         }
-        if (!in_array((string) ($result['category'] ?? ''), $this->allowedCategories(), true)) {
+        if (in_array((string) ($result['category'] ?? ''), ['支付退款', '账号安全', '服务器故障'], true)) {
+            return 'needs_human';
+        }
+        if ($this->automationMode() !== self::MODE_BROAD
+            && !in_array((string) ($result['category'] ?? ''), $this->allowedCategories(), true)) {
             return 'category_not_allowed';
         }
         if (
@@ -126,6 +129,11 @@ class TicketAiAutoReplyService
         }
 
         $exclusion = $this->exclusionReason($ticket, $sourceMessage);
+        if ($exclusion === null && app(TicketAiBusinessContextService::class)->requiresHumanReview(
+            (string) $ticket->subject . "\n" . (string) $sourceMessage->message
+        )) {
+            $exclusion = 'needs_human';
+        }
         if ($exclusion !== null) {
             $this->conversation->recordRejected($ticket, $sourceMessage, null, $exclusion);
             Log::info('ticket AI auto-reply excluded by policy', [
@@ -157,7 +165,6 @@ class TicketAiAutoReplyService
         }
         $rejection = $this->rejectionReason($result);
         if ($rejection !== null) {
-            $this->assistant->discardAutomationSuggestion($suggestionId, $ticketId);
             $this->conversation->recordRejected($ticket, $sourceMessage, $suggestionId, $rejection);
             Log::info('ticket AI auto-reply held for review', [
                 'ticket_id' => $ticketId,
@@ -176,20 +183,13 @@ class TicketAiAutoReplyService
             (int) $suggestionId,
             (string) $result['category'],
             (string) $result['draft'],
-            $isClarification
+            $isClarification || ($result['image_analysis']['status'] ?? null) === 'ready',
+            $result
         );
         if (!$sent) {
             $this->assistant->discardAutomationSuggestion($suggestionId, $ticketId);
             $this->conversation->recordRejected($ticket, $sourceMessage, $suggestionId, 'send_conflict');
             return;
-        }
-        try {
-            $this->conversation->recordSent($ticket, $sourceMessage, $sent, $result, $isClarification);
-        } catch (\Throwable $trackingError) {
-            Log::warning('ticket AI sent-state tracking failed', [
-                'ticket_id' => $ticketId,
-                'message' => $trackingError->getMessage(),
-            ]);
         }
     }
 
