@@ -51,13 +51,13 @@ final class OfficialKnowledgePackServiceTest extends TestCase
     {
         $first = $this->service->sync();
         $this->assertSame('官方使用文档', $first['status']['title']);
-        $this->assertSame(12, $first['summary']['created']);
+        $this->assertSame(18, $first['summary']['created']);
         $this->assertSame(0, $first['summary']['updated']);
-        $this->assertSame(12, Knowledge::query()->where('source_type', Knowledge::SOURCE_OFFICIAL)->count());
+        $this->assertSame(18, Knowledge::query()->where('source_type', Knowledge::SOURCE_OFFICIAL)->count());
 
         $second = $this->service->sync();
-        $this->assertSame(12, $second['summary']['unchanged']);
-        $this->assertSame(12, $second['status']['summary']['current']);
+        $this->assertSame(18, $second['summary']['unchanged']);
+        $this->assertSame(18, $second['status']['summary']['current']);
         $this->assertSame(
             '快速开始',
             Knowledge::query()->where('source_key', 'client-guides/keliboard-getting-started')->value('title')
@@ -76,5 +76,55 @@ final class OfficialKnowledgePackServiceTest extends TestCase
         $result = $this->service->sync();
         $this->assertSame(1, $result['summary']['skipped_local_modified']);
         $this->assertSame('本地维护的标题', $knowledge->fresh()->title);
+    }
+
+    public function test_sync_preserves_hidden_official_articles_and_custom_content(): void
+    {
+        $this->service->sync();
+        $official = Knowledge::query()->where('source_key', 'client-guides/trusttunnel')->firstOrFail();
+        $official->update(['show' => false]);
+        $custom = Knowledge::query()->create([
+            'language' => 'zh-CN', 'category' => '站点公告', 'title' => '旧版站点说明',
+            'body' => '<p>站点单独维护的内容</p>', 'show' => false,
+            'scope_type' => Knowledge::SCOPE_SITE, 'site_id' => 7,
+            'source_type' => Knowledge::SOURCE_CUSTOM,
+        ]);
+        $before = $custom->fresh()->getAttributes();
+
+        $result = $this->service->sync();
+
+        $this->assertSame(1, $result['summary']['skipped_local_modified']);
+        $this->assertFalse($official->fresh()->show);
+        $this->assertSame($before, $custom->fresh()->getAttributes());
+        $this->assertSame(19, Knowledge::query()->count());
+    }
+
+    public function test_sync_updates_unmodified_previous_content_without_replacing_its_id(): void
+    {
+        $this->service->sync();
+        $knowledge = Knowledge::query()->where('source_key', 'client-guides/v2rayn')->firstOrFail();
+        $currentBody = $knowledge->body;
+        $payload = $knowledge->only([
+            'category', 'language', 'title', 'body', 'sort', 'show', 'scope_type',
+            'site_id', 'agent_user_id', 'agent_domain_id',
+        ]);
+        $payload['body'] = '<h2>v2rayN 使用教程</h2><p>旧版导入说明</p>';
+        $knowledge->update([
+            'body' => $payload['body'], 'source_version' => '2026.08.15',
+            'source_hash' => hash('sha256', json_encode(
+                $payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
+            )),
+        ]);
+        $id = $knowledge->id;
+
+        $this->assertSame(1, $this->service->status()['summary']['update_available']);
+        $result = $this->service->sync();
+
+        $this->assertSame(1, $result['summary']['updated']);
+        $this->assertSame(17, $result['summary']['unchanged']);
+        $this->assertSame($id, $knowledge->fresh()->id);
+        $this->assertSame($currentBody, $knowledge->fresh()->body);
+        $this->assertSame('2026.11.01', $knowledge->fresh()->source_version);
+        $this->assertSame(18, $this->service->status()['summary']['current']);
     }
 }

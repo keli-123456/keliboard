@@ -1,7 +1,7 @@
 {
   "name": "client-guides",
-  "version": "2026.08.15",
-  "description": "官方使用文档，包含站点流程、订阅管理与客户端教程。",
+  "version": "2026.11.01",
+  "description": "官方使用文档，包含客户端兼容、ECH、TrustTunnel、连接排障、站点入口与返佣提现指引。",
   "category": "客户端教程",
   "language": "zh-CN",
   "asset_base_url": "/knowledge-assets/clients",
@@ -49,6 +49,66 @@
       "show": true,
       "scope_type": "global",
       "body": "articles/tickets-account-security.html",
+      "assets": [],
+      "requires_subscription_url": false
+    },
+    {
+      "slug": "client-compatibility",
+      "title": "客户端与内核兼容说明",
+      "category": "连接与排障",
+      "sort": 50,
+      "show": true,
+      "body": "articles/client-compatibility.html",
+      "assets": [],
+      "requires_subscription_url": false
+    },
+    {
+      "slug": "hysteria2-ech",
+      "title": "HY2 与 ECH 使用说明",
+      "category": "连接与排障",
+      "sort": 60,
+      "show": true,
+      "body": "articles/hysteria2-ech.html",
+      "assets": [],
+      "requires_subscription_url": false
+    },
+    {
+      "slug": "trusttunnel",
+      "title": "TrustTunnel 导入与证书校验",
+      "category": "连接与排障",
+      "sort": 70,
+      "show": true,
+      "body": "articles/trusttunnel.html",
+      "assets": [],
+      "requires_subscription_url": false
+    },
+    {
+      "slug": "connection-troubleshooting",
+      "title": "节点连接问题自助排查",
+      "category": "连接与排障",
+      "sort": 80,
+      "show": true,
+      "body": "articles/connection-troubleshooting.html",
+      "assets": [],
+      "requires_subscription_url": false
+    },
+    {
+      "slug": "site-navigation",
+      "title": "导航页、官网与订阅入口",
+      "category": "使用指南",
+      "sort": 90,
+      "show": true,
+      "body": "articles/site-navigation.html",
+      "assets": [],
+      "requires_subscription_url": false
+    },
+    {
+      "slug": "commission-agent",
+      "title": "邀请返佣、提现与代理说明",
+      "category": "使用指南",
+      "sort": 100,
+      "show": true,
+      "body": "articles/commission-agent.html",
       "assets": [],
       "requires_subscription_url": false
     },
