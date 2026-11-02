@@ -150,6 +150,9 @@ class AdminRoute
                 $router->get('/telemetry', [MachineController::class, 'telemetry']);
                 $router->get('/insight', [MachineController::class, 'insight']);
                 $router->get('/ssh/profile', [\App\Http\Controllers\V2\Admin\Server\MachineSshController::class, 'profile']);
+                $router->get('/terminal/profile', [\App\Http\Controllers\V2\Admin\Server\MachineTerminalController::class, 'profile']);
+                $router->post('/terminal/policy', [\App\Http\Controllers\V2\Admin\Server\MachineTerminalController::class, 'policy']);
+                $router->post('/terminal/ticket', [\App\Http\Controllers\V2\Admin\Server\MachineTerminalController::class, 'ticket']);
                 $router->post('/ssh/probe', [\App\Http\Controllers\V2\Admin\Server\MachineSshController::class, 'probe']);
                 $router->post('/ssh/profile', [\App\Http\Controllers\V2\Admin\Server\MachineSshController::class, 'save']);
                 $router->post('/ssh/ticket', [\App\Http\Controllers\V2\Admin\Server\MachineSshController::class, 'ticket']);

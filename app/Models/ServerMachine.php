@@ -14,6 +14,7 @@ class ServerMachine extends Model
     protected $hidden = ['ssh_profile'];
 
     protected $casts = [
+        'terminal_enabled' => 'boolean',
         'is_active' => 'boolean',
         'subproxy_enabled' => 'boolean',
         'webproxy_enabled' => 'boolean',

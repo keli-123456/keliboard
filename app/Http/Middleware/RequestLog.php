@@ -19,6 +19,7 @@ class RequestLog
         }
 
         try {
+            $isTerminal = preg_match('#/server/machine/(ssh|terminal)/#', $request->path()) === 1;
             $user = $request->user();
             if (!$user || (!$user->is_admin && !$user->is_staff)) {
                 return $response;
@@ -28,10 +29,10 @@ class RequestLog
                 'admin_id' => $user->id,
                 'action' => $this->resolveAction($request->path()),
                 'method' => strtoupper($request->method()),
-                'uri' => str_contains($request->path(), '/server/machine/ssh/') ? '/' . $request->path() : $request->getRequestUri(),
+                'uri' => $isTerminal ? '/' . $request->path() : $request->getRequestUri(),
                 'request_data' => json_encode(
-                    $this->sanitizePayload(str_contains($request->path(), '/server/machine/ssh/')
-                        ? array_intersect_key($request->all(), array_flip(['id', 'host', 'port', 'username', 'confirmed']))
+                    $this->sanitizePayload($isTerminal
+                        ? array_intersect_key($request->all(), array_flip(['id', 'host', 'port', 'username', 'confirmed', 'enabled']))
                         : (preg_match('#/server/manage/(save|config-preview)$#', $request->path())
                         ? array_replace($request->all(), ['protocol_settings' => '[REDACTED]', 'ips' => '[REDACTED]', 'excludes' => '[REDACTED]'])
                         : $request->all())),

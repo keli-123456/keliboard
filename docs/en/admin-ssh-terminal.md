@@ -1,7 +1,8 @@
 # Browser SSH Terminal
 
-The server-management list provides an SSH action in the row and its action
-menu. This is an interactive remote SSH shell, not a node-control command and
+The server-management list provides a terminal action in the row and its action
+menu. The default is [Agent mode](agent-terminal.md); this document covers the
+separate SSH fallback tab. It is an interactive remote SSH shell, not a node-control command and
 not a shell on the panel server. It does not install, restart or upgrade nodes.
 
 ## Deployment

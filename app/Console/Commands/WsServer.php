@@ -67,13 +67,22 @@ class WsServer extends Command
         $server->count = 1;
         $server->reusePort = false;
         $sshBridge = app(\App\Services\ServerMachine\MachineSshBridge::class);
-        $server->onWebSocketConnect = function ($connection, $request) use ($sshBridge) {
+        $terminalBridge = app(\App\Services\ServerMachine\MachineTerminalBridge::class);
+        $connections = [];
+        $terminalBridge->controls(function (int $machineId) use (&$connections) {
+            foreach ($connections as $connection) {
+                if (($connection->xboard_authenticated ?? false) && (int) ($connection->xboard_machine_id ?? 0) === $machineId
+                    && ($connection->xboard_terminal_protocol ?? 0) === 1 && ($connection->xboard_terminal_enabled ?? false)) return $connection;
+            }
+            return null;
+        });
+        $server->onWebSocketConnect = function ($connection, $request) use ($sshBridge, $terminalBridge) {
+            if ($terminalBridge->connect($connection, $request)) return;
             if ($sshBridge->connect($connection, $request)) return;
             $connection->xboard_forwarded_ip = $this->resolveHandshakeRemoteIp($connection, $request);
         };
 
         $authenticator = app(NodeRealtimeAuthenticator::class);
-        $connections = [];
 
         $server->onWorkerStart = function () use (
             &$connections,
@@ -174,7 +183,8 @@ class WsServer extends Command
             });
         };
 
-        $server->onMessage = function ($connection, $message) use ($authenticator, &$connections, &$receiptState, $realtimeEnabled, $snapshotPath, $receiptPath, $host, $port, $sshBridge) {
+        $server->onMessage = function ($connection, $message) use ($authenticator, &$connections, &$receiptState, $realtimeEnabled, $snapshotPath, $receiptPath, $host, $port, $sshBridge, $terminalBridge) {
+            if ($connection->agent_terminal ?? false) { $terminalBridge->message($connection, (string) $message); return; }
             if ($connection->machine_ssh ?? false) { $sshBridge->message($connection, (string) $message); return; }
             if (!$realtimeEnabled) {
                 $connection->close();
@@ -238,6 +248,9 @@ class WsServer extends Command
                 $connection->xboard_input_node_id = (string) $auth['input_node_id'];
                 $connection->xboard_server_id = $serverInfo ? (int) $serverInfo->id : 0;
                 $connection->xboard_machine_id = isset($auth['machine']) ? (int) $auth['machine']->id : null;
+                $connection->xboard_terminal_protocol = ($payload['terminal_protocol'] ?? null) === 1 ? 1 : 0;
+                $connection->xboard_terminal_enabled = $connection->xboard_machine_id !== null
+                    && $connection->xboard_terminal_protocol === 1 && ($payload['terminal_enabled'] ?? false) === true;
                 $connection->xboard_node_type = $auth['is_v2node'] ? 'v2node' : ($auth['normalized_node_type'] ?? null);
                 $connection->xboard_is_v2node = (bool) $auth['is_v2node'];
                 $connection->xboard_group_ids = $this->normalizeIntList((array) ($serverInfo->group_ids ?? []));
@@ -284,7 +297,9 @@ class WsServer extends Command
             }
         };
 
-        $server->onClose = function ($connection) use (&$connections, $snapshotPath, $host, $port, $realtimeEnabled, $sshBridge) {
+        $server->onClose = function ($connection) use (&$connections, $snapshotPath, $host, $port, $realtimeEnabled, $sshBridge, $terminalBridge) {
+            if ($connection->agent_terminal ?? false) { $terminalBridge->close($connection); return; }
+            $terminalBridge->controlClosed($connection);
             if ($connection->machine_ssh ?? false) { $sshBridge->close($connection); return; }
             if ((bool) ($connection->xboard_authenticated ?? false)) {
                 Log::info('Node realtime disconnected', [
@@ -300,7 +315,7 @@ class WsServer extends Command
             $this->writeSnapshot($snapshotPath, $host, $port, $realtimeEnabled, $connections);
         };
 
-        $server->onWorkerStop = fn () => $sshBridge->shutdown();
+        $server->onWorkerStop = function () use ($sshBridge, $terminalBridge) { $sshBridge->shutdown(); $terminalBridge->shutdown(); };
 
         global $argv;
         $argv = array_values(array_filter([
@@ -365,6 +380,8 @@ class WsServer extends Command
                 'node_id' => (string) ($connection->xboard_input_node_id ?? ''),
                 'server_id' => (int) ($connection->xboard_server_id ?? 0),
                 'machine_id' => $connection->xboard_machine_id ?? null,
+                'terminal_protocol' => (int) ($connection->xboard_terminal_protocol ?? 0),
+                'terminal_enabled' => (bool) ($connection->xboard_terminal_enabled ?? false),
                 'node_type' => $connection->xboard_node_type ?? null,
                 'group_ids' => $this->normalizeIntList((array) ($connection->xboard_group_ids ?? [])),
                 'authenticated_at' => $this->formatTimestamp((int) ($connection->xboard_authenticated_at ?? 0)),
