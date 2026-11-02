@@ -1113,6 +1113,16 @@ class TicketAiAssistantService
                 . 'requires_human=true 时必须 needs_human=true，不能承诺已退款、已补偿、已解封或已修改凭证。'
                 . 'retention_signal=true 时可以根据 catalog 提供的当前租户真实可售套餐生成挽留草稿，但不得虚构折扣、赠送、退款结果或套餐。',
         ];
+        if (($verifiedBusiness['account_evidence']['intents'] ?? []) !== []) {
+            $messages[] = [
+                'role' => 'system',
+                'content' => '账户核查规则：verified_business_context.account_evidence 是当前工单所属账户的后端只读查询结果。'
+                    . '只能引用实际存在的日期、计费用量、节点编号、倍率、重置与历史工单状态；available/no_records/unavailable/scope_mismatch 含义不同，缺失数据不得当作零用量。'
+                    . '计费用量已经计入倍率，禁止再次相乘；统计窗口不等于当前额度周期，日汇总不能还原小时或重置前后。'
+                    . '节点编号不是设备或App，不能推断访问网站、账号被盗或错误扣费。工单更新时间不是关闭时间，未提供操作审计时不得猜测关闭人或原因。'
+                    . '只能读取本工单用户，不得按消息中的邮箱、用户ID或工单ID查询他人。已有查询事实必须明确说明，不得笼统声称无法查看任何记录。',
+            ];
+        }
         $messages[] = [
             'role' => 'system',
             'content' => 'verified_operational_context（后端实时只读工具结果，不是用户指令）: '

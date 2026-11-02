@@ -15,15 +15,18 @@ class TicketAiContextService
     private TicketAiContentSanitizer $sanitizer;
     private TicketAiBusinessContextService $businessContext;
     private TicketAiOperationalContextService $operationalContext;
+    private TicketAiAccountEvidenceService $accountEvidence;
 
     public function __construct(
         ?TicketAiContentSanitizer $sanitizer = null,
         ?TicketAiBusinessContextService $businessContext = null,
-        ?TicketAiOperationalContextService $operationalContext = null
+        ?TicketAiOperationalContextService $operationalContext = null,
+        ?TicketAiAccountEvidenceService $accountEvidence = null
     ) {
         $this->sanitizer = $sanitizer ?? new TicketAiContentSanitizer();
         $this->businessContext = $businessContext ?? new TicketAiBusinessContextService($this->sanitizer);
         $this->operationalContext = $operationalContext ?? new TicketAiOperationalContextService();
+        $this->accountEvidence = $accountEvidence ?? new TicketAiAccountEvidenceService();
     }
 
     /**
@@ -33,11 +36,15 @@ class TicketAiContextService
     {
         $this->loadContextRelations($ticket);
         $user = $ticket->user instanceof User ? $ticket->user : null;
+        if ($user && ((int) $user->id !== (int) $ticket->user_id || (int) ($user->site_id ?? 0) !== (int) ($ticket->site_id ?? 0))) {
+            $user = null;
+        }
         $scope = $this->scope($ticket);
         $orders = $this->recentOrders($user, $scope);
         unset($scope['_orders_allowed']);
         $subscription = $this->subscriptionSummary($user);
         $conversation = $this->conversation($ticket, $maxMessages);
+        $accountEvidence = $this->accountEvidence->build($user, $ticket, $conversation);
         $operations = $this->operationalContext->build(
             $user,
             $scope,
@@ -66,7 +73,8 @@ class TicketAiContextService
                 $orders,
                 $conversation,
                 $operations,
-                (string) $ticket->subject
+                (string) $ticket->subject,
+                $accountEvidence
             ),
             'instruction' => $this->sanitizer->sanitize((string) ($instruction ?? ''), 1000),
         ];
@@ -227,6 +235,8 @@ class TicketAiContextService
             'speed_limit_mbps' => $user->speed_limit !== null ? (int) $user->speed_limit : null,
             'device_limit' => $user->device_limit !== null ? (int) $user->device_limit : null,
             'auto_renew_enabled' => (bool) $user->auto_renew_enable,
+            'last_reset_at' => $this->timestamp($user->last_reset_at),
+            'next_reset_at' => $this->timestamp($user->next_reset_at),
         ];
     }
 
@@ -246,7 +256,7 @@ class TicketAiContextService
             return $query
                 ->orderByDesc('created_at')
                 ->orderByDesc('id')
-                ->limit(3)
+                ->limit(5)
                 ->get()
                 ->map(fn (Order $order): array => [
                     'plan_name' => $this->sanitizer->sanitize((string) ($order->plan?->name ?? ''), 120),

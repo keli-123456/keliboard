@@ -44,23 +44,37 @@ class TicketAiBusinessContextService
         array $orders,
         array $conversation,
         array $operations = [],
-        string $subject = ''
+        string $subject = '',
+        array $accountEvidence = []
     ): array {
         $latestMessage = $this->latestUserMessage($conversation);
+        $question = TicketAiAccountEvidenceService::question($conversation, $subject);
         $operationalRequiresHuman = (bool) ($operations['requires_human'] ?? false);
-        $requiresHuman = $this->requiresHumanReview($subject . "\n" . $latestMessage) || $operationalRequiresHuman;
-        $intents = $this->detectReadOnlyIntents($latestMessage);
+        $scopeMismatch = ($accountEvidence['status'] ?? null) === 'scope_mismatch';
+        $requiresHuman = $this->requiresHumanReview($question) || $operationalRequiresHuman
+            || $scopeMismatch || (bool) ($accountEvidence['requires_human'] ?? false);
+        $intents = $this->detectReadOnlyIntents($question);
+        if (in_array('traffic_history', $accountEvidence['intents'] ?? [], true)) {
+            $intents = array_values(array_unique(array_merge($intents, ['traffic', 'order_history'])));
+        }
         $retentionSignal = $this->retentionSignal($latestMessage);
         $catalog = in_array('plan_catalog', $intents, true) || $retentionSignal !== null
             ? $this->catalog($user, $scope)
             : [];
-        $verifiedFacts = $this->verifiedFacts($intents, $subscription, $orders, $catalog);
+        if (!$user && $intents !== []) {
+            $requiresHuman = true;
+        }
+        $verifiedFacts = !$user || $scopeMismatch ? [] : $this->verifiedFacts($intents, $subscription, $orders, $catalog);
+        $accountFacts = array_values((array) ($accountEvidence['facts'] ?? []));
+        $verifiedFacts = array_merge($verifiedFacts, $accountFacts);
 
         return [
             'mode' => 'backend_verified_read_only',
             'intents' => $intents,
             'requires_human' => $requiresHuman,
             'verified_facts' => $verifiedFacts,
+            'account_evidence' => ($accountEvidence['intents'] ?? []) !== [] ? $accountEvidence : [],
+            'account_grounded_reply' => $accountFacts !== [] ? $this->groundedReply($verifiedFacts) : '',
             'retention_signal' => $retentionSignal !== null,
             'retention_reason' => $retentionSignal,
             'catalog' => $catalog,
@@ -87,9 +101,16 @@ class TicketAiBusinessContextService
     {
         if ((bool) ($business['requires_human'] ?? false)) {
             $operationalReply = trim((string) ($business['operational_reply'] ?? ''));
+            $accountReply = trim((string) ($business['account_grounded_reply'] ?? ''));
+            if ($accountReply !== '') {
+                $result['draft'] = $this->sanitizer->sanitize(
+                    $accountReply . "\n以上仅为已核验的只读记录，具体原因与后续处理需要人工核查，未修改账户或补偿流量。",
+                    5000
+                );
+            }
             if ((bool) ($business['operational_requires_human'] ?? false) && $operationalReply !== '') {
                 $result['draft'] = $this->sanitizer->sanitize(
-                    $operationalReply . "\n客服将结合实时运行记录继续处理，请勿反复重置订阅或重复提交订单。",
+                    $operationalReply . ($accountReply !== '' ? "\n" . $accountReply : '') . "\n客服将结合实时运行记录继续处理，请勿反复重置订阅或重复提交订单。",
                     5000
                 );
                 $result['category'] = '服务器故障';
@@ -119,6 +140,7 @@ class TicketAiBusinessContextService
         $result['confidence'] = max(0.99, (float) ($result['confidence'] ?? 0));
         $result['category'] = in_array('plan_catalog', $intents, true)
             || in_array('order_status', $intents, true)
+            || (in_array('order_history', $intents, true) && !in_array('traffic', $intents, true))
             ? '套餐订单'
             : '订阅与节点';
         $result['system_grounded'] = true;
@@ -172,6 +194,9 @@ class TicketAiBusinessContextService
             '订单状态', '支付状态', '订单进度', '订单完成了吗', '订单成功了吗', '查询订单',
         ])) {
             $intents[] = 'order_status';
+        }
+        if ($this->matches($message, ['套餐变更', '换套餐', '续费记录', '购买记录', '充值记录', '重置包', '套餐记录'])) {
+            $intents[] = 'order_history';
         }
         if ($this->matches($message, [
             '推荐套餐', '套餐推荐', '有什么套餐', '有哪些套餐', '套餐价格', '哪个套餐',
@@ -231,6 +256,15 @@ class TicketAiBusinessContextService
                     ? sprintf('总量 %s，已用 %s，剩余 %s', $this->formatBytes($total), $this->formatBytes($used), $this->formatBytes($remaining))
                     : '当前账号未查询到有效流量额度',
             ];
+            if (trim((string) ($subscription['plan_name'] ?? '')) !== '') {
+                $facts[] = ['label' => '当前套餐', 'value' => (string) $subscription['plan_name']];
+            }
+            foreach (['last_reset_at' => '账户记录的上次重置', 'next_reset_at' => '账户记录的下次重置'] as $key => $label) {
+                if ((int) ($subscription[$key] ?? 0) > 0) {
+                    $facts[] = ['label' => $label, 'value' => $this->formatTimestamp($subscription[$key])
+                        . ($key === 'next_reset_at' ? '（计划时间，不代表已执行）' : '')];
+                }
+            }
         }
         if (in_array('expiry', $intents, true)) {
             $expiredAt = (int) ($subscription['expired_at'] ?? 0);
@@ -257,6 +291,18 @@ class TicketAiBusinessContextService
             } else {
                 $facts[] = ['label' => '最近订单', 'value' => '当前站点范围内未查询到近期订单'];
             }
+        }
+        if (in_array('order_history', $intents, true)) {
+            foreach (array_slice($orders, 0, 5) as $index => $order) {
+                $facts[] = ['label' => '近期订单 ' . ($index + 1),
+                    'value' => (trim((string) ($order['plan_name'] ?? '')) ?: '订单')
+                        . '，类型：' . (Order::$typeMap[(int) ($order['type'] ?? -1)] ?? '未知')
+                        . '，状态：' . (Order::$statusMap[(int) ($order['status'] ?? -1)] ?? '未知')
+                        . '，创建于：' . $this->formatTimestamp($order['created_at'] ?? null)];
+            }
+            $facts[] = ['label' => '订单核验范围', 'value' => $orders === []
+                ? '当前用户与站点范围内未取得近期订单记录，不能据此认定未购买或未充值。'
+                : '仅列当前用户与站点范围内最近5笔订单；订单状态不等于套餐变更已执行的完整审计，也不是完整余额流水。'];
         }
         if (in_array('plan_catalog', $intents, true)) {
             $facts[] = [
@@ -416,7 +462,7 @@ class TicketAiBusinessContextService
     private function formatTimestamp(mixed $value): string
     {
         return is_numeric($value) && (int) $value > 0
-            ? date('Y-m-d H:i:s', (int) $value)
+            ? \Carbon\Carbon::createFromTimestamp((int) $value, config('app.timezone', 'UTC'))->format('Y-m-d H:i:s')
             : '未知时间';
     }
 

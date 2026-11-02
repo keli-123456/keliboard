@@ -219,6 +219,94 @@ final class TicketAiBusinessContextServiceTest extends TestCase
         $this->assertStringNotContainsString('检查网络', $result['draft']);
         $this->assertFalse($result['system_grounded']);
     }
+    public function test_follow_up_retains_verified_traffic_when_a_closure_dispute_requires_human_review(): void
+    {
+        $service = $this->service([]);
+        $business = $service->build(new User(), ['type' => 'platform'], [
+            'transfer_enable_bytes' => 100 * 1024 ** 3, 'used_bytes' => 60 * 1024 ** 3, 'remaining_bytes' => 40 * 1024 ** 3,
+        ], [], [
+            ['role' => 'user', 'content' => '流量一下就没了，我想知道去哪了'],
+            ['role' => 'assistant', 'content' => '请联系人工'],
+            ['role' => 'user', 'content' => '前两个工单我也没有关啊'],
+        ], [], '流量一下就没了', [
+            'intents' => ['traffic_history', 'ticket_history'], 'status' => 'available', 'requires_human' => true,
+            'facts' => [
+                ['label' => '较高用量日 2026-11-01', 'value' => '记录的计费用量 30.00 GB'],
+                ['label' => '历史工单 #7', 'value' => '已关闭，关闭操作人未提供'],
+            ],
+        ]);
+        $result = $service->applyGuardrails(['draft' => '无法查看流量记录，两个工单均由您关闭。', 'risk' => 'low', 'needs_human' => false], $business);
+
+        $this->assertTrue($result['needs_human']);
+        $this->assertFalse($result['system_grounded']);
+        foreach (['剩余 40.00 GB', '30.00 GB', '历史工单 #7', '关闭操作人未提供', '需要人工核查'] as $fact) {
+            $this->assertStringContainsString($fact, $result['draft']);
+        }
+        $this->assertStringNotContainsString('均由您关闭', $result['draft']);
+        $this->assertStringNotContainsString('无法查看流量记录', $result['draft']);
+    }
+
+    public function test_sensitive_follow_up_cannot_use_read_only_evidence_to_authorize_compensation(): void
+    {
+        $service = $this->service([]);
+        $business = $service->build(new User(), ['type' => 'platform'], [], [], [
+            ['role' => 'user', 'content' => '扣流量不对，请退款或补偿'],
+            ['role' => 'user', 'content' => '查到了吗'],
+        ], [], '', [
+            'intents' => ['traffic_history'], 'status' => 'available', 'requires_human' => false,
+            'facts' => [['label' => '节点 #27', 'value' => '计费用量 30.00 GB']],
+        ]);
+        $result = $service->applyGuardrails(['draft' => '已赠送100GB并退款', 'risk' => 'low'], $business);
+        $this->assertTrue($result['needs_human']);
+        $this->assertStringContainsString('30.00 GB', $result['draft']);
+        $this->assertStringContainsString('未修改账户或补偿流量', $result['draft']);
+        $this->assertStringNotContainsString('已赠送', $result['draft']);
+        $this->assertStringNotContainsString('并退款', $result['draft']);
+    }
+
+    public function test_traffic_evidence_includes_existing_plan_reset_and_typed_order_facts_without_claiming_execution(): void
+    {
+        $service = $this->service([]);
+        $business = $service->build(new User(), ['type' => 'platform'], [
+            'plan_name' => '标准套餐', 'transfer_enable_bytes' => 100 * 1024 ** 3,
+            'last_reset_at' => time() - 86400, 'next_reset_at' => time() + 86400,
+        ], [[
+            'plan_name' => '标准套餐', 'type' => Order::TYPE_RESET_TRAFFIC, 'status' => Order::STATUS_CANCELLED,
+            'created_at' => time(),
+        ]], [['role' => 'user', 'content' => '流量去哪了']], [], '', [
+            'intents' => ['traffic_history'], 'status' => 'partial', 'requires_human' => false,
+            'facts' => [['label' => '节点用量', 'value' => '节点明细暂不可读取。']],
+        ]);
+        $result = $service->applyGuardrails(['draft' => '已经执行了流量重置，剩余999GB', 'confidence' => 0.9], $business);
+        $this->assertFalse($result['needs_human']);
+        $this->assertSame('订阅与节点', $result['category']);
+        foreach (['标准套餐', '类型：流量重置', '已取消', '计划时间，不代表已执行', '节点明细暂不可读取', '不是完整余额流水'] as $fact) {
+            $this->assertStringContainsString($fact, $result['draft']);
+        }
+        $this->assertStringNotContainsString('已经执行了流量重置', $result['draft']);
+        $this->assertStringNotContainsString('999GB', $result['draft']);
+    }
+
+    public function test_scope_mismatch_does_not_turn_a_foreign_subscription_into_verified_facts(): void
+    {
+        $business = $this->service([])->build(new User(), [], ['transfer_enable_bytes' => 999 * 1024 ** 3], [],
+            [['role' => 'user', 'content' => '剩余流量']], [], '', [
+                'intents' => ['traffic_history'], 'status' => 'scope_mismatch', 'requires_human' => true,
+                'facts' => [['label' => '查询范围', 'value' => '账户归属无法核验，未读取历史数据。']],
+            ]);
+        $this->assertTrue($business['requires_human']);
+        $this->assertStringNotContainsString('999', json_encode($business));
+    }
+
+    public function test_missing_account_does_not_become_a_verified_zero_allowance_or_non_expiring_plan(): void
+    {
+        $business = $this->service([])->build(null, [], [], [],
+            [['role' => 'user', 'content' => '剩余流量和套餐到期时间是多少']]);
+        $this->assertTrue($business['requires_human']);
+        $this->assertSame([], $business['verified_facts']);
+        $this->assertSame('', $business['grounded_reply']);
+    }
+
     /** @param array<int, Plan> $plans */
     private function service(array $plans): TicketAiBusinessContextService
     {

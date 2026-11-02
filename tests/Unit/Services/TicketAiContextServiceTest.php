@@ -400,6 +400,26 @@ final class TicketAiContextServiceTest extends TestCase
         $this->assertSame(1200, $context['orders'][0]['total_amount']);
     }
 
+    public function test_mismatched_loaded_user_relation_cannot_expose_subscription_orders_or_risk(): void
+    {
+        $owner = $this->createUser();
+        $foreign = $this->createUser();
+        $ticket = $this->createTicket($owner, ['subject' => '流量明细']);
+        $ticket->setRelation('user', $foreign);
+
+        $context = (new TicketAiContextService())->build($ticket, 12, null);
+        $this->assertSame([], $context['user']);
+        $this->assertSame([], $context['subscription']);
+        $this->assertSame([], $context['orders']);
+        $this->assertFalse($context['risk']['available']);
+        $this->assertSame('scope_mismatch', $context['business']['account_evidence']['status']);
+        $this->assertTrue($context['business']['requires_human']);
+
+        $owner->site_id = 999;
+        $ticket->setRelation('user', $owner);
+        $this->assertSame([], (new TicketAiContextService())->build($ticket, 12, null)['subscription']);
+    }
+
     private function createUser(?int $planId = null, ?int $siteId = null): User
     {
         return User::query()->create([

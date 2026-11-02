@@ -14,6 +14,7 @@ use App\Services\TicketAiAssistantService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Tests\Support\InteractsWithInMemoryDatabase;
@@ -200,6 +201,67 @@ final class TicketAiAssistantServiceTest extends TestCase
                 && str_contains($content, 'Windows 客户端无法连接')
                 && str_contains($content, 'Windows 客户端连接排查');
         });
+    }
+
+    public function test_real_context_pipeline_supplies_private_safe_traffic_and_ticket_evidence_to_the_model(): void
+    {
+        $user = User::create([
+            'email' => 'private-owner@example.test', 'password' => 'secret', 'token' => 'private-account-token',
+            'uuid' => 'private-account-uuid', 'transfer_enable' => 100 * 1024 ** 3, 'u' => 0, 'd' => 60 * 1024 ** 3,
+            'created_at' => time(), 'updated_at' => time(),
+        ]);
+        $ticket = Ticket::create([
+            'user_id' => $user->id, 'subject' => '流量一下就没了', 'status' => Ticket::STATUS_OPENING,
+            'created_at' => time(), 'updated_at' => time(),
+        ]);
+        TicketMessage::create([
+            'ticket_id' => $ticket->id, 'user_id' => $user->id, 'message' => '前两个工单我也没有关啊',
+            'created_at' => time(), 'updated_at' => time(),
+        ]);
+        $previous = Ticket::create([
+            'user_id' => $user->id, 'subject' => 'private previous ticket text', 'status' => Ticket::STATUS_CLOSED,
+            'created_at' => time() - 1000, 'updated_at' => time() - 500,
+        ]);
+        Schema::create('v2_stat_user', function (Blueprint $table): void {
+            $table->integer('user_id'); $table->integer('record_at'); $table->string('record_type');
+            $table->bigInteger('u'); $table->bigInteger('d'); $table->integer('updated_at');
+        });
+        DB::table('v2_stat_user')->insert([
+            'user_id' => $user->id, 'record_at' => \Carbon\Carbon::now(config('app.timezone'))->startOfDay()->timestamp,
+            'record_type' => 'd', 'u' => 0, 'd' => 30 * 1024 ** 3, 'updated_at' => time(),
+        ]);
+        $this->saveSettings([
+            'ticket_ai_enable' => true, 'ticket_ai_base_url' => 'https://ai.example.test/v1',
+            'ticket_ai_model' => 'test-model', 'ticket_ai_api_key' => Crypt::encryptString('sk-synthetic'),
+            'ticket_ai_knowledge_enable' => false,
+        ]);
+        Http::fake(['*' => Http::response(['choices' => [['message' => ['content' => json_encode([
+            'summary' => '流量与工单核查', 'category' => '订阅与节点', 'risk' => 'low', 'needs_human' => false,
+            'confidence' => 0.99, 'draft' => '无法查看流量记录；工单由您关闭，已经补偿999GB。',
+        ], JSON_UNESCAPED_UNICODE)]]]])]);
+
+        $result = (new TicketAiAssistantService())->suggest($ticket);
+
+        $this->assertTrue($result['needs_human']);
+        foreach (['剩余 40.00 GB', '30.00 GB', '历史工单 #' . $previous->id, '不能证明关闭操作人', '节点明细暂不可读取'] as $fact) {
+            $this->assertStringContainsString($fact, $result['draft']);
+        }
+        foreach (['999GB', '由您关闭', '无法查看流量记录'] as $fiction) {
+            $this->assertStringNotContainsString($fiction, $result['draft']);
+        }
+        Http::assertSent(function ($request) use ($user): bool {
+            $messages = json_encode($request['messages'], JSON_UNESCAPED_UNICODE);
+            return str_contains($messages, 'backend_verified_read_only')
+                && str_contains($messages, 'billed_bytes') && str_contains($messages, (string) (30 * 1024 ** 3))
+                && str_contains($messages, '禁止再次相乘') && str_contains($messages, 'ticket_history')
+                && !str_contains($messages, $user->email) && !str_contains($messages, $user->token)
+                && !str_contains($messages, $user->uuid) && !str_contains($messages, 'private previous ticket text');
+        });
+        Http::assertSentCount(1);
+        $this->assertSame(60 * 1024 ** 3, (int) $user->fresh()->d);
+        $this->assertSame(1, TicketMessage::query()->count());
+        $this->assertSame(2, Ticket::query()->count());
+        $this->assertSame('generated', TicketAiSuggestion::find($result['suggestion_id'])->status);
     }
 
     public function test_chinese_natural_language_is_segmented_for_knowledge_matching(): void
