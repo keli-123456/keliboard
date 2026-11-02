@@ -35,6 +35,7 @@ final class MachineControllerInstallCommandTest extends TestCase
 
     public function test_install_command_returns_one_click_machine_install_command(): void
     {
+        $this->settings->values['server_machine_default_agent'] = 'kelinode';
         $machine = ServerMachine::create([
             'name' => "edge 'hk",
             'token' => "tok'en",
@@ -73,8 +74,22 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertStringContainsString('AGENT_TYPE="kelinode"', $commands['kelinode']['command']);
         $this->assertStringStartsWith("#!/usr/bin/env bash", $commands['kelinode-rs']['command']);
         $this->assertStringContainsString('AGENT_TYPE="kelinode-rs"', $commands['kelinode-rs']['command']);
-        $this->assertArrayNotHasKey('native_command', $payload['data']);
-        $this->assertArrayNotHasKey('native_config', $payload['data']);
+        $this->assertSame($commands['kelinode-rs']['command'], $payload['data']['native_command']);
+        $this->assertStringContainsString('kernel:', $payload['data']['native_config']);
+        $this->assertSame($command, $payload['data']['legacy_command']);
+        $this->assertSame('kelinode log', $payload['data']['native_log_command']);
+    }
+
+    public function test_install_command_defaults_to_rust_without_a_saved_preference(): void
+    {
+        $machine = ServerMachine::create(['name' => 'edge', 'token' => 'synthetic', 'is_active' => true]);
+        $request = $this->installRequest('https://panel.example.test/admin/server/machine/install', ['id' => $machine->id]);
+        $data = (new MachineController())->installCommand($request)->getData(true)['data'];
+        $this->assertSame('kelinode-rs', $data['default_agent']);
+        $this->assertTrue($data['native_enabled']);
+        $this->assertSame($data['native_command'], $data['command']);
+        $this->assertSame($data['native_config'], $data['config']);
+        $this->assertStringContainsString('AGENT_TYPE="kelinode-rs"', $data['command']);
     }
 
     public function test_embedded_native_dependency_helper_matches_the_panel_template_helper(): void

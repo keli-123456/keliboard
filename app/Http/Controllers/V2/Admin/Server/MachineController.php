@@ -458,17 +458,15 @@ class MachineController extends Controller
             'install_commands' => $this->buildInstallCommandOptions($legacyCommand, $nativeCommand, $defaultAgent),
         ];
 
-        if ($nativeEnabled) {
-            $data += [
-                'native_config' => $nativeConfig,
-                'native_command' => $nativeCommand,
-                'native_uninstall_command' => $this->buildNativeUninstallCommand($baseURL),
-                'native_log_command' => $this->buildNativeLogCommand(),
-                'native_version' => self::NATIVE_NODE_INSTALL_VERSION,
-                'legacy_config' => $legacyConfig,
-                'legacy_command' => $legacyCommand,
-            ];
-        }
+        $data += [
+            'native_config' => $nativeConfig,
+            'native_command' => $nativeCommand,
+            'native_uninstall_command' => $this->buildNativeUninstallCommand($baseURL),
+            'native_log_command' => $this->buildNativeLogCommand(),
+            'native_version' => self::NATIVE_NODE_INSTALL_VERSION,
+            'legacy_config' => $legacyConfig,
+            'legacy_command' => $legacyCommand,
+        ];
 
         return $this->success($data);
     }
@@ -656,7 +654,7 @@ class MachineController extends Controller
 
     private function serverMachineDefaultAgent(): string
     {
-        $agent = strtolower(trim((string) admin_setting('server_machine_default_agent', 'kelinode')));
+        $agent = strtolower(trim((string) admin_setting('server_machine_default_agent', 'kelinode-rs')));
         return in_array($agent, ['kelinode-rs', 'native-node', 'native_node'], true) ? 'kelinode-rs' : 'kelinode';
     }
 

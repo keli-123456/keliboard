@@ -301,7 +301,7 @@ class ConfigController extends Controller
                 'server_token' => admin_setting('server_token'),
                 'node_api_base_url' => (string) admin_setting('node_api_base_url', ''),
                 'server_machine_default_agent' => $this->normalizeServerMachineDefaultAgent(
-                    admin_setting('server_machine_default_agent', 'kelinode')
+                    admin_setting('server_machine_default_agent', 'kelinode-rs')
                 ),
                 'server_machine_distribution_source' => $this->normalizeMachineDistributionSource(
                     admin_setting('server_machine_distribution_source', 'github')
