@@ -78,6 +78,39 @@ final class TicketAiAssistantServiceTest extends TestCase
         $this->assertSame('api_key_decrypt_failed', $capabilities['reason']);
     }
 
+    public function test_risk_probe_uses_luna_and_synthetic_content_without_loading_a_real_ticket(): void
+    {
+        $service = new TicketAiAssistantService();
+        $this->saveSettings($service->prepareSettingsForSave([
+            'ticket_ai_enable' => true, 'ticket_ai_model' => 'gpt-6.1-sol', 'ticket_ai_max_tokens' => 800,
+            'ticket_ai_base_url' => 'https://api.openai.com/v1', 'ticket_ai_api_key' => 'sk-synthetic',
+            'risk_ai_model' => 'gpt-6-luna', 'risk_ai_max_tokens' => 4096, 'risk_ai_reasoning_effort' => 'low',
+        ]));
+        Http::fake(['*' => Http::response(['choices' => [['message' => ['content' => '{"ping":"ok"}'], 'finish_reason' => 'stop']],
+            'usage' => ['prompt_tokens' => 10, 'completion_tokens' => 5]])]);
+        $result = $service->testRiskConnection();
+        $this->assertTrue($result['ok']); $this->assertSame('gpt-6-luna', $result['model']);
+        Http::assertSent(fn ($request) => $request['model'] === 'gpt-6-luna'
+            && $request['max_completion_tokens'] === 4096 && $request['reasoning_effort'] === 'low'
+            && count($request['messages']) === 2 && $request['messages'][1]['content'] === '{"ping":"ok"}');
+        Http::assertSentCount(1);
+        $this->assertStringNotContainsString('sk-synthetic', json_encode($result));
+        $this->assertSame('gpt-6.1-sol', $service->publicSettings()['ticket_ai_model']);
+    }
+
+    public function test_a_risk_model_override_cannot_bypass_the_shared_disabled_switch(): void
+    {
+        $this->saveSettings(['ticket_ai_enable' => false, 'risk_ai_model' => 'gpt-6-luna']);
+        Http::fake();
+        try {
+            (new TicketAiAssistantService())->testRiskConnection();
+            $this->fail('Disabled provider must not be contacted.');
+        } catch (\App\Exceptions\TicketAiProviderException $error) {
+            $this->assertSame('disabled', $error->errorCode());
+        }
+        Http::assertNothingSent();
+    }
+
     public function test_suggest_generates_ticket_reply_draft_with_knowledge_context(): void
     {
         $user = User::create([

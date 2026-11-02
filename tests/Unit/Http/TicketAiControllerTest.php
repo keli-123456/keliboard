@@ -85,4 +85,14 @@ final class TicketAiControllerTest extends TestCase
 
         return $request;
     }
+
+    public function test_risk_workload_dispatches_only_the_synthetic_risk_probe(): void
+    {
+        $service = $this->createMock(TicketAiAssistantService::class);
+        $service->expects($this->once())->method('testRiskConnection')->with(42)->willReturn(['ok' => true, 'model' => 'gpt-6-luna', 'latency_ms' => 10]);
+        $service->expects($this->never())->method('testConnection');
+        $request = $this->requestForAdmin(42); $request->merge(['workload' => 'risk']);
+        $response = (new TicketController())->aiTestConnection($request, $service);
+        $this->assertSame('gpt-6-luna', json_decode($response->getContent(), true)['data']['model']);
+    }
 }

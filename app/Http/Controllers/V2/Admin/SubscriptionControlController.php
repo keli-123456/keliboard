@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Jobs\GenerateSubscriptionControlAiReviewJob;
 use App\Services\SubscriptionControlAiAdvisorService;
 use App\Services\SubscriptionControlCaseReviewService;
+use App\Services\SubscriptionAiAutomationService;
+use App\Services\SubscriptionAiBenchmarkService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -15,6 +17,84 @@ use Plugin\SubscriptionControl\Services\SubscriptionSourceIpBlockService;
 class SubscriptionControlController extends Controller
 {
     private const RECENT_EVENTS_KEY = 'subscription_control:recent_events';
+
+    public function benchmark(Request $request, SubscriptionAiBenchmarkService $service): JsonResponse
+    {
+        $data = $request->validate(['site_id' => ['required', 'integer', 'min:0']]);
+        return $this->success($service->overview((int) $data['site_id']));
+    }
+
+    public function startBenchmark(Request $request, SubscriptionAiBenchmarkService $service): JsonResponse
+    {
+        $data = $request->validate(['site_id' => ['required', 'integer', 'min:0'], 'confirmed' => ['required', 'accepted']]);
+        try { return $this->success($service->start((int) $data['site_id'], (int) $request->user()->id, true)); }
+        catch (\RuntimeException $error) { return $this->advisorFailure($error->getMessage()); }
+    }
+
+    public function labelBenchmark(Request $request, SubscriptionAiBenchmarkService $service): JsonResponse
+    {
+        $data = $request->validate(['case_id' => ['required', 'integer', 'min:1'], 'truth' => ['required', 'in:benign,abuse,uncertain'], 'attested' => ['required', 'accepted']]);
+        try { return $this->success($service->label((int) $data['case_id'], $data['truth'], true, (int) $request->user()->id)); }
+        catch (\RuntimeException $error) { return $this->advisorFailure($error->getMessage()); }
+    }
+
+    public function approveBenchmark(Request $request, SubscriptionAiBenchmarkService $service): JsonResponse
+    {
+        $data = $request->validate(['run_id' => ['required', 'integer', 'min:1'], 'user_ids' => ['required', 'array', 'min:1', 'max:10'],
+            'user_ids.*' => ['required', 'integer', 'min:1', 'distinct'], 'confirmed' => ['required', 'accepted'], 'operations_confirmed' => ['required', 'accepted']]);
+        try { return $this->success($service->approve((int) $data['run_id'], array_map('intval', $data['user_ids']), true, true, (int) $request->user()->id)); }
+        catch (\RuntimeException $error) { return $this->advisorFailure($error->getMessage()); }
+    }
+
+    public function cancelBenchmark(Request $request, SubscriptionAiBenchmarkService $service): JsonResponse
+    {
+        $data = $request->validate(['run_id' => ['required', 'integer', 'min:1']]);
+        try { return $this->success($service->cancel((int) $data['run_id'], (int) $request->user()->id)); }
+        catch (\RuntimeException $error) { return $this->advisorFailure($error->getMessage()); }
+    }
+
+    public function automation(SubscriptionAiAutomationService $service): JsonResponse
+    {
+        return $this->success($service->overview());
+    }
+
+    public function saveAutomation(Request $request, SubscriptionAiAutomationService $service): JsonResponse
+    {
+        $data = $request->validate([
+            'ai_auto_enabled' => ['required', 'boolean'], 'ai_auto_allow_reset_token' => ['required', 'boolean'],
+            'ai_auto_allow_suspend' => ['required', 'boolean'], 'ai_auto_notify' => ['required', 'boolean'],
+            'ai_auto_max_seconds' => ['required', 'integer', 'min:60', 'max:900'],
+            'ai_auto_hourly_budget' => ['required', 'integer', 'min:1', 'max:30'],
+            'ai_auto_active_limit' => ['required', 'integer', 'min:1', 'max:20'], 'confirmed' => ['required', 'boolean'],
+            'expected_revision' => ['required', 'integer', 'min:1'],
+            'ai_auto_mode' => ['required', 'in:shadow,independent,legacy'],
+        ]);
+        try { return $this->success($service->saveSettings($data, (bool) $data['confirmed'], (int) $request->user()->id, (int) $data['expected_revision'])); }
+        catch (\RuntimeException $error) { return $this->advisorFailure($error->getMessage()); }
+    }
+
+    public function runAutomation(SubscriptionAiAutomationService $service): JsonResponse
+    {
+        return $this->success($service->tick());
+    }
+
+    public function stopAutomation(Request $request, SubscriptionAiAutomationService $service): JsonResponse
+    {
+        return $this->success($service->saveSettings(array_merge($service->settings(), ['ai_auto_enabled' => false,
+            'ai_auto_allow_reset_token' => false, 'ai_auto_allow_suspend' => false]), false, (int) $request->user()->id));
+    }
+
+    public function revokeAutomation(Request $request, int $actionId, SubscriptionAiAutomationService $service): JsonResponse
+    {
+        return $this->success($service->revoke($actionId, (int) $request->user()->id));
+    }
+
+    public function reviewAutomation(Request $request, int $actionId, SubscriptionAiAutomationService $service): JsonResponse
+    {
+        $data = $request->validate(['verdict' => ['required', 'in:confirmed,false_positive,uncertain']]);
+        try { return $this->success($service->review($actionId, $data['verdict'], (int) $request->user()->id)); }
+        catch (\RuntimeException $error) { return $this->advisorFailure($error->getMessage()); }
+    }
 
     public function overview(Request $request): JsonResponse
     {

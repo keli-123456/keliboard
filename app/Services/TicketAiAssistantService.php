@@ -94,6 +94,7 @@ class TicketAiAssistantService
             'ticket_ai_base_url' => $settings['base_url'],
             'ticket_ai_allow_private_provider' => $settings['allow_private_provider'],
             'ticket_ai_model' => $settings['model'],
+            'ticket_ai_reasoning_effort' => $settings['reasoning_effort'],
             'ticket_ai_temperature' => $settings['temperature'],
             'ticket_ai_max_messages' => $settings['max_messages'],
             'ticket_ai_knowledge_enable' => $settings['knowledge_enable'],
@@ -253,6 +254,37 @@ class TicketAiAssistantService
                 'model' => $settings['model'],
                 'latency_ms' => (int) round((hrtime(true) - $startedAt) / 1_000_000),
                 'prompt_chars' => $this->messageChars($messages),
+            ]));
+            throw $exception;
+        }
+    }
+
+    /** Synthetic risk probe; never loads ticket, subscription or account content. */
+    public function testRiskConnection(?int $adminId = null): array
+    {
+        $settings = SubscriptionRiskAiSettings::forProvider($this->providerSettingsForInternalUse());
+        if (!($settings['enabled'] ?? false)) {
+            throw new TicketAiProviderException('disabled');
+        }
+        $startedAt = hrtime(true);
+        $log = array_merge($this->platformScopeFields(), [
+            'admin_id' => $adminId, 'model' => $settings['model'],
+            'provider_host' => $this->providerHost($settings['base_url']),
+        ]);
+        try {
+            $completion = $this->providerClient->complete($settings, [
+                ['role' => 'system', 'content' => 'Return only JSON with ping equal to ok. This is a synthetic connection test.'],
+                ['role' => 'user', 'content' => '{"ping":"ok"}'],
+            ], false);
+            if ((json_decode($completion['content'], true)['ping'] ?? null) !== 'ok') {
+                throw new TicketAiProviderException('invalid_response');
+            }
+            $this->recordRequestLog(array_merge($log, $this->completionLogFields($completion), ['status' => TicketAiRequestLog::STATUS_SUCCESS]));
+            return ['ok' => true, 'model' => $settings['model'], 'latency_ms' => $completion['latency_ms']];
+        } catch (TicketAiProviderException $exception) {
+            $this->recordRequestLog(array_merge($log, [
+                'status' => TicketAiRequestLog::STATUS_FAILED, 'error_code' => $exception->errorCode(),
+                'latency_ms' => (int) round((hrtime(true) - $startedAt) / 1_000_000),
             ]));
             throw $exception;
         }
@@ -681,6 +713,7 @@ class TicketAiAssistantService
             'vision_enable' => (bool) admin_setting('ticket_ai_vision_enable', false),
             'base_url' => rtrim(trim((string) admin_setting('ticket_ai_base_url', '')), '/'),
             'model' => trim((string) admin_setting('ticket_ai_model', '')),
+            'reasoning_effort' => TicketAiProviderClient::reasoningEffort((string) admin_setting('ticket_ai_model', ''), admin_setting('ticket_ai_reasoning_effort', 'low')),
             'allow_private_provider' => (bool) admin_setting('ticket_ai_allow_private_provider', false),
             'temperature' => max(0.0, min(1.0, (float) admin_setting('ticket_ai_temperature', 0.2))),
             'max_messages' => max(3, min(30, (int) admin_setting('ticket_ai_max_messages', 12))),

@@ -41,7 +41,7 @@ class SubscriptionControlAiAdvisorService
     public function overview(): array
     {
         $this->recoverStalePendingReviews();
-        $settings = $this->ai()->publicSettings();
+        $settings = SubscriptionRiskAiSettings::forPublicProvider($this->ai()->publicSettings());
         $latest = $this->tableAvailable()
             ? SubscriptionControlAiReview::query()->latest('id')->first()
             : null;
@@ -52,10 +52,8 @@ class SubscriptionControlAiAdvisorService
 
         return [
             'available' => $this->tableAvailable(),
-            'ai_ready' => (bool) ($settings['ticket_ai_enable'] ?? false)
-                && (bool) ($settings['ticket_ai_api_key_set'] ?? false)
-                && trim((string) ($settings['ticket_ai_base_url'] ?? '')) !== ''
-                && trim((string) ($settings['ticket_ai_model'] ?? '')) !== '',
+            'ai_ready' => SubscriptionRiskAiSettings::ready($settings),
+            'model' => $settings['model'],
             'managed_rules' => $this->catalog(),
             'latest_review' => $latest ? $this->serialize($latest) : null,
             'high_risk_users' => $highRiskUsers,
@@ -98,7 +96,7 @@ class SubscriptionControlAiAdvisorService
             $populationMetrics = (new SubscriptionControlPopulationMetricsService())->collect((int) $review->window_days);
             $metrics = $this->metrics($events, (int) $review->window_days, $populationMetrics);
             $metrics['manual_case_review_calibration'] = (new SubscriptionControlCaseReviewService())->calibrationMetrics();
-            $providerSettings = $this->ai()->providerSettingsForInternalUse();
+            $providerSettings = SubscriptionRiskAiSettings::forProvider($this->ai()->providerSettingsForInternalUse());
             if (
                 !(bool) ($providerSettings['enabled'] ?? false)
                 || trim((string) ($providerSettings['base_url'] ?? '')) === ''
@@ -607,7 +605,8 @@ class SubscriptionControlAiAdvisorService
      */
     private function requestReview(array $providerSettings, array $messages): array
     {
-        foreach ([3200, 4096] as $attempt => $maxTokens) {
+        $budget = max(128, min(4096, (int) ($providerSettings['max_tokens'] ?? 4096)));
+        foreach ([min(3200, $budget), $budget] as $attempt => $maxTokens) {
             $attemptMessages = $messages;
             if ($attempt > 0 && isset($attemptMessages[0]['content'])) {
                 $attemptMessages[0]['content'] .= ' 上一次响应无法解析。请重新生成一个完整 JSON 对象，不要使用 Markdown 代码块，不要添加任何解释文字，所有数组和字符串必须正确闭合。';

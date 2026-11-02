@@ -38,7 +38,9 @@ class TicketAiProviderClient
         ];
         if ($this->usesReasoningModelParameters($model)) {
             $payload['max_completion_tokens'] = $maxTokens;
-            if ($this->isOfficialOpenAiEndpoint($baseUrl)) {
+            if (preg_match('/^gpt-6(?:[.-]|$)/i', $model) === 1) {
+                $payload['reasoning_effort'] = self::reasoningEffort($model, $settings['reasoning_effort'] ?? 'low');
+            } elseif ($this->isOfficialOpenAiEndpoint($baseUrl)) {
                 $payload['reasoning_effort'] = 'low';
             }
         } else {
@@ -73,6 +75,9 @@ class TicketAiProviderClient
         }
 
         $responsePayload = $response->json();
+        if (in_array(data_get($responsePayload, 'choices.0.finish_reason'), ['length', 'content_filter'], true)) {
+            throw new TicketAiProviderException('invalid_response');
+        }
         $content = is_array($responsePayload) ? $this->extractContent($responsePayload) : null;
         if ($content === null || trim($content) === '') {
             throw new TicketAiProviderException('invalid_response');
@@ -226,7 +231,16 @@ class TicketAiProviderClient
 
     private function usesReasoningModelParameters(string $model): bool
     {
-        return preg_match('/^(?:gpt-5(?:[.-]|$)|o[134](?:[.-]|$))/i', trim($model)) === 1;
+        return preg_match('/^(?:gpt-[56](?:[.-]|$)|o[134](?:[.-]|$))/i', trim($model)) === 1;
+    }
+
+    public static function reasoningEffort(string $model, mixed $effort): string
+    {
+        $allowed = ['low', 'medium', 'high', 'xhigh', 'max'];
+        if (preg_match('/^gpt-6-luna(?:-|$)/i', trim($model)) === 1) {
+            $allowed[] = 'none';
+        }
+        return in_array($effort, $allowed, true) ? $effort : 'low';
     }
 
     private function isOfficialOpenAiEndpoint(string $baseUrl): bool

@@ -645,8 +645,11 @@ class TicketController extends Controller
 
     public function aiTestConnection(Request $request, TicketAiAssistantService $assistant)
     {
+        $params = $request->validate(['workload' => 'sometimes|string|in:ticket,risk']);
         try {
-            return $this->success($assistant->testConnection($request->user()?->id));
+            return $this->success(($params['workload'] ?? 'ticket') === 'risk'
+                ? $assistant->testRiskConnection($request->user()?->id)
+                : $assistant->testConnection($request->user()?->id));
         } catch (TicketAiProviderException $exception) {
             return $this->fail([422, $exception->errorCode()]);
         } catch (\RuntimeException $exception) {

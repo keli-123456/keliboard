@@ -437,6 +437,17 @@ class AdminRoute
                 $router->get('/subscription-control/source-ip-blocks', [SubscriptionControlController::class, 'sourceIpBlocks']);
                 $router->post('/subscription-control/source-ip-blocks/unblock', [SubscriptionControlController::class, 'unblockSourceIp']);
                 $router->get('/subscription-control/ai-advisor', [SubscriptionControlController::class, 'aiAdvisor']);
+                $router->get('/subscription-control/automation', [SubscriptionControlController::class, 'automation']);
+                $router->get('/subscription-control/automation/benchmark', [SubscriptionControlController::class, 'benchmark']);
+                $router->post('/subscription-control/automation/benchmark/start', [SubscriptionControlController::class, 'startBenchmark']);
+                $router->post('/subscription-control/automation/benchmark/label', [SubscriptionControlController::class, 'labelBenchmark']);
+                $router->post('/subscription-control/automation/benchmark/approve', [SubscriptionControlController::class, 'approveBenchmark']);
+                $router->post('/subscription-control/automation/benchmark/cancel', [SubscriptionControlController::class, 'cancelBenchmark']);
+                $router->post('/subscription-control/automation/policy', [SubscriptionControlController::class, 'saveAutomation']);
+                $router->post('/subscription-control/automation/run', [SubscriptionControlController::class, 'runAutomation']);
+                $router->post('/subscription-control/automation/stop', [SubscriptionControlController::class, 'stopAutomation']);
+                $router->post('/subscription-control/automation/{actionId}/revoke', [SubscriptionControlController::class, 'revokeAutomation']);
+                $router->post('/subscription-control/automation/{actionId}/review', [SubscriptionControlController::class, 'reviewAutomation'])->whereNumber('actionId');
                 $router->post('/subscription-control/high-risk-users/{userId}/review', [SubscriptionControlController::class, 'reviewHighRiskCase']);
                 $router->post('/subscription-control/ai-advisor/analyze', [SubscriptionControlController::class, 'analyzeWithAi']);
                 $router->post('/subscription-control/ai-advisor/{reviewId}/apply', [SubscriptionControlController::class, 'applyAiSuggestions']);

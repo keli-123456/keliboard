@@ -245,6 +245,7 @@ class ConfigController extends Controller
                     admin_setting('ticket_auto_reply_rules', [])
                 ),
                 ...app(TicketAiAssistantService::class)->publicSettings(),
+                ...\App\Services\SubscriptionRiskAiSettings::publicSettings(),
             ],
             'site' => [
                 'logo' => admin_setting('logo'),

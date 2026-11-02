@@ -77,6 +77,24 @@ final class TicketAiVisionServiceTest extends TestCase
         $this->assertSame('unavailable', $service->status($this->settings()));
     }
 
+    public function test_sol_vision_probe_and_analysis_preserve_the_combined_reasoning_budget(): void
+    {
+        [$ticket] = $this->fixture();
+        $provider = $this->createMock(TicketAiProviderClient::class);
+        $provider->expects($this->exactly(2))->method('complete')->willReturnCallback(function ($settings, $messages) {
+            $this->assertSame(4096, $settings['max_tokens']);
+            $this->assertSame('gpt-6.1-sol', $settings['model']);
+            $this->assertSame('low', $settings['reasoning_effort']);
+            if (str_contains($messages[0]['content'], 'six-character')) {
+                return $this->completion(['code' => $this->readProbeCode($messages[1]['content'][1]['image_url']['url'])]);
+            }
+            return $this->completion($this->observations());
+        });
+        $result = (new TicketAiVisionService($provider))->analyze($ticket,
+            array_merge($this->settings(), ['model' => 'gpt-6.1-sol', 'max_tokens' => 4096, 'reasoning_effort' => 'low']));
+        $this->assertSame('ready', $result['analysis']['status']);
+    }
+
     public function test_images_are_resized_reencoded_and_have_no_public_url_or_original_metadata(): void
     {
         [$ticket] = $this->fixture($this->png(3000, 600) . 'private-original-metadata');

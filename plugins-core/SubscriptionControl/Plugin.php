@@ -85,12 +85,27 @@ class Plugin extends AbstractPlugin
      */
     public function checkSubscribeAccess($servers, $user, $request)
     {
+        $sampleUser = $user instanceof User ? clone $user : null;
+        $sampleOutcome = 'allowed';
+        $aiBlocked = false;
         try {
             if (!$user) {
                 return $servers;
             }
 
             $this->recordPullTelemetry('pulls');
+
+            // AI protections never enter normalizeRiskAction(), which rotates credentials for legacy rules.
+            $restriction = null;
+            try { $restriction = app(\App\Services\SubscriptionAiAutomationService::class)->restriction($user); }
+            catch (\Throwable) { Log::warning('[SubscriptionControl] AI protection lookup unavailable; existing rules retained'); }
+            if ($restriction) {
+                $aiBlocked = true;
+                $this->intercept(response('订阅正在短时安全保护中，请稍后重试。此限制不会重置节点凭据。', $restriction['status'], [
+                    'Content-Type' => 'text/plain; charset=UTF-8', 'Retry-After' => (string) $restriction['retry_after'],
+                    'Cache-Control' => 'no-store',
+                ]));
+            }
 
             $riskConfig = $this->riskAnalyzerConfig();
             $ipInfo = (new SubscriptionClientIpResolver($riskConfig))->resolve($request);
@@ -151,6 +166,7 @@ class Plugin extends AbstractPlugin
                 $riskDecisionHalted
             );
             if ($riskDecisionHalted) {
+                $sampleOutcome = 'legacy_blocked';
                 return $servers;
             }
 
@@ -220,11 +236,18 @@ class Plugin extends AbstractPlugin
             $this->recordPullTelemetry('allowed');
 
         } catch (InterceptResponseException $e) {
+            $sampleOutcome = $aiBlocked ? 'ai_blocked' : 'legacy_blocked';
             // 交由全局异常处理器返回 403
             throw $e;
         } catch (\Throwable $e) {
+            $sampleOutcome = 'error';
             $this->recordPullTelemetry('errors');
             Log::error('[SubscriptionControl] 检查失败: ' . $e->getMessage());
+        } finally {
+            if ($sampleUser) {
+                try { app(\App\Services\SubscriptionAiBehaviorService::class)->capture($sampleUser, $request, $this->riskAnalyzerConfig(), $sampleOutcome); }
+                catch (\Throwable) { Log::warning('[SubscriptionControl] Independent behavior observation unavailable; access result unchanged'); }
+            }
         }
 
         // 返回服务器列表（filter钩子必须返回值）

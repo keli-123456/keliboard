@@ -49,4 +49,14 @@ final class TicketAiConfigValidationTest extends TestCase
     {
         return new Factory(new Translator(new ArrayLoader(), 'en'));
     }
+
+    public function test_model_routing_limits_reject_unbounded_waits_and_unsupported_effort(): void
+    {
+        $keys = ['ticket_ai_reasoning_effort', 'risk_ai_model', 'risk_ai_reasoning_effort', 'risk_ai_timeout', 'risk_ai_max_tokens'];
+        $rules = Arr::only(ConfigSave::RULES, $keys);
+        $this->assertTrue($this->validator()->make(['ticket_ai_reasoning_effort' => 'low', 'risk_ai_model' => 'gpt-6-luna',
+            'risk_ai_reasoning_effort' => 'none', 'risk_ai_timeout' => 30, 'risk_ai_max_tokens' => 4096], $rules)->passes());
+        $this->assertTrue($this->validator()->make(['ticket_ai_reasoning_effort' => 'none', 'risk_ai_reasoning_effort' => 'unlimited',
+            'risk_ai_timeout' => 60, 'risk_ai_max_tokens' => 4097], $rules)->fails());
+    }
 }

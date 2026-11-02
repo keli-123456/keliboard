@@ -203,6 +203,49 @@ final class TicketAiProviderClientTest extends TestCase
         });
     }
 
+    #[DataProvider('gptSixProvider')]
+    public function test_gpt_six_requests_use_a_bounded_reasoning_budget_without_sampling(string $model, string $effort, string $expected, string $base): void
+    {
+        Http::fake(['*' => Http::response($this->responsePayload('{"draft":"synthetic"}'))]);
+        (new TicketAiProviderClient())->complete($this->settings([
+            'model' => $model, 'base_url' => $base, 'reasoning_effort' => $effort,
+            'max_tokens' => 4096, 'temperature' => 0.7, 'json_mode' => true,
+        ]), [['role' => 'user', 'content' => 'Synthetic input only.']]);
+        Http::assertSent(fn ($request) => $request['model'] === $model
+            && $request['max_completion_tokens'] === 4096 && $request['reasoning_effort'] === $expected
+            && !isset($request['temperature']) && !isset($request['max_tokens']) && !isset($request['top_p'])
+            && $request['response_format'] === ['type' => 'json_object']);
+        Http::assertSentCount(1);
+    }
+
+    public static function gptSixProvider(): array
+    {
+        return [
+            ['gpt-6.1-sol', 'low', 'low', 'https://api.openai.com/v1'],
+            ['gpt-6.1-sol', 'high', 'high', 'https://api.openai.com/v1'],
+            ['gpt-6.1-sol', 'none', 'low', 'https://api.openai.com/v1'],
+            ['gpt-6-luna', 'none', 'none', 'https://api.openai.com/v1'],
+            ['gpt-6-luna', 'max', 'max', 'https://api.openai.com/v1'],
+            ['gpt-6-luna', 'unsupported', 'low', 'https://api.openai.com/v1'],
+            ['gpt-6.1-sol', 'low', 'low', 'https://ai.example.test/v1'],
+        ];
+    }
+
+    public function test_truncated_or_filtered_content_is_rejected_even_if_it_looks_like_complete_json(): void
+    {
+        foreach (['length', 'content_filter'] as $reason) {
+            $payload = $this->responsePayload('{"draft":"must not send"}');
+            $payload['choices'][0]['finish_reason'] = $reason;
+            Http::fake(['*' => Http::response($payload)]);
+            try {
+                (new TicketAiProviderClient())->complete($this->settings(), [['role' => 'user', 'content' => 'synthetic']]);
+                $this->fail('Unsafe completion was accepted.');
+            } catch (TicketAiProviderException $error) {
+                $this->assertSame('invalid_response', $error->errorCode());
+            }
+        }
+    }
+
     #[DataProvider('httpErrorProvider')]
     public function test_http_failures_are_mapped_without_exposing_response_body(int $status, string $code): void
     {

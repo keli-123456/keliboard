@@ -20,6 +20,7 @@ class AiCenterService
     {
         $days = max(1, min(90, $days));
         $settings = $this->safe(fn (): array => $this->ticketAi->publicSettings(), []);
+        $riskProvider = $this->safe(fn (): array => SubscriptionRiskAiSettings::forPublicProvider($settings), ['enabled' => false, 'model' => '', 'key_configured' => false, 'base_url' => '']);
         $provider = $this->safe(fn (): array => $this->ticketAi->capabilities(), [
             'enabled' => false,
             'configured' => false,
@@ -41,7 +42,7 @@ class AiCenterService
                 'knowledge_enabled' => (bool) ($settings['ticket_ai_knowledge_enable'] ?? false),
                 'stats' => $ticketStats,
             ],
-            'subscription_risk' => $this->riskStatus(),
+            'subscription_risk' => $this->riskStatus($riskProvider),
             'system_diagnostics' => $this->diagnosticStatus(),
             'knowledge_base' => $this->knowledgeStatus(),
         ];
@@ -60,6 +61,7 @@ class AiCenterService
                 'available' => (bool) ($provider['available'] ?? false),
                 'reason' => $provider['reason'] ?? null,
                 'model' => (string) ($settings['ticket_ai_model'] ?? ''),
+                'risk_model' => $riskProvider['model'],
                 'provider_host' => $this->providerHost((string) ($settings['ticket_ai_base_url'] ?? '')),
                 'circuit_open_until' => $provider['circuit_open_until'] ?? null,
                 'consecutive_failures' => (int) ($provider['consecutive_failures'] ?? 0),
@@ -83,7 +85,7 @@ class AiCenterService
     }
 
     /** @return array<string, mixed> */
-    private function riskStatus(): array
+    private function riskStatus(array $provider): array
     {
         if (!Schema::hasTable('v2_subscription_control_ai_review')) {
             return [
@@ -95,9 +97,9 @@ class AiCenterService
             ];
         }
 
-        return $this->safe(function (): array {
+        return $this->safe(function () use ($provider): array {
             $latest = SubscriptionControlAiReview::query()->latest('id')->first();
-            $aiReady = (bool) ($this->ticketAi->capabilities()['available'] ?? false);
+            $aiReady = SubscriptionRiskAiSettings::ready($provider);
 
             return [
                 'state' => $aiReady ? 'ready' : 'needs_configuration',
