@@ -31,6 +31,7 @@ class SubscriptionAiAutomationService
         'ai_auto_max_seconds' => 300, 'ai_auto_hourly_budget' => 10,
         'ai_auto_active_limit' => 5,
         'ai_auto_mode' => 'shadow',
+        'ai_auto_site_ids' => null,
     ];
 
     public function __construct(
@@ -69,7 +70,24 @@ class SubscriptionAiAutomationService
         foreach (['ai_auto_max_seconds' => [60, 900], 'ai_auto_hourly_budget' => [1, 30], 'ai_auto_active_limit' => [1, 20]] as $key => [$min, $max]) {
             $result[$key] = max($min, min($max, (int) ($values[$key] ?? $result[$key])));
         }
+        if (array_key_exists('ai_auto_site_ids', $values) && $values['ai_auto_site_ids'] !== null) {
+            if (!is_array($values['ai_auto_site_ids']) || count($values['ai_auto_site_ids']) > 100) throw new RuntimeException('invalid_site_scope');
+            $ids = [];
+            foreach ($values['ai_auto_site_ids'] as $id) {
+                if (is_bool($id) || filter_var($id, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]) === false) throw new RuntimeException('invalid_site_scope');
+                $ids[] = (int) $id;
+            }
+            $result['ai_auto_site_ids'] = array_values(array_unique($ids));
+            sort($result['ai_auto_site_ids']);
+        }
         return $result;
+    }
+
+    /** null retains legacy all-site scope; an empty list authorizes no sites. */
+    public static function allowsSite(array $settings, int $siteId): bool
+    {
+        $scope = $settings['ai_auto_site_ids'] ?? null;
+        return $scope === null || (is_array($scope) && in_array($siteId, $scope, true));
     }
 
     public function saveSettings(array $values, bool $confirmed, int $adminId, ?int $expectedRevision = null): array
@@ -79,10 +97,15 @@ class SubscriptionAiAutomationService
         if (($next['ai_auto_enabled'] || $next['ai_auto_allow_reset_token'] || $next['ai_auto_allow_suspend']) && !$confirmed) {
             throw new RuntimeException('authorization_required');
         }
-        DB::transaction(function () use ($next, $adminId, $expectedRevision): void {
+        DB::transaction(function () use (&$next, $values, $adminId, $expectedRevision): void {
             $policy = DB::table('v2_subscription_ai_policy')->where('id', 1)->lockForUpdate()->first();
             if (!$policy) throw new RuntimeException('migration_required');
             if ($expectedRevision !== null && $expectedRevision !== (int) $policy->revision) throw new RuntimeException('policy_changed');
+            // Older clients must not widen a scoped authorization by omitting the new field.
+            if (!array_key_exists('ai_auto_site_ids', $values)) {
+                $stored = json_decode((string) $policy->config, true);
+                $next['ai_auto_site_ids'] = $this->normalize(is_array($stored) ? $stored : [])['ai_auto_site_ids'];
+            }
             if ($next['ai_auto_enabled'] && $next['ai_auto_mode'] !== 'legacy' && !app(SubscriptionAiBehaviorService::class)->available()) throw new RuntimeException('migration_required');
             $plugin = Plugin::query()->where('code', 'subscription_control')->first();
             if ($next['ai_auto_enabled'] && (!$plugin || !$plugin->is_enabled)) throw new RuntimeException('plugin_disabled');
@@ -163,6 +186,13 @@ class SubscriptionAiAutomationService
         $table = $independent ? SubscriptionAiBehaviorService::TABLE : self::EVENTS;
         if (!Schema::hasTable($table)) return ['queued' => 0];
         $query = DB::table($table)->where($independent ? 'last_seen_at' : 'created_at', '>=', time() - 900)->where('user_id', '>', 0);
+        if ($settings['ai_auto_site_ids'] !== null) {
+            if ($independent) $query->whereIn('site_id', $settings['ai_auto_site_ids']);
+            else $query->whereExists(function ($scope) use ($table, $settings): void {
+                $scope->selectRaw('1')->from('v2_user')->whereColumn('v2_user.id', $table . '.user_id')
+                    ->whereIn(DB::raw('COALESCE(v2_user.site_id, 0)'), $settings['ai_auto_site_ids']);
+            });
+        }
         if (!$independent) $query->whereIn('code', array_keys(self::FAMILIES));
         $ids = $query
             ->whereNotExists(function ($query) use ($table): void {
@@ -188,7 +218,7 @@ class SubscriptionAiAutomationService
             $policy = $this->policySnapshot(); $settings = $policy['settings'];
             if (!$settings['ai_auto_enabled']) return null;
             $user = User::query()->find($userId);
-            if (!$this->eligible($user)) return null;
+            if (!$this->eligible($user) || !self::allowsSite($settings, (int) ($user->site_id ?? 0))) return null;
             if ($settings['ai_auto_mode'] !== 'shadow' && !app(SubscriptionAiBenchmarkService::class)->permits($user, $settings)) return null;
             $independent = $settings['ai_auto_mode'] !== 'legacy';
             if ($independent && !app(SubscriptionAiBehaviorService::class)->available()) return null;
@@ -300,7 +330,7 @@ class SubscriptionAiAutomationService
     public function restriction(User $user): ?array
     {
         $settings = Cache::store('redis')->remember('subscription_ai:policy', 10, fn() => $this->settings());
-        if (!$settings['ai_auto_enabled'] || $settings['ai_auto_mode'] === 'shadow' || !$this->eligible($user)) return null;
+        if (!$settings['ai_auto_enabled'] || $settings['ai_auto_mode'] === 'shadow' || !$this->eligible($user) || !self::allowsSite($settings, (int) ($user->site_id ?? 0))) return null;
         $record = SubscriptionAiAction::query()->where('user_id', $user->id)->where('site_id', (int) ($user->site_id ?? 0))
             ->where('credential_hash', $this->credentialHash($user))->where('status', 'active')->where('expires_at', '>', time())->latest('id')->first();
         if (!$record || $record->policy_hash !== $this->policyHash($settings)) return null;
@@ -361,7 +391,7 @@ class SubscriptionAiAutomationService
         try {
             $record = SubscriptionAiAction::query()->findOrFail($id);
             $user = User::query()->findOrFail($record->user_id);
-            if (!$this->settings()['ai_auto_enabled'] || (int) ($user->site_id ?? 0) !== $record->site_id || ($record->expires_at && $record->expires_at <= time())) throw new RuntimeException();
+            if (!$this->settings()['ai_auto_enabled'] || !self::allowsSite($this->settings(), (int) ($user->site_id ?? 0)) || (int) ($user->site_id ?? 0) !== $record->site_id || ($record->expires_at && $record->expires_at <= time())) throw new RuntimeException();
             if (!app(SubscriptionAiBenchmarkService::class)->permits($user, $this->settings(), $record->action)) throw new RuntimeException();
             $service = app(NotificationSiteContextService::class);
             $context = $service->forUser($user);
@@ -419,6 +449,7 @@ class SubscriptionAiAutomationService
     private function current(SubscriptionAiAction $record, ?User $user, array $settings, bool $requireFreshEvidence = true): bool
     {
         return $settings['ai_auto_enabled'] && $this->eligible($user)
+            && self::allowsSite($settings, (int) ($user->site_id ?? 0))
             && (int) ($user->site_id ?? 0) === $record->site_id
             && hash_equals($record->credential_hash, $this->credentialHash($user))
             && hash_equals($record->policy_hash, $this->policyHash($settings))

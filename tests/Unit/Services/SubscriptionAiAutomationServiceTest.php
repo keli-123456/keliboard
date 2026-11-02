@@ -397,6 +397,62 @@ final class SubscriptionAiAutomationServiceTest extends TestCase
         return app(\App\Services\SubscriptionAiBehaviorService::class);
     }
 
+    public function test_site_scoped_observation_neither_captures_nor_queues_another_sites_account(): void
+    {
+        $behavior = $this->independent();
+        $main = $this->user(10, ['site_id' => null]); $other = $this->user(11);
+        $this->enable(['ai_auto_mode' => 'shadow', 'ai_auto_site_ids' => [0]]);
+        $request = \Illuminate\Http\Request::create('/subscribe', 'GET', [], [], [], ['HTTP_USER_AGENT' => 'mihomo', 'REMOTE_ADDR' => '192.0.2.50']);
+        $behavior->capture($main, $request, [], 'allowed');
+        $behavior->capture($other, $request, [], 'allowed');
+        $this->assertSame(1, DB::table($behavior::TABLE)->count());
+        $this->assertSame(10, (int) DB::table($behavior::TABLE)->value('user_id'));
+        // Even a pre-existing out-of-scope snapshot cannot consume the queue budget.
+        $behavior->observe($other, '192.0.2.51', 'mihomo', 'allowed');
+        $this->assertNull($this->service->reserve(11));
+        $this->assertSame(['queued' => 1], $this->service->tick());
+        $this->assertSame([10], SubscriptionAiAction::query()->pluck('user_id')->map(fn($id) => (int) $id)->all());
+        $record = SubscriptionAiAction::query()->first(); $this->service->process($record->id);
+        $this->assertSame('shadow_proposal_not_executed', $record->fresh()->outcome);
+        $this->assertNull($this->service->restriction($main));
+        Bus::assertNotDispatched(SendEmailJob::class);
+    }
+
+    public function test_an_older_policy_editor_cannot_widen_the_saved_site_scope_by_omitting_it(): void
+    {
+        $this->independent(); $this->enable(['ai_auto_mode' => 'shadow', 'ai_auto_site_ids' => [0]]);
+        $oldClient = $this->service->settings(); unset($oldClient['ai_auto_site_ids']);
+        $oldClient['ai_auto_hourly_budget'] = 7;
+        $saved = $this->service->saveSettings($oldClient, true, 99);
+        $this->assertSame([0], $saved['settings']['ai_auto_site_ids']);
+        $this->assertSame(7, $saved['settings']['ai_auto_hourly_budget']);
+        $this->assertFalse(SubscriptionAiAutomationService::allowsSite($saved['settings'], 2));
+    }
+
+    public function test_empty_site_scope_authorizes_nothing_and_invalid_scope_fails_closed(): void
+    {
+        $none = $this->service->normalize(['ai_auto_site_ids' => []]);
+        $this->assertFalse(SubscriptionAiAutomationService::allowsSite($none, 0));
+        $this->assertFalse(SubscriptionAiAutomationService::allowsSite($none, 2));
+        $this->assertSame([0, 2], $this->service->normalize(['ai_auto_site_ids' => ['2', 0, 2]])['ai_auto_site_ids']);
+        foreach (['all', [-1], [true], ['not-a-site'], range(0, 100)] as $invalid) {
+            try { $this->service->normalize(['ai_auto_site_ids' => $invalid]); $this->fail('Invalid scope accepted.'); }
+            catch (\RuntimeException $error) { $this->assertSame('invalid_site_scope', $error->getMessage()); }
+        }
+    }
+
+    public function test_narrowing_site_scope_invalidates_a_queued_analysis_before_contacting_the_model(): void
+    {
+        $this->independent(); $user = $this->user();
+        app(\App\Services\SubscriptionAiBehaviorService::class)->observe($user, '192.0.2.50', 'mihomo', 'allowed');
+        $record = $this->service->reserve($user->id); $this->assertNotNull($record);
+        $this->enable(['ai_auto_mode' => 'shadow', 'ai_auto_site_ids' => [0]]);
+        $this->service->process($record->id);
+        $this->assertSame('failed', $record->fresh()->status);
+        $this->assertSame('context_changed', $record->fresh()->outcome);
+        $this->assertSame([], $this->provider->calls);
+    }
+
     private function historicalBehavior(User $user, int $blocked = 0): void
     {
         $behavior = app(\App\Services\SubscriptionAiBehaviorService::class);

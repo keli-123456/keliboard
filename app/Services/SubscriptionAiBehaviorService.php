@@ -31,6 +31,7 @@ class SubscriptionAiBehaviorService
     {
         $settings = Cache::store('redis')->remember('subscription_ai:policy', 10, fn() => app(SubscriptionAiAutomationService::class)->settings());
         if (!$settings['ai_auto_enabled'] || ($settings['ai_auto_mode'] ?? 'shadow') === 'legacy'
+            || !SubscriptionAiAutomationService::allowsSite($settings, (int) ($user->site_id ?? 0))
             || $user->is_admin || $user->is_staff || $user->banned || trim((string) $user->token) === '' || !config('app.key')) return;
         if (!Cache::store('redis')->remember('subscription_ai:behavior_available', 10, fn() => $this->available())) return;
         $ip = (new SubscriptionClientIpResolver($config))->resolve($request)['client_ip'];

@@ -68,6 +68,8 @@ class SubscriptionControlController extends Controller
             'ai_auto_active_limit' => ['required', 'integer', 'min:1', 'max:20'], 'confirmed' => ['required', 'boolean'],
             'expected_revision' => ['required', 'integer', 'min:1'],
             'ai_auto_mode' => ['required', 'in:shadow,independent,legacy'],
+            'ai_auto_site_ids' => ['sometimes', 'nullable', 'array', 'max:100'],
+            'ai_auto_site_ids.*' => ['required', 'integer', 'min:0', 'distinct'],
         ]);
         try { return $this->success($service->saveSettings($data, (bool) $data['confirmed'], (int) $request->user()->id, (int) $data['expected_revision'])); }
         catch (\RuntimeException $error) { return $this->advisorFailure($error->getMessage()); }

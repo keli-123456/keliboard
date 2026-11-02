@@ -59,6 +59,7 @@ class SubscriptionAiBenchmarkService
         if (!config('app.key')) throw new RuntimeException('benchmark_context_changed');
         $settings = app(SubscriptionAiAutomationService::class)->settings();
         if (!$settings['ai_auto_enabled'] || $settings['ai_auto_mode'] !== 'shadow') throw new RuntimeException('shadow_required');
+        if (!SubscriptionAiAutomationService::allowsSite($settings, $siteId)) throw new RuntimeException('site_not_authorized');
         $provider = SubscriptionRiskAiSettings::forProvider(app(TicketAiAssistantService::class)->providerSettingsForInternalUse());
         if (!($provider['enabled'] ?? false) || empty($provider['base_url']) || empty($provider['model']) || empty($provider['api_key'])) throw new RuntimeException('ai_disabled');
         $context = $this->contextKey($settings);
@@ -294,6 +295,7 @@ class SubscriptionAiBenchmarkService
     public function permits(User $user, array $settings, string $action = 'observe'): bool
     {
         if ($user->is_admin || $user->is_staff || $user->banned) return false;
+        if (!SubscriptionAiAutomationService::allowsSite($settings, (int) ($user->site_id ?? 0))) return false;
         if (!$this->permitsMode($settings) || in_array($action, ['reset_token', 'suspend_subscription'], true)) return false;
         $run = $this->latest((int) ($user->site_id ?? 0));
         if (!$run || $run->status === 'cancelled' || $run->context_key !== $this->contextKey($settings)) return false;

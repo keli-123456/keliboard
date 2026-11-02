@@ -52,6 +52,13 @@ final class SubscriptionAiBenchmarkServiceTest extends TestCase
         return DB::table(Benchmark::RUNS)->latest('id')->first();
     }
 
+    public function test_a_comparison_cannot_start_for_a_site_outside_the_observation_authorization(): void
+    {
+        $this->automation->current['ai_auto_site_ids'] = [0];
+        $this->expectExceptionMessage('site_not_authorized');
+        $this->bench->start(2, 99, true);
+    }
+
     public function test_admission_context_tracks_effective_risk_model_budget_and_effort_not_an_unrelated_ticket_model(): void
     {
         Schema::create('v2_settings', function (Blueprint $table): void {

@@ -13,6 +13,10 @@ permission for a model to edit code, disable existing rules, or expand its tools
   execution through this path is blocked; it cannot bypass admission.
 
 The master switch is off by default. Applying migrations does not enable it.
+An explicit `ai_auto_site_ids` list restricts capture, scheduling, analysis and
+execution to those account site IDs (null account site IDs map to 0). An empty
+list permits no sites; null retains legacy all-site scope. Saving from an older
+client that omits this field preserves the stored scope, never widens it.
 Independent observation requires both subscription-AI migrations, the enabled
 SubscriptionControl plugin, the existing `redis_ai:risk_ai` worker, and scheduler.
 Buffers, quotas and reservation locks explicitly use the shared `redis` cache
