@@ -66,7 +66,9 @@ class WsServer extends Command
         $server->name = 'xboard-node-realtime';
         $server->count = 1;
         $server->reusePort = false;
-        $server->onWebSocketConnect = function ($connection, $request) {
+        $sshBridge = app(\App\Services\ServerMachine\MachineSshBridge::class);
+        $server->onWebSocketConnect = function ($connection, $request) use ($sshBridge) {
+            if ($sshBridge->connect($connection, $request)) return;
             $connection->xboard_forwarded_ip = $this->resolveHandshakeRemoteIp($connection, $request);
         };
 
@@ -85,8 +87,10 @@ class WsServer extends Command
             $snapshotPath,
             $receiptPath,
             $host,
-            $port
+            $port,
+            $sshBridge
         ) {
+            $sshBridge->start();
             $this->writeSnapshot($snapshotPath, $host, $port, $realtimeEnabled, $connections);
             $this->writeReceiptSnapshot($receiptPath, $receiptState);
 
@@ -170,7 +174,8 @@ class WsServer extends Command
             });
         };
 
-        $server->onMessage = function ($connection, $message) use ($authenticator, &$connections, &$receiptState, $realtimeEnabled, $snapshotPath, $receiptPath, $host, $port) {
+        $server->onMessage = function ($connection, $message) use ($authenticator, &$connections, &$receiptState, $realtimeEnabled, $snapshotPath, $receiptPath, $host, $port, $sshBridge) {
+            if ($connection->machine_ssh ?? false) { $sshBridge->message($connection, (string) $message); return; }
             if (!$realtimeEnabled) {
                 $connection->close();
                 return;
@@ -279,7 +284,8 @@ class WsServer extends Command
             }
         };
 
-        $server->onClose = function ($connection) use (&$connections, $snapshotPath, $host, $port, $realtimeEnabled) {
+        $server->onClose = function ($connection) use (&$connections, $snapshotPath, $host, $port, $realtimeEnabled, $sshBridge) {
+            if ($connection->machine_ssh ?? false) { $sshBridge->close($connection); return; }
             if ((bool) ($connection->xboard_authenticated ?? false)) {
                 Log::info('Node realtime disconnected', [
                     'connection_id' => $connection->id,
@@ -293,6 +299,8 @@ class WsServer extends Command
             unset($connections[$connection->id]);
             $this->writeSnapshot($snapshotPath, $host, $port, $realtimeEnabled, $connections);
         };
+
+        $server->onWorkerStop = fn () => $sshBridge->shutdown();
 
         global $argv;
         $argv = array_values(array_filter([

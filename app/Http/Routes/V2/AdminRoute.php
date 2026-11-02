@@ -149,6 +149,10 @@ class AdminRoute
                 $router->get('/fetch', [MachineController::class, 'fetch']);
                 $router->get('/telemetry', [MachineController::class, 'telemetry']);
                 $router->get('/insight', [MachineController::class, 'insight']);
+                $router->get('/ssh/profile', [\App\Http\Controllers\V2\Admin\Server\MachineSshController::class, 'profile']);
+                $router->post('/ssh/probe', [\App\Http\Controllers\V2\Admin\Server\MachineSshController::class, 'probe']);
+                $router->post('/ssh/profile', [\App\Http\Controllers\V2\Admin\Server\MachineSshController::class, 'save']);
+                $router->post('/ssh/ticket', [\App\Http\Controllers\V2\Admin\Server\MachineSshController::class, 'ticket']);
                 $router->get('/rollouts', [\App\Http\Controllers\V2\Admin\Server\MachineRolloutController::class, 'index']);
                 $router->post('/rollouts', [\App\Http\Controllers\V2\Admin\Server\MachineRolloutController::class, 'create']);
                 $router->post('/rollouts/action', [\App\Http\Controllers\V2\Admin\Server\MachineRolloutController::class, 'action']);

@@ -11,6 +11,8 @@ class ServerMachine extends Model
 
     protected $guarded = ['id'];
 
+    protected $hidden = ['ssh_profile'];
+
     protected $casts = [
         'is_active' => 'boolean',
         'subproxy_enabled' => 'boolean',
@@ -23,6 +25,7 @@ class ServerMachine extends Model
         'last_seen_at' => 'integer',
         'load_status' => 'array',
         'upgrade_state' => 'array',
+        'ssh_profile' => 'array',
         'created_at' => 'timestamp',
         'updated_at' => 'timestamp',
     ];

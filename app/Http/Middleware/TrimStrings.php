@@ -13,6 +13,8 @@ class TrimStrings extends Middleware
     protected $except = [
         'password',
         'password_confirmation',
+        'private_key',
+        'key_password',
         'protocol_settings.network_settings.masquerade.body',
         'encrypted_data',
         'signature'

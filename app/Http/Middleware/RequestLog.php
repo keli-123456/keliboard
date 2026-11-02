@@ -28,11 +28,13 @@ class RequestLog
                 'admin_id' => $user->id,
                 'action' => $this->resolveAction($request->path()),
                 'method' => strtoupper($request->method()),
-                'uri' => $request->getRequestUri(),
+                'uri' => str_contains($request->path(), '/server/machine/ssh/') ? '/' . $request->path() : $request->getRequestUri(),
                 'request_data' => json_encode(
-                    $this->sanitizePayload(preg_match('#/server/manage/(save|config-preview)$#', $request->path())
+                    $this->sanitizePayload(str_contains($request->path(), '/server/machine/ssh/')
+                        ? array_intersect_key($request->all(), array_flip(['id', 'host', 'port', 'username', 'confirmed']))
+                        : (preg_match('#/server/manage/(save|config-preview)$#', $request->path())
                         ? array_replace($request->all(), ['protocol_settings' => '[REDACTED]', 'ips' => '[REDACTED]', 'excludes' => '[REDACTED]'])
-                        : $request->all()),
+                        : $request->all())),
                     JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR
                 ),
                 'ip' => $request->getClientIp(),
