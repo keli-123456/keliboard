@@ -74,6 +74,10 @@ class ProtocolCapabilityService
         $normalizedClientName = is_string($clientName) ? strtolower(trim($clientName)) : null;
         $family = $this->resolveClientFamily($normalizedClientName);
 
+        if ($family === 'kelicore') {
+            return KeliCoreCapabilities::supports($server, $clientVersion);
+        }
+
         if ($facts['protocol'] === 'trusttunnel') {
             if ($reason = $this->trustTunnelBlockReason($server)) {
                 return SupportResult::drop($reason);

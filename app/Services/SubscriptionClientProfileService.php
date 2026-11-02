@@ -8,6 +8,11 @@ class SubscriptionClientProfileService
 {
     public function resolve(Request $request): array
     {
+        $agent = strtolower(trim((string) $request->header('User-Agent', '')));
+        if ($request->header('X-Keli-Profile') === 'kelicore-v1'
+            && preg_match('/^(?:kelicore|keli-native-client)\/(\d+\.\d+\.\d+)(?:\s|$)/D', $agent, $native)) {
+            return ['flag' => 'kelicore', 'name' => 'kelicore', 'version' => $native[1]];
+        }
         $flag = strtolower($request->input('flag') ?? $request->header('User-Agent', ''));
         $manager = app('protocols.manager');
         $name = $manager->matchClientFlag($flag);
@@ -35,6 +40,12 @@ class SubscriptionClientProfileService
         }
         if ($name === 'karing') {
             $version = '1.13.0';
+        }
+        if (in_array($name, ['kelicore', 'keli-native-client'], true)) {
+            $agent = strtolower(trim((string) $request->header('User-Agent', '')));
+            $version = $version ?: $manager->extractClientVersion($agent, 'kelicore')
+                ?: $manager->extractClientVersion($agent, 'keli-native-client');
+            $name = 'kelicore';
         }
         if ($name === 'sing-box' && !$version) {
             $version = '1.12.0';

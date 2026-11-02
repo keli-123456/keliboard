@@ -11,6 +11,7 @@ use App\Protocols\General;
 use App\Protocols\QuantumultX;
 use App\Protocols\Shadowrocket;
 use App\Protocols\SingBox;
+use App\Protocols\KeliCore;
 use App\Services\Plugin\HookManager;
 use App\Services\Plugin\InterceptResponseException;
 use App\Services\SiteNavigationService;
@@ -404,6 +405,30 @@ final class ClientControllerTest extends TestCase
         $reflection->setValue($manager, $classes);
 
         app()->instance('protocols.manager', $manager);
+    }
+
+    public function test_native_subscription_keeps_exclusion_reasons_and_never_injects_fake_nodes(): void
+    {
+        $this->bindProtocolManager([KeliCore::class]);
+        app()->instance('protocols.capabilities', new TestClientCapabilityFilter());
+        app()->instance(SiteNavigationService::class, new class extends SiteNavigationService {
+            public function urlForSubscription(mixed $user, Request $request): ?string { return 'https://site.example.test'; }
+        });
+        app()->instance(WebsiteProxyEndpointService::class, new class extends WebsiteProxyEndpointService {
+            public function urlForSubscription(mixed $user, Request $request): ?string { return null; }
+        });
+        $request = Request::create('/sub/fixture?flag=clashmeta');
+        $request->headers->set('User-Agent', 'keli-native-client/0.1.425');
+        $request->headers->set('X-Keli-Profile', 'kelicore-v1');
+        $response = (new ClientController())->doSubscribe($request,
+            ['uuid' => 'test-password', 'u' => 1, 'd' => 2, 'transfer_enable' => 1024, 'expired_at' => 0],
+            [['type' => 'mieru', 'name' => 'Real node', 'host' => 'node.example.test', 'port' => 1234, 'password' => 'test-password', 'protocol_settings' => []],
+                ['type' => 'trusttunnel', 'name' => 'Not supported', 'protocol_settings' => []]]);
+        $profile = json_decode($response->getContent(), true);
+        $this->assertSame(['Real node'], array_column($profile['outbounds'], 'tag'));
+        $this->assertSame(['Not supported'], array_column($profile['keli']['skipped'], 'name'));
+        $this->assertSame('https://site.example.test', $response->headers->get('profile-web-page-url'));
+        $this->assertSame('upload=1; download=2; total=1024; expire=0', $response->headers->get('subscription-userinfo'));
     }
 
     private function bindValidatorFactory(): void

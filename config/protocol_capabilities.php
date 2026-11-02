@@ -54,6 +54,12 @@ return [
     ],
 
     'clients' => [
+        'kelicore' => [
+            'aliases' => ['kelicore', 'keli-native-client'],
+            'version_kind' => 'semver',
+            'unknown_version_policy' => 'conservative',
+            'protocols' => \App\Support\KeliCoreCapabilities::PROTOCOLS,
+        ],
         'sing-box' => [
             'aliases' => ['sing-box', 'karing', 'hiddify', 'hiddifynext', 'sfm'],
             'version_kind' => 'semver',

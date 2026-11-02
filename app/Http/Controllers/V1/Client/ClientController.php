@@ -5,6 +5,7 @@ namespace App\Http\Controllers\V1\Client;
 use App\Http\Controllers\Controller;
 use App\Models\Server;
 use App\Protocols\General;
+use App\Protocols\KeliCore;
 use App\Services\DomainAnalyticsService;
 use App\Services\Plugin\HookManager;
 use App\Services\RiskEventService;
@@ -87,17 +88,22 @@ class ClientController extends Controller
             allowedTypes: $requestedTypes,
             filterKeywords: $filterKeywords
         );
-        $serversFiltered = app('protocols.capabilities')->filterServersForClient(
-            $serversFiltered,
-            $clientInfo['name'] ?? null,
-            $clientInfo['version'] ?? null
-        );
+        $native = $protocolClassName === KeliCore::class;
+        if (!$native) {
+            $serversFiltered = app('protocols.capabilities')->filterServersForClient(
+                $serversFiltered,
+                $clientInfo['name'] ?? null,
+                $clientInfo['version'] ?? null
+            );
+        }
 
         $websiteUrl = app(WebsiteProxyEndpointService::class)->urlForSubscription($user, $request);
         $navigationUrl = app(SiteNavigationService::class)->urlForSubscription($user, $request);
-        $this->setSubscribeInfoToServers($serversFiltered, $user, count($servers) - count($serversFiltered));
-        $serversFiltered = $this->addPrefixToServerName($serversFiltered);
-        $this->prependWebsiteEntriesToServers($serversFiltered, $navigationUrl, $websiteUrl);
+        if (!$native) {
+            $this->setSubscribeInfoToServers($serversFiltered, $user, count($servers) - count($serversFiltered));
+            $serversFiltered = $this->addPrefixToServerName($serversFiltered);
+            $this->prependWebsiteEntriesToServers($serversFiltered, $navigationUrl, $websiteUrl);
+        }
 
         // Instantiate the protocol class with filtered servers and client info
         $protocolInstance = app()->make($protocolClassName, [

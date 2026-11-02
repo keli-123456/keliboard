@@ -5,6 +5,7 @@ namespace App\Http\Controllers\V1\App;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Protocols\SingBox;
+use App\Protocols\KeliCore;
 use App\Services\ServerService;
 use App\Services\UserService;
 use Illuminate\Http\Request;
@@ -16,7 +17,7 @@ class ConfigController extends Controller
     public function config(Request $request)
     {
         $validated = $request->validate([
-            'core' => ['nullable', 'string', 'in:sing-box'],
+            'core' => ['nullable', 'string', 'in:sing-box,kelicore'],
             'platform' => ['nullable', 'string', 'in:android,windows,macos'],
             'server_id' => ['nullable', 'integer', 'min:1'],
             'core_version' => ['nullable', 'string', 'max:32'],
@@ -42,17 +43,18 @@ class ConfigController extends Controller
             return $this->fail([404, '节点不存在或不可用']);
         }
 
-        $clientVersion = $validated['core_version'] ?? self::DEFAULT_SING_BOX_CORE_VERSION;
+        $native = ($validated['core'] ?? 'sing-box') === 'kelicore';
+        $clientVersion = $validated['core_version'] ?? ($native ? null : self::DEFAULT_SING_BOX_CORE_VERSION);
         $platform = $validated['platform'] ?? null;
         $defaultOutboundTag = $serverId === null
             ? null
             : (string) ($targetServers->first()['name'] ?? '');
 
         /** @var SingBox $protocol */
-        $protocol = app()->make(SingBox::class, [
+        $protocol = app()->make($native ? KeliCore::class : SingBox::class, [
             'user' => $user,
             'servers' => $targetServers->all(),
-            'clientName' => 'sing-box',
+            'clientName' => $native ? 'kelicore' : 'sing-box',
             'clientVersion' => $clientVersion
         ]);
 
@@ -60,6 +62,10 @@ class ConfigController extends Controller
             defaultOutboundTag: $defaultOutboundTag ?: null,
             platform: $platform
         );
+
+        if ($native) {
+            return $this->success($config);
+        }
 
         $missingTags = $this->missingOutboundTags(
             $config,
