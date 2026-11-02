@@ -47,6 +47,7 @@ class KeliCore extends SingBox
                 'naive' => $this->buildNaive($password, $server),
                 'socks' => $this->buildSocks($password, $server),
                 'http' => $this->buildHttp($password, $server),
+                'trusttunnel' => $this->nativeTrustTunnel($password, $server),
                 'mieru' => [
                     'type' => 'mieru', 'tag' => $server['name'], 'server' => $server['host'],
                     'server_port' => self::firstPortFromPortRange($server['ports'] ?? $server['port']) ?? (int) $server['port'],
@@ -93,6 +94,18 @@ class KeliCore extends SingBox
             ));
         }
         return [];
+    }
+
+    private function nativeTrustTunnel(string $password, array $server): array
+    {
+        $proxy = ClashMeta::buildTrustTunnel($password, $server);
+        $tls = ['enabled' => true, 'insecure' => false, 'server_name' => $proxy['sni']];
+        if (isset($proxy['fingerprint'])) {
+            $tls['certificate_sha256'] = $proxy['fingerprint'];
+        }
+        return ['type' => 'trusttunnel', 'tag' => $proxy['name'], 'server' => $proxy['server'],
+            'server_port' => $proxy['port'], 'username' => $proxy['username'], 'password' => $proxy['password'],
+            'tls' => $tls, 'transport' => ['type' => $proxy['quic'] ? 'quic' : 'tcp']];
     }
 
     private function nativeTransport(array $server, ?array $existing): ?array

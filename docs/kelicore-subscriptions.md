@@ -17,7 +17,7 @@ Profiles contain `outbounds`, Mihomo-style `rules`, and metadata:
     "platform": "android",
     "default_outbound": "supported-node",
     "skipped": [
-      {"name": "unsupported-node", "protocol": "trusttunnel", "reason": "Unsupported protocol"}
+      {"name": "unsupported-node", "protocol": "unknown-protocol", "reason": "Unsupported protocol"}
     ]
   }
 }
@@ -33,7 +33,14 @@ native engine supports only its existing rule semantics.
 exporter receives authorized nodes before capability filtering so it can explain
 every exclusion. Mixed subscriptions return usable nodes plus `skipped` metadata;
 all-unsupported subscriptions return diagnostics rather than an exporter failure.
-TrustTunnel is not yet a supported native-client protocol. Pending HY2 ECH
+TrustTunnel and SS2022 require native client >= 0.1.426. Earlier clients continue
+to receive exclusion reasons rather than incompatible nodes. TrustTunnel exports
+H2 or H3 with PKI verification enabled, and includes `tls.certificate_sha256` for
+automatic self-signed certificates using the existing node-scoped pin resolver.
+An unavailable pin or enabled TrustTunnel ECH excludes the node; neither is
+silently converted to an insecure connection. SS2022 supports all three SIP022
+ciphers and AES multi-user identities, with base64 key length checks. ChaCha
+identity chains, SS plugins and TUIC zero-RTT remain unsupported. Pending HY2 ECH
 configuration is excluded, not silently downgraded.
 
 Authentication, site context, token validation, account availability and group
@@ -51,6 +58,7 @@ explicitly rejects the new `core` field; authorization failures are not retried.
 ```powershell
 php vendor/phpunit/phpunit/phpunit --filter 'KeliCore|ProtocolCapabilityService|ProtocolManager|ClientController|AppBootstrapContextPlan|ProtocolExportRegression'
 php scripts/export-kelicore-acceptance.php
+php scripts/export-kelicore-acceptance.php --extended
 ```
 
 The exporter script uses synthetic nodes and no application bootstrap or database.

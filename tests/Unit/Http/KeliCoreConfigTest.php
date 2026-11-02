@@ -62,6 +62,19 @@ final class KeliCoreConfigTest extends TestCase
         $this->assertCount(1, $response->getData(true)['data']['keli']['skipped']);
     }
 
+    public function test_latest_client_receives_authorized_trusttunnel_nodes(): void
+    {
+        $request = Request::create('/api/v1/app/config?core=kelicore&core_version=0.1.426&platform=android');
+        $request->setUserResolver(fn () => User::find(1));
+        $response = (new ConfigController())->config($request);
+        $this->assertSame(200, $response->getStatusCode());
+        $data = $response->getData(true)['data'];
+        $this->assertSame(['mieru', 'trusttunnel'], array_column($data['outbounds'], 'type'));
+        $this->assertSame([], $data['keli']['skipped']);
+        $this->assertFalse($data['outbounds'][1]['tls']['insecure']);
+        $this->assertStringNotContainsString('Other group', $response->getContent());
+    }
+
     public function test_unavailable_user_and_other_group_node_remain_denied(): void
     {
         $request = Request::create('/api/v1/app/config?core=kelicore&core_version=0.1.425&server_id=3');

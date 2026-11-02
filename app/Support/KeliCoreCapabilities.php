@@ -5,7 +5,8 @@ namespace App\Support;
 final class KeliCoreCapabilities
 {
     public const MIN_VERSION = '0.1.425';
-    public const PROTOCOLS = ['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria', 'tuic', 'anytls', 'naive', 'mieru', 'socks', 'http'];
+    public const EXTENDED_VERSION = '0.1.426';
+    public const PROTOCOLS = ['shadowsocks', 'vmess', 'vless', 'trojan', 'hysteria', 'tuic', 'anytls', 'naive', 'mieru', 'socks', 'http', 'trusttunnel'];
 
     public static function supports(array $server, ?string $version): SupportResult
     {
@@ -18,6 +19,23 @@ final class KeliCoreCapabilities
             return SupportResult::drop('当前 kelicore 尚未支持此协议');
         }
         $network = strtolower((string) ($settings['network'] ?? 'tcp')) ?: 'tcp';
+        $ss2022 = $type === 'shadowsocks' && str_starts_with((string) ($settings['cipher'] ?? ''), '2022-');
+        if (($type === 'trusttunnel' || $ss2022) && version_compare($version, self::EXTENDED_VERSION, '<')) {
+            return SupportResult::drop('此协议需要 kelicore 0.1.426 或更新版本');
+        }
+        if ($type === 'trusttunnel') {
+            if (Hysteria2Ech::enabled($settings) || Hysteria2Ech::waiting($settings)) {
+                return SupportResult::drop('当前 kelicore 的 TrustTunnel 暂不支持 ECH，不会降级连接');
+            }
+            $alpn = (array) data_get($settings, 'tls_settings.alpn', ['h2']);
+            if (!array_intersect(['h2', 'h3'], $alpn)) {
+                return SupportResult::drop('TrustTunnel 需要 H2 或 H3 传输');
+            }
+            if (TrustTunnelCertificate::automatic($server)
+                && !app(\App\Services\ServerTlsCertificateResolver::class)->resolveTrustTunnelPinSha256($server)) {
+                return SupportResult::drop('TrustTunnel 证书指纹尚未就绪');
+            }
+        }
         if (in_array($type, ['vless', 'vmess', 'trojan'], true)) {
             if (!in_array($network, ['tcp', 'ws', 'grpc', 'httpupgrade', 'http', 'h2', 'quic'], true)) {
                 return SupportResult::drop('当前 kelicore 尚未支持此传输方式');
@@ -41,8 +59,20 @@ final class KeliCoreCapabilities
         if ($type === 'vmess' && (int) ($settings['alter_id'] ?? $settings['alterId'] ?? 0) !== 0) {
             return SupportResult::drop('当前 kelicore 仅支持 VMess AEAD');
         }
-        if ($type === 'shadowsocks' && (!in_array($settings['cipher'] ?? '', ['aes-128-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305'], true) || !empty($settings['plugin']))) {
-            return SupportResult::drop('当前 kelicore 仅支持传统 AEAD，不支持 SS2022 或插件');
+        if ($type === 'shadowsocks' && (!in_array($settings['cipher'] ?? '', ['aes-128-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305',
+            '2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', '2022-blake3-chacha20-poly1305'], true) || !empty($settings['plugin']))) {
+            return SupportResult::drop('当前 kelicore 尚不支持此 SS 加密方式或插件');
+        }
+        if ($ss2022 && isset($server['password'])) {
+            $keys = explode(':', $server['password']);
+            $length = $settings['cipher'] === '2022-blake3-aes-128-gcm' ? 16 : 32;
+            if (($settings['cipher'] === '2022-blake3-chacha20-poly1305' && count($keys) !== 1)
+                || array_filter($keys, static function (string $key) use ($length): bool {
+                    $decoded = base64_decode($key, true);
+                    return $decoded === false || strlen($decoded) !== $length || base64_encode($decoded) !== $key;
+                })) {
+                return SupportResult::drop('SS2022 密钥格式或长度不正确');
+            }
         }
         if ($type === 'hysteria') {
             if ((int) ($settings['version'] ?? 1) !== 2) {

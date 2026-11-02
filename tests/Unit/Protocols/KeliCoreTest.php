@@ -124,4 +124,39 @@ final class KeliCoreTest extends TestCase
         $this->assertSame([], $config['outbounds']);
         $this->assertStringContainsString('Hysteria 2', $config['keli']['skipped'][0]['reason']);
     }
+
+    public function test_extended_native_export_is_version_gated_and_preserves_security(): void
+    {
+        require_once dirname(__DIR__, 3) . '/scripts/export-kelicore-acceptance.php';
+        $config = \keliCoreAcceptanceProfile(true);
+        $this->assertCount(17, $config['outbounds']);
+        $this->assertCount(2, $config['keli']['skipped']);
+        $trust = array_values(array_filter($config['outbounds'], fn ($node) => $node['type'] === 'trusttunnel'));
+        $this->assertCount(3, $trust);
+        $this->assertFalse($trust[0]['tls']['insecure']);
+        $this->assertSame('quic', $trust[2]['transport']['type']);
+        foreach ([$this->node('trusttunnel'), $this->node('shadowsocks', ['cipher' => '2022-blake3-aes-128-gcm'])] as $node) {
+            $this->assertFalse(KeliCoreCapabilities::supports($node, '0.1.425')->supported);
+        }
+        $ech = $this->node('trusttunnel', ['ech' => ['enabled' => true, 'config' => \keliCoreAcceptanceEchConfig()]]);
+        $this->assertFalse(KeliCoreCapabilities::supports($ech, '0.1.426')->supported);
+    }
+
+    public function test_native_trusttunnel_self_signed_nodes_require_their_bound_pin(): void
+    {
+        $resolver = new class extends \App\Services\ServerTlsCertificateResolver {
+            public ?string $pin = null;
+            public function resolveTrustTunnelPinSha256(array|\App\Models\Server $server): ?string
+            {
+                return $this->pin;
+            }
+        };
+        app()->instance(\App\Services\ServerTlsCertificateResolver::class, $resolver);
+        $node = $this->node('trusttunnel', ['tls_settings' => ['cert_mode' => 'self']]);
+        $this->assertFalse(KeliCoreCapabilities::supports($node, '0.1.426')->supported);
+        $resolver->pin = str_repeat('ab', 32);
+        $config = (new KeliCore(['uuid' => 'test'], [$node], 'kelicore', '0.1.426'))->generateConfig();
+        $this->assertSame($resolver->pin, $config['outbounds'][0]['tls']['certificate_sha256']);
+        $this->assertFalse($config['outbounds'][0]['tls']['insecure']);
+    }
 }
