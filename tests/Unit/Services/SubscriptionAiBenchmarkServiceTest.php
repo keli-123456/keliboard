@@ -294,6 +294,98 @@ final class SubscriptionAiBenchmarkServiceTest extends TestCase
         $this->assertFalse($this->bench->permitsMode($this->pilotSettings()));
     }
 
+    public function test_reading_an_invalidated_run_reports_the_stall_without_mutating_or_restarting_it(): void
+    {
+        $run = $this->start(); $this->bench->enroll($this->action(), $this->automation->current);
+        $this->ai->provider['model'] = 'next-model';
+        $view = $this->bench->overview(2);
+        $this->assertSame('invalidated', $view['run']['status']);
+        $this->assertContains('benchmark_context_changed', $view['report']['reasons']);
+        $this->assertFalse($view['report']['eligible']);
+        $this->assertSame('collecting', DB::table(Benchmark::RUNS)->where('id', $run->id)->value('status'));
+        $this->assertSame(1, DB::table(Benchmark::RUNS)->count());
+        $this->assertSame(1, DB::table(Benchmark::CASES)->count());
+    }
+
+    public function test_confirmed_restart_atomically_preserves_an_invalidated_cohort_and_revokes_its_grants(): void
+    {
+        $old = $this->start(); $action = $this->action(); $this->bench->enroll($action, $this->automation->current);
+        $case = (array) DB::table(Benchmark::CASES)->first();
+        DB::table(Benchmark::GRANTS)->insert(['run_id' => $old->id, 'user_ids' => '[10]', 'report_hash' => str_repeat('a', 64), 'approved_by' => 99, 'approved_at' => time(), 'operations_confirmed' => true, 'expires_at' => time() + 3600]);
+        $this->ai->provider['model'] = 'next-model';
+        try { $this->bench->start(2, 99, false); $this->fail('Unconfirmed replacement accepted'); }
+        catch (\RuntimeException $error) { $this->assertSame('authorization_required', $error->getMessage()); }
+        $this->assertSame('collecting', DB::table(Benchmark::RUNS)->where('id', $old->id)->value('status'));
+        $view = $this->bench->start(2, 99, true);
+        $this->assertNotSame((int) $old->id, $view['run']['id']);
+        $this->assertSame('collecting', $view['run']['status']);
+        $this->assertNotContains('benchmark_context_changed', $view['report']['reasons']);
+        $this->assertSame('cancelled', DB::table(Benchmark::RUNS)->where('id', $old->id)->value('status'));
+        $this->assertSame($case, (array) DB::table(Benchmark::CASES)->first());
+        $this->assertNotNull(DB::table(Benchmark::GRANTS)->value('revoked_at'));
+        $this->assertSame(3, DB::table('v2_user')->count());
+        $this->assertSame(0, $view['review_progress']['total']);
+        $this->bench->enroll($this->action(11), $this->automation->current);
+        $this->assertSame(1, $this->bench->overview(2)['review_progress']['total']);
+    }
+
+    public function test_current_collecting_run_cannot_be_replaced_by_repeated_start_requests(): void
+    {
+        $run = $this->start();
+        try { $this->bench->start(2, 99, true); $this->fail('Duplicate collecting run accepted'); }
+        catch (\RuntimeException $error) { $this->assertSame('benchmark_in_progress', $error->getMessage()); }
+        $this->assertSame(1, DB::table(Benchmark::RUNS)->count());
+        $this->assertSame('collecting', DB::table(Benchmark::RUNS)->where('id', $run->id)->value('status'));
+    }
+
+    public function test_empty_run_is_missing_measurements_not_over_budget(): void
+    {
+        $view = $this->bench->start(2, 99, true);
+        $this->assertContains('operational_evidence_incomplete', $view['report']['reasons']);
+        $this->assertNotContains('operational_budget_exceeded', $view['report']['reasons']);
+        $this->assertFalse($view['report']['eligible']);
+    }
+
+    public function test_invalidated_run_stops_enrollment_without_deleting_old_evidence(): void
+    {
+        $this->start(); $this->bench->enroll($this->action(), $this->automation->current);
+        $this->ai->provider['model'] = 'next-model';
+        $this->bench->enroll($this->action(11), $this->automation->current);
+        $this->assertSame(1, DB::table(Benchmark::CASES)->count());
+        $this->assertSame(1, $this->bench->overview(2)['review_progress']['pending']);
+    }
+
+    public function test_expired_run_stops_enrollment_and_preserves_the_original_cohort(): void
+    {
+        $run = $this->start();
+        DB::table(Benchmark::RUNS)->where('id', $run->id)->update(['created_at' => time() - 31 * 86400]);
+        $this->bench->enroll($this->action(), $this->automation->current);
+        $this->assertSame('expired', $this->bench->overview(2)['run']['status']);
+        $this->assertSame(0, DB::table(Benchmark::CASES)->count());
+    }
+
+    public function test_enrollment_rechecks_current_authorization_instead_of_using_the_callers_old_settings(): void
+    {
+        $this->start(); $settings = $this->automation->current;
+        $this->automation->current['ai_auto_enabled'] = false;
+        $this->bench->enroll($this->action(), $settings);
+        $this->assertSame(0, DB::table(Benchmark::CASES)->count());
+    }
+
+    public function test_review_progress_counts_all_cases_not_just_the_first_page_and_does_not_invent_truth(): void
+    {
+        $run = $this->start(); $this->seedPassing($run);
+        DB::table(Benchmark::CASES)->where('run_id', $run->id)->update(['truth' => null]);
+        $id = DB::table(Benchmark::CASES)->where('run_id', $run->id)->value('id');
+        $this->bench->label($id, 'uncertain', true, 99);
+        $view = $this->bench->overview(2);
+        $this->assertCount(20, $view['cases']);
+        $this->assertSame(['total' => 600, 'completed' => 600, 'confirmed' => 0, 'uncertain' => 1, 'pending' => 599], $view['review_progress']);
+        $this->assertSame(0, $view['report']['normal']);
+        $this->assertSame(0, $view['report']['abuse']);
+        $this->assertFalse($view['report']['eligible']);
+    }
+
     public function test_key_rotation_cannot_turn_a_previous_holdout_account_into_training_data(): void
     {
         $this->start(); $user = 1;

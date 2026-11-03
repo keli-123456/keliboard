@@ -58,6 +58,14 @@ class SubscriptionAiBenchmarkService
         return DB::table(self::RUNS)->where('site_id', $siteId)->orderByDesc('id')->first();
     }
 
+    private function runStatus(object $run, string $context): string
+    {
+        if ($run->status === 'cancelled') return 'cancelled';
+        if ($run->context_key !== $context) return 'invalidated';
+        if ($run->created_at < time() - 30 * 86400) return 'expired';
+        return $run->status;
+    }
+
     public function start(int $siteId, int $adminId, bool $confirmed): array
     {
         if (!$this->available()) throw new RuntimeException('benchmark_migration_required');
@@ -72,8 +80,8 @@ class SubscriptionAiBenchmarkService
         $lock = Cache::store('redis')->lock('subscription_ai:benchmark:start:' . $siteId, 10);
         $created = $lock->get(function () use ($siteId, $adminId, $context): bool {
             DB::transaction(function () use ($siteId, $adminId, $context): void {
-                $old = $this->latest($siteId);
-                if ($old && $old->status === 'collecting') throw new RuntimeException('benchmark_in_progress');
+                $old = DB::table(self::RUNS)->where('site_id', $siteId)->orderByDesc('id')->lockForUpdate()->first();
+                if ($old && $this->runStatus($old, $context) === 'collecting') throw new RuntimeException('benchmark_in_progress');
                 $examples = DB::table(self::CASES . ' as c')->join(self::RUNS . ' as r', 'r.id', '=', 'c.run_id')
                     ->where('r.site_id', $siteId)->where('c.cohort', 'training')->whereIn('c.truth', ['benign', 'abuse'])->orderByDesc('c.id')->limit(4)
                     ->get(['c.evidence', 'c.truth', 'c.legacy_prediction'])->map(fn($row) => [
@@ -82,6 +90,9 @@ class SubscriptionAiBenchmarkService
                     ])->all();
                 $teaching = json_encode(['rule_intents' => self::RULE_INTENTS, 'reviewed_training_examples' => $examples], JSON_THROW_ON_ERROR);
                 if ($old && $old->context_key === $context && $old->teaching === $teaching && DB::table(self::CASES)->where('run_id', $old->id)->exists()) throw new RuntimeException('benchmark_duplicate_experiment');
+                if ($old && $old->status === 'collecting') {
+                    DB::table(self::RUNS)->where('id', $old->id)->update(['status' => 'cancelled', 'cancelled_by' => $adminId, 'cancelled_at' => time()]);
+                }
                 DB::table(self::RUNS)->insert(['site_id' => $siteId, 'context_key' => $context, 'teaching' => $teaching, 'status' => 'collecting', 'created_by' => $adminId, 'created_at' => time()]);
                 if ($old) DB::table(self::GRANTS)->where('run_id', $old->id)->whereNull('revoked_at')->update(['revoked_at' => time()]);
             });
@@ -96,10 +107,12 @@ class SubscriptionAiBenchmarkService
     {
         if (!$this->available() || $settings['ai_auto_mode'] !== 'shadow' || ($action->evidence['source'] ?? '') !== 'independent_behavior_v1') return;
         $run = $this->latest($action->site_id);
-        if (!$run || $run->status !== 'collecting' || $run->context_key !== $this->contextKey($settings)) return;
+        if (!$run || $this->runStatus($run, $this->contextKey($settings)) !== 'collecting') return;
         DB::transaction(function () use ($run, $action): void {
             $run = DB::table(self::RUNS)->where('id', $run->id)->lockForUpdate()->first();
-            if ($run->status !== 'collecting') return;
+            $settings = app(SubscriptionAiAutomationService::class)->settings();
+            if (!$settings['ai_auto_enabled'] || $settings['ai_auto_mode'] !== 'shadow' || !SubscriptionAiAutomationService::allowsSite($settings, $action->site_id)
+                || $this->runStatus($run, $this->contextKey($settings)) !== 'collecting' || (int) $this->latest($action->site_id)->id !== (int) $run->id) return;
             $subject = hash_hmac('sha256', $action->site_id . ':' . $action->user_id, (string) config('app.key'));
             if (DB::table(self::CASES)->where('run_id', $run->id)->where('subject_hash', $subject)->exists()) return;
             $prior = DB::table(self::CASES . ' as c')->join('v2_subscription_ai_action as a', 'a.id', '=', 'c.action_id')
@@ -132,7 +145,7 @@ class SubscriptionAiBenchmarkService
         if (!$case && $settings['ai_auto_mode'] === 'shadow') return null;
         $run = $case ? DB::table(self::RUNS)->where('id', $case->run_id)->first() : $this->latest($action->site_id);
         if (!$run) throw new RuntimeException('benchmark_context_changed');
-        if ($run->status === 'cancelled' || $run->context_key !== $this->contextKey($settings)) throw new RuntimeException('benchmark_context_changed');
+        if (!in_array($this->runStatus($run, $this->contextKey($settings)), ['collecting', 'sealed'], true)) throw new RuntimeException('benchmark_context_changed');
         return json_decode($run->teaching, true, 32, JSON_THROW_ON_ERROR);
     }
 
@@ -174,6 +187,7 @@ class SubscriptionAiBenchmarkService
         if (!$this->available()) return ['available' => false, 'site_id' => $siteId, 'report' => ['eligible' => false, 'reasons' => ['benchmark_migration_required']], 'cases' => [], 'run' => null, 'pilot' => null];
         $run = $this->latest($siteId);
         $settings = app(SubscriptionAiAutomationService::class)->settings();
+        $progress = $run ? DB::table(self::CASES)->where('run_id', $run->id)->selectRaw("COUNT(*) AS total, SUM(CASE WHEN completed_at IS NOT NULL THEN 1 ELSE 0 END) AS completed, SUM(CASE WHEN truth IN ('benign', 'abuse') THEN 1 ELSE 0 END) AS confirmed, SUM(CASE WHEN truth = 'uncertain' THEN 1 ELSE 0 END) AS uncertain, SUM(CASE WHEN truth IS NULL THEN 1 ELSE 0 END) AS pending")->first() : null;
         $cases = $run ? DB::table(self::CASES . ' as c')->leftJoin('v2_subscription_ai_action as a', 'a.id', '=', 'c.action_id')->where('c.run_id', $run->id)->whereNotNull('c.completed_at')->whereNull('c.truth')->orderBy('c.id')->limit(20)->get(['c.id', 'c.cohort', 'c.evidence', 'c.created_at', 'a.user_id'])->map(fn($case) => [
             'id' => (int) $case->id, 'user_id' => $case->user_id === null ? null : (int) $case->user_id, 'cohort' => $case->cohort, 'evidence' => json_decode($case->evidence, true, 32, JSON_THROW_ON_ERROR), 'created_at' => (int) $case->created_at,
         ])->all() : [];
@@ -182,8 +196,9 @@ class SubscriptionAiBenchmarkService
             'id' => (int) $case->id, 'user_id' => $case->user_id === null ? null : (int) $case->user_id, 'cohort' => $case->cohort,
             'evidence' => json_decode($case->evidence, true, 32, JSON_THROW_ON_ERROR), 'created_at' => (int) $case->created_at, 'truth' => $case->truth,
         ])->all() : [];
-        return ['available' => true, 'site_id' => $siteId, 'run' => $run ? ['id' => (int) $run->id, 'site_id' => (int) $run->site_id, 'status' => $run->status, 'created_at' => (int) $run->created_at] : null,
+        return ['available' => true, 'site_id' => $siteId, 'run' => $run ? ['id' => (int) $run->id, 'site_id' => (int) $run->site_id, 'status' => $this->runStatus($run, $this->contextKey($settings)), 'created_at' => (int) $run->created_at] : null,
             'report' => $run ? $this->report($run, $settings) : ['eligible' => false, 'reasons' => ['benchmark_not_started']], 'cases' => $cases, 'reviewed_cases' => $reviewed,
+            'review_progress' => $progress ? array_map('intval', (array) $progress) : null,
             'pilot' => $pilot ? ['user_ids' => json_decode($pilot->user_ids, true), 'expires_at' => (int) $pilot->expires_at, 'approved_by' => (int) $pilot->approved_by] : null];
     }
 
@@ -216,7 +231,8 @@ class SubscriptionAiBenchmarkService
         if ($fpP > 0.025 || $aiFp >= $oldFp) $reasons[] = 'false_positive_advantage_unproven';
         if ($aiFn > $oldFn || $missUpper > 0.02) $reasons[] = 'miss_safety_unproven';
         sort($latencies); $p95 = $latencies ? $latencies[(int) ceil(count($latencies) * 0.95) - 1] : null;
-        if ($p95 === null || $p95 > 120000 || $tokens > self::HOLDOUT_SIZE * 8000) $reasons[] = 'operational_budget_exceeded';
+        if (!$usageComplete || !$latencyComplete) $reasons[] = 'operational_evidence_incomplete';
+        if (($p95 !== null && $p95 > 120000) || $tokens > self::HOLDOUT_SIZE * 8000) $reasons[] = 'operational_budget_exceeded';
         return ['eligible' => $reasons === [], 'reasons' => array_values(array_unique($reasons)), 'protocol' => self::PROTOCOL,
             'sample_count' => $rows->count(), 'sample_target' => self::HOLDOUT_SIZE, 'normal' => $normal, 'abuse' => $abuse,
             'ai_false_positives' => $aiFp, 'rule_false_positives' => $oldFp, 'ai_misses' => $aiFn, 'rule_misses' => $oldFn,
