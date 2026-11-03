@@ -31,6 +31,16 @@ class MachineTelemetryService
             }
             $now = now()->timestamp;
             $status = array_intersect_key($input['status'], array_flip(self::METRICS));
+            $probe = app(MachineEntryProbe::class)->normalizeReport($input['entry_probe'] ?? null);
+            $probeAt = $probe === null ? null : $now;
+            // Repeated snapshots and older measurements must not renew probe freshness.
+            if (($state['session'] ?? null) === $input['session'] && isset($state['entry_probe']) && $probe !== null
+                && ($state['entry_probe'] === $probe || (($probe['state'] ?? null) === 'ready'
+                    && ($state['entry_probe']['state'] ?? null) === 'ready'
+                    && $probe['checked_at'] < $state['entry_probe']['checked_at']))) {
+                $probe = $state['entry_probe'];
+                $probeAt = $state['entry_probe_received_at'];
+            }
             $aggregate = $state['aggregate'] ?? ['since' => $now, 'count' => 0, 'cpu_sum' => 0, 'cpu_peak' => 0, 'rx_peak' => 0, 'tx_peak' => 0];
             $aggregate['count']++;
             $aggregate['cpu_sum'] += $status['cpu'];
@@ -40,6 +50,8 @@ class MachineTelemetryService
             Cache::put($key, [
                 'session' => $input['session'], 'sequence' => $input['sequence'],
                 'received_at' => $now, 'status' => $status, 'aggregate' => $aggregate,
+                'probe_reported' => array_key_exists('entry_probe', $input),
+                'entry_probe' => $probe, 'entry_probe_received_at' => $probeAt,
             ], self::TTL);
             return true;
         } finally {
@@ -61,8 +73,26 @@ class MachineTelemetryService
         // Do not allow a stale fast sample to replace a newer full status report.
         $status = $fast && (int) $at >= (int) ($legacy['updated_at'] ?? 0)
             ? array_replace($legacy, $state['status'], ['updated_at' => $at]) : $legacy;
+        $status['entry_probe_updated_at'] = $legacy['updated_at'] ?? null;
+        if ($fast && ($state['probe_reported'] ?? false)) {
+            $probe = $state['entry_probe'] ?? null;
+            $probeAt = $state['entry_probe_received_at'] ?? $at;
+            $legacyChecked = data_get($legacy, 'entry_probe.checked_at', 0);
+            $useFast = ($probe['state'] ?? null) === 'ready' && data_get($legacy, 'entry_probe.state') === 'ready'
+                ? $probe['checked_at'] > $legacyChecked || ($probe['checked_at'] === $legacyChecked && $probeAt >= ($legacy['updated_at'] ?? 0))
+                : $probeAt >= ($legacy['updated_at'] ?? 0);
+            if ($useFast) {
+                $status['entry_probe'] = $probe;
+                $status['entry_probe_updated_at'] = $probeAt;
+            }
+        }
+        $probeStatus = $status;
+        if (array_key_exists('is_active', $machine->getAttributes())) {
+            $probeStatus['machine']['is_active'] = (bool) $machine->is_active;
+        }
         return [
             'load_status' => $status,
+            'entry_probe' => app(MachineEntryProbe::class)->snapshot($probeStatus, now()->timestamp),
             'telemetry' => [
                 'mode' => $fast ? 'fast' : 'legacy', 'received_at' => $at,
                 'age_seconds' => $age,

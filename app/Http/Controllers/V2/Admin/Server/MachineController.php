@@ -42,6 +42,7 @@ class MachineController extends Controller
             $snapshot = app(MachineTelemetryService::class)->snapshot($machine);
             $machine->setAttribute('load_status', $snapshot['load_status']);
             $machine->setAttribute('telemetry', $snapshot['telemetry']);
+            $machine->setAttribute('entry_probe', $snapshot['entry_probe']);
             $machine->setAttribute('website_proxy_health', $websiteHealth[$machine->id] ?? []);
         }
 
@@ -55,7 +56,7 @@ class MachineController extends Controller
             'ids.*' => 'required|integer|min:1|distinct',
         ]);
         $machines = ServerMachine::query()->whereIn('id', $params['ids'])
-            ->get(['id', 'token', 'last_seen_at', 'load_status']);
+            ->get(['id', 'token', 'is_active', 'last_seen_at', 'load_status']);
         $this->appendOnlineStatus($machines);
         return $this->success($machines->map(function ($machine) {
             $snapshot = app(MachineTelemetryService::class)->snapshot($machine);
@@ -67,6 +68,7 @@ class MachineController extends Controller
                     'cpu', 'mem', 'swap', 'disk', 'net', 'uptime', 'updated_at',
                 ])),
                 'telemetry' => $snapshot['telemetry'],
+                'entry_probe' => $snapshot['entry_probe'],
             ]);
         })->values());
     }

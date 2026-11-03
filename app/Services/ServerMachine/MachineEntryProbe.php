@@ -31,7 +31,7 @@ class MachineEntryProbe
             $targets[$ip] = ['id' => substr(hash('sha256', $ip), 0, 16), 'ip' => $ip];
         }
         $config = ['schema' => 1, 'enabled' => $active && $valid && $targets !== [] && in_array(admin_setting('server_entry_probe_enable', false), [true, 1, '1'], true),
-            'interval_seconds' => max(60, min(600, (int) admin_setting('server_entry_probe_interval', 120))),
+            'interval_seconds' => max(5, min(600, (int) admin_setting('server_entry_probe_interval', 120))),
             'timeout_seconds' => 2, 'targets' => $valid ? array_values($targets) : []];
         $config['revision'] = hash('sha256', json_encode($config, JSON_THROW_ON_ERROR));
         return $config;
@@ -50,22 +50,25 @@ class MachineEntryProbe
             $ids[$row['id']] = true;
             $rows[] = ['id' => $row['id'], 'status' => $row['status']];
         }
-        return ['schema' => 1, 'revision' => $report['revision'], 'checked_at' => $report['checked_at'],
+        if (array_key_exists('consecutive_failures', $report)
+            && (!is_int($report['consecutive_failures']) || $report['consecutive_failures'] < 0 || $report['consecutive_failures'] > 2)) return null;
+        return (array_key_exists('consecutive_failures', $report) ? ['consecutive_failures' => $report['consecutive_failures']] : [])
+            + ['schema' => 1, 'revision' => $report['revision'], 'checked_at' => $report['checked_at'],
             'state' => $report['state'], 'targets' => $rows];
     }
 
     public function snapshot(array $status, int $now): array
     {
         $config = $this->configuration(data_get($status, 'machine.is_active', true) !== false);
-        $result = ['source' => 'agent_outbound_icmp', 'criterion' => 'any_target_success',
+        $result = ['source' => 'agent_outbound_icmp', 'criterion' => 'any_target_success', 'observed_at' => $now,
             'status' => $config['enabled'] ? 'unknown' : ($config['targets'] === [] ? 'unconfigured' : 'disabled'),
             'blocked_by_policy' => null, 'checked_at' => null, 'configured_targets' => count($config['targets']),
             'reachable_targets' => 0, 'unreachable_targets' => 0, 'unknown_targets' => count($config['targets']),
-            'valid_until' => null, 'results' => array_map(fn ($target) => $target + ['status' => 'unknown'], $config['targets']),
+            'valid_until' => null, 'consecutive_failures' => null, 'results' => array_map(fn ($target) => $target + ['status' => 'unknown'], $config['targets']),
             'independent_vantages' => 0];
         if (!$config['enabled']) return $result;
         $report = $this->normalizeReport($status['entry_probe'] ?? null);
-        $at = $status['updated_at'] ?? null;
+        $at = $status['entry_probe_updated_at'] ?? $status['updated_at'] ?? null;
         if (!$report || $report['revision'] !== $config['revision'] || $report['state'] !== 'ready'
             || !is_int($at) || $at > $now + 30 || $at < $now - 300
             || $report['checked_at'] < $now - min(900, $config['interval_seconds'] * 2 + 30)
@@ -80,13 +83,14 @@ class MachineEntryProbe
         $byId = array_column($report['targets'], 'status', 'id');
         $result['results'] = array_map(fn ($target) => $target + ['status' => $byId[$target['id']] ?? 'unknown'], $config['targets']);
         $result['checked_at'] = $report['checked_at'];
+        $result['consecutive_failures'] = $report['consecutive_failures'] ?? null;
         $result['valid_until'] = min($at + 300, $report['checked_at'] + min(900, $config['interval_seconds'] * 2 + 30));
         $result['reachable_targets'] = $reachable;
         $result['unreachable_targets'] = $unreachable;
         $result['unknown_targets'] = count($expected) - $reachable - $unreachable;
         if ($reachable > 0) {
             $result['status'] = 'reachable'; $result['blocked_by_policy'] = false;
-        } elseif ($unreachable === count($expected)) {
+        } elseif ($unreachable === count($expected) && ($report['consecutive_failures'] ?? 2) >= 2) {
             $result['status'] = 'suspected_blocked'; $result['blocked_by_policy'] = true;
         }
         return $result;

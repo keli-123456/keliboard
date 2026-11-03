@@ -152,7 +152,7 @@ class ConfigSave extends FormRequest
         'server_entry_probe_enable' => 'boolean',
         'server_entry_probe_targets' => 'array|max:8',
         'server_entry_probe_targets.*' => 'required|string|ip|distinct',
-        'server_entry_probe_interval' => 'integer|min:60|max:600',
+        'server_entry_probe_interval' => 'integer|min:5|max:600',
         'message_ops_enable' => 'boolean',
         'node_realtime_enable' => 'boolean',
         'node_realtime_path' => 'nullable|string|max:100',

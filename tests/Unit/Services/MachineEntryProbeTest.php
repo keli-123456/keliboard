@@ -61,6 +61,26 @@ final class MachineEntryProbeTest extends TestCase
         }
     }
 
+    public function test_new_agents_require_two_complete_failure_rounds_but_never_count_errors_or_skips_as_failures(): void
+    {
+        $this->settings(['server_entry_probe_interval' => 5]);
+        $this->assertSame(5, $this->probe->configuration()['interval_seconds']);
+        foreach ([0, 1] as $count) {
+            $result = $this->assess(['unreachable', 'unreachable', 'unreachable'], ['consecutive_failures' => $count]);
+            $this->assertSame('unknown', $result['status']); $this->assertNull($result['blocked_by_policy']);
+        }
+        $this->assertSame('suspected_blocked', $this->assess(['unreachable', 'unreachable', 'unreachable'], ['consecutive_failures' => 2])['status']);
+        foreach ([['unreachable'], ['unreachable', 'error', 'unreachable']] as $states) {
+            $this->assertSame('unknown', $this->assess($states, ['consecutive_failures' => 2])['status']);
+        }
+        $this->assertSame('reachable', $this->assess(['reachable'], ['consecutive_failures' => 0])['status']);
+        foreach ([-1, 3, '2', null] as $bad) {
+            $this->assertNull($this->probe->normalizeReport($this->report(['reachable'], ['consecutive_failures' => $bad])));
+        }
+        $status = ['updated_at' => 1030, 'entry_probe_updated_at' => 600, 'entry_probe' => $this->report(['reachable'])];
+        $this->assertSame('unknown', $this->probe->snapshot($status, 1030)['status']);
+    }
+
     public function test_expired_future_pending_wrong_revision_and_foreign_targets_are_unknown(): void
     {
         foreach ([['revision' => str_repeat('a', 64)], ['checked_at' => 500], ['checked_at' => 2000],
@@ -98,6 +118,10 @@ final class MachineEntryProbeTest extends TestCase
         $this->assertNotNull(MachineEntryProbe::publicIp('2606:4700:4700::1111'));
         $this->assertTrue($validator->make(['server_entry_probe_targets' => array_fill(0, 9, '8.8.8.8')], $rules)->fails());
         $this->assertTrue($validator->make(['server_entry_probe_interval' => 1], $rules)->fails());
+        $this->assertTrue($validator->make(['server_entry_probe_interval' => 4], $rules)->fails());
+        $this->assertTrue($validator->make(['server_entry_probe_interval' => 5], $rules)->passes());
+        $this->assertTrue($validator->make(['server_entry_probe_interval' => 600], $rules)->passes());
+        $this->assertTrue($validator->make(['server_entry_probe_interval' => 601], $rules)->fails());
     }
 
     public function test_report_projection_strips_untrusted_fields_and_rejects_duplicate_results(): void

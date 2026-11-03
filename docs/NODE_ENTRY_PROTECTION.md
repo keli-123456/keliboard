@@ -55,7 +55,8 @@ false-positive impact and incident response time require separate evaluation.
 
 Server Management / Domestic Probes contains `server_entry_probe_enable` (default
 false), `server_entry_probe_targets` (up to 8 public literal IPs), and
-`server_entry_probe_interval` (60-600 seconds, default 120). Administrators choose
+`server_entry_probe_interval` (5-600 seconds, default 120). Short intervals require
+the matching new agent; published v0.1.382 accepts 60-600 seconds. Administrators choose
 and verify the targets' location and ICMP availability; the software validates
 public address scope, not country. No default target is silently activated.
 
@@ -71,6 +72,15 @@ capabilities. Missing tools, unsupported ping implementations, permission errors
 and execution errors report `error`, not `unreachable`. Private, link-local,
 reserved and transition addresses are rejected by both panel and agent.
 
+The Rust machine installer now checks for iputils and attempts to install the
+missing optional package (`iputils-ping` on Debian/Ubuntu/Alpine, `iputils` on
+RPM-based systems/Arch). Existing compatible tools are kept; installed but broken
+packages are not forcibly reinstalled. Failure emits a warning and continues the
+node installation. It never enables probes or changes capabilities, and does not
+refresh Arch repositories or initiate a system upgrade. This installer change
+does not alter already running agents or require a new node binary; existing
+machines need an operator-requested installation of the missing package.
+
 The agent starts one shared worker only after opt-in, runs at most two child
 processes at once, and retains at most 8 panel/machine profiles. Identical command
 renewals do not cause extra probes. A 600-second lease stops new probes if control
@@ -79,13 +89,32 @@ has a bounded deadline. With no active profile the worker waits without periodic
 polling. Results piggyback the next full status report; per-target raw output and
 addresses are not returned by the agent.
 
+The newer worker tries the most recently successful target first and stops on
+any success. Remaining targets are bounded-concurrency fallbacks, not assumed
+failures when skipped. It waits the configured interval after the completed
+round, with no overlaps or catch-up queue. New reports contain a 0-2 consecutive
+failure count; only complete all-unreachable rounds advance it. Errors or success
+reset it. An in-flight round cannot publish after disable/re-enable or a changed
+configuration generation, even if the configuration content is restored.
+
+The existing five-second telemetry accepts a bounded optional probe report and
+stores it only in the credential-scoped telemetry cache. It does not touch machine
+liveness, control/configuration, users, billing or history. Cached probe receipt
+time is separate from resource time, identical/older measurements do not renew it,
+and a newer full status carrying an older probe does not override a newer fast
+measurement. Insight and AI context use this same merged observation; model
+context still strips target IPs. The open detail view uses the existing list
+refresh, not an additional polling loop, and expires observations locally.
+
 The panel derives the operator's requested criterion, rather than accepting a
 client-supplied verdict:
 
 - Any configured target reports `reachable`: `status=reachable`,
   `blocked_by_policy=false` ("block criterion not triggered"), even if others fail.
-- Every configured target reports `unreachable`: `status=suspected_blocked`,
-  `blocked_by_policy=true` ("all targets unreachable; suspected block").
+- Every configured target reports `unreachable` for two complete new-agent
+  rounds: `status=suspected_blocked`, `blocked_by_policy=true`. One round remains
+  unknown pending confirmation. Legacy reports without a consecutive failure
+  count retain the previous one-round criterion.
 - Missing/error results with no success, changed configuration, unknown target
   IDs, duplicate IDs, invalid or expired reports: `status=unknown`, verdict null.
 - Disabled/unconfigured states are explicit. Full status age is limited to 300

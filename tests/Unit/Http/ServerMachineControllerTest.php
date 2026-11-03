@@ -2229,6 +2229,88 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame(413, (new MachineController())->telemetry($request)->getStatusCode());
     }
 
+    private function probeReport(int $at, array $states = ['reachable'], int $failures = 0): array
+    {
+        $config = app(\App\Services\ServerMachine\MachineEntryProbe::class)->configuration();
+        return ['schema' => 1, 'revision' => $config['revision'], 'checked_at' => $at, 'state' => 'ready',
+            'consecutive_failures' => $failures, 'targets' => array_map(fn ($target, $status) => ['id' => $target['id'], 'status' => $status],
+                array_slice($config['targets'], 0, count($states)), $states)];
+    }
+
+    public function test_fast_probe_results_are_projected_without_control_history_or_private_fields(): void
+    {
+        $this->bindSettings(['server_entry_probe_enable' => true, 'server_entry_probe_targets' => ['223.5.5.5', '119.29.29.29'], 'server_entry_probe_interval' => 5]);
+        $machine = ServerMachine::create(['name' => 'probe', 'token' => 'private-synthetic', 'is_active' => true]);
+        $input = $this->telemetryInput($machine); $input['entry_probe'] = $this->probeReport(now()->timestamp);
+        $input['entry_probe']['raw_output'] = 'PRIVATE-TEST'; $input['entry_probe']['targets'][0]['ip'] = '127.0.0.1';
+        $controller = new MachineController();
+        $this->assertSame(401, $controller->telemetry(Request::create('/', 'POST', array_replace($input, ['token' => 'wrong'])))->getStatusCode());
+        $response = $controller->telemetry(Request::create('/', 'POST', $input));
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertArrayNotHasKey('entry_probe', $response->getData(true));
+        $machine->refresh(); $this->assertNull($machine->last_seen_at); $this->assertNull($machine->load_status);
+        $this->assertSame(0, ServerMachineLoadHistory::count());
+        $data = app(\App\Services\ServerMachine\MachineTelemetryService::class)->snapshot($machine);
+        $this->assertSame('reachable', $data['entry_probe']['status']);
+        $this->assertSame('unknown', $data['entry_probe']['results'][1]['status']);
+        $this->assertStringNotContainsString('PRIVATE-TEST', json_encode($data));
+        $this->assertArrayNotHasKey('ip', $data['load_status']['entry_probe']['targets'][0]);
+        $public = (new \App\Http\Controllers\V2\Admin\Server\MachineController())->telemetry(Request::create('/', 'GET', ['ids' => [$machine->id]]))->getData(true)['data'][0];
+        $this->assertSame('reachable', $public['entry_probe']['status']); $this->assertArrayNotHasKey('token', $public);
+        $machine->is_active = false;
+        $this->assertSame('disabled', app(\App\Services\ServerMachine\MachineTelemetryService::class)->snapshot($machine)['entry_probe']['status']);
+        $input['entry_probe']['consecutive_failures'] = -1;
+        $this->assertSame(422, $controller->telemetry(Request::create('/', 'POST', $input))->getStatusCode());
+    }
+
+    public function test_repeated_or_older_probe_measurements_do_not_renew_probe_freshness(): void
+    {
+        $this->bindSettings(['server_entry_probe_enable' => true, 'server_entry_probe_targets' => ['223.5.5.5'], 'server_entry_probe_interval' => 5]);
+        $machine = ServerMachine::create(['name' => 'probe', 'token' => 'synthetic', 'is_active' => true]);
+        $service = app(\App\Services\ServerMachine\MachineTelemetryService::class);
+        try {
+            \Carbon\Carbon::setTestNow('2026-11-03 12:00:00'); $first = now()->timestamp;
+            $input = $this->telemetryInput($machine); $input['entry_probe'] = $this->probeReport($first);
+            $service->receive($machine, $input);
+            \Carbon\Carbon::setTestNow('2026-11-03 12:00:45'); $input['sequence']++;
+            $service->receive($machine, $input);
+            $snapshot = $service->snapshot($machine);
+            $this->assertSame('fresh', $snapshot['telemetry']['state']);
+            $this->assertSame('unknown', $snapshot['entry_probe']['status']);
+            $this->assertSame($first, $snapshot['load_status']['entry_probe_updated_at']);
+            $input['sequence']++; $input['entry_probe'] = $this->probeReport(now()->timestamp, ['unreachable'], 1);
+            $service->receive($machine, $input); $this->assertSame('unknown', $service->snapshot($machine)['entry_probe']['status']);
+            \Carbon\Carbon::setTestNow('2026-11-03 12:00:50'); $input['sequence']++;
+            $input['entry_probe'] = $this->probeReport(now()->timestamp, ['unreachable'], 2); $service->receive($machine, $input);
+            $this->assertSame('suspected_blocked', $service->snapshot($machine)['entry_probe']['status']);
+            $input['sequence']++; $input['entry_probe'] = $this->probeReport($first); $service->receive($machine, $input);
+            $this->assertSame('suspected_blocked', $service->snapshot($machine)['entry_probe']['status']);
+            $input['sequence']++; $input['entry_probe'] = $this->probeReport(now()->timestamp); $service->receive($machine, $input);
+            $this->assertSame('reachable', $service->snapshot($machine)['entry_probe']['status']);
+        } finally { \Carbon\Carbon::setTestNow(); }
+    }
+
+    public function test_fast_probe_and_full_status_are_merged_by_measurement_age_independently_of_resource_age(): void
+    {
+        $this->bindSettings(['server_entry_probe_enable' => true, 'server_entry_probe_targets' => ['223.5.5.5'], 'server_entry_probe_interval' => 5]);
+        $service = app(\App\Services\ServerMachine\MachineTelemetryService::class);
+        $machine = ServerMachine::create(['name' => 'probe', 'token' => 'synthetic', 'is_active' => true]);
+        $now = now()->timestamp;
+        $machine->load_status = ['updated_at' => $now - 500, 'entry_probe' => $this->probeReport($now)];
+        $input = $this->telemetryInput($machine); $service->receive($machine, $input);
+        $this->assertSame('unknown', $service->snapshot($machine)['entry_probe']['status']);
+        $input['sequence']++; $input['entry_probe'] = $this->probeReport($now); $service->receive($machine, $input);
+        $machine->load_status = ['updated_at' => $now + 1, 'entry_probe' => $this->probeReport($now - 20, ['unreachable'], 2)];
+        $this->assertSame('reachable', $service->snapshot($machine)['entry_probe']['status']);
+        $machine->load_status = ['updated_at' => $now + 1, 'entry_probe' => $this->probeReport($now + 1, ['unreachable'], 2)];
+        $this->assertSame('suspected_blocked', $service->snapshot($machine)['entry_probe']['status']);
+        $input['sequence']++; $input['session'] = 'new-session'; $input['entry_probe'] = ['schema' => 1,
+            'revision' => $input['entry_probe']['revision'], 'checked_at' => 0, 'state' => 'pending', 'targets' => []];
+        $machine->load_status = []; $service->receive($machine, $input);
+        $this->assertSame('unknown', $service->snapshot($machine)['entry_probe']['status']);
+        $machine->token = 'rotated'; $this->assertSame('legacy', $service->snapshot($machine)['telemetry']['mode']);
+    }
+
     public function test_fast_telemetry_accepts_missing_network_without_losing_cpu(): void
     {
         $machine = ServerMachine::create(['name' => 'probe', 'token' => 'secret', 'is_active' => true]);

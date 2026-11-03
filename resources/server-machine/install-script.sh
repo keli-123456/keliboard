@@ -346,6 +346,7 @@ select_agent() {
 
 run_installer() {
   if [ "$AGENT_TYPE" = "kelinode-rs" ]; then
+    # The native installer also checks optional iputils ping; failure is nonfatal.
     local args=()
     if [ -n "$RELEASE_BASE_URL" ]; then
       args+=(--release-base-url "$RELEASE_BASE_URL")

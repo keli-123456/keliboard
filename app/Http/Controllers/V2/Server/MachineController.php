@@ -109,11 +109,19 @@ class MachineController extends Controller
             'peaks.cpu' => 'nullable|numeric|min:0|max:100',
             'peaks.rx_rate' => 'nullable|numeric|min:0|max:1000000000000000',
             'peaks.tx_rate' => 'nullable|numeric|min:0|max:1000000000000000',
+            'entry_probe' => 'nullable|array',
         ]);
         if ($validator->fails()) {
             return response()->json(['message' => 'Invalid telemetry payload'], 422);
         }
-        if (!app(MachineTelemetryService::class)->receive($machine, $validator->validated())) {
+        $input = $validator->validated();
+        if (isset($input['entry_probe'])) {
+            $input['entry_probe'] = app(\App\Services\ServerMachine\MachineEntryProbe::class)->normalizeReport($input['entry_probe']);
+            if ($input['entry_probe'] === null) {
+                return response()->json(['message' => 'Invalid probe report'], 422);
+            }
+        }
+        if (!app(MachineTelemetryService::class)->receive($machine, $input)) {
             return response()->json(['message' => 'Telemetry busy'], 429);
         }
         return response()->json(['data' => true, 'telemetry_version' => 1]);

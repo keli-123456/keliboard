@@ -37,10 +37,11 @@ class SubscriptionEntryProtectionService
             $nodes = Server::query()->whereIn('id', array_slice($candidateIds, 0, 16))->where('enabled', true)->where('show', true)
                 ->whereJsonContains('group_ids', (string) $user->group_id)->limit(16)->get(['id', 'machine_id']);
             $ids = $nodes->pluck('machine_id')->filter(fn ($v) => (int) $v > 0)->unique()->take(8)->all();
-            $machines = ServerMachine::query()->whereIn('id', $ids)->where('is_active', true)->limit(8)->get(['id', 'load_status']);
+            $machines = ServerMachine::query()->whereIn('id', $ids)->where('is_active', true)->limit(8)->get(['id', 'token', 'load_status']);
             $key = (string) config('app.key');
             $result['machines'] = $machines->map(function ($machine) use ($user, $key): array {
                 $context = app(MachineEntryProtection::class)->snapshot((array) $machine->load_status, time());
+                $context['reachability'] = app(\App\Services\ServerMachine\MachineTelemetryService::class)->snapshot($machine)['entry_probe'];
                 unset($context['reachability']['results']);
                 return ['ref' => substr(hash_hmac('sha256', $user->id . ':' . $user->token . ':' . $machine->id, $key), 0, 16),
                     'context' => $context];

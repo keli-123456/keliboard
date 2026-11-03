@@ -103,6 +103,19 @@ final class MachineControllerInstallCommandTest extends TestCase
         $this->assertStringContainsString('Dir::State::lists=$work/lists', $canonical);
     }
 
+    public function test_native_installer_checks_optional_iputils_after_base_dependencies(): void
+    {
+        $root = dirname(__DIR__, 3);
+        $canonical = trim(str_replace("\r\n", "\n", (string) file_get_contents($root . '/resources/server-machine/ping-dependency.sh')));
+        $native = str_replace("\r\n", "\n", (string) file_get_contents($root . '/resources/server-machine/kelinode-rs-install.sh'));
+        preg_match('/# BEGIN KELI_PING_DEPENDENCY[^\n]*\n(.*?)\n# END KELI_PING_DEPENDENCY/s', $native, $match);
+        $this->assertSame($canonical, trim($match[1] ?? ''));
+        $this->assertStringContainsString("    install_base_packages\n    keli_install_optional_ping\n", $native);
+        $this->assertStringContainsString('package=iputils-ping', $canonical);
+        $this->assertStringContainsString('package=iputils', $canonical);
+        $this->assertStringContainsString('Continuing node installation.', $canonical);
+    }
+
     public function test_install_command_uses_native_command_as_default_when_kelinode_rs_enabled(): void
     {
         $this->settings->values['server_machine_default_agent'] = 'kelinode-rs';
