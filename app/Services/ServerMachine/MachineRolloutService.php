@@ -14,6 +14,8 @@ use RuntimeException;
 
 class MachineRolloutService
 {
+    private const FIRST_REPORT_GRACE_SECONDS = 180;
+
     public function __construct(private MachineRolloutEvidence $evidence, private MachineUpgradeQueue $upgrades, private MachineReleaseDistributionService $distribution) {}
 
     public function create(int $adminId, array $input): MachineRollout
@@ -123,10 +125,18 @@ class MachineRolloutService
     private function monitor(MachineRolloutTarget $target, ?ServerMachine $machine, MachineRollout $rollout): void
     {
         if (!$machine || !$machine->is_active) throw new RuntimeException('machine_missing');
-        $sample = $this->current($machine);
         $state = $machine->upgrade_state ?? [];
         if (($state['id'] ?? '') !== $target->upgrade_id || ($state['rollout_id'] ?? '') !== $rollout->id) throw new RuntimeException('upgrade_replaced');
         if (($state['status'] ?? '') === 'failed' || ($state['rollback_performed'] ?? false)) throw new RuntimeException('upgrade_failed');
+        if (in_array($state['status'] ?? '', ['queued', 'dispatched', 'running'], true) && now()->timestamp - $target->queued_at > 900) throw new RuntimeException('upgrade_timeout');
+        try {
+            $sample = $this->current($machine);
+        } catch (RuntimeException $error) {
+            // The first post-restart report can precede core metrics. Waiting is not healthy evidence.
+            if (in_array($error->getMessage(), ['observation_unsupported', 'report_stale'], true)
+                && $this->awaitingFirstReport($target, $machine, $rollout)) return;
+            throw $error;
+        }
         if (in_array($state['status'] ?? '', ['queued', 'dispatched', 'running'], true)) {
             if (now()->timestamp - $target->queued_at > 900) throw new RuntimeException('upgrade_timeout');
             return;
@@ -178,6 +188,31 @@ class MachineRolloutService
             }
         }
         $target->save();
+    }
+
+    private function awaitingFirstReport(MachineRolloutTarget $target, ServerMachine $machine, MachineRollout $rollout): bool
+    {
+        $state = $machine->upgrade_state ?? [];
+        $now = now()->timestamp; $queued = (int) $target->queued_at;
+        if ($target->status !== 'upgrading' || $target->watch || $queued <= 0 || $queued > $now || $now - $queued > 900
+            || !in_array($state['status'] ?? '', ['queued', 'dispatched', 'running', 'succeeded'], true)) return false;
+        $start = $queued;
+        if (($state['status'] ?? '') === 'succeeded') {
+            $status = $machine->load_status ?? [];
+            if (data_get($status, 'runtime.binary_sha256') !== $rollout->release['binary_sha256']
+                || ltrim((string) ($status['version'] ?? ''), 'vV') !== ltrim($rollout->release['version'], 'vV')
+                || ($state['running_binary_sha256'] ?? '') !== $rollout->release['binary_sha256']) return false;
+            $finished = $state['finished_at'] ?? null;
+            if (is_int($finished) && $finished >= $queued && $finished <= $now) $start = $finished;
+        }
+        $status = $machine->load_status ?? [];
+        $observation = app(MachineRuntimeObservation::class)->normalize(data_get($status, 'runtime.observation'));
+        $baseline = $target->baseline ?? []; $before = $baseline[count($baseline) - 1]['oom'] ?? null;
+        if ($observation && $observation['oom'] && $before && ($observation['oom']['scope'] !== $before['scope']
+            || $observation['oom']['oom'] !== $before['oom'] || $observation['oom']['oom_kill'] !== $before['oom_kill'])) return false;
+        $metrics = app(MachineInsightService::class)->processMetrics($status);
+        if (($metrics['memory_trim_error_total'] ?? 0) > 0 || ($metrics['user_apply_error_total'] ?? 0) > 0) return false;
+        return $now - $start <= self::FIRST_REPORT_GRACE_SECONDS;
     }
 
     private function ready(ServerMachine $machine): void

@@ -259,6 +259,78 @@ final class MachineRolloutServiceTest extends TestCase
         $this->assertSame('running', $task->fresh()->status);
     }
 
+    public function test_first_incomplete_post_upgrade_report_waits_without_inventing_samples_or_dispatching_other_machines(): void
+    {
+        $a = $this->machine(); $b = $this->machine('other'); $task = $this->create([$a, $b]); $this->service->tick($task->id);
+        Carbon::setTestNow(now()->addMinute());
+        $status = $this->reportStatus(true, 20); unset($status['metrics']);
+        $this->report($a, $status); $this->service->tick($task->id);
+        $target = $task->targets()->first();
+        $this->assertSame('running', $task->fresh()->status); $this->assertNull($target->watch);
+        $this->assertSame([], $target->samples); $this->assertSame(0, $target->matched_count);
+        $this->assertNull($b->fresh()->upgrade_state);
+        Carbon::setTestNow(now()->addMinute()); $this->report($a, $this->reportStatus(true, 80)); $this->service->tick($task->id);
+        $this->assertNotNull($target->fresh()->watch); $this->assertSame([], $target->fresh()->samples);
+        $this->assertSame('running', $task->fresh()->status);
+    }
+
+    public function test_first_report_wait_has_a_fixed_deadline_not_renewed_by_fresh_partial_reports(): void
+    {
+        $a = $this->machine(); $task = $this->create([$a]); $this->service->tick($task->id);
+        Carbon::setTestNow(now()->addSeconds(120));
+        $status = $this->reportStatus(true, 10); unset($status['metrics']); $this->report($a, $status);
+        $state = $a->fresh()->upgrade_state; $state['finished_at'] = now()->timestamp; $a->update(['upgrade_state' => $state]);
+        $this->service->tick($task->id); $this->assertSame('running', $task->fresh()->status);
+        Carbon::setTestNow(now()->addSeconds(181)); $status['updated_at'] = now()->timestamp; $this->report($a, $status);
+        $this->service->tick($task->id);
+        $this->assertSame('paused', $task->fresh()->status); $this->assertSame('observation_unsupported', $task->fresh()->reason);
+    }
+
+    public function test_missing_first_report_after_the_overall_upgrade_deadline_cannot_extend_waiting(): void
+    {
+        $a = $this->machine(); $task = $this->create([$a]); $this->service->tick($task->id);
+        Carbon::setTestNow(now()->addSeconds(901));
+        $status = $this->reportStatus(true, 20); unset($status['metrics']); $this->report($a, $status);
+        $state = $a->fresh()->upgrade_state; $state['finished_at'] = now()->timestamp; $a->update(['upgrade_state' => $state]);
+        $this->service->tick($task->id); $this->assertSame('paused', $task->fresh()->status);
+    }
+
+    public function test_loss_of_metrics_after_a_valid_watch_is_not_treated_as_startup_waiting(): void
+    {
+        $a = $this->machine(); $task = $this->create([$a]); $this->service->tick($task->id);
+        $this->report($a, $this->reportStatus(true, 10)); $this->service->tick($task->id);
+        $this->assertNotNull($task->targets()->first()->watch);
+        Carbon::setTestNow(now()->addSeconds(30)); $status = $this->reportStatus(true, 40); unset($status['metrics']);
+        $this->report($a, $status); $this->service->tick($task->id);
+        $this->assertSame('paused', $task->fresh()->status);
+    }
+
+    public function test_known_upgrade_failure_or_replacement_is_not_hidden_by_missing_startup_metrics(): void
+    {
+        foreach (['failed', 'replaced'] as $failure) {
+            $a = $this->machine(); $task = $this->create([$a]); $this->service->tick($task->id);
+            $state = $a->fresh()->upgrade_state;
+            if ($failure === 'failed') $state['status'] = 'failed'; else $state['id'] = (string) Str::uuid();
+            $a->update(['upgrade_state' => $state, 'load_status' => []]); $this->service->tick($task->id);
+            $this->assertSame('paused', $task->fresh()->status);
+            $this->assertSame($failure === 'failed' ? 'upgrade_failed' : 'upgrade_replaced', $task->fresh()->reason);
+        }
+    }
+
+    public function test_known_safety_changes_or_wrong_binary_do_not_receive_a_startup_grace(): void
+    {
+        foreach (['oom', 'scope', 'runtime_error', 'binary'] as $fault) {
+            $a = $this->machine(); $task = $this->create([$a]); $this->service->tick($task->id);
+            $status = $this->reportStatus(true, 10); unset($status['metrics']['keli_core_rs']['keli_core_process_rss_bytes']);
+            if ($fault === 'oom') $status['runtime']['observation']['oom']['oom_kill'] = 1;
+            if ($fault === 'scope') $status['runtime']['observation']['oom']['scope'] = str_repeat('f', 64);
+            if ($fault === 'runtime_error') $status['metrics']['keli_core_rs']['keli_core_user_delta_apply_error_total'] = 1;
+            if ($fault === 'binary') $status['runtime']['binary_sha256'] = str_repeat('f', 64);
+            $this->report($a, $status); $this->service->tick($task->id);
+            $this->assertSame('paused', $task->fresh()->status, $fault);
+        }
+    }
+
     public function test_load_mismatch_resets_the_observation_window(): void
     {
         $a = $this->machine(); $task = $this->create([$a]); $this->service->tick($task->id);
