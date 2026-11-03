@@ -99,6 +99,16 @@ final class SubscriptionAiBenchmarkServiceTest extends TestCase
 
     private function decision(): array { return ['action' => 'temporary_block', 'duration_seconds' => 60]; }
 
+    private function teachingCase(object $run, int $user, string $cohort, ?string $truth, int $marker): int
+    {
+        $action = $this->action($user);
+        $evidence = array_replace($this->evidence(), ['features' => [['id' => 1, 'current_bucket_pull_counts' => [$marker]]]]);
+        return DB::table(Benchmark::CASES)->insertGetId(['run_id' => $run->id, 'action_id' => $action->id,
+            'subject_hash' => hash('sha256', 'synthetic-case-' . $action->id), 'cohort' => $cohort,
+            'evidence' => json_encode($evidence), 'legacy_prediction' => true, 'evidence_age_seconds' => 1,
+            'created_at' => time(), 'completed_at' => time(), 'truth' => $truth]);
+    }
+
     private function seedPassing(object $run): void
     {
         $rows = []; $candidate = 1;
@@ -241,13 +251,15 @@ final class SubscriptionAiBenchmarkServiceTest extends TestCase
     public function test_learning_examples_never_use_holdout_truth_and_are_frozen_for_the_next_run(): void
     {
         $run = $this->start(); $this->seedPassing($run);
+        $training = $this->action();
         $sample = (array) DB::table(Benchmark::CASES)->first(); unset($sample['id']);
-        $sample['cohort'] = 'training'; $sample['subject_hash'] = str_repeat('0', 64); $sample['action_id'] = 99998; $sample['evidence'] = json_encode(['source' => 'training-only-marker']);
+        $sample['cohort'] = 'training'; $sample['subject_hash'] = str_repeat('0', 64); $sample['action_id'] = $training->id;
+        $sample['evidence'] = json_encode(array_replace($this->evidence(), ['features' => [['id' => 1, 'current_bucket_pull_counts' => [7]]]]));
         DB::table(Benchmark::CASES)->insert($sample);
         $next = $this->bench->start(2, 99, true); $new = DB::table(Benchmark::RUNS)->where('id', $next['run']['id'])->first();
         $teaching = json_decode($new->teaching, true); $this->assertCount(1, $teaching['reviewed_training_examples']);
-        $this->assertSame('training-only-marker', $teaching['reviewed_training_examples'][0]['evidence']['source']);
-        DB::table(Benchmark::CASES)->where('action_id', 99998)->update(['truth' => 'abuse']);
+        $this->assertSame([7], $teaching['reviewed_training_examples'][0]['evidence']['features'][0]['current_bucket_pull_counts']);
+        DB::table(Benchmark::CASES)->where('action_id', $training->id)->update(['truth' => 'abuse']);
         $this->assertSame($new->teaching, DB::table(Benchmark::RUNS)->where('id', $new->id)->value('teaching'));
     }
 
@@ -384,6 +396,89 @@ final class SubscriptionAiBenchmarkServiceTest extends TestCase
         $this->assertSame(0, $view['report']['normal']);
         $this->assertSame(0, $view['report']['abuse']);
         $this->assertFalse($view['report']['eligible']);
+    }
+
+    public function test_rule_knowledge_and_training_replays_are_frozen_without_exporting_holdout_answers(): void
+    {
+        $old = $this->start();
+        DB::table('v2_user')->insert(['id' => 13, 'site_id' => 2, 'is_admin' => false]);
+        $this->teachingCase($old, 10, 'training', 'benign', 701);
+        $this->teachingCase($old, 13, 'training', null, 702);
+        $this->teachingCase($old, 12, 'holdout', 'abuse', 999999);
+        $this->bench->cancel($old->id, 99);
+        $view = $this->bench->start(2, 99, true);
+        $row = DB::table(Benchmark::RUNS)->where('id', $view['run']['id'])->first();
+        $lesson = json_decode($row->teaching, true, 32, JSON_THROW_ON_ERROR);
+        $this->assertCount(15, $lesson['legacy_rule_knowledge']['rules']);
+        $this->assertCount(1, $lesson['reviewed_training_examples']);
+        $this->assertSame('independently_reviewed', $lesson['reviewed_training_examples'][0]['label_kind']);
+        $this->assertSame('benign', $lesson['reviewed_training_examples'][0]['truth']);
+        $this->assertCount(1, $lesson['historical_rule_replays']);
+        $this->assertSame('unverified_legacy_reference', $lesson['historical_rule_replays'][0]['label_kind']);
+        $this->assertNull($lesson['historical_rule_replays'][0]['truth']);
+        $this->assertFalse($lesson['historical_rule_replays'][0]['exact_trigger_codes_available']);
+        $this->assertTrue($lesson['historical_rule_replays'][0]['same_rule_reference']);
+        $this->assertStringNotContainsString('999999', $row->teaching);
+        $this->assertStringNotContainsString('user_id', $row->teaching);
+        $this->assertSame(1, $view['teaching_summary']['verified_examples']);
+        $this->assertSame(1, $view['teaching_summary']['unverified_replays']);
+        $this->assertFalse($view['teaching_summary']['model_training']);
+        $this->assertSame(0, $view['report']['sample_count']);
+        DB::table(Benchmark::CASES)->where('run_id', $old->id)->update(['truth' => 'abuse']);
+        $this->assertSame($row->teaching, DB::table(Benchmark::RUNS)->where('id', $row->id)->value('teaching'));
+    }
+
+    public function test_unverified_replays_cannot_unlock_a_same_version_retake_or_become_ground_truth(): void
+    {
+        $run = $this->start(); $this->teachingCase($run, 10, 'training', null, 703);
+        $this->bench->cancel($run->id, 99);
+        try { $this->bench->start(2, 99, true); $this->fail('Weak labels unlocked a retake'); }
+        catch (\RuntimeException $error) { $this->assertSame('benchmark_duplicate_experiment', $error->getMessage()); }
+        $this->assertSame(1, DB::table(Benchmark::RUNS)->count());
+        $this->assertNull(DB::table(Benchmark::CASES)->value('truth'));
+        $this->assertSame(0, DB::table('v2_subscription_ai_benchmark_label')->count());
+    }
+
+    public function test_missing_historical_rule_versions_are_unknown_not_silently_replaced_with_current_settings(): void
+    {
+        $run = $this->start(); $this->teachingCase($run, 10, 'training', null, 704);
+        DB::table(Benchmark::RUNS)->where('id', $run->id)->update(['teaching' => json_encode(['rule_intents' => Benchmark::RULE_INTENTS, 'reviewed_training_examples' => []])]);
+        $this->ai->provider['model'] = 'next-model';
+        $next = $this->bench->start(2, 99, true);
+        $lesson = json_decode((string) DB::table(Benchmark::RUNS)->where('id', $next['run']['id'])->value('teaching'), true);
+        $this->assertCount(1, $lesson['historical_rule_replays']);
+        $this->assertNull($lesson['historical_rule_replays'][0]['rule_reference_version']);
+        $this->assertNull($lesson['historical_rule_replays'][0]['same_rule_reference']);
+        $this->assertFalse($lesson['historical_rule_replays'][0]['independent_details_available']);
+    }
+
+    public function test_holdout_identity_is_excluded_from_teaching_even_after_misclassification_or_key_rotation(): void
+    {
+        $run = $this->start(); $this->teachingCase($run, 10, 'holdout', 'abuse', 999991);
+        $this->teachingCase($run, 10, 'training', 'benign', 999992);
+        config(['app.key' => 'rotated-synthetic-key']);
+        $next = $this->bench->start(2, 99, true);
+        $lesson = (string) DB::table(Benchmark::RUNS)->where('id', $next['run']['id'])->value('teaching');
+        $this->assertSame(0, $next['teaching_summary']['verified_examples']);
+        $this->assertSame(0, $next['teaching_summary']['unverified_replays']);
+        $this->assertStringNotContainsString('999991', $lesson);
+        $this->assertStringNotContainsString('999992', $lesson);
+    }
+
+    public function test_teaching_deduplicates_accounts_and_excludes_current_staff_and_other_sites(): void
+    {
+        $run = $this->start();
+        for ($i = 0; $i < 7; $i++) $this->teachingCase($run, 10, 'training', null, 710 + $i);
+        $this->teachingCase($run, 11, 'training', 'benign', 999993);
+        $this->teachingCase($run, 12, 'training', 'benign', 999994);
+        $this->ai->provider['model'] = 'next-model';
+        $next = $this->bench->start(2, 99, true);
+        $this->assertSame(1, $next['teaching_summary']['unverified_replays']);
+        $this->assertSame(0, $next['teaching_summary']['verified_examples']);
+        $lesson = (string) DB::table(Benchmark::RUNS)->where('id', $next['run']['id'])->value('teaching');
+        $this->assertStringNotContainsString('999993', $lesson);
+        $this->assertStringNotContainsString('999994', $lesson);
+        $this->assertLessThan(32768, strlen($lesson));
     }
 
     public function test_key_rotation_cannot_turn_a_previous_holdout_account_into_training_data(): void

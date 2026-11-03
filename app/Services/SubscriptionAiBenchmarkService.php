@@ -35,7 +35,7 @@ class SubscriptionAiBenchmarkService
     {
         $provider = SubscriptionRiskAiSettings::forProvider(app(TicketAiAssistantService::class)->providerSettingsForInternalUse());
         $files = [];
-        foreach (['app/Services/SubscriptionRiskAiSettings.php', 'app/Services/TicketAiProviderClient.php', 'app/Services/SubscriptionAiAutomationService.php', 'app/Services/SubscriptionAiBehaviorService.php', 'app/Services/SubscriptionAiBenchmarkService.php', 'app/Services/SubscriptionEntryProtectionService.php', 'app/Services/ServerMachine/MachineEntryProtection.php', 'app/Services/ServerMachine/MachineEntryProbe.php', 'app/Http/Controllers/V1/Client/ClientController.php', 'plugins-core/SubscriptionControl/Plugin.php', 'plugins-core/SubscriptionControl/Services/SubscriptionRiskAnalyzer.php', 'plugins-core/SubscriptionControl/config.json'] as $file) {
+        foreach (['app/Services/SubscriptionRiskAiSettings.php', 'app/Services/TicketAiProviderClient.php', 'app/Services/SubscriptionAiAutomationService.php', 'app/Services/SubscriptionAiBehaviorService.php', 'app/Services/SubscriptionAiBenchmarkService.php', 'app/Services/SubscriptionAiRuleKnowledgeService.php', 'app/Services/SubscriptionEntryProtectionService.php', 'app/Services/ServerMachine/MachineEntryProtection.php', 'app/Services/ServerMachine/MachineEntryProbe.php', 'app/Http/Controllers/V1/Client/ClientController.php', 'plugins-core/SubscriptionControl/Plugin.php', 'plugins-core/SubscriptionControl/Services/SubscriptionRiskAnalyzer.php', 'plugins-core/SubscriptionControl/config.json'] as $file) {
             $files[$file] = hash_file('sha256', base_path($file));
         }
         foreach (['SubscriptionRiskResponsePolicy', 'SubscriptionTrustedEgressResolver', 'SubscriptionClientIpResolver', 'ManagedNodeRouteService'] as $name) {
@@ -66,6 +66,39 @@ class SubscriptionAiBenchmarkService
         return $run->status;
     }
 
+    private function teachingCases(int $siteId, bool $verified, string $referenceVersion): array
+    {
+        $query = DB::table(self::CASES . ' as c')->join(self::RUNS . ' as r', 'r.id', '=', 'c.run_id')
+            ->join('v2_subscription_ai_action as a', 'a.id', '=', 'c.action_id')->join('v2_user as u', 'u.id', '=', 'a.user_id')
+            ->where('r.site_id', $siteId)->where('a.site_id', $siteId)->whereRaw('COALESCE(u.site_id, 0) = ?', [$siteId])
+            ->where('u.is_admin', false)->where('u.is_staff', false)->where('u.banned', false)->where('c.cohort', 'training')->whereNotNull('c.completed_at')
+            ->whereNotExists(function ($held): void {
+                $held->selectRaw('1')->from(self::CASES . ' as h')->join('v2_subscription_ai_action as ha', 'ha.id', '=', 'h.action_id')
+                    ->where('h.cohort', 'holdout')->whereColumn('ha.user_id', 'a.user_id');
+            });
+        if ($verified) $query->whereIn('c.truth', ['benign', 'abuse']);
+        else $query->where(fn($q) => $q->whereNull('c.truth')->orWhere('c.truth', 'uncertain'));
+        $rows = $query->orderByDesc('c.id')->limit(24)->get(['c.evidence', 'c.truth', 'c.legacy_prediction', 'a.user_id', 'r.teaching as run_teaching']);
+        $seen = []; $examples = [];
+        foreach ($rows as $row) {
+            if (isset($seen[$row->user_id])) continue;
+            $evidence = json_decode($row->evidence, true, 32, JSON_THROW_ON_ERROR);
+            if (!is_array($evidence) || ($evidence['source'] ?? '') !== 'independent_behavior_v1') continue;
+            $seen[$row->user_id] = true;
+            $historical = json_decode($row->run_teaching, true, 32, JSON_THROW_ON_ERROR);
+            $version = $historical['legacy_rule_knowledge']['version'] ?? null;
+            if (!is_string($version) || !preg_match('/^[a-f0-9]{64}$/', $version)) $version = null;
+            $examples[] = ['ref' => ($verified ? 'T' : 'W') . (count($examples) + 1),
+                'evidence' => app(SubscriptionAiRuleKnowledgeService::class)->teachingEvidence($evidence),
+                'truth' => $verified ? $row->truth : null, 'label_kind' => $verified ? 'independently_reviewed' : 'unverified_legacy_reference',
+                'old_rule_intervened' => $row->legacy_prediction === null ? null : (bool) $row->legacy_prediction,
+                'exact_trigger_codes_available' => false, 'independent_details_available' => false,
+                'rule_reference_version' => $version, 'same_rule_reference' => $version === null ? null : $version === $referenceVersion];
+            if (count($examples) === 4) break;
+        }
+        return $examples;
+    }
+
     public function start(int $siteId, int $adminId, bool $confirmed): array
     {
         if (!$this->available()) throw new RuntimeException('benchmark_migration_required');
@@ -82,14 +115,17 @@ class SubscriptionAiBenchmarkService
             DB::transaction(function () use ($siteId, $adminId, $context): void {
                 $old = DB::table(self::RUNS)->where('site_id', $siteId)->orderByDesc('id')->lockForUpdate()->first();
                 if ($old && $this->runStatus($old, $context) === 'collecting') throw new RuntimeException('benchmark_in_progress');
-                $examples = DB::table(self::CASES . ' as c')->join(self::RUNS . ' as r', 'r.id', '=', 'c.run_id')
-                    ->where('r.site_id', $siteId)->where('c.cohort', 'training')->whereIn('c.truth', ['benign', 'abuse'])->orderByDesc('c.id')->limit(4)
-                    ->get(['c.evidence', 'c.truth', 'c.legacy_prediction'])->map(fn($row) => [
-                        'evidence' => json_decode($row->evidence, true, 32, JSON_THROW_ON_ERROR), 'truth' => $row->truth,
-                        'old_rule_intervened' => $row->legacy_prediction === null ? null : (bool) $row->legacy_prediction,
-                    ])->all();
-                $teaching = json_encode(['rule_intents' => self::RULE_INTENTS, 'reviewed_training_examples' => $examples], JSON_THROW_ON_ERROR);
-                if ($old && $old->context_key === $context && $old->teaching === $teaching && DB::table(self::CASES)->where('run_id', $old->id)->exists()) throw new RuntimeException('benchmark_duplicate_experiment');
+                $reference = app(SubscriptionAiRuleKnowledgeService::class)->snapshot();
+                $material = ['rule_intents' => self::RULE_INTENTS, 'legacy_rule_knowledge' => $reference,
+                    'reviewed_training_examples' => $this->teachingCases($siteId, true, $reference['version']), 'historical_rule_replays' => $this->teachingCases($siteId, false, $reference['version']),
+                    'boundary' => 'Historical replays are unverified, not ground truth. Allowed access does not prove benign use; refusal does not prove abuse. No holdout account is a teaching example. This is prompt reference, not model training.'];
+                $previous = $old ? json_decode($old->teaching, true, 32, JSON_THROW_ON_ERROR) : [];
+                $comparable = $material;
+                // More unverified observations cannot justify clearing and retaking the same exam.
+                unset($previous['historical_rule_replays'], $comparable['historical_rule_replays']);
+                if ($old && $old->context_key === $context && $previous === $comparable && DB::table(self::CASES)->where('run_id', $old->id)->exists()) throw new RuntimeException('benchmark_duplicate_experiment');
+                $teaching = json_encode($material, JSON_THROW_ON_ERROR);
+                if (strlen($teaching) > 32768) throw new RuntimeException('teaching_material_too_large');
                 if ($old && $old->status === 'collecting') {
                     DB::table(self::RUNS)->where('id', $old->id)->update(['status' => 'cancelled', 'cancelled_by' => $adminId, 'cancelled_at' => time()]);
                 }
@@ -199,6 +235,7 @@ class SubscriptionAiBenchmarkService
         return ['available' => true, 'site_id' => $siteId, 'run' => $run ? ['id' => (int) $run->id, 'site_id' => (int) $run->site_id, 'status' => $this->runStatus($run, $this->contextKey($settings)), 'created_at' => (int) $run->created_at] : null,
             'report' => $run ? $this->report($run, $settings) : ['eligible' => false, 'reasons' => ['benchmark_not_started']], 'cases' => $cases, 'reviewed_cases' => $reviewed,
             'review_progress' => $progress ? array_map('intval', (array) $progress) : null,
+            'teaching_summary' => $run ? app(SubscriptionAiRuleKnowledgeService::class)->summary(json_decode($run->teaching, true, 32, JSON_THROW_ON_ERROR)) : null,
             'pilot' => $pilot ? ['user_ids' => json_decode($pilot->user_ids, true), 'expires_at' => (int) $pilot->expires_at, 'approved_by' => (int) $pilot->approved_by] : null];
     }
 

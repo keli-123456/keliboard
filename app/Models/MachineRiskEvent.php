@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class MachineRiskEvent extends Model
 {
@@ -17,4 +18,9 @@ class MachineRiskEvent extends Model
         'ai_finished_at' => 'integer', 'reviewed_at' => 'integer', 'reviewed_by' => 'integer',
         'input_tokens' => 'integer', 'output_tokens' => 'integer', 'created_at' => 'integer', 'updated_at' => 'integer',
     ];
+
+    public function investigation(): HasOne
+    {
+        return $this->hasOne(MachineRiskInvestigation::class, 'event_id');
+    }
 }

@@ -178,6 +178,73 @@ final class SubscriptionAiAutomationServiceTest extends TestCase
         foreach (['credential_hash', 'policy_hash', 'intent_key'] as $secret) $this->assertArrayNotHasKey($secret, $record->toArray());
     }
 
+    public function test_shadow_analysis_receives_versioned_rule_reference_and_saves_an_opinion_not_a_fact_label(): void
+    {
+        $behavior = $this->independent(); $user = $this->user();
+        (require base_path('database/migrations/2026_11_02_000003_create_subscription_ai_benchmarks.php'))->up();
+        Plugin::query()->first()->update(['config' => json_encode(['multi_ua_allowed_count' => 5, 'ua_blacklist' => 'private-ua-marker', 'source_ip_deny_cidrs' => '203.0.113.55'])]);
+        $this->provider->override = ['action' => 'observe', 'duration_seconds' => 0, 'confidence' => 0.6, 'evidence_ids' => [1, 3], 'reason' => '现有证据不足以认定泄露。',
+            'rule_review' => ['rule_ids' => ['multi_ua_pull'], 'assessment' => 'insufficient', 'reason' => '多客户端可能属于正常使用，不能直接认定共享。']];
+        $behavior->observe($user, '192.0.2.50', 'mihomo', 'allowed'); $record = $this->active();
+        $this->assertCount(1, $this->provider->calls);
+        $payload = json_decode($this->provider->calls[0][1]['content'], true, 32, JSON_THROW_ON_ERROR);
+        $pack = $payload['lesson']['legacy_rule_knowledge']; $rules = array_column($pack['rules'], null, 'id');
+        $this->assertCount(15, $pack['rules']);
+        $this->assertSame(5, $rules['multi_ua_pull']['configured_parameters']['multi_ua_allowed_count']);
+        $this->assertSame($pack['version'], $record->decision['learning_material']['knowledge_version']);
+        $this->assertFalse($record->decision['learning_material']['model_training']);
+        $this->assertSame('insufficient', $record->decision['rule_review']['assessment']);
+        $this->assertSame('completed', $record->status); $this->assertSame('shadow_proposal_not_executed', $record->outcome);
+        $this->assertSame(0, DB::table('v2_subscription_ai_benchmark_label')->count());
+        $this->assertSame(0, DB::table('v2_subscription_ai_admission')->count());
+        $this->assertNull($this->service->restriction($user));
+        $this->assertSame('private-token-10', $user->fresh()->token); $this->assertSame('private-uuid-10', $user->fresh()->uuid);
+        foreach (['private-ua-marker', '203.0.113.55', 'private-token-10', 'private-uuid-10', '192.0.2.50'] as $private) $this->assertStringNotContainsString($private, json_encode($this->provider->calls));
+        Bus::assertNotDispatched(SendEmailJob::class);
+    }
+
+    public function test_a_model_cannot_turn_reference_material_into_permissions_or_fabricated_review_metadata(): void
+    {
+        $behavior = $this->independent(); $user = $this->user();
+        $this->provider->override = ['action' => 'observe', 'duration_seconds' => 0, 'confidence' => 0.6, 'evidence_ids' => [1], 'reason' => 'synthetic',
+            'learning_material' => ['model_training' => true]];
+        $behavior->observe($user, '192.0.2.50', 'mihomo', 'allowed'); $record = $this->active();
+        $this->assertSame('failed', $record->status); $this->assertSame('unsafe_decision', $record->outcome);
+        $this->assertNull($this->service->restriction($user));
+        $this->assertFalse($user->fresh()->banned);
+    }
+
+    public function test_rule_reference_changes_during_a_call_invalidate_the_result_without_changing_policy(): void
+    {
+        $behavior = $this->independent(); $user = $this->user();
+        $before = $this->service->settings();
+        $this->provider->during = fn() => Plugin::query()->first()->update(['config' => '{"multi_ua_allowed_count":7}']);
+        $behavior->observe($user, '192.0.2.50', 'mihomo', 'allowed'); $record = $this->active();
+        $this->assertSame('failed', $record->status); $this->assertSame('context_changed', $record->outcome);
+        $this->assertSame($before, $this->service->settings());
+        $this->assertNull($this->service->restriction($user));
+        $this->assertSame('private-token-10', $user->fresh()->token);
+    }
+
+    public function test_rule_review_schema_is_bounded_and_cannot_reference_unknown_rules_or_execute_commands(): void
+    {
+        $settings = SubscriptionAiAutomationService::DEFAULTS;
+        $evidence = ['event_ids' => [1], 'event_families' => [1 => 'timing'], 'source' => 'independent_behavior_v1'];
+        $decision = ['action' => 'observe', 'duration_seconds' => 0, 'confidence' => 0.5, 'evidence_ids' => [1], 'reason' => 'synthetic'];
+        foreach ([
+            ['rule_ids' => ['unknown_rule'], 'assessment' => 'agree', 'reason' => 'synthetic'],
+            ['rule_ids' => [], 'assessment' => 'agree', 'reason' => 'synthetic'],
+            ['rule_ids' => ['rate_limit', 'rate_limit'], 'assessment' => 'agree', 'reason' => 'synthetic'],
+            ['rule_ids' => ['rate_limit'], 'assessment' => 'confirmed_abuse', 'reason' => 'synthetic'],
+            ['rule_ids' => ['rate_limit'], 'assessment' => 'agree', 'reason' => str_repeat('x', 501)],
+            ['rule_ids' => ['rate_limit'], 'assessment' => 'agree', 'reason' => 'synthetic', 'command' => 'do-not-execute'],
+        ] as $review) {
+            try { $this->service->validateDecision($decision + ['rule_review' => $review], $evidence, $settings); $this->fail('Invalid review accepted'); }
+            catch (\RuntimeException $error) { $this->assertSame('unsafe_decision', $error->getMessage()); }
+        }
+        $this->assertArrayNotHasKey('rule_review', $this->service->validateDecision($decision, $evidence, $settings));
+    }
+
     public function test_observational_baseline_or_single_signal_never_becomes_an_action(): void
     {
         $this->user(); $this->enable(); $this->evidence(10, array_fill(0, 8, 'behavior_baseline_observation'));

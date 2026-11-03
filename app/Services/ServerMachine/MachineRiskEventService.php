@@ -6,6 +6,7 @@ namespace App\Services\ServerMachine;
 
 use App\Jobs\RecordMachineRiskEventJob;
 use App\Models\MachineRiskEvent;
+use App\Models\MachineRiskInvestigation;
 use App\Models\ServerMachine;
 use App\Models\User;
 use App\Services\SubscriptionAiBehaviorService;
@@ -76,22 +77,27 @@ class MachineRiskEventService
         $event = MachineRiskEvent::query()->where('episode_key', $episode['episode_key'])->first();
         if (!$event) {
             $evidence = $this->evidence($machine, $episode);
-            $event = MachineRiskEvent::query()->firstOrCreate(['episode_key' => $episode['episode_key']], [
+            $event = DB::transaction(function () use ($episode, $machine, $recoveredAt, $evidence): MachineRiskEvent {
+                $event = MachineRiskEvent::query()->firstOrCreate(['episode_key' => $episode['episode_key']], [
                 'machine_id' => $machine->id, 'authority_hash' => $episode['authority_hash'], 'probe_revision' => $episode['probe_revision'],
                 'status' => $recoveredAt === null ? 'open' : 'recovered', 'detected_at' => $episode['detected_at'],
                 'first_failure_at' => $episode['first_failure_at'], 'last_reachable_at' => $episode['last_reachable_at'],
                 'recovered_at' => $recoveredAt, 'evidence' => $evidence,
                 'notification_status' => app(MachineRiskSettings::class)->settings()['notify_admin'] ? 'pending' : 'disabled',
-            ]);
+                ]);
+                if ($event->wasRecentlyCreated) app(MachineRiskInvestigationService::class)->register($event, $episode['policy_revision']);
+                return $event;
+            });
             if ($event->wasRecentlyCreated) {
-                $this->notify($event);
+                app(MachineRiskInvestigationService::class)->notify($event, 'opened');
                 if ($recoveredAt === null && app(MachineRiskSettings::class)->settings()['auto_ai']) {
-                    app(MachineRiskAnalysis::class)->request($event);
+                    app(MachineRiskAnalysis::class)->request($event, true);
                 }
             }
         }
         if ($recoveredAt !== null && $recoveredAt >= $event->detected_at && $event->recovered_at === null) {
             $event->forceFill(['status' => 'recovered', 'recovered_at' => $recoveredAt])->save();
+            app(MachineRiskInvestigationService::class)->recordRecovery($event, $recoveredAt);
         }
         return $event;
     }
@@ -172,39 +178,28 @@ class MachineRiskEventService
             'verified_legitimate' => false, 'excludes_latest_hour' => true];
     }
 
-    private function notify(MachineRiskEvent $event): void
-    {
-        if ($event->notification_status !== 'pending') return;
-        if (!admin_setting('telegram_bot_enable', false)) { $event->forceFill(['notification_status' => 'panel_only'])->save(); return; }
-        try {
-            app(\App\Services\TelegramService::class)->sendMessageWithAdmin(
-                "Node risk observation #{$event->id}\nMachine #{$event->machine_id}\nOutbound probe failed; investigate connectivity.\nObserve only. No account action was taken."
-            );
-            $event->forceFill(['notification_status' => 'sent'])->save();
-        } catch (\Throwable) { $event->forceFill(['notification_status' => 'failed'])->save(); }
-    }
-
     public function advance(): array
     {
         if (!app(MachineRiskSettings::class)->available()) return ['recovered' => 0];
         app(SubscriptionRenderEvidence::class)->prune();
-        MachineRiskEvent::query()->whereIn('ai_status', ['pending', 'analyzing'])->where('ai_requested_at', '<', time() - 300)
-            ->update(['ai_status' => 'failed', 'ai_error_code' => 'worker_timeout', 'updated_at' => time()]);
-        $ids = MachineRiskEvent::query()->where('created_at', '<', time() - 7 * 86400)->limit(200)->pluck('id');
-        MachineRiskEvent::query()->whereIn('id', $ids)->delete();
-        $attempts = DB::table('v2_machine_risk_ai_attempt')->where('created_at', '<', time() - 7 * 86400)->limit(200)->pluck('attempt');
-        DB::table('v2_machine_risk_ai_attempt')->whereIn('attempt', $attempts)->delete();
-        if (!app(MachineRiskSettings::class)->enabled()) return ['recovered' => 0];
-        $recovered = 0;
-        foreach (MachineRiskEvent::query()->where('status', 'open')->orderBy('id')->limit(100)->get() as $event) {
-            $machine = ServerMachine::query()->find($event->machine_id);
-            if (!$machine || !$machine->is_active || !hash_equals($event->authority_hash, $this->authority($machine))) continue;
-            if ($event->probe_revision !== app(MachineEntryProbe::class)->configuration()['revision']) continue;
-            $probe = app(MachineTelemetryService::class)->snapshot($machine)['entry_probe'];
-            if ($probe['status'] === 'reachable' && $probe['checked_at'] >= $event->detected_at) {
-                $event->forceFill(['status' => 'recovered', 'recovered_at' => $probe['checked_at']])->save(); $recovered++;
+        $timedOut = MachineRiskEvent::query()->whereIn('ai_status', ['pending', 'analyzing'])->where('ai_requested_at', '<', time() - 300)->limit(100)->get();
+        foreach ($timedOut as $event) {
+            if (MachineRiskEvent::query()->whereKey($event->id)->whereIn('ai_status', ['pending', 'analyzing'])->where('ai_requested_at', '<', time() - 300)
+                ->update(['ai_status' => 'failed', 'ai_error_code' => 'worker_timeout', 'ai_finished_at' => time(), 'updated_at' => time()])) {
+                app(MachineRiskInvestigationService::class)->notify($event->fresh(), 'report');
             }
         }
-        return ['recovered' => $recovered];
+        $ids = MachineRiskEvent::query()->where('created_at', '<', time() - 7 * 86400)->limit(200)->pluck('id');
+        MachineRiskInvestigation::query()->whereIn('event_id', $ids)->delete();
+        MachineRiskEvent::query()->whereIn('id', $ids)->delete();
+        $orphans = MachineRiskInvestigation::query()->whereDoesntHave('event')->limit(200)->pluck('event_id');
+        MachineRiskInvestigation::query()->whereIn('event_id', $orphans)->delete();
+        $attempts = DB::table('v2_machine_risk_ai_attempt')->where('created_at', '<', time() - 7 * 86400)->limit(200)->pluck('attempt');
+        DB::table('v2_machine_risk_ai_attempt')->whereIn('attempt', $attempts)->delete();
+        $followup = app(MachineRiskInvestigationService::class);
+        $followup->recoverNotices();
+        $result = $followup->advance();
+        $result['ai_scheduled'] = app(MachineRiskSettings::class)->enabled() ? app(MachineRiskAnalysis::class)->drain() : 0;
+        return $result;
     }
 }

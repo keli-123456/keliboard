@@ -28,6 +28,7 @@ final class SubscriptionRenderEvidenceTest extends TestCase
         app()->instance('request', \Illuminate\Http\Request::create('https://synthetic.example.test/subscribe'));
         $this->bindTestUrlGenerator('https://synthetic.example.test');
         (require base_path('database/migrations/2026_11_03_000001_create_machine_risk_events.php'))->up();
+        (require base_path('database/migrations/2026_11_03_000003_create_machine_risk_investigations.php'))->up();
         (require base_path('database/migrations/2026_11_03_000002_create_subscription_render_evidence.php'))->up();
         $this->user = User::query()->create(['site_id' => 2, 'group_id' => 1, 'token' => 'private-token', 'uuid' => 'private-uuid', 'email' => 'private@example.test']);
     }

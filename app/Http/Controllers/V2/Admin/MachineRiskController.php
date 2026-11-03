@@ -7,6 +7,7 @@ use App\Models\MachineRiskEvent;
 use App\Models\ServerMachine;
 use App\Services\ServerMachine\MachineRiskAnalysis;
 use App\Services\ServerMachine\MachineRiskSettings;
+use App\Services\ServerMachine\MachineRiskInvestigationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -17,14 +18,17 @@ class MachineRiskController extends Controller
     {
         $data = $request->validate(['machine_id' => ['nullable', 'integer', 'min:1'], 'status' => ['nullable', 'in:open,recovered']]);
         $snapshot = $policy->snapshot();
-        $events = []; $summary = ['open' => 0, 'recovered' => 0, 'analyses_last_hour' => 0];
+        $events = []; $summary = ['open' => 0, 'recovered' => 0, 'analyses_last_hour' => 0, 'waiting' => 0, 'following' => 0, 'next_budget_at' => null];
         if ($snapshot['available']) {
             $query = MachineRiskEvent::query()->when(isset($data['machine_id']), fn ($q) => $q->where('machine_id', $data['machine_id']));
             $summary['open'] = (clone $query)->where('status', 'open')->count();
             $summary['recovered'] = (clone $query)->where('status', 'recovered')->count();
             $summary['analyses_last_hour'] = DB::table('v2_machine_risk_ai_attempt')->where('created_at', '>=', time() - 3600)->count();
+            $summary['waiting'] = (clone $query)->where('ai_status', 'waiting')->count();
+            $summary['following'] = (clone $query)->whereHas('investigation', fn($q) => $q->whereIn('state', MachineRiskInvestigationService::ACTIVE))->count();
+            $summary['next_budget_at'] = app(MachineRiskAnalysis::class)->nextBudgetAt($policy->settings()['hourly_budget']);
             $rows = $query->when(isset($data['status']), fn ($q) => $q->where('status', $data['status']))
-                ->orderByDesc('detected_at')->limit(50)->get();
+                ->with('investigation')->orderByDesc('detected_at')->limit(50)->get();
             $machines = ServerMachine::query()->whereIn('id', $rows->pluck('machine_id')->unique())
                 ->get(['id', 'name', 'is_active', 'token', 'load_status'])->keyBy('id');
             $events = $rows->map(fn ($event) => $this->payload($event, false, $machines->get($event->machine_id), true))->all();
@@ -50,11 +54,11 @@ class MachineRiskController extends Controller
     public function saveSettings(Request $request, MachineRiskSettings $policy): JsonResponse
     {
         $data = $request->validate(['enabled' => ['required', 'boolean'], 'auto_ai' => ['required', 'boolean'],
-            'notify_admin' => ['required', 'boolean'], 'hourly_budget' => ['required', 'integer', 'min:1', 'max:10'],
+            'notify_admin' => ['required', 'boolean'], 'notify_followup' => ['sometimes', 'boolean'], 'hourly_budget' => ['required', 'integer', 'min:1', 'max:10'],
             'expected_revision' => ['required', 'integer', 'min:1'], 'confirmed' => ['required', 'boolean']]);
         try {
             $settings = array_intersect_key($data, MachineRiskSettings::DEFAULTS);
-            foreach (['enabled', 'auto_ai', 'notify_admin'] as $key) $settings[$key] = (bool) $settings[$key];
+            foreach (['enabled', 'auto_ai', 'notify_admin', 'notify_followup'] as $key) if (array_key_exists($key, $settings)) $settings[$key] = (bool) $settings[$key];
             $settings['hourly_budget'] = (int) $settings['hourly_budget'];
             return $this->success($policy->save($settings,
                 $data['expected_revision'], (int) $request->user()->id, (bool) $data['confirmed']));
@@ -86,6 +90,9 @@ class MachineRiskController extends Controller
         $result['context_current'] = $machine && $machine->is_active
             && hash_equals($event->authority_hash, app(\App\Services\ServerMachine\MachineRiskEventService::class)->authority($machine))
             && $event->probe_revision === app(\App\Services\ServerMachine\MachineEntryProbe::class)->configuration()['revision'];
+        $result['investigation'] = $event->investigation?->toArray();
+        if ($event->investigation) $result['context_current'] = $result['context_current']
+            && $event->investigation->policy_revision === app(MachineRiskSettings::class)->snapshot()['revision'];
         $result['probe_current'] = $machine ? array_intersect_key(app(\App\Services\ServerMachine\MachineTelemetryService::class)->snapshot($machine)['entry_probe'],
             array_flip(['status', 'checked_at', 'valid_until'])) : null;
         if (!$detail) {
