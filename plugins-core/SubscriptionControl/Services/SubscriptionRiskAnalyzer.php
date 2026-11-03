@@ -915,15 +915,24 @@ TEXT;
         ) {
             $action = $this->configAction('leak_guard_escalate_action', 'reset_token_uuid');
         }
+        // Several scores derived from the same UA are one signal family, not corroboration.
+        $families = [];
+        foreach (['client' => ['risky_ua', 'non_whitelisted_ua', 'new_pull_ua_category', 'many_pull_ua_categories'],
+            'network' => ['new_pull_ip', 'many_pull_ips'],
+            'region' => ['new_pull_region', 'many_pull_regions', 'online_region_mismatch']] as $family => $members) {
+            if (array_intersect($signals, $members)) $families[] = $family;
+        }
+        if (count($families) < 2) $action = 'observe';
 
         return $this->decision(
             'subscription_leak_guard',
-            '订阅疑似被探测拉取，已进入保护模式',
+            $action === 'observe' ? '风险线索缺少多类行为佐证，已记录观察' : '组合风险信号命中，本次订阅请求已限流',
             $action,
             [
                 'risk_score' => $score,
                 'score_threshold' => $threshold,
                 'signals' => $signals,
+                'signal_families' => $families,
                 'hit_count' => $hitCount,
                 'ua_category' => $category,
                 'trusted_egress' => $trustedEgress,
@@ -1162,11 +1171,7 @@ TEXT;
 
     private function configAction(string $key, string $default): string
     {
-        if ($key === 'source_ip_deny_action') {
-            return 'block';
-        }
-
-        return 'reset_token_uuid';
+        return SubscriptionRiskResponsePolicy::forConfig($key);
     }
 
     private function clientUaNotAllowedAction(array $client): string

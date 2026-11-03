@@ -38,6 +38,10 @@ class SubscriptionAiBenchmarkService
         foreach (['app/Services/SubscriptionRiskAiSettings.php', 'app/Services/TicketAiProviderClient.php', 'app/Services/SubscriptionAiAutomationService.php', 'app/Services/SubscriptionAiBehaviorService.php', 'app/Services/SubscriptionAiBenchmarkService.php', 'app/Services/SubscriptionEntryProtectionService.php', 'app/Services/ServerMachine/MachineEntryProtection.php', 'app/Services/ServerMachine/MachineEntryProbe.php', 'app/Http/Controllers/V1/Client/ClientController.php', 'plugins-core/SubscriptionControl/Plugin.php', 'plugins-core/SubscriptionControl/Services/SubscriptionRiskAnalyzer.php', 'plugins-core/SubscriptionControl/config.json'] as $file) {
             $files[$file] = hash_file('sha256', base_path($file));
         }
+        foreach (['SubscriptionRiskResponsePolicy', 'SubscriptionTrustedEgressResolver', 'SubscriptionClientIpResolver', 'ManagedNodeRouteService'] as $name) {
+            $file = 'plugins-core/SubscriptionControl/Services/' . $name . '.php';
+            $files[$file] = hash_file('sha256', base_path($file));
+        }
         unset($settings['ai_auto_enabled'], $settings['ai_auto_mode']);
         $settings['ai_auto_max_seconds'] = min(120, $settings['ai_auto_max_seconds']);
         $settings['ai_auto_allow_reset_token'] = false; $settings['ai_auto_allow_suspend'] = false;

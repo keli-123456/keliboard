@@ -84,7 +84,7 @@ class MachineController extends Controller
         if (strlen($request->getContent()) > 8192) {
             return response()->json(['message' => 'Telemetry payload too large'], 413);
         }
-        $machine = $this->authenticateMachine($request, true, ['id', 'token']);
+        $machine = $this->authenticateMachine($request, true, ['id', 'token', 'is_active']);
         if (!$machine) {
             return response()->json(['message' => 'Invalid machine credentials'], 401);
         }
@@ -124,6 +124,8 @@ class MachineController extends Controller
         if (!app(MachineTelemetryService::class)->receive($machine, $input)) {
             return response()->json(['message' => 'Telemetry busy'], 429);
         }
+        try { app(\App\Services\ServerMachine\MachineRiskEventService::class)->observe($machine); }
+        catch (\Throwable $error) { Log::warning('Machine risk observation unavailable', ['error_type' => get_class($error)]); }
         return response()->json(['data' => true, 'telemetry_version' => 1]);
     }
 
@@ -273,6 +275,8 @@ class MachineController extends Controller
             // Monitoring storage must not suppress a successful control heartbeat.
             Log::warning('Machine monitoring history unavailable', ['machine_id' => (int) $machine->id, 'error_type' => get_class($error)]);
         }
+        try { app(\App\Services\ServerMachine\MachineRiskEventService::class)->observe($machine); }
+        catch (\Throwable $error) { Log::warning('Machine risk observation unavailable', ['error_type' => get_class($error)]); }
 
         return response()->json([
             'data' => true,

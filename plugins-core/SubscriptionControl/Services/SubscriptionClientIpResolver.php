@@ -52,7 +52,7 @@ TEXT;
         $source = 'remote_addr';
 
         if ($trustedProxy) {
-            foreach ($this->candidateHeaders($request) as $candidate) {
+            foreach ($this->candidateHeaders($request, $proxyIp) as $candidate) {
                 if ($candidate['ip'] === null) {
                     continue;
                 }
@@ -71,20 +71,26 @@ TEXT;
         ];
     }
 
-    private function candidateHeaders(Request $request): array
+    private function candidateHeaders(Request $request, string $peer): array
     {
         $cfConnectingIp = $this->normalizeIp($request->header('CF-Connecting-IP'));
         $forwardedClientIp = $this->firstForwardedClientIp($request->header('X-Forwarded-For'));
 
+        $cloudflarePeer = false;
+        foreach (preg_split('/\s+/', self::DEFAULT_TRUSTED_PROXY_CIDRS) as $cidr) {
+            $network = explode('/', $cidr)[0];
+            if (filter_var($network, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)
+                && $this->ipMatchesCidr($peer, $cidr)) { $cloudflarePeer = true; break; }
+        }
+        if (!$cloudflarePeer) {
+            // Managed agents append their observed socket peer to XFF. Ignore user-supplied CF/True-Client headers.
+            return [['source' => 'x_forwarded_for', 'ip' => $forwardedClientIp]];
+        }
         if ($cfConnectingIp !== null && $this->isTrustedProxy($cfConnectingIp) && $forwardedClientIp !== null) {
             return [
                 [
                     'source' => 'x_forwarded_for_client',
                     'ip' => $forwardedClientIp,
-                ],
-                [
-                    'source' => 'true_client_ip',
-                    'ip' => $this->normalizeIp($request->header('True-Client-IP')),
                 ],
                 [
                     'source' => 'cf_connecting_ip',
@@ -99,39 +105,19 @@ TEXT;
                 'ip' => $cfConnectingIp,
             ],
             [
-                'source' => 'true_client_ip',
-                'ip' => $this->normalizeIp($request->header('True-Client-IP')),
+                'source' => 'x_forwarded_for',
+                'ip' => $forwardedClientIp,
             ],
             [
                 'source' => 'cf_connecting_ipv6',
                 'ip' => $this->normalizeIp($request->header('CF-Connecting-IPv6')),
             ],
-            [
-                'source' => 'x_forwarded_for',
-                'ip' => $this->firstForwardedIp($request->header('X-Forwarded-For')),
-            ],
-            [
-                'source' => 'x_real_ip',
-                'ip' => $this->normalizeIp($request->header('X-Real-IP')),
-            ],
         ];
-    }
-
-    private function firstForwardedIp(?string $value): ?string
-    {
-        foreach (explode(',', (string) $value) as $part) {
-            $ip = $this->normalizeIp($part);
-            if ($ip !== null) {
-                return $ip;
-            }
-        }
-
-        return null;
     }
 
     private function firstForwardedClientIp(?string $value): ?string
     {
-        foreach (explode(',', (string) $value) as $part) {
+        foreach (array_reverse(explode(',', (string) $value)) as $part) {
             $ip = $this->normalizeIp($part);
             if ($ip !== null && !$this->isTrustedProxy($ip)) {
                 return $ip;
@@ -155,7 +141,7 @@ TEXT;
     private function trustedProxyCidrs(): array
     {
         $value = (string) ($this->config['trusted_proxy_cidrs'] ?? self::DEFAULT_TRUSTED_PROXY_CIDRS);
-        $egressValue = $this->config['trusted_egress_ips'] ?? '';
+        $egressValue = $this->config['_trusted_subscription_proxy_ips'] ?? '';
         if (is_array($egressValue)) {
             $egressValue = implode("\n", array_map('strval', $egressValue));
         }

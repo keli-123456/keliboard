@@ -20,6 +20,7 @@ use Plugin\SubscriptionControl\Services\SubscriptionControlEventStore;
 use Plugin\SubscriptionControl\Services\SubscriptionIpIntelligenceService;
 use Plugin\SubscriptionControl\Services\ManagedNodeRouteService;
 use Plugin\SubscriptionControl\Services\SubscriptionRiskAnalyzer;
+use Plugin\SubscriptionControl\Services\SubscriptionRiskResponsePolicy;
 use Plugin\SubscriptionControl\Services\SubscriptionTrustedEgressResolver;
 
 class Plugin extends AbstractPlugin
@@ -95,7 +96,7 @@ class Plugin extends AbstractPlugin
 
             $this->recordPullTelemetry('pulls');
 
-            // AI protections never enter normalizeRiskAction(), which rotates credentials for legacy rules.
+            // AI permissions and legacy response policies remain independent.
             $restriction = null;
             try { $restriction = app(\App\Services\SubscriptionAiAutomationService::class)->restriction($user); }
             catch (\Throwable) { Log::warning('[SubscriptionControl] AI protection lookup unavailable; existing rules retained'); }
@@ -170,20 +171,15 @@ class Plugin extends AbstractPlugin
                 return $servers;
             }
 
-            // 0. UA 告警并重置凭据（可选）
+            // A UA mismatch alone is an observation, never evidence of credential leakage.
             if ($this->getConfig('enable_ua_reset_token', false) && $this->isResetUA($userAgentLower)) {
-                Log::warning('[SubscriptionControl] UA 可疑，已重置用户订阅凭证', [
-                    'user_id' => $user->id,
-                    'ua' => $userAgent,
-                    'ip' => $ip
-                ]);
-                $this->resetAndBlockAccess('ua_reset', 'UA 可疑，已重置订阅凭证', $user, [
+                $this->respondToBehaviorRisk('ua_reset', '客户端标识异常，已记录观察', $user, [
                     'client_ip' => $ip,
                     'user_agent' => $userAgent,
                 ] + $ipMeta);
             }
 
-            // 0.5 在线唯一 IP 数超阈值时，重置订阅凭证并阻断订阅
+            // Online address counts alone are observation-only.
             if ($this->getConfig('enable_online_ip_threshold', false)) {
                 $onlineIpThreshold = max(1, (int) $this->getConfig('online_ip_threshold', 10));
                 $onlineIpCount = app(UserOnlineService::class)->getOnlineCount((int) $user->id);
@@ -205,7 +201,7 @@ class Plugin extends AbstractPlugin
             // 2. 检查IP限制（时间窗口内不同IP数量）
             if (!$trustedEgress && $this->getConfig('enable_ip_limit', false)) {
                 if (!$this->checkIpLimit($user->id, $ip)) {
-                    $this->resetAndBlockAccess('ip_limit', 'IP 数量超限，已重置订阅凭证', $user, [
+                    $this->respondToBehaviorRisk('ip_limit', '订阅请求来源数量超限，本次请求已限流', $user, [
                         'client_ip' => $ip,
                         'user_agent' => $userAgent,
                     ] + $ipMeta);
@@ -215,7 +211,7 @@ class Plugin extends AbstractPlugin
             // 3. 检查访问频率限制
             if ($this->getConfig('enable_rate_limit', false)) {
                 if (!$this->checkRateLimit($user->id)) {
-                    $this->resetAndBlockAccess('rate_limit', '访问频率超限，已重置订阅凭证', $user, [
+                    $this->respondToBehaviorRisk('rate_limit', '订阅访问频率超限，本次请求已限流', $user, [
                         'client_ip' => $ip,
                         'user_agent' => $userAgent,
                     ] + $ipMeta);
@@ -501,15 +497,15 @@ class Plugin extends AbstractPlugin
         // 检查使用次数
         if ($data['uses'] >= $maxUses) {
             $user = User::find($userId);
-            if ($user) {
-                $this->resetSubscriptionCredentials($user, $token);
+            if (!$user || !$this->resetSubscriptionCredentials($user, $token)) {
+                $this->blockAccess('credential_rotation_failed', '订阅凭据更新未完成，请稍后重试或联系管理员', $userId,
+                    ['action' => 'block', 'http_status' => 503]);
             }
             
             Log::warning('[SubscriptionControl] 订阅使用次数超限，已重置订阅凭证', [
                 'user_id' => $userId,
                 'uses' => $data['uses'],
-                'max_uses' => $maxUses,
-                'old_token' => $token
+                'max_uses' => $maxUses
             ]);
             
             return false;
@@ -532,27 +528,26 @@ class Plugin extends AbstractPlugin
     /**
      * 重置用户的订阅凭证：订阅 token 与节点 uuid 作为同一个泄露面处理。
      */
-    private function resetSubscriptionCredentials(User $user, ?string $oldToken = null): void
+    private function resetSubscriptionCredentials(User $user, ?string $oldToken = null): bool
     {
         try {
             $oldToken = $oldToken ?: (string) $user->token;
 
             $user->uuid = Helper::guid(true);
             $user->token = Helper::guid();
-            $user->save();
-
-            Cache::forget("subscription_control:usage:{$user->id}:{$oldToken}");
-
-            Log::info('[SubscriptionControl] 用户订阅凭证已重置', [
-                'user_id' => $user->id,
-                'old_token' => $oldToken,
-                'new_token' => $user->token
+            if (!$user->save()) return false;
+        } catch (\Throwable $e) {
+            Log::error('[SubscriptionControl] 重置订阅凭证失败', [
+                'user_id' => $user->id, 'error_type' => get_class($e)
             ]);
-        } catch (\Exception $e) {
-            Log::error('[SubscriptionControl] 重置订阅凭证失败: ' . $e->getMessage(), [
-                'user_id' => $user->id
-            ]);
+            return false;
         }
+        // Optional cache/log failures cannot undo an already persisted credential change.
+        try { Cache::forget("subscription_control:usage:{$user->id}:{$oldToken}"); }
+        catch (\Throwable) {}
+        try { Log::info('[SubscriptionControl] 用户订阅凭证已重置', ['user_id' => $user->id]); }
+        catch (\Throwable) {}
+        return true;
     }
 
     private function riskAnalyzerConfig(): array
@@ -561,9 +556,12 @@ class Plugin extends AbstractPlugin
         if (!is_array($config)) {
             $config = [];
         }
+        $config['_trusted_subscription_proxy_ips'] = [];
 
         try {
-            $config['trusted_egress_ips'] = (new SubscriptionTrustedEgressResolver($config))->resolve();
+            $resolver = new SubscriptionTrustedEgressResolver($config);
+            $config['trusted_egress_ips'] = $resolver->resolve();
+            $config['_trusted_subscription_proxy_ips'] = $resolver->resolveProxyEntries();
         } catch (\Throwable $e) {
             Log::warning('[SubscriptionControl] 可信出口自动解析失败，使用手动配置', [
                 'error' => $e->getMessage(),
@@ -779,12 +777,7 @@ class Plugin extends AbstractPlugin
                 continue;
             }
 
-            if ($action !== 'block') {
-                $meta['action'] = 'reset_token_uuid';
-                $this->resetSubscriptionCredentials($user);
-            }
-
-            $this->interceptRiskDecision($code, $reason, 403, $user, $meta);
+            $this->interceptRiskDecision($code, $reason, $action === 'throttle' ? 429 : 403, $user, $meta);
         }
 
         return $servers;
@@ -826,11 +819,11 @@ class Plugin extends AbstractPlugin
 
     private function handleOnlineIpThreshold(User $user, int $onlineIpCount, int $threshold, array $meta = [], bool $intercept = true): void
     {
-        $reason = '在线唯一IP数超阈值，已重置订阅凭证';
+        $reason = '在线地址数超阈值，已记录观察，未重置订阅凭据';
         $cooldownKey = "subscription_control:action_cooldown:{$user->id}:online_ip_threshold";
         $cooldown = max(60, (int) $this->getConfig('notify_cooldown_seconds', 1800));
         $baseMeta = array_merge($meta, [
-            'action' => 'reset_token_uuid',
+            'action' => 'observe',
             'online_ip_count' => $onlineIpCount,
             'threshold' => $threshold,
         ]);
@@ -843,17 +836,10 @@ class Plugin extends AbstractPlugin
                 'source' => $meta['source'] ?? 'unknown',
             ]);
 
-            if ($intercept) {
-                $this->intercept(response($this->buildBlockMessage('online_ip_threshold', $reason, $baseMeta), 403, [
-                    'Content-Type' => 'text/plain; charset=UTF-8',
-                ]));
-            }
-
             return;
         }
 
-        $this->resetSubscriptionCredentials($user);
-        Log::warning('[SubscriptionControl] 在线唯一IP数超阈值，已重置用户订阅凭证', [
+        Log::info('[SubscriptionControl] 在线地址数超阈值，已记录观察', [
             'user_id' => $user->id,
             'online_ip_count' => $onlineIpCount,
             'threshold' => $threshold,
@@ -864,11 +850,6 @@ class Plugin extends AbstractPlugin
 
         $this->recordRiskEvent('online_ip_threshold', $reason, $user->id, $user, $baseMeta);
 
-        if ($intercept) {
-            $this->intercept(response($this->buildBlockMessage('online_ip_threshold', $reason, $baseMeta), 403, [
-                'Content-Type' => 'text/plain; charset=UTF-8',
-            ]));
-        }
     }
 
     /**
@@ -880,42 +861,36 @@ class Plugin extends AbstractPlugin
         $this->recordRiskEvent($code, $reason, $userId, null, $meta);
 
         // 返回403错误（部分客户端会展示响应体，帮助用户自查/自救）
+        $status = (int) ($meta['http_status'] ?? 403);
         $message = $this->buildBlockMessage($code, $reason, $meta);
-        $this->intercept(response($message, 403, [
+        $this->intercept(response($message, $status, [
             'Content-Type' => 'text/plain; charset=UTF-8',
+            'Cache-Control' => 'no-store',
         ]));
     }
 
-    private function resetAndBlockAccess(string $code, string $reason, User $user, array $meta = []): never
+    private function respondToBehaviorRisk(string $code, string $reason, User $user, array $meta = []): void
     {
-        $meta['action'] = 'reset_token_uuid';
-        $this->resetSubscriptionCredentials($user);
-        $this->interceptRiskDecision($code, $reason, 403, $user, $meta);
+        $meta['action'] = $this->normalizeRiskAction('', $code);
+        if ($meta['action'] === 'observe') {
+            $this->recordRiskEvent($code, $reason, (int) $user->id, $user, $meta);
+            return;
+        }
+        $this->interceptRiskDecision($code, $reason, $meta['action'] === 'throttle' ? 429 : 403, $user, $meta);
     }
 
     private function normalizeRiskAction(string $action, string $code = ''): string
     {
-        if ($code === 'behavior_baseline_observation') {
-            return 'observe';
-        }
-        if (in_array($code, ['source_ip_denylist', 'ua_blacklist', 'ua_block_only'], true)) {
-            return 'block';
-        }
-
-        if ($code === 'client_ua_not_allowed' && strtolower(trim($action)) === 'block') {
-            return 'block';
-        }
-
-        return 'reset_token_uuid';
+        return SubscriptionRiskResponsePolicy::forEvent($code, $action);
     }
 
     private function interceptRiskDecision(string $code, string $reason, int $status, User $user, array $meta = []): never
     {
         $meta['http_status'] = $status;
         $this->recordRiskEvent($code, $reason, (int) $user->id, $user, $meta);
-        $this->intercept(response($this->buildBlockMessage($code, $reason, $meta), $status, [
-            'Content-Type' => 'text/plain; charset=UTF-8',
-        ]));
+        $headers = ['Content-Type' => 'text/plain; charset=UTF-8', 'Cache-Control' => 'no-store'];
+        if ($status === 429) $headers['Retry-After'] = '60';
+        $this->intercept(response($this->buildBlockMessage($code, $reason, $meta), $status, $headers));
     }
 
     private function recordRiskEvent(string $code, string $reason, int $userId = null, ?User $user = null, array $meta = []): void
@@ -996,8 +971,12 @@ class Plugin extends AbstractPlugin
             "订阅请求已被系统限制（{$status}）。",
         ];
 
-        if ($action === 'reset_token_uuid') {
-            $lines[] = '订阅凭证可能已被重置：旧订阅链接和旧节点配置将立即失效，请登录面板复制新链接并重新导入客户端。';
+        if ($action === 'throttle') {
+            $lines[] = '本次订阅请求已限流，请至少等待 60 秒后重试；若仍超出所设时间窗口的额度，请等待窗口恢复。现有节点凭据未被重置。';
+        } elseif ($code === 'credential_rotation_failed') {
+            $lines[] = '系统未确认凭据更新成功，请稍后重试；不要按已重置处理。';
+        } elseif ($action === 'reset_token_uuid') {
+            $lines[] = '订阅凭据已更新，请登录面板重新导入。旧节点凭据需等待节点应用更新后失效；已有连接是否断开取决于节点和协议。';
         } elseif (in_array($code, ['source_ip_denylist', 'ua_blacklist'], true)) {
             $lines[] = '当前订阅来源网络被限制，订阅请求已拒绝；系统不会重置您的订阅链接和节点凭据。';
         } elseif (in_array($code, ['ua_block_only', 'client_ua_not_allowed'], true)) {
@@ -1189,7 +1168,9 @@ class Plugin extends AbstractPlugin
         $action = $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid'), $code);
 
         return match ($action) {
-            'reset_token_uuid' => '系统已重置订阅链接和节点凭据，旧订阅与旧节点配置已失效，请重新获取并导入。',
+            'reset_token_uuid' => '订阅凭据已更新，请重新获取并导入。节点凭据需等待节点应用更新后失效，不能据此确认已有连接已断开。',
+            'throttle' => '本次订阅请求已限流；请等待检测窗口额度恢复后重试，订阅链接和节点凭据未重置。',
+            'observe' => '已记录观察，未拦截订阅、未重置凭据。',
             'block' => '当前订阅来源网络被限制，订阅请求已拒绝，订阅链接和节点凭据未重置。',
             default => '本次订阅请求已被拦截，请检查客户端或网络环境后重试。',
         };

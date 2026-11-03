@@ -46,21 +46,21 @@
         },
         "client_ua_unknown_action": {
             "type": "string",
-            "default": "reset_token_uuid",
+            "default": "observe",
             "label": "非白名单客户端处理策略",
-            "description": "仅在手动启用客户端 UA 白名单后生效。非白名单客户端固定按 reset_token_uuid 处理；默认风控不依赖白名单"
+            "description": "未知客户端只记录观察，不重置凭据；浏览器、空 UA 和脚本仍仅拒绝本次请求。UA 本身不能证明订阅泄露"
         },
         "trusted_proxy_cidrs": {
             "type": "text",
             "default": "127.0.0.0/8\n::1/128\n10.0.0.0/8\n172.16.0.0/12\n192.168.0.0/16\nfc00::/7\nfe80::/10\n103.21.244.0/22\n103.22.200.0/22\n103.31.4.0/22\n104.16.0.0/13\n104.24.0.0/14\n108.162.192.0/18\n131.0.72.0/22\n141.101.64.0/18\n162.158.0.0/15\n172.64.0.0/13\n173.245.48.0/20\n188.114.96.0/20\n190.93.240.0/20\n197.234.240.0/22\n198.41.128.0/17\n2400:cb00::/32\n2606:4700::/32\n2803:f800::/32\n2405:b500::/32\n2405:8100::/32\n2a06:98c0::/29\n2c0f:f248::/32",
             "label": "可信代理 CIDR 列表",
-            "description": "仅当请求来源 IP 命中该列表时，才信任 CF-Connecting-IP / True-Client-IP / X-Forwarded-For 等真实客户端 IP 头"
+            "description": "仅对受控代理解析 X-Forwarded-For，并从右向左校验代理链。CF-Connecting-IP 只由直接相连的已知 Cloudflare 边缘提供；不把客户端自带的头当身份"
         },
         "trusted_egress_ips": {
             "type": "text",
             "default": "",
             "label": "自有节点/可信出口 IP 列表",
-            "description": "填写自有节点出口、订阅反代出口或可信出口 IP/CIDR。命中后会信任其转发的真实客户端 IP 头，并跳过同源批量订阅检测，不把该出口的 IP/地区变化计入泄露保护风险"
+            "description": "填写自有节点出口或可信出口 IP/CIDR，仅降低出口共享导致的 IP/地区误报。不授予转发头权限；手工反代地址须另填可信代理 CIDR"
         },
         "enable_auto_trusted_node_ips": {
             "type": "boolean",
@@ -78,7 +78,7 @@
             "type": "boolean",
             "default": true,
             "label": "解析节点域名作为可信出口",
-            "description": "开启后会解析节点 host/SNI/Host 域名的 A/AAAA 记录；若解析结果命中 Cloudflare CIDR，会自动判定为小云朵域名并跳过这些边缘 IP"
+            "description": "只解析节点 host 的 A/AAAA，跳过 Cloudflare 边缘 IP；SNI、Reality 伪装域名及 WS Host 不作为可信出口，也不授予转发头权限"
         },
         "auto_trusted_node_ip_cache_ttl_seconds": {
             "type": "number",
@@ -132,7 +132,7 @@
             "type": "boolean",
             "default": true,
             "label": "使用近期风控事件学习节点封禁前缀",
-            "description": "开启后，会从最近风控事件中的 ip_prefix 提取云厂商来源前缀，生成节点侧 source_ip 拦截规则。默认只保留最近 3 天数据。"
+            "description": "只从近 3 天明确命中来源黑名单且实际 block 的事件学习云厂商前缀；观察、限流和历史行为重置事件不会升级成节点封禁"
         },
         "enable_node_source_ip_builtin_provider_cidrs": {
             "type": "boolean",
@@ -190,9 +190,9 @@
         },
         "source_batch_action": {
             "type": "string",
-            "default": "reset_token_uuid",
+            "default": "throttle",
             "label": "同源批量命中策略",
-            "description": "固定按 reset_token_uuid 处理：命中后同时重置订阅 token 和节点 uuid。历史值 observe / throttle / empty / block / reset_token 会统一按 reset_token_uuid 处理"
+            "description": "固定仅对当前订阅请求返回 429，不重置 token/UUID。至少等待 60 秒后重试；如仍超过检测窗口额度，需等待窗口恢复"
         },
         "enable_behavior_baseline_observation": {
             "type": "boolean",
@@ -232,9 +232,9 @@
         },
         "leak_guard_action": {
             "type": "string",
-            "default": "reset_token_uuid",
+            "default": "throttle",
             "label": "泄露保护命中策略",
-            "description": "固定按 reset_token_uuid 处理：命中后同时重置订阅 token 和节点 uuid。历史值 observe / throttle / empty / block / reset_token 会统一按 reset_token_uuid 处理"
+            "description": "分数达标且有至少两类行为佐证时仅返回 429；单一 UA、低流量、缺少在线证据或云厂商标签不单独升级。确认泄露后由管理员轮换凭据"
         },
         "enable_leak_guard_strict_mode": {
             "type": "boolean",
@@ -246,7 +246,7 @@
             "type": "boolean",
             "default": true,
             "label": "启用泄露保护重复命中升级",
-            "description": "开启后，同一订阅在检测窗口内多次命中泄露保护，会继续按下方策略重置订阅 token 和节点 uuid"
+            "description": "记录重复命中线索，仍只限制当前订阅请求，不自动升级为全账号凭据重置"
         },
         "leak_guard_escalate_hits": {
             "type": "number",
@@ -256,9 +256,9 @@
         },
         "leak_guard_escalate_action": {
             "type": "string",
-            "default": "reset_token_uuid",
+            "default": "throttle",
             "label": "泄露保护升级策略",
-            "description": "固定按 reset_token_uuid 处理：命中后同时重置订阅 token 和节点 uuid。历史值 observe / block / empty / throttle / reset_token 会统一按 reset_token_uuid 处理"
+            "description": "重复命中仍为请求级限流；不会因重试次数增加而自动重置 token/UUID"
         },
         "leak_guard_score_threshold": {
             "type": "number",
@@ -322,9 +322,9 @@
         },
         "multi_ua_action": {
             "type": "string",
-            "default": "reset_token_uuid",
+            "default": "observe",
             "label": "多UA命中处理策略",
-            "description": "固定按 reset_token_uuid 处理。历史值 observe / throttle / empty / block / reset_token 会统一按 reset_token_uuid 处理"
+            "description": "只记录观察，不拦截、不重置凭据；正常换客户端或多设备使用不能单独认定为泄露"
         },
         "enable_multi_region_pull_detection": {
             "type": "boolean",
@@ -346,9 +346,9 @@
         },
         "multi_region_pull_action": {
             "type": "string",
-            "default": "reset_token_uuid",
+            "default": "observe",
             "label": "多地区拉取处理策略",
-            "description": "固定按 reset_token_uuid 处理。历史值 observe / throttle / empty / block / reset_token 会统一按 reset_token_uuid 处理"
+            "description": "只记录观察，不拦截、不重置凭据；移动网络、旅行与代理出口变化均可能导致地区变化"
         },
         "enable_multi_region_online_detection": {
             "type": "boolean",
@@ -364,9 +364,9 @@
         },
         "multi_region_online_action": {
             "type": "string",
-            "default": "reset_token_uuid",
+            "default": "observe",
             "label": "在线多地区处理策略",
-            "description": "固定按 reset_token_uuid 处理。历史值 observe / throttle / empty / block / reset_token 会统一按 reset_token_uuid 处理"
+            "description": "只记录在线地区观察，不拦截、不重置凭据；在线地址数量并不等于设备数或异常人数"
         },
         "ip_region_cache_ttl_seconds": {
             "type": "number",
@@ -395,14 +395,14 @@
         "enable_ua_reset_token": {
             "type": "boolean",
             "default": true,
-            "label": "命中UA时重置订阅凭证",
-            "description": "开启后，当UA命中重置关键词，将同时重置用户订阅token和节点uuid并阻断订阅"
+            "label": "观察旧客户端标识",
+            "description": "命中旧客户端关键词时仅记录观察，不阻断订阅、不重置 token/UUID"
         },
         "ua_reset_keywords": {
             "type": "text",
             "default": "west2online\nClashForWindows\nClash for Windows\nClashForAndroid\nClash for Android\nClashX/\nClashDotNetFramework\nClash.NET\nclashR\nv2rayN/6.23\nv2rayNG/1.8.\nv2rayNG/1.8.5\nQuantumult%20X/1.0.\nQuantumult%20X/1.0.29\nQuantumult X/1.0.\nLoon/636\nSurge/2390\nStash/2.4.\nSurfboard\nKitsunebi\nSagerNet\nPotatso\nPharos\nPostern\nShadowsocksX-NG\nsstap\nSSD\nv2raytun",
-            "label": "重置UA关键词列表（逗号或换行分隔）",
-            "description": "命中后同时重置用户订阅 token 和节点 uuid 并阻断订阅。建议放老旧客户端或疑似伪造客户端；社交平台预取 UA 应放在 UA 黑名单中封禁来源 IP，普通浏览器误点只拒绝展示"
+            "label": "旧客户端观察关键词（逗号或换行分隔）",
+            "description": "仅记录兼容性排查线索。客户端名称或版本本身不能证明凭据已泄露"
         },
         "ua_reset_exclude_keywords": {
             "type": "text",
@@ -414,13 +414,13 @@
             "type": "boolean",
             "default": false,
             "label": "启用在线唯一IP数阈值",
-            "description": "开启后，当用户当前在线唯一IP数超过阈值时，自动重置订阅token和节点uuid并阻断订阅"
+            "description": "在线地址数超过阈值时记录观察，不重置凭据、不拦截订阅，也不自动断开节点连接"
         },
         "online_ip_threshold": {
             "type": "number",
             "default": 10,
             "label": "在线唯一IP数阈值",
-            "description": "当当前在线唯一IP数超过该值时，将自动重置用户订阅token和节点uuid并阻断订阅"
+            "description": "只用于观察提示；在线地址数不是设备数，超过此值不会单独触发凭据重置"
         },
         "enable_email_notice": {
             "type": "boolean",
@@ -466,9 +466,9 @@
         },
         "ip_limit_action": {
             "type": "string",
-            "default": "reset_token_uuid",
+            "default": "throttle",
             "label": "触发限制后的操作",
-            "description": "固定为 reset_token_uuid：超过 IP 限制时同时重置订阅 token 和节点 uuid"
+            "description": "超过所设窗口额度时只对当前请求返回 429，不重置凭据；窗口恢复后可重新获取订阅"
         },
         "enable_rate_limit": {
             "type": "boolean",

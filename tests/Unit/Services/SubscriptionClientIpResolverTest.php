@@ -67,7 +67,7 @@ final class SubscriptionClientIpResolverTest extends TestCase
         ]);
 
         $result = (new SubscriptionClientIpResolver([
-            'trusted_egress_ips' => '2.56.116.39',
+            '_trusted_subscription_proxy_ips' => ['2.56.116.39'],
         ]))->resolve($request);
 
         $this->assertSame('203.0.113.9', $result['client_ip']);
@@ -86,7 +86,7 @@ final class SubscriptionClientIpResolverTest extends TestCase
         ]);
 
         $result = (new SubscriptionClientIpResolver([
-            'trusted_egress_ips' => '103.14.76.98',
+            '_trusted_subscription_proxy_ips' => ['103.14.76.98'],
         ]))->resolve($request);
 
         $this->assertSame('203.0.113.9', $result['client_ip']);
@@ -94,5 +94,44 @@ final class SubscriptionClientIpResolverTest extends TestCase
         $this->assertSame('x_forwarded_for_client', $result['client_ip_source']);
         $this->assertTrue($result['trusted_proxy']);
         $this->assertSame('ray-SIN', $result['cf_ray']);
+    }
+
+    public function test_trusted_egress_does_not_authorize_forged_client_headers(): void
+    {
+        $request = Request::create('/s/token', 'GET', [], [], [], [
+            'REMOTE_ADDR' => '8.8.8.8', 'HTTP_CF_CONNECTING_IP' => '1.1.1.1', 'HTTP_X_FORWARDED_FOR' => '1.1.1.1',
+        ]);
+        $result = (new SubscriptionClientIpResolver(['trusted_egress_ips' => '8.8.8.8']))->resolve($request);
+        $this->assertFalse($result['trusted_proxy']); $this->assertSame('8.8.8.8', $result['client_ip']);
+    }
+
+    public function test_managed_forwarder_uses_observed_rightmost_untrusted_peer_not_injected_cf_or_leftmost_xff(): void
+    {
+        $request = Request::create('/s/token', 'GET', [], [], [], [
+            'REMOTE_ADDR' => '8.8.8.8', 'HTTP_CF_CONNECTING_IP' => '1.1.1.1',
+            'HTTP_TRUE_CLIENT_IP' => '1.1.1.1', 'HTTP_X_FORWARDED_FOR' => '1.1.1.1, 9.9.9.9',
+        ]);
+        $result = (new SubscriptionClientIpResolver(['_trusted_subscription_proxy_ips' => ['8.8.8.8']]))->resolve($request);
+        $this->assertSame('9.9.9.9', $result['client_ip']); $this->assertSame('x_forwarded_for', $result['client_ip_source']);
+    }
+
+    public function test_cloudflare_in_front_of_managed_forwarder_does_not_trust_attacker_supplied_xff_prefix(): void
+    {
+        $request = Request::create('/s/token', 'GET', [], [], [], [
+            'REMOTE_ADDR' => '172.70.142.152', 'HTTP_CF_CONNECTING_IP' => '8.8.8.8',
+            'HTTP_X_FORWARDED_FOR' => '1.1.1.1, 9.9.9.9, 8.8.8.8',
+        ]);
+        $result = (new SubscriptionClientIpResolver(['_trusted_subscription_proxy_ips' => ['8.8.8.8']]))->resolve($request);
+        $this->assertSame('9.9.9.9', $result['client_ip']);
+    }
+
+    public function test_managed_forwarder_without_valid_peer_chain_does_not_fall_back_to_unverified_headers(): void
+    {
+        $request = Request::create('/s/token', 'GET', [], [], [], [
+            'REMOTE_ADDR' => '8.8.8.8', 'HTTP_CF_CONNECTING_IP' => '1.1.1.1',
+            'HTTP_TRUE_CLIENT_IP' => '1.1.1.1', 'HTTP_X_REAL_IP' => '1.1.1.1', 'HTTP_X_FORWARDED_FOR' => 'invalid',
+        ]);
+        $result = (new SubscriptionClientIpResolver(['_trusted_subscription_proxy_ips' => ['8.8.8.8']]))->resolve($request);
+        $this->assertSame('8.8.8.8', $result['client_ip']); $this->assertSame('remote_addr', $result['client_ip_source']);
     }
 }

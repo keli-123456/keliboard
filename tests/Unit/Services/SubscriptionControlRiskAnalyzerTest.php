@@ -104,7 +104,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame([], $sfa);
         $this->assertCount(1, $oldClashForAndroid);
         $this->assertSame('client_ua_not_allowed', $oldClashForAndroid[0]['code']);
-        $this->assertSame('reset_token_uuid', $oldClashForAndroid[0]['action']);
+        $this->assertSame('observe', $oldClashForAndroid[0]['action']);
         $this->assertSame('legacy_clash', $oldClashForAndroid[0]['meta']['ua_category']);
     }
 
@@ -159,11 +159,11 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertCount(1, $decisions);
         $this->assertSame('multi_ua_pull', $decisions[0]['code']);
-        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
+        $this->assertSame('observe', $decisions[0]['action']);
         $this->assertSame(['mihomo', 'sing-box'], $decisions[0]['meta']['ua_categories']);
     }
 
-    public function test_legacy_reset_token_action_is_normalized_to_full_credential_reset(): void
+    public function test_legacy_reset_token_action_cannot_promote_a_single_client_signal_to_rotation(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([
             'enable_multi_ua_detection' => true,
@@ -176,7 +176,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $decisions = $analyzer->inspectSubscriptionPull(1006, 'token-f', '1.1.1.1', 'sing-box/1.11.0');
 
         $this->assertCount(1, $decisions);
-        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
+        $this->assertSame('observe', $decisions[0]['action']);
     }
 
     public function test_client_ua_whitelist_blocks_unapproved_script_family_without_resetting_credentials(): void
@@ -211,7 +211,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame([], $allowed);
         $this->assertCount(1, $blocked);
         $this->assertSame('client_ua_not_allowed', $blocked[0]['code']);
-        $this->assertSame('reset_token_uuid', $blocked[0]['action']);
+        $this->assertSame('observe', $blocked[0]['action']);
         $this->assertSame('legacy_clash', $blocked[0]['meta']['ua_category']);
     }
 
@@ -233,11 +233,11 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertCount(1, $decisions);
         $this->assertSame('multi_region_pull', $decisions[0]['code']);
-        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
+        $this->assertSame('observe', $decisions[0]['action']);
         $this->assertSame(['JP', 'US'], $decisions[0]['meta']['regions']);
     }
 
-    public function test_multi_region_online_detection_resets_credentials_even_when_configured_observe(): void
+    public function test_multi_region_online_detection_is_observation_only(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([
             'enable_multi_region_online_detection' => true,
@@ -259,11 +259,11 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertCount(1, $decisions);
         $this->assertSame('multi_region_online', $decisions[0]['code']);
-        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
+        $this->assertSame('observe', $decisions[0]['action']);
         $this->assertSame(['JP', 'US'], $decisions[0]['meta']['regions']);
     }
 
-    public function test_leak_guard_resets_credentials_for_script_pull_outside_online_region(): void
+    public function test_leak_guard_only_throttles_the_risky_request_outside_online_region(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([
             'enable_leak_guard' => true,
@@ -285,7 +285,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertCount(1, $decisions);
         $this->assertSame('subscription_leak_guard', $decisions[0]['code']);
-        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
+        $this->assertSame('throttle', $decisions[0]['action']);
         $this->assertContains('risky_ua', $decisions[0]['meta']['signals']);
         $this->assertContains('online_region_mismatch', $decisions[0]['meta']['signals']);
         $this->assertGreaterThanOrEqual(80, $decisions[0]['meta']['risk_score']);
@@ -383,7 +383,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame([], $decisions);
     }
 
-    public function test_leak_guard_resets_low_usage_active_plan_user_with_rotating_risky_client_families(): void
+    public function test_low_usage_and_multiple_ua_scores_are_not_independent_corroboration(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([
             'enable_leak_guard' => true,
@@ -408,7 +408,8 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame([], $first);
         $this->assertCount(1, $second);
         $this->assertSame('subscription_leak_guard', $second[0]['code']);
-        $this->assertSame('reset_token_uuid', $second[0]['action']);
+        $this->assertSame('observe', $second[0]['action']);
+        $this->assertSame(['client'], $second[0]['meta']['signal_families']);
         $this->assertContains('risky_ua', $second[0]['meta']['signals']);
         $this->assertContains('non_whitelisted_ua', $second[0]['meta']['signals']);
         $this->assertContains('many_pull_ua_categories', $second[0]['meta']['signals']);
@@ -446,7 +447,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame([], $decisions);
     }
 
-    public function test_leak_guard_strict_mode_resets_known_client_from_new_pull_ip(): void
+    public function test_leak_guard_strict_mode_does_not_rotate_credentials_from_new_pull_ip(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([
             'enable_leak_guard' => true,
@@ -465,12 +466,13 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
         $this->assertSame([], $first);
         $this->assertCount(1, $second);
         $this->assertSame('subscription_leak_guard', $second[0]['code']);
-        $this->assertSame('reset_token_uuid', $second[0]['action']);
+        $this->assertSame('observe', $second[0]['action']);
+        $this->assertSame(['network'], $second[0]['meta']['signal_families']);
         $this->assertContains('new_pull_ip', $second[0]['meta']['signals']);
         $this->assertContains('many_pull_ips', $second[0]['meta']['signals']);
     }
 
-    public function test_leak_guard_escalates_repeated_hits_to_credential_reset(): void
+    public function test_repeated_leak_guard_hits_cannot_escalate_to_credential_rotation(): void
     {
         $analyzer = new SubscriptionRiskAnalyzer([
             'enable_leak_guard' => true,
@@ -500,9 +502,9 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
             ['online_ips' => ['1.1.1.1']]
         );
 
-        $this->assertSame('reset_token_uuid', $first[0]['action']);
+        $this->assertSame('throttle', $first[0]['action']);
         $this->assertSame(1, $first[0]['meta']['hit_count']);
-        $this->assertSame('reset_token_uuid', $second[0]['action']);
+        $this->assertSame('throttle', $second[0]['action']);
         $this->assertSame(2, $second[0]['meta']['hit_count']);
     }
 
@@ -521,7 +523,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertCount(1, $decisions);
         $this->assertSame('source_batch_pull', $decisions[0]['code']);
-        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
+        $this->assertSame('throttle', $decisions[0]['action']);
         $this->assertSame(3, $decisions[0]['meta']['source_user_count']);
         $this->assertSame('sparkle', $decisions[0]['meta']['ua_category']);
     }
@@ -541,7 +543,7 @@ final class SubscriptionControlRiskAnalyzerTest extends TestCase
 
         $this->assertCount(1, $decisions);
         $this->assertSame('source_batch_pull', $decisions[0]['code']);
-        $this->assertSame('reset_token_uuid', $decisions[0]['action']);
+        $this->assertSame('throttle', $decisions[0]['action']);
         $this->assertSame(3, $decisions[0]['meta']['source_user_count']);
         $this->assertSame('script', $decisions[0]['meta']['ua_category']);
         $this->assertSame(['script', 'sing-box', 'sparkle'], $decisions[0]['meta']['source_ua_categories']);

@@ -778,6 +778,8 @@ final class ManagedNodeRouteService
         try {
             DB::table('v2_subscription_control_event')
                 ->select(['client_ip', 'ip_prefix', 'ip_asn', 'ip_org'])
+                ->where('action', 'block')
+                ->whereIn('code', ['source_ip_denylist', 'subscription_source_ip_denylist'])
                 ->where('created_at', '>=', $since)
                 ->orderByDesc('created_at')
                 ->limit(5000)

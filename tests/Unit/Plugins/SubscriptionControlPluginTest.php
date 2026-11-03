@@ -52,14 +52,14 @@ final class SubscriptionControlPluginTest extends TestCase
         $this->assertTrue($isResetUa->invoke($plugin, strtolower('BadBot/1.0')));
     }
 
-    public function test_risk_actions_always_reset_credentials(): void
+    public function test_unknown_or_single_signal_actions_never_authorize_credential_rotation(): void
     {
         $plugin = new Plugin('subscription_control');
         $normalize = new ReflectionMethod($plugin, 'normalizeRiskAction');
         $normalize->setAccessible(true);
 
         foreach (['observe', ' OBSERVE ', 'block', 'empty', 'throttle', 'reset_token', 'reset_token_uuid', '限制访问', ''] as $action) {
-            $this->assertSame('reset_token_uuid', $normalize->invoke($plugin, $action));
+            $this->assertSame('observe', $normalize->invoke($plugin, $action));
         }
     }
 
@@ -116,7 +116,7 @@ final class SubscriptionControlPluginTest extends TestCase
         $normalize->setAccessible(true);
 
         $this->assertSame('block', $normalize->invoke($plugin, 'block', 'client_ua_not_allowed'));
-        $this->assertSame('reset_token_uuid', $normalize->invoke($plugin, 'reset_token_uuid', 'client_ua_not_allowed'));
+        $this->assertSame('observe', $normalize->invoke($plugin, 'reset_token_uuid', 'client_ua_not_allowed'));
     }
 
     public function test_ua_blacklist_treats_none_keyword_as_empty_user_agent(): void

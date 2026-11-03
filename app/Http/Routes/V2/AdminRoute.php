@@ -30,6 +30,7 @@ use App\Http\Controllers\V2\Admin\StaffSitesController;
 use App\Http\Controllers\V2\Admin\OrderUpgradeQuoteController;
 use App\Http\Controllers\V2\Admin\OperationTaskController;
 use App\Http\Controllers\V2\Admin\SubscriptionControlController;
+use App\Http\Controllers\V2\Admin\MachineRiskController;
 use App\Http\Controllers\V2\Admin\MarketingController;
 use App\Http\Controllers\V2\Admin\SpamRegistrationController;
 use App\Http\Controllers\V2\Admin\DomainHealthController;
@@ -433,6 +434,11 @@ class AdminRoute
             $router->group([
                 'prefix' => 'risk'
             ], function ($router) {
+                $router->get('/node-events', [MachineRiskController::class, 'overview']);
+                $router->post('/node-events/settings', [MachineRiskController::class, 'saveSettings']);
+                $router->get('/node-events/{id}', [MachineRiskController::class, 'detail'])->whereNumber('id');
+                $router->post('/node-events/{id}/analyze', [MachineRiskController::class, 'analyze'])->whereNumber('id');
+                $router->post('/node-events/{id}/review', [MachineRiskController::class, 'review'])->whereNumber('id');
                 $router->get('/subscription-control/overview', [SubscriptionControlController::class, 'overview']);
                 $router->get('/subscription-control/source-ip-blocks', [SubscriptionControlController::class, 'sourceIpBlocks']);
                 $router->post('/subscription-control/source-ip-blocks/unblock', [SubscriptionControlController::class, 'unblockSourceIp']);

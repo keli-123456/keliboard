@@ -90,14 +90,9 @@ final class SubscriptionControlOwnershipTest extends TestCase
 
         $this->assertFalse((bool) ($items['enable_client_ua_whitelist']['default'] ?? true), 'UA whitelist should not be enabled by default');
 
-        foreach ([
-            'source_batch_action',
-            'leak_guard_action',
-            'multi_ua_action',
-            'multi_region_pull_action',
-            'multi_region_online_action',
-        ] as $key) {
-            $this->assertSame('reset_token_uuid', (string) ($items[$key]['default'] ?? ''), $key . ' should reset credentials');
+        foreach (['source_batch_action' => 'throttle', 'leak_guard_action' => 'throttle',
+            'multi_ua_action' => 'observe', 'multi_region_pull_action' => 'observe', 'multi_region_online_action' => 'observe'] as $key => $action) {
+            $this->assertSame($action, (string) ($items[$key]['default'] ?? ''), $key . ' must not rotate credentials');
         }
 
         $this->assertSame('block', (string) ($items['source_ip_deny_action']['default'] ?? ''));

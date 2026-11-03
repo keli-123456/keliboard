@@ -127,6 +127,24 @@ final class ManagedNodeRouteServiceTest extends TestCase
         $this->assertSame([], $server->route_ids);
     }
 
+    public function test_observations_throttles_and_historical_behavior_resets_cannot_train_node_deny_routes(): void
+    {
+        $this->createServer();
+        foreach (['observe', 'throttle', 'reset_token_uuid'] as $index => $action) {
+            $this->database->table('v2_subscription_control_event')->insert([
+                'event_id' => 'weak-' . $index, 'code' => 'subscription_multi_region_pull', 'reason' => 'sampled signal',
+                'action' => $action, 'client_ip' => '203.0.113.10', 'ip_prefix' => '203.0.113.0/24',
+                'ip_asn' => 45090, 'ip_org' => 'Tencent cloud computing', 'created_at' => time(), 'updated_at' => time(),
+            ]);
+        }
+        $result = (new ManagedNodeRouteService())->sync([
+            'enable_node_source_ip_managed_routes' => true, 'enable_node_source_ip_builtin_provider_cidrs' => false,
+            'enable_node_source_ip_bgp_prefix_refresh' => false, 'enable_node_source_ip_route_learned_prefixes' => true,
+            'node_source_ip_provider_policy' => 'tencent=block', 'node_source_ip_provider_cidrs' => '',
+        ]);
+        $this->assertSame([], $result['active_route_ids']);
+    }
+
     public function test_save_settings_preserves_unrelated_plugin_config_and_syncs(): void
     {
         Plugin::create([

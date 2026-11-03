@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\Schema;
 
 final class SubscriptionTrustedEgressResolver
 {
-    private const CACHE_KEY = 'subscription_control:trusted_egress:auto:v1';
+    private const CACHE_KEY = 'subscription_control:trusted_egress:auto:v2';
     private const DEFAULT_CLOUDFLARE_CIDRS = <<<'TEXT'
 103.21.244.0/22
 103.22.200.0/22
@@ -62,6 +62,27 @@ TEXT;
         return implode("\n", $this->normalizeEntries(array_merge($manual, $auto)));
     }
 
+    public function resolveProxyEntries(): array
+    {
+        $stale = $this->configInt('auto_trusted_machine_stale_seconds', 900, 60, 86400);
+        $ttl = min(30, intdiv($stale, 2));
+        return Cache::remember(self::CACHE_KEY . ':proxy:' . $stale, $ttl,
+            fn () => $this->proxyEntriesFromRows($this->collectMachineRows(), $ttl));
+    }
+
+    public function proxyEntriesFromRows(array $rows, int $reserveSeconds = 0): array
+    {
+        $entries = [];
+        foreach ($rows as $row) {
+            $row = (array) $row;
+            if (!(($row['subproxy_enabled'] ?? false) || ($row['webproxy_enabled'] ?? false)) || !$this->machineFresh($row, $reserveSeconds)) continue;
+            $entries = array_merge($entries, $this->trustedEntriesFromMachineRow($row));
+        }
+        // Only exact, public addresses of an explicitly enabled managed forwarder.
+        return array_values(array_filter($this->normalizeEntries($entries), fn ($ip) =>
+            filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false));
+    }
+
     public function resolveFromRows(array $serverRows, array $machineRows = []): array
     {
         $entries = [];
@@ -100,12 +121,21 @@ TEXT;
             'subproxy_machine_ips' => true,
         ], JSON_UNESCAPED_SLASHES));
 
-        return Cache::remember($cacheKey, $ttl, function (): array {
-            return $this->resolveFromRows(
-                $this->collectServerRows(),
-                $this->collectMachineRows()
-            );
+        $state = Cache::remember($cacheKey, $ttl, function (): array {
+            $machines = [];
+            foreach ($this->configBool('enable_auto_trusted_machine_ips', true) ? $this->collectMachineRows() : [] as $row) {
+                $row = (array) $row;
+                if (!$this->machineFresh($row)) continue;
+                $status = $row['load_status'];
+                if (is_string($status)) $status = json_decode($status, true);
+                $machines[] = ['entries' => $this->normalizeEntries($this->trustedEntriesFromMachineRow($row)),
+                    'valid_until' => $status['updated_at'] + $this->configInt('auto_trusted_machine_stale_seconds', 900, 60, 86400)];
+            }
+            return ['servers' => $this->resolveFromRows($this->collectServerRows()), 'machines' => $machines];
         });
+        $entries = $state['servers'];
+        foreach ($state['machines'] as $row) if ($row['valid_until'] >= time()) $entries = array_merge($entries, $row['entries']);
+        return $this->normalizeEntries($entries);
     }
 
     private function collectServerRows(): array
@@ -156,6 +186,9 @@ TEXT;
             if (Schema::hasColumn('v2_server_machine', 'subproxy_enabled')) {
                 $columns[] = 'subproxy_enabled';
             }
+            if (Schema::hasColumn('v2_server_machine', 'webproxy_enabled')) {
+                $columns[] = 'webproxy_enabled';
+            }
             $query = DB::table('v2_server_machine')->select($columns);
 
             if (Schema::hasColumn('v2_server_machine', 'is_active')) {
@@ -180,6 +213,7 @@ TEXT;
 
     private function trustedEntriesFromMachineRow(array $row): array
     {
+        if (!$this->machineFresh($row)) return [];
         $status = $row['load_status'] ?? null;
         if (is_string($status)) {
             $decoded = json_decode($status, true);
@@ -195,7 +229,7 @@ TEXT;
             data_get($status, 'ip.panel_seen'),
         ]);
 
-        if ((bool) ($row['subproxy_enabled'] ?? false)) {
+        if (($row['subproxy_enabled'] ?? false) || ($row['webproxy_enabled'] ?? false)) {
             $entries = array_merge($entries, $this->parseStoredList([
                 data_get($status, 'agent.subscription_proxy.public_ipv4'),
                 data_get($status, 'agent.subscription_proxy.public_ipv6'),
@@ -205,6 +239,16 @@ TEXT;
         }
 
         return $entries;
+    }
+
+    private function machineFresh(array $row, int $reserveSeconds = 0): bool
+    {
+        if (array_key_exists('is_active', $row) && !$row['is_active']) return false;
+        $status = $row['load_status'] ?? [];
+        if (is_string($status)) $status = json_decode($status, true) ?: [];
+        $at = $status['updated_at'] ?? null;
+        $stale = $this->configInt('auto_trusted_machine_stale_seconds', 900, 60, 86400);
+        return is_int($at) && $at <= time() + 30 && $at >= time() - $stale + $reserveSeconds;
     }
 
     private function trustedEntriesFromHost(string $host): array
@@ -262,18 +306,8 @@ TEXT;
 
     private function trustedHostCandidates(array $row): array
     {
-        $settings = $this->normalizeSettings($row['protocol_settings'] ?? []);
-        $candidates = [
-            $row['host'] ?? '',
-            data_get($settings, 'server_name'),
-            data_get($settings, 'tls.server_name'),
-            data_get($settings, 'tls_settings.server_name'),
-            data_get($settings, 'reality_settings.server_name'),
-            data_get($settings, 'network_settings.host'),
-            data_get($settings, 'network_settings.headers.Host'),
-            data_get($settings, 'network_settings.headers.host'),
-            data_get($settings, 'network_settings.headers.:authority'),
-        ];
+        // TLS names and transport Host headers can point to unrelated third parties.
+        $candidates = [$row['host'] ?? ''];
 
         $hosts = [];
         foreach ($candidates as $candidate) {

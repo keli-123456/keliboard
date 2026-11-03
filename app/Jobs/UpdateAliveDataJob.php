@@ -36,20 +36,28 @@ class UpdateAliveDataJob implements ShouldQueue
   {
     try {
       $snapshotVersion = $this->reportedAt ?? microtime(true);
+      $riskSample = null;
       Cache::lock(self::SNAPSHOT_LOCK_KEY, self::SNAPSHOT_LOCK_SECONDS)
-        ->block(self::SNAPSHOT_LOCK_WAIT_SECONDS, function () use ($snapshotVersion): void {
+        ->block(self::SNAPSHOT_LOCK_WAIT_SECONDS, function () use ($snapshotVersion, &$riskSample): void {
           $versionCacheKey = $this->nodeSnapshotVersionCacheKey();
           if ($snapshotVersion < (float) Cache::get($versionCacheKey, 0.0)) {
             return;
           }
 
-          $this->applySnapshot();
+          $riskSample = $this->applySnapshot();
           Cache::put(
             $versionCacheKey,
             $snapshotVersion,
             now()->addSeconds(max(600, UserOnlineService::aliveCacheTtlSeconds() * 10))
           );
         });
+      if ($riskSample !== null) {
+        try {
+          app(\App\Services\ServerMachine\MachineRiskActivity::class)->record($this->nodeType, $this->nodeId, $riskSample, $snapshotVersion);
+        } catch (\Throwable $error) {
+          Log::warning('Machine risk activity unavailable', ['error_type' => get_class($error)]);
+        }
+      }
     } catch (\Throwable $e) {
       Log::error('UpdateAliveDataJob failed', [
         'error' => $e->getMessage(),
@@ -58,7 +66,7 @@ class UpdateAliveDataJob implements ShouldQueue
     }
   }
 
-  private function applySnapshot(): void
+  private function applySnapshot(): array
   {
     $updateAt = time();
     $nodeKey = $this->nodeType . $this->nodeId;
@@ -142,6 +150,9 @@ class UpdateAliveDataJob implements ShouldQueue
     Cache::put($nodeUsersCacheKey, $currentNodeUserIds, $ttl);
     UserOnlineService::updateRealtimeIndex($realtimeCounts, $updateAt + $ttlSeconds);
     $this->syncOnlineCounts($changedOnlineUpdates);
+    $riskUsers = [];
+    foreach (array_slice($currentOnlineIps, 0, 64, true) as $id => $ips) $riskUsers[$id] = count($ips);
+    return ['users' => $riskUsers, 'total_users' => count($currentNodeUserIds), 'capped' => count($currentNodeUserIds) > 64];
   }
 
   private function nodeSnapshotVersionCacheKey(): string
