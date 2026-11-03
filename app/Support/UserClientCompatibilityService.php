@@ -6,6 +6,8 @@ use Illuminate\Support\Arr;
 
 class UserClientCompatibilityService
 {
+    public const SUMMARY_VERSION = 2;
+
     private const IMPORT_CLIENTS = [
         ['key' => 'clashmeta', 'label' => 'Clash Meta', 'client_name' => 'meta'],
         ['key' => 'clashverge', 'label' => 'Clash Verge', 'client_name' => 'verge'],
@@ -36,35 +38,40 @@ class UserClientCompatibilityService
 
         $clients = [];
         foreach (self::IMPORT_CLIENTS as $client) {
-            $status = 'allow';
             $reasons = [];
+            $limitations = [];
+            $counts = ['total' => count($normalizedServers), 'supported' => 0, 'conditional' => 0, 'blocked' => 0];
 
             foreach ($normalizedServers as $server) {
                 $assessment = $this->capabilities->assessClientSupport($client['client_name'], $server);
                 $assessmentStatus = (string) ($assessment['status'] ?? 'block');
                 $reason = trim((string) ($assessment['reason'] ?? ''));
 
-                if ($assessmentStatus === 'block') {
-                    $status = 'block';
+                $counts[match ($assessmentStatus) { 'allow' => 'supported', 'partial' => 'conditional', default => 'blocked' }]++;
+                if ($assessmentStatus !== 'allow') {
                     if ($reason !== '') {
                         $reasons[] = $reason;
                     }
-                    break;
-                }
-
-                if ($assessmentStatus === 'partial' && $status !== 'block') {
-                    $status = 'partial';
-                    if ($reason !== '') {
-                        $reasons[] = $reason;
-                    }
+                    $facts = $this->capabilities->extractFacts($server);
+                    $limitations[] = match (true) {
+                        $facts['protocol'] === 'hysteria' && $facts['ech'] => 'ech',
+                        $facts['protocol'] === 'hysteria' && $facts['obfs_type'] === 'gecko' => 'gecko',
+                        !empty($assessment['matched_rule']['min_version']) => 'client_version',
+                        default => 'unsupported_features',
+                    };
                 }
             }
+
+            $status = $counts['total'] > 0 && $counts['supported'] === $counts['total'] ? 'allow'
+                : ($counts['supported'] + $counts['conditional'] > 0 ? 'partial' : 'block');
 
             $clients[] = [
                 'key' => $client['key'],
                 'label' => $client['label'],
                 'status' => $status,
                 'reasons' => array_values(array_unique(array_filter($reasons))),
+                'node_counts' => $counts,
+                'limitations' => array_values(array_unique($limitations)),
             ];
         }
 
@@ -76,6 +83,7 @@ class UserClientCompatibilityService
         $protocols = array_values(array_unique(array_filter($protocols)));
 
         return [
+            'schema_version' => self::SUMMARY_VERSION,
             'protocols' => $protocols,
             'clients' => $clients,
             'allow_clients' => array_values(array_filter($clients, fn (array $client) => $client['status'] === 'allow')),

@@ -245,6 +245,25 @@ final class TrustTunnelSubscriptionLifecycleTest extends TestCase
         $this->assertStringNotContainsString('TT-header-core', base64_decode($body, true) ?: $body);
     }
 
+    public function test_node_list_cache_is_invalidated_when_the_compatibility_schema_changes(): void
+    {
+        $user = $this->user();
+        $this->saveNode('TT-cache-summary', ['h2']);
+        $servers = ServerService::getAvailableServers($user);
+        $legacyTag = sha1(json_encode(array_column($servers, 'cache_key')));
+        $request = Request::create('/api/v1/user/server/fetch', 'GET');
+        $request->setUserResolver(fn () => $user);
+        $request->headers->set('If-None-Match', '"' . $legacyTag . '"');
+        $summary = new UserClientCompatibilityService(new ProtocolCapabilityService(config('protocol_capabilities')));
+        $controller = new \App\Http\Controllers\V1\User\ServerController();
+        $response = $controller->fetch($request, $summary);
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame(2, $response->getData(true)['compatibility']['schema_version']);
+        $this->assertNotSame('"' . $legacyTag . '"', $response->headers->get('ETag'));
+        $request->headers->set('If-None-Match', $response->headers->get('ETag'));
+        $this->assertSame(304, $controller->fetch($request, $summary)->getStatusCode());
+    }
+
     public function test_transport_change_has_new_config_etag_and_keeps_subscription_credentials(): void
     {
         $user = $this->user();
