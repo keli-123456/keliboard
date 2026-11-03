@@ -763,6 +763,59 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame(51, $history?->load_status['node_failures'][0]['node_id'] ?? null);
     }
 
+    public function test_status_derives_entry_observations_from_authenticated_reports_without_trusting_client_deltas(): void
+    {
+        $now = now()->timestamp;
+        $runtime = ['core_mode' => 'embedded', 'observation' => ['schema' => 1, 'session' => str_repeat('a', 32),
+            'pid' => 10, 'started_at' => $now - 1000, 'uptime_seconds' => 1000]];
+        $machine = ServerMachine::create(['name' => 'synthetic-entry', 'token' => 'machine-token', 'is_active' => false,
+            'load_status' => ['updated_at' => $now - 60, 'runtime' => $runtime,
+                'metrics' => ['keli_core_rs' => ['keli_core_tcp_auth_failure_total' => 4]]]]);
+        $response = (new MachineController())->status(Request::create('/api/v2/server/machine/status', 'POST', [
+            'machine_id' => $machine->id, 'token' => 'machine-token', 'status' => [
+                'runtime' => $runtime, 'entry_security' => ['schema' => 1, 'private' => 'private-node-secret',
+                    'counters' => ['tcp_auth_failure_total' => 9, 'user_id' => 999]],
+                'entry_protection_state' => ['deltas' => ['tcp_auth_failure_total' => 999]],
+            ],
+        ]));
+        $this->assertTrue($response->getData(true)['data']);
+        $status = $machine->fresh()->load_status;
+        $this->assertSame(5, $status['entry_protection_state']['deltas']['tcp_auth_failure_total']);
+        $this->assertSame(60, $status['entry_protection_state']['interval_seconds']);
+        $this->assertStringNotContainsString('private-node-secret', json_encode($status['entry_security']));
+        $this->assertArrayNotHasKey('user_id', $status['entry_security']['counters']);
+    }
+
+    public function test_authenticated_full_status_distributes_probe_settings_and_stores_only_allowlisted_results(): void
+    {
+        $this->bindSettings(['subscription_proxy_enable' => false, 'server_entry_probe_enable' => true,
+            'server_entry_probe_targets' => ['223.5.5.5', '119.29.29.29'], 'server_entry_probe_interval' => 120]);
+        $machine = ServerMachine::create(['name' => 'synthetic-probe', 'token' => 'machine-token', 'is_active' => true]);
+        $controller = new MachineController();
+        $send = fn (array $status, string $token = 'machine-token') => $controller->status(Request::create('/api/v2/server/machine/status', 'POST', [
+            'machine_id' => $machine->id, 'token' => $token, 'status' => $status,
+        ]));
+        $denied = $send([], 'wrong-token');
+        $this->assertSame(401, $denied->getStatusCode());
+        $this->assertArrayNotHasKey('entry_probe', $denied->getData(true));
+        $config = $send([])->getData(true)['entry_probe'];
+        $this->assertTrue($config['enabled']); $this->assertCount(2, $config['targets']);
+        $this->assertSame(120, $config['interval_seconds']); $this->assertSame(2, $config['timeout_seconds']);
+        $this->assertNull($machine->fresh()->load_status['entry_probe']);
+        $report = ['schema' => 1, 'revision' => $config['revision'], 'checked_at' => time(), 'state' => 'ready',
+            'targets' => [['id' => $config['targets'][0]['id'], 'status' => 'reachable', 'raw_output' => 'private-test-output']],
+            'blocked_by_policy' => true];
+        $this->assertTrue($send(['entry_probe' => $report])->getData(true)['data']);
+        $stored = $machine->fresh()->load_status;
+        $this->assertArrayNotHasKey('blocked_by_policy', $stored['entry_probe']);
+        $this->assertArrayNotHasKey('raw_output', $stored['entry_probe']['targets'][0]);
+        $snapshot = app(\App\Services\ServerMachine\MachineEntryProbe::class)->snapshot($stored, time());
+        $this->assertFalse($snapshot['blocked_by_policy']);
+        $machine->forceFill(['is_active' => false])->save();
+        $disabled = $send([])->getData(true)['entry_probe'];
+        $this->assertFalse($disabled['enabled']); $this->assertNotSame($config['revision'], $disabled['revision']);
+    }
+
     public function test_status_persists_hy2_tls_certificate_fingerprint(): void
     {
         $this->bindSettings([

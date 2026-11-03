@@ -245,7 +245,7 @@ class Plugin extends AbstractPlugin
             Log::error('[SubscriptionControl] 检查失败: ' . $e->getMessage());
         } finally {
             if ($sampleUser) {
-                try { app(\App\Services\SubscriptionAiBehaviorService::class)->capture($sampleUser, $request, $this->riskAnalyzerConfig(), $sampleOutcome); }
+                try { app(\App\Services\SubscriptionAiBehaviorService::class)->capture($sampleUser, $request, $this->riskAnalyzerConfig(), $sampleOutcome, true); }
                 catch (\Throwable) { Log::warning('[SubscriptionControl] Independent behavior observation unavailable; access result unchanged'); }
             }
         }

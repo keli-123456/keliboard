@@ -27,7 +27,7 @@ class SubscriptionAiBehaviorService
     }
 
     /** Observe all access outcomes, not just old-rule alarms. No model or queue call here. */
-    public function capture(User $user, \Illuminate\Http\Request $request, array $config, string $outcome): void
+    public function capture(User $user, \Illuminate\Http\Request $request, array $config, string $outcome, bool $deferAllowedSnapshot = false): void
     {
         $settings = Cache::store('redis')->remember('subscription_ai:policy', 10, fn() => app(SubscriptionAiAutomationService::class)->settings());
         if (!$settings['ai_auto_enabled'] || ($settings['ai_auto_mode'] ?? 'shadow') === 'legacy'
@@ -36,16 +36,33 @@ class SubscriptionAiBehaviorService
         if (!Cache::store('redis')->remember('subscription_ai:behavior_available', 10, fn() => $this->available())) return;
         $ip = (new SubscriptionClientIpResolver($config))->resolve($request)['client_ip'];
         $client = (new SubscriptionRiskAnalyzer([]))->classifyUserAgent((string) $request->header('User-Agent', ''))['category'];
-        $this->observe($user, (string) $ip, (string) $client, $outcome);
+        $this->observe($user, (string) $ip, (string) $client, $outcome, deferSnapshot: $deferAllowedSnapshot && $outcome === 'allowed');
     }
 
-    public function observe(User $user, string $ip, string $client, string $outcome): void
+    /** Successful render candidates, not proof of client receipt or subsequent use. */
+    public function captureResponse(User $user, array $servers): void
+    {
+        $settings = Cache::store('redis')->remember('subscription_ai:policy', 10, fn() => app(SubscriptionAiAutomationService::class)->settings());
+        if (!$settings['ai_auto_enabled'] || ($settings['ai_auto_mode'] ?? 'shadow') === 'legacy'
+            || !SubscriptionAiAutomationService::allowsSite($settings, (int) ($user->site_id ?? 0))
+            || $user->is_admin || $user->is_staff || $user->banned || trim((string) $user->token) === '' || !config('app.key')
+            || !Cache::store('redis')->remember('subscription_ai:behavior_available', 10, fn() => $this->available())) return;
+        $ids = [];
+        foreach ($servers as $server) {
+            $id = is_array($server) ? ($server['id'] ?? null) : null;
+            if (is_int($id) && $id > 0) $ids[$id] = $id;
+            if (count($ids) > self::DIMENSIONS) break;
+        }
+        $this->observe($user, '', '', 'allowed', array_values($ids), true);
+    }
+
+    public function observe(User $user, string $ip, string $client, string $outcome, array $responseNodes = [], bool $responseOnly = false, bool $deferSnapshot = false): void
     {
         $now = time(); $bucket = intdiv($now, 300) * 300;
         $identity = ['user_id' => (int) $user->id, 'site_id' => (int) ($user->site_id ?? 0), 'credential_hash' => $this->credential($user), 'bucket_at' => $bucket];
         $key = 'subscription_ai:behavior:' . hash('sha256', json_encode($identity));
         // Nonblocking per-account lock; an unavailable buffer must never hold up subscriptions.
-        Cache::store('redis')->lock($key . ':lock', 3)->get(function () use ($identity, $key, $now, $ip, $client, $outcome): void {
+        Cache::store('redis')->lock($key . ':lock', 3)->get(function () use ($identity, $key, $now, $ip, $client, $outcome, $responseNodes, $responseOnly, $deferSnapshot): void {
             $state = Cache::store('redis')->get($key);
             if (!is_array($state)) {
                 $admission = 'subscription_ai:behavior_admissions:' . intdiv($now, 60);
@@ -54,15 +71,23 @@ class SubscriptionAiBehaviorService
                 $stored = DB::table(self::TABLE)->where($identity)->value('sample');
                 $state = $stored ? json_decode($stored, true, 32, JSON_THROW_ON_ERROR) : ['pulls' => 0, 'ips' => [], 'clients' => [], 'outcomes' => [], 'capped' => false, 'first_at' => $now];
             }
-            $state['pulls'] = min(1000000, $state['pulls'] + 1);
-            $packed = @inet_pton($ip);
-            $fingerprint = hash_hmac('sha256', $identity['credential_hash'] . ':' . ($packed === false ? 'unknown' : bin2hex($packed)), (string) config('app.key'));
-            $this->increment($state['ips'], $fingerprint, $state['capped']);
-            $this->increment($state['clients'], $client, $state['capped']);
-            $outcome = in_array($outcome, ['allowed', 'legacy_blocked', 'ai_blocked', 'error'], true) ? $outcome : 'error';
-            $state['outcomes'][$outcome] = min(1000000, ($state['outcomes'][$outcome] ?? 0) + 1);
+            if ($responseOnly) {
+                $state['response_count'] = min(1000000, ($state['response_count'] ?? 0) + 1);
+                $state['response_nodes'] ??= [];
+                foreach ($responseNodes as $id) $this->increment($state['response_nodes'], (string) $id, $state['capped']);
+            } else {
+                $state['pulls'] = min(1000000, $state['pulls'] + 1);
+                $packed = @inet_pton($ip);
+                $fingerprint = hash_hmac('sha256', $identity['credential_hash'] . ':' . ($packed === false ? 'unknown' : bin2hex($packed)), (string) config('app.key'));
+                $this->increment($state['ips'], $fingerprint, $state['capped']);
+                $this->increment($state['clients'], $client, $state['capped']);
+                $outcome = in_array($outcome, ['allowed', 'legacy_blocked', 'ai_blocked', 'error'], true) ? $outcome : 'error';
+                $state['outcomes'][$outcome] = min(1000000, ($state['outcomes'][$outcome] ?? 0) + 1);
+            }
             $state['last_at'] = $now;
             Cache::store('redis')->put($key, $state, 600);
+            // A successful response shares this snapshot budget with its access observation.
+            if ($deferSnapshot) return;
             // At most one persisted snapshot per account/minute and 60 globally/minute.
             // Buffered tails and contention may be missing; evidence explicitly declares lower bounds.
             if (!Cache::store('redis')->add($key . ':snapshot', true, 60)) return;
@@ -99,6 +124,7 @@ class SubscriptionAiBehaviorService
             ['id' => 4, 'family' => 'reference', 'historical_buckets' => $referenceRows->count(), 'history_span_seconds' => max(0, $reference['last_at'] - $reference['first_at']), 'mature' => $mature],
         ];
         return ['source' => 'independent_behavior_v1', 'feature_ids' => [1, 2, 3, 4], 'features' => $features, 'event_ids' => [1, 2, 3, 4],
+            'entry_protection' => app(SubscriptionEntryProtectionService::class)->forUser($user, array_map('intval', array_keys($recent['response_nodes'])), $recent['response_count']),
             'event_families' => [1 => 'timing', 2 => 'network', 3 => 'client', 4 => 'reference'], 'families' => ['timing', 'network', 'client', 'reference'],
             'behavior_bucket_ids' => $ids, 'baseline_mature' => $mature, 'last_event_at' => $recent['last_at'], 'window_seconds' => 900,
             'sampling' => ['lower_bounds_only' => true, 'not_full_population_coverage' => true, 'cache_tails_may_be_missing' => true, 'identity_dimensions_capped' => $recent['capped'] || $reference['capped'], 'global_write_budget_per_minute' => 60, 'global_new_buffer_budget_per_minute' => 120],
@@ -108,10 +134,15 @@ class SubscriptionAiBehaviorService
 
     private function summary($rows): array
     {
-        $result = ['ips' => [], 'clients' => [], 'outcomes' => [], 'bucket_pulls' => [], 'first_at' => 0, 'last_at' => 0, 'capped' => false];
+        $result = ['ips' => [], 'clients' => [], 'outcomes' => [], 'bucket_pulls' => [], 'first_at' => 0, 'last_at' => 0, 'capped' => false, 'response_nodes' => [], 'response_count' => 0];
         foreach ($rows as $row) {
             $sample = json_decode($row->sample, true, 32, JSON_THROW_ON_ERROR);
             foreach (['ips', 'clients', 'outcomes'] as $field) foreach ($sample[$field] as $key => $count) $result[$field][$key] = ($result[$field][$key] ?? 0) + $count;
+            foreach ((array) ($sample['response_nodes'] ?? []) as $id => $count) {
+                if (count($result['response_nodes']) < self::DIMENSIONS || isset($result['response_nodes'][$id])) $result['response_nodes'][$id] = true;
+                else $result['capped'] = true;
+            }
+            $result['response_count'] += max(0, (int) ($sample['response_count'] ?? 0));
             $result['bucket_pulls'][] = $sample['pulls'];
             $result['first_at'] = $result['first_at'] ? min($result['first_at'], $sample['first_at']) : $sample['first_at'];
             $result['last_at'] = max($result['last_at'], $sample['last_at']);

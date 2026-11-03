@@ -149,6 +149,10 @@ class ConfigSave extends FormRequest
         'server_machine_distribution_base_url' => 'nullable|url|max:500',
         'server_pull_interval' => 'integer',
         'server_push_interval' => 'integer',
+        'server_entry_probe_enable' => 'boolean',
+        'server_entry_probe_targets' => 'array|max:8',
+        'server_entry_probe_targets.*' => 'required|string|ip|distinct',
+        'server_entry_probe_interval' => 'integer|min:60|max:600',
         'message_ops_enable' => 'boolean',
         'node_realtime_enable' => 'boolean',
         'node_realtime_path' => 'nullable|string|max:100',
@@ -267,7 +271,12 @@ class ConfigSave extends FormRequest
      */
     public function rules()
     {
-        return self::RULES;
+        $rules = self::RULES;
+        $rules['server_entry_probe_targets.*'] = ['bail', 'required', 'string', 'ip', 'distinct',
+            function ($attribute, $value, $fail): void {
+                if (\App\Services\ServerMachine\MachineEntryProbe::publicIp($value) === null) $fail('探测目标必须为有效公网 IP，不能使用内网、保留地址或域名。');
+            }];
+        return $rules;
     }
 
     public function messages()

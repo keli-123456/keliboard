@@ -26,6 +26,7 @@ class MachineInsightService
             'telemetry' => $snapshot['telemetry'],
             'host' => array_intersect_key($status, array_flip(['cpu', 'mem', 'swap', 'disk', 'uptime'])),
             'process' => $this->processMetrics($raw),
+            'entry_protection' => app(MachineEntryProtection::class)->snapshot($raw, $now),
             'runtime_observation' => app(MachineRuntimeObservation::class)->normalize(data_get($raw, 'runtime.observation')),
             'runtime_tracking' => array_intersect_key((array) ($raw['runtime_observation_state'] ?? []), array_flip(['tracking_since', 'observed_restarts', 'last_change_at'])),
             'ip' => $ip,

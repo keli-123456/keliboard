@@ -435,6 +435,36 @@ final class ClientControllerTest extends TestCase
     {
         app()->instance('validator', new ValidatorFactory(new Translator(new ArrayLoader(), 'en'), app()));
     }
+
+    public function test_rendered_subscription_observation_is_after_filtering_and_failure_never_changes_the_response(): void
+    {
+        $this->bindProtocolManager([TestClientFilteredProtocol::class]);
+        app()->instance('protocols.capabilities', new TestClientCapabilityFilter());
+        $observer = new class extends \App\Services\SubscriptionAiBehaviorService {
+            public array $ids = [];
+            public function captureResponse(User $user, array $servers): void {
+                $this->ids = array_column($servers, 'id');
+                throw new \RuntimeException('synthetic observation failure');
+            }
+        };
+        app()->instance(\App\Services\SubscriptionAiBehaviorService::class, $observer);
+        $user = (new User())->forceFill(['id' => 10, 'u' => 0, 'd' => 0, 'transfer_enable' => 1024]);
+        $response = (new ClientController())->doSubscribe(Request::create('/', 'GET', ['flag' => 'Hiddify/1.2.8.1103', 'types' => 'anytls']), $user, [
+            ['id' => 27, 'type' => 'anytls', 'name' => 'Included', 'protocol_settings' => []],
+            ['id' => 28, 'type' => 'trojan', 'name' => 'Excluded', 'protocol_settings' => []],
+        ]);
+        $this->assertSame([27], array_values(array_filter($observer->ids)));
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertStringContainsString('Included', $response->getContent());
+        $this->assertStringNotContainsString('Excluded', $response->getContent());
+        $this->assertStringNotContainsString('observation failure', $response->getContent());
+        $observer->ids = [];
+        $this->bindProtocolManager([TestClientUnavailableProtocol::class]);
+        $failed = (new ClientController())->doSubscribe(Request::create('/', 'GET', ['flag' => 'Hiddify/1.2.8.1103']), $user,
+            [['id' => 27, 'type' => 'anytls', 'name' => 'Included', 'protocol_settings' => []]]);
+        $this->assertSame(503, $failed->getStatusCode());
+        $this->assertSame([], $observer->ids);
+    }
 }
 
 final class TestClientCapabilityFilter
@@ -463,4 +493,10 @@ final class TestClientFilteredProtocol extends \App\Support\AbstractProtocol
             'names' => array_column($this->servers, 'name'),
         ]);
     }
+}
+
+final class TestClientUnavailableProtocol extends \App\Support\AbstractProtocol
+{
+    public $flags = ['hiddify'];
+    public function handle() { return new Response('temporarily unavailable', 503); }
 }

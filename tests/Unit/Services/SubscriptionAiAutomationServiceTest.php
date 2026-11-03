@@ -465,6 +465,60 @@ final class SubscriptionAiAutomationServiceTest extends TestCase
         }
     }
 
+    public function test_response_capture_does_not_double_count_access_or_expose_hosts_and_respects_site_scope(): void
+    {
+        $behavior = $this->independent(); $user = $this->user(10, ['site_id' => null]);
+        $other = $this->user(11); $this->enable(['ai_auto_mode' => 'shadow', 'ai_auto_site_ids' => [0]]);
+        $behavior->observe($user, '192.0.2.50', 'mihomo', 'allowed');
+        $servers = array_map(fn ($id) => ['id' => $id, 'host' => 'private-node.example.test', 'password' => 'private-node-password'], range(1, 30));
+        $behavior->captureResponse($user, $servers);
+        $identity = ['user_id' => 10, 'site_id' => 0, 'credential_hash' => $behavior->credential($user), 'bucket_at' => intdiv(time(), 300) * 300];
+        $key = 'subscription_ai:behavior:' . hash('sha256', json_encode($identity));
+        Cache::store('redis')->forget($key . ':snapshot');
+        $behavior->captureResponse($user, $servers); $behavior->captureResponse($other, $servers);
+        $sample = json_decode(DB::table($behavior::TABLE)->value('sample'), true);
+        $this->assertSame(1, $sample['pulls']); $this->assertSame(['allowed' => 1], $sample['outcomes']);
+        $this->assertSame(2, $sample['response_count']); $this->assertCount(16, $sample['response_nodes']);
+        $this->assertTrue($sample['capped']); $this->assertArrayNotHasKey('', $sample['clients']);
+        $this->assertSame(1, DB::table($behavior::TABLE)->count());
+        $this->assertStringNotContainsString('private-node', json_encode($sample));
+        $evidence = $behavior->evidence($user);
+        $this->assertSame(16, $evidence['entry_protection']['candidate_nodes_lower_bound']);
+        $this->assertSame('unavailable', $evidence['entry_protection']['status']);
+    }
+
+    public function test_shared_machine_signals_can_only_produce_an_observation_not_an_account_penalty(): void
+    {
+        $behavior = $this->independent(); $user = $this->user();
+        $behavior->observe($user, '192.0.2.50', 'mihomo', 'allowed');
+        $record = $this->service->reserve($user->id);
+        $evidence = $record->evidence;
+        $evidence['entry_protection']['machines'] = [['ref' => 'opaque', 'context' => ['state' => 'fresh']]];
+        $record->forceFill(['evidence' => $evidence])->save();
+        $this->provider->action = 'temporary_block'; $this->service->process($record->id);
+        $payload = json_decode($this->provider->calls[0][1]['content'], true);
+        $this->assertSame(['observe'], $payload['allowed_actions']);
+        $this->assertArrayHasKey('entry_protection', $payload['evidence']);
+        $this->assertSame('failed', $record->fresh()->status);
+        $this->assertSame('unsafe_decision', $record->fresh()->outcome);
+        $this->assertNull($this->service->restriction($user));
+        $this->assertSame('private-token-10', $user->fresh()->token);
+        Bus::assertNotDispatched(SendEmailJob::class);
+    }
+
+    public function test_successful_response_and_access_share_one_snapshot_without_losing_the_first_node_candidates(): void
+    {
+        $behavior = $this->independent(); $user = $this->user();
+        $request = \Illuminate\Http\Request::create('/subscribe', 'GET', [], [], [], ['HTTP_USER_AGENT' => 'mihomo', 'REMOTE_ADDR' => '192.0.2.50']);
+        $behavior->capture($user, $request, [], 'allowed', true);
+        $this->assertSame(0, DB::table($behavior::TABLE)->count());
+        $behavior->captureResponse($user, [['id' => 27]]);
+        $this->assertSame(1, DB::table($behavior::TABLE)->count());
+        $sample = json_decode(DB::table($behavior::TABLE)->value('sample'), true);
+        $this->assertSame(1, $sample['pulls']); $this->assertSame(1, $sample['response_count']);
+        $this->assertSame(['27' => 1], $sample['response_nodes']);
+    }
+
     public function test_default_is_independent_shadow_and_disabled_without_an_authorization(): void
     {
         $this->assertSame('shadow', $this->service->settings()['ai_auto_mode']);
@@ -476,6 +530,7 @@ final class SubscriptionAiAutomationServiceTest extends TestCase
         $behavior = $this->independent(); $user = $this->user();
         $plugin = new ControlPlugin('subscription_control'); $plugin->setConfig([]);
         $this->assertSame([], $plugin->checkSubscribeAccess([], $user, \Illuminate\Http\Request::create('/subscribe', 'GET', [], [], [], ['HTTP_USER_AGENT' => 'mihomo', 'REMOTE_ADDR' => '192.0.2.50'])));
+        $behavior->captureResponse($user, []);
         $this->assertSame(1, DB::table($behavior::TABLE)->count());
         $this->assertSame(0, DB::table('v2_subscription_control_event')->count());
         $this->assertSame(['queued' => 1], $this->service->tick());

@@ -252,6 +252,8 @@ class SubscriptionAiAutomationService
             $benchmark = app(SubscriptionAiBenchmarkService::class);
             $lesson = $benchmark->lesson($record, $settings);
             $analysisSettings = $settings;
+            // Shared node context is advisory only and cannot authorize an account restriction.
+            $analysisSettings['entry_observe_only'] = !empty($record->evidence['entry_protection']['machines']);
             if ($lesson !== null) {
                 $analysisSettings['ai_auto_max_seconds'] = min(120, $settings['ai_auto_max_seconds']);
                 $analysisSettings['ai_auto_allow_reset_token'] = false; $analysisSettings['ai_auto_allow_suspend'] = false;
@@ -262,6 +264,7 @@ class SubscriptionAiAutomationService
                     'evidence' => ($record->evidence['source'] ?? '') === 'independent_behavior_v1' ? $benchmark->blindEvidence($record->evidence) : $record->evidence,
                     'lesson' => $lesson ?? ['rule_intents' => SubscriptionAiBenchmarkService::RULE_INTENTS, 'reviewed_training_examples' => []],
                 ], JSON_THROW_ON_ERROR)],
+                ['role' => 'system', 'content' => 'The objective is reducing node entry exposure, not punishing ordinary sharing, network changes or high traffic. entry_protection contains sampled successful-render candidates, not confirmed client receipt, leakage or use. Machine-wide errors may come from other users or ordinary failures. They cannot identify an attacker or establish censorship. When machine context is supplied this phase is strictly observe-only; describe limitations and suggest human investigation, never claim an IP was blocked or that an account caused it.'],
             ], false);
             $decision = $this->validateDecision(json_decode($reply['content'], true, 32, JSON_THROW_ON_ERROR), $record->evidence, $analysisSettings);
             $decision['model'] = mb_substr((string) ($provider['model'] ?? ''), 0, 120);
@@ -460,6 +463,7 @@ class SubscriptionAiAutomationService
 
     private function allowedActions(array $settings): array
     {
+        if ($settings['entry_observe_only'] ?? false) return ['observe'];
         return array_merge(['observe', 'notify', 'throttle', 'temporary_block'],
             $settings['ai_auto_allow_reset_token'] ? ['reset_token'] : [], $settings['ai_auto_allow_suspend'] ? ['suspend_subscription'] : []);
     }

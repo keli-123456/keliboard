@@ -168,6 +168,8 @@ class MachineController extends Controller
             'hy2_port_forward' => is_array(data_get($payload, 'hy2_port_forward')) ? data_get($payload, 'hy2_port_forward') : null,
             'mieru_port_forward' => is_array(data_get($payload, 'mieru_port_forward')) ? data_get($payload, 'mieru_port_forward') : null,
             'metrics' => is_array(data_get($payload, 'metrics')) ? data_get($payload, 'metrics') : null,
+            'entry_security' => app(\App\Services\ServerMachine\MachineEntryProtection::class)->normalizeReport(data_get($payload, 'entry_security')),
+            'entry_probe' => app(\App\Services\ServerMachine\MachineEntryProbe::class)->normalizeReport(data_get($payload, 'entry_probe')),
             'agent' => is_array(data_get($payload, 'agent')) ? data_get($payload, 'agent') : null,
             'node_failures' => $this->normalizeNodeFailures(data_get($payload, 'node_failures')),
             'tls_certificates' => $this->normalizeTlsCertificates(data_get($payload, 'tls_certificates')),
@@ -186,6 +188,10 @@ class MachineController extends Controller
         $status['runtime_observation_state'] = app(MachineRuntimeObservation::class)->track(
             is_array($machine->load_status) ? $machine->load_status : [], $observation, $status['updated_at']
         );
+        if (!array_key_exists('entry_security', $payload)) unset($status['entry_security']);
+        $status['entry_protection_state'] = app(\App\Services\ServerMachine\MachineEntryProtection::class)->observe(
+            is_array($machine->load_status) ? $machine->load_status : [], $status, $status['updated_at']
+        );
 
         if (!$machine->is_active) {
             $status['machine'] = ['is_active' => false];
@@ -198,6 +204,7 @@ class MachineController extends Controller
                 'data' => true,
                 'reload' => false,
                 'upgrade' => null,
+                'entry_probe' => app(\App\Services\ServerMachine\MachineEntryProbe::class)->configuration(false),
             ]);
         }
 
@@ -239,6 +246,7 @@ class MachineController extends Controller
             $previous = is_array($locked->load_status) ? $locked->load_status : [];
             $status['ip_observation'] = app(MachineIpHistory::class)->observe($previous, $status['ip'], $status['updated_at']);
             $status['runtime_observation_state'] = app(MachineRuntimeObservation::class)->track($previous, $observation, $status['updated_at']);
+            $status['entry_protection_state'] = app(\App\Services\ServerMachine\MachineEntryProtection::class)->observe($previous, $status, $status['updated_at']);
             $locked->forceFill([
                 'last_seen_at' => now()->timestamp, 'load_status' => $status,
                 'upgrade_state' => $this->resolveUpgradeState($locked, $status, data_get($payload, 'upgrade')),
@@ -246,7 +254,8 @@ class MachineController extends Controller
             return [$locked, $status];
         });
         if (!$machine->is_active) {
-            return response()->json(['data' => true, 'reload' => false, 'upgrade' => null]);
+            return response()->json(['data' => true, 'reload' => false, 'upgrade' => null,
+                'entry_probe' => app(\App\Services\ServerMachine\MachineEntryProbe::class)->configuration(false)]);
         }
         $upgradeCommand = $this->buildUpgradeCommand($machine, $this->resolvePanelBaseURL($request));
 
@@ -261,6 +270,7 @@ class MachineController extends Controller
             'data' => true,
             'reload' => $reload,
             'upgrade' => $upgradeCommand,
+            'entry_probe' => app(\App\Services\ServerMachine\MachineEntryProbe::class)->configuration(),
         ]);
     }
 

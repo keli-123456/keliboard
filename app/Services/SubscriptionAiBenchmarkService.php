@@ -19,7 +19,8 @@ class SubscriptionAiBenchmarkService
     public const HOLDOUT_SIZE = 600;
     public const PROTOCOL = 'paired-shadow-v1';
     public const RULE_INTENTS = [
-        'Detect credential sharing or automated harvesting, not ordinary network changes.',
+        'Reduce node entry exposure from credential leakage or automated harvesting, not ordinary network changes.',
+        'Machine-wide handshake/auth failures do not identify a subscriber or prove an attack; do not infer censorship.',
         'UA/IP/region counts do not prove devices or abuse; all can have legitimate explanations.',
         'Distinguish an explicit hostile scanner from a browser opening a link or a normal client.',
         'Use independent corroboration; prefer observation when evidence is incomplete.',
@@ -34,7 +35,7 @@ class SubscriptionAiBenchmarkService
     {
         $provider = SubscriptionRiskAiSettings::forProvider(app(TicketAiAssistantService::class)->providerSettingsForInternalUse());
         $files = [];
-        foreach (['app/Services/SubscriptionRiskAiSettings.php', 'app/Services/TicketAiProviderClient.php', 'app/Services/SubscriptionAiAutomationService.php', 'app/Services/SubscriptionAiBehaviorService.php', 'app/Services/SubscriptionAiBenchmarkService.php', 'plugins-core/SubscriptionControl/Plugin.php', 'plugins-core/SubscriptionControl/Services/SubscriptionRiskAnalyzer.php', 'plugins-core/SubscriptionControl/config.json'] as $file) {
+        foreach (['app/Services/SubscriptionRiskAiSettings.php', 'app/Services/TicketAiProviderClient.php', 'app/Services/SubscriptionAiAutomationService.php', 'app/Services/SubscriptionAiBehaviorService.php', 'app/Services/SubscriptionAiBenchmarkService.php', 'app/Services/SubscriptionEntryProtectionService.php', 'app/Services/ServerMachine/MachineEntryProtection.php', 'app/Services/ServerMachine/MachineEntryProbe.php', 'app/Http/Controllers/V1/Client/ClientController.php', 'plugins-core/SubscriptionControl/Plugin.php', 'plugins-core/SubscriptionControl/Services/SubscriptionRiskAnalyzer.php', 'plugins-core/SubscriptionControl/config.json'] as $file) {
             $files[$file] = hash_file('sha256', base_path($file));
         }
         unset($settings['ai_auto_enabled'], $settings['ai_auto_mode']);
@@ -42,6 +43,7 @@ class SubscriptionAiBenchmarkService
         $settings['ai_auto_allow_reset_token'] = false; $settings['ai_auto_allow_suspend'] = false;
         return hash_hmac('sha256', json_encode([
             'protocol' => self::PROTOCOL, 'settings' => $settings, 'files' => $files,
+            'entry_probe_revision' => app(\App\Services\ServerMachine\MachineEntryProbe::class)->configuration()['revision'],
             'provider' => array_intersect_key($provider, array_flip(['base_url', 'model', 'api_key', 'temperature', 'allow_private_provider', 'reasoning_effort', 'timeout', 'max_tokens', 'json_mode'])),
             'rules' => DB::table('v2_plugins')->where('code', 'subscription_control')->value('config'),
         ], JSON_THROW_ON_ERROR), (string) config('app.key'));
@@ -116,7 +118,7 @@ class SubscriptionAiBenchmarkService
 
     public function blindEvidence(array $evidence): array
     {
-        return array_intersect_key($evidence, array_flip(['source', 'features', 'feature_ids', 'event_ids', 'event_families', 'families', 'baseline_mature', 'last_event_at', 'window_seconds', 'sampling', 'reference']));
+        return array_intersect_key($evidence, array_flip(['source', 'features', 'feature_ids', 'event_ids', 'event_families', 'families', 'baseline_mature', 'last_event_at', 'window_seconds', 'sampling', 'reference', 'entry_protection']));
     }
 
     public function lesson(SubscriptionAiAction $action, array $settings): ?array

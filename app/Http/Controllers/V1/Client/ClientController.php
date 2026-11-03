@@ -97,6 +97,8 @@ class ClientController extends Controller
             );
         }
 
+        // Freeze bounded real-node IDs before synthetic website/status entries are added.
+        $entryCandidates = array_map(static fn (array $server): array => ['id' => $server['id'] ?? null], array_slice($serversFiltered, 0, 17));
         $websiteUrl = app(WebsiteProxyEndpointService::class)->urlForSubscription($user, $request);
         $navigationUrl = app(SiteNavigationService::class)->urlForSubscription($user, $request);
         if (!$native) {
@@ -118,6 +120,13 @@ class ClientController extends Controller
         ]);
 
         $response = $protocolInstance->handle();
+        try {
+            if (is_object($response) && method_exists($response, 'getStatusCode') && $response->getStatusCode() >= 200 && $response->getStatusCode() < 300) {
+                app(\App\Services\SubscriptionAiBehaviorService::class)->captureResponse($user, $entryCandidates);
+            }
+        } catch (\Throwable) {
+            // Observation must never change subscription content, status or delivery latency via retries.
+        }
         $profileUrl = $navigationUrl ?? $websiteUrl;
         $supportUrl = $websiteUrl ?? $navigationUrl;
         if ($profileUrl !== null && is_object($response) && isset($response->headers)) {
