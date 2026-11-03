@@ -64,6 +64,7 @@ class KeliCore extends SingBox
                 }
             }
             $outbounds[] = $outbound;
+            $this->noteGeneratedNode($server);
         }
         $tags = array_column($outbounds, 'tag');
         return [

@@ -119,6 +119,11 @@ class ClientController extends Controller
             ],
         ]);
 
+        try {
+            if (method_exists($protocolInstance, 'observeGeneratedNodes')) {
+                $protocolInstance->observeGeneratedNodes(app(\App\Services\ServerMachine\SubscriptionRenderEvidence::class)->collecting($user));
+            }
+        } catch (\Throwable) {}
         $response = $protocolInstance->handle();
         try {
             if (is_object($response) && method_exists($response, 'getStatusCode') && $response->getStatusCode() >= 200 && $response->getStatusCode() < 300) {
@@ -127,6 +132,12 @@ class ClientController extends Controller
         } catch (\Throwable) {
             // Observation must never change subscription content, status or delivery latency via retries.
         }
+        try {
+            if (is_object($response) && method_exists($response, 'getStatusCode') && $response->getStatusCode() >= 200 && $response->getStatusCode() < 300
+                && method_exists($protocolInstance, 'generatedNodeEvidence') && ($generated = $protocolInstance->generatedNodeEvidence()) !== null) {
+                app(\App\Services\ServerMachine\SubscriptionRenderEvidence::class)->capture($user, $generated, class_basename($protocolInstance));
+            }
+        } catch (\Throwable) {}
         $profileUrl = $navigationUrl ?? $websiteUrl;
         $supportUrl = $websiteUrl ?? $navigationUrl;
         if ($profileUrl !== null && is_object($response) && isset($response->headers)) {

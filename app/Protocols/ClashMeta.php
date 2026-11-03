@@ -81,6 +81,7 @@ class ClashMeta extends AbstractProtocol
         $proxies = [];
 
         foreach ($servers as $item) {
+            $before = count($proxy);
             if ($item['type'] === Server::TYPE_TRUSTTUNNEL) {
                 $proxy[] = self::buildTrustTunnel($item['password'], $item);
                 $proxies[] = $item['name'];
@@ -130,6 +131,7 @@ class ClashMeta extends AbstractProtocol
                 array_push($proxy, self::buildMieru($item['password'], $item));
                 array_push($proxies, $item['name']);
             }
+            if (count($proxy) > $before && !empty($proxy[array_key_last($proxy)]['server'])) $this->noteGeneratedNode($item);
         }
 
         $config['proxies'] = array_merge($config['proxies'] ? $config['proxies'] : [], $proxy);

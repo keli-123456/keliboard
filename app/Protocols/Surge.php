@@ -37,6 +37,7 @@ class Surge extends AbstractProtocol
         $proxyGroup = '';
 
         foreach ($servers as $item) {
+            $before = strlen($proxies);
             if (
                 $item['type'] === Server::TYPE_SHADOWSOCKS
                 && in_array(data_get($item, 'protocol_settings.cipher'), [
@@ -75,6 +76,7 @@ class Surge extends AbstractProtocol
                 $proxies .= self::buildHttp($item['password'], $item);
                 $proxyGroup .= $item['name'] . ', ';
             }
+            if (strlen($proxies) > $before) $this->noteGeneratedNode($item);
         }
 
 

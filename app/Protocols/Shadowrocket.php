@@ -61,6 +61,7 @@ class Shadowrocket extends AbstractProtocol
         }
         $uri .= "STATUS={$status}\r\n";
         foreach ($servers as $item) {
+            $before = strlen($uri);
             if ($item['type'] === Server::TYPE_SHADOWSOCKS) {
                 $uri .= self::buildShadowsocks($item['password'], $item);
             }
@@ -91,6 +92,7 @@ class Shadowrocket extends AbstractProtocol
             if ($item['type'] === Server::TYPE_MIERU) {
                 $uri .= self::buildMieru($item['password'], $item);
             }
+            if (strlen($uri) > $before) $this->noteGeneratedNode($item);
         }
         return response(base64_encode($uri))
             ->header('content-type', 'text/plain');

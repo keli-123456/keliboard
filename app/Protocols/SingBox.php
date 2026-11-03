@@ -202,6 +202,7 @@ class SingBox extends AbstractProtocol
         $outbounds = $this->config['outbounds'];
         $proxies = [];
         foreach ($this->servers as $item) {
+            $before = count($proxies);
             $type = Server::normalizeType(data_get($item, 'type'));
             $protocol_settings = data_get($item, 'protocol_settings', []);
             if ($type === Server::TYPE_SHADOWSOCKS) {
@@ -247,6 +248,7 @@ class SingBox extends AbstractProtocol
                 $httpConfig = $this->buildHttp($this->user['uuid'], $item);
                 $proxies[] = $httpConfig;
             }
+            if (count($proxies) > $before && !empty($proxies[array_key_last($proxies)]['server'])) $this->noteGeneratedNode($item);
         }
         foreach ($outbounds as &$outbound) {
             if (in_array($outbound['type'], ['urltest', 'selector'])) {

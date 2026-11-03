@@ -30,6 +30,28 @@ abstract class AbstractProtocol
 
     protected array $subscriptionInfo;
 
+    private ?array $generationEvidence = null;
+
+    public function observeGeneratedNodes(bool $enabled): void
+    {
+        $this->generationEvidence = $enabled ? ['nodes' => [], 'capped' => false] : null;
+    }
+
+    public function generatedNodeEvidence(): ?array { return $this->generationEvidence; }
+
+    /** Called only after a renderer actually adds a node, never for input candidates. */
+    protected function noteGeneratedNode(array $server): void
+    {
+        if ($this->generationEvidence === null) return;
+        try {
+            if (count($this->generationEvidence['nodes']) >= \App\Services\ServerMachine\SubscriptionRenderEvidence::NODES) {
+                $this->generationEvidence['capped'] = true; return;
+            }
+            $node = app(\App\Services\ServerMachine\SubscriptionRenderEvidence::class)->node($server);
+            if ($node !== null) $this->generationEvidence['nodes'][$node['node_id'] . ':' . $node['version']] = $node;
+        } catch (\Throwable) { $this->generationEvidence['capped'] = true; }
+    }
+
     /**
      * @var array 协议标识
      */

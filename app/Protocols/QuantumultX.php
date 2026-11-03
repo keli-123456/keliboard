@@ -28,6 +28,7 @@ class QuantumultX extends AbstractProtocol
         $expire = $user['expired_at'] ?? 0;
 
         foreach ($servers as $item) {
+            $before = strlen($uri);
             $type = $item['type'] ?? null;
             if (!$type) {
                 continue;
@@ -57,6 +58,7 @@ class QuantumultX extends AbstractProtocol
                     $uri .= self::buildAnyTLS($item['password'], $item);
                     break;
             }
+            if (strlen($uri) > $before) $this->noteGeneratedNode($item);
         }
 
         return response(base64_encode($uri))

@@ -31,6 +31,7 @@ class Surfboard extends AbstractProtocol
         $proxyGroup = '';
 
         foreach ($servers as $item) {
+            $before = strlen($proxies);
             if (
                 $item['type'] === Server::TYPE_SHADOWSOCKS
                 && in_array(data_get($item, 'protocol_settings.cipher'), [
@@ -63,6 +64,7 @@ class Surfboard extends AbstractProtocol
                 // [Proxy Group]
                 $proxyGroup .= $item['name'] . ', ';
             }
+            if (strlen($proxies) > $before) $this->noteGeneratedNode($item);
         }
 
         $config = subscribe_template('surfboard', File::exists(base_path(self::CUSTOM_TEMPLATE_FILE))

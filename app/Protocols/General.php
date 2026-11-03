@@ -33,6 +33,7 @@ class General extends AbstractProtocol
         $uri = '';
 
         foreach ($servers as $item) {
+            $before = strlen($uri);
             $uri .= match ($item['type']) {
                 Server::TYPE_VMESS => self::buildVmess($item['password'], $item),
                 Server::TYPE_VLESS => self::buildVless($item['password'], $item),
@@ -42,6 +43,7 @@ class General extends AbstractProtocol
                 Server::TYPE_SOCKS => self::buildSocks($item['password'], $item),
                 default => '',
             };
+            if (strlen($uri) > $before) $this->noteGeneratedNode($item);
         }
         return response(base64_encode($uri))->header('content-type', 'text/plain');
     }

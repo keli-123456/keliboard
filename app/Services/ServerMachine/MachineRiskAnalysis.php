@@ -111,6 +111,10 @@ class MachineRiskAnalysis
         $users = array_map(fn ($row) => ['ref' => $row['ref'], 'activity' => $row['activity'],
             'within_5_seconds_sample' => $row['within_5_seconds'], 'within_5_minutes_sample' => $row['within_5_minutes'],
             'subscription' => $row['subscription']], array_slice($evidence['users'] ?? [], 0, 20));
+        $generation = (array) ($evidence['subscription_generation'] ?? []);
+        $generation['users'] = array_map(fn ($row) => array_intersect_key($row, array_flip([
+            'ref', 'first_at', 'last_at', 'receipts_lower_bound', 'versions',
+        ])), array_slice($generation['users'] ?? [], 0, 20));
         $result = ['mode' => 'observe_only', 'event_status' => $event->status, 'recovered_at' => $event->recovered_at,
             'evidence' => [
                 ['id' => 'probe', 'value' => $evidence['probe']],
@@ -118,6 +122,7 @@ class MachineRiskAnalysis
                 ['id' => 'users', 'value' => $users],
                 ['id' => 'shared_security', 'value' => array_intersect_key((array) ($evidence['entry_security'] ?? []),
                     array_flip(['state', 'observed_at', 'interval_seconds', 'totals', 'deltas']))],
+                ['id' => 'subscription_generation', 'value' => $generation],
             ], 'limits' => $evidence['limits']];
         if (strlen(json_encode($result, JSON_THROW_ON_ERROR)) > 65536) throw new RuntimeException('unsafe_analysis');
         return $result;
@@ -131,7 +136,11 @@ class MachineRiskAnalysis
             || !$this->ids($value['evidence_ids'] ?? null) || !is_array($value['limitations'] ?? null) || count($value['limitations']) > 8
             || !is_array($value['related_users'] ?? null) || count($value['related_users']) > 20) throw new RuntimeException('unsafe_analysis');
         foreach ($value['limitations'] as $text) if (!$this->text($text, 300)) throw new RuntimeException('unsafe_analysis');
-        $refs = array_column($evidence['evidence'][2]['value'], 'ref'); $seen = [];
+        $refs = array_column($evidence['evidence'][2]['value'], 'ref');
+        foreach ($evidence['evidence'] as $part) if (($part['id'] ?? null) === 'subscription_generation') {
+            $refs = array_merge($refs, array_column($part['value']['users'] ?? [], 'ref'));
+        }
+        $seen = [];
         foreach ($value['related_users'] as $row) {
             if (!is_array($row) || array_diff(array_keys($row), ['ref', 'assessment', 'reason', 'evidence_ids'])
                 || !in_array($row['ref'] ?? null, $refs, true) || isset($seen[$row['ref']])
@@ -144,8 +153,8 @@ class MachineRiskAnalysis
 
     private function ids(mixed $ids): bool
     {
-        return is_array($ids) && count($ids) <= 4 && !array_filter($ids, fn ($id) => !is_string($id))
-            && array_diff($ids, ['probe', 'coverage', 'users', 'shared_security']) === [];
+        return is_array($ids) && count($ids) <= 5 && !array_filter($ids, fn ($id) => !is_string($id))
+            && array_diff($ids, ['probe', 'coverage', 'users', 'shared_security', 'subscription_generation']) === [];
     }
 
     private function text(mixed $value, int $max): bool

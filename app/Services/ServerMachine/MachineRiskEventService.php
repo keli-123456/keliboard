@@ -126,6 +126,7 @@ class MachineRiskEventService
         $activity['users_capped'] = $eligible > count($users);
         return ['mode' => 'observe_only', 'kind' => 'outbound_probe_failure', 'probe' => $episode['probe'],
             'activity' => $activity, 'users' => $users,
+            'subscription_generation' => app(SubscriptionRenderEvidence::class)->forMachine((int) $machine->id, $episode['detected_at'], $episode['episode_key']),
             'entry_security' => app(MachineEntryProtection::class)->snapshot((array) $machine->load_status, time()),
             'limits' => ['outbound_icmp_is_not_independent_censorship_proof', 'connection_start_times_not_collected',
                 'online_samples_may_arrive_late_or_be_missing', 'no_account_causality_from_time_correlation',
@@ -186,6 +187,7 @@ class MachineRiskEventService
     public function advance(): array
     {
         if (!app(MachineRiskSettings::class)->available()) return ['recovered' => 0];
+        app(SubscriptionRenderEvidence::class)->prune();
         MachineRiskEvent::query()->whereIn('ai_status', ['pending', 'analyzing'])->where('ai_requested_at', '<', time() - 300)
             ->update(['ai_status' => 'failed', 'ai_error_code' => 'worker_timeout', 'updated_at' => time()]);
         $ids = MachineRiskEvent::query()->where('created_at', '<', time() - 7 * 86400)->limit(200)->pluck('id');

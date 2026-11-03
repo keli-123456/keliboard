@@ -29,6 +29,7 @@ class Loon extends AbstractProtocol
         $uri = '';
 
         foreach ($servers as $item) {
+            $before = strlen($uri);
             if (
                 $item['type'] === Server::TYPE_SHADOWSOCKS
             ) {
@@ -43,6 +44,7 @@ class Loon extends AbstractProtocol
             if ($item['type'] === Server::TYPE_HYSTERIA) {
                 $uri .= self::buildHysteria($item['password'], $item, $user);
             }
+            if (strlen($uri) > $before) $this->noteGeneratedNode($item);
         }
         return response($uri)
             ->header('content-type', 'text/plain')
