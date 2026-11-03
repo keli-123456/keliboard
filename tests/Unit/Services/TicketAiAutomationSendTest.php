@@ -208,6 +208,40 @@ final class TicketAiAutomationSendTest extends TestCase
             $suggestion->category, $suggestion->draft, true, $approval));
     }
 
+    public function test_verified_image_context_can_follow_a_text_reply_without_resending_the_original_image(): void
+    {
+        [$ticket, $followup, $suggestion, $approval] = $this->imageFollowupFixture();
+        $this->assertTrue($approval['image_analysis']['context_reused']);
+        $sent = (new TicketService())->replyByAiAutomation((int) $ticket->id, (int) $followup->id, (int) $suggestion->id,
+            $suggestion->category, $suggestion->draft, false, $approval);
+        $this->assertNotNull($sent);
+        $this->assertSame(0, TicketAiConversation::where('ticket_id', $ticket->id)->firstOrFail()->follow_up_count);
+    }
+
+    public function test_image_context_is_rechecked_when_a_followup_answer_is_sent(): void
+    {
+        [$ticket, $followup, $suggestion, $approval, $original] = $this->imageFollowupFixture();
+        $original->image_analysis = array_replace($original->image_analysis, ['status' => 'held']);
+        $original->save();
+        $this->assertNull((new TicketService())->replyByAiAutomation((int) $ticket->id, (int) $followup->id, (int) $suggestion->id,
+            $suggestion->category, $suggestion->draft, false, $approval));
+        $this->assertSame(2, TicketMessage::where('ticket_id', $ticket->id)->count());
+        $this->assertSame('generated', $suggestion->fresh()->status);
+    }
+
+    private function imageFollowupFixture(): array
+    {
+        [$ticket, , $original, $analysis] = $this->screenshotFixture();
+        $analysis += ['analysis_version' => 'ticket-vision-v2', 'context_reused' => false,
+            'observations' => ['client' => 'v2rayN', 'error_text' => 'Local port already in use']];
+        $original->image_analysis = $analysis; $original->save();
+        $followup = TicketMessage::create(['ticket_id' => $ticket->id, 'user_id' => $ticket->user_id, 'message' => '还是截图里的问题']);
+        $reused = app(\App\Services\TicketAiVisionService::class)->analyze($ticket, ['vision_enable' => true])['analysis'];
+        $suggestion = $original->replicate();
+        $suggestion->image_analysis = $reused; $suggestion->save();
+        return [$ticket, $followup, $suggestion, array_merge($this->approval($suggestion), ['image_analysis' => $reused]), $original];
+    }
+
     private function screenshotFixture(): array
     {
         if (!extension_loaded('gd')) $this->markTestSkipped('GD required.');

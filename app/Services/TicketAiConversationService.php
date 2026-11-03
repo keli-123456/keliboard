@@ -103,6 +103,10 @@ class TicketAiConversationService
         if ((bool) admin_setting('ticket_ai_vision_enable', false) && $sourceMessage->attachments()->exists()) {
             return null;
         }
+        if ((bool) admin_setting('ticket_ai_vision_enable', false)
+            && app(TicketAiVisionService::class)->followupContext($ticket, $sourceMessage) !== null) {
+            return null;
+        }
         if ($this->broadMode() && $sourceMessage->attachments()->exists() && mb_strlen($message) < 20) {
             return "已收到您上传的附件，但自动客服目前不能直接读取图片内容。请补充截图中的完整错误文字、客户端名称与应用版本、实际内核及版本。\n"
                 . '请不要发送订阅链接、Token、UUID、密码或验证码。';

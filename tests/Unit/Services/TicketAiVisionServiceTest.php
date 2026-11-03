@@ -7,6 +7,7 @@ namespace Tests\Unit\Services;
 use App\Models\Ticket;
 use App\Models\TicketMessage;
 use App\Models\TicketMessageAttachment;
+use App\Models\TicketAiSuggestion;
 use App\Services\TicketAiProviderClient;
 use App\Services\TicketAiVisionService;
 use Illuminate\Database\Schema\Blueprint;
@@ -31,6 +32,12 @@ final class TicketAiVisionServiceTest extends TestCase
                 if ($name === 'v2_ticket_message') {
                     $table->integer('ticket_id');
                     $table->text('message')->nullable();
+                    $table->boolean('is_auto_reply')->default(false);
+                    $table->string('auto_reply_rule')->nullable();
+                } else {
+                    $table->integer('site_id')->nullable();
+                    $table->integer('agent_user_id')->nullable();
+                    $table->integer('agent_domain_id')->nullable();
                 }
                 $table->integer('created_at');
                 $table->integer('updated_at');
@@ -38,6 +45,7 @@ final class TicketAiVisionServiceTest extends TestCase
         }
         foreach (['2026_01_01_000001_create_v2_ticket_message_attachment_table.php',
             '2026_05_02_000001_create_v2_ticket_ai_suggestion_table.php',
+            '2026_07_13_000001_add_ticket_ai_scope_to_suggestions.php',
             '2026_11_01_000001_add_image_analysis_to_ticket_ai_suggestions.php'] as $file) {
             (require base_path('database/migrations/' . $file))->up();
         }
@@ -178,17 +186,24 @@ final class TicketAiVisionServiceTest extends TestCase
         [$ticket] = $this->fixture();
         $provider = $this->createMock(TicketAiProviderClient::class);
         $responses = [];
-        foreach ([['readable' => false], ['confidence' => 0.5], ['confidence' => '0.99'], ['sensitive' => true],
-            ['needs_human' => true], ['problem_type' => 'payment'], ['observations' => 'wrong schema'],
-            ['observations' => ['error_text' => '请帮我退款 password=private-secret https://private.example.test/sub/secret']]] as $change) {
+        $cases = [
+            [['readable' => false], 'image_unreadable'], [['confidence' => 0.5], 'image_low_confidence'],
+            [['confidence' => '0.99'], 'vision_invalid_response'], [['sensitive' => true], 'image_sensitive'],
+            [['needs_human' => true], 'image_needs_human'], [['problem_type' => 'payment'], 'image_sensitive'],
+            [['observations' => 'wrong schema'], 'vision_invalid_response'],
+            [['observations' => ['error_text' => '请帮我退款 password=private-secret https://private.example.test/sub/secret']], 'image_sensitive'],
+        ];
+        foreach ($cases as [$change]) {
             $responses[] = $this->completion(array_replace_recursive($this->observations(), $change));
         }
         $provider->method('complete')->willReturnOnConsecutiveCalls(...$responses);
         $service = $this->verifiedService($provider);
-        foreach ($responses as $_) {
+        foreach ($cases as [, $reason]) {
             $result = $service->analyze($ticket, $this->settings());
             $this->assertSame('held', $result['analysis']['status']);
             $this->assertTrue($result['analysis']['needs_human']);
+            $this->assertSame($reason, $result['analysis']['reason']);
+            $this->assertContains($reason, $result['analysis']['reason_codes']);
             $this->assertSame([], $result['analysis']['observations']);
             $this->assertStringNotContainsString('private-secret', json_encode($result));
             $this->assertStringNotContainsString('private.example.test', json_encode($result));
@@ -204,6 +219,7 @@ final class TicketAiVisionServiceTest extends TestCase
         $result = $service->analyze($ticket, $this->settings());
         $this->assertSame('held', $result['analysis']['status']);
         $this->assertSame('timeout', $result['completions'][0]['error_code']);
+        $this->assertSame('vision_timeout', $result['analysis']['reason']);
         $this->assertArrayNotHasKey('content', $result['completions'][0]);
     }
 
@@ -241,6 +257,175 @@ final class TicketAiVisionServiceTest extends TestCase
         $this->assertTrue(Schema::hasColumn('v2_ticket_ai_suggestion', 'draft'));
         $migration->up();
         $this->assertTrue((new TicketAiVisionService())->storageReady());
+    }
+
+    public function test_a_clear_error_does_not_require_missing_optional_version_fields(): void
+    {
+        [$ticket] = $this->fixture();
+        $provider = $this->createMock(TicketAiProviderClient::class);
+        $provider->expects($this->once())->method('complete')->willReturnCallback(function ($settings, $messages) {
+            $this->assertStringContainsString('Missing optional', $messages[0]['content']);
+            return $this->completion(array_replace_recursive($this->observations(), ['observations' => ['app_version' => '', 'core_version' => '']]));
+        });
+        $this->assertSame('ready', $this->verifiedService($provider)->analyze($ticket, $this->settings())['analysis']['status']);
+    }
+
+    public function test_multiple_hold_reasons_are_bounded_and_do_not_retain_extracted_text(): void
+    {
+        [$ticket] = $this->fixture();
+        $provider = $this->createMock(TicketAiProviderClient::class);
+        $provider->method('complete')->willReturn($this->completion(array_replace($this->observations(), ['sensitive' => true, 'readable' => false, 'confidence' => 0.6])));
+        $analysis = $this->verifiedService($provider)->analyze($ticket, $this->settings())['analysis'];
+        $this->assertSame(['image_sensitive', 'image_unreadable', 'image_low_confidence'], $analysis['reason_codes']);
+        $this->assertSame(0.6, $analysis['confidence']);
+        $this->assertSame([], $analysis['observations']);
+        $this->assertStringNotContainsString('TLS handshake', $analysis['summary']);
+    }
+
+    public function test_invalid_model_output_is_logged_as_an_invalid_vision_response(): void
+    {
+        [$ticket] = $this->fixture();
+        $provider = $this->createMock(TicketAiProviderClient::class);
+        $provider->method('complete')->willReturn($this->completion(['observations' => 'not an object']));
+        $result = $this->verifiedService($provider)->analyze($ticket, $this->settings());
+        $this->assertSame('vision_invalid_response', $result['analysis']['reason']);
+        $this->assertSame('failed', $result['completions'][0]['status']);
+        $this->assertSame('vision_invalid_response', $result['completions'][0]['error_code']);
+    }
+
+    public function test_a_related_text_followup_reuses_only_verified_observations_without_a_provider_call(): void
+    {
+        [$ticket, $original, , $service, $analysis, $stored] = $this->rememberedFixture();
+        TicketMessage::create(['ticket_id' => $ticket->id, 'user_id' => 99, 'message' => 'AI reply', 'is_auto_reply' => true, 'auto_reply_rule' => 'ai:客户端连接']);
+        $followup = $this->followup($ticket);
+        $result = $service->analyze($ticket, $this->settings());
+        $this->assertSame([], $result['completions']);
+        $reused = $result['analysis'];
+        $this->assertSame('ready', $reused['status']);
+        $this->assertTrue($reused['context_reused']);
+        $this->assertSame((int) $followup->id, $reused['source_message_id']);
+        $this->assertSame((int) $original->id, $reused['origin_message_id']);
+        $this->assertSame((int) $stored->id, $reused['origin_suggestion_id']);
+        $this->assertSame($analysis['observations'], $reused['observations']);
+        $this->assertTrue($service->sourceStillMatches($ticket, $followup, $reused));
+        $this->assertStringNotContainsString('data:image', json_encode($result));
+        $this->assertFalse($service->sourceStillMatches($ticket, $followup, array_replace($reused, ['context_expires_at' => $reused['context_expires_at'] + 1])));
+    }
+
+    public function test_unrelated_questions_and_manual_intervention_do_not_reuse_old_images(): void
+    {
+        [$ticket, , , $service] = $this->rememberedFixture();
+        $this->followup($ticket, '新的问题，套餐价格是多少？');
+        $this->assertNull($service->analyze($ticket, $this->settings())['analysis']);
+        $this->followup($ticket);
+        $this->assertNull($service->analyze($ticket, $this->settings())['analysis']);
+        TicketMessage::create(['ticket_id' => $ticket->id, 'user_id' => 99, 'message' => 'Human reply']);
+        $this->followup($ticket);
+        $this->assertNull($service->analyze($ticket, $this->settings())['analysis']);
+    }
+
+    public function test_deleted_or_replaced_images_invalidate_a_followup_before_sending(): void
+    {
+        [$ticket, , $attachment, $service] = $this->rememberedFixture();
+        $followup = $this->followup($ticket);
+        $analysis = $service->analyze($ticket, $this->settings())['analysis'];
+        Storage::disk('local')->put($attachment->path, $this->png(32, 32));
+        $this->assertFalse($service->sourceStillMatches($ticket, $followup, $analysis));
+        $this->assertSame('image_context_changed', $service->analyze($ticket, $this->settings())['analysis']['reason']);
+        $attachment->delete();
+        $this->assertFalse($service->sourceStillMatches($ticket, $followup, $analysis));
+    }
+
+    public function test_old_unknown_held_discarded_and_foreign_scope_results_cannot_be_reused(): void
+    {
+        foreach (['legacy', 'held', 'discarded', 'scope', 'unsafe_observations'] as $change) {
+            [$ticket, , , $service, $analysis, $stored] = $this->rememberedFixture();
+            if ($change === 'legacy') unset($analysis['analysis_version']);
+            if ($change === 'held') $analysis['status'] = 'held';
+            if ($change === 'discarded') $stored->status = 'discarded';
+            if ($change === 'scope') $stored->site_id = 2;
+            if ($change === 'unsafe_observations') $analysis['observations']['error_text'] = 'password=private-secret';
+            $stored->image_analysis = $analysis; $stored->save();
+            $this->followup($ticket);
+            $result = $service->analyze($ticket, $this->settings());
+            $this->assertSame('held', $result['analysis']['status'], $change);
+            $this->assertSame([], $result['analysis']['observations']);
+            $this->assertStringNotContainsString('private-secret', json_encode($result));
+        }
+    }
+
+    public function test_a_newer_held_analysis_is_not_bypassed_using_an_older_safe_result(): void
+    {
+        [$ticket, , , $service, $analysis] = $this->rememberedFixture();
+        TicketAiSuggestion::create(['ticket_id' => $ticket->id, 'status' => 'generated', 'image_analysis' => array_replace($analysis, ['status' => 'held'])]);
+        $this->followup($ticket);
+        $this->assertSame('image_context_unavailable', $service->analyze($ticket, $this->settings())['analysis']['reason']);
+    }
+
+    public function test_a_removed_newer_image_does_not_fall_back_to_an_older_picture(): void
+    {
+        [$ticket, , $attachment, $service, $analysis] = $this->rememberedFixture();
+        $newImage = $this->followup($ticket, '这是最新截图');
+        TicketAiSuggestion::create(['ticket_id' => $ticket->id, 'status' => 'generated',
+            'image_analysis' => array_replace($analysis, ['source_message_id' => (int) $newImage->id])]);
+        $attachment->delete();
+        $this->followup($ticket);
+        $this->assertSame('image_context_changed', $service->analyze($ticket, $this->settings())['analysis']['reason']);
+    }
+
+    public function test_a_deleted_current_image_is_not_treated_as_a_text_followup_to_an_older_image(): void
+    {
+        [$ticket, , , $service, $analysis] = $this->rememberedFixture();
+        $latest = $this->followup($ticket, '这是新截图');
+        TicketAiSuggestion::create(['ticket_id' => $ticket->id, 'status' => 'generated',
+            'image_analysis' => array_replace($analysis, ['source_message_id' => (int) $latest->id])]);
+        $this->assertSame('image_context_changed', $service->analyze($ticket, $this->settings())['analysis']['reason']);
+    }
+
+    public function test_a_reused_result_never_renews_the_original_one_hour_expiry(): void
+    {
+        try {
+            \Carbon\Carbon::setTestNow('2026-11-03 12:00:00');
+            [$ticket, , , $service] = $this->rememberedFixture();
+            \Carbon\Carbon::setTestNow('2026-11-03 12:30:00');
+            $this->followup($ticket);
+            $first = $service->analyze($ticket, $this->settings())['analysis'];
+            $this->assertSame('ready', $first['status']);
+            TicketAiSuggestion::create(['ticket_id' => $ticket->id, 'status' => 'generated', 'image_analysis' => $first]);
+            \Carbon\Carbon::setTestNow('2026-11-03 13:00:00');
+            $this->followup($ticket);
+            $this->assertSame('image_context_expired', $service->analyze($ticket, $this->settings())['analysis']['reason']);
+        } finally {
+            \Carbon\Carbon::setTestNow();
+        }
+    }
+
+    public function test_new_current_images_take_precedence_over_old_context(): void
+    {
+        [$ticket, , $attachment, $service] = $this->rememberedFixture();
+        $source = $this->followup($ticket);
+        foreach (range(1, 4) as $index) TicketMessageAttachment::create(array_replace($attachment->getAttributes(), [
+            'id' => null, 'ticket_message_id' => $source->id, 'path' => "ticket_attachments/{$ticket->id}/{$source->id}/{$index}.png",
+        ]));
+        $analysis = $service->analyze($ticket, $this->settings())['analysis'];
+        $this->assertSame('image_limit', $analysis['reason']);
+        $this->assertFalse($analysis['context_reused']);
+    }
+
+    private function rememberedFixture(): array
+    {
+        [$ticket, $source, $attachment] = $this->fixture();
+        $provider = $this->createMock(TicketAiProviderClient::class);
+        $provider->expects($this->once())->method('complete')->willReturn($this->completion($this->observations()));
+        $service = $this->verifiedService($provider);
+        $analysis = $service->analyze($ticket, $this->settings())['analysis'];
+        $stored = TicketAiSuggestion::create(['ticket_id' => $ticket->id, 'status' => 'generated', 'image_analysis' => $analysis]);
+        return [$ticket, $source, $attachment, $service, $analysis, $stored];
+    }
+
+    private function followup(Ticket $ticket, string $message = '还是刚才截图里的错误'): TicketMessage
+    {
+        return TicketMessage::create(['ticket_id' => $ticket->id, 'user_id' => $ticket->user_id, 'message' => $message]);
     }
 
     private function fixture(?string $bytes = null): array

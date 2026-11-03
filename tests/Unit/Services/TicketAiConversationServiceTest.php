@@ -49,6 +49,20 @@ final class TicketAiConversationServiceTest extends TestCase
         $this->assertNull($service->clarification($ticket, $next));
     }
 
+    public function test_image_followups_are_not_replaced_with_generic_repeated_questions(): void
+    {
+        $this->bindSettings(['ticket_ai_vision_enable' => true]);
+        $vision = $this->createMock(\App\Services\TicketAiVisionService::class);
+        $vision->expects($this->exactly(2))->method('followupContext')->willReturnOnConsecutiveCalls(
+            ['status' => 'ready'], ['status' => 'held', 'reason' => 'image_context_changed']
+        );
+        app()->instance(\App\Services\TicketAiVisionService::class, $vision);
+        foreach (range(1, 2) as $index) {
+            [$ticket, $source] = $this->ticketWithMessage('还是截图里的问题');
+            $this->assertNull((new TicketAiConversationService())->clarification($ticket, $source));
+        }
+    }
+
     public function test_it_keeps_the_conversation_active_for_a_second_user_reply(): void
     {
         [$ticket, $source] = $this->ticketWithMessage('订阅导入失败');

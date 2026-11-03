@@ -444,6 +444,8 @@ final class TicketAiAssistantV2Test extends TestCase
         $result = (new TicketAiAssistantService(vision: $vision))->suggest($ticket);
         $this->assertTrue($result['needs_human']);
         $this->assertSame('held', $result['image_analysis']['status']);
+        $this->assertSame('vision_unavailable', $result['image_analysis']['reason']);
+        $this->assertSame($result['image_analysis']['summary'], $result['draft']);
         $this->assertFalse($result['system_grounded']);
         $this->assertSame('generated', TicketAiSuggestion::findOrFail($result['suggestion_id'])->status);
         Http::assertNothingSent();
