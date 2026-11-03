@@ -53,7 +53,7 @@ false-positive impact and incident response time require separate evaluation.
 
 ## Optional domestic-direction ICMP criterion
 
-System Configuration / Node API contains `server_entry_probe_enable` (default
+Server Management / Domestic Probes contains `server_entry_probe_enable` (default
 false), `server_entry_probe_targets` (up to 8 public literal IPs), and
 `server_entry_probe_interval` (60-600 seconds, default 120). Administrators choose
 and verify the targets' location and ICMP availability; the software validates
