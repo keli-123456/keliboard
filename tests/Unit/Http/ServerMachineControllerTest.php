@@ -2263,6 +2263,72 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame(422, $controller->telemetry(Request::create('/', 'POST', $input))->getStatusCode());
     }
 
+    public function test_manual_upgrade_of_a_shared_machine_only_dispatches_to_the_selected_reporter(): void
+    {
+        $this->bindSettings(['server_machine_distribution_source' => 'panel']);
+        foreach (['2026_06_12_000002_create_v2_server_machine_release_table.php', '2026_07_14_000001_add_binary_sha256_to_server_machine_release.php'] as $file) {
+            (require database_path('migrations/' . $file))->up();
+        }
+        \Illuminate\Support\Facades\Storage::fake('local');
+        $disk = \Illuminate\Support\Facades\Storage::disk('local');
+        $disk->put('manifest', '{}');
+        $disk->put('archive', 'release');
+        $hash = str_repeat('b', 64);
+        $release = \App\Models\ServerMachineRelease::create(['component' => 'kelinode-rs', 'version' => 'v0.1.386',
+            'platform' => 'linux-x86_64', 'manifest_path' => 'manifest', 'archive_path' => 'archive',
+            'sha256' => str_repeat('a', 64), 'binary_sha256' => $hash, 'status' => 'active']);
+        $machine = ServerMachine::create(['name' => 'shared', 'token' => 'synthetic', 'is_active' => true]);
+        $server = new MachineController();
+        $admin = new \App\Http\Controllers\V2\Admin\Server\MachineController();
+        $a = str_repeat('a', 32);
+        $b = str_repeat('b', 32);
+        $aIp = '192.0.2.10';
+        $bIp = '2001:db8::20';
+        $report = fn (?string $id, string $ip, array $status = []) => $server->status(Request::create(
+            'https://panel.example.test/', 'POST', [
+                'machine_id' => $machine->id, 'token' => 'synthetic', 'status' => $status + ['version' => 'v0.1.385'],
+            ], [], [], ['REMOTE_ADDR' => $ip] + ($id === null ? [] : ['HTTP_X_KELI_INSTANCE_ID' => $id])
+        ))->getData(true);
+        $report($a, $aIp);
+        $report($b, $bIp);
+        $this->assertTrue($report($a, $aIp)['identity_conflict']);
+        $payload = ['id' => $machine->id, 'component' => 'kelinode-rs', 'target_version' => 'v0.1.386'];
+        $enqueue = fn (array $target) => $admin->upgradeInstance(Request::create('/', 'POST', $payload + $target))->getData(true);
+        $this->assertNotSame('success', $admin->upgrade(Request::create('/', 'POST', $payload))->getData(true)['status']);
+        $this->assertNotSame('success', $enqueue(['installation_id' => $a, 'observed_ip' => $bIp])['status']);
+        $this->assertSame('success', $enqueue(['installation_id' => $b, 'observed_ip' => $bIp])['status']);
+        $queued = $machine->fresh()->upgrade_state;
+        $stored = json_decode($machine->fresh()->getRawOriginal('upgrade_state'), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertArrayNotHasKey('status', $stored);
+        $this->assertArrayNotHasKey('target_version', $stored);
+        $this->assertSame($queued, $stored['instance_upgrade']);
+        $spoof = ['version' => 'v0.1.386', 'runtime' => ['binary_sha256' => $hash],
+            'upgrade' => ['id' => $queued['id'], 'status' => 'succeeded', 'component' => 'core']];
+        $this->assertNull($report($a, $aIp, $spoof)['upgrade']);
+        $this->assertNull($report(null, $bIp, $spoof)['upgrade']);
+        $this->assertNull($report($b, $aIp, $spoof)['upgrade']);
+        $this->assertSame($queued, $machine->fresh()->upgrade_state);
+        $this->assertNotSame('success', $enqueue(['installation_id' => $a, 'observed_ip' => $aIp])['status']);
+        $claim = $report($b, '2001:0db8::20');
+        $this->assertFalse($claim['reload']);
+        $this->assertSame($queued['id'], $claim['upgrade']['id']);
+        $this->assertSame($hash, $claim['upgrade']['expected_binary_sha256']);
+        $this->assertSame('panel', $claim['upgrade']['release_source']);
+        $this->assertNull($report($a, $aIp, $spoof)['upgrade']);
+        $this->assertSame('dispatched', $machine->fresh()->upgrade_state['status']);
+        $spoof['upgrade']['expected_binary_sha256'] = str_repeat('c', 64);
+        $report($b, $bIp, $spoof);
+        $this->assertSame('succeeded', $machine->fresh()->upgrade_state['status']);
+        $this->assertSame('kelinode-rs', $machine->fresh()->upgrade_state['component']);
+        $this->assertSame($hash, $machine->fresh()->upgrade_state['expected_binary_sha256']);
+
+        $report($a, $aIp);
+        $this->assertSame('success', $enqueue(['installation_id' => $a, 'observed_ip' => $aIp])['status']);
+        $release->forceFill(['binary_sha256' => str_repeat('d', 64)])->save();
+        $this->assertNull($report($a, $aIp)['upgrade']);
+        $this->assertSame('instance_release_changed', $machine->fresh()->upgrade_state['error']);
+    }
+
     public function test_shared_machine_reports_keep_probe_resources_and_rates_isolated_without_unlocking_controls(): void
     {
         $this->bindSettings(['server_entry_probe_enable' => true, 'server_entry_probe_targets' => ['223.5.5.5'], 'server_entry_probe_interval' => 5]);

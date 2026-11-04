@@ -9,6 +9,7 @@ use App\Services\ServerMachine\MachineReleaseDistributionService;
 use App\Services\ServerMachine\MachineTelemetryService;
 use App\Services\ServerMachine\MachineIpHistory;
 use App\Services\ServerMachine\MachineRuntimeObservation;
+use App\Services\ServerMachine\MachineUpgradeQueue;
 use App\Services\ServerService;
 use App\Services\ServerTlsCertificateService;
 use App\Services\SubscriptionProxy\WebsiteProxyRoutingService;
@@ -179,7 +180,24 @@ class MachineController extends Controller
             app(\App\Services\ServerMachine\MachineAddressInventory::class)->record($machine, $installation, $ip, $now, $runtime, $probeReport, $payload['net'] ?? null);
         }
         if ($shared) {
-            return response()->json(['data' => true, 'reload' => false, 'upgrade' => null, 'identity_conflict' => true,
+            $upgrade = null;
+            $state = $machine->upgrade_state;
+            if ($machine->is_active && isset($state['target_installation_id']) && in_array($state['status'] ?? null, MachineUpgradeQueue::ACTIVE, true)
+                && MachineUpgradeQueue::matchesReporter($state, $installation, $ip['panel_seen'] ?? null, true)) {
+                $locked = DB::transaction(function () use ($machine, $payload, $installation, $ip) {
+                    $row = ServerMachine::query()->lockForUpdate()->find($machine->id);
+                    if (!$row || !$row->is_active || !hash_equals((string) $row->token, (string) $machine->token)) return null;
+                    $status = array_intersect_key($payload, ['version' => true, 'runtime' => true]);
+                    $row->upgrade_state = $this->resolveUpgradeState($row, $status, $payload['upgrade'] ?? null, $installation, $ip['panel_seen'] ?? null, true);
+                    if ($row->isDirty('upgrade_state')) $row->save();
+                    return $row;
+                });
+                if ($locked) {
+                    $upgrade = $this->buildUpgradeCommand($locked, $this->resolvePanelBaseURL($request),
+                        $installation, $ip['panel_seen'] ?? null, $this->statusString($payload['version'] ?? null, 80), true);
+                }
+            }
+            return response()->json(['data' => true, 'reload' => false, 'upgrade' => $upgrade, 'identity_conflict' => true,
                 'entry_probe' => $probe->configuration($machine->is_active && $installation !== null)]);
         }
 
@@ -272,7 +290,7 @@ class MachineController extends Controller
             $reload = true;
         }
 
-        [$machine, $status] = DB::transaction(function () use ($machine, $status, $payload, $observation): array {
+        [$machine, $status] = DB::transaction(function () use ($machine, $status, $payload, $observation, $installation, $ip): array {
             $locked = ServerMachine::query()->lockForUpdate()->findOrFail($machine->id);
             if ($machine->isDirty('subproxy_cert_state')) {
                 $state = is_array($locked->subproxy_cert_state) ? $locked->subproxy_cert_state : [];
@@ -289,7 +307,7 @@ class MachineController extends Controller
             $status['entry_protection_state'] = app(\App\Services\ServerMachine\MachineEntryProtection::class)->observe($previous, $status, $status['updated_at']);
             $locked->forceFill([
                 'last_seen_at' => now()->timestamp, 'load_status' => $status,
-                'upgrade_state' => $this->resolveUpgradeState($locked, $status, data_get($payload, 'upgrade')),
+                'upgrade_state' => $this->resolveUpgradeState($locked, $status, data_get($payload, 'upgrade'), $installation, $ip['panel_seen'] ?? null),
             ])->save();
             return [$locked, $status];
         });
@@ -297,7 +315,8 @@ class MachineController extends Controller
             return response()->json(['data' => true, 'reload' => false, 'upgrade' => null,
                 'entry_probe' => app(\App\Services\ServerMachine\MachineEntryProbe::class)->configuration(false)]);
         }
-        $upgradeCommand = $this->buildUpgradeCommand($machine, $this->resolvePanelBaseURL($request));
+        $upgradeCommand = $this->buildUpgradeCommand($machine, $this->resolvePanelBaseURL($request),
+            $installation, $ip['panel_seen'] ?? null, $this->statusString($payload['version'] ?? null, 80));
 
         try {
             app(MachineTelemetryService::class)->recordHistory($machine, array_diff_key($status, ['ip_observation' => true]));
@@ -388,12 +407,15 @@ class MachineController extends Controller
         return $out;
     }
 
-    private function resolveUpgradeState(ServerMachine $machine, array $status, mixed $reported): ?array
+    private function resolveUpgradeState(ServerMachine $machine, array $status, mixed $reported, ?string $installation = null, ?string $ip = null, bool $shared = false): ?array
     {
         $state = is_array($machine->upgrade_state) ? $machine->upgrade_state : null;
         if (empty($state)) {
             return null;
         }
+        if (!MachineUpgradeQueue::matchesReporter($state, $installation, $ip, $shared)) return $state;
+        $targeted = isset($state['target_installation_id']);
+        if ($targeted && empty($state['dispatched_at'])) $reported = null;
 
         $now = now()->timestamp;
         $targetVersion = trim((string) ($state['target_version'] ?? ''));
@@ -405,7 +427,7 @@ class MachineController extends Controller
         if (is_array($reported) && (string) ($reported['id'] ?? '') === (string) ($state['id'] ?? '')) {
             $reportedStatus = trim((string) ($reported['status'] ?? ''));
             $reportedComponent = $this->normalizeUpgradeComponent($reported['component'] ?? $component);
-            if ($reportedComponent !== $component) {
+            if (!$targeted && $reportedComponent !== $component) {
                 $state['component'] = $reportedComponent;
                 $component = $reportedComponent;
             }
@@ -495,7 +517,8 @@ class MachineController extends Controller
             'installed_binary_sha256',
             'running_binary_sha256',
         ] as $field) {
-            if (!empty($state['rollout_id']) && in_array($field, ['expected_archive_sha256', 'expected_binary_sha256'], true)) {
+            if ((!empty($state['rollout_id']) || isset($state['target_installation_id']))
+                && in_array($field, ['expected_archive_sha256', 'expected_binary_sha256'], true)) {
                 continue;
             }
             if (!array_key_exists($field, $reported)) {
@@ -561,14 +584,15 @@ class MachineController extends Controller
 
         return 'runtime_version_mismatch';
     }
-    private function buildUpgradeCommand(ServerMachine $machine, string $panelBaseUrl): ?array
+    private function buildUpgradeCommand(ServerMachine $machine, string $panelBaseUrl, ?string $installation = null, ?string $ip = null, string $version = '', bool $shared = false): ?array
     {
-        if (app(\App\Services\ServerMachine\MachineIdentityGuard::class)->conflicted((int) $machine->id)) return null;
+        if (!$machine->upgrade_state) return null;
+        $shared = $shared || app(\App\Services\ServerMachine\MachineIdentityGuard::class)->conflicted((int) $machine->id);
         $distribution = app(MachineReleaseDistributionService::class);
         $source = $distribution->source();
-        $claimed = DB::transaction(function () use ($machine, $distribution): ?array {
+        $claimed = DB::transaction(function () use ($machine, $distribution, $source, $installation, $ip, $version, $shared): ?array {
             $locked = ServerMachine::query()->lockForUpdate()->find($machine->id);
-            if (!$locked || !$locked->is_active) {
+            if (!$locked || !$locked->is_active || !hash_equals((string) $locked->token, (string) $machine->token)) {
                 return null;
             }
 
@@ -576,6 +600,7 @@ class MachineController extends Controller
             if (!in_array((string) ($state['status'] ?? ''), ['queued', 'dispatched'], true)) {
                 return null;
             }
+            if (!MachineUpgradeQueue::matchesReporter($state, $installation, $ip, $shared)) return null;
 
             $now = now()->timestamp;
             $lastDispatchedAt = (int) ($state['last_dispatched_at'] ?? 0);
@@ -602,10 +627,18 @@ class MachineController extends Controller
                 $targetVersion,
                 MachineReleaseDistributionService::PLATFORM_LINUX_X86_64
             );
-            if (!empty($state['rollout_id']) && ($distribution->source() !== MachineReleaseDistributionService::SOURCE_PANEL || !$release
+            $targeted = isset($state['target_installation_id']);
+            if ($targeted && ltrim($version, 'vV') !== ltrim((string) ($state['target_from_version'] ?? ''), 'vV')) {
+                $state['status'] = 'failed';
+                $state['error'] = 'instance_version_changed';
+                $state['finished_at'] = $state['updated_at'] = $now;
+                $locked->forceFill(['upgrade_state' => $state])->save();
+                return null;
+            }
+            if (($targeted || !empty($state['rollout_id'])) && ($source !== MachineReleaseDistributionService::SOURCE_PANEL || !$release
                 || $release->sha256 !== ($state['expected_archive_sha256'] ?? '') || $release->binary_sha256 !== ($state['expected_binary_sha256'] ?? ''))) {
                 $state['status'] = 'failed';
-                $state['error'] = 'rollout_release_changed';
+                $state['error'] = $targeted ? 'instance_release_changed' : 'rollout_release_changed';
                 $state['finished_at'] = $now;
                 $state['updated_at'] = $now;
                 $locked->forceFill(['upgrade_state' => $state])->save();

@@ -40,6 +40,9 @@ class MachineInsightService
             'identity_conflict' => $conflicted,
             'reporting_instances' => $instances,
             'address_groups' => $inventory->groups($addresses, $instances, $status, $conflicted, $now),
+            'upgrade_targets' => $machine->is_active && $conflicted
+                && app(MachineReleaseDistributionService::class)->source() === MachineReleaseDistributionService::SOURCE_PANEL
+                ? app(MachineUpgradeQueue::class)->instanceTargets($addresses, $now) : [],
             'address_probes' => $machine->is_active && $conflicted ? $inventory->probes($addresses, $now) : [],
             'observed_at' => $now,
             'last_seen_at' => $machine->last_seen_at,

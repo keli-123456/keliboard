@@ -173,6 +173,7 @@ class AdminRoute
                 $router->get('/installCommand', [MachineController::class, 'installCommand']);
                 $router->get('/versionInfo', [MachineController::class, 'versionInfo']);
                 $router->post('/upgrade', [MachineController::class, 'upgrade']);
+                $router->post('/upgradeInstance', [MachineController::class, 'upgradeInstance']);
                 $router->get('/release/fetch', [MachineReleaseManagementController::class, 'fetch']);
                 $router->post('/release/upload', [MachineReleaseManagementController::class, 'upload']);
                 $router->post('/release/setDefault', [MachineReleaseManagementController::class, 'setDefault']);

@@ -43,6 +43,19 @@ class ServerMachine extends Model
         return bin2hex(random_bytes(32));
     }
 
+    public function getUpgradeStateAttribute(?string $value): ?array
+    {
+        $state = $this->fromJson($value);
+        return is_array($state) ? ($state['instance_upgrade'] ?? $state) : null;
+    }
+
+    public function setUpgradeStateAttribute(?array $state): void
+    {
+        // Legacy panel workers cannot dispatch a targeted command, even after rollback.
+        if (isset($state['target_installation_id'])) $state = ['instance_upgrade' => $state];
+        $this->attributes['upgrade_state'] = $state === null ? null : $this->castAttributeAsJson('upgrade_state', $state);
+    }
+
     public function servers(): HasMany
     {
         return $this->hasMany(Server::class, 'machine_id', 'id');

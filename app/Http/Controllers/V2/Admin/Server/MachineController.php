@@ -573,6 +573,8 @@ class MachineController extends Controller
             'target_version' => 'nullable|string|max:64',
             'component' => 'nullable|string|max:64',
             'force' => 'nullable|boolean',
+            'installation_id' => 'prohibited',
+            'observed_ip' => 'prohibited',
         ]);
 
         $machine = ServerMachine::find((int) $params['id']);
@@ -596,14 +598,6 @@ class MachineController extends Controller
             ]);
         }
 
-        $currentUpgrade = is_array($machine->upgrade_state) ? $machine->upgrade_state : [];
-        if (
-            !(bool) ($params['force'] ?? false)
-            && in_array((string) ($currentUpgrade['status'] ?? ''), ['queued', 'dispatched', 'running'], true)
-        ) {
-            return $this->fail([409, '该机器已有进行中的升级任务']);
-        }
-
         $targetVersion = trim((string) ($params['target_version'] ?? ''));
         if ($targetVersion === '') {
             $latest = $this->resolveLatestKelinodeVersion(false, $component);
@@ -620,6 +614,24 @@ class MachineController extends Controller
         }
 
         return $this->success($this->withOnlineStatus($machine->fresh() ?: $machine));
+    }
+
+    public function upgradeInstance(Request $request)
+    {
+        $params = $request->validate([
+            'id' => 'required|integer|min:1',
+            'target_version' => ['required', 'string', 'max:64', 'regex:/^v?\d+\.\d+\.\d+$/D'],
+            'installation_id' => ['required', 'string', 'regex:/^[a-f0-9]{32}$/D'],
+            'observed_ip' => 'required|ip',
+            'force' => 'prohibited',
+        ]);
+        try {
+            $machine = app(MachineUpgradeQueue::class)->enqueue((int) $params['id'], 'kelinode-rs', $params['target_version'],
+                installationId: $params['installation_id'], observedIp: $params['observed_ip']);
+        } catch (\RuntimeException $error) {
+            return $this->fail([$error->getCode() ?: 409, $error->getMessage()]);
+        }
+        return $this->success($machine->upgrade_state);
     }
 
     private function buildInstallCommandOptions(string $legacyCommand, string $nativeCommand, string $defaultAgent): array
