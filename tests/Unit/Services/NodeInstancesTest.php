@@ -65,6 +65,30 @@ final class NodeInstancesTest extends TestCase
         $this->assertSame('machine:3:' . str_repeat('a', 32), NodeReportSource::resolve($r, 3)['key']);
         $this->assertNull(NodeReportSource::installation('not-an-id'));
     }
+    public function test_machine_overview_selects_latest_attributed_online_report_without_summing(): void
+    {
+        $primary = $this->machine('primary');
+        $replica = $this->machine('replica');
+        $unbound = $this->machine('unbound');
+        $node = $this->node($primary->id);
+        $second = $this->node($replica->id);
+        DB::table('v2_server_machine_binding')->insert(['server_id' => $node->id, 'machine_id' => $replica->id, 'created_at' => time()]);
+        $registry = app(NodeInstanceRegistry::class);
+        $now = time();
+        $registry->record($node, $this->request(str_repeat('a', 32), $primary->id), ['online_users' => 7, 'last_online_at' => $now - 200]);
+        $registry->record($node, $this->request(str_repeat('b', 32), $replica->id), ['online_users' => 3, 'last_online_at' => $now - 12]);
+        $registry->record($second, $this->request(str_repeat('b', 32), $replica->id), ['online_users' => 0, 'last_online_at' => $now - 2]);
+        $registry->record($node, $this->request(str_repeat('c', 32), $unbound->id), ['online_users' => 99, 'last_online_at' => $now]);
+
+        $overview = app(\App\Services\ServerMachine\MachineReportingInstances::class)->listOverview([$primary->id, $replica->id, $unbound->id]);
+        $this->assertSame([$node->id, $second->id], array_column($overview['nodes'][$replica->id], 'id'));
+        $this->assertSame($second->id, $overview['activity'][$replica->id]['node_id']);
+        $this->assertSame(0, $overview['activity'][$replica->id]['count']);
+        $this->assertSame('bbbbbbbb', $overview['activity'][$replica->id]['instance']);
+        $this->assertSame($now - 200, $overview['activity'][$primary->id]['reported_at']);
+        $this->assertNull($overview['activity'][$primary->id]['count']);
+        $this->assertArrayNotHasKey($unbound->id, $overview['activity']);
+    }
     public function test_two_instances_keep_independent_snapshots_and_same_logical_node_device_policy(): void {
         $a = 'agent:' . str_repeat('a', 32); $b = 'agent:' . str_repeat('b', 32);
         $now = microtime(true);
@@ -142,7 +166,7 @@ final class NodeInstancesTest extends TestCase
         $stableKey = NodeReportSource::from($stable)['key'];
         DB::table('v2_server_instance_traffic')->insert(['server_id' => $one->id, 'reporter_key' => $stableKey,
             'record_at' => strtotime(date('Y-m-d')), 'upload' => 0, 'download' => 400, 'updated_at' => time()]);
-        $summaries = $view->summaries([$machine->id, $replica->id]);
+        $summaries = $view->listOverview([$machine->id, $replica->id])['reporters'];
         $this->assertCount(2, $summaries[$machine->id]);
         $this->assertCount(1, $summaries[$replica->id]);
         $data = app(\App\Services\ServerMachine\MachineInsightService::class)->snapshot($machine);
@@ -173,7 +197,7 @@ final class NodeInstancesTest extends TestCase
             ['installation_id' => str_repeat('a', 32), 'ips' => [['ip' => '2001:db8::2', 'observed' => true]], 'changes' => $changes],
             ['installation_id' => str_repeat('c', 32), 'ips' => [['ip' => '203.0.113.7', 'observed' => true]], 'changes' => []],
             ['installation_id' => null, 'ips' => [['ip' => '2001:db8::1', 'observed' => true]], 'changes' => []],
-        ]], $view->summaries([$machine->id]))[$machine->id];
+        ]], $view->listOverview([$machine->id])['reporters'])[$machine->id];
         $this->assertCount(2, $sources);
         $this->assertSame([20, 460, strtotime('tomorrow')], array_values($sources[0]['billing']));
         $this->assertSame([12, 34, strtotime('tomorrow')], array_values($sources[1]['billing']));

@@ -14,19 +14,36 @@ class MachineReportingInstances
 {
     public function __construct(private NodeInstanceRegistry $registry) {}
 
-    public function summaries(array $machineIds): array
+    public function listOverview(array $machineIds): array
     {
-        if (!$machineIds) return [];
+        if (!$machineIds) return ['reporters' => [], 'nodes' => [], 'activity' => []];
         $replicas = NodeMachineBinding::available() ? DB::table('v2_server_machine_binding')->whereIn('machine_id', $machineIds)
             ->get(['server_id', 'machine_id'])->groupBy('server_id') : collect();
-        $nodes = Server::query()->whereIn('machine_id', $machineIds)->orWhereIn('id', $replicas->keys())->get(['id', 'machine_id']);
-        $reporters = [];
+        $nodes = Server::query()->whereIn('machine_id', $machineIds)->orWhereIn('id', $replicas->keys())->orderBy('id')->get(['id', 'machine_id', 'name']);
+        $reporters = $bound = $activity = [];
+        $scope = array_fill_keys($machineIds, true);
+        $ttl = UserOnlineService::nodeDataExpirySeconds();
         foreach ($nodes->chunk(200) as $chunk) {
             $snapshots = Cache::many($chunk->map(fn ($node) => $this->registry->key($node->id))->all());
             foreach ($chunk as $node) {
-                $allowed = $replicas->get($node->id, collect())->pluck('machine_id')->push($node->machine_id)->map(fn ($id) => (int) $id)->all();
+                $allowed = array_intersect_key(array_fill_keys($replicas->get($node->id, collect())->pluck('machine_id')
+                    ->push($node->machine_id)->map(fn ($id) => (int) $id)->all(), true), $scope);
+                foreach ($allowed as $machineId => $_) {
+                    $bound[$machineId][] = ['id' => (int) $node->id, 'name' => $node->name];
+                }
                 foreach ($this->registry->snapshotRows((array) ($snapshots[$this->registry->key($node->id)] ?? [])) as $row) {
-                    if ($row['machine_id'] && in_array($row['machine_id'], $allowed, true)) {
+                    if (isset($allowed[$row['machine_id'] ?? 0])) {
+                        $id = (int) $row['machine_id'];
+                        $at = (int) ($row['last_online_at'] ?? 0);
+                        // One attributable report, not a sum of overlapping users across nodes or instances.
+                        if ($at > ($activity[$id]['reported_at'] ?? 0)) {
+                            $activity[$id] = [
+                                'node_id' => (int) $node->id, 'node_name' => $node->name,
+                                'instance' => $row['installation_id'] ? substr($row['installation_id'], 0, 8) : null,
+                                'count' => isset($row['online_users']) ? (int) $row['online_users'] : null,
+                                'reported_at' => $at, 'valid_until' => $at + $ttl,
+                            ];
+                        }
                         $previous = $reporters[$row['machine_id']][$row['key']] ?? [];
                         $latest = $row['last_seen_at'] >= ($previous['last_seen_at'] ?? 0) ? $row : $previous;
                         $latest['node_ids'] = [...($previous['node_ids'] ?? []), $node->id];
@@ -35,7 +52,7 @@ class MachineReportingInstances
                 }
             }
         }
-        return array_map('array_values', $reporters);
+        return ['reporters' => array_map('array_values', $reporters), 'nodes' => $bound, 'activity' => $activity];
     }
 
     public function listSources(array $groupsByMachine, array $summaries): array

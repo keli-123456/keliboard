@@ -43,7 +43,8 @@ class MachineController extends Controller
 
         $replicaCounts = \App\Services\Node\NodeMachineBinding::replicaCounts();
         $instances = app(MachineReportingInstances::class);
-        $instanceSummaries = $instances->summaries($machines->modelKeys());
+        $overview = $instances->listOverview($machines->modelKeys());
+        $instanceSummaries = $overview['reporters'];
         $conflicts = app(MachineIdentityGuard::class)->conflicts($machines->modelKeys());
         $inventory = app(MachineAddressInventory::class);
         $addresses = $inventory->snapshots($machines);
@@ -60,6 +61,11 @@ class MachineController extends Controller
             $activeGroups = array_values(array_filter($groups, fn ($group) => $group['last_seen_at'] >= $freshSince));
             $displayGroups = $activeGroups ?: $groups;
             $groupsByMachine[$machine->id] = $displayGroups;
+            $machine->setAttribute('bound_nodes', $overview['nodes'][$machine->id] ?? []);
+            $machine->setAttribute('node_activity', $overview['activity'][$machine->id] ?? null);
+            $machine->setAttribute('search_addresses', array_values(array_unique(array_merge([], ...array_map(
+                fn ($group) => array_column($group['ips'], 'ip'), $displayGroups
+            )))));
             $active = [];
             foreach ([...$reporters, ...$activeGroups] as $reporter) {
                 if ($reporter['last_seen_at'] >= $freshSince) $active[$reporter['installation_id'] ?? 'legacy'] = true;
