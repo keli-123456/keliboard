@@ -2263,6 +2263,45 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame(422, $controller->telemetry(Request::create('/', 'POST', $input))->getStatusCode());
     }
 
+    public function test_machine_list_excludes_old_unidentified_reports_from_active_instance_count(): void
+    {
+        $this->bindSettings(['server_machine_distribution_source' => 'panel', 'server_push_interval' => 60]);
+        $machine = ServerMachine::create(['name' => 'shared', 'token' => 'synthetic', 'is_active' => true]);
+        $nodeId = \Illuminate\Support\Facades\DB::table('v2_server')->insertGetId([
+            'name' => 'test-node', 'type' => 'trojan', 'host' => 'node.example.test', 'port' => '443',
+            'server_port' => 443, 'rate' => 1, 'machine_id' => $machine->id,
+        ]);
+        $registry = app(\App\Services\Node\NodeInstanceRegistry::class);
+        $inventory = app(\App\Services\ServerMachine\MachineAddressInventory::class);
+        $guard = app(\App\Services\ServerMachine\MachineIdentityGuard::class);
+        $now = time();
+        $base = 'machine:' . $machine->id;
+        $a = str_repeat('a', 32);
+        $b = str_repeat('b', 32);
+        $legacy = ['key' => $base, 'installation_id' => null, 'machine_id' => $machine->id, 'reported_ip' => '192.0.2.20', 'last_seen_at' => $now - 3600];
+        $rows = [$base => $legacy];
+        foreach ([$a => '192.0.2.10', $b => '192.0.2.11'] as $id => $ip) {
+            $guard->observeInstallation($machine->id, $id);
+            $inventory->record($machine, $id, ['panel_seen' => $ip], $now, [
+                'version' => 'v0.1.385', 'valid_until' => $now + 100,
+            ]);
+            $rows[$base . ':' . $id] = ['key' => $base . ':' . $id, 'installation_id' => $id, 'machine_id' => $machine->id,
+                'reported_ip' => $ip, 'last_seen_at' => $now];
+        }
+        \Illuminate\Support\Facades\Cache::put($registry->key($nodeId), $rows, 3600);
+        $admin = new \App\Http\Controllers\V2\Admin\Server\MachineController();
+        $fetch = fn () => $admin->fetch(Request::create('/'))->getData(true)['data'][0];
+        $item = $fetch();
+        $this->assertSame(2, $item['reporting_instances']);
+        $this->assertEqualsCanonicalizing([$a, $b], array_column($item['address_sources'], 'installation_id'));
+        $this->assertSame(['v0.1.385', 'v0.1.385'], array_column($item['address_sources'], 'upgrade_version'));
+        $this->assertCount(3, $registry->snapshot($nodeId));
+
+        $rows[$base]['last_seen_at'] = $now;
+        \Illuminate\Support\Facades\Cache::put($registry->key($nodeId), $rows, 3600);
+        $this->assertSame(3, $fetch()['reporting_instances'], 'A legacy source still reporting must remain visible in the count.');
+    }
+
     public function test_manual_upgrade_of_a_shared_machine_only_dispatches_to_the_selected_reporter(): void
     {
         $this->bindSettings(['server_machine_distribution_source' => 'panel']);

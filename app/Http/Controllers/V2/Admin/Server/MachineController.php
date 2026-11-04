@@ -48,6 +48,8 @@ class MachineController extends Controller
         $inventory = app(MachineAddressInventory::class);
         $addresses = $inventory->snapshots($machines);
         $now = now()->timestamp;
+        $freshSince = $now - \App\Services\UserOnlineService::nodeDataExpirySeconds();
+        $panelReleases = $this->releaseDistribution()->source() === MachineReleaseDistributionService::SOURCE_PANEL;
         $groupsByMachine = [];
         foreach ($machines as $machine) {
             $machine->setAttribute('servers_count', (int) $machine->servers_count + (int) ($replicaCounts[$machine->id] ?? 0));
@@ -55,10 +57,16 @@ class MachineController extends Controller
             $snapshot = app(MachineTelemetryService::class)->snapshot($machine);
             $reporters = $instanceSummaries[$machine->id] ?? [];
             $groups = $inventory->groups($addresses[$machine->id] ?? [], $reporters, $snapshot['load_status'], $conflicts[$machine->id], $now);
-            $groupsByMachine[$machine->id] = $groups;
-            $machine->setAttribute('reporting_instances', max(count($reporters), count($groups)));
-            $machine->setAttribute('address_group', $groups ? array_intersect_key($groups[0], array_flip(['installation_id', 'ips'])) : null);
-            $machine->setAttribute('address_count', array_sum(array_map(fn ($row) => count($row['ips']), $groups)));
+            $activeGroups = array_values(array_filter($groups, fn ($group) => $group['last_seen_at'] >= $freshSince));
+            $displayGroups = $activeGroups ?: $groups;
+            $groupsByMachine[$machine->id] = $displayGroups;
+            $active = [];
+            foreach ([...$reporters, ...$activeGroups] as $reporter) {
+                if ($reporter['last_seen_at'] >= $freshSince) $active[$reporter['installation_id'] ?? 'legacy'] = true;
+            }
+            $machine->setAttribute('reporting_instances', count($active));
+            $machine->setAttribute('address_group', $displayGroups ? array_intersect_key($displayGroups[0], array_flip(['installation_id', 'ips'])) : null);
+            $machine->setAttribute('address_count', array_sum(array_map(fn ($row) => count($row['ips']), $displayGroups)));
             $machine->setAttribute('load_status', $snapshot['load_status']);
             $machine->setAttribute('telemetry', $snapshot['telemetry']);
             $machine->setAttribute('entry_probe', $snapshot['entry_probe']);
@@ -73,6 +81,16 @@ class MachineController extends Controller
             if (isset($rows[0]['runtime'])) $machine->setAttribute('address_runtime', $rows[0]['runtime']);
             if (isset($rows[0]['change'])) $machine->setAttribute('address_change', $rows[0]['change']);
             if ($machine->identity_conflict || $machine->reporting_instances > 1) {
+                if ($panelReleases && $machine->is_active && $machine->identity_conflict) {
+                    $targets = app(MachineUpgradeQueue::class)->instanceTargets($addresses[$machine->id] ?? [], $now);
+                    $eligible = array_column($targets, 'version', 'installation_id');
+                    foreach ($rows as &$row) {
+                        if (isset($eligible[$row['installation_id'] ?? ''])) {
+                            $row['upgrade_version'] = $eligible[$row['installation_id']];
+                        }
+                    }
+                    unset($row);
+                }
                 $machine->setAttribute('address_sources', $rows);
                 if ($machine->is_active) $machine->setAttribute('address_rates', $inventory->rates($addresses[$machine->id] ?? [], $now));
             }
