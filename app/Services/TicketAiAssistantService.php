@@ -422,7 +422,7 @@ class TicketAiAssistantService
      * Persist one deterministic clarification without spending a provider call.
      * The reply contains no tenant data and is still tracked like any AI draft.
      */
-    public function suggestClarification(Ticket $ticket, string $draft): array
+    public function suggestClarification(Ticket $ticket, string $draft, bool $imageFailure = false): array
     {
         $settings = $this->settings();
         if (!$settings['enabled']) {
@@ -448,7 +448,7 @@ class TicketAiAssistantService
             'risk_explanation' => '',
             'risk_evidence' => [],
             'system_grounded' => true,
-            'grounding_type' => 'controlled_clarification',
+            'grounding_type' => $imageFailure ? TicketAiVisionService::CLARIFICATION_GROUNDING : 'controlled_clarification',
         ];
         if ((bool) ($context['business']['requires_human'] ?? false)) {
             $result = $this->businessContext->applyGuardrails($result, (array) $context['business']);
@@ -458,7 +458,7 @@ class TicketAiAssistantService
             $scopeFields,
             $ticket,
             null,
-            array_merge($settings, ['model' => 'system:clarification']),
+            array_merge($settings, ['model' => $imageFailure ? TicketAiVisionService::CLARIFICATION_MODEL : 'system:clarification']),
             $result,
             null
         );

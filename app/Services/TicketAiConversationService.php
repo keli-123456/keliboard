@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Log;
 class TicketAiConversationService
 {
     private const RESUMABLE_HANDOFF_REASONS = ['category_not_allowed'];
+    private const IMAGE_CLARIFICATION_SENT = 'image_clarification_sent';
 
     private const HUMAN_REQUEST_PATTERNS = [
         '人工客服', '转人工', '找人工', '真人客服', '人工处理', '人工回复',
@@ -138,6 +139,22 @@ class TicketAiConversationService
         return $state && $state->last_draft_hash !== null && hash_equals((string) $state->last_draft_hash, $hash);
     }
 
+    public function hasImageClarification(Ticket $ticket, ?int $imageMessageId = null, ?int $beforeMessageId = null): bool
+    {
+        if (!$this->available()) {
+            return false;
+        }
+        $query = TicketAiConversationEvent::query()->where('ticket_id', $ticket->id)
+            ->where('event', 'follow_up_sent')->where('reason', self::IMAGE_CLARIFICATION_SENT);
+        if ($imageMessageId !== null) {
+            $query->where('source_message_id', $imageMessageId);
+        }
+        if ($beforeMessageId !== null) {
+            $query->where('reply_message_id', '<', $beforeMessageId);
+        }
+        return $query->exists();
+    }
+
     public function resumeBroadAutomation(Ticket $ticket): void
     {
         if (!$this->broadMode()) {
@@ -201,7 +218,9 @@ class TicketAiConversationService
         $state->last_source_message_id = (int) $sourceMessage->id;
         $state->last_reply_message_id = (int) $replyMessage->id;
         $state->last_draft_hash = hash('sha256', trim((string) ($result['draft'] ?? $replyMessage->message)));
-        $state->last_reason = $followUp ? 'clarification_sent' : 'auto_reply_sent';
+        $state->last_reason = !$followUp ? 'auto_reply_sent'
+            : (($result['grounding_type'] ?? null) === TicketAiVisionService::CLARIFICATION_GROUNDING
+                ? self::IMAGE_CLARIFICATION_SENT : 'clarification_sent');
         $state->last_activity_at = time();
         $state->save();
 

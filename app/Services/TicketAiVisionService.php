@@ -13,6 +13,15 @@ use Illuminate\Support\Facades\Storage;
 
 class TicketAiVisionService
 {
+    public const CLARIFICATION_MODEL = 'system:image_clarification';
+    public const CLARIFICATION_GROUNDING = 'controlled_image_clarification';
+    public const CLARIFICATION_TEXT = '目前未能从截图中可靠读取报错。请直接粘贴完整的错误文字，并告诉我客户端名称和版本（如果还没提供）。也可以只上传清晰的报错区域，请先遮住账号、二维码、订阅链接和密码。收到补充后我会继续排查。';
+    private const CLARIFIABLE_FAILURES = [
+        'vision_unavailable', 'vision_provider_error', 'vision_timeout', 'vision_invalid_response',
+        'image_unreadable', 'image_low_confidence', 'image_needs_human', 'image_no_details',
+        'image_unsupported_topic', 'invalid_image', 'image_limit',
+    ];
+
     private const MAX_IMAGES = 3;
     private const MAX_SOURCE_BYTES = 8 * 1024 * 1024;
     private const MAX_IMAGE_BYTES = 1024 * 1024;
@@ -181,6 +190,45 @@ class TicketAiVisionService
         return true;
     }
 
+    public function isClarifiableFailure(mixed $analysis, int $sourceMessageId): bool
+    {
+        return is_array($analysis) && ($analysis['status'] ?? null) === 'held'
+            && ($analysis['context_reused'] ?? false) === false
+            && (int) ($analysis['source_message_id'] ?? 0) === $sourceMessageId
+            && in_array($analysis['reason'] ?? null, self::CLARIFIABLE_FAILURES, true)
+            && is_array($analysis['reason_codes'] ?? [])
+            && !array_filter($analysis['reason_codes'] ?? [], fn ($reason) => !in_array($reason, self::CLARIFIABLE_FAILURES, true));
+    }
+
+    public function failedSourceMatches(Ticket $ticket, TicketMessage $source, int $suggestionId): bool
+    {
+        if ($suggestionId <= 0 || !$this->storageReady()
+            || (int) $source->ticket_id !== (int) $ticket->id
+            || (int) $source->user_id !== (int) $ticket->user_id
+            || !$source->attachments()->exists()
+            || $source->attachments()->where(fn ($query) => $query
+                ->where('ticket_id', '<>', $ticket->id)->orWhere('user_id', '<>', $ticket->user_id))->exists()) {
+            return false;
+        }
+
+        $failure = TicketAiSuggestion::where('ticket_id', $ticket->id)
+            ->where('image_analysis->source_message_id', $source->id)->orderByDesc('id')->lockForUpdate()->first();
+
+        return $failure && (int) $failure->id === $suggestionId
+            && $this->isClarifiableSuggestion($ticket, $source, $failure);
+    }
+
+    private function isClarifiableSuggestion(Ticket $ticket, TicketMessage $source, TicketAiSuggestion $suggestion): bool
+    {
+        return $suggestion->admin_id === null && $suggestion->risk === 'medium'
+            && in_array($suggestion->status, [TicketAiSuggestion::STATUS_GENERATED, TicketAiSuggestion::STATUS_SUPERSEDED], true)
+            && $suggestion->scope_type === ($ticket->agent_user_id ? 'agent' : ($ticket->site_id ? 'site' : 'platform'))
+            && (int) $suggestion->site_id === (int) $ticket->site_id
+            && (int) $suggestion->agent_user_id === (int) $ticket->agent_user_id
+            && (int) $suggestion->agent_domain_id === (int) $ticket->agent_domain_id
+            && $this->isClarifiableFailure($suggestion->image_analysis, (int) $source->id);
+    }
+
     public function followupContext(Ticket $ticket, TicketMessage $source): ?array
     {
         if (!$this->referencesImage($source) || !$this->storageReady() || (int) $source->ticket_id !== (int) $ticket->id
@@ -203,6 +251,11 @@ class TicketAiVisionService
             if (!$previous->attachments()->exists() && (!$stored || $derived)) {
                 if (!$this->referencesImage($previous)) return null;
                 continue;
+            }
+            // A safe text request supersedes this failed image, not other or newer screenshots.
+            if ($stored && $this->isClarifiableSuggestion($ticket, $previous, $stored)
+                && app(TicketAiConversationService::class)->hasImageClarification($ticket, (int) $previous->id, (int) $source->id)) {
+                return null;
             }
             $base = $this->contextBase($source, $previous);
             $created = (int) $previous->getRawOriginal('created_at');

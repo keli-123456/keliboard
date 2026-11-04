@@ -406,6 +406,17 @@ class TicketService
             $isClarification = $suggestion->model === 'system:clarification'
                 && ($approval['grounding_type'] ?? null) === 'controlled_clarification';
             $analysis = $suggestion->image_analysis;
+            if ($suggestion->model === TicketAiVisionService::CLARIFICATION_MODEL) {
+                if (($approval['grounding_type'] ?? null) !== TicketAiVisionService::CLARIFICATION_GROUNDING
+                    || $message !== TicketAiVisionService::CLARIFICATION_TEXT || $analysis !== null
+                    || !(bool) admin_setting('ticket_ai_vision_enable', false) || $conversation->hasImageClarification($ticket)
+                    || !app(TicketAiVisionService::class)->failedSourceMatches(
+                        $ticket, $sourceMessage, (int) ($approval['image_failure_suggestion_id'] ?? 0)
+                    )) {
+                    return null;
+                }
+                $isClarification = true;
+            }
             if ($analysis !== null || ($sourceMessage->attachments()->exists() && !$isClarification)) {
                 if (!(bool) admin_setting('ticket_ai_vision_enable', false) || !is_array($analysis)
                     || $analysis !== ($approval['image_analysis'] ?? null)

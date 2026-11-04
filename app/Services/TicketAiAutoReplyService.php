@@ -158,6 +158,16 @@ class TicketAiAutoReplyService
             ? $this->assistant->suggestClarification($ticket, $clarification)
             : $this->assistant->suggest($ticket);
         $suggestionId = isset($result['suggestion_id']) ? (int) $result['suggestion_id'] : null;
+        if (!$isClarification && $suggestionId && ($result['risk'] ?? null) === 'medium'
+            && (bool) admin_setting('ticket_ai_vision_enable', false)
+            && app(TicketAiVisionService::class)->isClarifiableFailure($result['image_analysis'] ?? null, $sourceMessageId)
+            && !$this->conversation->hasImageClarification($ticket)) {
+            $failureId = $suggestionId;
+            $result = $this->assistant->suggestClarification($ticket, TicketAiVisionService::CLARIFICATION_TEXT, true);
+            $result['image_failure_suggestion_id'] = $failureId;
+            $suggestionId = isset($result['suggestion_id']) ? (int) $result['suggestion_id'] : null;
+            $isClarification = true;
+        }
         if ($this->conversation->isDuplicateDraft($ticket, (string) ($result['draft'] ?? ''))) {
             $this->assistant->discardAutomationSuggestion($suggestionId, $ticketId);
             $this->conversation->recordRejected($ticket, $sourceMessage, $suggestionId, 'duplicate_reply');

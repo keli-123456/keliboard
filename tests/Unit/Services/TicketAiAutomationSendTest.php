@@ -6,16 +6,20 @@ namespace Tests\Unit\Services;
 
 use App\Models\Ticket;
 use App\Models\TicketAiConversation;
+use App\Models\TicketAiConversationEvent;
 use App\Models\TicketAiSuggestion;
 use App\Models\TicketMessage;
 use App\Services\TicketAiAssistantService;
 use App\Services\TicketAiAutoReplyService;
+use App\Services\TicketAiContextService;
 use App\Services\TicketAiConversationService;
+use App\Services\TicketAiVisionService;
 use App\Services\TicketService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
 
@@ -227,6 +231,142 @@ final class TicketAiAutomationSendTest extends TestCase
             $suggestion->category, $suggestion->draft, false, $approval));
         $this->assertSame(2, TicketMessage::where('ticket_id', $ticket->id)->count());
         $this->assertSame('generated', $suggestion->fresh()->status);
+    }
+
+    public static function anonymizedScreenshotCases(): array
+    {
+        // Failure mix from the eight pending non-sensitive cases; all message text is synthetic.
+        return [
+            '01 uncertain' => ['image_needs_human', 'Still: the screenshot error says local port is in use.'],
+            '02 uncertain' => ['image_needs_human', 'Still: Clash reports an invalid configuration.'],
+            '03 uncertain' => ['image_needs_human', 'The screenshot says the profile format is invalid.'],
+            '04 uncertain' => ['image_needs_human', 'Still getting TLS handshake failure on this client.'],
+            '05 uncertain' => ['image_needs_human', 'The screenshot shows a DNS lookup timeout.'],
+            '06 unavailable' => ['vision_unavailable', 'Still: importing the profile says unsupported protocol.'],
+            '07 unavailable' => ['vision_unavailable', 'The screenshot error is address already in use.'],
+            '08 unsupported topic' => ['image_unsupported_topic', 'Still: the screenshot says the local proxy port is in use.'],
+        ];
+    }
+
+    #[DataProvider('anonymizedScreenshotCases')]
+    public function test_screenshot_clarification_then_text_followup(string $reason, string $supplement): void
+    {
+        [$ticket, $source, $failure] = $this->heldScreenshotFixture($reason);
+        $context = $this->createMock(TicketAiContextService::class);
+        $context->expects($this->once())->method('build')->willReturn(['scope' => ['type' => 'platform'], 'business' => []]);
+        $assistant = $this->getMockBuilder(TicketAiAssistantService::class)
+            ->setConstructorArgs([$context])->onlyMethods(['suggest'])->getMock();
+        $calls = 0;
+        $assistant->expects($this->exactly(2))->method('suggest')->willReturnCallback(function (Ticket $current) use ($failure, $supplement, &$calls) {
+            if (++$calls === 1) {
+                return $this->approval($failure) + ['image_analysis' => $failure->image_analysis];
+            }
+
+            $this->assertSame($supplement, TicketMessage::where('ticket_id', $current->id)->latest('id')->value('message'));
+            $this->assertNull(app(TicketAiVisionService::class)->analyze($current, ['vision_enable' => true])['analysis']);
+            $suggestion = $failure->replicate();
+            $suggestion->forceFill(['status' => 'generated', 'risk' => 'low', 'needs_human' => false,
+                'confidence' => 0.95, 'image_analysis' => null, 'draft' => 'A safe answer based on the new text.'])->save();
+            return $this->approval($suggestion);
+        });
+        $automation = new TicketAiAutoReplyService($assistant);
+        $automation->process((int) $ticket->id, (int) $source->id, true);
+        $automation->process((int) $ticket->id, (int) $source->id, true);
+
+        $state = TicketAiConversation::where('ticket_id', $ticket->id)->firstOrFail();
+        $this->assertSame('waiting_user', $state->status);
+        $this->assertNull($state->handoff_reason);
+        $this->assertSame(1, $state->follow_up_count);
+        $this->assertSame(2, TicketMessage::where('ticket_id', $ticket->id)->count());
+        $this->assertSame(TicketAiVisionService::CLARIFICATION_TEXT, TicketMessage::findOrFail($state->last_reply_message_id)->message);
+        $this->assertSame('image_clarification_sent', TicketAiConversationEvent::where('ticket_id', $ticket->id)->firstOrFail()->reason);
+        $this->assertSame('superseded', $failure->fresh()->status);
+
+        app()->instance(\Illuminate\Contracts\Bus\Dispatcher::class, new \Illuminate\Bus\Dispatcher(app()));
+        \Illuminate\Support\Facades\Bus::fake();
+        $followup = (new TicketService())->reply($ticket->fresh(), $supplement, (int) $ticket->user_id);
+        $this->assertInstanceOf(TicketMessage::class, $followup);
+        \Illuminate\Support\Facades\Bus::assertDispatchedAfterResponse(\App\Jobs\ProcessTicketAiAutoReplyJob::class);
+        $automation->process((int) $ticket->id, (int) $followup->id, false);
+
+        $state->refresh();
+        $this->assertSame('active', $state->status);
+        $this->assertSame(1, $state->follow_up_count);
+        $this->assertSame(2, $state->auto_reply_count);
+        $this->assertNull($state->handoff_reason);
+        $this->assertSame('A safe answer based on the new text.', TicketMessage::findOrFail($state->last_reply_message_id)->message);
+        $this->assertSame(Ticket::STATUS_OPENING, (int) $ticket->fresh()->status);
+    }
+
+    public function test_sensitive_or_mismatched_image_failures_do_not_send_clarification(): void
+    {
+        foreach (['image_sensitive', 'attachment_scope_mismatch', 'image_context_changed'] as $code) {
+            [$ticket, $source, $failure] = $this->heldScreenshotFixture('vision_unavailable', [$code]);
+            $assistant = $this->createMock(TicketAiAssistantService::class);
+            $assistant->expects($this->once())->method('suggest')->willReturn($this->approval($failure) + [
+                'image_analysis' => $failure->image_analysis,
+            ]);
+            $assistant->expects($this->never())->method('suggestClarification');
+            (new TicketAiAutoReplyService($assistant))->process((int) $ticket->id, (int) $source->id, true);
+            $this->assertSame(1, TicketMessage::where('ticket_id', $ticket->id)->count());
+            $this->assertSame('human_required', TicketAiConversation::where('ticket_id', $ticket->id)->value('status'));
+        }
+    }
+
+    #[DataProvider('invalidatedScreenshotClarifications')]
+    public function test_image_clarification_rechecks_source_and_analysis_before_sending(bool $newMessage): void
+    {
+        [$ticket, $source, $failure] = $this->heldScreenshotFixture('vision_unavailable');
+        $clarification = $failure->replicate();
+        $clarification->forceFill(['model' => TicketAiVisionService::CLARIFICATION_MODEL, 'draft' => TicketAiVisionService::CLARIFICATION_TEXT,
+            'image_analysis' => null, 'risk' => 'low', 'needs_human' => false, 'confidence' => 1.0])->save();
+        if ($newMessage) {
+            TicketMessage::create(['ticket_id' => $ticket->id, 'user_id' => $ticket->user_id, 'message' => 'The error text is invalid configuration.']);
+        } else {
+            $newer = $failure->replicate();
+            $newer->image_analysis = array_replace($failure->image_analysis, ['reason' => 'image_sensitive']);
+            $newer->save();
+        }
+        $approval = $this->approval($clarification) + [
+            'grounding_type' => TicketAiVisionService::CLARIFICATION_GROUNDING,
+            'image_failure_suggestion_id' => (int) $failure->id,
+        ];
+        $this->assertNull((new TicketService())->replyByAiAutomation((int) $ticket->id, (int) $source->id,
+            (int) $clarification->id, $clarification->category, $clarification->draft, true, $approval));
+        $this->assertSame(0, TicketMessage::where('ticket_id', $ticket->id)->where('is_auto_reply', 1)->count());
+    }
+
+    public static function invalidatedScreenshotClarifications(): array
+    {
+        return ['newer sensitive analysis' => [false], 'newer user message' => [true]];
+    }
+
+    public function test_second_failed_screenshot_does_not_repeat_the_text_request(): void
+    {
+        [$ticket, $source, $failure] = $this->heldScreenshotFixture('vision_unavailable');
+        $state = TicketAiConversation::create(['ticket_id' => $ticket->id, 'status' => 'active']);
+        TicketAiConversationEvent::create(['ticket_id' => $ticket->id, 'conversation_id' => $state->id,
+            'event' => 'follow_up_sent', 'reason' => 'image_clarification_sent', 'source_message_id' => $source->id - 1]);
+
+        $assistant = $this->createMock(TicketAiAssistantService::class);
+        $assistant->expects($this->once())->method('suggest')->willReturn($this->approval($failure) + [
+            'image_analysis' => $failure->image_analysis,
+        ]);
+        $assistant->expects($this->never())->method('suggestClarification');
+        (new TicketAiAutoReplyService($assistant))->process((int) $ticket->id, (int) $source->id, false);
+
+        $this->assertSame(1, TicketMessage::where('ticket_id', $ticket->id)->count());
+        $this->assertSame('risk_not_low', $state->fresh()->handoff_reason);
+    }
+
+    private function heldScreenshotFixture(string $reason, array $extraReasons = []): array
+    {
+        [$ticket, $source, $failure, $analysis] = $this->screenshotFixture();
+        $failure->forceFill(['risk' => 'medium', 'needs_human' => true, 'confidence' => 0,
+            'image_analysis' => array_replace($analysis, ['status' => 'held', 'needs_human' => true, 'confidence' => 0,
+                'reason' => $reason, 'reason_codes' => [$reason, ...$extraReasons], 'context_reused' => false, 'observations' => []]),
+        ])->save();
+        return [$ticket, $source, $failure];
     }
 
     private function imageFollowupFixture(): array
