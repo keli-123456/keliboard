@@ -141,6 +141,17 @@ final class MachineTerminalServiceTest extends TestCase
         $this->rejected('session_revoked',fn ()=>$this->service->consume($p['ticket'],'https://panel.example.test'));
     }
 
+    public function test_shared_machine_installations_block_agent_terminal_tickets(): void
+    {
+        $guard = new \App\Services\ServerMachine\MachineIdentityGuard();
+        $guard->observeInstallation((int) $this->machine->id, str_repeat('a', 32));
+        $guard->observeInstallation((int) $this->machine->id, str_repeat('b', 32));
+        $profile = $this->service->profile($this->machine);
+        $this->assertSame('identity_conflict', $profile['agent_state']);
+        $this->assertFalse($profile['runtime_ready']);
+        $this->rejected('unavailable', fn () => $this->packet());
+    }
+
     public function test_policy_requires_live_admin_token_and_explicit_confirmation(): void
     {
         $this->machine->update(['terminal_enabled'=>false]);

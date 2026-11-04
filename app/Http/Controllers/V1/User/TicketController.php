@@ -68,7 +68,7 @@ class TicketController extends Controller
             ]
         );
         HookManager::call('ticket.create.after', $ticket);
-        return $this->success(true);
+        return $this->success($request->boolean('return_ticket') ? ['id' => (int) $ticket->id] : true);
 
     }
 

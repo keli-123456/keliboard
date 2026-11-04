@@ -18,6 +18,7 @@ class TicketSave extends FormRequest
         return [
             'subject' => 'required',
             'level' => 'required|in:0,1,2',
+            'return_ticket' => 'sometimes|boolean',
             'message' => 'required_without:images',
             'images' => 'nullable|array|max:' . $maxImages,
             'images.*' => 'file|image|mimes:jpg,jpeg,png,webp|max:' . $maxKb

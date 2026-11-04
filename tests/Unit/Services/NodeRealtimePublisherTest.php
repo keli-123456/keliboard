@@ -22,6 +22,13 @@ final class NodeRealtimePublisherTest extends TestCase
 
     public function test_build_targets_includes_machine_ids_without_breaking_existing_targets(): void
     {
+        $this->setUpInMemoryDatabase();
+        Schema::create('v2_server', function (Blueprint $table): void {
+            $table->increments('id'); $table->integer('machine_id')->nullable();
+        });
+        DB::table('v2_server')->insert([['id' => 2, 'machine_id' => 12], ['id' => 3, 'machine_id' => null]]);
+        (require base_path('database/migrations/2026_11_04_000001_create_server_machine_bindings.php'))->up();
+        DB::table('v2_server_machine_binding')->insert(['server_id' => 3, 'machine_id' => 13, 'created_at' => time()]);
         $method = new ReflectionMethod(NodeRealtimePublisher::class, 'buildTargets');
         $method->setAccessible(true);
 
@@ -30,7 +37,7 @@ final class NodeRealtimePublisherTest extends TestCase
         $this->assertSame([
             'server_ids' => [2, 3],
             'group_ids' => [9],
-            'machine_ids' => [7],
+            'machine_ids' => [7, 12, 13],
         ], $targets);
     }
 

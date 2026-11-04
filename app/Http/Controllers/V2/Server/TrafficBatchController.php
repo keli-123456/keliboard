@@ -38,11 +38,13 @@ class TrafficBatchController extends Controller
             return response()->json(['message' => 'Unsupported traffic batch schema.'], 422);
         }
         try {
-            $receipt = $service->accept($node, $body['report_id'] ?? null, $body['traffic'] ?? null);
+            $receipt = $service->accept($node, $body['report_id'] ?? null, $body['traffic'] ?? null,
+                \App\Services\Node\NodeReportSource::from($request)['key']);
         } catch (\InvalidArgumentException | \OverflowException $error) {
             return response()->json(['message' => $error->getMessage()], 422);
         }
         $service->dispatch($receipt);
+        app(\App\Services\Node\NodeInstanceRegistry::class)->record($node, $request, ['last_traffic_at' => time()]);
         // Only a previously committed accounting transaction earns an applied receipt.
         return response()->json([
             'version' => 1, 'report_id' => $receipt->report_id, 'content_hash' => $receipt->content_hash,

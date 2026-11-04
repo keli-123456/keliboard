@@ -70,6 +70,7 @@ class WsServer extends Command
         $terminalBridge = app(\App\Services\ServerMachine\MachineTerminalBridge::class);
         $connections = [];
         $terminalBridge->controls(function (int $machineId) use (&$connections) {
+            if (app(\App\Services\ServerMachine\MachineIdentityGuard::class)->conflicted($machineId)) return null;
             foreach ($connections as $connection) {
                 if (($connection->xboard_authenticated ?? false) && (int) ($connection->xboard_machine_id ?? 0) === $machineId
                     && ($connection->xboard_terminal_protocol ?? 0) === 1 && ($connection->xboard_terminal_enabled ?? false)) return $connection;
@@ -206,6 +207,7 @@ class WsServer extends Command
                         'node_id' => $payload['node_id'] ?? null,
                         'node_type' => $payload['node_type'] ?? null,
                         'machine_id' => $payload['machine_id'] ?? null,
+                        ...(isset($payload['instance_id']) ? ['instance_id' => $payload['instance_id']] : []),
                     ]);
                 } catch (\Throwable $e) {
                     $context = [
@@ -245,6 +247,7 @@ class WsServer extends Command
                 $connection->xboard_authenticated_at = time();
                 $serverInfo = $auth['server'] ?? null;
                 $connection->xboard_connection_key = $auth['connection_key'];
+                $connection->xboard_installation_id = $auth['installation_id'] ?? null;
                 $connection->xboard_input_node_id = (string) $auth['input_node_id'];
                 $connection->xboard_server_id = $serverInfo ? (int) $serverInfo->id : 0;
                 $connection->xboard_machine_id = isset($auth['machine']) ? (int) $auth['machine']->id : null;
@@ -281,6 +284,10 @@ class WsServer extends Command
             }
 
             if ((bool) ($connection->xboard_authenticated ?? false)) {
+                if ((int) ($connection->xboard_machine_id ?? 0) > 0) {
+                    app(\App\Services\ServerMachine\MachineIdentityGuard::class)->observeInstallation(
+                        (int) $connection->xboard_machine_id, $connection->xboard_installation_id ?? null);
+                }
                 $this->writeSnapshot($snapshotPath, $host, $port, $realtimeEnabled, $connections);
             }
 
@@ -380,6 +387,7 @@ class WsServer extends Command
                 'node_id' => (string) ($connection->xboard_input_node_id ?? ''),
                 'server_id' => (int) ($connection->xboard_server_id ?? 0),
                 'machine_id' => $connection->xboard_machine_id ?? null,
+                'installation_id' => $connection->xboard_installation_id ?? null,
                 'terminal_protocol' => (int) ($connection->xboard_terminal_protocol ?? 0),
                 'terminal_enabled' => (bool) ($connection->xboard_terminal_enabled ?? false),
                 'node_type' => $connection->xboard_node_type ?? null,
@@ -441,6 +449,20 @@ class WsServer extends Command
             'message' => trim((string) ($payload['message'] ?? '')),
             'updated_at' => date(DATE_ATOM),
         ];
+        $machineId = (int) ($connection->xboard_machine_id ?? 0);
+        $installation = \App\Services\Node\NodeReportSource::installation($connection->xboard_installation_id ?? null);
+        $sourceKey = $machineId > 0 ? 'machine:' . $machineId . ($installation ? ':' . $installation : '') : ($installation ? 'agent:' . $installation : null);
+        if ($sourceKey) {
+            $scopedKey = 'node_instance_receipt:' . $serverId . ':' . $sourceKey . ':' . $topic;
+            $safe = array_intersect_key($next, array_flip(['status', 'event_id', 'event_ts', 'updated_at']));
+            try { \Illuminate\Support\Facades\Cache::lock($scopedKey . ':lock', 5)->block(3, function () use ($scopedKey, $safe): void {
+                if (NodeRealtimeReceipt::shouldReplace(\Illuminate\Support\Facades\Cache::get($scopedKey), $safe)) {
+                    \Illuminate\Support\Facades\Cache::put($scopedKey, $safe, 86400);
+                }
+            }); } catch (\Throwable $error) {
+                Log::warning('Instance receipt cache unavailable', ['error_type' => get_class($error)]);
+            }
+        }
         if (!NodeRealtimeReceipt::shouldReplace($receiptState[$key] ?? null, $next)) {
             return;
         }

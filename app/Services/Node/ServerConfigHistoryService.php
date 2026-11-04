@@ -144,6 +144,7 @@ final class ServerConfigHistoryService
         $query = ServerConfigRevision::where('server_id', $server->id);
         $total = (clone $query)->count();
         $receipt = app(NodeRealtimeStatusService::class)->receiptsForServers([(int) $server->id])[$server->id]['config'] ?? null;
+        if (count(NodeMachineBinding::machineIds($server)) > 1 || count(app(NodeInstanceRegistry::class)->snapshot((int) $server->id)) > 1) $receipt = null;
         $hash = $this->hash($this->snapshot($server));
         $items = $query->orderByDesc('id')->offset(($page - 1) * 15)->limit(15)->get([
             'id', 'actor_id', 'action', 'source_revision_id', 'config_hash', 'event_id', 'created_at', 'changes', 'impact',

@@ -138,6 +138,14 @@ class NodeRealtimePublisher
 
     private function buildTargets(array $serverIds = [], array $groupIds = [], array $machineIds = []): ?array
     {
+        if ($serverIds !== []) {
+            if (\Illuminate\Support\Facades\Schema::hasColumn('v2_server', 'machine_id')) {
+                $machineIds = array_merge($machineIds, Server::query()->whereIn('id', $serverIds)->whereNotNull('machine_id')->pluck('machine_id')->all());
+            }
+            if (\App\Services\Node\NodeMachineBinding::available()) {
+                $machineIds = array_merge($machineIds, \Illuminate\Support\Facades\DB::table('v2_server_machine_binding')->whereIn('server_id', $serverIds)->pluck('machine_id')->all());
+            }
+        }
         $targets = array_filter([
             'server_ids' => $this->normalizeIntList($serverIds),
             'group_ids' => $this->normalizeIntList($groupIds),

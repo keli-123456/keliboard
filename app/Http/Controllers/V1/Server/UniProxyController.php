@@ -157,7 +157,8 @@ class UniProxyController extends Controller
         $nodeType = $node->type;
         $nodeId = $this->getNodeCacheServerId($node);
 
-        Cache::put(
+        if (!\App\Services\Node\NodeReportSource::from($request)['identified']
+            && count(app(\App\Services\Node\NodeInstanceRegistry::class)->snapshot((int) $node->id)) <= 1) Cache::put(
             CacheKey::get('SERVER_' . strtoupper($nodeType) . '_ONLINE_USER', $nodeId),
             count($data),
             3600
@@ -170,6 +171,7 @@ class UniProxyController extends Controller
 
         $userService = new UserService();
         $userService->trafficFetch($node, $nodeType, $data);
+        app(\App\Services\Node\NodeInstanceRegistry::class)->record($node, $request, ['last_traffic_at' => time()]);
         return $this->success(true);
     }
 
@@ -257,7 +259,9 @@ class UniProxyController extends Controller
                 'error' => 'Invalid online data'
             ], 400);
         }
-        UpdateAliveDataJob::dispatch($data, $node->type, $node->id);
+        $source = \App\Services\Node\NodeReportSource::from($request);
+        app(\App\Services\Node\NodeInstanceRegistry::class)->record($node, $request, ['online_users' => count($data), 'last_online_at' => time()]);
+        UpdateAliveDataJob::dispatch($data, $node->type, $node->id, null, $source['key'], $source['machine_id'], $this->getNodeCacheServerId($node));
         return response()->json(['data' => true]);
     }
 
@@ -298,10 +302,12 @@ class UniProxyController extends Controller
         ];
 
         $cacheTime = max(300, (int) admin_setting('server_push_interval', 60) * 3);
-        cache([
+        app(\App\Services\Node\NodeInstanceRegistry::class)->recordStatus($node, $request, $statusData);
+        if (count(app(\App\Services\Node\NodeInstanceRegistry::class)->snapshot((int) $node->id)) <= 1) cache([
             CacheKey::get('SERVER_' . strtoupper($nodeType) . '_LOAD_STATUS', $nodeId) => $statusData,
             CacheKey::get('SERVER_' . strtoupper($nodeType) . '_LAST_LOAD_AT', $nodeId) => now()->timestamp,
         ], $cacheTime);
+        else Cache::forget(CacheKey::get('SERVER_' . strtoupper($nodeType) . '_LOAD_STATUS', $nodeId));
 
         return response()->json(['data' => true, "code" => 0, "message" => "success"]);
     }

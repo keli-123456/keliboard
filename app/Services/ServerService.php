@@ -312,8 +312,7 @@ class ServerService
 
     public static function getMachineNodes(ServerMachine $machine): Collection
     {
-        return Server::query()
-            ->where('machine_id', (int) $machine->id)
+        return \App\Services\Node\NodeMachineBinding::query((int) $machine->id)
             ->when(self::hasServerEnabledColumn(), function ($query) {
                 $query->where('enabled', true);
             })

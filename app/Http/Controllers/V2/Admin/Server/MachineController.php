@@ -38,7 +38,10 @@ class MachineController extends Controller
         $websiteHealth = app(\App\Services\SubscriptionProxy\WebsiteProxyEndpointService::class)
             ->adminHealthPayloads($machines->modelKeys());
 
+        $replicaCounts = \App\Services\Node\NodeMachineBinding::replicaCounts();
         foreach ($machines as $machine) {
+            $machine->setAttribute('servers_count', (int) $machine->servers_count + (int) ($replicaCounts[$machine->id] ?? 0));
+            $machine->setAttribute('identity_conflict', app(\App\Services\ServerMachine\MachineIdentityGuard::class)->conflicted((int) $machine->id));
             $snapshot = app(MachineTelemetryService::class)->snapshot($machine);
             $machine->setAttribute('load_status', $snapshot['load_status']);
             $machine->setAttribute('telemetry', $snapshot['telemetry']);
@@ -264,14 +267,14 @@ class MachineController extends Controller
 
         return $this->success([
             'bound' => Server::query()
-                ->where('machine_id', (int) $machine->id)
+                ->whereIn('id', \App\Services\Node\NodeMachineBinding::query((int) $machine->id)->select('id'))
                 ->orderBy('sort', 'ASC')
                 ->orderBy('id', 'ASC')
                 ->get(),
             'available' => Server::query()
                 ->where(function ($query) use ($machine) {
                     $query->whereNull('machine_id')
-                        ->orWhere('machine_id', (int) $machine->id);
+                        ->orWhereIn('id', \App\Services\Node\NodeMachineBinding::query((int) $machine->id)->select('id'));
                 })
                 ->orderBy('sort', 'ASC')
                 ->orderBy('id', 'ASC')
@@ -300,6 +303,10 @@ class MachineController extends Controller
 
         try {
             DB::beginTransaction();
+            $sharedIds = \App\Services\Node\NodeMachineBinding::available() ? DB::table('v2_server_machine_binding')->where('machine_id', $machine->id)->pluck('server_id')->map(fn ($id) => (int) $id)->all() : [];
+            if ($sharedIds) DB::table('v2_server_machine_binding')->where('machine_id', $machine->id)->whereNotIn('server_id', $nodeIds)->delete();
+            $primaryIds = array_values(array_diff($nodeIds, $sharedIds));
+            $previousOwners = Server::query()->whereIn('id', $primaryIds)->whereNotNull('machine_id')->pluck('machine_id')->all();
             $oldIds = Server::query()
                 ->where('machine_id', (int) $machine->id)
                 ->pluck('id')
@@ -313,13 +320,17 @@ class MachineController extends Controller
 
             if (!empty($nodeIds)) {
                 Server::query()
-                    ->whereIn('id', $nodeIds)
+                    ->whereIn('id', $primaryIds)
                     ->update(['machine_id' => (int) $machine->id]);
             }
             DB::commit();
 
-            $affected = array_values(array_unique(array_merge($oldIds, $nodeIds)));
-            app(NodeRealtimePublisher::class)->invalidateConfigForMachines([(int) $machine->id], 'admin.server_machine.bound', [
+            $affected = array_values(array_unique(array_merge($oldIds, $nodeIds, $sharedIds)));
+            $affectedMachines = array_merge([(int) $machine->id], $previousOwners);
+            foreach (Server::query()->whereIn('id', $affected)->get() as $affectedNode) {
+                $affectedMachines = array_merge($affectedMachines, \App\Services\Node\NodeMachineBinding::machineIds($affectedNode));
+            }
+            app(NodeRealtimePublisher::class)->invalidateConfigForMachines($affectedMachines, 'admin.server_machine.bound', [
                 'server_ids' => $affected,
             ]);
 

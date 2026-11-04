@@ -35,9 +35,8 @@ class ServerTlsCertificateService
                 continue;
             }
 
-            $server = Server::query()
+            $server = \App\Services\Node\NodeMachineBinding::query((int) $machine->id)
                 ->whereKey($normalized['server_id'])
-                ->where('machine_id', (int) $machine->id)
                 ->first();
 
             if (!$server || !(($normalized['protocol'] === 'hysteria2' && $this->isHysteria2Server($server))

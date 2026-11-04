@@ -39,6 +39,12 @@ class Server
 
         $request->merge(['node_type' => $auth['normalized_node_type']]);
         $request->attributes->set('node_info', $auth['server']);
+        $request->attributes->set('node_report_source', \App\Services\Node\NodeReportSource::resolve(
+            $request, isset($auth['machine']) ? (int) $auth['machine']->id : null
+        ));
+        if ($auth['server'] && $request->isMethod('POST')) {
+            abort_unless(app(\App\Services\Node\NodeInstanceRegistry::class)->record($auth['server'], $request), 429, 'Too many active node reporting instances.');
+        }
         return $next($request);
     }
 }

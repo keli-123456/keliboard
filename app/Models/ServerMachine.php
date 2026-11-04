@@ -7,6 +7,13 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class ServerMachine extends Model
 {
+    protected static function booted(): void
+    {
+        static::deleting(function (ServerMachine $machine): void {
+            if (\App\Services\Node\NodeMachineBinding::available()) \Illuminate\Support\Facades\DB::table('v2_server_machine_binding')->where('machine_id', $machine->id)->delete();
+        });
+    }
+
     protected $table = 'v2_server_machine';
 
     protected $guarded = ['id'];

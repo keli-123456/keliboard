@@ -11,6 +11,18 @@ class NodeRealtimeAuthenticator
 {
     public function authenticate(array $params): ?array
     {
+        $installation = \App\Services\Node\NodeReportSource::installation($params['instance_id'] ?? null);
+        if (isset($params['instance_id']) && $installation === null) return null;
+        $result = $this->authenticateIdentity($params);
+        if ($result && $installation !== null) {
+            $result['installation_id'] = $installation;
+            $result['connection_key'] .= ':instance:' . $installation;
+        }
+        return $result;
+    }
+
+    private function authenticateIdentity(array $params): ?array
+    {
         $token = trim((string) ($params['token'] ?? ''));
         $nodeId = $params['node_id'] ?? null;
         $machineId = $params['machine_id'] ?? null;
@@ -96,8 +108,7 @@ class NodeRealtimeAuthenticator
             return null;
         }
 
-        $query = ServerModel::query()
-            ->where('machine_id', (int) $machine->id)
+        $query = \App\Services\Node\NodeMachineBinding::query((int) $machine->id)
             ->when($nodeType, function ($query) use ($nodeType) {
                 $query->where('type', $nodeType);
             })

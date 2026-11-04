@@ -43,6 +43,7 @@ class MachineController extends Controller
             ]);
         }
 
+        app(\App\Services\ServerMachine\MachineIdentityGuard::class)->observe((int) $machine->id, $request);
         $this->touchMachine($machine);
 
         $nodes = ServerService::getMachineNodes($machine)
@@ -115,6 +116,9 @@ class MachineController extends Controller
             return response()->json(['message' => 'Invalid telemetry payload'], 422);
         }
         $input = $validator->validated();
+        if (app(\App\Services\ServerMachine\MachineIdentityGuard::class)->observe((int) $machine->id, $request)) {
+            return response()->json(['data' => true, 'telemetry_version' => 1, 'identity_conflict' => true]);
+        }
         if (isset($input['entry_probe'])) {
             $input['entry_probe'] = app(\App\Services\ServerMachine\MachineEntryProbe::class)->normalizeReport($input['entry_probe']);
             if ($input['entry_probe'] === null) {
@@ -139,6 +143,9 @@ class MachineController extends Controller
         $payload = $request->input('status');
         if (!is_array($payload)) {
             $payload = $request->only(['cpu', 'mem', 'swap', 'disk', 'net', 'uptime', 'version']);
+        }
+        if (app(\App\Services\ServerMachine\MachineIdentityGuard::class)->observe((int) $machine->id, $request)) {
+            return response()->json(['data' => true, 'reload' => false, 'upgrade' => null, 'identity_conflict' => true]);
         }
 
         $validator = Validator::make($payload, [
@@ -533,6 +540,7 @@ class MachineController extends Controller
     }
     private function buildUpgradeCommand(ServerMachine $machine, string $panelBaseUrl): ?array
     {
+        if (app(\App\Services\ServerMachine\MachineIdentityGuard::class)->conflicted((int) $machine->id)) return null;
         $distribution = app(MachineReleaseDistributionService::class);
         $source = $distribution->source();
         $claimed = DB::transaction(function () use ($machine, $distribution): ?array {

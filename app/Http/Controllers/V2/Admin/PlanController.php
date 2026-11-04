@@ -4,6 +4,8 @@ namespace App\Http\Controllers\V2\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\PlanSave;
+use App\Http\Requests\Admin\PlanContentPreview;
+use App\Http\Resources\PlanResource;
 use App\Jobs\ApplyPlanToUsersJob;
 use App\Jobs\RecalculateNextResetAtJob;
 use App\Models\Order;
@@ -15,6 +17,14 @@ use Illuminate\Support\Facades\Log;
 
 class PlanController extends Controller
 {
+    public function previewContent(PlanContentPreview $request)
+    {
+        // Use the storefront formatter on a draft array; no plan or user is saved.
+        $preview = (new PlanResource($request->validated()))->resolve($request);
+
+        return $this->success(['content' => $preview['content']]);
+    }
+
     public function fetch(Request $request)
     {
         $plans = Plan::orderBy('sort', 'ASC')

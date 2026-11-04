@@ -40,6 +40,7 @@ class MachineTerminalService
         $state = !$agent ? 'offline' : (($agent['terminal_protocol'] ?? 0) !== 1 ? 'upgrade_required'
             : (!(bool) ($agent['terminal_enabled'] ?? false) ? 'local_disabled' : 'ready'));
         if (!$this->enabled()) $state = 'global_disabled';
+        if (app(MachineIdentityGuard::class)->conflicted((int) $machine->id)) $state = 'identity_conflict';
         return ['machine_id' => $machine->id, 'enabled' => (bool) $machine->terminal_enabled,
             'agent_state' => $state, 'runtime_ready' => $state === 'ready' && (bool) $machine->terminal_enabled && (bool) $machine->is_active,
             'session_seconds' => 1200, 'idle_seconds' => 600, 'cpu_percent' => 10, 'memory_mib' => 64];

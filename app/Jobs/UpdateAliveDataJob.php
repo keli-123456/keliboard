@@ -21,14 +21,23 @@ class UpdateAliveDataJob implements ShouldQueue
   private const SNAPSHOT_LOCK_SECONDS = 120;
   private const SNAPSHOT_LOCK_WAIT_SECONDS = 30;
   private ?float $reportedAt = null;
+  private ?string $sourceKey = null;
+  private ?int $sourceMachineId = null;
+  private ?int $cacheNodeId = null;
 
   public function __construct(
     private readonly array $data,
     private readonly string $nodeType,
     private readonly int $nodeId,
-    ?float $reportedAt = null
+    ?float $reportedAt = null,
+    ?string $sourceKey = null,
+    ?int $sourceMachineId = null,
+    ?int $cacheNodeId = null
   ) {
     $this->reportedAt = $reportedAt ?? microtime(true);
+    $this->sourceKey = \App\Services\Node\NodeReportSource::validKey($sourceKey);
+    $this->sourceMachineId = $sourceMachineId !== null && $sourceMachineId > 0 ? $sourceMachineId : null;
+    $this->cacheNodeId = $cacheNodeId;
     $this->onQueue('online_sync');
   }
 
@@ -36,6 +45,7 @@ class UpdateAliveDataJob implements ShouldQueue
   {
     try {
       $snapshotVersion = $this->reportedAt ?? microtime(true);
+      if ($this->sourceKey !== null && $snapshotVersion < microtime(true) - UserOnlineService::nodeDataExpirySeconds()) return;
       $riskSample = null;
       Cache::lock(self::SNAPSHOT_LOCK_KEY, self::SNAPSHOT_LOCK_SECONDS)
         ->block(self::SNAPSHOT_LOCK_WAIT_SECONDS, function () use ($snapshotVersion, &$riskSample): void {
@@ -53,7 +63,7 @@ class UpdateAliveDataJob implements ShouldQueue
         });
       if ($riskSample !== null) {
         try {
-          app(\App\Services\ServerMachine\MachineRiskActivity::class)->record($this->nodeType, $this->nodeId, $riskSample, $snapshotVersion);
+          app(\App\Services\ServerMachine\MachineRiskActivity::class)->record($this->nodeType, $this->nodeId, $riskSample, $snapshotVersion, $this->sourceMachineId, $this->sourceKey !== null);
         } catch (\Throwable $error) {
           Log::warning('Machine risk activity unavailable', ['error_type' => get_class($error)]);
         }
@@ -69,7 +79,8 @@ class UpdateAliveDataJob implements ShouldQueue
   private function applySnapshot(): array
   {
     $updateAt = time();
-    $nodeKey = $this->nodeType . $this->nodeId;
+    $logicalNode = $this->nodeType . $this->nodeId;
+    $nodeKey = $logicalNode . ($this->sourceKey ? ':' . $this->sourceKey : '');
     $mode = UserOnlineService::getDeviceLimitMode();
     $ttlSeconds = UserOnlineService::aliveCacheTtlSeconds();
     $nodeDataExpirySeconds = $this->nodeDataExpirySeconds();
@@ -96,7 +107,7 @@ class UpdateAliveDataJob implements ShouldQueue
       $currentOnlineIps[$uid] = $normalizedIps;
     }
 
-    $nodeUsersCacheKey = UserOnlineService::nodeUsersCacheKey($this->nodeType, $this->nodeId);
+    $nodeUsersCacheKey = UserOnlineService::nodeUsersCacheKey($this->nodeType, $this->nodeId, $this->sourceKey);
     $previousNodeUserIds = array_values(array_unique(array_filter(
       array_map('intval', (array) Cache::get($nodeUsersCacheKey, [])),
       static fn(int $uid): bool => $uid > 0
@@ -125,6 +136,8 @@ class UpdateAliveDataJob implements ShouldQueue
         $ipsArray[$nodeKey] = [
           'aliveips' => $currentOnlineIps[$uid],
           'lastupdateAt' => $updateAt,
+          'node_key' => $logicalNode,
+          'node_type' => $this->nodeType,
         ];
       } else {
         unset($ipsArray[$nodeKey]);
@@ -148,6 +161,10 @@ class UpdateAliveDataJob implements ShouldQueue
 
     $this->storeCachedAliveData($cacheUpdates, $ttl);
     Cache::put($nodeUsersCacheKey, $currentNodeUserIds, $ttl);
+    $instances = app(\App\Services\Node\NodeInstanceRegistry::class);
+    if ($this->sourceKey !== null || count($instances->snapshot($this->nodeId)) > 1) {
+      $instances->refreshOnlineCount($this->nodeType, $this->nodeId, $this->sourceKey, $this->cacheNodeId);
+    }
     UserOnlineService::updateRealtimeIndex($realtimeCounts, $updateAt + $ttlSeconds);
     $this->syncOnlineCounts($changedOnlineUpdates);
     $riskUsers = [];
@@ -157,7 +174,7 @@ class UpdateAliveDataJob implements ShouldQueue
 
   private function nodeSnapshotVersionCacheKey(): string
   {
-    return UserOnlineService::nodeUsersCacheKey($this->nodeType, $this->nodeId) . ':VERSION';
+    return UserOnlineService::nodeUsersCacheKey($this->nodeType, $this->nodeId, $this->sourceKey) . ':VERSION';
   }
 
   private function filterFreshNodeData(mixed $cachedData, int $updateAt, int $expirySeconds): array

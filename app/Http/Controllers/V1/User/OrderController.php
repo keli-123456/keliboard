@@ -161,7 +161,9 @@ class OrderController extends Controller
     public function confirmUpgrade(OrderUpgradeConfirm $request, OrderUpgradeService $orderUpgradeService)
     {
         $user = User::findOrFail($request->user()->id);
-        $order = $orderUpgradeService->confirmUpgrade($user, (string) $request->input('quote_token'));
+        $order = $orderUpgradeService->confirmUpgrade($user, (string) $request->input('quote_token'),
+            $request->filled('target_plan_id') ? (int) $request->input('target_plan_id') : null,
+            $request->filled('period') ? (string) $request->input('period') : null);
 
         return $this->success([
             'trade_no' => $order->trade_no,

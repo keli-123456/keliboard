@@ -14,18 +14,21 @@ class MachineRiskActivity
     public const SAMPLES = 60;
     public const RETENTION = 1860;
 
-    public function record(string $nodeType, int $nodeId, array $sample, float $reportedAt): void
+    public function record(string $nodeType, int $nodeId, array $sample, float $reportedAt, ?int $sourceMachineId = null, bool $identified = false): void
     {
         if (!app(MachineRiskSettings::class)->enabled() || $nodeId <= 0) return;
         $now = time(); $at = (int) $reportedAt;
         if ($at > $now + 5 || $at < $now - 300) return;
         $node = Server::query()->whereKey($nodeId)->where('type', $nodeType)->first(['id', 'machine_id']);
-        if (!$node || (int) $node->machine_id <= 0) return;
+        if (!$node) return;
+        $owners = \App\Services\Node\NodeMachineBinding::machineIds($node);
+        $machineId = $sourceMachineId ?? (!$identified && count($owners) === 1 ? $owners[0] : null);
+        if (!$machineId || !in_array($machineId, $owners, true)) return;
         $users = [];
         foreach (array_slice((array) ($sample['users'] ?? []), 0, self::USERS, true) as $id => $count) {
             if ((int) $id > 0 && is_numeric($count) && (int) $count > 0) $users[(int) $id] = min(1000000, (int) $count);
         }
-        $key = $this->key((int) $node->machine_id, $nodeId);
+        $key = $this->key($machineId, $nodeId);
         Cache::lock($key . ':lock', 3)->get(function () use ($key, $users, $sample, $at, $now): void {
             $state = json_decode((string) Cache::get($key, '{}'), true) ?: [];
             if ($at <= (int) ($state['latest_at'] ?? 0)) return;
@@ -50,7 +53,7 @@ class MachineRiskActivity
 
     public function forMachine(int $machineId, int $detectedAt): array
     {
-        $nodes = Server::query()->where('machine_id', $machineId)->where('enabled', true)->limit(33)->get(['id', 'group_ids']);
+        $nodes = \App\Services\Node\NodeMachineBinding::query($machineId)->where('enabled', true)->limit(33)->get(['id', 'group_ids']);
         $users = []; $times = []; $capped = $nodes->count() > 32; $samples = 0;
         foreach ($nodes->take(32) as $node) {
             $state = json_decode((string) Cache::get($this->key($machineId, (int) $node->id), '{}'), true) ?: [];

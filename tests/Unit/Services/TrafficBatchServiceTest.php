@@ -114,6 +114,49 @@ final class TrafficBatchServiceTest extends TestCase
         $this->assertSame(3, DB::table('v2_traffic_batch')->count());
     }
 
+    public function test_instance_totals_share_the_accounting_transaction_and_retries_never_repeat_them(): void
+    {
+        (require base_path('database/migrations/2026_11_04_000002_add_traffic_batch_reporters.php'))->up();
+        $service = new TrafficBatchService(); $node = Server::findOrFail(1);
+        $a = $service->accept($node, str_repeat('c', 32), [7 => [10, 20]], 'machine:1');
+        $b = $service->accept($node, str_repeat('d', 32), [7 => [20, 30]], 'machine:2');
+        $service->process((int) $a->id); $service->process((int) $b->id); $service->process((int) $a->id);
+        $this->assertSame(45, (int) DB::table('v2_user')->where('id', 7)->value('u'));
+        $this->assertSame(75, (int) DB::table('v2_user')->where('id', 7)->value('d'));
+        $this->assertSame(15, (int) DB::table('v2_server_instance_traffic')->where('reporter_key', 'machine:1')->value('upload'));
+        $this->assertSame(30, (int) DB::table('v2_server_instance_traffic')->where('reporter_key', 'machine:2')->value('upload'));
+        $this->assertSame($a->id, $service->accept($node, str_repeat('c', 32), [7 => [10, 20]], 'machine:1')->id);
+        $this->expectException(ConflictHttpException::class);
+        $service->accept($node, str_repeat('c', 32), [7 => [10, 20]], 'machine:2');
+    }
+
+    public function test_agent_upgrade_can_retry_old_receipts_without_reattributing_or_rebilling(): void
+    {
+        (require base_path('database/migrations/2026_11_04_000002_add_traffic_batch_reporters.php'))->up();
+        $service = new TrafficBatchService(); $node = Server::findOrFail(1);
+        $old = $service->accept($node, str_repeat('c', 32), [7 => [10, 20]], 'machine:1');
+        $retry = $service->accept($node, str_repeat('c', 32), [7 => [10, 20]], 'machine:1:' . str_repeat('a', 32));
+        $this->assertSame($old->id, $retry->id); $this->assertSame('machine:1', $retry->reporter_key);
+        $service->process((int) $old->id); $service->process((int) $retry->id);
+        $this->assertTotals(15, 30, 10, 20);
+        $this->assertSame(1, DB::table('v2_server_instance_traffic')->count());
+        $this->assertSame('machine:1', DB::table('v2_server_instance_traffic')->value('reporter_key'));
+    }
+
+    public function test_instance_statistics_failure_rolls_back_the_original_accounting_too(): void
+    {
+        (require base_path('database/migrations/2026_11_04_000002_add_traffic_batch_reporters.php'))->up();
+        $service = new TrafficBatchService();
+        $receipt = $service->accept(Server::findOrFail(1), str_repeat('c', 32), [7 => [10, 20]], 'machine:1');
+        app()->instance(\App\Services\Node\NodeInstanceTraffic::class, new class extends \App\Services\Node\NodeInstanceTraffic {
+            public function apply(array $payload): void { parent::apply($payload); throw new \RuntimeException('Synthetic instance statistic failure'); }
+        });
+        try { $service->process((int) $receipt->id); $this->fail('Failure was swallowed'); } catch (\RuntimeException) {}
+        $this->assertTotals(0, 0, 0, 0);
+        $this->assertSame(0, DB::table('v2_server_instance_traffic')->count());
+        $this->assertNull(DB::table('v2_traffic_batch')->where('id', $receipt->id)->value('processed_at'));
+    }
+
     public function test_completion_serialization_failure_retries_only_the_marker(): void
     {
         $receipt = $this->accept();

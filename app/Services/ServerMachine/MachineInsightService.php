@@ -15,13 +15,23 @@ class MachineInsightService
         $status = $snapshot['load_status'];
         $entryProtection = app(MachineEntryProtection::class)->snapshot($raw, $now);
         $entryProtection['reachability'] = $snapshot['entry_probe'];
-        $nodes = $machine->servers()->orderBy('id')->get(['id', 'name', 'type', 'updated_at']);
+        $nodes = \App\Services\Node\NodeMachineBinding::query((int) $machine->id)->orderBy('id')->get(['id', 'name', 'type', 'updated_at', 'machine_id']);
         $receipts = app(NodeRealtimeStatusService::class)->receiptsForServers($nodes->modelKeys());
+        // A receipt from another replica must never make this machine look synchronized.
+        foreach ($nodes as $node) {
+            $sources = array_values(array_filter(app(\App\Services\Node\NodeInstanceRegistry::class)->snapshot((int) $node->id), fn ($row) => (int) ($row['machine_id'] ?? 0) === (int) $machine->id));
+            if (count($sources) === 1 && !app(MachineIdentityGuard::class)->conflicted((int) $machine->id)) {
+                foreach (['config', 'users'] as $topic) $receipts[$node->id][$topic] = \Illuminate\Support\Facades\Cache::get('node_instance_receipt:' . $node->id . ':' . $sources[0]['key'] . ':' . $topic);
+            } elseif (count(\App\Services\Node\NodeMachineBinding::machineIds($node)) > 1 || count($sources) > 1 || app(MachineIdentityGuard::class)->conflicted((int) $machine->id)) {
+                $receipts[$node->id] = [];
+            }
+        }
 
         $ip = app(MachineIpHistory::class)->observe($raw, [], $now);
         $ip['tracking_since'] = data_get($raw, 'ip_observation.tracking_since');
         return [
             'machine_id' => (int) $machine->id,
+            'identity_conflict' => app(MachineIdentityGuard::class)->conflicted((int) $machine->id),
             'observed_at' => $now,
             'last_seen_at' => $machine->last_seen_at,
             'report_at' => $raw['updated_at'] ?? null,

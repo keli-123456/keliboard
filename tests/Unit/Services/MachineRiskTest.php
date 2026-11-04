@@ -238,7 +238,7 @@ final class MachineRiskTest extends TestCase
         (new \App\Jobs\UpdateAliveDataJob([$user->id => ['192.0.2.103']], 'hysteria', $this->node->id, $at - 1))->handle();
         $this->assertSame($value, Cache::get($key));
         app()->instance(MachineRiskActivity::class, new class extends MachineRiskActivity {
-            public function record(string $nodeType, int $nodeId, array $sample, float $reportedAt): void { throw new \RuntimeException('Synthetic cache outage'); }
+            public function record(string $nodeType, int $nodeId, array $sample, float $reportedAt, ?int $sourceMachineId = null, bool $identified = false): void { throw new \RuntimeException('Synthetic cache outage'); }
         });
         (new \App\Jobs\UpdateAliveDataJob([], 'hysteria', $this->node->id, $at + 1))->handle();
         $this->assertSame(0, $user->fresh()->online_count);

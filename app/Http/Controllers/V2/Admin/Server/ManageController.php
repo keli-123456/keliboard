@@ -40,6 +40,7 @@ class ManageController extends Controller
     public function getNodes(Request $request)
     {
         $servers = ServerService::getAllServers();
+        $instanceSummaries = app(\App\Services\Node\NodeInstanceRegistry::class)->summaries($servers);
         $tlsCertificatesByServer = $this->tlsCertificatesByServer(
             $servers->pluck('id')
                 ->map(fn ($id): int => (int) $id)
@@ -66,7 +67,8 @@ class ManageController extends Controller
             ? collect()
             : Server::whereIn('id', $parentIds)->get()->keyBy('id');
 
-        $servers = $servers->map(function (Server $item) use ($groups, $parents, $tlsCertificatesByServer) {
+        $servers = $servers->map(function (Server $item) use ($groups, $parents, $tlsCertificatesByServer, $instanceSummaries) {
+            $item['instance_summary'] = $instanceSummaries[(int) $item->id];
             $item['groups'] = collect((array) ($item->group_ids ?? []))
                 ->map(fn ($id) => $groups->get((int) $id))
                 ->filter()

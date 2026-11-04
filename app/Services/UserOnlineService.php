@@ -39,11 +39,12 @@ class UserOnlineService
         return self::CACHE_TTL_SECONDS;
     }
 
-    public static function nodeUsersCacheKey(string $nodeType, int $nodeId): string
+    public static function nodeUsersCacheKey(string $nodeType, int $nodeId, ?string $source = null): string
     {
         $normalizedType = strtoupper((string) preg_replace('/[^a-z0-9_:-]/i', '', $nodeType));
 
-        return self::NODE_USERS_CACHE_PREFIX . $normalizedType . '_' . max(0, $nodeId);
+        $source = \App\Services\Node\NodeReportSource::validKey($source);
+        return self::NODE_USERS_CACHE_PREFIX . $normalizedType . '_' . max(0, $nodeId) . ($source ? ':' . $source : '');
     }
 
     public static function supportsRealtimeIndex(): bool
@@ -139,7 +140,7 @@ class UserOnlineService
                             $ip => [
                                 'ip' => $ip,
                                 'last_seen' => $nodeData['lastupdateAt'],
-                                'node_type' => Str::before($nodeKey, (string) $nodeData['lastupdateAt'])
+                                'node_type' => $nodeData['node_type'] ?? Str::before($nodeKey, (string) $nodeData['lastupdateAt'])
                             ]
                         ];
                     })
@@ -539,25 +540,24 @@ class UserOnlineService
 
     private static function countAliveIps(array $ipsArray): int
     {
-        $count = 0;
+        $byNode = [];
 
-        foreach ($ipsArray as $data) {
+        foreach ($ipsArray as $key => $data) {
             if (!is_array($data) || !isset($data['aliveips']) || !is_array($data['aliveips'])) {
                 continue;
             }
 
-            $nodeIps = [];
+            $logicalNode = (string) ($data['node_key'] ?? $key);
             foreach ($data['aliveips'] as $ipNodeId) {
                 $ip = self::normalizeAliveIP((string) $ipNodeId);
                 if ($ip === '') {
                     continue;
                 }
-                $nodeIps[$ip] = true;
+                $byNode[$logicalNode][$ip] = true;
             }
-            $count += count($nodeIps);
         }
 
-        return $count;
+        return array_sum(array_map('count', $byNode));
     }
 
     private static function summarizeAliveCache(mixed $cachedData, ?int $mode = null, ?int $now = null): array

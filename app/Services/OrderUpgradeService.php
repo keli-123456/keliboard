@@ -77,14 +77,15 @@ class OrderUpgradeService
 
         unset($preview['_source_order'], $preview['_source_plan'], $preview['_tenant_context'], $preview['_target_pricing']);
         $preview['quote_token'] = $quote->token;
+        $preview['target_period'] = $periodKey;
         $preview['expires_at'] = (int) $quote->expires_at;
 
         return $preview;
     }
 
-    public function confirmUpgrade(User $user, string $quoteToken): Order
+    public function confirmUpgrade(User $user, string $quoteToken, ?int $expectedPlanId = null, ?string $expectedPeriod = null): Order
     {
-        return DB::transaction(function () use ($user, $quoteToken): Order {
+        return DB::transaction(function () use ($user, $quoteToken, $expectedPlanId, $expectedPeriod): Order {
             // Serialize the buyer before MySQL establishes a repeatable-read order snapshot.
             $user = User::whereKey($user->id)->lockForUpdate()->firstOrFail();
 
@@ -97,6 +98,13 @@ class OrderUpgradeService
 
             if (!$quote) {
                 throw new ApiException(__('Upgrade quote does not exist'));
+            }
+
+            if (($expectedPlanId !== null || $expectedPeriod !== null) &&
+                ($expectedPlanId === null || $expectedPeriod === null ||
+                    (int) $quote->target_plan_id !== $expectedPlanId ||
+                    $quote->target_period !== PlanService::getPeriodKey($expectedPeriod))) {
+                throw new ApiException(__('Upgrade quote does not match the selected plan or period'));
             }
 
             if ($quote->status !== OrderUpgradeQuote::STATUS_PENDING) {

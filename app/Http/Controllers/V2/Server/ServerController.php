@@ -61,6 +61,7 @@ class ServerController extends Controller
         $nodeType = (string) $node->type;
         $nodeId = $this->getNodeCacheServerId($node);
         $pushInterval = max(1, (int) admin_setting('server_push_interval', 60));
+        $source = \App\Services\Node\NodeReportSource::from($request);
         $cacheTime = max(300, $pushInterval * 3);
         $onlineCacheTime = max(120, $pushInterval * 3);
 
@@ -77,17 +78,19 @@ class ServerController extends Controller
         if (!empty($traffic)) {
             $userService = new UserService();
             $userService->trafficFetch($node, $nodeType, $traffic);
+            app(\App\Services\Node\NodeInstanceRegistry::class)->record($node, $request, ['last_traffic_at' => time()]);
             Cache::put(CacheKey::get('SERVER_' . strtoupper($nodeType) . '_LAST_PUSH_AT', $nodeId), time(), 3600);
         }
 
         $alive = $request->input('alive');
         if (is_array($alive)) {
-            UpdateAliveDataJob::dispatch($alive, $nodeType, $node->id);
+            app(\App\Services\Node\NodeInstanceRegistry::class)->record($node, $request, ['online_users' => count($alive), 'last_online_at' => time()]);
+            UpdateAliveDataJob::dispatch($alive, $nodeType, $node->id, null, $source['key'], $source['machine_id'], $nodeId);
             Cache::put(CacheKey::get('SERVER_' . strtoupper($nodeType) . '_LAST_PUSH_AT', $nodeId), time(), 3600);
         }
 
         $online = $request->input('online');
-        if (is_array($online)) {
+        if (is_array($online) && !$source['identified'] && count(app(\App\Services\Node\NodeInstanceRegistry::class)->snapshot((int) $node->id)) <= 1) {
             $onlineUserCount = 0;
             foreach ($online as $count) {
                 if ((int) $count > 0) {
@@ -112,6 +115,7 @@ class ServerController extends Controller
             && is_numeric(data_get($status, 'disk.total', 0))
             && is_numeric(data_get($status, 'disk.used', 0))
         ) {
+            app(\App\Services\Node\NodeInstanceRegistry::class)->recordStatus($node, $request, $status);
             $statusData = [
                 'cpu' => (float) $status['cpu'],
                 'mem' => [
@@ -128,15 +132,18 @@ class ServerController extends Controller
                 ],
                 'updated_at' => now()->timestamp,
             ];
-            cache([
+            if (count(app(\App\Services\Node\NodeInstanceRegistry::class)->snapshot((int) $node->id)) <= 1) cache([
                 CacheKey::get('SERVER_' . strtoupper($nodeType) . '_LOAD_STATUS', $nodeId) => $statusData,
                 CacheKey::get('SERVER_' . strtoupper($nodeType) . '_LAST_LOAD_AT', $nodeId) => now()->timestamp,
             ], $cacheTime);
+            else Cache::forget(CacheKey::get('SERVER_' . strtoupper($nodeType) . '_LOAD_STATUS', $nodeId));
         }
 
         $metrics = $request->input('metrics');
         if (is_array($metrics) && !empty($metrics)) {
-            Cache::put(CacheKey::get('SERVER_' . strtoupper($nodeType) . '_METRICS', $nodeId), $metrics, $cacheTime);
+            if (count(app(\App\Services\Node\NodeInstanceRegistry::class)->snapshot((int) $node->id)) <= 1) {
+                Cache::put(CacheKey::get('SERVER_' . strtoupper($nodeType) . '_METRICS', $nodeId), $metrics, $cacheTime);
+            } else Cache::forget(CacheKey::get('SERVER_' . strtoupper($nodeType) . '_METRICS', $nodeId));
         }
 
         return response()->json(['data' => true]);

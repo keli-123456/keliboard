@@ -58,6 +58,19 @@ use Illuminate\Database\Eloquent\Casts\Attribute;
  */
 class Server extends Model
 {
+    protected static function booted(): void
+    {
+        static::saving(function (Server $node): void {
+            if ($node->exists && \App\Services\Node\NodeMachineBinding::available()
+                && \Illuminate\Support\Facades\DB::table('v2_server_machine_binding')->where('server_id', $node->id)->exists()) {
+                \App\Services\Node\NodeMachineBinding::assertCompatible($node);
+            }
+        });
+        static::deleting(function (Server $node): void {
+            if (\App\Services\Node\NodeMachineBinding::available()) \Illuminate\Support\Facades\DB::table('v2_server_machine_binding')->where('server_id', $node->id)->delete();
+        });
+    }
+
     public const RUNTIME_GENERIC = 'generic';
     public const RUNTIME_V2NODE = 'v2node';
     public const TYPE_HYSTERIA = 'hysteria';

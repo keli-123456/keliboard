@@ -18,6 +18,7 @@ class MachineUpgradeQueue
             if (!$machine || !$machine->is_active) {
                 throw new RuntimeException('机器不存在或已停用', 422);
             }
+            if (app(MachineIdentityGuard::class)->conflicted($id)) throw new RuntimeException('Multiple installations share this machine credential. Assign separate machine identities before upgrading.', 409);
             if (Schema::hasTable('v2_machine_rollout_target')) {
                 $reserved = MachineRolloutTarget::where('active_machine_id', $id)->value('rollout_id');
                 if ($reserved !== null && $reserved !== $rolloutId) {

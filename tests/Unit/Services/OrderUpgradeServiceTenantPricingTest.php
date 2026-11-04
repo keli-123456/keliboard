@@ -92,6 +92,38 @@ final class OrderUpgradeServiceTenantPricingTest extends TestCase
         $this->assertSame($targetPlan->id, (int) $buyer->fresh()->plan_id);
     }
 
+    public function test_confirmation_rejects_a_quote_for_a_different_selected_plan_or_period(): void
+    {
+        [$buyer, , $target] = $this->createUpgradeableSubscription();
+        $service = app(OrderUpgradeService::class);
+        $preview = $service->previewUpgrade($buyer, $target, Plan::PERIOD_MONTHLY);
+        foreach (['plan', 'period', 'incomplete'] as $mismatch) {
+            $before = Order::count();
+            try {
+                $service->confirmUpgrade($buyer, $preview['quote_token'],
+                    $mismatch === 'plan' ? $target->id + 100 : $target->id,
+                    $mismatch === 'incomplete' ? null : ($mismatch === 'period' ? 'year_price' : 'month_price'));
+                $this->fail('A mismatched selection must not create an upgrade order.');
+            } catch (\App\Exceptions\ApiException $error) {
+                $this->assertSame('Upgrade quote does not match the selected plan or period', $error->getMessage());
+            }
+            $this->assertSame($before, Order::count());
+            $quote = \App\Models\OrderUpgradeQuote::where('token', $preview['quote_token'])->firstOrFail();
+            $this->assertSame(\App\Models\OrderUpgradeQuote::STATUS_PENDING, $quote->status);
+        }
+    }
+
+    public function test_confirmation_accepts_the_matching_legacy_period_alias(): void
+    {
+        [$buyer, , $target] = $this->createUpgradeableSubscription();
+        $service = app(OrderUpgradeService::class);
+        $preview = $service->previewUpgrade($buyer, $target, 'month_price');
+        $this->assertSame(Plan::PERIOD_MONTHLY, $preview['target_period']);
+        $order = $service->confirmUpgrade($buyer, $preview['quote_token'], $target->id, 'month_price');
+        $this->assertSame($target->id, (int) $order->plan_id);
+        $this->assertSame(Plan::PERIOD_MONTHLY, $order->period);
+    }
+
     public function test_upgrade_confirmation_locks_buyer_before_any_order_snapshot_read(): void
     {
         [$buyer, , $target] = $this->createUpgradeableSubscription();

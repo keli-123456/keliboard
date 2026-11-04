@@ -10,18 +10,21 @@ use App\Models\User;
 use App\Services\Plugin\HookManager;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use RuntimeException;
 use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 
 class TrafficBatchService
 {
-    public function accept(Server $node, mixed $reportId, mixed $traffic): object
+    public function accept(Server $node, mixed $reportId, mixed $traffic, ?string $reporterKey = null): object
     {
         $reportId = TrafficBatchPayload::reportId($reportId);
         $traffic = TrafficBatchPayload::normalize($traffic);
         $hash = TrafficBatchPayload::contentHash($traffic);
+        $reporterKey = \App\Services\Node\NodeReportSource::validKey($reporterKey);
+        $hasReporter = Schema::hasColumn('v2_traffic_batch', 'reporter_key');
         $this->assertTransactionalStorage();
-        return DB::transaction(function () use ($node, $reportId, $traffic, $hash): object {
+        return DB::transaction(function () use ($node, $reportId, $traffic, $hash, $reporterKey, $hasReporter): object {
             $this->sqliteWriteLock('v2_server', (int) $node->id);
             // Serialize admission per authenticated node, including first insertion races.
             $current = Server::query()->whereKey($node->id)->lockForUpdate()->first();
@@ -33,6 +36,13 @@ class TrafficBatchService
             if ($existing) {
                 if (!hash_equals($existing->content_hash, $hash) || $existing->node_type !== $current->type) {
                     throw new ConflictHttpException('Traffic report ID was reused with a different payload.');
+                }
+                $previousReporter = $existing->reporter_key ?? null;
+                // Adding an installation ID after an agent upgrade must not strand an older admitted batch.
+                $sameLegacyMachine = is_string($previousReporter) && preg_match('/^machine:[1-9][0-9]*$/D', $previousReporter) === 1
+                    && is_string($reporterKey) && str_starts_with($reporterKey, $previousReporter . ':');
+                if ($previousReporter !== null && $previousReporter !== $reporterKey && !$sameLegacyMachine) {
+                    throw new ConflictHttpException('Traffic receipt belongs to a different reporting instance.');
                 }
                 return $existing;
             }
@@ -51,10 +61,12 @@ class TrafficBatchService
                 TrafficBatchPayload::scale($download, $cents);
             }
             $now = time();
+            if ($reporterKey) app(\App\Services\Node\NodeInstanceTraffic::class)->totals($filtered, $cents);
             $payload = json_encode([
                 'version' => 1, 'node_id' => (int) $current->id, 'node_type' => $protocol,
                 'node_name' => (string) $current->name, 'rate_cents' => $cents,
                 'record_at' => strtotime(date('Y-m-d', $now)), 'traffic' => $filtered,
+                ...($hasReporter && $reporterKey ? ['reporter_key' => $reporterKey] : []),
             ], JSON_THROW_ON_ERROR);
             if (strlen($payload) > TrafficBatchPayload::MAX_BODY_BYTES) {
                 throw new \InvalidArgumentException('Prepared traffic exceeds batch size limit.');
@@ -64,6 +76,7 @@ class TrafficBatchService
                 'report_id' => $reportId, 'content_hash' => $hash,
                 'prepared_hash' => hash('sha256', $payload),
                 'payload' => $payload, 'created_at' => $now,
+                ...($hasReporter ? ['reporter_key' => $reporterKey] : []),
             ]);
             return DB::table('v2_traffic_batch')->where('id', $id)->first();
         }, 3);
@@ -118,6 +131,7 @@ class TrafficBatchService
             }
             $payload = $this->payload($row);
             app(TrafficBatchAccounting::class)->apply($payload);
+            app(\App\Services\Node\NodeInstanceTraffic::class)->apply($payload);
             DB::table('v2_traffic_batch')->where('id', $id)->update(['processed_at' => time()]);
         }, 3);
         // Quota invalidation can retry independently; it must never repeat accounting.
@@ -170,6 +184,7 @@ class TrafficBatchService
         }
         if ($driver === 'mysql') {
             $tables = ['v2_server', 'v2_traffic_batch', 'v2_user', 'v2_stat_user', 'v2_stat_user_node_day', 'v2_stat_server'];
+            if (Schema::hasTable('v2_server_instance_traffic')) $tables[] = 'v2_server_instance_traffic';
             $engines = DB::table('information_schema.TABLES')->where('TABLE_SCHEMA', $connection->getDatabaseName())
                 ->whereIn('TABLE_NAME', $tables)->pluck('ENGINE', 'TABLE_NAME');
             foreach ($tables as $table) {

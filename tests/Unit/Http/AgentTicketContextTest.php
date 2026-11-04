@@ -87,6 +87,42 @@ final class AgentTicketContextTest extends TestCase
         $this->assertNull($ticket->agent_domain_id);
     }
 
+    public function test_creation_returns_an_exact_ticket_id_only_when_requested_by_the_client(): void
+    {
+        foreach ([false, true] as $returnTicket) {
+            $buyer = $this->createUser('ticket-receipt-' . (int) $returnTicket . '@example.test');
+            $request = \App\Http\Requests\User\TicketSave::create('/api/v1/user/ticket/save', 'POST', [
+                'subject' => 'Local receipt test', 'level' => 1, 'message' => 'Please check', 'return_ticket' => (int) $returnTicket,
+            ]);
+            $request->setUserResolver(fn () => $buyer);
+            $response = (new \App\Http\Controllers\V1\User\TicketController())->save($request);
+            $ticket = Ticket::where('user_id', $buyer->id)->firstOrFail();
+            $this->assertSame($returnTicket ? ['id' => $ticket->id] : true, $response->getData(true)['data']);
+        }
+    }
+
+    public function test_ticket_creation_serializes_the_owner_before_reading_open_tickets(): void
+    {
+        $buyer = $this->createUser('ticket-lock@example.test');
+        $reads = [];
+        \Illuminate\Support\Facades\DB::connection()->beforeExecuting(function ($sql) use (&$reads): void {
+            if (str_starts_with(strtolower($sql), 'select')) {
+                foreach (['v2_user', 'v2_ticket'] as $table) {
+                    if (str_contains($sql, 'from "' . $table . '"')) $reads[] = $table;
+                }
+            }
+        });
+        (new TicketService())->createTicket($buyer->id, 'First', 1, 'Local test');
+        $this->assertSame('v2_user', $reads[0]);
+        try {
+            (new TicketService())->createTicket($buyer->id, 'Second', 1, 'Local test');
+            $this->fail('An open ticket must prevent duplicate creation.');
+        } catch (\App\Exceptions\ApiException $error) {
+            $this->assertSame('存在未关闭的工单', $error->getMessage());
+        }
+        $this->assertSame(1, Ticket::where('user_id', $buyer->id)->count());
+    }
+
     public function test_agent_domain_ticket_records_domain_context(): void
     {
         $agent = $this->createActiveAgent('domain-agent@example.test');

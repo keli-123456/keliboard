@@ -77,6 +77,7 @@ class AdminRoute
             ], function ($router) {
                 $router->get('/fetch', [PlanController::class, 'fetch']);
                 $router->get('/fetchStats', [PlanController::class, 'fetchStats']);
+                $router->post('/previewContent', [PlanController::class, 'previewContent']);
                 $router->post('/save', [PlanController::class, 'save']);
                 $router->post('/applyUsers', [PlanController::class, 'applyUsers']);
                 $router->post('/drop', [PlanController::class, 'drop']);
@@ -181,6 +182,8 @@ class AdminRoute
                 'prefix' => 'server/manage'
             ], function ($router) {
                 $router->get('/getNodes', [ManageController::class, 'getNodes']);
+                $router->get('/instances', [\App\Http\Controllers\V2\Admin\Server\NodeInstancesController::class, 'fetch']);
+                $router->post('/instances', [\App\Http\Controllers\V2\Admin\Server\NodeInstancesController::class, 'save']);
                 $router->get('/getOptions', [ManageController::class, 'getOptions']);
                 $router->get('/getCapabilities', [ManageController::class, 'getCapabilities']);
                 $router->get('/ech', [ManageController::class, 'echState']);

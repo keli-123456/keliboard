@@ -218,6 +218,8 @@ class TicketService
         $stored = [];
         try {
             DB::beginTransaction();
+            // Lock the owner even when there is no existing ticket row to lock yet.
+            User::whereKey($userId)->lockForUpdate()->firstOrFail();
             if (Ticket::where('status', 0)->where('user_id', $userId)->lockForUpdate()->first()) {
                 DB::rollBack();
                 throw new ApiException('存在未关闭的工单');
