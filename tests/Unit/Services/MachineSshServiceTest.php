@@ -67,6 +67,15 @@ final class MachineSshServiceTest extends TestCase
         catch (SshTerminalException $e) { $this->assertSame($reason, $e->getMessage()); }
     }
 
+    public function test_reporting_address_never_populates_or_replaces_ssh_host(): void
+    {
+        $this->machine->load_status = ['ip' => ['public_ipv4' => '192.0.2.50']];
+        $this->assertSame($this->target['host'], $this->service->profile($this->machine)['host']);
+        $this->machine->ssh_profile = null;
+        $this->assertSame('', $this->service->profile($this->machine)['host']);
+        $this->assertReason('host_not_verified', fn () => $this->issue());
+    }
+
     public function test_ticket_is_encrypted_origin_bound_one_use_and_not_in_url(): void
     {
         $packet = $this->issue();

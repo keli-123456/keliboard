@@ -97,6 +97,89 @@ final class NodeInstancesTest extends TestCase
         $this->assertFalse($registry->record($node, $this->request(str_repeat('f', 32))));
         $this->assertCount(NodeInstanceRegistry::LIMIT, $registry->snapshot($node->id));
     }
+    public function test_machine_addresses_keep_families_and_changes_with_the_reporting_installation(): void
+    {
+        $machine = $this->machine('addresses');
+        $view = app(\App\Services\ServerMachine\MachineAddressInventory::class);
+        $a = str_repeat('a', 32); $b = str_repeat('b', 32);
+        $now = time();
+        $v6 = '2606:4700:4700::1001';
+        $view->record($machine, $a, ['public_ipv4' => '1.0.0.1', 'public_ipv6' => $v6], $now - 30);
+        $view->record($machine, $a, ['public_ipv4' => '1.1.1.1', 'public_ipv6' => $v6, 'panel_seen' => $v6, 'local' => ['10.0.0.1']], $now - 20);
+        $view->record($machine, $b, ['public_ipv4' => '8.8.4.4'], $now - 10);
+        $records = $view->snapshots([$machine])[$machine->id];
+        $groups = $view->groups($records, [['reported_ip' => '192.0.2.9', 'last_seen_at' => $now]], ['ip' => ['public_ipv4' => '9.9.9.9']], true, $now);
+        $this->assertSame([$b, $a, null], array_column($groups, 'installation_id'));
+        $this->assertSame(['8.8.4.4'], array_column($groups[0]['ips'], 'ip'));
+        $this->assertSame(['1.1.1.1', $v6], array_column($groups[1]['ips'], 'ip'));
+        $this->assertSame('1.0.0.1', $groups[1]['changes'][0]['from']);
+        $this->assertSame([['ip' => '192.0.2.9', 'observed' => true]], $groups[2]['ips']);
+        $this->assertSame([], $view->groups([], [], ['ip' => ['public_ipv4' => '9.9.9.9']], true, $now));
+        $machine->token = 'rotated';
+        $this->assertSame([], $view->snapshots([$machine])[$machine->id]);
+    }
+    public function test_machine_summary_deduplicates_reporters_and_keeps_ip_history_and_traffic_separate(): void
+    {
+        (require base_path('database/migrations/2026_11_04_000002_add_traffic_batch_reporters.php'))->up();
+        $machine = $this->machine('shared'); $replica = $this->machine('replica');
+        $one = $this->node($machine->id); $two = $this->node($machine->id);
+        (new NodeMachineBinding())->replaceReplicas($two->id, [$replica->id]);
+        $registry = app(NodeInstanceRegistry::class);
+        $stable = $this->request(str_repeat('a', 32), $machine->id);
+        $legacy = $this->request('', $machine->id);
+        $registry->record($one, $stable);
+        $registry->record($two, $stable);
+        $registry->record($one, $legacy);
+        $guard = app(MachineIdentityGuard::class);
+        $this->assertFalse($guard->conflicted($machine->id), 'Same-address legacy handover alone is not a conflict');
+        $legacy->server->set('REMOTE_ADDR', '2001:db8::1'); $registry->record($one, $legacy);
+        $this->assertTrue($guard->conflicted($machine->id));
+        $this->assertTrue($guard->observe($machine->id, $stable));
+        $stable->server->set('REMOTE_ADDR', '2001:db8::2'); $registry->record($one, $stable);
+        $stable->server->set('REMOTE_ADDR', '2001:0db8::2'); $registry->record($one, $stable);
+        $registry->record($two, $this->request(str_repeat('b', 32), $replica->id));
+        $view = app(\App\Services\ServerMachine\MachineReportingInstances::class);
+        $stableKey = NodeReportSource::from($stable)['key'];
+        DB::table('v2_server_instance_traffic')->insert(['server_id' => $one->id, 'reporter_key' => $stableKey,
+            'record_at' => strtotime(date('Y-m-d')), 'upload' => 0, 'download' => 400, 'updated_at' => time()]);
+        $summaries = $view->summaries([$machine->id, $replica->id]);
+        $this->assertCount(2, $summaries[$machine->id]);
+        $this->assertCount(1, $summaries[$replica->id]);
+        $data = app(\App\Services\ServerMachine\MachineInsightService::class)->snapshot($machine);
+        $instances = collect($data['reporting_instances'])->keyBy('key');
+        $this->assertCount(2, $instances);
+        $this->assertSame(400, $instances[$stableKey]['nodes'][0]['today_download']);
+        $this->assertSame(0, $instances[$stableKey]['nodes'][0]['today_upload']);
+        $this->assertNull($instances[$stableKey]['nodes'][1]['today_download']);
+        $changes = $instances[$stableKey]['nodes'][0]['ip_changes'];
+        $this->assertCount(1, $changes);
+        $this->assertSame('203.0.113.7', $changes[0]['from']);
+        $this->assertSame('2001:db8::2', $changes[0]['to']);
+        $this->assertSame([], $instances[NodeReportSource::from($legacy)['key']]['nodes'][0]['ip_changes']);
+        $this->assertNull($instances[NodeReportSource::from($legacy)['key']]['nodes'][0]['today_download']);
+        $reports = collect($summaries[$machine->id])->keyBy('key');
+        $this->assertSame([], $view->billedToday([$machine->id => $reports[NodeReportSource::from($legacy)['key']]]));
+        $this->assertSame([], $view->billedToday([$replica->id => $summaries[$replica->id][0]]));
+        $this->assertSame([0, 400, strtotime('tomorrow')], array_values($view->billedToday([$machine->id => $reports[$stableKey]])[$machine->id]));
+        DB::table('v2_server_instance_traffic')->insert(['server_id' => $two->id, 'reporter_key' => $stableKey,
+            'record_at' => strtotime(date('Y-m-d')), 'upload' => 20, 'download' => 60, 'updated_at' => time()]);
+        $this->assertSame([20, 460, strtotime('tomorrow')], array_values($view->billedToday([$machine->id => $reports[$stableKey]])[$machine->id]));
+        $second = $this->request(str_repeat('c', 32), $machine->id);
+        $registry->record($one, $second);
+        $secondKey = NodeReportSource::from($second)['key'];
+        DB::table('v2_server_instance_traffic')->insert(['server_id' => $one->id, 'reporter_key' => $secondKey,
+            'record_at' => strtotime('today'), 'upload' => 12, 'download' => 34, 'updated_at' => time()]);
+        $sources = $view->listSources([$machine->id => [
+            ['installation_id' => str_repeat('a', 32), 'ips' => [['ip' => '2001:db8::2', 'observed' => true]], 'changes' => $changes],
+            ['installation_id' => str_repeat('c', 32), 'ips' => [['ip' => '203.0.113.7', 'observed' => true]], 'changes' => []],
+            ['installation_id' => null, 'ips' => [['ip' => '2001:db8::1', 'observed' => true]], 'changes' => []],
+        ]], $view->summaries([$machine->id]))[$machine->id];
+        $this->assertCount(2, $sources);
+        $this->assertSame([20, 460, strtotime('tomorrow')], array_values($sources[0]['billing']));
+        $this->assertSame([12, 34, strtotime('tomorrow')], array_values($sources[1]['billing']));
+        $this->assertSame('2001:db8::2', $sources[0]['change']['to']);
+        $this->assertArrayNotHasKey('change', $sources[1]);
+    }
     public function test_replica_binding_keeps_the_primary_and_authenticates_only_assigned_active_machines(): void {
         $a = $this->machine('a'); $b = $this->machine('b'); $c = $this->machine('c'); $node = $this->node($a->id);
         (new NodeMachineBinding())->replaceReplicas($node->id, [$b->id], NodeMachineBinding::revision($node));

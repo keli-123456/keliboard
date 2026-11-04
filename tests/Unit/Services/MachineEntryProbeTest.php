@@ -93,6 +93,48 @@ final class MachineEntryProbeTest extends TestCase
         $this->assertSame('unknown', $this->probe->snapshot(['updated_at' => 1000, 'entry_probe' => $old], 1000)['status']);
     }
 
+    public function test_address_result_requires_ipv4_source_and_fresh_installation_evidence(): void
+    {
+        $v4 = '1.0.0.1'; $v6 = '2606:4700:4700::1001';
+        $this->settings(['server_entry_probe_targets' => ['223.5.5.5', '119.29.29.29']]);
+        $report = $this->report(['unreachable', 'unreachable'], ['source_failures' => [$v4 => 2], 'consecutive_failures' => 2]);
+        $report['targets'][0]['source_ip'] = $v4;
+        $report['targets'][1]['source_ip'] = $v4;
+        $installation = str_repeat('a', 32);
+        $status = ['updated_at' => 1000, 'entry_probe' => $report, 'entry_probe_installation_id' => $installation];
+        $snapshot = $this->probe->snapshot($status, 1000);
+        $this->assertSame('suspected_blocked', $snapshot['status']);
+        $this->assertSame($installation, $snapshot['address_installation_id']);
+        $this->assertSame('suspected_blocked', $snapshot['addresses'][$v4]['status']);
+        $this->assertArrayNotHasKey('addresses', $this->probe->snapshot($status, 1500));
+        unset($status['entry_probe_installation_id']);
+        $this->assertArrayNotHasKey('addresses', $this->probe->snapshot($status, 1000));
+        $status['entry_probe_installation_id'] = $installation;
+        $status['entry_probe']['targets'][1]['status'] = 'error';
+        $this->assertSame('unknown', $this->probe->snapshot($status, 1000)['addresses'][$v4]['status']);
+        $status['entry_probe']['targets'][1]['source_ip'] = $v6;
+        $status['entry_probe']['targets'][1]['status'] = 'reachable';
+        $this->assertNull($this->probe->normalizeReport($status['entry_probe']));
+        $this->assertSame('unknown', $this->probe->snapshot($status, 1000)['status']);
+    }
+
+    public function test_legacy_ipv6_targets_are_not_distributed_or_counted_as_probe_evidence(): void
+    {
+        $v6 = '2606:4700:4700::1111';
+        $this->settings(['server_entry_probe_targets' => [$v6, '223.5.5.5']]);
+        $config = $this->probe->configuration();
+        $this->assertTrue($config['enabled']);
+        $this->assertSame(['223.5.5.5'], array_column($config['targets'], 'ip'));
+        $this->assertSame('reachable', $this->assess(['reachable'])['status']);
+        $legacy = $config;
+        unset($legacy['revision']);
+        array_unshift($legacy['targets'], ['id' => substr(hash('sha256', $v6), 0, 16), 'ip' => $v6]);
+        $report = $this->report(['reachable'], ['revision' => hash('sha256', json_encode($legacy, JSON_THROW_ON_ERROR))]);
+        $this->assertSame('unknown', $this->probe->snapshot(['updated_at' => 1000, 'entry_probe' => $report], 1000)['status']);
+        $this->settings(['server_entry_probe_targets' => [$v6]]);
+        $this->assertSame('unconfigured', $this->probe->snapshot([], 1000)['status']);
+    }
+
     public function test_off_unconfigured_and_invalid_storage_never_probe_or_reuse_old_success(): void
     {
         $this->settings(['server_entry_probe_enable' => false]);
@@ -116,6 +158,7 @@ final class MachineEntryProbeTest extends TestCase
             $this->assertTrue($validator->make(['server_entry_probe_targets' => [$ip]], $rules)->fails(), $ip);
         }
         $this->assertNotNull(MachineEntryProbe::publicIp('2606:4700:4700::1111'));
+        $this->assertTrue($validator->make(['server_entry_probe_targets' => ['2606:4700:4700::1111']], $rules)->fails());
         $this->assertTrue($validator->make(['server_entry_probe_targets' => array_fill(0, 9, '8.8.8.8')], $rules)->fails());
         $this->assertTrue($validator->make(['server_entry_probe_interval' => 1], $rules)->fails());
         $this->assertTrue($validator->make(['server_entry_probe_interval' => 4], $rules)->fails());

@@ -18,7 +18,7 @@ class MachineSshService
     public function profile(ServerMachine $machine): array
     {
         $profile = (array) $machine->ssh_profile;
-        return ['machine_id' => $machine->id, 'host' => $profile['host'] ?? data_get($machine->load_status, 'ip.public_ipv4', ''),
+        return ['machine_id' => $machine->id, 'host' => $profile['host'] ?? '',
             'port' => $profile['port'] ?? 22, 'username' => $profile['username'] ?? 'root',
             'fingerprint' => $profile['fingerprint'] ?? null, 'key_type' => $profile['key_type'] ?? null,
             'verified_at' => $profile['verified_at'] ?? null, 'runtime_ready' => $this->available()];

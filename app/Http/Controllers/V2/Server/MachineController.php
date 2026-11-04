@@ -125,6 +125,7 @@ class MachineController extends Controller
                 return response()->json(['message' => 'Invalid probe report'], 422);
             }
         }
+        $input['entry_probe_installation_id'] = \App\Services\Node\NodeReportSource::installation($request->header('X-Keli-Instance-Id'));
         if (!app(MachineTelemetryService::class)->receive($machine, $input)) {
             return response()->json(['message' => 'Telemetry busy'], 429);
         }
@@ -144,9 +145,7 @@ class MachineController extends Controller
         if (!is_array($payload)) {
             $payload = $request->only(['cpu', 'mem', 'swap', 'disk', 'net', 'uptime', 'version']);
         }
-        if (app(\App\Services\ServerMachine\MachineIdentityGuard::class)->observe((int) $machine->id, $request)) {
-            return response()->json(['data' => true, 'reload' => false, 'upgrade' => null, 'identity_conflict' => true]);
-        }
+        $shared = app(\App\Services\ServerMachine\MachineIdentityGuard::class)->observe((int) $machine->id, $request);
 
         $validator = Validator::make($payload, [
             'cpu' => 'nullable|numeric|min:0|max:100',
@@ -159,6 +158,15 @@ class MachineController extends Controller
         ]);
         if ($validator->fails()) {
             return response()->json(['message' => 'Invalid status payload'], 422);
+        }
+
+        $installation = \App\Services\Node\NodeReportSource::installation($request->header('X-Keli-Instance-Id'));
+        $ip = $this->buildIPStatus($request, $payload);
+        if ($installation !== null && $machine->is_active) {
+            app(\App\Services\ServerMachine\MachineAddressInventory::class)->record($machine, $installation, $ip, now()->timestamp);
+        }
+        if ($shared) {
+            return response()->json(['data' => true, 'reload' => false, 'upgrade' => null, 'identity_conflict' => true]);
         }
 
         $status = [
@@ -176,7 +184,7 @@ class MachineController extends Controller
                 'used' => (int) data_get($payload, 'disk.used', 0),
             ],
             'net' => is_array(data_get($payload, 'net')) ? data_get($payload, 'net') : null,
-            'ip' => $this->buildIPStatus($request, $payload),
+            'ip' => $ip,
             'system' => is_array(data_get($payload, 'system')) ? data_get($payload, 'system') : null,
             'uptime' => data_get($payload, 'uptime'),
             'version' => data_get($payload, 'version'),
@@ -187,6 +195,7 @@ class MachineController extends Controller
             'metrics' => is_array(data_get($payload, 'metrics')) ? data_get($payload, 'metrics') : null,
             'entry_security' => app(\App\Services\ServerMachine\MachineEntryProtection::class)->normalizeReport(data_get($payload, 'entry_security')),
             'entry_probe' => app(\App\Services\ServerMachine\MachineEntryProbe::class)->normalizeReport(data_get($payload, 'entry_probe')),
+            'entry_probe_installation_id' => $installation,
             'agent' => is_array(data_get($payload, 'agent')) ? data_get($payload, 'agent') : null,
             'node_failures' => $this->normalizeNodeFailures(data_get($payload, 'node_failures')),
             'tls_certificates' => $this->normalizeTlsCertificates(data_get($payload, 'tls_certificates')),

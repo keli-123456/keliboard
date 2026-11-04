@@ -35,6 +35,7 @@ class MachineTelemetryService
             $probeAt = $probe === null ? null : $now;
             // Repeated snapshots and older measurements must not renew probe freshness.
             if (($state['session'] ?? null) === $input['session'] && isset($state['entry_probe']) && $probe !== null
+                && ($state['entry_probe_installation_id'] ?? null) === ($input['entry_probe_installation_id'] ?? null)
                 && ($state['entry_probe'] === $probe || (($probe['state'] ?? null) === 'ready'
                     && ($state['entry_probe']['state'] ?? null) === 'ready'
                     && $probe['checked_at'] < $state['entry_probe']['checked_at']))) {
@@ -52,6 +53,7 @@ class MachineTelemetryService
                 'received_at' => $now, 'status' => $status, 'aggregate' => $aggregate,
                 'probe_reported' => array_key_exists('entry_probe', $input),
                 'entry_probe' => $probe, 'entry_probe_received_at' => $probeAt,
+                'entry_probe_installation_id' => $input['entry_probe_installation_id'] ?? null,
             ], self::TTL);
             return true;
         } finally {
@@ -84,6 +86,7 @@ class MachineTelemetryService
             if ($useFast) {
                 $status['entry_probe'] = $probe;
                 $status['entry_probe_updated_at'] = $probeAt;
+                $status['entry_probe_installation_id'] = $state['entry_probe_installation_id'] ?? null;
             }
         }
         $probeStatus = $status;

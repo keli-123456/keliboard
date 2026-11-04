@@ -29,10 +29,17 @@ class NodeInstanceRegistry
             }
             $row = $rows[$id] ?? ['first_seen_at' => time()];
             $ip = $request->ip();
+            $ip = is_string($ip) && filter_var($ip, FILTER_VALIDATE_IP) ? inet_ntop(inet_pton($ip)) : null;
+            if ($source['installation_id'] && $ip && !empty($row['reported_ip']) && $ip !== $row['reported_ip']) {
+                $row['ip_changes'] = array_slice([['from' => $row['reported_ip'], 'to' => $ip, 'at' => time()], ...($row['ip_changes'] ?? [])], 0, 8);
+            }
             $rows[$id] = array_replace($row, $source, ['last_seen_at' => time(),
-                'reported_ip' => is_string($ip) && filter_var($ip, FILTER_VALIDATE_IP) ? $ip : null],
+                'reported_ip' => $ip ?? ($row['reported_ip'] ?? null)],
                 array_intersect_key($fields, array_flip(['online_users', 'cpu', 'memory_total', 'memory_used', 'last_online_at', 'last_traffic_at', 'last_status_at'])));
             Cache::put($key, $rows, self::RETENTION);
+            if ($source['machine_id'] && count($rows) > 1) {
+                app(\App\Services\ServerMachine\MachineIdentityGuard::class)->observeNodeOverlap($source['machine_id'], $rows);
+            }
             return true;
         }); } catch (\Throwable $error) {
             \Illuminate\Support\Facades\Log::warning('Node instance observation unavailable', ['error_type' => get_class($error)]);
@@ -42,6 +49,11 @@ class NodeInstanceRegistry
 
     public function snapshot(int $nodeId): array
     {
+        return $this->snapshotRows((array) Cache::get($this->key($nodeId), []));
+    }
+
+    public function snapshotRows(array $rows): array
+    {
         $now = time();
         $ttl = UserOnlineService::nodeDataExpirySeconds();
         return array_values(array_map(function ($row) use ($now, $ttl): array {
@@ -49,7 +61,7 @@ class NodeInstanceRegistry
             $row['status_fresh'] = ($row['last_status_at'] ?? 0) >= $now - $ttl;
             if (($row['last_online_at'] ?? 0) < $now - $ttl) $row['online_users'] = null;
             return $row;
-        }, (array) Cache::get($this->key($nodeId), [])));
+        }, array_filter($rows, fn ($row) => ($row['last_seen_at'] ?? 0) >= $now - self::RETENTION)));
     }
 
     public function recordStatus(object $node, Request $request, array $status): void

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\ServerMachine;
 
+use App\Services\Node\NodeReportSource;
 use Symfony\Component\HttpFoundation\IpUtils;
 
 /** Operator-defined outbound ICMP policy, not an independent censorship diagnosis. */
@@ -28,6 +29,7 @@ class MachineEntryProbe
         foreach (is_array($raw) ? array_slice($raw, 0, 8) : [] as $value) {
             $ip = self::publicIp($value);
             if ($ip === null) { $valid = false; break; }
+            if (str_contains($ip, ':')) continue;
             $targets[$ip] = ['id' => substr(hash('sha256', $ip), 0, 16), 'ip' => $ip];
         }
         $config = ['schema' => 1, 'enabled' => $active && $valid && $targets !== [] && in_array(admin_setting('server_entry_probe_enable', false), [true, 1, '1'], true),
@@ -43,16 +45,32 @@ class MachineEntryProbe
             || !preg_match('/^[a-f0-9]{64}$/D', $report['revision']) || !is_int($report['checked_at'] ?? null)
             || !in_array($report['state'] ?? null, ['ready', 'pending', 'expired', 'error'], true)
             || !is_array($report['targets'] ?? null) || count($report['targets']) > 8) return null;
-        $rows = []; $ids = [];
+        $rows = []; $ids = []; $sources = [];
         foreach ($report['targets'] as $row) {
             if (!is_array($row) || !is_string($row['id'] ?? null) || !preg_match('/^[a-f0-9]{16}$/D', $row['id'])
                 || isset($ids[$row['id']]) || !in_array($row['status'] ?? null, ['reachable', 'unreachable', 'error'], true)) return null;
             $ids[$row['id']] = true;
-            $rows[] = ['id' => $row['id'], 'status' => $row['status']];
+            $result = ['id' => $row['id'], 'status' => $row['status']];
+            if (array_key_exists('source_ip', $row)) {
+                $source = self::publicIp($row['source_ip']);
+                if ($source === null || str_contains($source, ':')) return null;
+                $result['source_ip'] = $source;
+                $sources[$source] = true;
+            }
+            $rows[] = $result;
         }
         if (array_key_exists('consecutive_failures', $report)
             && (!is_int($report['consecutive_failures']) || $report['consecutive_failures'] < 0 || $report['consecutive_failures'] > 2)) return null;
-        return (array_key_exists('consecutive_failures', $report) ? ['consecutive_failures' => $report['consecutive_failures']] : [])
+        $failures = $report['source_failures'] ?? [];
+        if (!is_array($failures) || count($failures) > 8) return null;
+        $sourceFailures = [];
+        foreach ($failures as $source => $count) {
+            $ip = self::publicIp($source);
+            if ($ip === null || !isset($sources[$ip]) || isset($sourceFailures[$ip]) || !is_int($count) || $count < 1 || $count > 2) return null;
+            $sourceFailures[$ip] = $count;
+        }
+        return ($sourceFailures ? ['source_failures' => $sourceFailures] : [])
+            + (array_key_exists('consecutive_failures', $report) ? ['consecutive_failures' => $report['consecutive_failures']] : [])
             + ['schema' => 1, 'revision' => $report['revision'], 'checked_at' => $report['checked_at'],
             'state' => $report['state'], 'targets' => $rows];
     }
@@ -88,11 +106,35 @@ class MachineEntryProbe
         $result['reachable_targets'] = $reachable;
         $result['unreachable_targets'] = $unreachable;
         $result['unknown_targets'] = count($expected) - $reachable - $unreachable;
+        $installation = NodeReportSource::installation($status['entry_probe_installation_id'] ?? null);
+        if ($installation !== null && ($addresses = $this->addressResults($report, count($expected)))) {
+            $result['address_installation_id'] = $installation;
+            $result['addresses'] = $addresses;
+        }
         if ($reachable > 0) {
             $result['status'] = 'reachable'; $result['blocked_by_policy'] = false;
         } elseif ($unreachable === count($expected) && ($report['consecutive_failures'] ?? 2) >= 2) {
             $result['status'] = 'suspected_blocked'; $result['blocked_by_policy'] = true;
         }
         return $result;
+    }
+
+    private function addressResults(array $report, int $total): array
+    {
+        $grouped = [];
+        foreach ($report['targets'] as $row) {
+            $ip = $row['source_ip'] ?? null;
+            if (!$ip) continue;
+            $grouped[$ip][$row['status']] = ($grouped[$ip][$row['status']] ?? 0) + 1;
+        }
+        $results = [];
+        foreach ($grouped as $ip => $counts) {
+            $reachable = $counts['reachable'] ?? 0;
+            $failed = $counts['unreachable'] ?? 0;
+            $rounds = $failed === $total ? ($report['source_failures'][$ip] ?? 0) : 0;
+            $results[$ip] = ['status' => $reachable ? 'reachable' : ($rounds >= 2 ? 'suspected_blocked' : 'unknown'),
+                'reachable_targets' => $reachable, 'configured_targets' => $total, 'consecutive_failures' => $rounds];
+        }
+        return $results;
     }
 }

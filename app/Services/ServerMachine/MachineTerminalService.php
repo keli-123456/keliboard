@@ -98,6 +98,7 @@ class MachineTerminalService
             || !hash_equals($record['machine_token_hash'], hash('sha256', (string) $machine->token))) {
             throw new SshTerminalException('session_revoked', 403);
         }
+        if (app(MachineIdentityGuard::class)->conflicted((int) $machine->id)) throw new SshTerminalException('unavailable', 409);
     }
 
     public function authenticateAgent(array $record, array $frame): bool

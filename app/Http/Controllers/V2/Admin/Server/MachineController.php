@@ -12,6 +12,9 @@ use App\Services\ServerMachine\BatchBindingService;
 use App\Services\ServerMachine\MachineReleaseDistributionService;
 use App\Services\ServerMachine\MachineTelemetryService;
 use App\Services\ServerMachine\MachineInsightService;
+use App\Services\ServerMachine\MachineIdentityGuard;
+use App\Services\ServerMachine\MachineAddressInventory;
+use App\Services\ServerMachine\MachineReportingInstances;
 use App\Services\ServerMachine\MachineUpgradeQueue;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -39,14 +42,36 @@ class MachineController extends Controller
             ->adminHealthPayloads($machines->modelKeys());
 
         $replicaCounts = \App\Services\Node\NodeMachineBinding::replicaCounts();
+        $instances = app(MachineReportingInstances::class);
+        $instanceSummaries = $instances->summaries($machines->modelKeys());
+        $conflicts = app(MachineIdentityGuard::class)->conflicts($machines->modelKeys());
+        $inventory = app(MachineAddressInventory::class);
+        $addresses = $inventory->snapshots($machines);
+        $now = now()->timestamp;
+        $groupsByMachine = [];
         foreach ($machines as $machine) {
             $machine->setAttribute('servers_count', (int) $machine->servers_count + (int) ($replicaCounts[$machine->id] ?? 0));
-            $machine->setAttribute('identity_conflict', app(\App\Services\ServerMachine\MachineIdentityGuard::class)->conflicted((int) $machine->id));
+            $machine->setAttribute('identity_conflict', $conflicts[$machine->id]);
             $snapshot = app(MachineTelemetryService::class)->snapshot($machine);
+            $reporters = $instanceSummaries[$machine->id] ?? [];
+            $groups = $inventory->groups($addresses[$machine->id] ?? [], $reporters, $snapshot['load_status'], $conflicts[$machine->id], $now);
+            $groupsByMachine[$machine->id] = $groups;
+            $machine->setAttribute('reporting_instances', max(count($reporters), count($groups)));
+            $machine->setAttribute('address_group', $groups ? array_intersect_key($groups[0], array_flip(['installation_id', 'ips'])) : null);
+            $machine->setAttribute('address_count', array_sum(array_map(fn ($row) => count($row['ips']), $groups)));
             $machine->setAttribute('load_status', $snapshot['load_status']);
             $machine->setAttribute('telemetry', $snapshot['telemetry']);
             $machine->setAttribute('entry_probe', $snapshot['entry_probe']);
             $machine->setAttribute('website_proxy_health', $websiteHealth[$machine->id] ?? []);
+        }
+
+        $sources = $instances->listSources($groupsByMachine, $instanceSummaries);
+        foreach ($machines as $machine) {
+            $rows = $sources[$machine->id] ?? [];
+            $machine->setAttribute('address_billing', $rows[0]['billing'] ?? null);
+            if (isset($rows[0]['runtime'])) $machine->setAttribute('address_runtime', $rows[0]['runtime']);
+            if (isset($rows[0]['change'])) $machine->setAttribute('address_change', $rows[0]['change']);
+            if ($machine->identity_conflict || $machine->reporting_instances > 1) $machine->setAttribute('address_sources', $rows);
         }
 
         return $this->success($machines);
@@ -61,7 +86,8 @@ class MachineController extends Controller
         $machines = ServerMachine::query()->whereIn('id', $params['ids'])
             ->get(['id', 'token', 'is_active', 'last_seen_at', 'load_status']);
         $this->appendOnlineStatus($machines);
-        return $this->success($machines->map(function ($machine) {
+        $conflicts = app(MachineIdentityGuard::class)->conflicts($machines->modelKeys());
+        return $this->success($machines->map(function ($machine) use ($conflicts) {
             $snapshot = app(MachineTelemetryService::class)->snapshot($machine);
             return array_merge($machine->only([
                 'id', 'last_seen_at', 'is_online', 'online_status',
@@ -72,6 +98,7 @@ class MachineController extends Controller
                 ])),
                 'telemetry' => $snapshot['telemetry'],
                 'entry_probe' => $snapshot['entry_probe'],
+                'identity_conflict' => $conflicts[$machine->id],
             ]);
         })->values());
     }
