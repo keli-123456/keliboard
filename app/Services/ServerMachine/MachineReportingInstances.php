@@ -48,13 +48,16 @@ class MachineReportingInstances
                 $id = $group['installation_id'];
                 $reporter = $reporters[$id ?? ''] ?? null;
                 $source = ['installation_id' => $id, 'ips' => $group['ips'],
-                    'seen_until' => $reporter ? $reporter['last_seen_at'] + $ttl : null];
+                    'seen_until' => ($seen = max($reporter['last_seen_at'] ?? 0, $group['last_seen_at'] ?? 0)) ? $seen + $ttl : null];
                 if ($id !== null && $reporter) {
                     $selected[$reporter['key']] = $reporter;
                     if ($reporter['status_fresh']) $source['runtime'] = [
                         'cpu' => $reporter['cpu'] ?? null, 'memory_used' => $reporter['memory_used'] ?? null,
                         'valid_until' => $reporter['last_status_at'] + $ttl,
                     ];
+                }
+                if (isset($group['runtime']) && $group['runtime']['valid_until'] >= ($source['runtime']['valid_until'] ?? 0)) {
+                    $source['runtime'] = $group['runtime'];
                 }
                 $ips = array_column($group['ips'], 'ip');
                 foreach (array_reverse($group['changes']) as $change) {

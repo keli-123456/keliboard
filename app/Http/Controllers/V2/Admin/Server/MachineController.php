@@ -62,6 +62,7 @@ class MachineController extends Controller
             $machine->setAttribute('load_status', $snapshot['load_status']);
             $machine->setAttribute('telemetry', $snapshot['telemetry']);
             $machine->setAttribute('entry_probe', $snapshot['entry_probe']);
+            if ($machine->is_active && $machine->identity_conflict) $machine->setAttribute('address_probes', $inventory->probes($addresses[$machine->id] ?? [], $now));
             $machine->setAttribute('website_proxy_health', $websiteHealth[$machine->id] ?? []);
         }
 
@@ -87,7 +88,10 @@ class MachineController extends Controller
             ->get(['id', 'token', 'is_active', 'last_seen_at', 'load_status']);
         $this->appendOnlineStatus($machines);
         $conflicts = app(MachineIdentityGuard::class)->conflicts($machines->modelKeys());
-        return $this->success($machines->map(function ($machine) use ($conflicts) {
+        $inventory = app(MachineAddressInventory::class);
+        $addresses = $inventory->snapshots($machines->filter(fn ($machine) => $machine->is_active && $conflicts[$machine->id]));
+        $now = now()->timestamp;
+        return $this->success($machines->map(function ($machine) use ($conflicts, $inventory, $addresses, $now) {
             $snapshot = app(MachineTelemetryService::class)->snapshot($machine);
             return array_merge($machine->only([
                 'id', 'last_seen_at', 'is_online', 'online_status',
@@ -98,6 +102,7 @@ class MachineController extends Controller
                 ])),
                 'telemetry' => $snapshot['telemetry'],
                 'entry_probe' => $snapshot['entry_probe'],
+                'address_probes' => $inventory->probes($addresses[$machine->id] ?? [], $now),
                 'identity_conflict' => $conflicts[$machine->id],
             ]);
         })->values());

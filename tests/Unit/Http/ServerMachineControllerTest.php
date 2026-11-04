@@ -2263,6 +2263,42 @@ final class ServerMachineControllerTest extends TestCase
         $this->assertSame(422, $controller->telemetry(Request::create('/', 'POST', $input))->getStatusCode());
     }
 
+    public function test_shared_machine_reports_keep_probe_and_resources_isolated_without_unlocking_controls(): void
+    {
+        $this->bindSettings(['server_entry_probe_enable' => true, 'server_entry_probe_targets' => ['223.5.5.5'], 'server_entry_probe_interval' => 5]);
+        $machine = ServerMachine::create(['name' => 'shared', 'token' => 'synthetic', 'is_active' => true]);
+        $controller = new MachineController();
+        $at = now()->timestamp;
+        $a = str_repeat('a', 32); $b = str_repeat('b', 32);
+        $headers = fn ($id) => ['HTTP_X_KELI_INSTANCE_ID' => $id];
+        $status = fn ($id, $cpu) => $controller->status(Request::create('/', 'POST', [
+            'machine_id' => $machine->id, 'token' => $machine->token, 'status' => ['cpu' => $cpu,
+                'version' => 'v0.1.384', 'ip' => ['public_ipv4' => $id === $a ? '1.1.1.1' : '8.8.8.8']],
+        ], [], [], $headers($id)))->getData(true);
+        $this->assertTrue($status($a, 12)['data']);
+        $before = $machine->fresh()->load_status;
+        $shared = $status($b, 30);
+        $this->assertTrue($shared['identity_conflict']);
+        $this->assertFalse($shared['reload']); $this->assertNull($shared['upgrade']);
+        $this->assertTrue($shared['entry_probe']['enabled']);
+        $input = $this->telemetryInput($machine);
+        foreach ([$a => ['reachable', 0], $b => ['unreachable', 2]] as $id => [$state, $failures]) {
+            $input['entry_probe'] = $this->probeReport($at, [$state], $failures);
+            $response = $controller->telemetry(Request::create('/', 'POST', $input, [], [], $headers($id)));
+            $this->assertTrue($response->getData(true)['identity_conflict']);
+        }
+        $this->assertSame($before, $machine->fresh()->load_status);
+        $inventory = app(\App\Services\ServerMachine\MachineAddressInventory::class);
+        $records = $inventory->snapshots([$machine])[$machine->id];
+        $this->assertEquals(30, $records[$b]['runtime']['cpu']);
+        $this->assertSame('v0.1.384', $records[$b]['runtime']['version']);
+        $updates = (new \App\Http\Controllers\V2\Admin\Server\MachineController())->telemetry(Request::create('/', 'GET', ['ids' => [$machine->id]]))->getData(true)['data'][0];
+        $this->assertSame('reachable', $updates['address_probes'][$a]['status']);
+        $this->assertSame('suspected_blocked', $updates['address_probes'][$b]['status']);
+        $this->assertArrayNotHasKey('addresses', $updates['address_probes'][$b]);
+        $this->assertSame('unknown', $inventory->probes($records, $at + 41)[$a]['status']);
+    }
+
     public function test_repeated_or_older_probe_measurements_do_not_renew_probe_freshness(): void
     {
         $this->bindSettings(['server_entry_probe_enable' => true, 'server_entry_probe_targets' => ['223.5.5.5'], 'server_entry_probe_interval' => 5]);

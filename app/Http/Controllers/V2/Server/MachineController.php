@@ -116,9 +116,7 @@ class MachineController extends Controller
             return response()->json(['message' => 'Invalid telemetry payload'], 422);
         }
         $input = $validator->validated();
-        if (app(\App\Services\ServerMachine\MachineIdentityGuard::class)->observe((int) $machine->id, $request)) {
-            return response()->json(['data' => true, 'telemetry_version' => 1, 'identity_conflict' => true]);
-        }
+        $shared = app(\App\Services\ServerMachine\MachineIdentityGuard::class)->observe((int) $machine->id, $request);
         if (isset($input['entry_probe'])) {
             $input['entry_probe'] = app(\App\Services\ServerMachine\MachineEntryProbe::class)->normalizeReport($input['entry_probe']);
             if ($input['entry_probe'] === null) {
@@ -126,6 +124,12 @@ class MachineController extends Controller
             }
         }
         $input['entry_probe_installation_id'] = \App\Services\Node\NodeReportSource::installation($request->header('X-Keli-Instance-Id'));
+        if ($shared) {
+            if ($machine->is_active && $input['entry_probe_installation_id'] !== null && isset($input['entry_probe'])) {
+                app(\App\Services\ServerMachine\MachineAddressInventory::class)->record($machine, $input['entry_probe_installation_id'], null, now()->timestamp, [], $input['entry_probe']);
+            }
+            return response()->json(['data' => true, 'telemetry_version' => 1, 'identity_conflict' => true]);
+        }
         if (!app(MachineTelemetryService::class)->receive($machine, $input)) {
             return response()->json(['message' => 'Telemetry busy'], 429);
         }
@@ -162,11 +166,19 @@ class MachineController extends Controller
 
         $installation = \App\Services\Node\NodeReportSource::installation($request->header('X-Keli-Instance-Id'));
         $ip = $this->buildIPStatus($request, $payload);
+        $probe = app(\App\Services\ServerMachine\MachineEntryProbe::class);
+        $probeReport = $probe->normalizeReport(data_get($payload, 'entry_probe'));
         if ($installation !== null && $machine->is_active) {
-            app(\App\Services\ServerMachine\MachineAddressInventory::class)->record($machine, $installation, $ip, now()->timestamp);
+            $now = now()->timestamp;
+            $runtime = ['cpu' => isset($payload['cpu']) ? (float) $payload['cpu'] : null,
+                'memory_used' => isset($payload['mem']['used']) ? (int) $payload['mem']['used'] : null,
+                'version' => $this->statusString($payload['version'] ?? null, 80) ?: null,
+                'valid_until' => $now + \App\Services\UserOnlineService::nodeDataExpirySeconds()];
+            app(\App\Services\ServerMachine\MachineAddressInventory::class)->record($machine, $installation, $ip, $now, $runtime, $probeReport);
         }
         if ($shared) {
-            return response()->json(['data' => true, 'reload' => false, 'upgrade' => null, 'identity_conflict' => true]);
+            return response()->json(['data' => true, 'reload' => false, 'upgrade' => null, 'identity_conflict' => true,
+                'entry_probe' => $probe->configuration($machine->is_active && $installation !== null)]);
         }
 
         $status = [
@@ -194,7 +206,7 @@ class MachineController extends Controller
             'mieru_port_forward' => is_array(data_get($payload, 'mieru_port_forward')) ? data_get($payload, 'mieru_port_forward') : null,
             'metrics' => is_array(data_get($payload, 'metrics')) ? data_get($payload, 'metrics') : null,
             'entry_security' => app(\App\Services\ServerMachine\MachineEntryProtection::class)->normalizeReport(data_get($payload, 'entry_security')),
-            'entry_probe' => app(\App\Services\ServerMachine\MachineEntryProbe::class)->normalizeReport(data_get($payload, 'entry_probe')),
+            'entry_probe' => $probeReport,
             'entry_probe_installation_id' => $installation,
             'agent' => is_array(data_get($payload, 'agent')) ? data_get($payload, 'agent') : null,
             'node_failures' => $this->normalizeNodeFailures(data_get($payload, 'node_failures')),

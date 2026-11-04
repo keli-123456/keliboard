@@ -16,7 +16,7 @@ class MachineAddressInventory
         return 'machine_addresses:' . $machine->id . ':' . hash('sha256', (string) $machine->token);
     }
 
-    public function record(ServerMachine $machine, string $installation, array $status, int $now): void
+    public function record(ServerMachine $machine, string $installation, ?array $status, int $now, array $runtime = [], ?array $probe = null): void
     {
         $key = $this->key($machine);
         try {
@@ -25,7 +25,16 @@ class MachineAddressInventory
             try {
                 $rows = (array) Cache::get($key, []);
                 $previous = $rows[$installation] ?? [];
-                $rows[$installation] = $this->group($installation, $status, $now, $previous);
+                if ($status === null && (!$previous || $probe === null)) return;
+                $next = $status === null ? $previous : $this->group($installation, $status, $now, $previous) + $previous;
+                if ($status !== null) $next['runtime'] = $runtime;
+                $oldProbe = $previous['entry_probe'] ?? null;
+                if ($probe !== null && ($oldProbe === null || $probe['revision'] !== $oldProbe['revision']
+                    || ($probe['state'] === 'ready' && $probe['checked_at'] > $oldProbe['checked_at']))) {
+                    $next['entry_probe'] = $probe;
+                    $next['entry_probe_updated_at'] = $now;
+                }
+                $rows[$installation] = $next;
                 uasort($rows, fn ($a, $b) => $b['at'] <=> $a['at']);
                 Cache::put($key, array_slice($rows, 0, self::LIMIT, true), self::TTL);
             } finally {
@@ -43,6 +52,18 @@ class MachineAddressInventory
         if (!$keys) return [];
         try { $cache = Cache::many(array_values($keys)); } catch (\Throwable) { return []; }
         return array_map(fn ($key) => (array) ($cache[$key] ?? []), $keys);
+    }
+
+    public function probes(array $rows, int $now): array
+    {
+        $probe = app(MachineEntryProbe::class);
+        $results = [];
+        foreach ($rows as $id => $row) {
+            if (isset($row['entry_probe']) && ($row['at'] ?? 0) >= $now - self::TTL) {
+                $results[$id] = $probe->snapshot($row + ['entry_probe_installation_id' => $id], $now);
+            }
+        }
+        return $results;
     }
 
     public function groups(array $records, array $reporters, array $status, bool $shared, int $now): array
@@ -66,8 +87,10 @@ class MachineAddressInventory
         uasort($groups, fn ($a, $b) => ($b['at'] >= $now - 300) <=> ($a['at'] >= $now - 300)
             ?: ($b['installation_id'] !== null) <=> ($a['installation_id'] !== null) ?: $b['at'] <=> $a['at']);
         return array_values(array_map(function ($row): array {
-            return ['installation_id' => $row['installation_id'], 'ips' => array_values($row['ips']),
-                'changes' => $row['ip_observation']['changes'] ?? []];
+            $group = ['installation_id' => $row['installation_id'], 'ips' => array_values($row['ips']),
+                'changes' => $row['ip_observation']['changes'] ?? [], 'last_seen_at' => $row['at']];
+            if (isset($row['runtime'])) $group['runtime'] = $row['runtime'];
+            return $group;
         }, array_slice($groups, 0, self::LIMIT, true)));
     }
 

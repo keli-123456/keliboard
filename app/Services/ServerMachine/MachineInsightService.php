@@ -34,11 +34,13 @@ class MachineInsightService
         $ip['tracking_since'] = data_get($raw, 'ip_observation.tracking_since');
         $instances = app(MachineReportingInstances::class)->details($sourcesByNode);
         $inventory = app(MachineAddressInventory::class);
+        $addresses = $inventory->snapshots([$machine])[$machine->id] ?? [];
         return [
             'machine_id' => (int) $machine->id,
             'identity_conflict' => $conflicted,
             'reporting_instances' => $instances,
-            'address_groups' => $inventory->groups($inventory->snapshots([$machine])[$machine->id] ?? [], $instances, $status, $conflicted, $now),
+            'address_groups' => $inventory->groups($addresses, $instances, $status, $conflicted, $now),
+            'address_probes' => $machine->is_active && $conflicted ? $inventory->probes($addresses, $now) : [],
             'observed_at' => $now,
             'last_seen_at' => $machine->last_seen_at,
             'report_at' => $raw['updated_at'] ?? null,
