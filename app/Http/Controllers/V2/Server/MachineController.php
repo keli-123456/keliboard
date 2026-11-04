@@ -125,8 +125,10 @@ class MachineController extends Controller
         }
         $input['entry_probe_installation_id'] = \App\Services\Node\NodeReportSource::installation($request->header('X-Keli-Instance-Id'));
         if ($shared) {
-            if ($machine->is_active && $input['entry_probe_installation_id'] !== null && isset($input['entry_probe'])) {
-                app(\App\Services\ServerMachine\MachineAddressInventory::class)->record($machine, $input['entry_probe_installation_id'], null, now()->timestamp, [], $input['entry_probe']);
+            if ($machine->is_active && $input['entry_probe_installation_id'] !== null) {
+                app(\App\Services\ServerMachine\MachineAddressInventory::class)->record(
+                    $machine, $input['entry_probe_installation_id'], null, now()->timestamp, [], $input['entry_probe'] ?? null,
+                    $input['status']['net'] ?? null, array_intersect_key($input, ['session' => true, 'sequence' => true]));
             }
             return response()->json(['data' => true, 'telemetry_version' => 1, 'identity_conflict' => true]);
         }
@@ -174,7 +176,7 @@ class MachineController extends Controller
                 'memory_used' => isset($payload['mem']['used']) ? (int) $payload['mem']['used'] : null,
                 'version' => $this->statusString($payload['version'] ?? null, 80) ?: null,
                 'valid_until' => $now + \App\Services\UserOnlineService::nodeDataExpirySeconds()];
-            app(\App\Services\ServerMachine\MachineAddressInventory::class)->record($machine, $installation, $ip, $now, $runtime, $probeReport);
+            app(\App\Services\ServerMachine\MachineAddressInventory::class)->record($machine, $installation, $ip, $now, $runtime, $probeReport, $payload['net'] ?? null);
         }
         if ($shared) {
             return response()->json(['data' => true, 'reload' => false, 'upgrade' => null, 'identity_conflict' => true,

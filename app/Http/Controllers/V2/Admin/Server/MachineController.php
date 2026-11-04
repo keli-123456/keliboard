@@ -72,7 +72,10 @@ class MachineController extends Controller
             $machine->setAttribute('address_billing', $rows[0]['billing'] ?? null);
             if (isset($rows[0]['runtime'])) $machine->setAttribute('address_runtime', $rows[0]['runtime']);
             if (isset($rows[0]['change'])) $machine->setAttribute('address_change', $rows[0]['change']);
-            if ($machine->identity_conflict || $machine->reporting_instances > 1) $machine->setAttribute('address_sources', $rows);
+            if ($machine->identity_conflict || $machine->reporting_instances > 1) {
+                $machine->setAttribute('address_sources', $rows);
+                if ($machine->is_active) $machine->setAttribute('address_rates', $inventory->rates($addresses[$machine->id] ?? [], $now));
+            }
         }
 
         return $this->success($machines);
@@ -103,6 +106,7 @@ class MachineController extends Controller
                 'telemetry' => $snapshot['telemetry'],
                 'entry_probe' => $snapshot['entry_probe'],
                 'address_probes' => $inventory->probes($addresses[$machine->id] ?? [], $now),
+                ...($conflicts[$machine->id] ? ['address_rates' => $inventory->rates($addresses[$machine->id] ?? [], $now)] : []),
                 'identity_conflict' => $conflicts[$machine->id],
             ]);
         })->values());

@@ -16,7 +16,7 @@ class MachineAddressInventory
         return 'machine_addresses:' . $machine->id . ':' . hash('sha256', (string) $machine->token);
     }
 
-    public function record(ServerMachine $machine, string $installation, ?array $status, int $now, array $runtime = [], ?array $probe = null): void
+    public function record(ServerMachine $machine, string $installation, ?array $status, int $now, array $runtime = [], ?array $probe = null, mixed $net = null, ?array $tick = null): void
     {
         $key = $this->key($machine);
         try {
@@ -25,9 +25,17 @@ class MachineAddressInventory
             try {
                 $rows = (array) Cache::get($key, []);
                 $previous = $rows[$installation] ?? [];
-                if ($status === null && (!$previous || $probe === null)) return;
+                if ($status === null && !$previous) return;
                 $next = $status === null ? $previous : $this->group($installation, $status, $now, $previous) + $previous;
-                if ($status !== null) $next['runtime'] = $runtime;
+                if ($status !== null) {
+                    $next['runtime'] = $runtime;
+                    if ($sample = $this->network($net, $now, false)) $next['network'] = $sample;
+                } elseif ($tick !== null) {
+                    $fast = $previous['fast_network'] ?? [];
+                    if (($fast['session'] ?? null) === $tick['session'] && ($fast['sequence'] ?? 0) >= $tick['sequence']) return;
+                    // An accepted heartbeat without a rate does not refresh the last measurement.
+                    $next['fast_network'] = array_replace($this->network($net, $now, true) ?? $fast, $tick);
+                }
                 $oldProbe = $previous['entry_probe'] ?? null;
                 if ($probe !== null && ($oldProbe === null || $probe['revision'] !== $oldProbe['revision']
                     || ($probe['state'] === 'ready' && $probe['checked_at'] > $oldProbe['checked_at']))) {
@@ -64,6 +72,32 @@ class MachineAddressInventory
             }
         }
         return $results;
+    }
+
+    public function rates(array $rows, int $now): array
+    {
+        $rates = [];
+        foreach ($rows as $id => $row) {
+            $full = $row['network'] ?? [];
+            $fast = $row['fast_network'] ?? [];
+            $sample = ($fast['at'] ?? 0) >= ($full['at'] ?? 0) ? $fast : $full;
+            if (($sample['valid_until'] ?? 0) >= $now && (isset($sample['rx']) || isset($sample['tx']))) {
+                $rates[$id] = array_intersect_key($sample, ['rx' => true, 'tx' => true, 'fresh_until' => true, 'valid_until' => true]);
+            }
+        }
+        return $rates;
+    }
+
+    private function network(mixed $net, int $now, bool $fast): ?array
+    {
+        $sample = [];
+        foreach (['rx', 'tx'] as $direction) {
+            $value = is_array($net) ? ($net[$direction . '_rate'] ?? null) : null;
+            if (is_numeric($value) && is_finite((float) $value) && $value >= 0 && $value <= 1e15) {
+                $sample[$direction] = (float) $value;
+            }
+        }
+        return $sample ? $sample + ['at' => $now, 'fresh_until' => $now + ($fast ? 15 : 90), 'valid_until' => $now + ($fast ? 60 : 300)] : null;
     }
 
     public function groups(array $records, array $reporters, array $status, bool $shared, int $now): array
