@@ -38,6 +38,7 @@ class Kernel extends ConsoleKernel
         $schedule->command('machines:advance-rollouts')->everyMinute()->onOneServer()->withoutOverlapping(2);
         $schedule->command('machines:dns-sync')->everyMinute()->onOneServer()->withoutOverlapping(2);
         $schedule->command('machines:advance-cloud')->everyMinute()->onOneServer()->withoutOverlapping(2);
+        $schedule->command('machines:advance-notices')->everyMinute()->onOneServer()->withoutOverlapping(2);
         $schedule->command('check:commission')->everyMinute()->onOneServer();
         $schedule->command('agent-profit:settle')->everyFiveMinutes()->onOneServer()->withoutOverlapping(10);
         $schedule->command('check:ticket')->everyMinute()->onOneServer();

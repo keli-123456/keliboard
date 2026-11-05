@@ -241,9 +241,12 @@ class MachineCloudService
                         if ($error->getMessage() !== 'outcome_uncertain') throw $error;
                         $task->fill(['status' => 'uncertain', 'reason' => 'outcome_uncertain', 'next_check_at' => time() + 30])->save();
                     }
-                    $resource->save(); return;
+                    $resource->save();
+                    app(\App\Services\ServerMachine\MachineOperationNotifier::class)->cloud((int) $task->id);
+                    return;
                 }
                 $resource->save();
+                if ($task->status === 'dispatching') app(\App\Services\ServerMachine\MachineOperationNotifier::class)->cloud((int) $task->id);
                 $wanted = $task->action === 'shutdown' ? 'offline' : 'running';
                 if (in_array($resource->status, ['booting', 'rebooting', 'shutting_down'], true)) $task->saw_transition = true;
                 $confirmed = $resource->status === $wanted;
@@ -277,6 +280,7 @@ class MachineCloudService
             if ($status !== 'completed') { $resource->manual_hold = true; $resource->armed = false; }
             $resource->save();
         });
+        app(\App\Services\ServerMachine\MachineOperationNotifier::class)->cloud((int) $task->id);
     }
 
     public function verifyRecovery(int $id, int $revision): void
@@ -287,7 +291,9 @@ class MachineCloudService
             $resource->save();
             $after = (int) (Task::query()->find($resource->last_task_id)?->dispatched_at ?? 0);
             if ($resource->status !== 'running' || !$this->health->snapshot($resource, $after)['ready']) throw new CloudException('reports_pending');
+            $wasHeld = $resource->dns_hold;
             $resource->fill(['dns_hold' => false, 'revision' => $resource->revision + 1])->save();
+            if ($wasHeld && $resource->last_task_id) app(\App\Services\ServerMachine\MachineOperationNotifier::class)->cloud((int) $resource->last_task_id, true);
         });
     }
 

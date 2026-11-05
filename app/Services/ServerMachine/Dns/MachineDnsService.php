@@ -176,6 +176,7 @@ class MachineDnsService
                 if ($delete) { $binding->delete(); return; }
                 $binding->fill(['enabled' => $enabled, 'revision' => $binding->revision + 1,
                     'status' => $enabled ? 'pending' : 'disabled', 'last_verified_at' => null, 'next_attempt_at' => 0])->save();
+                app(\App\Services\ServerMachine\MachineOperationNotifier::class)->resetDns((int) $binding->id);
             });
         });
     }
@@ -219,7 +220,7 @@ class MachineDnsService
                     $credential = MachineDnsCredential::query()->find($binding->credential_id);
                     if (!$credential) throw new DnsException('credentials_required');
                     $desired = $this->target($binding, $machine);
-                    if ($desired === $binding->last_ip && $binding->last_verified_at > time() - 900) {
+                    if ($binding->status === 'synced' && $desired === $binding->last_ip && $binding->last_verified_at > time() - 900) {
                         $binding->fill(['status' => 'synced', 'next_attempt_at' => time() + 60])->save();
                         return;
                     }
@@ -235,6 +236,7 @@ class MachineDnsService
                         if ($before !== $desired || $binding->status !== 'synced') $this->audit('synced', $binding, $binding->credential_id, null, $before, $desired);
                         $binding->fill(['last_ip' => $desired, 'last_verified_at' => time(), 'next_attempt_at' => time() + 60, 'status' => 'synced'])->save();
                     });
+                    app(\App\Services\ServerMachine\MachineOperationNotifier::class)->dns((int) $binding->id);
                 } catch (\Throwable $error) {
                     $status = $error instanceof DnsException ? $error->getMessage() : 'sync_failed';
                     $halt = in_array($status, ['identity_changed', 'record_changed', 'record_mismatch', 'record_locked'], true);
@@ -243,6 +245,7 @@ class MachineDnsService
                         $binding->fill(['status' => $status, 'enabled' => $halt ? false : true,
                             'next_attempt_at' => time() + 300, 'revision' => $binding->revision + ($halt ? 1 : 0)])->save();
                     });
+                    app(\App\Services\ServerMachine\MachineOperationNotifier::class)->dns((int) $binding->id);
                 }
             });
         });

@@ -152,6 +152,8 @@ class AdminRoute
                 $router->get('/telemetry', [MachineController::class, 'telemetry']);
                 $router->get('/insight', [MachineController::class, 'insight']);
                 $router->get('/dns', [\App\Http\Controllers\V2\Admin\Server\MachineDnsController::class, 'fetch']);
+                $router->get('/notices', [\App\Http\Controllers\V2\Admin\Server\MachineOperationNoticeController::class, 'fetch']);
+                $router->post('/notices/policy', [\App\Http\Controllers\V2\Admin\Server\MachineOperationNoticeController::class, 'save']);
                 $router->get('/cloud', [\App\Http\Controllers\V2\Admin\Server\MachineCloudController::class, 'fetch']);
                 $router->post('/cloud/account', [\App\Http\Controllers\V2\Admin\Server\MachineCloudController::class, 'account']);
                 $router->post('/cloud/account/drop', [\App\Http\Controllers\V2\Admin\Server\MachineCloudController::class, 'dropAccount']);

@@ -237,6 +237,11 @@ class TelegramService
         );
     }
 
+    public function sendMessageWithActiveAdmins(string $message): void
+    {
+        $this->eachAdminTelegramUser(fn (int $telegramId): mixed => SendTelegramJob::dispatch($telegramId, $message), false, true);
+    }
+
     public function sendDocumentWithAdmin(string $absoluteFilePath, string $filename, ?string $caption = null, bool $isStaff = false): void
     {
         $this->eachAdminTelegramUser(
@@ -372,10 +377,11 @@ class TelegramService
         );
     }
 
-    private function eachAdminTelegramUser(callable $callback, bool $isStaff = false): void
+    private function eachAdminTelegramUser(callable $callback, bool $isStaff = false, bool $activeOnly = false): void
     {
         User::query()
             ->whereNotNull('telegram_id')
+            ->when($activeOnly, fn($query) => $query->where('banned', false))
             ->where(
                 fn ($query) => $query->where('is_admin', 1)
                     ->when($isStaff, fn ($query) => $query->orWhere('is_staff', 1))
