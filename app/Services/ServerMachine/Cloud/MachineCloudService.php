@@ -40,6 +40,32 @@ class MachineCloudService
             'tasks' => Task::query()->orderByDesc('id')->limit(100)->get()];
     }
 
+    public function listSummaries(iterable $machines): array
+    {
+        if (!$this->available()) return [];
+        $authorities = [];
+        foreach ($machines as $machine) $authorities[$machine->id] = hash('sha256', (string) $machine->token);
+        if (!$authorities) return [];
+        $resources = Resource::query()->whereIn('machine_id', array_keys($authorities))->whereNotNull('installation_id')->get();
+        $tasks = Task::query()->whereIn('id', $resources->pluck('last_task_id')->filter())->get()->keyBy('id');
+        $result = [];
+        foreach ($resources as $resource) {
+            if (!NodeReportSource::installation($resource->installation_id)
+                || !hash_equals($authorities[$resource->machine_id], (string) $resource->machine_authority)) continue;
+            $task = $tasks->get($resource->last_task_id);
+            // Only local, explicitly selected fields; a list read must never contact the provider.
+            $result[$resource->machine_id][] = [
+                'id' => $resource->id, 'installation_id' => $resource->installation_id, 'provider' => 'linode',
+                'external_id' => $resource->external_id, 'label' => $resource->label, 'region' => $resource->region,
+                'status' => $resource->status, 'observed_at' => $resource->observed_at,
+                'auto_boot' => $resource->auto_boot, 'dns_hold' => $resource->dns_hold,
+                'recovery_status' => $resource->recovery_status,
+                'task' => $task && $task->resource_id === $resource->id ? $task->only(['id', 'action', 'status', 'reason', 'created_at']) : null,
+            ];
+        }
+        return $result;
+    }
+
     public function saveAccount(array $input): Account
     {
         return $this->lock('account:' . ($input['id'] ?? 'new'), function () use ($input) {

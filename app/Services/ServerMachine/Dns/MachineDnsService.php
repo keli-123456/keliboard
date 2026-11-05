@@ -56,6 +56,52 @@ class MachineDnsService
         return Cache::lock('machine-dns:' . $key, 90)->block(2, $work);
     }
 
+    public function catalog(array $input, bool $records): array
+    {
+        $credential = MachineDnsCredential::query()->findOrFail($input['credential_id']);
+        $page = (int) ($input['page'] ?? 1);
+        $search = trim((string) ($input['search'] ?? ''));
+        if ($page < 1 || $page > 10000 || strlen($search) > 253) throw new DnsException('invalid_record');
+        if (!$records) return $this->provider->zones($credential, $page, $search);
+        $zone = strtolower(rtrim($input['zone'], '.'));
+        $this->validateZone($credential, $zone);
+        if (!in_array($input['type'], ['A', 'AAAA'], true)) throw new DnsException('invalid_record');
+        return $this->provider->records($credential, $zone, $input['type'], $page, $search);
+    }
+
+    public function preview(array $input): array
+    {
+        $credential = MachineDnsCredential::query()->findOrFail($input['credential_id']);
+        $machine = ServerMachine::query()->findOrFail($input['machine_id']);
+        $binding = $this->bindingDraft($input, $credential, $machine);
+        if (MachineDnsBinding::query()->where('record_scope', $binding->record_scope)->exists()) throw new DnsException('record_in_use');
+        $target = $this->target($binding, $machine);
+        $record = $this->provider->inspect($credential, $binding);
+        $this->assertRecord($binding, $record);
+        return ['current_ip' => $this->literal($record['content'], $binding->type), 'target_ip' => $target,
+            'credential_revision' => $credential->revision, 'checked_at' => time(),
+            'source_seen_at' => $this->addresses->snapshots([$machine])[$machine->id][$binding->installation_id]['at'] ?? null,
+            'ttl' => $record['ttl'], 'proxied' => $record['proxied'] ?? false, 'line' => $record['line'] ?? null];
+    }
+
+    private function validateZone(MachineDnsCredential $credential, string $zone): void
+    {
+        if ($credential->provider === 'cloudflare' ? !preg_match('/^[a-f0-9]{32}$/D', $zone) : !$this->hostname($zone)) throw new DnsException('invalid_record');
+    }
+
+    private function bindingDraft(array $input, MachineDnsCredential $credential, ServerMachine $machine): MachineDnsBinding
+    {
+        $hostname = strtolower(rtrim($input['hostname'], '.'));
+        $zone = strtolower(rtrim($input['zone'], '.'));
+        $this->validateZone($credential, $zone);
+        if (!$this->hostname($hostname) || !NodeReportSource::installation($input['installation_id']) || !in_array($input['type'], ['A', 'AAAA'], true)
+            || !preg_match($credential->provider === 'cloudflare' ? '/^[a-f0-9]{32}$/D' : '/^[0-9]{1,40}$/D', $input['record_id'])
+            || ($credential->provider !== 'cloudflare' && $hostname !== $zone && !str_ends_with($hostname, '.' . $zone))) throw new DnsException('invalid_record');
+        return new MachineDnsBinding(array_intersect_key($input, array_flip(['credential_id', 'machine_id', 'installation_id', 'record_id', 'type']))
+            + ['hostname' => $hostname, 'zone' => $zone, 'record_scope' => hash('sha256', $credential->provider . ':' . $zone . ':' . $input['record_id']),
+                'machine_authority' => $this->authority($machine)]);
+    }
+
     public function saveCredential(array $input, int $admin): array
     {
         return $this->lock('credential:' . ($input['id'] ?? 'new'), function () use ($input, $admin) {
@@ -96,22 +142,20 @@ class MachineDnsService
             $credential = MachineDnsCredential::query()->findOrFail($input['credential_id']);
             if (MachineDnsBinding::query()->count() >= 500) throw new DnsException('limit_reached');
             $machine = ServerMachine::query()->findOrFail($input['machine_id']);
-            $hostname = strtolower(rtrim($input['hostname'], '.'));
-            $zone = strtolower(rtrim($input['zone'], '.'));
-            if (!$this->hostname($hostname) || !NodeReportSource::installation($input['installation_id'])) throw new DnsException('invalid_record');
-            if ($credential->provider === 'cloudflare') {
-                if (!preg_match('/^[a-f0-9]{32}$/D', $zone) || !preg_match('/^[a-f0-9]{32}$/D', $input['record_id'])) throw new DnsException('invalid_record');
-            } elseif (!$this->hostname($zone) || !preg_match('/^[0-9]{1,40}$/D', $input['record_id'])
-                || ($hostname !== $zone && !str_ends_with($hostname, '.' . $zone))) throw new DnsException('invalid_record');
-            $scope = hash('sha256', $credential->provider . ':' . $zone . ':' . $input['record_id']);
-            return $this->lock('record:' . $scope, function () use ($input, $admin, $credential, $machine, $hostname, $zone, $scope) {
-                if (MachineDnsBinding::query()->where('record_scope', $scope)->exists()) throw new DnsException('record_in_use');
-                $binding = new MachineDnsBinding(array_intersect_key($input, array_flip(['credential_id', 'machine_id', 'installation_id', 'record_id', 'type']))
-                    + ['hostname' => $hostname, 'zone' => $zone, 'record_scope' => $scope, 'machine_authority' => $this->authority($machine)]);
-                $this->target($binding, $machine);
+            $binding = $this->bindingDraft($input, $credential, $machine);
+            return $this->lock('record:' . $binding->record_scope, function () use ($input, $admin, $credential, $machine, $binding) {
+                if (MachineDnsBinding::query()->where('record_scope', $binding->record_scope)->exists()) throw new DnsException('record_in_use');
+                $target = $this->target($binding, $machine);
                 $record = $this->provider->inspect($credential, $binding);
                 $this->assertRecord($binding, $record);
-                $binding->fill(['last_ip' => $this->literal($record['content'], $binding->type), 'enabled' => false,
+                $current = $this->literal($record['content'], $binding->type);
+                if (isset($input['preview_checked_at'])) {
+                    if ($input['preview_checked_at'] < time() - 120 || $input['preview_checked_at'] > time() + 30) throw new DnsException('preview_expired');
+                    if ($credential->revision !== $input['credential_revision']) throw new DnsException('config_changed');
+                    if ($current !== $this->literal($input['expected_current_ip'], $binding->type)) throw new DnsException('preview_record_changed');
+                    if ($target !== $this->literal($input['expected_target_ip'], $binding->type)) throw new DnsException('source_changed');
+                }
+                $binding->fill(['last_ip' => $current, 'enabled' => false,
                     'status' => 'disabled', 'revision' => 1, 'last_verified_at' => time()]);
                 DB::transaction(function () use ($binding, $admin) {
                     $binding->save();

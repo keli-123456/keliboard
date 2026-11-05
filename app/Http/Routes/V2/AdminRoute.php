@@ -162,6 +162,9 @@ class AdminRoute
                 $router->post('/cloud/cancel', [\App\Http\Controllers\V2\Admin\Server\MachineCloudController::class, 'cancel']);
                 $router->post('/cloud/verify', [\App\Http\Controllers\V2\Admin\Server\MachineCloudController::class, 'verify']);
                 $router->get('/dns/instances', [\App\Http\Controllers\V2\Admin\Server\MachineDnsController::class, 'instances']);
+                $router->get('/dns/zones', [\App\Http\Controllers\V2\Admin\Server\MachineDnsController::class, 'zones']);
+                $router->get('/dns/records', [\App\Http\Controllers\V2\Admin\Server\MachineDnsController::class, 'records']);
+                $router->post('/dns/preview', [\App\Http\Controllers\V2\Admin\Server\MachineDnsController::class, 'preview']);
                 $router->post('/dns/credential', [\App\Http\Controllers\V2\Admin\Server\MachineDnsController::class, 'credential']);
                 $router->post('/dns/credential/drop', [\App\Http\Controllers\V2\Admin\Server\MachineDnsController::class, 'dropCredential']);
                 $router->post('/dns/binding', [\App\Http\Controllers\V2\Admin\Server\MachineDnsController::class, 'binding']);

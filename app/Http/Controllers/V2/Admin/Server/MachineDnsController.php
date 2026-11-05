@@ -29,6 +29,41 @@ class MachineDnsController extends Controller
         return $this->run($request, $service, fn () => $service->instances($data['machine_id']));
     }
 
+    public function zones(Request $request, MachineDnsService $service)
+    {
+        return $this->catalog($request, $service, false);
+    }
+
+    public function records(Request $request, MachineDnsService $service)
+    {
+        return $this->catalog($request, $service, true);
+    }
+
+    private function catalog(Request $request, MachineDnsService $service, bool $records)
+    {
+        return $this->run($request, $service, function () use ($request, $service, $records) {
+            if (!$service->available()) throw new DnsException('migration_required');
+            $data = $request->validate(['credential_id' => 'required|integer|min:1', 'page' => 'sometimes|integer|min:1|max:10000',
+                'search' => 'nullable|string|max:253'] + ($records ? ['zone' => 'required|string|max:253', 'type' => 'required|in:A,AAAA'] : []));
+            return $service->catalog($data, $records);
+        });
+    }
+
+    public function preview(Request $request, MachineDnsService $service)
+    {
+        return $this->run($request, $service, function () use ($request, $service) {
+            if (!$service->available()) throw new DnsException('migration_required');
+            return $service->preview($request->validate($this->bindingRules()));
+        });
+    }
+
+    private function bindingRules(): array
+    {
+        return ['credential_id' => 'required|integer|min:1', 'machine_id' => 'required|integer|min:1',
+            'installation_id' => 'required|string|regex:/^[a-f0-9]{32}$/D', 'zone' => 'required|string|max:253',
+            'record_id' => 'required|string|max:64', 'hostname' => 'required|string|max:253', 'type' => 'required|in:A,AAAA'];
+    }
+
     public function credential(Request $request, MachineDnsService $service)
     {
         $data = $request->validate(['id' => 'sometimes|integer|min:1', 'expected_revision' => 'required_with:id|integer|min:1',
@@ -51,9 +86,10 @@ class MachineDnsController extends Controller
 
     public function binding(Request $request, MachineDnsService $service)
     {
-        $data = $request->validate(['credential_id' => 'required|integer|min:1', 'machine_id' => 'required|integer|min:1',
-            'installation_id' => 'required|string|regex:/^[a-f0-9]{32}$/D', 'zone' => 'required|string|max:253',
-            'record_id' => 'required|string|max:64', 'hostname' => 'required|string|max:253', 'type' => 'required|in:A,AAAA']);
+        $data = $request->validate($this->bindingRules() + [
+            'preview_checked_at' => 'required_with:expected_current_ip,expected_target_ip,credential_revision|integer|min:1',
+            'expected_current_ip' => 'required_with:preview_checked_at|ip', 'expected_target_ip' => 'required_with:preview_checked_at|ip',
+            'credential_revision' => 'required_with:preview_checked_at|integer|min:1']);
         return $this->run($request, $service, fn () => $service->createBinding($data, (int) $request->user()->id));
     }
 

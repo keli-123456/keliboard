@@ -129,6 +129,59 @@ class MachineCloudTest extends TestCase
         $this->assertStringNotContainsString('credentials', json_encode($this->service->overview()));
         $this->assertFalse($this->resource->auto_boot); $this->assertTrue($this->resource->manual_hold);
     }
+
+    public function test_machine_list_cloud_summaries_are_local_read_only_and_scoped_to_full_installation(): void
+    {
+        $this->bind();
+        $other = $this->resource->replicate();
+        $other->fill(['external_id' => '456', 'label' => 'Second VM', 'installation_id' => str_repeat('b', 32),
+            'status' => 'offline', 'observed_at' => time() - 400])->save();
+        $this->fake();
+        $summary = $this->service->listSummaries([$this->machine]);
+        $rows = $summary[$this->machine->id];
+        $this->assertCount(2, $rows);
+        $byInstance = array_column($rows, null, 'installation_id');
+        $this->assertSame('running', $byInstance[$this->instance]['status']);
+        $this->assertSame('offline', $byInstance[str_repeat('b', 32)]['status']);
+        $this->assertSame('jp-osa', $rows[0]['region']);
+        $this->assertFalse($rows[0]['auto_boot']);
+        $this->assertArrayNotHasKey('machine_authority', $rows[0]);
+        $this->assertArrayNotHasKey('account_id', $rows[0]);
+        $this->assertStringNotContainsString('synthetic-cloud-token', json_encode($summary));
+        $this->assertSame([], $this->service->listSummaries([]));
+        Http::assertNothingSent(); Bus::assertNothingDispatched();
+    }
+
+    public function test_list_summary_never_attaches_an_old_binding_to_a_new_machine_authority(): void
+    {
+        $this->bind();
+        $this->machine->token = 'new-machine-identity'; $this->machine->save();
+        $this->fake();
+        $this->assertSame([], $this->service->listSummaries([$this->machine]));
+        $this->resource->installation_id = null; $this->resource->save();
+        $this->assertSame([], $this->service->listSummaries([$this->machine]));
+        Http::assertNothingSent();
+    }
+
+    public function test_list_summary_exposes_only_its_own_latest_task_without_private_request_or_admin_fields(): void
+    {
+        $this->bind(); $task = $this->queue(); $this->fake();
+        $row = $this->service->listSummaries([$this->machine])[$this->machine->id][0];
+        $this->assertSame($task->id, $row['task']['id']);
+        $this->assertSame('queued', $row['task']['status']);
+        $this->assertArrayNotHasKey('request_key', $row['task']);
+        $this->assertArrayNotHasKey('admin_id', $row['task']);
+        $task->resource_id = 999; $task->save();
+        $this->assertNull($this->service->listSummaries([$this->machine])[$this->machine->id][0]['task']);
+        Http::assertNothingSent();
+    }
+
+    public function test_list_summary_is_empty_before_cloud_migration(): void
+    {
+        Schema::drop('v2_machine_cloud_task');
+        $this->fake();
+        $this->assertSame([], $this->service->listSummaries([$this->machine])); Http::assertNothingSent();
+    }
     public function test_blank_account_edit_keeps_token_but_disarms_policy(): void
     {
         $this->readyToRecover();

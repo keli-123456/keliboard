@@ -76,6 +76,139 @@ class MachineDnsTest extends TestCase
             'hostname' => 'node.example.com', 'type' => 'A'], 7);
     }
 
+    private function input(): array
+    {
+        return ['credential_id' => $this->credential->id, 'machine_id' => $this->machine->id,
+            'installation_id' => $this->instance, 'zone' => $this->zone, 'record_id' => $this->record,
+            'hostname' => 'node.example.com', 'type' => 'A'];
+    }
+
+    private function previewInput(): array
+    {
+        $this->fake(['api.cloudflare.com/*' => Http::response(['success' => true, 'result' => $this->remote()])]);
+        $preview = $this->service->preview($this->input());
+        return $this->input() + ['preview_checked_at' => $preview['checked_at'], 'credential_revision' => $preview['credential_revision'],
+            'expected_current_ip' => $preview['current_ip'], 'expected_target_ip' => $preview['target_ip']];
+    }
+
+    public function test_preview_is_read_only_and_returns_current_and_same_installation_target(): void
+    {
+        $input = $this->previewInput();
+        $this->assertSame('1.1.1.1', $input['expected_current_ip']);
+        $this->assertSame('8.8.8.8', $input['expected_target_ip']);
+        $this->assertSame(0, MachineDnsBinding::query()->count());
+        $this->assertSame(0, DB::table('v2_machine_dns_log')->count());
+        Http::assertSentCount(1); Http::assertSent(fn ($request) => $request->method() === 'GET');
+        $binding = $this->service->createBinding($input, 7);
+        $this->assertFalse($binding->enabled);
+        Http::assertNotSent(fn ($request) => $request->method() !== 'GET'); Bus::assertNothingDispatched();
+    }
+
+    public function test_save_rechecks_dns_after_preview_and_refuses_a_changed_address(): void
+    {
+        $input = $this->previewInput();
+        $this->fake(['api.cloudflare.com/*' => Http::response(['success' => true, 'result' => $this->remote('9.9.9.9')])]);
+        try { $this->service->createBinding($input, 7); $this->fail('Changed record must be previewed again'); }
+        catch (DnsException $error) { $this->assertSame('preview_record_changed', $error->getMessage()); }
+        $this->assertSame(0, MachineDnsBinding::query()->count());
+        Http::assertNotSent(fn ($request) => $request->method() !== 'GET');
+    }
+
+    public function test_save_rechecks_source_credential_and_preview_age(): void
+    {
+        $input = $this->previewInput();
+        $this->report('9.9.9.9');
+        try { $this->service->createBinding($input, 7); $this->fail('Changed target must be previewed again'); }
+        catch (DnsException $error) { $this->assertSame('source_changed', $error->getMessage()); }
+        $this->report('8.8.8.8');
+        $this->credential->revision = 2; $this->credential->save();
+        try { $this->service->createBinding($input, 7); $this->fail('Changed credential must be previewed again'); }
+        catch (DnsException $error) { $this->assertSame('config_changed', $error->getMessage()); }
+        $input['credential_revision'] = 2; $input['preview_checked_at'] = time() - 121;
+        try { $this->service->createBinding($input, 7); $this->fail('Expired preview'); }
+        catch (DnsException $error) { $this->assertSame('preview_expired', $error->getMessage()); }
+        $input['preview_checked_at'] = time() + 31;
+        try { $this->service->createBinding($input, 7); $this->fail('Future preview'); }
+        catch (DnsException $error) { $this->assertSame('preview_expired', $error->getMessage()); }
+        $this->assertSame(0, MachineDnsBinding::query()->count());
+    }
+
+    public function test_catalog_pages_are_bounded_and_only_return_selected_fields(): void
+    {
+        $this->fake(['api.cloudflare.com/*' => Http::response(['success' => true, 'result' => [
+            ['id' => $this->zone, 'name' => 'Example.COM', 'private_metadata' => 'do-not-return'],
+        ], 'result_info' => ['total_pages' => 3]])]);
+        $result = $this->service->catalog(['credential_id' => $this->credential->id, 'page' => 2, 'search' => 'example.com'], false);
+        $this->assertSame(['items' => [['id' => $this->zone, 'name' => 'example.com']], 'page' => 2, 'has_more' => true], $result);
+        Http::assertSentCount(1);
+        Http::assertSent(fn ($request) => $request->method() === 'GET' && str_starts_with($request->url(), 'https://api.cloudflare.com/client/v4/zones?')
+            && $request['page'] === 2 && $request['per_page'] === 50 && $request['name'] === 'example.com');
+        $this->assertStringNotContainsString('synthetic-dns-token', json_encode($result));
+    }
+
+    public function test_cloudflare_record_catalog_filters_family_and_does_not_expose_extra_metadata(): void
+    {
+        $this->fake(['api.cloudflare.com/*' => Http::response(['success' => true, 'result' => [$this->remote() + ['comment' => 'private-comment']], 'result_info' => ['total_pages' => 1]])]);
+        $result = $this->service->catalog(['credential_id' => $this->credential->id, 'zone' => $this->zone, 'type' => 'A', 'search' => 'node'], true);
+        $this->assertSame('node.example.com', $result['items'][0]['hostname']);
+        $this->assertFalse($result['items'][0]['locked']);
+        $this->assertStringNotContainsString('private-comment', json_encode($result));
+        Http::assertSent(fn ($request) => $request['type'] === 'A' && $request['name.contains'] === 'node' && $request->method() === 'GET');
+    }
+
+    public function test_unsupported_wildcard_or_private_records_are_disabled_not_a_broken_catalog(): void
+    {
+        $this->fake(['api.cloudflare.com/*' => Http::response(['success' => true, 'result' => [
+            array_replace($this->remote(), ['name' => '*.example.com']),
+            array_replace($this->remote(), ['id' => str_repeat('d', 32), 'content' => '127.0.0.1']),
+        ], 'result_info' => ['total_pages' => 1]])]);
+        $result = $this->service->catalog(['credential_id' => $this->credential->id, 'zone' => $this->zone, 'type' => 'A'], true);
+        $this->assertTrue($result['items'][0]['locked']); $this->assertTrue($result['items'][1]['locked']);
+    }
+
+    public function test_aliyun_catalog_uses_signed_read_operations_and_keeps_record_line(): void
+    {
+        $credential = MachineDnsCredential::query()->create(['name' => 'Ali synthetic', 'provider' => 'aliyun',
+            'credentials' => ['access_key_id' => 'synthetic-id', 'access_key_secret' => 'synthetic-secret'], 'revision' => 1]);
+        $this->fake(['alidns.aliyuncs.com/*' => Http::sequence()->push(['Domains' => ['Domain' => [['DomainName' => 'example.com']]], 'TotalCount' => 51])
+            ->push(['DomainRecords' => ['Record' => [['RecordId' => '123', 'DomainName' => 'example.com', 'RR' => '@', 'Type' => 'AAAA',
+                'Value' => '2606:4700:4700::1111', 'TTL' => 600, 'Line' => 'telecom', 'Status' => 'ENABLE']]], 'TotalCount' => 1])]);
+        $zones = $this->service->catalog(['credential_id' => $credential->id, 'search' => 'example'], false);
+        $this->assertTrue($zones['has_more']); $this->assertSame('example.com', $zones['items'][0]['id']);
+        $records = $this->service->catalog(['credential_id' => $credential->id, 'zone' => 'example.com', 'type' => 'AAAA'], true);
+        $this->assertSame('telecom', $records['items'][0]['line']);
+        $this->assertSame('example.com', $records['items'][0]['hostname']);
+        Http::assertSent(fn ($request) => $request['Action'] === 'DescribeDomainRecords' && $request['TypeKeyWord'] === 'AAAA' && $request['PageSize'] === 50 && isset($request['Signature']));
+        Http::assertNotSent(fn ($request) => !in_array($request['Action'], ['DescribeDomains', 'DescribeDomainRecords'], true));
+    }
+
+    public function test_catalog_never_uses_untrusted_paths_and_masks_malformed_provider_errors(): void
+    {
+        $this->fake();
+        foreach ([['zone' => '../../secrets', 'type' => 'A'], ['zone' => $this->zone, 'type' => 'TXT'], ['page' => 10001]] as $patch) {
+            try { $this->service->catalog($patch + ['credential_id' => $this->credential->id], isset($patch['zone'])); $this->fail('Invalid catalog parameters'); }
+            catch (DnsException $error) { $this->assertSame('invalid_record', $error->getMessage()); }
+        }
+        Http::assertNothingSent();
+        foreach ([['success' => true, 'result' => [], 'result_info' => ['total_pages' => 'bad']], ['success' => true, 'result' => ['not-a-list'], 'result_info' => ['total_pages' => 1]]] as $body) {
+            $this->fake(['api.cloudflare.com/*' => Http::response($body)]);
+            try { $this->service->catalog(['credential_id' => $this->credential->id], false); $this->fail('Invalid provider body'); }
+            catch (DnsException $error) { $this->assertSame('provider_rejected', $error->getMessage()); }
+        }
+    }
+
+    public function test_catalog_and_preview_require_admin_before_contacting_provider(): void
+    {
+        $this->fake();
+        foreach (['zones', 'records', 'preview'] as $action) {
+            $request = Request::create('/dns/' . $action, 'GET');
+            $request->setUserResolver(fn () => (object) ['is_admin' => false]);
+            try { (new MachineDnsController())->$action($request, $this->service); $this->fail('Admin only'); }
+            catch (\Symfony\Component\HttpKernel\Exception\HttpException $error) { $this->assertSame(403, $error->getStatusCode()); }
+        }
+        Http::assertNothingSent();
+    }
+
     private function enable(MachineDnsBinding $binding): MachineDnsBinding
     {
         $this->service->changeBinding($binding->id, $binding->revision, true, false, 7);

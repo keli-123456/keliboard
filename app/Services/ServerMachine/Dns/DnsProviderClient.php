@@ -9,16 +9,78 @@ use Illuminate\Support\Facades\Http;
 
 class DnsProviderClient
 {
-    public function inspect(MachineDnsCredential $credential, MachineDnsBinding $binding): array
+    public function zones(MachineDnsCredential $credential, int $page, string $search): array
     {
         if ($credential->provider === 'cloudflare') {
-            $record = $this->cloudflare($credential, $binding, 'GET');
+            $json = $this->cloudflareRequest($credential, 'GET', '/zones', [],
+                ['page' => $page, 'per_page' => 50, 'order' => 'name'] + ($search === '' ? [] : ['name' => $search]));
+            $rows = $json['result'];
+            $more = $this->hasMore($json['result_info']['total_pages'] ?? null, $page);
+        } else {
+            $json = $this->aliyun($credential, 'DescribeDomains', ['PageNumber' => $page, 'PageSize' => 50]
+                + ($search === '' ? [] : ['KeyWord' => $search]));
+            $rows = $json['Domains']['Domain'] ?? null;
+            $more = $this->hasMore($json['TotalCount'] ?? null, $page, 50);
+        }
+        $this->assertList($rows);
+        $items = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) throw new DnsException('provider_rejected');
+            $name = $this->domain($row[$credential->provider === 'cloudflare' ? 'name' : 'DomainName'] ?? null);
+            $id = $credential->provider === 'cloudflare' ? ($row['id'] ?? '') : $name;
+            if (!is_string($id) || ($credential->provider === 'cloudflare' && !preg_match('/^[a-f0-9]{32}$/D', $id))) throw new DnsException('provider_rejected');
+            $items[] = ['id' => $id, 'name' => $name];
+        }
+        return ['items' => $items, 'page' => $page, 'has_more' => $more];
+    }
+
+    public function records(MachineDnsCredential $credential, string $zone, string $type, int $page, string $search): array
+    {
+        if ($credential->provider === 'cloudflare') {
+            $json = $this->cloudflareRequest($credential, 'GET', '/zones/' . $zone . '/dns_records', [],
+                ['page' => $page, 'per_page' => 50, 'type' => $type, 'order' => 'name'] + ($search === '' ? [] : ['name.contains' => $search]));
+            $rows = $json['result'];
+            $more = $this->hasMore($json['result_info']['total_pages'] ?? null, $page);
+        } else {
+            $json = $this->aliyun($credential, 'DescribeDomainRecords', ['DomainName' => $zone, 'TypeKeyWord' => $type,
+                'PageNumber' => $page, 'PageSize' => 50] + ($search === '' ? [] : ['RRKeyWord' => $search]));
+            $rows = $json['DomainRecords']['Record'] ?? null;
+            $more = $this->hasMore($json['TotalCount'] ?? null, $page, 50);
+        }
+        $this->assertList($rows);
+        $items = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) throw new DnsException('provider_rejected');
+            $record = $this->normalize($credential, $row);
+            $id = $row[$credential->provider === 'cloudflare' ? 'id' : 'RecordId'] ?? '';
+            if (!is_string($id) || !preg_match($credential->provider === 'cloudflare' ? '/^[a-f0-9]{32}$/D' : '/^[0-9]{1,40}$/D', $id)
+                || $record['type'] !== $type) throw new DnsException('provider_rejected');
+            $wildcard = str_starts_with($record['hostname'], '*.');
+            $this->domain($wildcard ? substr($record['hostname'], 2) : $record['hostname']);
+            if (!is_string($record['content']) || strlen($record['content']) > 64 || !is_int($record['ttl'])
+                || (isset($record['line']) && (!is_string($record['line']) || strlen($record['line']) > 100))) throw new DnsException('provider_rejected');
+            $ip = \App\Services\ServerMachine\MachineEntryProbe::publicIp($record['content']);
+            $record['locked'] = $record['locked'] || $wildcard || !$ip || str_contains($ip, ':') !== ($type === 'AAAA');
+            $items[] = array_intersect_key($record, array_flip(['hostname', 'type', 'content', 'ttl', 'proxied', 'line', 'locked'])) + ['id' => $id];
+        }
+        return ['items' => $items, 'page' => $page, 'has_more' => $more];
+    }
+
+    public function inspect(MachineDnsCredential $credential, MachineDnsBinding $binding): array
+    {
+        return $this->normalize($credential, $credential->provider === 'cloudflare'
+            ? $this->cloudflare($credential, $binding, 'GET')
+            : $this->aliyun($credential, 'DescribeDomainRecordInfo', ['RecordId' => $binding->record_id]));
+    }
+
+    private function normalize(MachineDnsCredential $credential, array $record): array
+    {
+        if ($credential->provider === 'cloudflare') {
             return ['hostname' => strtolower(rtrim((string) ($record['name'] ?? ''), '.')),
                 'type' => $record['type'] ?? '', 'content' => $record['content'] ?? '',
                 'ttl' => $record['ttl'] ?? 1, 'proxied' => $record['proxied'] ?? false,
                 'locked' => ($record['locked'] ?? false) === true];
         }
-        $record = $this->aliyun($credential, 'DescribeDomainRecordInfo', ['RecordId' => $binding->record_id]);
         $domain = strtolower((string) ($record['DomainName'] ?? ''));
         $rr = (string) ($record['RR'] ?? '');
         return ['hostname' => strtolower($rr === '@' ? $domain : $rr . '.' . $domain),
@@ -43,14 +105,19 @@ class DnsProviderClient
     private function cloudflare(MachineDnsCredential $credential, MachineDnsBinding $binding, string $method, array $data = []): array
     {
         if (!preg_match('/^[a-f0-9]{32}$/D', $binding->zone) || !preg_match('/^[a-f0-9]{32}$/D', $binding->record_id)) throw new DnsException('invalid_record');
+        return $this->cloudflareRequest($credential, $method, '/zones/' . $binding->zone . '/dns_records/' . $binding->record_id, $data)['result'];
+    }
+
+    private function cloudflareRequest(MachineDnsCredential $credential, string $method, string $path, array $data = [], array $query = []): array
+    {
         try {
             $response = Http::withToken($credential->credentials['api_token'])->acceptJson()->connectTimeout(5)->timeout(10)
-                ->withoutRedirecting()->send($method, 'https://api.cloudflare.com/client/v4/zones/' . $binding->zone . '/dns_records/' . $binding->record_id,
-                    $data ? ['json' => $data] : []);
+                ->withoutRedirecting()->send($method, 'https://api.cloudflare.com/client/v4' . $path,
+                    ($data ? ['json' => $data] : []) + ($query ? ['query' => $query] : []));
         } catch (\Throwable) { throw new DnsException('provider_unavailable'); }
         $json = $this->decode($response);
         if (($json['success'] ?? false) !== true || !is_array($json['result'] ?? null)) throw new DnsException('provider_rejected');
-        return $json['result'];
+        return $json;
     }
 
     public static function signAliyun(array $parameters, string $secret): array
@@ -72,8 +139,28 @@ class DnsProviderClient
                 ->post('https://alidns.aliyuncs.com/', $parameters);
         } catch (\Throwable) { throw new DnsException('provider_unavailable'); }
         $json = $this->decode($response);
+        if (str_starts_with((string) ($json['Code'] ?? ''), 'Forbidden') || ($json['Code'] ?? '') === 'InvalidAccessKeyId.NotFound') throw new DnsException('provider_forbidden');
         if (isset($json['Code'])) throw new DnsException('provider_rejected');
         return $json;
+    }
+
+    private function assertList(mixed $rows): void
+    {
+        if (!is_array($rows) || !array_is_list($rows) || count($rows) > 50) throw new DnsException('provider_rejected');
+    }
+
+    private function hasMore(mixed $total, int $page, int $size = 1): bool
+    {
+        if ((!is_int($total) && !(is_string($total) && ctype_digit($total))) || $total < 0 || $total > 10000000) throw new DnsException('provider_rejected');
+        return $page < 10000 && $page * $size < (int) $total;
+    }
+
+    private function domain(mixed $name): string
+    {
+        if (!is_string($name) || strlen($name) > 253) throw new DnsException('provider_rejected');
+        $name = strtolower(rtrim($name, '.'));
+        if (!filter_var($name, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)) throw new DnsException('provider_rejected');
+        return $name;
     }
 
     private function decode(Response $response): array

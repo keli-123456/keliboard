@@ -48,6 +48,7 @@ class MachineController extends Controller
         $conflicts = app(MachineIdentityGuard::class)->conflicts($machines->modelKeys());
         $inventory = app(MachineAddressInventory::class);
         $addresses = $inventory->snapshots($machines);
+        $cloud = app(\App\Services\ServerMachine\Cloud\MachineCloudService::class)->listSummaries($machines);
         $now = now()->timestamp;
         $freshSince = $now - \App\Services\UserOnlineService::nodeDataExpirySeconds();
         $panelReleases = $this->releaseDistribution()->source() === MachineReleaseDistributionService::SOURCE_PANEL;
@@ -78,6 +79,7 @@ class MachineController extends Controller
             $machine->setAttribute('entry_probe', $snapshot['entry_probe']);
             if ($machine->is_active && $machine->identity_conflict) $machine->setAttribute('address_probes', $inventory->probes($addresses[$machine->id] ?? [], $now));
             $machine->setAttribute('website_proxy_health', $websiteHealth[$machine->id] ?? []);
+            $machine->setAttribute('cloud_instances', $cloud[$machine->id] ?? []);
         }
 
         $sources = $instances->listSources($groupsByMachine, $instanceSummaries);
@@ -117,8 +119,9 @@ class MachineController extends Controller
         $conflicts = app(MachineIdentityGuard::class)->conflicts($machines->modelKeys());
         $inventory = app(MachineAddressInventory::class);
         $addresses = $inventory->snapshots($machines->filter(fn ($machine) => $machine->is_active && $conflicts[$machine->id]));
+        $cloud = app(\App\Services\ServerMachine\Cloud\MachineCloudService::class)->listSummaries($machines);
         $now = now()->timestamp;
-        return $this->success($machines->map(function ($machine) use ($conflicts, $inventory, $addresses, $now) {
+        return $this->success($machines->map(function ($machine) use ($conflicts, $inventory, $addresses, $cloud, $now) {
             $snapshot = app(MachineTelemetryService::class)->snapshot($machine);
             return array_merge($machine->only([
                 'id', 'last_seen_at', 'is_online', 'online_status',
@@ -129,6 +132,7 @@ class MachineController extends Controller
                 ])),
                 'telemetry' => $snapshot['telemetry'],
                 'entry_probe' => $snapshot['entry_probe'],
+                'cloud_instances' => $cloud[$machine->id] ?? [],
                 'address_probes' => $inventory->probes($addresses[$machine->id] ?? [], $now),
                 ...($conflicts[$machine->id] ? ['address_rates' => $inventory->rates($addresses[$machine->id] ?? [], $now)] : []),
                 'identity_conflict' => $conflicts[$machine->id],
