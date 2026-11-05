@@ -278,6 +278,35 @@ final class TicketAiConversationServiceTest extends TestCase
         $this->assertSame('automation_state_unavailable', $result['reason']);
     }
 
+    public function test_failure_for_an_older_message_does_not_block_a_new_supplement(): void
+    {
+        [$ticket, $oldSource] = $this->ticketWithMessage('节点连不上');
+        $service = new TicketAiConversationService();
+        $this->assertTrue($service->preflight($ticket, $oldSource)['allow']);
+        $newSource = $this->message($ticket, (int) $ticket->user_id, '补充：Clash 显示连接超时。');
+
+        $service->recordFailure((int) $ticket->id, (int) $oldSource->id, 'unstructured_output');
+
+        $this->assertTrue($service->preflight($ticket, $newSource)['allow']);
+        $state = TicketAiConversation::query()->where('ticket_id', $ticket->id)->sole();
+        $this->assertSame(0, $state->failure_count);
+        $this->assertNull($state->handoff_reason);
+    }
+
+    public function test_exhausted_format_recovery_only_consumes_the_failed_message(): void
+    {
+        [$ticket, $failedSource] = $this->ticketWithMessage('节点连不上');
+        $service = new TicketAiConversationService();
+        $service->recordFailure((int) $ticket->id, (int) $failedSource->id, 'unstructured_output');
+
+        $this->assertSame('duplicate_source_message', $service->preflight($ticket, $failedSource)['reason']);
+        $next = $this->message($ticket, (int) $ticket->user_id, '补充新的错误文字。');
+        $this->assertTrue($service->preflight($ticket, $next)['allow']);
+        $state = TicketAiConversation::query()->where('ticket_id', $ticket->id)->sole();
+        $this->assertSame(1, $state->failure_count);
+        $this->assertNull($state->handoff_reason);
+    }
+
     public function test_historical_human_reply_is_detected_even_without_a_conversation_record(): void
     {
         [$ticket] = $this->ticketWithMessage('请帮忙排查');

@@ -75,12 +75,17 @@ class TicketAiProviderClient
         }
 
         $responsePayload = $response->json();
-        if (in_array(data_get($responsePayload, 'choices.0.finish_reason'), ['length', 'content_filter'], true)) {
-            throw new TicketAiProviderException('invalid_response');
+        $finishReason = data_get($responsePayload, 'choices.0.finish_reason');
+        $refusal = data_get($responsePayload, 'choices.0.message.refusal');
+        if ($finishReason === 'content_filter' || (is_string($refusal) && trim($refusal) !== '')) {
+            throw new TicketAiProviderException('invalid_response', 'content_filtered');
+        }
+        if ($finishReason === 'length') {
+            throw new TicketAiProviderException('invalid_response', 'truncated');
         }
         $content = is_array($responsePayload) ? $this->extractContent($responsePayload) : null;
         if ($content === null || trim($content) === '') {
-            throw new TicketAiProviderException('invalid_response');
+            throw new TicketAiProviderException('invalid_response', 'missing_content');
         }
         $content = trim($content);
         $decoded = $validateStructuredContent ? $this->decodeStructuredContent($content) : null;
@@ -339,7 +344,7 @@ class TicketAiProviderClient
             return $decoded;
         }
 
-        throw new TicketAiProviderException('invalid_response');
+        throw new TicketAiProviderException('invalid_response', 'invalid_schema');
     }
 
     /** @param array<string, mixed> $decoded @return array<string, mixed> */

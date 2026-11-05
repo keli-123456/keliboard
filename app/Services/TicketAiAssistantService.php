@@ -19,6 +19,8 @@ class TicketAiAssistantService
 {
     private const API_KEY_SETTING = 'ticket_ai_api_key';
     private const API_KEY_MASK = '********';
+    private const SUGGESTION_BUDGET_SECONDS = 70;
+    private const MIN_COMPLETION_SECONDS = 5;
     private const CATEGORY_OPTIONS = [
         '客户端连接',
         '订阅与节点',
@@ -324,25 +326,25 @@ class TicketAiAssistantService
             ? $this->officialLookup->verifiedReply($lookup['sources']) : null;
         $controlledDraft = $proof === null ? null : $this->officialLookup->controlledDraft($proof);
         $messages = $this->buildMessages($context, $knowledge, $settings, $lookup);
-        $startedAt = hrtime(true);
+        $automatic = $automationSourceId !== null && $adminId === null;
+        $deadline = ($automatic || $analysis !== null || $lookup !== null)
+            ? $workflowStartedAt + self::SUGGESTION_BUDGET_SECONDS * 1_000_000_000 : null;
+        $requestScope = array_merge($scopeFields, ['ticket_id' => (int) $ticket->id, 'admin_id' => $adminId,
+            'provider_host' => $this->providerHost($settings['base_url']), 'model' => $settings['model']]);
 
         try {
-            if ($analysis !== null || $lookup !== null) {
-                // Stay below the queue retry interval, including image processing and official lookups.
-                $remaining = 70 - (int) ceil((hrtime(true) - $workflowStartedAt) / 1_000_000_000);
-                $providerSettings['timeout'] = min($settings['timeout'], max(5, $remaining));
-                if ($analysis !== null && $remaining < 5) {
-                    $analysis['status'] = 'held';
-                    $analysis['reason'] = 'vision_timeout';
-                    $analysis['reason_codes'] = ['vision_timeout'];
-                    $analysis['needs_human'] = true;
-                    $analysis['observations'] = [];
-                    $analysis['summary'] = '截图处理超时，已留待人工核对。可补充错误文字，不必反复提交相同图片。';
-                }
+            if ($analysis !== null && $this->remainingCompletionSeconds($deadline) < self::MIN_COMPLETION_SECONDS) {
+                $analysis['status'] = 'held';
+                $analysis['reason'] = 'vision_timeout';
+                $analysis['reason_codes'] = ['vision_timeout'];
+                $analysis['needs_human'] = true;
+                $analysis['observations'] = [];
+                $analysis['summary'] = '截图处理超时，已留待人工核对。可补充错误文字，不必反复提交相同图片。';
             }
             $imageHeld = $analysis !== null && $analysis['status'] !== 'ready';
             $controlled = !$imageHeld && $controlledDraft !== null;
-            $completion = $imageHeld || $controlled ? null : $this->providerClient->complete($providerSettings, $messages);
+            $completion = $imageHeld || $controlled ? null
+                : $this->completeSuggestion($providerSettings, $messages, $requestScope, $automatic, $deadline);
             if ($completion !== null) {
                 $this->circuitBreaker->success($settings['base_url'], $settings['model']);
             }
@@ -427,18 +429,55 @@ class TicketAiAssistantService
             return $result;
         } catch (TicketAiProviderException $exception) {
             $this->circuitBreaker->failure($settings['base_url'], $settings['model'], $settings['failure_threshold'], $settings['cooldown_minutes']);
-            $this->recordRequestLog(array_merge($scopeFields, [
-                'ticket_id' => (int) $ticket->id,
-                'admin_id' => $adminId,
-                'status' => TicketAiRequestLog::STATUS_FAILED,
-                'error_code' => $exception->errorCode(),
-                'provider_host' => $this->providerHost($settings['base_url']),
-                'model' => $settings['model'],
-                'latency_ms' => (int) round((hrtime(true) - $startedAt) / 1_000_000),
-                'prompt_chars' => $this->messageChars($messages),
-            ]));
             throw $exception;
         }
+    }
+
+    private function completeSuggestion(array $settings, array $messages, array $log, bool $automatic, ?int $deadline): array
+    {
+        $retry = false;
+        while (true) {
+            $startedAt = hrtime(true);
+            try {
+                $remaining = $this->remainingCompletionSeconds($deadline);
+                if ($remaining < self::MIN_COMPLETION_SECONDS) {
+                    throw new TicketAiProviderException('timeout');
+                }
+                $completion = $this->providerClient->complete(array_replace($settings, [
+                    'timeout' => min($settings['timeout'], $remaining),
+                ]), $messages);
+                if ($automatic && !$completion['structured']) {
+                    throw new TicketAiProviderException('invalid_response', 'unstructured');
+                }
+                return $completion;
+            } catch (TicketAiProviderException $error) {
+                $this->recordRequestLog(array_merge($log, [
+                    'status' => TicketAiRequestLog::STATUS_FAILED,
+                    'error_code' => $error->errorCode(),
+                    'latency_ms' => (int) round((hrtime(true) - $startedAt) / 1_000_000),
+                    'prompt_chars' => $this->messageChars($messages),
+                ]));
+                if ($retry || !$automatic || $error->errorCode() !== 'invalid_response'
+                    || !in_array($error->responseIssue, ['missing_content', 'truncated', 'invalid_schema', 'unstructured'], true)
+                    || $this->remainingCompletionSeconds($deadline) < self::MIN_COMPLETION_SECONDS) {
+                    throw $error;
+                }
+            }
+
+            $retry = true;
+            // Reuse the checked context, never the failed completion, and keep the original time/token budgets.
+            array_splice($messages, -1, 0, [[
+                'role' => 'system',
+                'content' => '只返回一个简洁的 JSON 对象，不要加代码块、前言或思考过程。draft 必须是非空字符串，'
+                    . 'knowledge_refs 必须是数组；继续遵守所有风险、人工核查和来源限制。针对最新用户补充回答，'
+                    . '不要重复询问已提供的信息。',
+            ]]);
+        }
+    }
+
+    private function remainingCompletionSeconds(?int $deadline): int
+    {
+        return $deadline === null ? PHP_INT_MAX : (int) floor(($deadline - hrtime(true)) / 1_000_000_000);
     }
 
     private function lookupOfficialSources(array $context, ?array $analysis, array $knowledge): ?array

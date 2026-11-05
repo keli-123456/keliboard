@@ -277,13 +277,22 @@ class TicketAiConversationService
         if (!$this->available()) {
             return;
         }
-        $ticket = Ticket::query()->find($ticketId);
-        if (!$ticket) {
-            return;
-        }
-        $this->withLockedState($ticket, fn (TicketAiConversation $state) =>
-            $this->recordFailureState($state, $sourceMessageId, $reason)
-        );
+        DB::transaction(function () use ($ticketId, $sourceMessageId, $reason): void {
+            $ticket = Ticket::query()->whereKey($ticketId)->lockForUpdate()->first();
+            if (!$ticket || (int) $ticket->status !== Ticket::STATUS_OPENING) {
+                return;
+            }
+            if ($sourceMessageId > 0) {
+                $latest = TicketMessage::query()->where('ticket_id', $ticketId)->latest('id')->first(['id', 'user_id']);
+                if (!$latest || (int) $latest->id !== $sourceMessageId || (int) $latest->user_id !== (int) $ticket->user_id) {
+                    return;
+                }
+            }
+            $state = $this->stateFor($ticket);
+            if ($state !== null) {
+                $this->recordFailureState($state, $sourceMessageId, $reason);
+            }
+        });
     }
 
     private function recordFailureState(TicketAiConversation $state, int $sourceMessageId, string $reason): void
@@ -293,12 +302,16 @@ class TicketAiConversationService
             return;
         }
 
-        $state->status = TicketAiConversation::STATUS_HUMAN_REQUIRED;
+        // A response-format failure belongs to this message, not a permanent human takeover.
+        $recoverable = $reason === 'unstructured_output';
+        $state->status = $recoverable ? TicketAiConversation::STATUS_ACTIVE : TicketAiConversation::STATUS_HUMAN_REQUIRED;
         $state->failure_count = max(0, (int) $state->failure_count) + 1;
         $state->last_source_message_id = $sourceMessageId > 0 ? $sourceMessageId : $state->last_source_message_id;
         $state->last_reason = $reason;
-        $state->handoff_reason = $reason;
-        $state->handoff_at = $state->handoff_at ?: time();
+        if (!$recoverable) {
+            $state->handoff_reason = $reason;
+            $state->handoff_at = $state->handoff_at ?: time();
+        }
         $state->last_activity_at = time();
         $state->save();
 

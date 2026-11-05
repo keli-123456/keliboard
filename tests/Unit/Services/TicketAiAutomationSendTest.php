@@ -7,6 +7,7 @@ namespace Tests\Unit\Services;
 use App\Models\Ticket;
 use App\Models\TicketAiConversation;
 use App\Models\TicketAiConversationEvent;
+use App\Models\TicketAiRequestLog;
 use App\Models\TicketAiSuggestion;
 use App\Models\TicketMessage;
 use App\Services\TicketAiAssistantService;
@@ -20,7 +21,9 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -104,6 +107,102 @@ final class TicketAiAutomationSendTest extends TestCase
         $this->assertNull($this->send($ticket, $source, $suggestion, $approval));
         $source->update(['message' => 'Windows: address already in use.']);
         $this->assertNotNull($this->send($ticket, $source, $suggestion, $approval));
+    }
+
+    public static function continuationResponses(): array
+    {
+        return [
+            'invalid schema then valid' => ['invalid_schema', 'valid', 'sent', 'auto_reply_sent', 2],
+            'empty then valid' => ['empty', 'valid', 'sent', 'auto_reply_sent', 2],
+            'truncated then valid' => ['truncated', 'valid', 'sent', 'auto_reply_sent', 2],
+            'plain text then valid' => ['unstructured', 'valid', 'sent', 'auto_reply_sent', 2],
+            'still invalid' => ['invalid_schema', 'empty', 'failed', 'unstructured_output', 2],
+            'filtered response' => ['filtered', null, 'failed', 'needs_human', 1],
+            'explicit refusal' => ['refused', null, 'failed', 'needs_human', 1],
+            'valid but unsafe after retry' => ['truncated', 'unsafe', 'handoff', 'needs_human', 2],
+        ];
+    }
+
+    #[DataProvider('continuationResponses')]
+    public function test_supplement_continues_once_through_a_recoverable_provider_response(
+        string $first, ?string $second, string $event, string $reason, int $calls
+    ): void {
+        [$ticket, $source] = $this->fixture();
+        $source->update(['message' => '节点连不上。']);
+        Crypt::swap(new Encrypter(str_repeat('a', 32), 'AES-256-CBC'));
+        $this->settings(['ticket_ai_base_url' => 'https://ai.example.test/v1', 'ticket_ai_model' => 'test-model',
+            'ticket_ai_api_key' => Crypt::encryptString('sk-test')]);
+        Schema::create('v2_knowledge', function (Blueprint $table): void {
+            $table->id();
+            $table->string('title');
+            $table->string('category');
+            $table->text('body');
+            $table->boolean('show');
+        });
+        DB::table('v2_knowledge')->insert(['id' => 1, 'title' => 'Clash 节点连接排查', 'category' => '客户端连接',
+            'body' => 'Clash: verify the selected profile is active.', 'show' => true]);
+        (require base_path('database/migrations/2026_07_13_000002_create_ticket_ai_request_logs.php'))->up();
+
+        $context = $this->createMock(TicketAiContextService::class);
+        $context->expects($this->exactly(2))->method('build')->willReturnCallback(function (Ticket $current): array {
+            $messages = $current->messages()->get()->map(fn (TicketMessage $msg) => [
+                'role' => (int) $msg->user_id === (int) $current->user_id ? 'user' : 'assistant',
+                'content' => $msg->message,
+            ])->all();
+            return ['scope' => ['type' => 'platform'], 'conversation' => $messages, 'business' => []];
+        });
+        $worker = new TicketAiAutoReplyService(new TicketAiAssistantService($context));
+        $worker->process((int) $ticket->id, (int) $source->id, true);
+        $this->assertSame('clarification_sent', TicketAiConversationEvent::where('ticket_id', $ticket->id)->sole()->reason);
+
+        app()->instance(\Illuminate\Contracts\Bus\Dispatcher::class, new \Illuminate\Bus\Dispatcher(app()));
+        \Illuminate\Support\Facades\Bus::fake();
+        $supplement = (new TicketService())->reply($ticket->fresh(), 'Clash 客户端显示节点连接失败。', (int) $ticket->user_id);
+        \Illuminate\Support\Facades\Bus::assertDispatchedAfterResponse(\App\Jobs\ProcessTicketAiAutoReplyJob::class);
+
+        $answer = '请确认 Clash 正在使用刚更新的订阅配置，再重试出错的节点。';
+        $payload = static fn (string $kind): array => ['choices' => [[
+            'finish_reason' => match ($kind) {'truncated' => 'length', 'filtered' => 'content_filter', default => 'stop'},
+            'message' => ['content' => match ($kind) {
+                'valid', 'unsafe' => json_encode(['draft' => $answer, 'risk' => 'low', 'category' => '客户端连接',
+                    'confidence' => 0.98, 'needs_human' => $kind === 'unsafe', 'knowledge_refs' => [1]]),
+                'empty', 'refused' => null,
+                'unstructured' => 'This invalid output must not be sent or copied.',
+                default => '{"draft":[],"sentinel":"invalid-output"}',
+            }, 'refusal' => $kind === 'refused' ? 'Filtered.' : null],
+        ]]];
+        Http::preventStrayRequests();
+        $sequence = Http::fakeSequence('https://ai.example.test/v1/chat/completions')->push($payload($first));
+        if ($second !== null) {
+            $sequence->push($payload($second));
+        }
+        $logs = new class {
+            public array $warnings = [];
+            public function warning(string $message, array $context): void { $this->warnings[] = $context; }
+            public function info(string $message, array $context): void {}
+        };
+        Log::swap($logs);
+
+        $worker->process((int) $ticket->id, (int) $supplement->id, false);
+        $worker->process((int) $ticket->id, (int) $supplement->id, false);
+
+        $this->assertCount($calls, Http::recorded(), json_encode($logs->warnings));
+        foreach (Http::recorded() as $idx => [$request]) {
+            $body = json_encode($request->data(), JSON_UNESCAPED_UNICODE);
+            $this->assertStringContainsString($supplement->message, $body);
+            $this->assertStringNotContainsString('invalid-output', $body);
+            $this->assertSame($idx === 1, str_contains($body, '只返回一个简洁的 JSON 对象'));
+        }
+        $outcome = TicketAiConversationEvent::where('ticket_id', $ticket->id)->where('source_message_id', $supplement->id)->sole();
+        $this->assertSame($event, $outcome->event);
+        $this->assertSame($reason, $outcome->reason);
+        $this->assertSame($event === 'sent' ? 4 : 3, TicketMessage::where('ticket_id', $ticket->id)->count());
+        $this->assertSame($event === 'failed' ? 1 : 0, count($logs->warnings));
+        if ($event === 'sent') {
+            $this->assertSame($answer, TicketMessage::findOrFail($outcome->reply_message_id)->message);
+        }
+        $this->assertSame($second === 'valid' || $second === 'unsafe' ? ['failed', 'success'] : array_fill(0, $calls, 'failed'),
+            TicketAiRequestLog::where('ticket_id', $ticket->id)->orderBy('id')->pluck('status')->all());
     }
 
     public function test_persisted_safety_decisions_cannot_be_overridden_by_approval_data(): void

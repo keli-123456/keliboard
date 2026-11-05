@@ -44,17 +44,21 @@ class TicketAiAutoReplyService
                 $lock->release();
             }
         } catch (\Throwable $e) {
+            $providerError = $e instanceof TicketAiProviderException ? $e : null;
             Log::warning('ticket AI auto-reply failed', [
                 'ticket_id' => $ticketId,
                 'source_message_id' => $sourceMessageId,
                 'message' => $e->getMessage(),
+                'provider_response_issue' => $providerError?->responseIssue,
             ]);
 
             if ($this->shouldRetry($e)) {
                 throw $e;
             } else {
                 try {
-                    $this->conversation->recordFailure($ticketId, $sourceMessageId, 'automation_exception');
+                    $reason = $providerError?->errorCode() !== 'invalid_response' ? 'automation_exception'
+                        : ($providerError->responseIssue === 'content_filtered' ? 'needs_human' : 'unstructured_output');
+                    $this->conversation->recordFailure($ticketId, $sourceMessageId, $reason);
                 } catch (\Throwable $trackingError) {
                     Log::warning('ticket AI automation failure tracking failed', [
                         'ticket_id' => $ticketId,
