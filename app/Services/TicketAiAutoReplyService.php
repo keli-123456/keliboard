@@ -156,7 +156,7 @@ class TicketAiAutoReplyService
         $isClarification = $clarification !== null;
         $result = $isClarification
             ? $this->assistant->suggestClarification($ticket, $clarification)
-            : $this->assistant->suggest($ticket);
+            : $this->assistant->suggest($ticket, null, null, $sourceMessageId);
         $suggestionId = isset($result['suggestion_id']) ? (int) $result['suggestion_id'] : null;
         if (!$isClarification && $suggestionId && ($result['risk'] ?? null) === 'medium'
             && (bool) admin_setting('ticket_ai_vision_enable', false)

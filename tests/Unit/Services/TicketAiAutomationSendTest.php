@@ -13,10 +13,14 @@ use App\Services\TicketAiAssistantService;
 use App\Services\TicketAiAutoReplyService;
 use App\Services\TicketAiContextService;
 use App\Services\TicketAiConversationService;
+use App\Services\TicketAiOfficialLookup;
 use App\Services\TicketAiVisionService;
 use App\Services\TicketService;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Encryption\Encrypter;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -48,6 +52,58 @@ final class TicketAiAutomationSendTest extends TestCase
         $this->assertSame((int) $reply->id, $state->last_reply_message_id);
         $this->assertNull($this->send($ticket, $source, $suggestion));
         $this->assertSame(2, TicketMessage::where('ticket_id', $ticket->id)->count());
+    }
+
+    public function test_verified_official_answer_is_sent_by_the_worker_without_a_model_call(): void
+    {
+        [$ticket, $source] = $this->fixture();
+        config(['tickets.ai_official_lookup' => true]);
+        $source->update(['message' => 'Windows: address already in use.']);
+        Crypt::swap(new Encrypter(str_repeat('a', 32), 'AES-256-CBC'));
+        $this->settings(['ticket_ai_base_url' => 'https://ai.example.test/v1', 'ticket_ai_model' => 'test-model',
+            'ticket_ai_api_key' => Crypt::encryptString('sk-test'), 'ticket_ai_knowledge_enable' => false]);
+        $context = $this->createMock(TicketAiContextService::class);
+        $context->method('build')->willReturn(['scope' => ['type' => 'platform'],
+            'conversation' => [['role' => 'user', 'content' => $source->message]], 'business' => []]);
+        Http::preventStrayRequests();
+        Http::fake(TicketAiOfficialLookupTest::portDocuments());
+
+        $assistant = new TicketAiAssistantService($context);
+        $capability = $assistant->capabilities();
+        $this->assertTrue($capability['available'], (string) $capability['reason']);
+        $worker = new TicketAiAutoReplyService($assistant);
+        $worker->process((int) $ticket->id, (int) $source->id, true);
+        $worker->process((int) $ticket->id, (int) $source->id, true);
+        $this->assertSame(1, TicketMessage::where('ticket_id', $ticket->id)->where('is_auto_reply', true)->count(),
+            (string) TicketAiConversation::where('ticket_id', $ticket->id)->value('handoff_reason'));
+        $reply = TicketMessage::where('ticket_id', $ticket->id)->where('is_auto_reply', true)->sole();
+        $this->assertStringContainsString(TicketAiOfficialLookupTest::WINDOWS, $reply->message);
+        $this->assertStringContainsString('未占用的本地代理端口', $reply->message);
+        $this->assertSame(TicketAiSuggestion::STATUS_SENT,
+            TicketAiSuggestion::where('model', TicketAiOfficialLookup::REPLY_MODEL)->sole()->status);
+        Http::assertSentCount(1);
+    }
+
+    public function test_official_reply_is_revalidated_against_the_source_and_current_settings(): void
+    {
+        [$ticket, $source, $suggestion] = $this->fixture();
+        $source->update(['message' => 'Windows: address already in use.']);
+        $proof = ['kind' => 'port', 'source' => 'winsock', 'source_message_id' => (int) $source->id,
+            'source_hash' => hash('sha256', $source->message)];
+        $suggestion->update(['model' => TicketAiOfficialLookup::REPLY_MODEL,
+            'draft' => (new TicketAiOfficialLookup())->controlledDraft($proof), 'matched_knowledge' => []]);
+        $approval = $this->approval($suggestion) + ['system_grounded' => true,
+            'grounding_type' => TicketAiOfficialLookup::GROUNDING, 'official_reply' => $proof];
+
+        $this->assertNull($this->send($ticket, $source, $suggestion, $approval));
+        config(['tickets.ai_official_lookup' => true]);
+        $this->assertNull($this->send($ticket, $source, $suggestion));
+        $this->assertNull($this->send($ticket, $source, $suggestion, array_replace($approval,
+            ['official_reply' => array_replace($proof, ['source' => 'https://untrusted.test'])])));
+        $source->update(['message' => 'Different problem.']);
+        $this->assertNull($this->send($ticket, $source, $suggestion, $approval));
+        $source->update(['message' => 'Windows: address already in use.']);
+        $this->assertNotNull($this->send($ticket, $source, $suggestion, $approval));
     }
 
     public function test_persisted_safety_decisions_cannot_be_overridden_by_approval_data(): void

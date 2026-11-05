@@ -11,12 +11,15 @@ use App\Models\TicketAiSuggestion;
 use App\Models\TicketMessage;
 use App\Models\User;
 use App\Services\TicketAiAssistantService;
+use App\Services\TicketAiAutoReplyService;
+use App\Services\TicketAiContextService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
 
@@ -201,6 +204,60 @@ final class TicketAiAssistantServiceTest extends TestCase
                 && str_contains($content, 'Windows 客户端无法连接')
                 && str_contains($content, 'Windows 客户端连接排查');
         });
+    }
+
+    public static function officialDraftCases(): array
+    {
+        return [
+            'grounded' => [true, false, 200, [1], 'Check which local process owns the listening port.', 'cited', 2],
+            'invented reference' => [true, false, 200, [2], 'Unsupported claim.', 'uncited', 2],
+            'model supplied link' => [true, false, 200, [1], 'Go to https://untrusted.test/fix.', 'uncited', 2],
+            'source unavailable' => [true, false, 503, [1], 'Unsupported claim.', 'no_match', 2],
+            'sensitive' => [true, true, 200, [1], 'Needs account review.', null, 1],
+            'disabled' => [false, false, 200, [1], 'Existing draft.', null, 1],
+        ];
+    }
+
+    #[DataProvider('officialDraftCases')]
+    public function test_official_lookup_is_a_draft_only_fallback(
+        bool $enabled, bool $sensitive, int $status, array $refs, string $draft, ?string $expected, int $requests
+    ): void {
+        config(['tickets.ai_official_lookup' => $enabled]);
+        $user = User::create(['email' => 'owner@example.test', 'password' => 'secret', 'token' => 'token', 'uuid' => 'uuid']);
+        $ticket = Ticket::create(['user_id' => $user->id, 'subject' => 'Client error', 'level' => 1,
+            'status' => Ticket::STATUS_OPENING, 'reply_status' => Ticket::REPLY_STATUS_WAITING_ADMIN]);
+        $context = $this->createMock(TicketAiContextService::class);
+        $context->method('build')->willReturn(['scope' => ['type' => 'platform'],
+            'conversation' => [['role' => 'assistant', 'content' => 'Please paste the error text.'],
+                ['role' => 'user', 'content' => 'Windows: address already in use.']],
+            'business' => ['requires_human' => $sensitive]]);
+        $this->saveSettings([
+            'ticket_ai_enable' => true, 'ticket_ai_base_url' => 'https://ai.example.test/v1',
+            'ticket_ai_model' => 'test-model', 'ticket_ai_api_key' => Crypt::encryptString('sk-test'),
+        ]);
+        $url = TicketAiOfficialLookupTest::WINDOWS;
+        Http::preventStrayRequests();
+        Http::fake([
+            $url => Http::response('<table><tr><td>WSAEADDRINUSE</td><td>Address already in use.</td></tr></table>', $status),
+            'https://ai.example.test/v1/chat/completions' => Http::response(['choices' => [['message' => ['content' => json_encode([
+                'category' => '客户端连接', 'risk' => 'low', 'needs_human' => false, 'confidence' => 0.99,
+                'draft' => $draft, 'official_source_refs' => $refs,
+            ])]]]]),
+        ]);
+
+        $result = (new TicketAiAssistantService($context))->suggest($ticket);
+        $this->assertSame($expected, $result['official_lookup']['status'] ?? null);
+        $this->assertSame($expected === 'cited', str_contains($result['draft'], $url));
+        $this->assertStringNotContainsString('untrusted.test', $result['draft']);
+        $suggestion = TicketAiSuggestion::findOrFail($result['suggestion_id']);
+        $this->assertSame($result['draft'], $suggestion->draft);
+        if ($expected !== null) {
+            $this->assertTrue($suggestion->needs_human);
+            $this->assertSame('needs_human', (new TicketAiAutoReplyService())->rejectionReason($result));
+            $this->assertSame([], $result['matched_knowledge']);
+        }
+        Http::assertSentCount($requests);
+        $this->assertSame(0, TicketMessage::count());
     }
 
     public function test_real_context_pipeline_supplies_private_safe_traffic_and_ticket_evidence_to_the_model(): void

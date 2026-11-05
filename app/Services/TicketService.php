@@ -403,6 +403,16 @@ class TicketService
             if ($suggestion->scope_type !== $scope['type']) {
                 return null;
             }
+            if ($suggestion->model === TicketAiOfficialLookup::REPLY_MODEL || isset($approval['official_reply'])) {
+                $proof = $approval['official_reply'] ?? null;
+                if (!TicketAiOfficialLookup::enabled() || $suggestion->model !== TicketAiOfficialLookup::REPLY_MODEL
+                    || ($approval['grounding_type'] ?? null) !== TicketAiOfficialLookup::GROUNDING
+                    || !is_array($proof) || ($proof['source_message_id'] ?? null) !== $sourceMessageId
+                    || ($proof['source_hash'] ?? null) !== hash('sha256', (string) $sourceMessage->message)
+                    || app(TicketAiOfficialLookup::class)->controlledDraft($proof) !== $message) {
+                    return null;
+                }
+            }
             $isClarification = $suggestion->model === 'system:clarification'
                 && ($approval['grounding_type'] ?? null) === 'controlled_clarification';
             $analysis = $suggestion->image_analysis;

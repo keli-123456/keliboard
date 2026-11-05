@@ -2,6 +2,7 @@
 
 return [
     'retention_days' => (int) env('TICKET_RETENTION_DAYS', 90),
+    'ai_official_lookup' => (bool) env('TICKET_AI_OFFICIAL_LOOKUP_ENABLED', false),
     'auto_close' => [
         'waiting_user_hours' => (int) env('TICKET_AUTO_CLOSE_WAITING_USER_HOURS', 24),
         'waiting_admin_hours' => (int) env('TICKET_AUTO_CLOSE_WAITING_ADMIN_HOURS', 48),
