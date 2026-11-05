@@ -24,6 +24,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Support\InteractsWithInMemoryDatabase;
 use Tests\TestCase;
 
@@ -83,6 +84,16 @@ class MachineCloudTest extends TestCase
     private function report(?string $instance = null, ?int $at = null): void
     {
         $this->inventory->record($this->machine, $instance ?? $this->instance, ['public_ipv4' => '8.8.8.8'], $at ?? time());
+    }
+    private function nodeReport(array $fields, int $nodeId = 9): void
+    {
+        DB::table('v2_server')->updateOrInsert(['id' => $nodeId], ['machine_id' => $this->machine->id, 'enabled' => true]);
+        Cache::put('node_instances:' . $nodeId, [array_replace(['machine_id' => $this->machine->id,
+            'installation_id' => $this->instance, 'last_seen_at' => time()], $fields)], 300);
+    }
+    public static function nodeReportTypes(): array
+    {
+        return ['resource status' => ['last_status_at'], 'online report' => ['last_online_at'], 'traffic report' => ['last_traffic_at']];
     }
     private function bind(): void
     {
@@ -313,6 +324,112 @@ class MachineCloudTest extends TestCase
         $this->assertSame('waiting_reports', $task->fresh()->status);
         $node['installation_id'] = $this->instance; Cache::put('node_instances:9', [$node], 300); $this->report(); $this->service->process($task->id);
         $this->assertSame('completed', $task->fresh()->status); $this->assertFalse($this->resource->fresh()->dns_hold);
+    }
+
+    #[DataProvider('nodeReportTypes')]
+    public function test_fresh_node_report_types_are_all_valid_recovery_evidence(string $field): void
+    {
+        $this->bind(); $this->nodeReport([$field => time(), 'online_users' => 0]);
+        $this->assertSame(['agent' => 'fresh', 'nodes' => 'fresh', 'ready' => true], $this->health->snapshot($this->resource));
+        Http::assertNotSent(fn ($request) => $request->method() !== 'GET');
+    }
+
+    #[DataProvider('nodeReportTypes')]
+    public function test_a_new_node_report_can_complete_recovery_without_another_power_post(string $field): void
+    {
+        $this->bind(); $this->nodeReport([]);
+        $task = $this->queue(); $this->service->process($task->id);
+        $task->refresh()->fill(['dispatched_at' => time() - 10])->save();
+        $this->fake('running', [$this->event('linode_reboot')]);
+        $this->service->process($task->id);
+        $this->assertSame('waiting_reports', $task->fresh()->status);
+        $this->assertTrue($this->resource->fresh()->dns_hold);
+        $this->nodeReport([$field => time()]); $this->service->process($task->id);
+        $this->assertSame('completed', $task->fresh()->status);
+        $this->assertFalse($this->resource->fresh()->dns_hold);
+        Http::assertNotSent(fn ($request) => $request->method() !== 'GET');
+    }
+
+    public function test_generic_node_poll_or_heartbeat_alone_does_not_prove_recovery(): void
+    {
+        $this->bind(); $this->nodeReport(['last_config_at' => time(), 'last_heartbeat_at' => time()]);
+        $this->assertSame(['agent' => 'fresh', 'nodes' => 'waiting', 'ready' => false], $this->health->snapshot($this->resource));
+    }
+
+    #[DataProvider('nodeReportTypes')]
+    public function test_node_evidence_must_respect_the_existing_node_freshness_window(string $field): void
+    {
+        $this->bind();
+        $this->nodeReport([$field => time() - min(180, \App\Services\UserOnlineService::nodeDataExpirySeconds()) - 1]);
+        $this->assertFalse($this->health->snapshot($this->resource)['ready']);
+    }
+
+    #[DataProvider('nodeReportTypes')]
+    public function test_new_poll_does_not_make_pre_dispatch_node_evidence_fresh_again(string $field): void
+    {
+        $this->bind(); $after = time() - 10;
+        foreach ([$after - 1, $after] as $at) {
+            $this->nodeReport([$field => $at]);
+            $this->assertFalse($this->health->snapshot($this->resource, $after)['ready']);
+        }
+        $this->nodeReport([$field => $after + 1]);
+        $this->assertTrue($this->health->snapshot($this->resource, $after)['ready']);
+    }
+
+    public function test_future_or_malformed_field_does_not_hide_another_valid_report(): void
+    {
+        $this->bind(); $this->nodeReport(['last_status_at' => time() + 3600, 'last_online_at' => 'invalid', 'last_traffic_at' => time()]);
+        $this->assertTrue($this->health->snapshot($this->resource)['ready']);
+    }
+
+    public function test_future_malformed_or_missing_reports_do_not_prove_recovery(): void
+    {
+        $this->bind();
+        foreach ([time() + 3600, 'invalid', 0, -1, null] as $at) {
+            $this->nodeReport(['last_status_at' => $at, 'last_online_at' => $at, 'last_traffic_at' => $at]);
+            $this->assertFalse($this->health->snapshot($this->resource)['ready']);
+        }
+    }
+
+    public function test_online_or_traffic_evidence_never_crosses_machine_or_installation_identity(): void
+    {
+        $this->bind();
+        foreach ([['machine_id' => $this->machine->id + 1], ['installation_id' => null],
+            ['installation_id' => substr($this->instance, 0, 8)], ['installation_id' => str_repeat('d', 32)]] as $identity) {
+            $this->nodeReport($identity + ['last_online_at' => time(), 'last_traffic_at' => time()]);
+            $this->assertFalse($this->health->snapshot($this->resource)['ready']);
+        }
+    }
+
+    public function test_every_enabled_bound_node_needs_its_own_report(): void
+    {
+        $this->bind(); $this->nodeReport(['last_online_at' => time()], 9); $this->nodeReport([], 10);
+        $this->assertFalse($this->health->snapshot($this->resource)['ready']);
+        $this->nodeReport(['last_traffic_at' => time()], 10);
+        $this->assertTrue($this->health->snapshot($this->resource)['ready']);
+        $this->nodeReport([], 10); DB::table('v2_server')->where('id', 10)->update(['enabled' => false]);
+        $this->assertTrue($this->health->snapshot($this->resource)['ready']);
+    }
+
+    public function test_replica_bound_nodes_cannot_borrow_another_machines_report(): void
+    {
+        $this->bind();
+        Schema::create('v2_server_machine_binding', function (Blueprint $table) { $table->integer('machine_id'); $table->integer('server_id'); });
+        $this->nodeReport(['last_online_at' => time()], 10);
+        DB::table('v2_server')->where('id', 10)->update(['machine_id' => $this->machine->id + 1]);
+        DB::table('v2_server_machine_binding')->insert(['machine_id' => $this->machine->id, 'server_id' => 10]);
+        $this->assertTrue($this->health->snapshot($this->resource)['ready']);
+        Cache::put('node_instances:10', [['machine_id' => $this->machine->id + 1, 'installation_id' => $this->instance,
+            'last_seen_at' => time(), 'last_online_at' => time()]], 300);
+        $this->assertFalse($this->health->snapshot($this->resource)['ready']);
+    }
+
+    public function test_node_business_reports_cannot_replace_missing_or_pre_dispatch_agent_evidence(): void
+    {
+        $this->bind(); $this->nodeReport(['last_traffic_at' => time()]); $after = time() - 10;
+        $this->report(null, $after); $this->assertFalse($this->health->snapshot($this->resource, $after)['ready']);
+        $this->report(null, time() - 181); $this->assertFalse($this->health->snapshot($this->resource)['ready']);
+        $this->report(); $this->assertTrue($this->health->snapshot($this->resource)['ready']);
     }
     public function test_observed_peer_does_not_prove_agent_identity_or_recovery(): void
     {

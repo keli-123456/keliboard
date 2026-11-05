@@ -71,9 +71,15 @@ the panel; the final preflight reduces, but cannot eliminate, external races.
 ## Recovery and DNS
 
 Cloud power and report recovery are separate. Bound boot/reboot tasks wait for
-fresh reports strictly after dispatch from the same installation, including each
-enabled bound node's status report. This does **not** establish that a client's
-TCP/UDP forwarding works. Unbound resources have cloud-only completion.
+fresh reports strictly after dispatch from the same installation. Each enabled
+bound node needs an authenticated resource-status, online, or traffic report.
+An online report with zero users is still a valid reporting signal. Evidence
+uses panel receive timestamps within the existing node-report expiry, capped at
+180 seconds; fields are validated independently so a malformed or future field
+cannot replace valid evidence. Generic heartbeats/config polls, old reports,
+another machine, and unidentified/other installations do not establish recovery.
+This does **not** establish that a client's TCP/UDP forwarding works. Unbound
+resources have cloud-only completion.
 
 Power intent puts only the matching machine/installation's DNS bindings on hold.
 The DNS sync job performs no provider write while that hold is present. It is
@@ -85,11 +91,12 @@ subsequent sync jobs, not an atomic transaction across two providers.
 ## Verification Scope
 
 Local tests use SQLite, mocked official API responses, and synthetic browser
-fixtures. No real token, production VM power action, or provider billing was
-tested in this implementation task. Before live use, first authorize an inventory
-read, verify resource identity and permissions, then separately approve a power
-test on a non-business instance. Automatic recovery should remain disabled until
-that live test is complete.
+fixtures. A separate authorized inventory-only live check verified reading
+Linode instances and comparing existing Agent identities. No production VM
+power action or provider billing was tested. Before live power use, verify
+resource identity and permissions, then separately approve a power test on a
+non-business instance. Automatic recovery should remain disabled until that
+live test is complete.
 
 Primary references:
 - [Linode API authentication/scopes](https://techdocs.akamai.com/linode-api/reference/get-started)
