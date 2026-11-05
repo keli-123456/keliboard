@@ -121,6 +121,37 @@ final class NodeInstancesTest extends TestCase
         $this->assertFalse($registry->record($node, $this->request(str_repeat('f', 32))));
         $this->assertCount(NodeInstanceRegistry::LIMIT, $registry->snapshot($node->id));
     }
+    public function test_instance_summary_excludes_expired_history_and_keeps_bindings_unchanged(): void
+    {
+        $primary = $this->machine('primary');
+        $replica = $this->machine('replica');
+        $node = $this->node($primary->id);
+        (new NodeMachineBinding())->replaceReplicas($node->id, [$replica->id]);
+        $registry = new NodeInstanceRegistry();
+        $now = time();
+        $staleAt = $now - UserOnlineService::nodeDataExpirySeconds() - 5;
+        $rows = [
+            'current' => ['key' => 'current', 'identified' => true, 'last_seen_at' => $now],
+            'offline' => ['key' => 'offline', 'identified' => true, 'last_seen_at' => $staleAt],
+            'expired' => ['key' => 'expired', 'identified' => true, 'last_seen_at' => $now - NodeInstanceRegistry::RETENTION - 5],
+            'legacy' => ['key' => 'legacy', 'identified' => false, 'last_seen_at' => $staleAt],
+        ];
+        $key = $registry->key($node->id);
+        Cache::put($key, $rows);
+
+        $this->assertSame(['current', 'offline', 'legacy'], array_column($registry->snapshot($node->id), 'key'));
+        $this->assertSame(['observed' => 2, 'online' => 1, 'unidentified' => false, 'bound_machines' => 2],
+            $registry->summaries([$node])[$node->id]);
+        $this->assertSame($rows, Cache::get($key));
+
+        $rows['current']['last_seen_at'] = $staleAt;
+        $rows['legacy']['last_seen_at'] = $now;
+        Cache::put($key, $rows);
+        $this->assertSame(['observed' => 2, 'online' => 0, 'unidentified' => true, 'bound_machines' => 2],
+            $registry->summaries([$node])[$node->id]);
+        $this->assertSame([$primary->id, $replica->id], NodeMachineBinding::machineIds($node));
+    }
+
     public function test_machine_addresses_keep_families_and_changes_with_the_reporting_installation(): void
     {
         $machine = $this->machine('addresses');

@@ -61,7 +61,12 @@ class NodeInstanceRegistry
             $row['status_fresh'] = ($row['last_status_at'] ?? 0) >= $now - $ttl;
             if (($row['last_online_at'] ?? 0) < $now - $ttl) $row['online_users'] = null;
             return $row;
-        }, array_filter($rows, fn ($row) => ($row['last_seen_at'] ?? 0) >= $now - self::RETENTION)));
+        }, $this->retainedRows($rows, $now)));
+    }
+
+    private function retainedRows(array $rows, int $now): array
+    {
+        return array_filter($rows, fn ($row) => ($row['last_seen_at'] ?? 0) >= $now - self::RETENTION);
     }
 
     public function recordStatus(object $node, Request $request, array $status): void
@@ -94,14 +99,18 @@ class NodeInstanceRegistry
         $all = $keys ? Cache::many($keys) : [];
         $replicas = NodeMachineBinding::available() ? \Illuminate\Support\Facades\DB::table('v2_server_machine_binding')
             ->whereIn('server_id', $list->pluck('id'))->get()->groupBy('server_id') : collect();
+        $now = time();
+        $freshSince = $now - UserOnlineService::nodeDataExpirySeconds();
         $result = [];
         foreach ($list as $node) {
-            $rows = (array) ($all[$this->key((int) $node->id)] ?? []);
+            $rows = $this->retainedRows((array) ($all[$this->key((int) $node->id)] ?? []), $now);
             $identified = array_filter($rows, fn ($row) => $row['identified'] ?? false);
+            $online = array_filter($rows, fn ($row) => ($row['last_seen_at'] ?? 0) >= $freshSince);
+            $identifiedOnline = count(array_filter($online, fn ($row) => $row['identified'] ?? false));
             $ids = array_merge([(int) $node->machine_id], $replicas->get($node->id, collect())->pluck('machine_id')->all());
             $result[(int) $node->id] = ['observed' => count($identified),
-                'online' => count(array_filter($identified, fn ($row) => ($row['last_seen_at'] ?? 0) >= time() - UserOnlineService::nodeDataExpirySeconds())),
-                'unidentified' => count($rows) > count($identified), 'bound_machines' => count(array_unique(array_filter($ids)))];
+                'online' => $identifiedOnline, 'unidentified' => count($online) > $identifiedOnline,
+                'bound_machines' => count(array_unique(array_filter($ids)))];
         }
         return $result;
     }
