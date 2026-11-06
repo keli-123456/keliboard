@@ -87,6 +87,119 @@ final class TicketAiAutomationSendTest extends TestCase
         Http::assertSentCount(1);
     }
 
+    public function test_worker_uses_automatic_contract_and_sends_once_without_disabling_draft_review(): void
+    {
+        [$ticket, $source] = $this->fixture();
+        Crypt::swap(new Encrypter(str_repeat('a', 32), 'AES-256-CBC'));
+        $this->settings(['ticket_ai_base_url' => 'https://ai.example.test/v1', 'ticket_ai_model' => 'test-model',
+            'ticket_ai_api_key' => Crypt::encryptString('sk-test'), 'ticket_ai_knowledge_enable' => false,
+            'ticket_ai_auto_reply_require_knowledge' => false]);
+        $context = $this->createMock(TicketAiContextService::class);
+        $context->method('build')->willReturn(['scope' => ['type' => 'platform'], 'business' => ['requires_human' => false],
+            'operations' => ['status' => 'healthy'], 'conversation' => [['role' => 'user', 'content' => $source->message]]]);
+        $contracts = [];
+        Http::preventStrayRequests();
+        Http::fake(['https://ai.example.test/v1/chat/completions' => function ($request) use (&$contracts) {
+            $messages = $request->data()['messages'];
+            $contract = json_decode($messages[array_key_last($messages)]['content'], true)['output_contract'];
+            $contracts[] = $contract;
+            return Http::response(['choices' => [['message' => ['content' => json_encode([
+                'draft' => '请使用客户端的订阅导入功能。', 'risk' => 'low', 'category' => '客户端连接',
+                'confidence' => 0.98, 'needs_human' => $contract['review_required'], 'knowledge_refs' => [],
+            ])]]]]);
+        }]);
+        $assistant = new TicketAiAssistantService($context);
+        $worker = new TicketAiAutoReplyService($assistant);
+        $worker->process((int) $ticket->id, (int) $source->id, true);
+        $worker->process((int) $ticket->id, (int) $source->id, true);
+
+        $this->assertSame(1, TicketMessage::where('ticket_id', $ticket->id)->where('is_auto_reply', true)->count());
+        $this->assertSame('sent', TicketAiConversationEvent::where('ticket_id', $ticket->id)->sole()->event);
+        $draft = $assistant->suggest($ticket->fresh(), null, 99, (int) $source->id);
+        $this->assertTrue($draft['needs_human']);
+        $this->assertSame([false, true], array_column($contracts, 'review_required'));
+        $this->assertSame(['automatic_customer_reply', 'admin_review_draft'], array_column($contracts, 'reply_mode'));
+        $this->assertSame(1, TicketMessage::where('ticket_id', $ticket->id)->where('is_auto_reply', true)->count());
+        Http::assertSentCount(2);
+    }
+
+    public function test_low_risk_model_hold_is_reconsidered_only_after_a_new_supplement_and_sent_once(): void
+    {
+        [$ticket, $source, $held] = $this->fixture();
+        $held->update(['needs_human' => true]);
+        $conversation = app(TicketAiConversationService::class);
+        $conversation->recordRejected($ticket, $source, (int) $held->id, 'needs_human');
+        $this->assertFalse($conversation->preflight($ticket, $source)['allow']);
+        $supplement = TicketMessage::create(['ticket_id' => $ticket->id, 'user_id' => $ticket->user_id,
+            'message' => 'Windows Clash，已补充版本，错误为核心尚未启动。']);
+        $suggestion = $held->replicate();
+        $suggestion->fill(['needs_human' => false, 'draft' => '请先启动客户端核心，再测试已选节点。'])->save();
+        $assistant = $this->createMock(TicketAiAssistantService::class);
+        $assistant->expects($this->once())->method('suggest')->willReturn($this->approval($suggestion));
+        $worker = new TicketAiAutoReplyService($assistant);
+        $worker->process((int) $ticket->id, (int) $supplement->id, false);
+        $worker->process((int) $ticket->id, (int) $supplement->id, false);
+
+        $state = TicketAiConversation::where('ticket_id', $ticket->id)->sole();
+        $this->assertSame('active', $state->status);
+        $this->assertNull($state->handoff_reason);
+        $this->assertSame((int) $supplement->id, $state->last_source_message_id);
+        $this->assertSame(1, $state->auto_reply_count);
+        $this->assertSame(['handoff', 'resumed', 'sent'], TicketAiConversationEvent::where('ticket_id', $ticket->id)->orderBy('id')->pluck('event')->all());
+        $this->assertSame(1, TicketMessage::where('ticket_id', $ticket->id)->where('is_auto_reply', true)->count());
+        $this->assertSame('generated', $held->fresh()->status);
+        $this->assertSame('sent', $suggestion->fresh()->status);
+    }
+
+    public static function nonResumableHolds(): array
+    {
+        return [
+            'medium risk' => [['risk' => 'medium'], []],
+            'high risk' => [['risk' => 'high'], []],
+            'refund' => [['category' => '支付退款'], []],
+            'account security' => [['category' => '账号安全'], []],
+            'service failure' => [['category' => '服务器故障'], []],
+            'unstructured' => [['structured_output' => false], []],
+            'low confidence' => [['confidence' => 0.89], []],
+            'reviewed by admin' => [['admin_id' => 99], []],
+            'other tenant' => [['scope_type' => 'site', 'site_id' => 9], []],
+            'discarded' => [['status' => 'discarded'], []],
+            'unsafe image' => [['image_analysis' => ['status' => 'held']], []],
+            'actual human reply' => [[], ['human_reply' => true]],
+            'previous human request' => [[], ['old_message' => '请转人工客服']],
+            'previous sensitive action' => [[], ['old_message' => '申请退款']],
+            'new human request' => [[], ['new_message' => '请转人工客服']],
+            'policy hold without a suggestion' => [[], ['without_suggestion' => true]],
+            'explicit handoff' => [[], ['reason' => 'user_requested_human']],
+            'strict mode' => [[], ['strict' => true]],
+        ];
+    }
+
+    #[DataProvider('nonResumableHolds')]
+    public function test_supplement_cannot_resume_hard_safety_or_unverified_handoffs(array $attributes, array $options): void
+    {
+        [$ticket, $source, $held] = $this->fixture();
+        $held->forceFill(array_merge(['needs_human' => true], $attributes))->save();
+        if (isset($options['old_message'])) {
+            $source->update(['message' => $options['old_message']]);
+        }
+        if ($options['strict'] ?? false) {
+            $this->settings(['ticket_ai_auto_reply_mode' => 'strict']);
+        }
+        $conversation = app(TicketAiConversationService::class);
+        $conversation->recordRejected($ticket, $source, ($options['without_suggestion'] ?? false) ? null : (int) $held->id,
+            $options['reason'] ?? 'needs_human');
+        if ($options['human_reply'] ?? false) {
+            TicketMessage::create(['ticket_id' => $ticket->id, 'user_id' => 99, 'message' => '人工正在处理']);
+        }
+        $supplement = TicketMessage::create(['ticket_id' => $ticket->id, 'user_id' => $ticket->user_id,
+            'message' => $options['new_message'] ?? 'Windows Clash 仍然报错']);
+        $this->assertFalse($conversation->preflight($ticket, $supplement)['allow']);
+        $state = TicketAiConversation::where('ticket_id', $ticket->id)->sole();
+        $this->assertSame('human_required', $state->status);
+        $this->assertSame(0, TicketAiConversationEvent::where('ticket_id', $ticket->id)->where('event', 'resumed')->count());
+    }
+
     public function test_official_reply_is_revalidated_against_the_source_and_current_settings(): void
     {
         [$ticket, $source, $suggestion] = $this->fixture();

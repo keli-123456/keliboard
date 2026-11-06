@@ -325,8 +325,8 @@ class TicketAiAssistantService
         $proof = $adminId === null && is_string($sourceText) && $lookup !== null
             ? $this->officialLookup->verifiedReply($lookup['sources']) : null;
         $controlledDraft = $proof === null ? null : $this->officialLookup->controlledDraft($proof);
-        $messages = $this->buildMessages($context, $knowledge, $settings, $lookup);
         $automatic = $automationSourceId !== null && $adminId === null;
+        $messages = $this->buildMessages($context, $knowledge, $settings, $lookup, $automatic);
         $deadline = ($automatic || $analysis !== null || $lookup !== null)
             ? $workflowStartedAt + self::SUGGESTION_BUDGET_SECONDS * 1_000_000_000 : null;
         $requestScope = array_merge($scopeFields, ['ticket_id' => (int) $ticket->id, 'admin_id' => $adminId,
@@ -1197,7 +1197,7 @@ class TicketAiAssistantService
      * @param array<string, mixed> $context
      * @return array<int, array{role:string,content:string}>
      */
-    private function buildMessages(array $context, array $knowledge, array $settings, ?array $lookup = null): array
+    private function buildMessages(array $context, array $knowledge, array $settings, ?array $lookup = null, bool $automatic = false): array
     {
         $trustedInstruction = $this->sanitizer->sanitize(
             (string) ($context['instruction'] ?? ''),
@@ -1225,7 +1225,8 @@ class TicketAiAssistantService
             'output_contract' => [
                 'fields' => ['summary', 'category', 'sentiment', 'risk', 'needs_human', 'confidence', 'draft', 'knowledge_refs'],
                 'risk_values' => ['low', 'medium', 'high'],
-                'review_required' => true,
+                'review_required' => !$automatic,
+                'reply_mode' => $automatic ? 'automatic_customer_reply' : 'admin_review_draft',
                 'risk_explanation_field' => 'Return risk_explanation using only ticket_context.risk.evidence when the ticket concerns risk control.',
             ],
         ];
@@ -1238,16 +1239,35 @@ class TicketAiAssistantService
             $promptData['output_contract']['fields'][] = 'official_source_refs';
         }
         $prompt = json_encode($promptData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $systemPrompt = (string) ($settings['system_prompt'] ?? '');
+        if ($automatic && ($systemPrompt === '' || trim($systemPrompt) === $this->defaultSystemPrompt())) {
+            $systemPrompt = '你是当前站点的自动客服。结合后端核验事实和知识依据，直接回答用户的最新问题。'
+                . '没有足够排错信息时先问清具体缺失项，不要猜测原因或重复询问已有信息。'
+                . '不得承诺退款、补偿、封号、解封或支付处理结果；敏感问题和已核验的服务故障仍须人工核查。'
+                . '回答简洁、礼貌、可执行，只输出 JSON：summary, category, sentiment, risk, needs_human, confidence, draft, knowledge_refs。';
+        }
 
         $messages = [
             ['role' => 'system', 'content' => $this->mandatorySecurityPrompt()],
             [
                 'role' => 'system',
                 'content' => $this->sanitizer->sanitize(
-                    (string) ($settings['system_prompt'] ?: $this->defaultSystemPrompt()),
+                    $systemPrompt !== '' ? $systemPrompt : $this->defaultSystemPrompt(),
                     5000
                 ),
             ],
+        ];
+        $messages[] = [
+            'role' => 'system',
+            'content' => $automatic
+                ? '本次工作模式是 automatic_customer_reply：回复将由后台安全检查通过后直接发送给用户，不是等待管理员审核的草稿。'
+                    . '前文关于“只生成审核草稿”的描述只适用于人工助手模式，不适用于本次任务；其他安全边界和站点限制仍须遵守。'
+                    . 'needs_human 表示问题确实需要人工权限或人工调查，不表示所有 AI 回复都要审核。'
+                    . '普通客户端排错、订阅使用和已有核验记录的解释，依据充分时应直接给出可执行答复，不要无故转人工。'
+                    . '仅缺少客户端版本、错误文字等可由用户补充的信息时，明确追问最多 3 项尚缺信息，不要把缺少排错信息当成必须转人工；'
+                    . '这种安全追问可设置 risk=low、needs_human=false，confidence 表示追问是否恰当，不能谎称已确定故障原因。'
+                    . '涉及退款、账号安全、提现、封禁、隐私或已核验的服务侧故障，以及确实无法可靠处理的问题，仍须保留人工核查。'
+                : '本次工作模式是 admin_review_draft：仅生成供管理员审核的草稿，不自动发送；继续遵守所有风险与人工核查限制。',
         ];
         $messages[] = [
             'role' => 'system',
@@ -1280,7 +1300,10 @@ class TicketAiAssistantService
             'role' => 'system',
             'content' => '答复质量规则：先给结论，再给最多 3 个与当前问题直接相关的步骤。'
                 . '所有套餐、流量、到期、订单和风控结论必须来自后端核验字段；知识库只用于说明操作方法。'
-                . '不得重复询问 ticket_context 中已有的事实。若核验数据或知识依据不足，必须指出具体缺失项并设置 needs_human=true，'
+                . '不得重复询问 ticket_context 中已有的事实。'
+                . ($automatic
+                    ? '若仅缺少用户可补充的排错信息，先具体追问，不应仅因此设置 needs_human=true；涉及无法核验的账户结论、敏感操作或服务侧异常时仍须人工核查。'
+                    : '若核验数据或知识依据不足，必须指出具体缺失项并设置 needs_human=true，')
                 . '不得输出看似正确但无法核验的通用答案。',
         ];
         if ($lookup !== null) {

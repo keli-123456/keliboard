@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Ticket;
 use App\Models\TicketAiConversation;
 use App\Models\TicketAiConversationEvent;
+use App\Models\TicketAiSuggestion;
 use App\Models\TicketMessage;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -47,7 +48,9 @@ class TicketAiConversationService
             return ['allow' => false, 'reason' => 'ticket_closed', 'handoff' => false];
         }
         if ($state->status === TicketAiConversation::STATUS_HUMAN_REQUIRED) {
-            return ['allow' => false, 'reason' => $state->handoff_reason ?: 'human_required', 'handoff' => true];
+            if (!$this->resumeLowRiskSupplement($ticket, $sourceMessage, $state)) {
+                return ['allow' => false, 'reason' => $state->handoff_reason ?: 'human_required', 'handoff' => true];
+            }
         }
         $humanReply = TicketMessage::query()->where('ticket_id', $ticket->id)
             ->where('user_id', '!=', $ticket->user_id)
@@ -88,6 +91,68 @@ class TicketAiConversationService
         }
 
         return ['allow' => true, 'reason' => null, 'handoff' => false];
+    }
+
+    private function resumeLowRiskSupplement(Ticket $ticket, TicketMessage $source, TicketAiConversation $state): bool
+    {
+        if (!$this->broadMode() || $state->handoff_reason !== 'needs_human'
+            || (int) $source->ticket_id !== (int) $ticket->id || (int) $source->user_id !== (int) $ticket->user_id
+            || (int) $source->id <= (int) $state->last_source_message_id
+            || (int) TicketMessage::where('ticket_id', $ticket->id)->max('id') !== (int) $source->id) {
+            return false;
+        }
+
+        $messages = TicketMessage::where('ticket_id', $ticket->id)->orderBy('id')->get();
+        $business = app(TicketAiBusinessContextService::class);
+        foreach ($messages as $message) {
+            if ((int) $message->user_id !== (int) $ticket->user_id && !$message->is_auto_reply) {
+                return false;
+            }
+            if ((int) $message->user_id === (int) $ticket->user_id
+                && ($business->requiresHumanReview((string) $ticket->subject . "\n" . (string) $message->message)
+                    || $this->containsAny(mb_strtolower((string) $ticket->subject) . ' ' . $this->normalizedMessage($message), self::HUMAN_REQUEST_PATTERNS))) {
+                return false;
+            }
+        }
+
+        // Only a persisted low-risk model hold can be reconsidered on a new user message.
+        $event = TicketAiConversationEvent::where('conversation_id', $state->id)->latest('id')->first();
+        if (!$event || $event->event !== 'handoff' || $event->reason !== 'needs_human'
+            || (int) $event->source_message_id !== (int) $state->last_source_message_id) {
+            return false;
+        }
+        $suggestion = TicketAiSuggestion::whereKey($event->suggestion_id)->where('ticket_id', $ticket->id)
+            ->whereNull('admin_id')->where('status', TicketAiSuggestion::STATUS_GENERATED)->first();
+        if (!$suggestion || !$suggestion->structured_output || $suggestion->risk !== 'low' || !$suggestion->needs_human
+            || !is_finite((float) $suggestion->confidence)
+            || (float) $suggestion->confidence < max(0.5, min(1.0, (float) admin_setting('ticket_ai_auto_reply_min_confidence', 0.9)))
+            || (float) $suggestion->confidence > 1
+            || !in_array($suggestion->category, ['客户端连接', '订阅与节点', '套餐订单', '其他'], true)
+            || ($suggestion->image_analysis !== null && ($suggestion->image_analysis['status'] ?? null) !== 'ready')) {
+            return false;
+        }
+        foreach (['site_id', 'agent_user_id', 'agent_domain_id'] as $field) {
+            if ((int) $suggestion->{$field} !== (int) $ticket->{$field}) {
+                return false;
+            }
+        }
+        $scopeType = $ticket->agent_user_id ? 'agent' : ($ticket->site_id ? 'site' : 'platform');
+        if ($suggestion->scope_type !== $scopeType) {
+            return false;
+        }
+
+        $state->status = TicketAiConversation::STATUS_ACTIVE;
+        $state->handoff_reason = null;
+        $state->handoff_at = null;
+        $state->last_reason = 'user_supplement_resumed';
+        $state->last_activity_at = time();
+        $state->save();
+        $this->recordEvent($state, 'resumed', 'user_supplement_resumed', [
+            'source_message_id' => (int) $source->id,
+            'suggestion_id' => (int) $suggestion->id,
+        ]);
+
+        return true;
     }
 
     public function clarification(Ticket $ticket, TicketMessage $sourceMessage): ?string
