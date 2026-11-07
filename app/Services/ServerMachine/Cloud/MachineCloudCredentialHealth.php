@@ -46,6 +46,12 @@ class MachineCloudCredentialHealth
         }
         return $ids;
     }
+    public function assertAccountIdentity(Account $account, array $body): void
+    {
+        $expected = $this->identityKey($account); $observed = $this->entity($account->provider, $body);
+        if ($expected === null || $observed === null) throw new CloudException('account_identity_required');
+        if (!hash_equals($expected, $observed)) throw new CloudException('credential_identity_changed');
+    }
     private function contextKey(string $scope, Account $account, array $plan, string $intent): string
     {
         $value = match ($scope) {

@@ -198,8 +198,11 @@ class MachineFailoverNativeBridge
             $currentMembers = Member::query()->where('execution_id', $run->id)->pluck('id');
             if (Attempt::query()->whereIn('execution_member_id', $currentMembers)->count() >= $service['attempt_limit']) throw new CloudException('attempt_budget');
             $cost = (int) round($policy->monthly_limit_usd * 100);
-            if ($cost <= 0 || (clone $history)->sum('reserved_cents') + $cost > (int) round($service['monthly_cap_usd'] * 100)) throw new CloudException('shared_monthly_budget');
-            $active = Attempt::query()->whereNotIn('status', ['rejected', 'failed', 'cancelled', 'completed', 'retained'])->get();
+            $released = \Illuminate\Support\Facades\Schema::hasTable('v2_machine_failover_budget_release')
+                ? (int) \App\Models\MachineFailoverBudgetRelease::query()->where('service_id', $run->service_id)->sum('amount_cents') : 0;
+            if ($cost <= 0 || (clone $history)->sum('reserved_cents') - $released + $cost > (int) round($service['monthly_cap_usd'] * 100)) throw new CloudException('shared_monthly_budget');
+            app(MachineFailoverBudget::class)->assertCapacity($run->service_id, $run->service_revision, $cost);
+            $active = Attempt::query()->whereNotIn('status', ['rejected', 'failed', 'cancelled', 'completed', 'retained', 'released'])->get();
             if ($active->whereIn('execution_member_id', $members->all())->count() >= $service['max_parallel']) throw new CloudException('parallel_budget');
             $ids = app(MachineCloudCredentialHealth::class)->sameAccountIds($account);
             if ($active->whereIn('account_id', $ids)->isNotEmpty()) throw new CloudException('account_reserved');
@@ -215,6 +218,8 @@ class MachineFailoverNativeBridge
     public function assertAttempt(Attempt $attempt, ?Task $task = null): void
     {
         $this->gate->assertAllowed('native_task');
+        if (\Illuminate\Support\Facades\Schema::hasTable('v2_machine_failover_budget_release')
+            && \App\Models\MachineFailoverBudgetRelease::query()->where('attempt_id', $attempt->id)->exists()) throw new CloudException('budget_released');
         $current = Attempt::query()->find($attempt->id);
         if (!$current || $current->only(['task_id', 'account_id', 'account_revision', 'payload']) !== $attempt->only(['task_id', 'account_id', 'account_revision', 'payload'])) throw new CloudException('native_lineage_changed');
         if ($task === null && $attempt->task_id) $task = Task::query()->findOrFail($attempt->task_id);
@@ -225,10 +230,7 @@ class MachineFailoverNativeBridge
         $credential = app(MachineFailoverCredentials::class); $account = $credential->assertPlan($plan);
         if ($account->id !== $attempt->account_id || $account->revision !== $attempt->account_revision || $account->provider !== 'linode'
             || $plan !== $this->input($policy, array_intersect_key($plan, array_flip(['account_id', 'provider', 'credential_pool'])))) throw new CloudException('native_lineage_changed');
-        if ($task && ($attempt->task_id !== $task->id || $task->admin_id !== $run->admin_id || $task->account_id !== $attempt->account_id
-            || $task->account_revision !== $attempt->account_revision || ($task->payload['coordinated_attempt'] ?? null) !== $attempt->id
-            || ProvisionPlan::normalize($task->payload['plan']) !== $plan
-            || !hash_equals($attempt->payload['task_identity'] ?? '', $this->taskIdentity($task)))) throw new CloudException('native_lineage_changed');
+        if ($task && ($task->admin_id !== $run->admin_id || !$this->bindingCurrent($attempt, $task))) throw new CloudException('native_lineage_changed');
         if (!$task?->dispatched_at) $this->source($member, $policy);
     }
 
@@ -302,6 +304,16 @@ class MachineFailoverNativeBridge
             && in_array($task->evidence['credential_failure_operation'] ?? null, ['create', 'preflight'], true)
             && ($failure['outcome'] ?? null) === 'rejected' && ($failure['rotation_candidate'] ?? false) === true
             && ($failure['requires_review'] ?? true) === false;
+    }
+
+    public function bindingCurrent(Attempt $attempt, Task $task): bool
+    {
+        try {
+            return $attempt->task_id === $task->id && $task->account_id === $attempt->account_id && $task->account_revision === $attempt->account_revision
+                && ($task->payload['coordinated_attempt'] ?? null) === $attempt->id
+                && ProvisionPlan::normalize($task->payload['plan']) === ProvisionPlan::normalize($attempt->payload['plan'])
+                && hash_equals($attempt->payload['task_identity'] ?? '', $this->taskIdentity($task));
+        } catch (\Throwable) { return false; }
     }
 
     public function mayFinishRejected(Task $task, CloudException $error): bool

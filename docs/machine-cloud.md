@@ -979,13 +979,13 @@ its request ID, chosen credential revision and the configured monthly-price
 upper bound in integer cents. Attempts share the service's parallel, attempt
 and price-reservation limits across members. Prior runs' reservations are not
 reset by starting another run or crossing a calendar month; rejected, cancelled,
-retained and completed attempts do not refund the conservative price reserve.
-This is a conservative incremental reservation cap, not an actual bill, provider
-spending limit or live price quote. It covers retained candidates created by this
-journal, not the pre-existing source VM or unjournaled historical resources;
-`price_verified=false` and `baseline_cost_included=false` remain explicit. An
-audited baseline-cost/release workflow is still required before live activation
-or safely reclaiming these reservations. Unknown mutations continue to hold
+retained and completed attempts do not automatically refund the price reserve.
+The separate finance workflow below now adds a verified source/history baseline
+before reserving another attempt and permits an explicit audited local release.
+The bridge's older internal report still describes its incremental reservation
+only (`price_verified=false`, `baseline_cost_included=false`); it is not a quote
+or combined balance. The finance workspace is the combined-balance interface.
+Neither report is an actual bill or provider spending limit. Unknown mutations continue to hold
 their execution slot; account aliases and unknown cloud-account identities do
 not receive a separate account allowance. Native daily limits and cooldowns are
 rechecked under the existing provisioning locks.
@@ -1035,3 +1035,67 @@ orchestration notices are still outstanding. This does not claim complete live
 tanzhen v2 parity or authorize a non-business cloud acceptance run.
 The forwarding integration tests exercise the existing isolated HY2 verifier
 profile; they do not add or certify interoperability for every node protocol.
+
+### Cost Baseline And Reservation Review
+
+`MachineFailoverBudget` adds a local finance workspace to the multi-member page.
+Opening it reads the panel journal only. The explicit cost-check action performs
+bounded GETs against the fixed Linode API; no provider mutation is available.
+The snapshot includes original and unjournaled retained instances, including
+powered-off instances. It deduplicates aliases of the same verified cloud
+account/resource, uses integer cents and regional monthly-price overrides, and
+does not count a journaled candidate twice on top of its conservative reserve.
+New journaled candidates without a current quote retain the full upper-bound
+reservation. Known higher quotes increase the combined allocation.
+
+This is a compute-instance monthly estimate, not an invoice, accumulated usage,
+credit balance, tax calculation or provider-enforced budget. Only the supported
+standard Linode types with one public IPv4, backups disabled and no attached
+volumes have a verified estimate. Unverified add-ons, types, resource identities,
+untracked resources, incomplete inventory and a history footprint over 100 tasks
+block new reservations instead of becoming zero-cost resources. DigitalOcean and
+Vultr pricing/creation are not added by this increment.
+
+A snapshot pins service, policy, machine authority and credential context.
+Credential account identity must already be known and freshly verified by the
+credential-health workflow. Cost reads require the relevant account, Linode,
+type and volume read permissions. Resource absence additionally requires an
+unrestricted account view (`GET /profile/grants` returns an empty 204), exact
+complete inventory pagination/counts and matching account identity/scope before
+and after the read. A restricted or failed query never proves deletion. Cloud
+reads have a 30-second total deadline checked between requests; snapshots expire
+after 300 seconds. Refresh begins with a durable reading record, invalidating
+the previous snapshot immediately. A reading record older than 35 seconds is
+displayed as expired. A failed, changed or superseded refresh cannot resurrect
+old evidence. No periodic provider polling was added.
+
+The native review displays member phases, individual attempts, initialization,
+forwarding and DNS receipt presence, and retained reservations. It exposes no
+start, resume, retry, credential-rotation or cutover endpoint. The new GETs read
+local records; cost capture is a separate POST that still makes only provider
+GETs. The service execution gate continues to reject every real invocation.
+
+A reservation release requires a current administrator, explicit confirmation
+and a short-lived encrypted proof pinned to the exact attempt, current facts and
+administrator. Eligible evidence is limited to a never-dispatched task, a trusted
+typed definite rejection without a resource, or a known resource ID confirmed
+absent in a fresh complete unrestricted snapshot. An uncertain create without an
+external ID cannot be released, even if an inventory is empty. A running member,
+active owned instance, recent Agent report, armed cloud resource or pending DNS
+reference blocks release. Proofs are revalidated under the registry, account and
+quota locks; one immutable release per attempt and request identity prevents
+double credits. The audit retains the task, failure evidence and resource IDs.
+
+Release credits only the panel's price reservation, never a cloud bill, customer
+balance or payment/traffic ledger. It does not delete or stop a VM. It fences the
+released attempt and cancels only unfinished local work so that the old intent
+cannot resume with a refunded reserve. A lost browser receipt triggers readback
+of existing records, not automatic resubmission. Failed reads retain old data
+only as expired. Closing or switching the surrounding service is guarded while
+an explicit finance operation is pending.
+
+Tests use isolated SQLite, cache and mocked cloud responses; browser previews
+use synthetic adapters only. The finance schema has not been migrated in
+production, no real cloud acceptance has run, and no code was deployed by this
+increment. Automatic creation, automatic credential rotation and DNS cutover
+remain disabled; existing tanzhen and kelinode-rs are untouched.

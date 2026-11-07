@@ -164,6 +164,11 @@ class AdminRoute
                 $router->post('/cloud/failover/services/simulate', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'simulate']);
                 $router->get('/cloud/failover/services/run', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'report']);
                 $router->get('/cloud/failover/services/shadow', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'shadow']);
+                $router->get('/cloud/failover/services/native', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverBudgetController::class, 'workspace']);
+                $router->get('/cloud/failover/services/native/run', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverBudgetController::class, 'report']);
+                $router->post('/cloud/failover/services/native/costs', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverBudgetController::class, 'capture']);
+                $router->get('/cloud/failover/services/native/release-preview', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverBudgetController::class, 'preview']);
+                $router->post('/cloud/failover/services/native/release', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverBudgetController::class, 'release']);
                 $router->post('/cloud/failover/services/advance', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'advance']);
                 $router->post('/cloud/failover/services/cancel', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'cancel']);
                 $router->get('/cloud/failover/catalog', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'catalog']);

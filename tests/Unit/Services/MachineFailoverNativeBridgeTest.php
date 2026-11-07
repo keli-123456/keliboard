@@ -67,6 +67,9 @@ class MachineFailoverNativeBridgeTest extends TestCase
         parent::setUp(); $this->setUpInMemoryDatabase(); $this->bindJsonResponseFactory();
         app()->instance('encrypter', new Encrypter(str_repeat('n', 32), 'AES-256-CBC'));
         app()->instance(\Illuminate\Contracts\Bus\Dispatcher::class, new \Illuminate\Bus\Dispatcher(app())); Bus::fake();
+        $budget = \Mockery::mock(\App\Services\ServerMachine\Cloud\MachineFailoverBudget::class);
+        $budget->shouldReceive('assertCapacity')->andReturnNull();
+        app()->instance(\App\Services\ServerMachine\Cloud\MachineFailoverBudget::class, $budget);
         foreach (['machine_provision', 'machine_failover', 'machine_acceptance'] as $key) config([$key => require base_path('config/' . $key . '.php')]);
         foreach (['2026_11_05_160000_create_machine_dns_tables.php', '2026_11_05_170000_create_machine_cloud_tables.php',
             '2026_11_05_200000_create_machine_operation_notices.php', '2026_11_05_220000_create_machine_provision_tasks.php',
@@ -212,11 +215,14 @@ class MachineFailoverNativeBridgeTest extends TestCase
                     $row = ['id' => 1000 + count($this->posts), 'label' => $request['label'], 'tags' => $request['tags'], 'region' => $request['region'],
                         'type' => $request['type'], 'image' => $request['image'], 'created' => gmdate('Y-m-d\TH:i:s'), 'status' => 'running',
                         'ipv4' => [count($this->posts) === 1 ? '8.8.4.4' : '9.9.9.11'], 'ipv6' => ''];
+                    $row['backups'] = ['enabled' => false];
                     if ($this->mode !== 'unknown_absent') $this->remote[$row['id']] = $row;
                     if (str_starts_with($this->mode, 'unknown')) return Http::response([], 503);
                     return Http::response($row);
                 }
                 if (str_ends_with($url, '/v4/account')) return Http::response(['euuid' => 'fixture-account-' . substr(hash('sha256', $request->header('Authorization')[0]), 0, 16)]);
+                if (str_ends_with($url, '/profile/grants')) return Http::response('', 204);
+                if (str_contains($url, '/volumes?')) return Http::response(['page' => 1, 'pages' => 1, 'results' => 0, 'data' => []]);
                 if (str_contains($url, '/regions/')) return Http::response(['id' => 'sg-sin-2', 'status' => 'ok', 'capabilities' => ['Metadata']]);
                 if (str_contains($url, '/images/')) return Http::response(['id' => 'linode/debian12', 'status' => 'available', 'deprecated' => false, 'capabilities' => ['cloud-init']]);
                 if (str_contains($url, '/linode/types/')) return Http::response(['id' => 'g6-standard-4', 'class' => 'standard', 'price' => ['monthly' => 48], 'region_prices' => []]);
@@ -224,7 +230,8 @@ class MachineFailoverNativeBridgeTest extends TestCase
                 if (preg_match('~/linode/instances/(\d+)$~', $url, $m)) return Http::response($this->remote[(int) $m[1]]);
                 if (str_contains($url, '/linode/instances?')) {
                     $filter = json_decode($request->header('X-Filter')[0] ?? '{}', true);
-                    return Http::response(['data' => array_values(array_filter($this->remote, fn ($row) => !isset($filter['label']) || $filter['label'] === $row['label'])), 'pages' => 1]);
+                    $rows = array_values(array_filter($this->remote, fn ($row) => !isset($filter['label']) || $filter['label'] === $row['label']));
+                    return Http::response(['data' => $rows, 'pages' => 1, 'page' => 1, 'results' => count($rows)]);
                 }
             }
             if ($url === 'https://verifier.example.test/v1/verify') {
@@ -586,5 +593,44 @@ class MachineFailoverNativeBridgeTest extends TestCase
     {
         $this->start(); $this->expectException(\RuntimeException::class);
         (require base_path('database/migrations/2026_11_07_180000_create_machine_failover_native_journal.php'))->down();
+    }
+
+    private function realCostGuard(): \App\Services\ServerMachine\Cloud\MachineFailoverBudget
+    {
+        (require base_path('database/migrations/2026_11_07_190000_create_machine_failover_finance.php'))->up();
+        app()->forgetInstance(\App\Services\ServerMachine\Cloud\MachineFailoverBudget::class);
+        foreach ($this->fixtures as $index => $f) {
+            $source = $f['source']; $plan = $source->payload['plan'];
+            $request = ['label' => 'keli-' . str_replace('-', '', $source->id), 'tags' => [$source->marker],
+                'region' => $plan['region'], 'type' => $plan['size'], 'image' => $plan['image']];
+            $source->fill(['payload' => ['plan' => $plan, 'request' => $request], 'external_id' => (string) (900 + $index),
+                'provider_created_at' => gmdate('Y-m-d\TH:i:s\Z', time() - 86401), 'dispatched_at' => time() - 86401])->save();
+            $this->remote[900 + $index] = ['id' => 900 + $index, 'label' => $request['label'], 'tags' => $request['tags'], 'region' => $plan['region'],
+                'type' => $plan['size'], 'image' => $plan['image'], 'created' => $source->provider_created_at, 'status' => 'running',
+                'ipv4' => [$f['sourceIp']], 'ipv6' => '', 'backups' => ['enabled' => false]];
+        }
+        return app(\App\Services\ServerMachine\Cloud\MachineFailoverBudget::class);
+    }
+
+    public function test_native_reserve_requires_a_fresh_real_cost_baseline_even_when_all_execution_gates_are_test_injected(): void
+    {
+        $this->realCostGuard(); $run = $this->advance($this->start());
+        $this->assertSame('cost_baseline_required', $run['members'][0]['reason'], json_encode($run));
+        $this->assertSame(0, Attempt::count()); $this->assertSame([], $this->posts);
+    }
+
+    public function test_native_rotation_consumes_existing_source_cost_and_release_never_resumes_the_old_attempt(): void
+    {
+        $finance = $this->realCostGuard(); $this->mode = 'reject'; $run = $this->start(230);
+        $execution = Execution::query()->find($run['id']);
+        $finance->capture($execution->service_id, 1, $this->admin->id);
+        $run = $this->advance($run); $run = $this->advance($run);
+        $this->assertSame('shared_monthly_budget', $run['members'][0]['reason'], json_encode($run));
+        $this->assertCount(1, $this->posts); $attempt = Attempt::query()->first();
+        $preview = $finance->previewRelease($attempt->id, $this->admin->id); $this->assertTrue($preview['eligible'], json_encode($preview));
+        $finance->release($attempt->id, $preview['proof_token'], str_repeat('f', 32), $this->admin->id);
+        $finance->assertCapacity($execution->service_id, 1, 10000);
+        $this->code('budget_released', fn () => app(MachineFailoverNativeBridge::class)->assertAttempt($attempt->fresh()));
+        $this->advance($run); $this->assertCount(1, $this->posts);
     }
 }
