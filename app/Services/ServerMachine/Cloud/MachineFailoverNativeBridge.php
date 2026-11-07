@@ -39,7 +39,7 @@ class MachineFailoverNativeBridge
             || count(array_unique($planIds, SORT_REGULAR)) !== count($planIds)) throw new CloudException('invalid_native_intent');
         foreach ($planIds as $id) if (!is_int($id) || $id < 1) throw new CloudException('invalid_native_intent');
         sort($planIds);
-        return $this->registry->locked(fn () => DB::transaction(function () use ($service, $revision, $planIds, $releaseId, $request, $admin) {
+        $result = $this->registry->locked(fn () => DB::transaction(function () use ($service, $revision, $planIds, $releaseId, $request, $admin) {
             $this->gate->assertAllowed('start'); $this->registry->actor($admin);
             $snapshot = $this->registry->snapshot($service, $revision); $release = $this->release($releaseId);
             $intent = $this->hash([$service, $revision, $planIds, $release]); $key = $this->hash([$admin, $request]);
@@ -74,6 +74,8 @@ class MachineFailoverNativeBridge
             foreach ($rows as $row) Member::query()->create($row + ['execution_id' => $run->id]);
             return $this->report($run->id, $admin);
         }));
+        app(\App\Services\ServerMachine\MachineOperationNotifier::class)->failoverRun($result['id']);
+        return $result;
     }
 
     public function advance(string $id, int $admin): array
@@ -104,6 +106,7 @@ class MachineFailoverNativeBridge
         $phases = Member::query()->where('execution_id', $id)->pluck('phase')->all();
         if (!array_diff($phases, self::FINISHED)) $run->fill(['status' => in_array('needs_review', $phases, true) ? 'needs_review'
             : (count(array_unique($phases)) === 1 ? $phases[0] : 'stopped')])->save();
+        app(\App\Services\ServerMachine\MachineOperationNotifier::class)->failoverRun($id);
         return $this->report($id, $admin);
     }
 

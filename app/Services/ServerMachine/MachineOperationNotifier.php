@@ -50,6 +50,7 @@ class MachineOperationNotifier
         DB::transaction(function () use ($scope, $enabled, $revision, $admin) {
             $row = DB::table(self::POLICY)->where('scope', $scope)->lockForUpdate()->first();
             if (!$row || (int) $row->revision !== $revision) throw new MachineOperationNoticeException('policy_changed');
+            if ($scope === 'failover' && $enabled) app(MachineFailoverNoticeSource::class)->baseline();
             DB::table(self::POLICY)->where('scope', $scope)->update(['enabled' => $enabled, 'revision' => $revision + 1,
                 'updated_by' => $admin, 'updated_at' => time()]);
             Notice::query()->where('scope', $scope)->where('status', 'pending')->update(['status' => 'suppressed', 'delivery_reason' => 'policy_changed']);
@@ -129,6 +130,33 @@ class MachineOperationNotifier
         });
     }
 
+    public function failover(int $member): void
+    {
+        $this->safely(function () use ($member) {
+            if (!$this->scopeAvailable('failover')) return;
+            $this->locked('failover', $member, fn () => DB::transaction(fn () => app(MachineFailoverNoticeSource::class)->capture($member,
+                fn ($phase, $context, $snapshot) => $this->record('failover', $member, null, (string) Str::uuid(), $phase, $context, $snapshot, null))));
+        });
+    }
+
+    public function failoverRun(string $run): void
+    {
+        $this->safely(function () use ($run) {
+            if (!$this->scopeAvailable('failover')) return;
+            foreach (\App\Models\MachineFailoverExecutionMember::query()->where('execution_id', $run)->pluck('id') as $id) $this->failover((int) $id);
+        });
+    }
+
+    public function failoverCosts(int $service): void
+    {
+        $this->safely(function () use ($service) {
+            if (!$this->scopeAvailable('failover') || !DB::table(self::POLICY)->where('scope', 'failover')->value('enabled')) return;
+            DB::table('v2_machine_failover_notice_state')->whereIn('member_id', \App\Models\MachineFailoverExecutionMember::query()
+                ->whereIn('execution_id', \App\Models\MachineFailoverExecution::query()->where('service_id', $service)->select('id'))->select('id'))
+                ->update(['next_scan_at' => 0]);
+        });
+    }
+
     private function record(string $scope, int $source, ?int $resource, ?string $episode, string $phase, string $context, array $snapshot, ?string $suppress): Notice
     {
         $policy = DB::table(self::POLICY)->where('scope', $scope)->first();
@@ -179,6 +207,7 @@ class MachineOperationNotifier
 
     private function current(Notice $notice): bool
     {
+        if ($notice->scope === 'failover') return app(MachineFailoverNoticeSource::class)->current($notice);
         if ($notice->scope === 'provision') {
             if (!$this->scopeAvailable('provision')) return false;
             $row = MachineReplacementTask::query()->find($notice->source_id);
@@ -208,6 +237,9 @@ class MachineOperationNotifier
     public function advance(): array
     {
         if (!$this->available()) return ['queued' => 0, 'unknown' => 0];
+        $this->safely(function () {
+            if ($this->scopeAvailable('failover')) foreach (app(MachineFailoverNoticeSource::class)->due() as $id) $this->failover($id);
+        });
         try { app(MachineReplacementService::class)->refreshStatuses(); }
         catch (\Throwable) { Log::warning('[MachineReplacement] Status reconciliation unavailable'); }
         $unknown = Notice::query()->where('status', 'sending')->where('claimed_at', '<', time() - 300)
@@ -248,6 +280,7 @@ class MachineOperationNotifier
     }
     private function scopeAvailable(string $scope): bool
     {
+        if ($scope === 'failover') return app(MachineFailoverNoticeSource::class)->available();
         return $scope !== 'provision' || (Schema::hasTable('v2_machine_replacement_task')
             && DB::table(self::POLICY)->where('scope', $scope)->exists());
     }
@@ -263,7 +296,7 @@ class MachineOperationNotifier
     }
     private function scope(string $scope): void
     {
-        if (!in_array($scope, ['cloud', 'dns', 'provision'], true)) throw new MachineOperationNoticeException('invalid_scope');
+        if (!in_array($scope, ['cloud', 'dns', 'provision', 'failover'], true)) throw new MachineOperationNoticeException('invalid_scope');
     }
     private function locked(string $scope, int $id, callable $work): mixed
     {

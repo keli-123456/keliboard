@@ -406,6 +406,22 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $this->assertCount(2, array_unique(Attempt::query()->get()->map(fn ($row) => $row->payload['forwarding_receipt'])->all()));
     }
 
+    public function test_native_notification_hooks_accept_real_internal_receipts_without_extra_cloud_operations(): void
+    {
+        foreach (['2026_11_07_190000_create_machine_failover_finance.php', '2026_11_07_200000_create_machine_failover_review.php',
+            '2026_11_07_210000_create_machine_failover_notice_state.php'] as $file) (require base_path('database/migrations/' . $file))->up();
+        $notifier = new class extends \App\Services\ServerMachine\MachineOperationNotifier { protected function channelReady(): bool { return true; } };
+        app()->instance(\App\Services\ServerMachine\MachineOperationNotifier::class, $notifier);
+        $notifier->save('failover', true, 1, $this->admin->id);
+        $run = $this->ready($this->advance($this->start())); $run = $this->advance($run);
+        $this->assertSame('completed', $run['status']); $this->assertCount(1, $this->posts); $this->assertSame(1, $this->verifications); $this->assertSame(1, $this->dnsWrites);
+        $notices = \App\Models\MachineOperationNotice::query()->where('scope', 'failover')->get();
+        $this->assertTrue($notices->contains('phase', 'progress')); $this->assertTrue($notices->contains('phase', 'forwarding_verified'));
+        $completion = $notices->firstWhere('phase', 'completed'); $this->assertNotNull($completion, $notices->toJson());
+        $this->assertTrue(app(\App\Services\ServerMachine\MachineFailoverNoticeSource::class)->current($completion));
+        \Illuminate\Support\Facades\Bus::assertDispatched(\App\Jobs\SendMachineOperationNoticeJob::class);
+    }
+
     public function test_crash_after_dns_prepare_reattaches_the_same_intent_without_creating_a_second_one(): void
     {
         $run = $this->ready($this->advance($this->start())); $attempt = Attempt::query()->first();

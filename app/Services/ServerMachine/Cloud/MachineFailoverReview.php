@@ -124,7 +124,7 @@ class MachineFailoverReview
         if (!$this->available() || !in_array($operation, ['claim', 'close', 'restore'], true) || !preg_match('/^[a-f0-9]{32}$/D', $request)) throw new CloudException('invalid_review_request');
         $initial = Check::query()->findOrFail($checkId);
         $task = $initial->attempt_id ? Task::query()->find(Attempt::query()->findOrFail($initial->attempt_id)->task_id) : null;
-        return $this->registry->locked(fn () => Cache::lock('machine-cloud:quota:linode', 120)->block(2,
+        $result = $this->registry->locked(fn () => Cache::lock('machine-cloud:quota:linode', 120)->block(2,
             fn () => Cache::lock('machine-cloud:account:' . ($task?->account_id ?? 'review-empty'), 120)->block(2,
                 fn () => DB::transaction(function () use ($checkId, $operation, $request, $admin) {
                     $this->registry->actor($admin); $check = Check::query()->whereKey($checkId)->lockForUpdate()->firstOrFail();
@@ -173,6 +173,8 @@ class MachineFailoverReview
                     }
                     return $result;
                 }))));
+        app(\App\Services\ServerMachine\MachineOperationNotifier::class)->failover((int) $result['member_id']);
+        return $result;
     }
     private function hash(mixed $value): string { return hash('sha256', json_encode($value, JSON_THROW_ON_ERROR)); }
 }

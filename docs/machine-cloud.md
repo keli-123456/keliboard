@@ -1173,3 +1173,62 @@ but the UI no longer renders those alone as a fresh passing test.
 All verification for this increment uses isolated database/cache/cloud fixtures
 and local browser adapters. No real VM was created, claimed or deleted, no real
 DNS was changed, and no existing tanzhen service or node binary was touched.
+
+### Native Failover Notifications
+
+Native multi-member journals use the existing `admin_operations` outbox and
+Telegram administrator channel, with a separate `failover` policy that defaults
+to off. Enabling the policy baselines existing member, review and resource-risk
+signals in the same transaction as the policy revision. Historical entries and
+events from a disabled period are not replayed. The UI is a collapsed section
+under multi-member orchestration; opening it reads local notification history
+only. A policy change is explicitly confirmed and never enables execution.
+
+The source reads native journals, stopped-run review actions, owned-instance
+records and already captured cost snapshots. It does not call provider APIs,
+collect new telemetry, run acceptance, advance a task, release budget, or alter
+cloud/DNS state. Start/advance/review hooks run after their business transaction;
+completed cost reads mark the relevant local notice cursors due. The existing
+minute notification command also scans at most 100 due members, covering missed
+hooks and deadlines. Notification failures cannot fail a business transaction.
+Typical rechecks are one minute for active members, five minutes for review,
+one hour for retained-risk records and one day for settled completed/cancelled
+members. This bounded sweep can take multiple ticks for a large backlog; it is
+not a five-second real-time alerting SLA.
+
+Progress, timeout, uncertain/review, budget blocks, retention, claim/closure/
+restore and original IPv4-probe recovery are distinct events. Routine progress
+is coalesced to one per member per ten minutes; critical stage changes are not
+held by that progress cooldown. A durable per-member cursor prevents a pruned
+30-day outbox record from being recreated. Retention risk starts after an hour
+and repeats at most daily per member. The warning includes stopped candidates
+and a retained old source after cutover, but never the active accepted candidate.
+A matching fresh unrestricted absence observation suppresses the warning. A
+released attempt stays quiet unless later matching positive cost evidence finds
+that resource again. An unknown result is not treated as zero cost or absence.
+All monetary wording is potential ongoing charges, not an observed invoice.
+
+Forwarding/DNS success notices require pinned attempt/task/account/installation/
+release identities and matching receipt digests. The isolated acceptance record
+must have completed cleanup and still be within its recorded validity window.
+DNS additionally requires the exact native request, original/target instances,
+owned record and a verified provider readback. Missing, forged or expired proof
+is a review signal, never success. These remain historical synthetic forwarding
+and provider readback facts, not proof of current client service, worldwide DNS
+propagation or all-user recovery. Probe recovery requires a fresh matching
+original-instance observation and never implies forwarding recovery.
+
+Before submission, the notice worker checks current authorization, policy
+revision, source context, phase, proof and expiry under its existing delivery
+claim. Changed or obsolete notices are suppressed. Telegram queue submission is
+not proof of recipient delivery; uncertain submission is never blindly retried.
+Only whitelisted codes, numeric IDs, shortened run/installation references and
+receipt times enter the outbox/Telegram text. Raw provider errors, credentials,
+configuration, customer data and logs do not enter notification snapshots.
+
+Migration `2026_11_07_210000` adds a disabled policy and persistent local cursors;
+downgrade refuses to erase populated notification evidence. Verification uses
+in-memory databases, fake transports and local browser adapters only. This
+increment is not deployed or enabled in production. Real creation, automatic
+rotation and DNS cutover remain hard-disabled. Existing tanzhen and kelinode-rs
+are untouched; no production notification or cloud acceptance has been run.

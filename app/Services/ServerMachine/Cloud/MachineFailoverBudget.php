@@ -159,7 +159,7 @@ class MachineFailoverBudget
             if (in_array('present', $states, true) && in_array('absent', $states, true)) $items[$entry['task']->id] = [
                 'state' => 'unknown', 'monthly_cents' => null, 'reason' => 'cost_inventory_inconsistent', 'absence_verified' => false, 'identity' => $entry['identity']];
         }
-        return $this->registry->locked(fn () => DB::transaction(function () use ($id, $revision, $admin, $graph, $snapshot, $items, $deadline) {
+        $result = $this->registry->locked(fn () => DB::transaction(function () use ($id, $revision, $admin, $graph, $snapshot, $items, $deadline) {
             $service = $this->scope($id, $revision, $admin);
             if (microtime(true) > $deadline) throw new CloudException('cost_read_timeout');
             if ($this->latest($id)?->id !== $snapshot->id) throw new CloudException('cost_read_superseded');
@@ -167,6 +167,8 @@ class MachineFailoverBudget
             $snapshot->fill(['payload' => ['state' => 'complete', 'items' => $items], 'checked_at' => time(), 'valid_until' => time() + 300])->save();
             return $this->workspace($id, $revision, $admin);
         }));
+        app(\App\Services\ServerMachine\MachineOperationNotifier::class)->failoverCosts($id);
+        return $result;
     }
 
     public function assertCapacity(int $id, int $revision, int $additionalCents): void

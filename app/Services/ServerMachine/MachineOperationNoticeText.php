@@ -38,10 +38,12 @@ final class MachineOperationNoticeText
         'failed' => '替换任务失败', 'completed' => '独立 DNS 切换回读已核验'];
 
     public static function reason(string $code): string { return isset(self::REASONS[$code]) ? $code : 'unknown'; }
+    public static function description(string $code): string { return self::REASONS[self::reason($code)]; }
 
     public static function message(MachineOperationNotice $notice): string
     {
         $s = $notice->snapshot;
+        if ($notice->scope === 'failover') return MachineFailoverNoticeText::message($notice);
         if ($notice->scope === 'provision') {
             $title = match ($notice->phase) { 'failed' => '替换任务失败', 'uncertain' => '替换结果待核对',
                 'recovered' => '原实例 IPv4 探测恢复', 'completed' => '替换 DNS 回读已核验', default => '替换任务进度' };
