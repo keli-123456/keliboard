@@ -151,7 +151,9 @@ final class NativeFailoverConcurrentFixture
         $bus = new \Illuminate\Bus\Dispatcher(app(), fn ($connection) => app('queue')->connection($connection));
         app()->instance(\Illuminate\Contracts\Bus\Dispatcher::class, $bus); app()->instance(\Illuminate\Contracts\Bus\QueueingDispatcher::class, $bus); Bus::swap($bus);
         $exceptions = new class implements \Illuminate\Contracts\Debug\ExceptionHandler {
-            public function report(\Throwable $e) { NativeFailoverConcurrentFixture::event('worker_error', NativeFailoverConcurrentFixture::errorCode($e)); }
+            public function report(\Throwable $e) {
+                NativeFailoverConcurrentFixture::event($e instanceof \Illuminate\Queue\MaxAttemptsExceededException ? 'queue_exhausted' : 'worker_error', NativeFailoverConcurrentFixture::errorCode($e));
+            }
             public function shouldReport(\Throwable $e) { return true; }
             public function render($request, \Throwable $e) { throw new \RuntimeException('HTTP rendering is unavailable in a fixture worker.'); }
             public function renderForConsole($output, \Throwable $e) { $output->writeln('Fixture worker failed.'); }

@@ -29,7 +29,8 @@ final class NativeFailoverConcurrencyTest extends TestCase
         foreach (array_keys($this->workers) as $id) $this->join($id, true);
         $summary = ['case' => $this->name(), 'isolation' => getenv('KELI_NATIVE_ISOLATION'), 'workers' => count($this->workers),
             'killed_workers' => $this->killed, 'mock_creates' => $this->eventCount('create'), 'mock_dns_writes' => $this->eventCount('dns_write'),
-            'worker_errors' => $this->eventCount('worker_error'), 'member_reasons' => Member::query()->whereNotNull('reason')->pluck('reason')->all(),
+            'worker_errors' => $this->eventCount('worker_error'), 'exhausted_jobs' => $this->eventCount('queue_exhausted'),
+            'failed_queue_jobs' => $this->eventCount('job_failed'), 'member_reasons' => Member::query()->whereNotNull('reason')->pluck('reason')->all(),
             'runtime_reason' => Runtime::query()->find($this->run['id'])->reason,
             'cloud_mocked' => true, 'dns_mocked' => true, 'production_connections' => 0, 'cleanup' => false];
         try { $this->fixture->cleanup(); $summary['cleanup'] = true; }
@@ -75,7 +76,12 @@ final class NativeFailoverConcurrencyTest extends TestCase
     }
     private function eventCount(string $kind): int { return DB::table('native_fixture_event')->where('kind', $kind)->count(); }
     private function errors(): string { return implode(', ', [...DB::table('native_fixture_event')->where('kind', 'worker_error')->pluck('reference')->all(), ...Member::query()->whereNotNull('reason')->pluck('reason')->all()]); }
-    private function cleanWorkers(): void { $this->assertSame(0, $this->eventCount('worker_error'), $this->errors()); }
+    private function cleanWorkers(bool $expectedExhausted = false): void
+    {
+        $this->assertSame(0, $this->eventCount('worker_error'), $this->errors());
+        $this->assertSame($expectedExhausted ? 1 : 0, $this->eventCount('queue_exhausted'));
+        $this->assertSame($expectedExhausted ? 1 : 0, $this->eventCount('job_failed'));
+    }
     private function workOnce(): void { $this->fixture->due($this->run['id']); $this->join($this->spawn()); $this->cleanWorkers(); }
     private function runStatus(): string { return (string) Execution::query()->findOrFail($this->run['id'])->status; }
 
@@ -131,7 +137,7 @@ final class NativeFailoverConcurrencyTest extends TestCase
         $this->assertSame(1, $this->eventCount('create')); $this->assertSame(1, Attempt::query()->count());
         $this->assertNotNull(Task::query()->findOrFail(Attempt::query()->first()->task_id)->external_id);
         $redis = app('redis')->connection(); foreach ($redis->zrange('queues:admin_operations:reserved', 0, -1) as $payload) $redis->zadd('queues:admin_operations:reserved', 0, $payload);
-        $this->join($this->spawn()); $this->assertSame(1, $this->eventCount('create')); $this->cleanWorkers();
+        $this->join($this->spawn()); $this->assertSame(1, $this->eventCount('create')); $this->cleanWorkers(true);
     }
     public function test_expired_live_worker_cannot_overwrite_a_new_workers_reconciliation(): void
     {
