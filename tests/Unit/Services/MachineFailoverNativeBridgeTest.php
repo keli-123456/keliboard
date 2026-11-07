@@ -994,4 +994,21 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $this->assertSame('retained', Member::query()->first()->phase); $this->assertCount(2, $this->posts); $this->assertSame(0, $this->dnsWrites);
         $this->assertSame(20000, Attempt::query()->sum('reserved_cents')); $this->assertSame(0, \App\Models\MachineFailoverBudgetRelease::count());
     }
+    public function test_runner_accepts_mysql_object_key_normalization_without_relaxing_pinned_values(): void
+    {
+        $reorder = function ($value) use (&$reorder) {
+            if (!is_array($value)) return $value;
+            if (!array_is_list($value)) ksort($value, SORT_STRING);
+            return array_map($reorder, $value);
+        };
+        $roundTrip = function () use ($reorder) {
+            foreach ([Execution::class, Member::class, Attempt::class, Task::class] as $model) foreach ($model::query()->get() as $row) {
+                $row->payload = $reorder($row->payload); $row->save();
+            }
+        };
+        $run = $this->runtimeStart(); $roundTrip(); $run = $this->tick($run);
+        $this->assertCount(1, $this->posts); $roundTrip(); $this->runtimeReady($run); $run = $this->tick($run);
+        $this->assertSame('awaiting_dns', $run['members'][0]['phase'], $run['members'][0]['reason'] ?? 'no reason');
+        $roundTrip(); $run = $this->tick($run); $this->assertSame('completed', $run['status']);
+    }
 }

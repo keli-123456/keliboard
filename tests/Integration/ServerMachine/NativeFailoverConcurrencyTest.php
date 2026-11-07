@@ -29,7 +29,9 @@ final class NativeFailoverConcurrencyTest extends TestCase
         foreach (array_keys($this->workers) as $id) $this->join($id, true);
         $summary = ['case' => $this->name(), 'isolation' => getenv('KELI_NATIVE_ISOLATION'), 'workers' => count($this->workers),
             'killed_workers' => $this->killed, 'mock_creates' => $this->eventCount('create'), 'mock_dns_writes' => $this->eventCount('dns_write'),
-            'worker_errors' => $this->eventCount('worker_error'), 'cloud_mocked' => true, 'dns_mocked' => true, 'production_connections' => 0, 'cleanup' => false];
+            'worker_errors' => $this->eventCount('worker_error'), 'member_reasons' => Member::query()->whereNotNull('reason')->pluck('reason')->all(),
+            'runtime_reason' => Runtime::query()->find($this->run['id'])->reason,
+            'cloud_mocked' => true, 'dns_mocked' => true, 'production_connections' => 0, 'cleanup' => false];
         try { $this->fixture->cleanup(); $summary['cleanup'] = true; }
         finally {
             $dir = dirname(__DIR__, 3) . '/artifacts'; if (!is_dir($dir)) mkdir($dir, 0700, true);
@@ -72,7 +74,7 @@ final class NativeFailoverConcurrencyTest extends TestCase
         $this->wait(fn () => (int) app('redis')->connection()->get('fixture-barrier:' . $phase) >= $count, $phase);
     }
     private function eventCount(string $kind): int { return DB::table('native_fixture_event')->where('kind', $kind)->count(); }
-    private function errors(): string { return implode(', ', DB::table('native_fixture_event')->where('kind', 'worker_error')->pluck('reference')->all()); }
+    private function errors(): string { return implode(', ', [...DB::table('native_fixture_event')->where('kind', 'worker_error')->pluck('reference')->all(), ...Member::query()->whereNotNull('reason')->pluck('reason')->all()]); }
     private function cleanWorkers(): void { $this->assertSame(0, $this->eventCount('worker_error'), $this->errors()); }
     private function workOnce(): void { $this->fixture->due($this->run['id']); $this->join($this->spawn()); $this->cleanWorkers(); }
     private function runStatus(): string { return (string) Execution::query()->findOrFail($this->run['id'])->status; }
@@ -91,7 +93,7 @@ final class NativeFailoverConcurrencyTest extends TestCase
     }
     public function test_duplicate_queue_payloads_are_fenced_across_three_workers(): void
     {
-        $this->seed(); $redis = app('redis')->connection(); $payload = $redis->lindex('queues:admin_operations', 0);
+        $this->seed(); $redis = app('redis')->connection(); $payload = $redis->lindex('queues:admin_operations', 0) ?: ($redis->zrange('queues:admin_operations:delayed', 0, 0)[0] ?? null);
         $this->assertIsString($payload); $redis->rpush('queues:admin_operations', $payload, $payload);
         $ids = [$this->spawn(), $this->spawn(), $this->spawn()]; foreach ($ids as $id) $this->join($id);
         $this->cleanWorkers(); $this->assertSame(1, $this->eventCount('create')); $this->assertSame(1, Attempt::query()->count());
@@ -103,7 +105,7 @@ final class NativeFailoverConcurrencyTest extends TestCase
         Runtime::query()->whereKey($this->run['id'])->update(['next_dispatch_at' => 0]);
         $ids = [$this->spawn('recover'), $this->spawn('recover')]; foreach ($ids as $id) $this->join($id);
         $this->assertSame(2, Runtime::query()->find($this->run['id'])->generation);
-        $this->assertSame(1, app('redis')->connection()->llen('queues:admin_operations')); $this->workOnce();
+        $redis = app('redis')->connection(); $this->assertSame(1, $redis->llen('queues:admin_operations') + $redis->zcard('queues:admin_operations:delayed')); $this->workOnce();
         $this->assertSame(1, $this->eventCount('create')); $this->assertSame(1, Attempt::query()->count());
     }
     public function test_real_queue_connection_failure_preserves_the_ticket_until_recovery(): void

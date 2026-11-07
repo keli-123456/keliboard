@@ -140,7 +140,7 @@ class MachineInstanceAcceptance
         $fields = ['revision', 'policy_id', 'policy_revision', 'task_id', 'installation_id', 'release_id', 'binary_sha256', 'version',
             'ip', 'resource_id', 'active_policy_id', 'status', 'verification', 'verified_until', 'challenge_id', 'challenge_deadline'];
         $stored = $instance->fresh();
-        if (!$stored || $stored->only($fields) !== $instance->only($fields)) throw new CloudException('acceptance_evidence_changed');
+        if (!$stored || !MachineIntentJson::same($stored->only($fields), $instance->only($fields))) throw new CloudException('acceptance_evidence_changed');
         if ($instance->policy_id !== $policy->id) throw new CloudException('ownership_mismatch');
         $task = Task::query()->findOrFail($instance->task_id); $account = $this->task($policy, $task);
         if (isset($task->payload['isolated_acceptance'])) {
@@ -159,13 +159,13 @@ class MachineInstanceAcceptance
         if ($instance->policy_revision !== $policy->revision || !$instance->resource_id || $instance->verified_until <= time()
             || empty($instance->verification['cleanup_complete']) || empty($instance->verification['context'])
             || ($instance->verification['verifier_fingerprint'] ?? null) !== $this->verifier->configuration($policy->id)['fingerprint']
-            || $this->evidence->capture($instance, $policy) !== $instance->verification['context']) throw new CloudException('acceptance_expired');
+            || !MachineIntentJson::same($this->evidence->capture($instance, $policy), $instance->verification['context'])) throw new CloudException('acceptance_expired');
         $this->remote($instance, $task, $account);
         $resource = MachineCloudResource::query()->find($instance->resource_id);
         if (!$resource || $resource->account_id !== $task->account_id || $resource->external_id !== $task->external_id
             || $resource->provider_created_at !== $task->provider_created_at || $resource->machine_id !== $policy->machine_id
             || $resource->installation_id !== $instance->installation_id || $resource->auto_boot || $resource->armed || $resource->active_task_id
-            || $instance->verified_until <= time() || $this->evidence->capture($instance, $policy) !== $instance->verification['context']) throw new CloudException('acceptance_expired');
+            || $instance->verified_until <= time() || !MachineIntentJson::same($this->evidence->capture($instance, $policy), $instance->verification['context'])) throw new CloudException('acceptance_expired');
         $this->scope($instance, $policy->fresh(), $policy->revision, $admin);
     }
 

@@ -45,4 +45,8 @@ final class NativeFailoverFixtureGuardTest extends TestCase
         $this->assertStringNotContainsString('secrets.', json_encode($workflow));
         $this->assertStringNotContainsString('deploy', json_encode($job['steps']));
     }
+    public function test_concurrent_test_class_loads_without_booting_a_database(): void
+    {
+        $this->assertTrue(class_exists(\Tests\Integration\ServerMachine\NativeFailoverConcurrencyTest::class));
+    }
 }

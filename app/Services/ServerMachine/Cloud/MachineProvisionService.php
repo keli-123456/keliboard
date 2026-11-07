@@ -100,8 +100,8 @@ class MachineProvisionService
                 app(MachineFailoverNativeBridge::class)->assertAttempt($attempt);
                 $member = \App\Models\MachineFailoverExecutionMember::query()->findOrFail($attempt->execution_member_id);
                 $execution = \App\Models\MachineFailoverExecution::query()->findOrFail($member->execution_id);
-                if ($attempt->request_id !== $requestId || ProvisionPlan::normalize($attempt->payload['plan']) !== $plan || $execution->admin_id !== $admin) throw new CloudException('native_lineage_changed');
-                $hash = hash('sha256', $hash . ':' . $attempt->id);
+                if ($attempt->request_id !== $requestId || !MachineIntentJson::same(ProvisionPlan::normalize($attempt->payload['plan']), $plan) || $execution->admin_id !== $admin) throw new CloudException('native_lineage_changed');
+                $hash = hash('sha256', MachineIntentJson::encode($plan) . ':' . $attempt->id);
             }
             if ($replacementPlan !== null) {
                 $source = \App\Models\MachineFailoverPlan::query()->findOrFail($replacementPlan);

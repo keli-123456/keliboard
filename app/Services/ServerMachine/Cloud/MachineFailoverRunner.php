@@ -199,7 +199,8 @@ class MachineFailoverRunner
             $prior = DB::table(self::EVENTS)->where('request_key', $key)->first();
             if ($prior) { if (!hash_equals($prior->intent_hash, $intent)) throw new CloudException('request_conflict'); return; }
             Runtime::query()->firstOrCreate(['execution_id' => $id]); $row = Runtime::query()->whereKey($id)->lockForUpdate()->firstOrFail();
-            $prior = DB::table(self::EVENTS)->where('request_key', $key)->first();
+            // A consistent read could retain the snapshot from before the row-lock wait.
+            $prior = DB::table(self::EVENTS)->where('request_key', $key)->lockForUpdate()->first();
             if ($prior) { if (!hash_equals($prior->intent_hash, $intent)) throw new CloudException('request_conflict'); return; }
             if ($row->revision !== $revision) throw new CloudException('runtime_changed');
             if ($run->status !== 'running' && !$row->stop_requested_at) throw new CloudException('runtime_not_running');

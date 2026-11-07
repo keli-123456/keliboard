@@ -236,7 +236,7 @@ class MachineFailoverNativeBridge
         if (app(MachineFailoverReview::class)->available() && \App\Models\MachineFailoverReviewAction::query()
             ->where('attempt_id', $attempt->id)->whereIn('operation', ['claim', 'close'])->exists()) throw new CloudException('review_hold');
         $current = Attempt::query()->find($attempt->id);
-        if (!$current || $current->only(['task_id', 'account_id', 'account_revision', 'payload']) !== $attempt->only(['task_id', 'account_id', 'account_revision', 'payload'])) throw new CloudException('native_lineage_changed');
+        if (!$current || !MachineIntentJson::same($current->only(['task_id', 'account_id', 'account_revision', 'payload']), $attempt->only(['task_id', 'account_id', 'account_revision', 'payload']))) throw new CloudException('native_lineage_changed');
         if ($task === null && $attempt->task_id) $task = Task::query()->findOrFail($attempt->task_id);
         $member = Member::query()->findOrFail($attempt->execution_member_id); $run = Execution::query()->findOrFail($member->execution_id);
         $this->context($run, $requireLease);
@@ -244,7 +244,7 @@ class MachineFailoverNativeBridge
         $policy = Policy::query()->findOrFail($member->policy_id); $plan = ProvisionPlan::normalize($attempt->payload['plan']);
         $credential = app(MachineFailoverCredentials::class); $account = $credential->assertPlan($plan);
         if ($account->id !== $attempt->account_id || $account->revision !== $attempt->account_revision || $account->provider !== 'linode'
-            || $plan !== $this->input($policy, array_intersect_key($plan, array_flip(['account_id', 'provider', 'credential_pool'])))) throw new CloudException('native_lineage_changed');
+            || !MachineIntentJson::same($plan, $this->input($policy, array_intersect_key($plan, array_flip(['account_id', 'provider', 'credential_pool']))))) throw new CloudException('native_lineage_changed');
         if ($task && ($task->admin_id !== $run->admin_id || !$this->bindingCurrent($attempt, $task))) throw new CloudException('native_lineage_changed');
         if (!$task?->dispatched_at) $this->source($member, $policy);
     }
@@ -333,7 +333,7 @@ class MachineFailoverNativeBridge
         try {
             return $attempt->task_id === $task->id && $task->account_id === $attempt->account_id && $task->account_revision === $attempt->account_revision
                 && ($task->payload['coordinated_attempt'] ?? null) === $attempt->id
-                && ProvisionPlan::normalize($task->payload['plan']) === ProvisionPlan::normalize($attempt->payload['plan'])
+                && MachineIntentJson::same(ProvisionPlan::normalize($task->payload['plan']), ProvisionPlan::normalize($attempt->payload['plan']))
                 && hash_equals($attempt->payload['task_identity'] ?? '', $this->taskIdentity($task));
         } catch (\Throwable) { return false; }
     }
@@ -357,7 +357,7 @@ class MachineFailoverNativeBridge
         $this->gate->assertAllowed('context'); app(MachineFailoverRunner::class)->guard($run->id, $requireLease); $this->registry->actor($run->admin_id);
         if ($run->status !== 'running' || $run->deadline_at <= time()) throw new CloudException('native_intent_expired');
         if (!hash_equals($run->context_hash, $this->registry->fingerprint($this->registry->snapshot($run->service_id, $run->service_revision)))) throw new CloudException('native_context_changed');
-        if ($this->release($run->payload['release']['id']) !== $run->payload['release']) throw new CloudException('release_changed');
+        if (!MachineIntentJson::same($this->release($run->payload['release']['id']), $run->payload['release'])) throw new CloudException('release_changed');
     }
 
     private function source(Member $member, Policy $policy): void
@@ -407,7 +407,7 @@ class MachineFailoverNativeBridge
     private function taskIdentity(Task $task): string
     {
         return $this->hash([$task->id, $task->admin_id, $task->account_id, $task->account_revision, $task->machine_id, $task->machine_authority,
-            $task->slot, $task->installation_id, $task->callback_hash, $task->marker, $task->plan_hash, $this->hash($task->payload['request'])]);
+            $task->slot, $task->installation_id, $task->callback_hash, $task->marker, $task->plan_hash, hash('sha256', MachineIntentJson::encode($task->payload['request']))]);
     }
 
     private function receipt(Attempt $attempt, string $stage, Task $task, MachineOwnedInstance $instance, ?MachineDnsTransition $dns = null): void
