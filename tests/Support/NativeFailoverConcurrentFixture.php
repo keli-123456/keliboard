@@ -134,7 +134,7 @@ final class NativeFailoverConcurrentFixture
         app()->instance(\App\Services\ServerMachine\Cloud\MachineFailoverBudget::class, $budget);
         $policies = \App\Models\MachineFailoverPolicy::query()->pluck('id')->all();
         app()->instance(MachineFailoverExecutionGate::class, new class extends MachineFailoverExecutionGate { public function assertAllowed(string $operation): void {} });
-        config(['machine_failover.runner_enabled' => true, 'machine_failover.allow_replacement' => true,
+        config(['machine_failover.observe_enabled' => true, 'machine_failover.runner_enabled' => true, 'machine_failover.allow_replacement' => true,
             'machine_failover.allowed_replacement_policy_ids' => $policies, 'machine_provision.allow_live' => true,
             'machine_provision.allowed_test_machine_ids' => \App\Models\ServerMachine::query()->pluck('id')->all(),
             'machine_acceptance.allow_verification' => true, 'machine_acceptance.allow_dns' => true, 'machine_acceptance.allowed_policy_ids' => $policies,

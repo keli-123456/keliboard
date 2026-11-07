@@ -68,7 +68,7 @@ jobs:
           KELI_NATIVE_REDIS_PORT: ${{ job.services.redis.ports[6379] }}
         run: |
           mkdir -p artifacts
-          vendor/bin/phpunit -c phpunit-native-failover.xml --log-junit artifacts/native-failover.xml
+          vendor/bin/phpunit -c phpunit-native-failover.xml --stop-on-error --stop-on-failure --log-junit artifacts/native-failover.xml
       - name: Preserve aggregate acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4

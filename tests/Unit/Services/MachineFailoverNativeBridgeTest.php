@@ -1011,4 +1011,13 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $this->assertSame('awaiting_dns', $run['members'][0]['phase'], $run['members'][0]['reason'] ?? 'no reason');
         $roundTrip(); $run = $this->tick($run); $this->assertSame('completed', $run['status']);
     }
+    public function test_replacement_validation_preserves_native_pool_identity_after_json_key_reordering(): void
+    {
+        $this->advance($this->start()); $task = $this->task(); $attempt = Attempt::query()->firstOrFail();
+        $input = ProvisionPlan::normalize($task->payload['plan']); $payload = $attempt->payload;
+        $payload['plan']['credential_pool'] = array_reverse($payload['plan']['credential_pool'], true); $attempt->payload = $payload; $attempt->save();
+        $member = Member::query()->firstOrFail();
+        $result = app(MachineReplacementService::class)->validate($member->plan_id, $input, $task, $attempt->fresh());
+        $this->assertSame($member->episode_key, $result['episode_key']); $this->assertCount(1, $this->posts);
+    }
 }

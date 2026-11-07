@@ -71,7 +71,7 @@ class MachineReplacementService
         $policy = Policy::query()->findOrFail($plan->policy_id);
         if ($plan->policy_revision !== $policy->revision) throw new CloudException('config_changed');
         if ($attempt) app(MachineFailoverNativeBridge::class)->assertAttempt($attempt, $current);
-        if (ProvisionPlan::normalize($attempt ? $attempt->payload['plan'] : $this->input($policy, $current)) !== $input) throw new CloudException('source_changed');
+        if (!MachineIntentJson::same(ProvisionPlan::normalize($attempt ? $attempt->payload['plan'] : $this->input($policy, $current)), $input)) throw new CloudException('source_changed');
         $checks = app(MachineFailoverPolicyService::class)->localChecks($policy, $current);
         foreach ($checks as $check) {
             if ($check['status'] !== 'passed' && !in_array($check['code'], ['execution_disabled', 'provider_not_checked',
