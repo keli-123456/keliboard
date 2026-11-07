@@ -67,6 +67,7 @@ class MachineFailoverServiceRegistry
             if ($service->exists && $service->revision !== $input['expected_revision']) throw new CloudException('config_changed');
             if (!$service->exists && Service::query()->count() >= 50) throw new CloudException('limit_reached');
             if ($service->exists && Run::query()->where('service_id', $service->id)->where('status', 'running')->exists()) throw new CloudException('run_active');
+            if ($service->exists && $this->nativeHistory($service->id, true)) throw new CloudException('run_active');
             $seen = []; $machines = []; $values = [];
             foreach ($input['members'] as $row) {
                 if (!is_array($row) || array_diff(array_keys($row), ['policy_id', 'policy_revision', 'name', 'priority', 'enabled'])
@@ -82,7 +83,7 @@ class MachineFailoverServiceRegistry
                 $values[array_key_last($values)]['name'] = $this->name($row['name'] ?? null);
             }
             $removed = $service->exists ? Member::query()->where('service_id', $service->id)->whereNotIn('policy_id', array_keys($seen)) : null;
-            if ($removed && (clone $removed)->exists() && Run::query()->where('service_id', $service->id)->exists()) throw new CloudException('member_audit_retained');
+            if ($removed && (clone $removed)->exists() && (Run::query()->where('service_id', $service->id)->exists() || $this->nativeHistory($service->id))) throw new CloudException('member_audit_retained');
             $removed?->delete();
             $service->fill(['name' => $name, 'max_parallel' => $input['max_parallel'], 'attempt_limit' => $input['attempt_limit'],
                 'monthly_cap_usd' => (float) $cap, 'revision' => $service->exists ? $service->revision + 1 : 1, 'updated_by' => $admin])->save();
@@ -96,7 +97,7 @@ class MachineFailoverServiceRegistry
         $this->locked(fn () => DB::transaction(function () use ($id, $revision, $admin) {
             $this->actor($admin); $service = Service::query()->findOrFail($id);
             if ($service->revision !== $revision) throw new CloudException('config_changed');
-            if (Run::query()->where('service_id', $id)->exists()) throw new CloudException('service_in_use');
+            if (Run::query()->where('service_id', $id)->exists() || $this->nativeHistory($id)) throw new CloudException('service_in_use');
             Member::query()->where('service_id', $id)->delete(); $service->delete();
         }));
     }
@@ -131,6 +132,11 @@ class MachineFailoverServiceRegistry
         return $result;
     }
     public function fingerprint(array $snapshot): string { return hash('sha256', json_encode($snapshot, JSON_THROW_ON_ERROR)); }
+    private function nativeHistory(int $service, bool $active = false): bool
+    {
+        return Schema::hasTable('v2_machine_failover_execution') && \App\Models\MachineFailoverExecution::query()->where('service_id', $service)
+            ->when($active, fn ($query) => $query->where('status', 'running'))->exists();
+    }
     private function name(mixed $name): string
     {
         if (!is_string($name) || preg_match('/[\x00-\x1F\x7F]/', $name)) throw new CloudException('invalid_name');

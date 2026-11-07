@@ -947,3 +947,91 @@ data only as expired; late responses from another service/revision are ignored.
 No new control enables real creation, credential rotation or DNS cutover. Tests
 use isolated SQLite/cache/provider fixtures and local browser adapters only;
 no production system, cloud VM or existing tanzhen service was contacted.
+
+### Gated Native Linode Bridge
+
+`MachineFailoverNativeBridge` connects the multi-member registry to the existing
+native provisioning, initialization callback, report/IPv4 checks, signed
+forwarding verifier and owned Cloudflare A-record transition code. This is a
+separate durable native journal, not an extension of the synthetic driver and
+not a consumer of browser-posted verdicts or shadow/simulation receipts.
+
+The bridge is deliberately unarmed: `MachineFailoverExecutionGate` always
+rejects. There is no environment/configuration switch, controller route, UI
+button or scheduler that enables or starts a native multi-member run. Existing
+provisioning, replacement, allowlist, acceptance and DNS gates remain unchanged
+and must also pass. Tests replace only the gate dependency in an isolated test
+container; SQLite/cache state, queues, cloud APIs, DNS and the verifier are all
+fixtures. No production database migration, cloud creation, real rotation, DNS
+write, tanzhen operation or kelinode-rs change is performed by this increment.
+
+Each run pins its administrator, registry revision, provider-specific policy and
+credential-pool snapshot, release ID and binary SHA-256. Each participating
+member claims one immutable failure episode and independently owned active
+source installation and existing owned DNS record. Imported/unowned instances,
+another controller's used episode and unsupported creation providers are
+rejected. One episode cannot acquire a second independent replacement job via
+the older manual replacement entry. Native run history also prevents deleting
+the service or removing its members to discard reservations.
+
+Before any native enqueue, a database transaction reserves one child attempt,
+its request ID, chosen credential revision and the configured monthly-price
+upper bound in integer cents. Attempts share the service's parallel, attempt
+and price-reservation limits across members. Prior runs' reservations are not
+reset by starting another run or crossing a calendar month; rejected, cancelled,
+retained and completed attempts do not refund the conservative price reserve.
+This is a conservative incremental reservation cap, not an actual bill, provider
+spending limit or live price quote. It covers retained candidates created by this
+journal, not the pre-existing source VM or unjournaled historical resources;
+`price_verified=false` and `baseline_cost_included=false` remain explicit. An
+audited baseline-cost/release workflow is still required before live activation
+or safely reclaiming these reservations. Unknown mutations continue to hold
+their execution slot; account aliases and unknown cloud-account identities do
+not receive a separate account allowance. Native daily limits and cooldowns are
+rechecked under the existing provisioning locks.
+
+Creating a native task and binding it to an attempt occur in the same database
+transaction. Task ID, credential, installation ID, machine authority, callback
+identity, marker, plan hash and initialization request are bound by a private
+identity digest. They cannot be rebound after a timeout or token rejection.
+Only a trusted, typed definite rejection, without an external resource or
+initialization callback, can lead to a distinct child attempt after the existing
+rotation planner, credential health, source evidence and all shared budgets pass
+again. Billing/quota errors still require a verified different cloud account;
+duplicate tokens, aliases, unknown identity and template errors do not authorize
+token hopping. No ordinary/manual task gains this retry behavior.
+
+Unknown POST outcomes only reconcile the original account, request, marker and
+task. A repeated enqueue uses that task's original request ID and binding.
+Initialization callbacks, candidate reports and binary identity use the native
+validators. Forwarding receipts are read from the trusted verifier/check records,
+must match the exact native task, candidate, configuration and cleanup proof,
+and are pinned before DNS. Identical checkpoints are idempotent; conflicting or
+cross-task receipts require review. A worker call with an unresolved receipt is
+not blindly dispatched again. Fresh-proof expiry also stops automatic progress
+rather than manufacturing another successful test.
+
+DNS preparation has one deterministic request per child attempt and must match
+the original owned record, source, zone and candidate. Preparation interrupted
+before its local acknowledgement reattaches that same transition. DNS writes
+retain the existing persisted-before-POST boundary; an uncertain write only
+reads back that transition, even if the original source becomes reachable.
+Successful persisted DNS acknowledgement can be recovered without issuing
+another verifier challenge or DNS mutation. Forwarding and DNS evidence cannot
+be combined from different attempts. Source recovery before create cancels;
+after creation but before DNS it retains the candidate and stops cutover. Source
+evidence and authority are checked again immediately before each new mutation.
+Unknown/stale evidence does not count as a recovered or blocked IP. There is no
+automatic DNS reversal or VM deletion.
+
+The native journal has a 20-minute run deadline; expiration, context changes,
+unknown proof or unresolved failures stop for review while retaining the original
+mutation identity and reservations. Review is not permission to re-dispatch.
+Progress can resume the same persisted intent within its valid proof/deadline,
+not start a fresh paid operation. The native bridge remains backend-internal and
+has not been exposed as an execution UI. DigitalOcean/Vultr creation adapters,
+live worker/WAN and provider error acceptance, controlled activation and native
+orchestration notices are still outstanding. This does not claim complete live
+tanzhen v2 parity or authorize a non-business cloud acceptance run.
+The forwarding integration tests exercise the existing isolated HY2 verifier
+profile; they do not add or certify interoperability for every node protocol.

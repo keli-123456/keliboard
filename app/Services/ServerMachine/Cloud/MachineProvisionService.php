@@ -25,7 +25,8 @@ class MachineProvisionService
         'replacement_evidence_changed', 'replacement_guard_failed', 'replacement_cooldown', 'source_recovered',
         'replacement_episode_used', 'ownership_mismatch', 'config_changed', 'daily_budget', 'task_active',
         'release_changed', 'isolated_context_changed', 'isolated_scope_changed', 'isolation_confirmation_required', 'credential_group_changed',
-        'credential_health_blocked', 'credential_health_unavailable', 'credential_identity_changed'];
+        'credential_health_blocked', 'credential_health_unavailable', 'credential_identity_changed',
+        'orchestration_disabled', 'native_lineage_changed', 'native_context_changed', 'native_intent_expired'];
 
     public function __construct(private LinodeProvisionClient $provider, private ProvisionBootstrap $bootstrap,
         private MachineCloudHealth $health, private MachineAddressInventory $addresses) {}
@@ -71,7 +72,13 @@ class MachineProvisionService
         return $this->enqueue($input, $requestId, $admin, null, $intent);
     }
 
-    private function enqueue(array $input, string $requestId, int $admin, ?int $replacementPlan = null, ?array $isolated = null): array
+    public function queueCoordinated(array $input, string $requestId, int $admin, string $attemptId): array
+    {
+        app(MachineFailoverExecutionGate::class)->assertAllowed('queue');
+        return $this->enqueue($input, $requestId, $admin, null, null, $attemptId);
+    }
+
+    private function enqueue(array $input, string $requestId, int $admin, ?int $replacementPlan = null, ?array $isolated = null, ?string $attemptId = null): array
     {
         $this->gate();
         if (!$this->available()) throw new CloudException('migration_required');
@@ -79,15 +86,23 @@ class MachineProvisionService
         $plan = ProvisionPlan::normalize($input);
         $this->origin($plan);
         if ($plan['source_ref']) throw new CloudException('source_review_required');
-        if (isset($plan['credential_pool']) && $replacementPlan === null && $isolated === null) throw new CloudException('invalid_plan');
+        if (isset($plan['credential_pool']) && $replacementPlan === null && $isolated === null && $attemptId === null) throw new CloudException('invalid_plan');
         return Cache::lock('machine-provision:slot:' . hash('sha256', $plan['machine_id'] . ':' . $plan['slot']), 120)
-            ->block(2, fn () => $this->quotaLocked($plan['provider'] ?? 'linode', fn () => $this->locked($plan['account_id'], function () use ($plan, $requestId, $admin, $replacementPlan, $isolated) {
+            ->block(2, fn () => $this->quotaLocked($plan['provider'] ?? 'linode', fn () => $this->locked($plan['account_id'], function () use ($plan, $requestId, $admin, $replacementPlan, $isolated, $attemptId) {
             $this->actor($admin);
             $this->testMachine($plan['machine_id']);
             if ($plan['monthly_limit_usd'] <= 0) throw new CloudException('budget_required');
             $key = hash('sha256', $admin . ':' . $requestId);
             $hash = hash('sha256', json_encode($plan, JSON_THROW_ON_ERROR));
             if ($isolated !== null) $hash = hash('sha256', $hash . ':' . json_encode($isolated, JSON_THROW_ON_ERROR));
+            $attempt = $attemptId === null ? null : \App\Models\MachineFailoverAttempt::query()->findOrFail($attemptId);
+            if ($attempt) {
+                app(MachineFailoverNativeBridge::class)->assertAttempt($attempt);
+                $member = \App\Models\MachineFailoverExecutionMember::query()->findOrFail($attempt->execution_member_id);
+                $execution = \App\Models\MachineFailoverExecution::query()->findOrFail($member->execution_id);
+                if ($attempt->request_id !== $requestId || ProvisionPlan::normalize($attempt->payload['plan']) !== $plan || $execution->admin_id !== $admin) throw new CloudException('native_lineage_changed');
+                $hash = hash('sha256', $hash . ':' . $attempt->id);
+            }
             if ($replacementPlan !== null) {
                 $source = \App\Models\MachineFailoverPlan::query()->findOrFail($replacementPlan);
                 app(MachineReplacementService::class)->gate($source->policy_id);
@@ -104,7 +119,8 @@ class MachineProvisionService
             if ($account->provider !== 'linode' || $account->provider !== ($plan['provider'] ?? 'linode') || !$machine->is_active) throw new CloudException('invalid_plan');
             if (isset($plan['credential_pool'])) app(MachineFailoverCredentials::class)->assertPlan($plan);
             $replacement = $replacementPlan === null ? null : app(MachineReplacementService::class)->validate($replacementPlan, $plan);
-            if ($replacementPlan === null && Schema::hasTable('v2_machine_replacement_task')
+            if ($attempt) app(MachineReplacementService::class)->validate($member->plan_id, $plan, null, $attempt);
+            if ($replacementPlan === null && $attempt === null && Schema::hasTable('v2_machine_replacement_task')
                 && \App\Models\MachineFailoverPolicy::query()->where('slot', $plan['slot'])
                     ->whereIn('id', \App\Models\MachineOwnedInstance::query()->whereNotNull('active_policy_id')->select('active_policy_id'))->exists()) {
                 throw new CloudException('replacement_required');
@@ -123,7 +139,7 @@ class MachineProvisionService
                 'image' => $plan['image'], 'tags' => [$marker], 'booted' => true, 'backups_enabled' => false,
                 'authorized_keys' => $plan['authorized_keys'], 'root_pass' => bin2hex(random_bytes(20)) . 'aA9!',
                 'metadata' => ['user_data' => base64_encode($data)]];
-            $task = DB::transaction(function () use ($id, $key, $admin, $account, $machine, $plan, $hash, $installation, $secret, $marker, $request, $replacement, $isolated) {
+            $task = DB::transaction(function () use ($id, $key, $admin, $account, $machine, $plan, $hash, $installation, $secret, $marker, $request, $replacement, $isolated, $attempt) {
                 $replacementId = $replacement === null ? null : MachineReplacementTask::query()->create($replacement + [
                     'task_id' => $id, 'status' => 'queued', 'notice_event' => (string) Str::uuid(),
                     'steps' => [['state' => 'queued', 'reason' => null, 'created_at' => time()]],
@@ -132,12 +148,14 @@ class MachineProvisionService
                     'account_id' => $account->id, 'account_revision' => $account->revision, 'machine_id' => $machine->id,
                     'machine_authority' => hash('sha256', (string) $machine->token), 'plan_hash' => $hash, 'slot' => $plan['slot'],
                     'installation_id' => $installation, 'callback_hash' => hash('sha256', $secret), 'marker' => $marker,
-                    'payload' => ['plan' => $plan, 'request' => $request] + ($isolated === null ? [] : ['isolated_acceptance' => $isolated]), 'status' => 'queued',
+                    'payload' => ['plan' => $plan, 'request' => $request] + ($isolated === null ? [] : ['isolated_acceptance' => $isolated])
+                        + ($attempt === null ? [] : ['coordinated_attempt' => $attempt->id]), 'status' => 'queued',
                     'deadline_at' => time() + max(120, min(1200, (int) config('machine_provision.timeout_seconds', 1200)))];
                 if ($replacementId !== null) $attributes['replacement_id'] = $replacementId;
                 $task = Task::query()->create($attributes);
                 if (!$task->exists) throw new CloudException('internal_failure');
                 if ($isolated !== null) app(MachineIsolatedAcceptance::class)->assertTask($task);
+                if ($attempt) app(MachineFailoverNativeBridge::class)->bind($attempt, $task);
                 $this->move($task, 'queued');
                 return $task;
             });
@@ -154,6 +172,7 @@ class MachineProvisionService
             if (!$task || in_array($task->status, Task::TERMINAL, true) || $task->next_check_at > time()) return;
             try {
                 $this->gate(); $this->actor($task->admin_id); $this->testMachine($task->machine_id);
+                if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertTask($task);
                 if ($task->replacement_id) app(MachineReplacementService::class)->assertDispatch($task);
                 $account = MachineCloudAccount::query()->find($task->account_id);
                 $machine = ServerMachine::query()->find($task->machine_id);
@@ -184,6 +203,7 @@ class MachineProvisionService
                     if (isset($payload['plan']['credential_pool'])) app(MachineFailoverCredentials::class)->assertPlan($payload['plan']);
                     if (isset($payload['isolated_acceptance'])) app(MachineIsolatedAcceptance::class)->assertTask($task);
                     if ($task->replacement_id) app(MachineReplacementService::class)->assertDispatch($task);
+                    if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertTask($task);
                     $health->assertEligible($account, $payload['plan']);
                     $dispatchAt = time();
                     if ($task->deadline_at <= $dispatchAt) throw new CloudException('deadline');
@@ -231,7 +251,8 @@ class MachineProvisionService
                     $this->move($task, $task->dispatched_at && !$task->external_id ? 'outcome_unknown' : $task->status, $reason);
                     $this->wait($task, $error instanceof CloudRequestFailure ? time() + $error->decision['cooldown_seconds'] : null); return;
                 }
-                $this->move($task, $task->dispatched_at ? 'needs_review' : ($reason === 'source_recovered' ? 'cancelled' : 'failed'), $reason);
+                $rejected = isset($task->payload['coordinated_attempt']) && app(MachineFailoverNativeBridge::class)->mayFinishRejected($task, $error);
+                $this->move($task, $task->dispatched_at && !$rejected ? 'needs_review' : ($reason === 'source_recovered' ? 'cancelled' : 'failed'), $reason);
             } catch (\Throwable) { $this->move($task, $task->dispatched_at ? 'needs_review' : 'failed', 'internal_failure'); }
         }));
     }
@@ -250,6 +271,7 @@ class MachineProvisionService
                 || !hash_equals($task->installation_id, $installation) || !$task->dispatched_at
                 || $task->deadline_at <= time()) throw new CloudException('invalid_callback');
             if (in_array($task->status, Task::TERMINAL, true)) return false;
+            if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertTask($task);
             if ($task->bootstrap_state !== null) {
                 if ($task->bootstrap_state !== $state) throw new CloudException('bootstrap_conflict');
                 return true;
@@ -327,6 +349,7 @@ class MachineProvisionService
         if (!$error instanceof CloudRequestFailure) return;
         app(MachineCloudCredentialHealth::class)->record($account, $error, $operation, $task->id . ':' . ($task->next_check_at ?? 0), $task->payload['plan'], $task->id);
         $evidence = $task->evidence ?? []; $evidence['credential_failure'] = $error->decision;
+        $evidence['credential_failure_operation'] = $operation;
         $evidence['credential_rotation'] = ['automatic' => false, 'dispatch_allowed' => false, 'action' => $error->decision['outcome'] === 'unknown' ? 'reconcile' : 'stop',
             'reason' => $error->decision['outcome'] === 'unknown' ? 'original_intent_only' : 'single_credential', 'next_account_id' => null, 'next_account_revision' => null];
         if ($task->replacement_id) {

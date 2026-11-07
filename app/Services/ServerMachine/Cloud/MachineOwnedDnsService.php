@@ -35,6 +35,8 @@ class MachineOwnedDnsService
             $this->acceptance->gate($policy->id, 'allow_dns'); $instance = Instance::query()->findOrFail($instanceId);
             if (!$policy->dns_credential_id || !$policy->dns_credential_revision || $policy->dns_hostname === '') throw new CloudException('dns_not_configured');
             $this->acceptance->scope($instance, $policy, $policyRevision, $admin);
+            $task = MachineProvisionTask::query()->findOrFail($instance->task_id);
+            if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertDnsIntent($task, $zone, $requestId, $recovery);
             $key = hash('sha256', $admin . ':' . $requestId);
             if ($old = Transition::query()->where('request_key', $key)->first()) {
                 $record = OwnedDns::query()->findOrFail($old->dns_id);
@@ -85,6 +87,8 @@ class MachineOwnedDnsService
             return $this->dnsLock($record->hostname, $record->credential_id, function () use ($policy, $transition, $record, $admin) {
                 $instance = Instance::query()->findOrFail($transition->to_instance_id);
                 $this->acceptance->scope($instance, $policy, $transition->policy_revision, $admin);
+                $task = MachineProvisionTask::query()->findOrFail($instance->task_id);
+                if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertDnsTransition($task, $transition);
                 if ($transition->state === 'verified') return $transition->toArray();
                 if ($transition->dispatched_at !== null) return $this->reconcile($transition, $record, $instance, $policy, $admin);
                 if ($transition->state !== 'prepared' || $transition->deadline_at <= time() || $record->revision !== $transition->dns_revision) throw new CloudException('dns_intent_expired');
@@ -111,6 +115,8 @@ class MachineOwnedDnsService
                     $this->acceptance->scope($instance, $policy->fresh(), $transition->policy_revision, $admin);
                     $this->acceptance->gate($policy->id, 'allow_dns');
                     $this->credential($record->credential_id, $record->credential_revision);
+                    $task = MachineProvisionTask::query()->findOrFail($instance->task_id);
+                    if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertDnsTransition($task, $row);
                     if ($row->deadline_at <= time()) throw new CloudException('dns_intent_expired');
                     $row->fill(['state' => 'dispatching', 'dispatched_at' => time(), 'write_kind' => $kind])->save();
                     return $row;

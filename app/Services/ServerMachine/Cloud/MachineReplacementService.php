@@ -63,14 +63,15 @@ class MachineReplacementService
     }
 
     // Called under the provisioning account lock, again immediately before the provider POST.
-    public function validate(int $planId, array $input, ?Task $current = null): array
+    public function validate(int $planId, array $input, ?Task $current = null, ?\App\Models\MachineFailoverAttempt $attempt = null): array
     {
         $input = ProvisionPlan::normalize($input);
         $plan = Plan::query()->findOrFail($planId);
         $this->gate($plan->policy_id);
         $policy = Policy::query()->findOrFail($plan->policy_id);
         if ($plan->policy_revision !== $policy->revision) throw new CloudException('config_changed');
-        if (ProvisionPlan::normalize($this->input($policy, $current)) !== $input) throw new CloudException('source_changed');
+        if ($attempt) app(MachineFailoverNativeBridge::class)->assertAttempt($attempt, $current);
+        if (ProvisionPlan::normalize($attempt ? $attempt->payload['plan'] : $this->input($policy, $current)) !== $input) throw new CloudException('source_changed');
         $checks = app(MachineFailoverPolicyService::class)->localChecks($policy, $current);
         foreach ($checks as $check) {
             if ($check['status'] !== 'passed' && !in_array($check['code'], ['execution_disabled', 'provider_not_checked',
@@ -88,11 +89,16 @@ class MachineReplacementService
         if (($summary['probe']['state'] ?? null) === 'healthy' && ($summary['probe']['installation_id'] ?? null) === $source) {
             throw new CloudException('source_recovered');
         }
-        $sameDecision = $current ? ($summary['plan']['evidence']['episode_key'] ?? null) === ($plan->evidence['episode_key'] ?? null)
+        $sameDecision = ($current || $attempt) ? ($summary['plan']['evidence']['episode_key'] ?? null) === ($plan->evidence['episode_key'] ?? null)
             && in_array($plan->status, ['blocked', 'superseded'], true) : ($summary['plan']['id'] ?? null) === $plan->id && $plan->status === 'blocked';
         if (!$summary['evidence_current'] || !$summary['threshold_reached'] || ($summary['probe']['state'] ?? null) !== 'failed' || !$sameDecision
             || !is_string($plan->evidence['episode_key'] ?? null)) throw new CloudException('replacement_evidence_changed');
         $episode = $plan->evidence['episode_key'];
+        if (app(MachineFailoverNativeBridge::class)->claimsEpisode($episode, $attempt)) throw new CloudException('replacement_episode_used');
+        if ($attempt) {
+            $member = \App\Models\MachineFailoverExecutionMember::query()->findOrFail($attempt->execution_member_id);
+            if ($member->plan_id !== $plan->id || $member->policy_id !== $policy->id || $member->episode_key !== $episode) throw new CloudException('native_lineage_changed');
+        }
         if ($policy->credential_group_id && Task::query()->where('machine_id', $policy->machine_id)->where('slot', $policy->slot)
             ->when($current, fn ($query) => $query->where('id', '!=', $current->id))->where('created_at', '>=', time() - 86400)->count() >= $policy->daily_limit) throw new CloudException('credential_group_daily_budget');
         if (Replacement::query()->where('episode_key', $episode)->when($current, fn ($query) => $query->where('task_id', '!=', $current->id))->exists()) {

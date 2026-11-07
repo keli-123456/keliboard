@@ -186,6 +186,7 @@ class MachineInstanceAcceptance
 
     private function task(Policy $policy, Task $task): MachineCloudAccount
     {
+        if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertTask($task);
         $credentials = app(MachineFailoverCredentials::class);
         $machine = ServerMachine::query()->find($policy->machine_id); $account = MachineCloudAccount::query()->find($task->account_id);
         if (!$policy->isolation_confirmed || !$machine || !$machine->is_active || !$account || $account->provider !== 'linode'
