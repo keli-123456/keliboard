@@ -5,7 +5,7 @@ use App\Models\MachineCloudAccount;
 use App\Services\ServerMachine\MachineEntryProbe;
 use Illuminate\Support\Facades\Http;
 
-class LinodeClient
+class LinodeClient implements CloudClient
 {
     public function inventory(MachineCloudAccount $account, int $page): array
     {
@@ -65,7 +65,7 @@ class LinodeClient
         throw new CloudException('safety_unknown');
     }
 
-    private function request(MachineCloudAccount $account, string $method, string $path, array $query = [], array $filter = []): array
+    protected function request(MachineCloudAccount $account, string $method, string $path, array $query = [], array $filter = []): array
     {
         try {
             $client = Http::withToken($account->credentials['api_token'])->acceptJson()->connectTimeout(3)->timeout(5)->withoutRedirecting();
@@ -83,7 +83,7 @@ class LinodeClient
         return $data;
     }
 
-    private function normalize(mixed $row): array
+    protected function normalize(mixed $row): array
     {
         if (!is_array($row)) throw new CloudException('provider_invalid');
         $id = (string) ($row['id'] ?? ''); $this->validateId($id);

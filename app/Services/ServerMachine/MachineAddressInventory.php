@@ -53,12 +53,15 @@ class MachineAddressInventory
         }
     }
 
-    public function snapshots(iterable $machines): array
+    public function snapshots(iterable $machines, bool $strict = false): array
     {
         $keys = [];
         foreach ($machines as $machine) $keys[$machine->id] = $this->key($machine);
         if (!$keys) return [];
-        try { $cache = Cache::many(array_values($keys)); } catch (\Throwable) { return []; }
+        try { $cache = Cache::many(array_values($keys)); } catch (\Throwable $error) {
+            if ($strict) throw $error;
+            return [];
+        }
         return array_map(fn ($key) => (array) ($cache[$key] ?? []), $keys);
     }
 

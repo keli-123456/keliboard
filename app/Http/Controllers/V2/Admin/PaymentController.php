@@ -4,7 +4,9 @@ namespace App\Http\Controllers\V2\Admin;
 
 use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
+use App\Models\AgentDomain;
 use App\Models\Payment;
+use App\Models\User;
 use App\Services\PaymentService;
 use App\Services\PaymentCollectionPolicyService;
 use App\Services\PaytaroChannelService;
@@ -28,10 +30,19 @@ class PaymentController extends Controller
     public function fetch()
     {
         $payments = Payment::query()->useWritePdo()->orderBy('sort', 'ASC')->get();
+        $agentPayments = $payments->where('owner_type', Payment::OWNER_AGENT);
+        $agentIds = $agentPayments->pluck('owner_id')->filter()->unique()->all();
+        $domainIds = $agentPayments->pluck('owner_domain_id')->filter()->unique()->all();
+        $agentEmails = $agentIds ? User::query()->useWritePdo()->whereIn('id', $agentIds)->pluck('email', 'id') : collect();
+        $domains = $domainIds ? AgentDomain::query()->useWritePdo()->whereIn('id', $domainIds)->get(['id', 'agent_user_id', 'domain'])->keyBy('id') : collect();
         $policy = app(PaymentCollectionPolicyService::class);
         $now = $policy->now();
         $totals = $policy->dailyTotals($payments, $now);
         foreach ($payments as $k => $v) {
+            $domain = $domains->get($v->owner_domain_id);
+            $payments[$k]['agent_email'] = $v->owner_type === Payment::OWNER_AGENT ? $agentEmails->get($v->owner_id) : null;
+            $payments[$k]['owner_domain'] = $v->owner_type === Payment::OWNER_AGENT && $domain && (int) $domain->agent_user_id === $v->owner_id
+                ? $domain->domain : null;
             $payments[$k]['collection_state'] = $policy->state($v, $totals[$v->id] ?? 0, $now);
             $notifyUrl = url("/api/v1/guest/payment/notify/{$v->payment}/{$v->uuid}");
             if ($v->notify_domain) {
@@ -115,6 +126,9 @@ class PaymentController extends Controller
             return $this->success(true);
         }
         $params['uuid'] = Helper::randomChar(8);
+        $params['owner_type'] = Payment::OWNER_PLATFORM;
+        $params['owner_id'] = null;
+        $params['owner_domain_id'] = null;
         if (!Payment::create($params)) {
             return $this->fail([500, '保存失败']);
         }
@@ -135,17 +149,29 @@ class PaymentController extends Controller
 
     public function sort(Request $request)
     {
-        $request->validate([
-            'ids' => 'required|array'
+        $params = $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'required|integer|min:1|distinct',
         ], [
             'ids.required' => '参数有误',
             'ids.array' => '参数有误'
         ]);
         try {
             DB::beginTransaction();
-            foreach ($request->input('ids') as $k => $v) {
-                $payment = Payment::find($v);
-                if (!$payment || !$payment->update(['sort' => $k + 1])) {
+            $payments = Payment::query()->whereIn('id', $params['ids'])->lockForUpdate()->get()->keyBy('id');
+            $owners = $payments->map(function (Payment $payment): ?string {
+                if ($payment->owner_type === Payment::OWNER_PLATFORM && $payment->owner_id === null && $payment->owner_domain_id === null) {
+                    return Payment::OWNER_PLATFORM;
+                }
+                return $payment->owner_type === Payment::OWNER_AGENT && $payment->owner_id > 0
+                    ? Payment::OWNER_AGENT . ':' . $payment->owner_id : null;
+            });
+            if ($payments->count() !== count($params['ids']) || $owners->contains(null) || $owners->unique()->count() !== 1) {
+                DB::rollBack();
+                return $this->fail([400, '仅可对同一收款主体的支付方式排序']);
+            }
+            foreach (array_values($params['ids']) as $k => $v) {
+                if (!$payments->get($v)->update(['sort' => $k + 1])) {
                     throw new \Exception();
                 }
             }

@@ -693,37 +693,7 @@ class MachineController extends Controller
 
     private function buildPanelInstallScript(string $baseURL, ServerMachine $machine, string $agent): string
     {
-        $template = (string) file_get_contents($this->panelInstallScriptTemplatePath());
-        $distribution = $this->releaseDistribution();
-        $machineName = $machine->name ?: ('machine-' . $machine->id);
-
-        return strtr($template, [
-            '{{APT_DEPENDENCY_HELPER}}' => (string) file_get_contents(dirname($this->panelInstallScriptTemplatePath()) . DIRECTORY_SEPARATOR . 'apt-dependencies.sh'),
-            '{{AGENT_TYPE}}' => $this->bashString($agent),
-            '{{MACHINE_URL}}' => $this->bashString($baseURL),
-            '{{MACHINE_ID}}' => $this->bashString((string) ((int) $machine->id)),
-            '{{MACHINE_TOKEN}}' => $this->bashString((string) $machine->token),
-            '{{MACHINE_NAME}}' => $this->bashString($machineName),
-            '{{KELINODE_INSTALL_SCRIPT_URL}}' => $this->bashString('https://raw.githubusercontent.com/keli-123456/kelinode/main/script/install.sh'),
-            '{{KELINODE_RS_INSTALL_SCRIPT_URL}}' => $this->bashString($distribution->installScriptUrl($baseURL)),
-            '{{KELINODE_RS_RELEASE_BASE_URL}}' => $this->bashString($distribution->releaseBaseUrl($baseURL)),
-        ]);
-    }
-
-    private function panelInstallScriptTemplatePath(): string
-    {
-        return dirname(__DIR__, 6) . DIRECTORY_SEPARATOR . 'resources' . DIRECTORY_SEPARATOR . 'server-machine' . DIRECTORY_SEPARATOR . 'install-script.sh';
-    }
-
-    private function bashString(string $value): string
-    {
-        $escaped = str_replace(
-            ["\\", '"', '$', '`', "\r", "\n"],
-            ["\\\\", '\\"', '\\$', '\\`', '', ''],
-            $value
-        );
-
-        return '"' . $escaped . '"';
+        return app(\App\Services\ServerMachine\MachineInstallScript::class)->render($baseURL, $machine, $agent);
     }
     private function buildNativeUninstallCommand(string $baseURL): string
     {

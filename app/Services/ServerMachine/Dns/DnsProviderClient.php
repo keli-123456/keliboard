@@ -9,6 +9,45 @@ use Illuminate\Support\Facades\Http;
 
 class DnsProviderClient
 {
+    public function ownedRecords(MachineDnsCredential $credential, string $zone, string $hostname): array
+    {
+        $this->ownedProvider($credential, $zone); $records = [];
+        for ($page = 1; $page <= 3; $page++) {
+            $json = $this->cloudflareRequest($credential, 'GET', '/zones/' . $zone . '/dns_records', [],
+                ['name.exact' => $hostname, 'page' => $page, 'per_page' => 50]);
+            $this->assertList($json['result']);
+            foreach ($json['result'] as $row) $records[] = $this->ownedRecordData($credential, $row, $hostname);
+            $pages = $json['result_info']['total_pages'] ?? null;
+            if (!is_int($pages) || $pages < 0 || $pages > 3) throw new DnsException('provider_rejected');
+            if ($page >= $pages) return $records;
+        }
+        throw new DnsException('provider_rejected');
+    }
+
+    public function createOwnedA(MachineDnsCredential $credential, string $zone, string $hostname, string $ip, string $marker): array
+    {
+        $this->ownedProvider($credential, $zone);
+        if (\App\Services\ServerMachine\MachineEntryProbe::publicIp($ip) !== $ip || str_contains($ip, ':')
+            || !filter_var($hostname, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME) || !preg_match('/^keli-owned-[a-f0-9]{48}$/D', $marker)) throw new DnsException('invalid_record');
+        $json = $this->cloudflareRequest($credential, 'POST', '/zones/' . $zone . '/dns_records',
+            ['type' => 'A', 'name' => $hostname, 'content' => $ip, 'ttl' => 60, 'proxied' => false, 'comment' => $marker]);
+        return $this->ownedRecordData($credential, $json['result'], $hostname);
+    }
+
+    private function ownedProvider(MachineDnsCredential $credential, string $zone): void
+    {
+        if ($credential->provider !== 'cloudflare' || !preg_match('/^[a-f0-9]{32}$/D', $zone)) throw new DnsException('owned_dns_unsupported');
+    }
+
+    private function ownedRecordData(MachineDnsCredential $credential, mixed $row, string $hostname): array
+    {
+        if (!is_array($row) || !is_string($row['id'] ?? null) || !preg_match('/^[a-f0-9]{32}$/D', $row['id'])
+            || ($row['name'] ?? null) !== $hostname || !is_string($row['comment'] ?? '') || strlen($row['comment'] ?? '') > 1000
+            || !is_string($row['content'] ?? null) || strlen($row['content']) > 1024) throw new DnsException('provider_rejected');
+        return $this->normalize($credential, $row) + ['id' => $row['id'], 'comment' => $row['comment'] ?? '',
+            'private_routing' => $row['private_routing'] ?? false];
+    }
+
     public function zones(MachineDnsCredential $credential, int $page, string $search): array
     {
         if ($credential->provider === 'cloudflare') {

@@ -9,5 +9,6 @@ class MachineCloudAccount extends Model
     protected $guarded = ['id'];
     protected $dateFormat = 'U';
     protected $hidden = ['credentials'];
-    protected $casts = ['credentials' => 'encrypted:array', 'revision' => 'integer', 'last_sync_at' => 'integer'];
+    protected $casts = ['credentials' => 'encrypted:array', 'revision' => 'integer', 'last_sync_at' => 'integer',
+        'group_id' => 'integer', 'group_revision' => 'integer'];
 }

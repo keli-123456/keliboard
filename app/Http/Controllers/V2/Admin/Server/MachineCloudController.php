@@ -22,6 +22,7 @@ class MachineCloudController extends Controller
     public function account(Request $request, MachineCloudService $service)
     {
         $input = $request->validate(['id' => 'sometimes|integer|min:1', 'expected_revision' => 'required_with:id|integer|min:1',
+            'provider' => 'sometimes|in:linode,digitalocean,vultr', 'group_id' => 'sometimes|nullable|integer|min:1',
             'name' => 'required|string|max:80', 'api_token' => 'nullable|string|max:4096']);
         return $this->run($request, $service, fn () => $service->saveAccount($input));
     }

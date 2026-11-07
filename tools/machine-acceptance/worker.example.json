@@ -1,0 +1,7 @@
+{
+  "shared_key_file": "/etc/keli-verifier/shared-key",
+  "sing_box": "/opt/keli-verifier/sing-box",
+  "sing_box_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "state_dir": "/var/lib/keli-verifier",
+  "profiles": {}
+}

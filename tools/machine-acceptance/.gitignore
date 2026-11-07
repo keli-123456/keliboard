@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+worker.json
+*.pem
+*.key
+*.sqlite3*

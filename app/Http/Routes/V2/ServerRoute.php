@@ -38,6 +38,7 @@ class ServerRoute
             'prefix' => NodeApiContract::V2_SERVER_MACHINE_PREFIX,
         ], function ($route) {
             $route->get('kelinode-rs/install.sh', [MachineReleaseController::class, 'installScript']);
+            $route->post('provision/result', [\App\Http\Controllers\V2\Server\MachineProvisionController::class, 'result']);
             $route->get('releases/{component}/{platform}/latest', [MachineReleaseController::class, 'latest']);
             $route->get('releases/{component}/{version}/{platform}/manifest.json', [MachineReleaseController::class, 'manifest']);
             $route->get('releases/{component}/{version}/{platform}/archive.tar.gz', [MachineReleaseController::class, 'archive']);

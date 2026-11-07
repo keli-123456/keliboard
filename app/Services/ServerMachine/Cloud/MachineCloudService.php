@@ -14,10 +14,17 @@ use Illuminate\Support\Facades\Schema;
 
 class MachineCloudService
 {
-    public function __construct(private LinodeClient $provider, private MachineCloudHealth $health) {}
+    private const PROVIDERS = ['linode', 'digitalocean', 'vultr'];
+    public function __construct(private LinodeClient $linode, private MachineCloudHealth $health) {}
+    private function provider(Account $account): CloudClient
+    {
+        return match ($account->provider) { 'linode' => $this->linode, 'digitalocean' => app(DigitalOceanClient::class),
+            'vultr' => app(VultrClient::class), default => throw new CloudException('unsupported_provider') };
+    }
     public function available(): bool
     {
-        return Schema::hasTable('v2_machine_cloud_account') && Schema::hasTable('v2_machine_cloud_resource') && Schema::hasTable('v2_machine_cloud_task');
+        return Schema::hasTable('v2_machine_cloud_account') && Schema::hasTable('v2_machine_cloud_resource') && Schema::hasTable('v2_machine_cloud_task')
+            && Schema::hasColumn('v2_machine_cloud_resource', 'provider') && Schema::hasColumn('v2_machine_cloud_task', 'provider');
     }
     private function lock(string $key, callable $work): mixed { return Cache::lock('machine-cloud:' . $key, 120)->block(2, $work); }
     private function withResource(int $id, callable $work): mixed
@@ -25,16 +32,22 @@ class MachineCloudService
         $initial = Resource::query()->findOrFail($id);
         return $this->lock('account:' . $initial->account_id, fn () => $this->lock('resource:' . $id, function () use ($id, $work) {
             $resource = Resource::query()->findOrFail($id);
-            return $work($resource, Account::query()->findOrFail($resource->account_id));
+            $account = Account::query()->findOrFail($resource->account_id);
+            if ($resource->provider !== $account->provider) throw new CloudException('identity_changed');
+            return $work($resource, $account);
         }));
     }
 
     public function overview(): array
     {
-        if (!$this->available()) return ['available' => false, 'accounts' => [], 'resources' => [], 'tasks' => []];
+        if (!$this->available()) return ['available' => false, 'providers' => [], 'accounts' => [], 'resources' => [], 'tasks' => []];
         $resources = Resource::query()->orderBy('account_id')->orderBy('id')->limit(500)->get();
         $latest = Task::query()->whereIn('id', $resources->pluck('last_task_id')->filter())->get()->keyBy('id');
-        return ['available' => true, 'accounts' => Account::query()->orderBy('id')->get(),
+        $groups = app(MachineCloudGroupService::class);
+        return ['available' => true, 'providers' => self::PROVIDERS, 'accounts' => Account::query()->orderBy('id')->get(),
+            'groups_available' => $groups->available(), 'groups' => $groups->overview(),
+            'failover_available' => app(MachineFailoverPolicyService::class)->available(),
+            'acceptance_available' => app(MachineInstanceAcceptance::class)->available(),
             'resources' => $resources->map(fn ($resource) => $resource->toArray() + ['health' => $this->health->snapshot($resource,
                 $resource->dns_hold ? (int) ($latest->get($resource->last_task_id)?->dispatched_at ?? 0) : 0)]),
             'tasks' => Task::query()->orderByDesc('id')->limit(100)->get()];
@@ -55,7 +68,7 @@ class MachineCloudService
             $task = $tasks->get($resource->last_task_id);
             // Only local, explicitly selected fields; a list read must never contact the provider.
             $result[$resource->machine_id][] = [
-                'id' => $resource->id, 'installation_id' => $resource->installation_id, 'provider' => 'linode',
+                'id' => $resource->id, 'installation_id' => $resource->installation_id, 'provider' => $resource->provider,
                 'external_id' => $resource->external_id, 'label' => $resource->label, 'region' => $resource->region,
                 'status' => $resource->status, 'observed_at' => $resource->observed_at,
                 'auto_boot' => $resource->auto_boot, 'dns_hold' => $resource->dns_hold,
@@ -68,21 +81,28 @@ class MachineCloudService
 
     public function saveAccount(array $input): Account
     {
-        return $this->lock('account:' . ($input['id'] ?? 'new'), function () use ($input) {
+        if (isset($input['id']) && array_key_exists('group_id', $input)) throw new CloudException('group_assignment_required');
+        $work = fn () => $this->lock('account:' . ($input['id'] ?? 'new'), function () use ($input) {
             $row = isset($input['id']) ? Account::query()->findOrFail($input['id']) : new Account();
+            $provider = $input['provider'] ?? ($row->exists ? $row->provider : 'linode');
+            if (!in_array($provider, self::PROVIDERS, true)) throw new CloudException('unsupported_provider');
+            if ($row->exists && $row->provider !== $provider) throw new CloudException('provider_immutable');
             if ($row->exists && $row->revision !== $input['expected_revision']) throw new CloudException('config_changed');
-            if ($row->exists && Resource::query()->where('account_id', $row->id)->whereNotNull('active_task_id')->exists()) throw new CloudException('task_active');
+            if ($row->exists && (Resource::query()->where('account_id', $row->id)->whereNotNull('active_task_id')->exists()
+                || $this->provisioningUsesAccount($row->id))) throw new CloudException('task_active');
             if (!$row->exists && Account::query()->count() >= 50) throw new CloudException('limit_reached');
             $keys = $row->exists ? $row->credentials : [];
             if (trim((string) ($input['api_token'] ?? '')) !== '') $keys['api_token'] = trim($input['api_token']);
             if (empty($keys['api_token'])) throw new CloudException('credentials_required');
-            DB::transaction(function () use ($row, $keys, $input) {
+            DB::transaction(function () use ($row, $keys, $input, $provider) {
                 if ($row->exists) Resource::query()->where('account_id', $row->id)->update(['auto_boot' => false, 'armed' => false,
                     'manual_hold' => true, 'recovery_status' => 'account_changed', 'revision' => DB::raw('revision + 1')]);
-                $row->fill(['name' => $input['name'], 'provider' => 'linode', 'credentials' => $keys, 'revision' => ($row->revision ?? 0) + 1])->save();
+                $row->fill(['name' => $input['name'], 'provider' => $provider, 'credentials' => $keys, 'revision' => ($row->revision ?? 0) + 1]
+                    + (array_key_exists('group_id', $input) ? ['group_id' => $input['group_id']] : []))->save();
             });
             return $row;
         });
+        return array_key_exists('group_id', $input) ? app(MachineCloudGroupService::class)->withGroup($input['group_id'], $work) : $work();
     }
 
     public function deleteAccount(int $id, int $revision): void
@@ -90,6 +110,8 @@ class MachineCloudService
         $this->lock('account:' . $id, function () use ($id, $revision) {
             $account = Account::query()->findOrFail($id);
             if ($account->revision !== $revision) throw new CloudException('config_changed');
+            if ($this->provisioningUsesAccount($id, true)) throw new CloudException('account_in_use');
+            if (Schema::hasTable('v2_machine_failover_policy') && \App\Models\MachineFailoverPolicy::query()->where('account_id', $id)->exists()) throw new CloudException('account_in_use');
             if (Resource::query()->where('account_id', $id)->where(fn ($q) => $q->whereNotNull('machine_id')->orWhereNotNull('active_task_id'))->exists()) throw new CloudException('account_in_use');
             DB::transaction(function () use ($account) { Resource::query()->where('account_id', $account->id)->delete(); $account->delete(); });
         });
@@ -100,13 +122,13 @@ class MachineCloudService
         $this->lock('account:' . $id, function () use ($id, $page) {
             $account = Account::query()->findOrFail($id);
             try {
-                $data = $this->provider->inventory($account, $page);
+                $data = $this->provider($account)->inventory($account, $page);
                 DB::transaction(function () use ($account, $data, $page) {
                     foreach ($data['resources'] as $snapshot) {
-                        $row = Resource::query()->where('external_id', $snapshot['external_id'])->first();
+                        $row = Resource::query()->where('provider', $account->provider)->where('external_id', $snapshot['external_id'])->first();
                         if ($row && (int) $row->account_id !== $account->id) throw new CloudException('resource_in_use');
                         if (!$row && Resource::query()->count() >= 500) throw new CloudException('limit_reached');
-                        $row ??= new Resource(['account_id' => $account->id]);
+                        $row ??= new Resource(['account_id' => $account->id, 'provider' => $account->provider]);
                         $this->applySnapshot($row, $snapshot); $row->save();
                     }
                     $account->fill(['last_sync_at' => time(), 'last_page' => $page, 'pages' => $data['pages'], 'last_error' => null])->save();
@@ -124,8 +146,9 @@ class MachineCloudService
     public function binding(int $id, int $revision, ?int $machineId, ?string $installation): void
     {
         $this->withResource($id, function ($resource, $account) use ($revision, $machineId, $installation) {
+            if (Schema::hasTable('v2_machine_owned_instance') && \App\Models\MachineOwnedInstance::query()->where('resource_id', $resource->id)->exists()) throw new CloudException('owned_identity_locked');
             $this->editable($resource, $revision);
-            $this->applySnapshot($resource, $this->provider->instance($account, $resource->external_id));
+            $this->applySnapshot($resource, $this->provider($account)->instance($account, $resource->external_id));
             $resource->save();
             if ($machineId !== null && !NodeReportSource::installation($installation)) throw new CloudException('invalid_binding');
             if ($machineId !== null && Resource::query()->where('machine_id', $machineId)->where('installation_id', $installation)->where('id', '!=', $resource->id)->exists()) throw new CloudException('instance_in_use');
@@ -148,10 +171,12 @@ class MachineCloudService
         $this->withResource($id, function ($resource, $account) use ($revision, $enabled, $admin) {
             $this->editable($resource, $revision);
             if ($enabled) {
-                $this->applySnapshot($resource, $this->provider->instance($account, $resource->external_id));
+                if (Schema::hasTable('v2_machine_owned_instance') && \App\Models\MachineOwnedInstance::query()->where('resource_id', $resource->id)->exists()) throw new CloudException('owned_identity_locked');
+                if ($account->provider !== 'linode') throw new CloudException('auto_boot_unsupported');
+                $this->applySnapshot($resource, $this->provider($account)->instance($account, $resource->external_id));
                 $resource->save();
                 if ($resource->status !== 'running' || $this->health->snapshot($resource)['agent'] !== 'fresh') throw new CloudException('baseline_required');
-                $this->assertIdle($this->provider->safety($account, $resource->external_id, time() - 600));
+                $this->assertIdle($this->provider($account)->safety($account, $resource->external_id, time() - 600));
             }
             $resource->fill(['auto_boot' => $enabled, 'armed' => $enabled, 'manual_hold' => !$enabled, 'policy_admin_id' => $admin,
                 'last_running_at' => $enabled ? time() : $resource->last_running_at, 'offline_since' => null, 'offline_samples' => 0,
@@ -176,11 +201,12 @@ class MachineCloudService
     private function accept(Resource $resource, Account $account, string $action, string $key, int $admin, bool $automatic): Task
     {
         if (!$this->adminActive($admin)) throw new CloudException('permission_revoked');
+        if ($this->provisioningUsesAccount($account->id)) throw new CloudException('task_active');
         if (Task::query()->where('resource_id', $resource->id)->where('created_at', '>', time() - 60)->exists()) throw new CloudException('cooldown');
         if (!$automatic) {
-            $this->applySnapshot($resource, $this->provider->instance($account, $resource->external_id));
+            $this->applySnapshot($resource, $this->provider($account)->instance($account, $resource->external_id));
             $resource->save();
-            $events = $this->provider->safety($account, $resource->external_id, time() - 600);
+            $events = $this->provider($account)->safety($account, $resource->external_id, time() - 600);
             $this->assertIdle($events);
         }
         if (($action === 'boot' && $resource->status !== 'offline') || ($action !== 'boot' && $resource->status !== 'running')) throw new CloudException('state_changed');
@@ -188,7 +214,7 @@ class MachineCloudService
             $resource->revision++;
             $task = Task::query()->create(['resource_id' => $resource->id, 'admin_id' => $admin, 'request_key' => $key,
                 'action' => $action, 'automatic' => $automatic, 'resource_revision' => $resource->revision,
-                'account_revision' => $account->revision, 'external_id' => $resource->external_id, 'resource_label' => $resource->label,
+                'account_revision' => $account->revision, 'provider' => $account->provider, 'external_id' => $resource->external_id, 'resource_label' => $resource->label,
                 'status' => 'queued', 'deadline_at' => time() + 900]);
             $resource->fill(['active_task_id' => $task->id, 'last_task_id' => $task->id, 'dns_hold' => $resource->machine_id !== null,
                 'armed' => false, 'manual_hold' => $action === 'shutdown', 'recovery_status' => 'queued',
@@ -217,17 +243,20 @@ class MachineCloudService
         if (!$first || in_array($first->status, Task::TERMINAL, true)) return;
         $this->withResource((int) $first->resource_id, function ($resource, $account) use ($id) {
             $task = Task::query()->findOrFail($id);
+            $pollSeconds = $account->provider === 'vultr' ? 5 : 30;
             if (in_array($task->status, Task::TERMINAL, true)) return;
             if ($task->deadline_at <= time()) { $this->finish($task, $resource, 'expired', 'deadline'); return; }
             if ($resource->revision !== $task->resource_revision || $account->revision !== $task->account_revision
+                || $resource->provider !== $account->provider || $task->provider !== $account->provider
+                || $resource->external_id !== $task->external_id
                 || !$this->adminActive((int) $task->admin_id)) { $this->finish($task, $resource, 'failed', 'config_changed'); return; }
             try {
-                $this->applySnapshot($resource, $this->provider->instance($account, $resource->external_id));
+                $this->applySnapshot($resource, $this->provider($account)->instance($account, $resource->external_id));
                 if ($task->status === 'queued') {
                     if ($resource->machine_id && $this->health->snapshot($resource)['agent'] === 'identity_changed') throw new CloudException('identity_changed');
                     if ($task->automatic && (!$resource->auto_boot || $resource->manual_hold)) throw new CloudException('permission_revoked');
                     if (($task->action === 'boot' && $resource->status !== 'offline') || ($task->action !== 'boot' && $resource->status !== 'running')) throw new CloudException('state_changed');
-                    $events = $this->provider->safety($account, $resource->external_id, time() - 600);
+                    $events = $this->provider($account)->safety($account, $resource->external_id, time() - 600);
                     $this->assertIdle($events);
                     if ($task->automatic) $this->assertNoShutdown($events, (int) ($resource->last_running_at ?? 0));
                     if (!$this->adminActive((int) $task->admin_id)) throw new CloudException('permission_revoked');
@@ -235,11 +264,11 @@ class MachineCloudService
                     // Commit the dispatch boundary first. A worker crash cannot replay this POST.
                     $task->fill(['status' => 'dispatching', 'dispatched_at' => time(), 'baseline_event_id' => max([0, ...array_column($events, 'id')])])->save();
                     try {
-                        $this->provider->power($account, $resource->external_id, $task->action);
-                        $task->fill(['status' => 'waiting_provider', 'acknowledged' => true, 'next_check_at' => time() + 30])->save();
+                        $this->provider($account)->power($account, $resource->external_id, $task->action);
+                        $task->fill(['status' => 'waiting_provider', 'acknowledged' => true, 'next_check_at' => time() + $pollSeconds])->save();
                     } catch (CloudException $error) {
                         if ($error->getMessage() !== 'outcome_uncertain') throw $error;
-                        $task->fill(['status' => 'uncertain', 'reason' => 'outcome_uncertain', 'next_check_at' => time() + 30])->save();
+                        $task->fill(['status' => 'uncertain', 'reason' => 'outcome_uncertain', 'next_check_at' => time() + $pollSeconds])->save();
                     }
                     $resource->save();
                     app(\App\Services\ServerMachine\MachineOperationNotifier::class)->cloud((int) $task->id);
@@ -249,13 +278,18 @@ class MachineCloudService
                 if ($task->status === 'dispatching') app(\App\Services\ServerMachine\MachineOperationNotifier::class)->cloud((int) $task->id);
                 $wanted = $task->action === 'shutdown' ? 'offline' : 'running';
                 if (in_array($resource->status, ['booting', 'rebooting', 'shutting_down'], true)) $task->saw_transition = true;
+                if ($account->provider === 'vultr' && $resource->status === 'offline') $task->saw_transition = true;
                 $confirmed = $resource->status === $wanted;
                 if ($task->action === 'reboot' && $confirmed) {
-                    $events = $this->provider->safety($account, $resource->external_id, max(0, $task->dispatched_at - 2));
-                    $confirmed = (bool) array_filter($events, fn ($event) => $event['id'] > $task->baseline_event_id
-                        && $event['action'] === 'linode_reboot' && in_array($event['status'], ['finished', 'completed'], true));
+                    if ($account->provider === 'vultr') $confirmed = $task->saw_transition;
+                    else {
+                        $events = $this->provider($account)->safety($account, $resource->external_id, max(0, $task->dispatched_at - 2));
+                        $expected = $account->provider === 'linode' ? 'linode_reboot' : 'reboot';
+                        $confirmed = (bool) array_filter($events, fn ($event) => $event['id'] > $task->baseline_event_id
+                            && $event['action'] === $expected && $event['at'] >= $task->dispatched_at - 2 && in_array($event['status'], ['finished', 'completed'], true));
+                    }
                 }
-                if (!$confirmed) { $task->next_check_at = time() + 30; $task->save(); return; }
+                if (!$confirmed) { $task->next_check_at = time() + $pollSeconds; $task->save(); return; }
                 $task->provider_confirmed_at ??= time();
                 if ($task->action === 'shutdown' || !$resource->machine_id) { $this->finish($task, $resource, 'completed'); return; }
                 $health = $this->health->snapshot($resource, (int) $task->dispatched_at);
@@ -287,7 +321,7 @@ class MachineCloudService
     {
         $this->withResource($id, function ($resource, $account) use ($revision) {
             $this->editable($resource, $revision);
-            $this->applySnapshot($resource, $this->provider->instance($account, $resource->external_id));
+            $this->applySnapshot($resource, $this->provider($account)->instance($account, $resource->external_id));
             $resource->save();
             $after = (int) (Task::query()->find($resource->last_task_id)?->dispatched_at ?? 0);
             if ($resource->status !== 'running' || !$this->health->snapshot($resource, $after)['ready']) throw new CloudException('reports_pending');
@@ -304,7 +338,8 @@ class MachineCloudService
             $resource->next_check_at = time() + 60;
             try {
                 if (!$this->adminActive((int) $resource->policy_admin_id)) throw new CloudException('permission_revoked');
-                $this->applySnapshot($resource, $this->provider->instance($account, $resource->external_id));
+                if ($account->provider !== 'linode') throw new CloudException('auto_boot_unsupported');
+                $this->applySnapshot($resource, $this->provider($account)->instance($account, $resource->external_id));
                 $health = $this->health->snapshot($resource);
                 if ($health['agent'] === 'identity_changed') throw new CloudException('identity_changed');
                 if ($resource->status === 'running') {
@@ -320,13 +355,14 @@ class MachineCloudService
                 $resource->offline_since ??= time(); $resource->offline_samples++;
                 if ($resource->offline_samples < 2 || $resource->offline_since > time() - 55) { $resource->recovery_status = 'confirming_offline'; $resource->save(); return; }
                 if ($resource->last_auto_boot_at > time() - 3600 || Task::query()->where('resource_id', $resource->id)->where('automatic', true)->where('created_at', '>=', time() - 86400)->count() >= 2) throw new CloudException('auto_budget');
-                $events = $this->provider->safety($account, $resource->external_id, $resource->last_running_at);
+                $events = $this->provider($account)->safety($account, $resource->external_id, $resource->last_running_at);
                 $this->assertIdle($events); $this->assertNoShutdown($events, $resource->last_running_at);
                 $resource->save();
                 $this->accept($resource, $account, 'boot', hash('sha256', 'auto:' . $resource->id . ':' . $resource->offline_since), (int) $resource->policy_admin_id, true);
             } catch (CloudException $error) {
                 $code = $error->getMessage();
-                if (in_array($code, ['external_shutdown', 'identity_changed', 'permission_revoked'], true)) { $resource->manual_hold = true; $resource->armed = false; }
+                if (in_array($code, ['external_shutdown', 'identity_changed', 'permission_revoked', 'auto_boot_unsupported'], true)) { $resource->manual_hold = true; $resource->armed = false; }
+                if ($code === 'auto_boot_unsupported') $resource->auto_boot = false;
                 $resource->fill(['recovery_status' => $code, 'next_check_at' => time() + 300])->save();
             }
         });
@@ -355,5 +391,14 @@ class MachineCloudService
     {
         $admin = User::query()->find($id);
         return $admin && $admin->is_admin && !$admin->banned;
+    }
+
+    private function provisioningUsesAccount(int $id, bool $includeDispatched = false): bool
+    {
+        if (!Schema::hasTable('v2_machine_provision_task')) return false;
+        return \App\Models\MachineProvisionTask::query()->where('account_id', $id)->where(function ($query) use ($includeDispatched) {
+            $query->whereNotIn('status', \App\Models\MachineProvisionTask::TERMINAL);
+            if ($includeDispatched) $query->orWhereNotNull('dispatched_at');
+        })->exists();
     }
 }

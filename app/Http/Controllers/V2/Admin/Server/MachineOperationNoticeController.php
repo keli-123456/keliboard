@@ -12,13 +12,13 @@ class MachineOperationNoticeController extends Controller
     public function fetch(Request $request, MachineOperationNotifier $notifier)
     {
         abort_unless($request->user()?->is_admin, 403);
-        $input = $request->validate(['scope' => 'required|in:cloud,dns', 'resource_id' => 'sometimes|integer|min:1']);
+        $input = $request->validate(['scope' => 'required|in:cloud,dns,provision', 'resource_id' => 'sometimes|integer|min:1']);
         return $this->success($notifier->overview($input['scope'], $input['resource_id'] ?? null));
     }
     public function save(Request $request, MachineOperationNotifier $notifier)
     {
         abort_unless($request->user()?->is_admin, 403);
-        $input = $request->validate(['scope' => 'required|in:cloud,dns', 'enabled' => 'required|boolean',
+        $input = $request->validate(['scope' => 'required|in:cloud,dns,provision', 'enabled' => 'required|boolean',
             'expected_revision' => 'required|integer|min:1', 'confirmed' => 'required|accepted']);
         try { return $this->success($notifier->save($input['scope'], $input['enabled'], $input['expected_revision'], (int) $request->user()->id)); }
         catch (MachineOperationNoticeException $error) { return response()->json(['message' => $error->getMessage()], 422); }

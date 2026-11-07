@@ -7,6 +7,9 @@ use App\Models\MachineCloudResource;
 use App\Models\MachineCloudTask;
 use App\Models\MachineDnsBinding;
 use App\Models\MachineOperationNotice as Notice;
+use App\Models\MachineReplacementTask;
+use App\Models\MachineProvisionTask;
+use App\Services\ServerMachine\Cloud\MachineReplacementService;
 use App\Models\User;
 use App\Services\TelegramService;
 use Illuminate\Support\Facades\Cache;
@@ -31,7 +34,7 @@ class MachineOperationNotifier
     public function overview(string $scope, ?int $resource = null): array
     {
         $this->scope($scope);
-        if (!$this->available()) return ['available' => false, 'policy' => ['enabled' => false, 'revision' => 0], 'channel_ready' => false, 'notices' => []];
+        if (!$this->available() || !$this->scopeAvailable($scope)) return ['available' => false, 'policy' => ['enabled' => false, 'revision' => 0], 'channel_ready' => false, 'notices' => []];
         $policy = DB::table(self::POLICY)->where('scope', $scope)->first();
         return ['available' => true, 'policy' => ['enabled' => (bool) $policy->enabled, 'revision' => (int) $policy->revision],
             'channel_ready' => $this->channelReady(), 'notices' => Notice::query()->where('scope', $scope)
@@ -42,7 +45,7 @@ class MachineOperationNotifier
     public function save(string $scope, bool $enabled, int $revision, int $admin): array
     {
         $this->scope($scope);
-        if (!$this->available()) throw new MachineOperationNoticeException('migration_required');
+        if (!$this->available() || !$this->scopeAvailable($scope)) throw new MachineOperationNoticeException('migration_required');
         if (!$this->adminActive($admin)) throw new MachineOperationNoticeException('permission_revoked');
         DB::transaction(function () use ($scope, $enabled, $revision, $admin) {
             $row = DB::table(self::POLICY)->where('scope', $scope)->lockForUpdate()->first();
@@ -106,6 +109,26 @@ class MachineOperationNotifier
         });
     }
 
+    public function replacement(int $id, bool $recovered = false): void
+    {
+        $this->safely(function () use ($id, $recovered) {
+            if (!$this->scopeAvailable('provision')) return;
+            $this->locked('provision', $id, function () use ($id, $recovered) {
+                $row = MachineReplacementTask::query()->find($id);
+                $task = $row ? MachineProvisionTask::query()->find($row->task_id) : null;
+                if (!$row || !$task || ($recovered && !$row->source_recovered_at)) return;
+                $phase = $recovered ? 'recovered' : $this->replacementPhase($row);
+                $prior = !$recovered || Notice::query()->where('scope', 'provision')->where('source_id', $id)
+                    ->where('status', 'submitted')->where('phase', '!=', 'recovered')->exists();
+                $this->record('provision', $id, null, $recovered ? $row->recovery_event : $row->notice_event, $phase,
+                    $this->replacementContext($row, $recovered), ['machine_id' => $row->machine_id, 'policy_id' => $row->policy_id,
+                        'task_id' => $task->id, 'installation' => substr($recovered ? $row->source_installation_id : $task->installation_id, 0, 8),
+                        'cloud_id' => $task->external_id, 'result' => $row->status,
+                        'reason' => MachineOperationNoticeText::reason((string) $row->reason)], $prior ? null : 'no_prior_notice');
+            });
+        });
+    }
+
     private function record(string $scope, int $source, ?int $resource, ?string $episode, string $phase, string $context, array $snapshot, ?string $suppress): Notice
     {
         $policy = DB::table(self::POLICY)->where('scope', $scope)->first();
@@ -156,6 +179,14 @@ class MachineOperationNotifier
 
     private function current(Notice $notice): bool
     {
+        if ($notice->scope === 'provision') {
+            if (!$this->scopeAvailable('provision')) return false;
+            $row = MachineReplacementTask::query()->find($notice->source_id);
+            $recovered = $notice->phase === 'recovered';
+            return $row && hash_equals($notice->context_hash, $this->replacementContext($row, $recovered))
+                && ($recovered || $notice->phase === $this->replacementPhase($row))
+                && app(MachineReplacementService::class)->noticeCurrent($row, $notice->snapshot, $recovered);
+        }
         if ($notice->scope === 'dns') {
             $row = MachineDnsBinding::query()->find($notice->source_id);
             return $row && hash_equals($notice->context_hash, $this->dnsContext($row)) && ($notice->phase === 'failed'
@@ -177,6 +208,8 @@ class MachineOperationNotifier
     public function advance(): array
     {
         if (!$this->available()) return ['queued' => 0, 'unknown' => 0];
+        try { app(MachineReplacementService::class)->refreshStatuses(); }
+        catch (\Throwable) { Log::warning('[MachineReplacement] Status reconciliation unavailable'); }
         $unknown = Notice::query()->where('status', 'sending')->where('claimed_at', '<', time() - 300)
             ->update(['status' => 'unknown', 'delivery_reason' => 'transport_unknown']);
         Notice::query()->where('status', 'pending')->where('expires_at', '<=', time())->update(['status' => 'suppressed', 'delivery_reason' => 'expired']);
@@ -202,6 +235,22 @@ class MachineOperationNotifier
     {
         return hash('sha256', json_encode($row->only(['id', 'external_id', 'provider_created_at', 'machine_id', 'installation_id', 'machine_authority'])));
     }
+    private function replacementContext(MachineReplacementTask $row, bool $recovered): string
+    {
+        return hash('sha256', json_encode([$row->only(['id', 'policy_id', 'policy_revision', 'account_id', 'machine_id', 'task_id']),
+            $recovered ? $row->recovery_event : $row->notice_event]));
+    }
+    private function replacementPhase(MachineReplacementTask $row): string
+    {
+        if ($row->reason === 'queue_unavailable') return 'failed';
+        return match ($row->status) { 'failed' => 'failed', 'needs_review', 'outcome_unknown' => 'uncertain',
+            'completed' => 'completed', default => 'progress' };
+    }
+    private function scopeAvailable(string $scope): bool
+    {
+        return $scope !== 'provision' || (Schema::hasTable('v2_machine_replacement_task')
+            && DB::table(self::POLICY)->where('scope', $scope)->exists());
+    }
     protected function channelReady(): bool
     {
         return (bool) admin_setting('telegram_bot_enable', false) && trim((string) admin_setting('telegram_bot_token', '')) !== ''
@@ -214,7 +263,7 @@ class MachineOperationNotifier
     }
     private function scope(string $scope): void
     {
-        if (!in_array($scope, ['cloud', 'dns'], true)) throw new MachineOperationNoticeException('invalid_scope');
+        if (!in_array($scope, ['cloud', 'dns', 'provision'], true)) throw new MachineOperationNoticeException('invalid_scope');
     }
     private function locked(string $scope, int $id, callable $work): mixed
     {

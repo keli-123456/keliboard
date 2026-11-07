@@ -176,7 +176,8 @@ class MachineController extends Controller
             $runtime = ['cpu' => isset($payload['cpu']) ? (float) $payload['cpu'] : null,
                 'memory_used' => isset($payload['mem']['used']) ? (int) $payload['mem']['used'] : null,
                 'version' => $this->statusString($payload['version'] ?? null, 80) ?: null,
-                'valid_until' => $now + \App\Services\UserOnlineService::nodeDataExpirySeconds()];
+                'valid_until' => $now + \App\Services\UserOnlineService::nodeDataExpirySeconds()]
+                + app(\App\Services\ServerMachine\MachineInstanceRuntime::class)->normalize($payload);
             app(\App\Services\ServerMachine\MachineAddressInventory::class)->record($machine, $installation, $ip, $now, $runtime, $probeReport, $payload['net'] ?? null);
         }
         if ($shared) {

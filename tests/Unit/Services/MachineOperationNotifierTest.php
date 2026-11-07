@@ -46,7 +46,7 @@ class MachineOperationNotifierTest extends TestCase
         app()->instance('encrypter', new Encrypter(str_repeat('o', 32), 'AES-256-CBC'));
         app()->instance(\Illuminate\Contracts\Bus\Dispatcher::class, new \Illuminate\Bus\Dispatcher(app())); Bus::fake();
         Http::swap(new \Illuminate\Http\Client\Factory()); Http::preventStrayRequests();
-        foreach (['2026_11_05_160000_create_machine_dns_tables.php', '2026_11_05_170000_create_machine_cloud_tables.php', '2026_11_05_200000_create_machine_operation_notices.php'] as $file) (require base_path('database/migrations/' . $file))->up();
+        foreach (['2026_11_05_160000_create_machine_dns_tables.php', '2026_11_05_170000_create_machine_cloud_tables.php', '2026_11_05_200000_create_machine_operation_notices.php', '2026_11_06_010000_add_machine_cloud_providers.php'] as $file) (require base_path('database/migrations/' . $file))->up();
         Schema::create('v2_user', function (Blueprint $table) { $table->id(); $table->boolean('is_admin'); $table->boolean('banned')->default(false); $table->bigInteger('telegram_id')->nullable(); $table->timestamps(); });
         Schema::create('v2_server_machine', function (Blueprint $table) { $table->id(); $table->string('name'); $table->string('token'); $table->boolean('is_active'); $table->timestamps(); });
         $this->admin = User::query()->create(['is_admin' => true, 'telegram_id' => 123]);

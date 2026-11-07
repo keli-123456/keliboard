@@ -1,0 +1,27 @@
+[Unit]
+Description=Keli isolated forwarding verifier
+After=network-online.target
+
+[Service]
+User=keli-verifier
+Group=keli-verifier
+ExecStart=/usr/bin/python3 /opt/keliboard/tools/machine-acceptance/worker.py --config /etc/keli-verifier/worker.json --certificate /etc/keli-verifier/tls.pem --key /etc/keli-verifier/tls-key.pem
+WorkingDirectory=/var/lib/keli-verifier
+UMask=0077
+KillMode=control-group
+TimeoutStopSec=3
+CPUQuota=25%
+MemoryMax=384M
+TasksMax=64
+Environment=GOMAXPROCS=1
+Environment=GOMEMLIMIT=192MiB
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/keli-verifier
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=127.0.0.0/8
+# Add only the separately authorized candidate IPv4 addresses before use.
+# No [Install] section: this example is not enabled automatically.

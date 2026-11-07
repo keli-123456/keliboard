@@ -46,6 +46,7 @@ class MachineCloudTest extends TestCase
         app()->instance('encrypter', new Encrypter(str_repeat('c', 32), 'AES-256-CBC'));
         app()->instance(\Illuminate\Contracts\Bus\Dispatcher::class, new \Illuminate\Bus\Dispatcher(app())); Bus::fake();
         (require base_path('database/migrations/2026_11_05_170000_create_machine_cloud_tables.php'))->up();
+        (require base_path('database/migrations/2026_11_06_010000_add_machine_cloud_providers.php'))->up();
         Schema::create('v2_user', function (Blueprint $table) { $table->id(); $table->boolean('is_admin'); $table->boolean('banned')->default(false); $table->timestamps(); });
         Schema::create('v2_server_machine', function (Blueprint $table) { $table->id(); $table->string('name'); $table->string('token'); $table->boolean('is_active'); $table->timestamps(); });
         Schema::create('v2_server', function (Blueprint $table) { $table->id(); $table->integer('machine_id')->nullable(); $table->boolean('enabled'); });
