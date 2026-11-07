@@ -1370,3 +1370,73 @@ isolation, worker/error/exhaustion counts, mock operation counts, whitelisted
 reasons and cleanup results. They do not include serialized queue payloads,
 generated credentials, scripts, raw provider logs or database dumps. Failed runs
 are retained as evidence and are not presented as successful acceptance.
+
+### Disposable Horizon Daemon Acceptance
+
+`Native Failover Horizon Acceptance` is a different manual-only workflow. Its
+`smoke` scope validates console startup, a local stop and neighbor isolation;
+`full` scope additionally observes real process timeout, runtime/member lease
+expiry, master restart and stop recovery. It has the same disposable service
+identity guards and no release/deployment path. Never point this fixture at an
+existing Redis server, panel database or production Horizon environment.
+
+Each case starts the locked Horizon v5.45.6 console implementation: a master,
+its supervisor and two actual `horizon:work` processes using Horizon RedisQueue.
+The console-only test bootstrap registers the vendor queue/events/services but
+does not load the panel `.env`, dashboard, production schedules or supervisors.
+Master identity, Horizon/queue/cache prefixes and the Linux session are owned by
+the case. A neighboring synthetic queue and master marker are checked before
+and after cleanup. This is a namespace noninterference check, not an attached
+production neighbor or a test of an existing external process manager.
+
+Native jobs keep their actual 75-second timeout, 90-second Redis visibility,
+120-second run lease and 300-second member lock. The suite never edits expiry,
+due rows, Redis sorted-set times or the clock to advance a stalled run. A blocked
+synthetic create is recorded durably before waiting for the real worker timeout.
+Horizon must replace the worker; new fenced tickets must wait out the surviving
+member lock and reconcile the same mock resource without another paid intent.
+After a master-only SIGKILL, its orphan supervisor/workers must exit and a fresh
+master must continue the original task. A separate worker SIGKILL after stop
+must settle locally after the actual run lease, even with the execution gate
+closed, without DNS writes or releasing an uncertain cost reservation.
+
+Controlled source telemetry is kept fresh during real waits and initialization
+callbacks use current timestamps. Publishing a new source probe while a short
+step is validating an older SQL decision snapshot is intentionally avoided;
+changed-evidence concurrency is not the purpose of this daemon-lifecycle suite.
+No evidence checks, signed receipts or production gates are weakened for it.
+The parent drives the normal due/stop sweeper at its real clock (polled every
+second for bounded observation), not the panel's one-minute scheduler cadence.
+It therefore validates lease lower bounds and recovery semantics, not a promise
+that production minute scheduling will recover at exactly the expiry second.
+
+Signals are restricted to a recorded fixture Linux session, matching UID and
+owner-bearing wrapper argv. Cleanup first requests graceful termination, then
+signals only individually verified surviving fixture PIDs. It never invokes
+global Horizon terminate/purge, queue clear or unqualified process killing.
+Aggregate artifacts include runtime hashes, actual elapsed times, expected
+timeout/exhaustion counts and cleanup evidence. Owned processes, private console
+files, tables and Redis keys must be gone, neighbor sentinels unchanged, and the
+CI service containers/network removed. Cloud, DNS and verifier remain mocked;
+this is not paid cloud, DNS propagation, WAN or real user acceptance.
+
+Recorded full daemon run:
+[42392469002](https://github.com/keli-123456/keliboard/actions/runs/42392469002),
+test source `275af39b0ab5ea01a1428856893aff6487097825`. All four cases passed in
+both isolation levels (8/8, no errors or skips). Each matrix observed a 75-second
+job timeout and 120-second runtime recovery; original-intent readback resumed at
+316/317 seconds, after the unshortened 300-second member lock. The stop with a
+dead worker settled at 121 seconds with the execution gate closed, zero DNS
+writes and no uncertain budget refund. Master restart retained the original
+task, with no orphan live processes or duplicate mock creations. All eight cases
+verified empty owned tables/keys, no live fixture processes and unchanged
+neighbor sentinels; both jobs removed their two service containers and network.
+
+The shared non-daemon multi-worker suite was rerun at the same test source:
+[42392563241](https://github.com/keli-123456/keliboard/actions/runs/42392563241),
+22/22 with no errors/skips and all fixture cleanup checks passed. Final local unit
+regression, including the native job/fixture timeout contract, passed 3,387 tests
+and 21,634 assertions. Earlier smoke failures concerned fixture probe publication
+cadence/decision snapshots and are retained separately; the final run did not
+relax production evidence guards. No panel/node runtime code or existing Horizon,
+queue, execution-gate, release or deployment configuration changed in this work.

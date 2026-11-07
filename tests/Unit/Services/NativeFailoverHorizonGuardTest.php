@@ -47,6 +47,13 @@ final class NativeFailoverHorizonGuardTest extends TestCase
     {
         $this->expectException(\RuntimeException::class); HorizonFixture::configuration($this->environment(), '');
     }
+    public function test_native_job_keeps_its_own_timeout_below_visibility_and_runtime_lease(): void
+    {
+        $job = new \App\Jobs\MachineFailoverRunJob('synthetic', 1, 'synthetic');
+        $this->assertSame(HorizonFixture::JOB_TIMEOUT, $job->timeout); $this->assertSame(1, $job->tries);
+        $this->assertSame('redis', $job->connection); $this->assertSame('admin_operations', $job->queue);
+        $this->assertLessThan(90, $job->timeout); $this->assertGreaterThan(90, HorizonFixture::RUN_LEASE);
+    }
     public function test_workflow_has_only_manual_fixture_services_without_production_inputs(): void
     {
         $workflow = \Symfony\Component\Yaml\Yaml::parseFile(dirname(__DIR__, 3) . '/.github/workflows/native-horizon-acceptance.yml');
