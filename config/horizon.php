@@ -2,6 +2,11 @@
 
 use Illuminate\Support\Str;
 use Linfo\Linfo;
+use App\Services\ServerMachine\Cloud\MachineFailoverQueue;
+
+// This opt-in adds a bounded pool to the existing master; it grants no execution permission.
+$failoverSupervisors = filter_var(env('MACHINE_FAILOVER_WORKER_ENABLED', false), FILTER_VALIDATE_BOOLEAN)
+    ? ['MachineFailover' => MachineFailoverQueue::supervisor()] : [];
 
 // $lInfo = new Linfo();
 // $parser = $lInfo->getParser();
@@ -89,6 +94,7 @@ return [
 
     'waits' => [
         'redis:default' => 60,
+        ...($failoverSupervisors ? [MachineFailoverQueue::CONNECTION . ':' . MachineFailoverQueue::NAME => 120] : []),
     ],
 
     /*
@@ -220,6 +226,7 @@ return [
                 'timeout' => max(300, (int) env('BACKUP_JOB_TIMEOUT_SECONDS', 21600)),
                 'memory' => 256,
             ],
+            ...$failoverSupervisors,
         ],
         'local' => [
             'Xboard' => [
@@ -272,6 +279,7 @@ return [
                 'timeout' => max(300, (int) env('BACKUP_JOB_TIMEOUT_SECONDS', 21600)),
                 'memory' => 256,
             ],
+            ...$failoverSupervisors,
         ],
     ],
 ];

@@ -9,10 +9,12 @@ use App\Models\MachineFailoverExecutionMember as Member;
 use App\Models\MachineFailoverRuntime as Runtime;
 use App\Models\MachineProvisionTask as Task;
 use App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate;
+use App\Services\ServerMachine\Cloud\MachineFailoverQueue;
 use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\TestCase;
 use Tests\Support\NativeFailoverConcurrentFixture as Fixture;
 use Tests\Support\NativeFailoverHorizonFixture as HorizonFixture;
+use Tests\Support\NativeFailoverBusinessProbeJob;
 
 final class NativeFailoverHorizonTest extends TestCase
 {
@@ -30,7 +32,8 @@ final class NativeFailoverHorizonTest extends TestCase
             'horizon_version' => \Composer\InstalledVersions::getPrettyVersion('laravel/horizon'), 'runtime_hashes' => HorizonFixture::runtimeHashes(),
             'job_timeout_seconds' => HorizonFixture::JOB_TIMEOUT, 'retry_after_seconds' => 90,
             'run_lease_seconds' => HorizonFixture::RUN_LEASE, 'member_lock_seconds' => HorizonFixture::MEMBER_LEASE,
-            'timers_accelerated' => false, 'queue_driver' => get_class(app('queue')->connection('redis')),
+            'timers_accelerated' => false, 'queue_driver' => get_class(app('queue')->connection(MachineFailoverQueue::CONNECTION)),
+            'worker_evidence' => $this->fixture->workerEvidence(), 'business_probes' => $this->eventTotal('business_processed'),
             'mock_creates' => $this->eventTotal('create'), 'mock_dns_writes' => $this->eventTotal('dns_write'),
             'job_timeouts' => $this->eventTotal('job_timed_out'), 'failed_queue_jobs' => $this->eventTotal('job_failed'),
             'exhausted_jobs' => $this->eventTotal('queue_exhausted'), 'worker_errors' => $this->eventTotal('worker_error'),
@@ -62,17 +65,27 @@ final class NativeFailoverHorizonTest extends TestCase
     }
     private function daemonReady(string $master): void
     {
-        $this->awaitCondition(fn () => $this->eventTotal('horizon_worker_boot') >= 2 && count($this->fixture->liveProcesses($master)) >= 4,
-            'isolated master, supervisor and two workers', 25, false);
+        $this->awaitCondition(function () use ($master) {
+            $rows = $this->fixture->liveProcesses($master);
+            $workers = array_keys(array_filter($rows, fn ($row) => $row['connection'] !== null));
+            $booted = DB::table('native_fixture_event')->where('kind', 'horizon_worker_boot')->pluck('reference')->map(fn ($pid) => (int) $pid)->all();
+            return count($rows) >= 5 && count(array_intersect($workers, $booted)) === 2;
+        }, 'isolated master, two supervisors and independent workers', 25, false);
         $rows = $this->fixture->liveProcesses($master); $pid = $this->fixture->masterPid($master);
         $this->assertSame($pid, $rows[$pid]['session']); $this->assertSame($pid, $rows[$pid]['group']);
-        $this->assertInstanceOf(\Laravel\Horizon\RedisQueue::class, app('queue')->connection('redis'));
+        $this->assertInstanceOf(\Laravel\Horizon\RedisQueue::class, app('queue')->connection(MachineFailoverQueue::CONNECTION));
+        $native = array_values(array_filter($rows, fn ($row) => $row['connection'] === MachineFailoverQueue::CONNECTION));
+        $this->assertCount(1, $native); $this->assertCount(1, array_filter($rows, fn ($row) => $row['connection'] === 'redis'));
+        $this->assertSame(10, $native[0]['nice']);
+        foreach (['memory' => '128', 'timeout' => '80', 'max-time' => '900', 'max-jobs' => '100', 'queue' => 'machine_failover'] as $key => $value)
+            $this->assertSame($value, $native[0]['worker_options'][$key] ?? null);
         $this->assertTrue($this->fixture->boundaryIntact());
     }
     private function assertNoUnexpectedErrors(): void
     {
         $this->assertSame(0, $this->eventTotal('worker_error'), $this->diagnostics());
         $this->assertSame(0, $this->eventTotal('horizon_error'), $this->diagnostics());
+        $this->assertSame(1, $this->fixture->workerEvidence()['peak_failover_workers']);
     }
     private function claimTime(): int
     {
@@ -83,11 +96,23 @@ final class NativeFailoverHorizonTest extends TestCase
         $worker = DB::table('native_fixture_event')->where('kind', 'barrier')->where('reference', 'create_after')->orderBy('id')->value('worker');
         $this->assertMatchesRegularExpression('/^horizon-\d+$/D', (string) $worker); return (int) substr($worker, 8);
     }
+    private function businessProbe(string $tag, bool $stopsOnly = false): int
+    {
+        $at = hrtime(true); NativeFailoverBusinessProbeJob::dispatch($tag);
+        $this->awaitCondition(fn () => DB::table('native_fixture_event')->where('kind', 'business_processed')->where('reference', $tag)->exists(),
+            'business queue must stay responsive', 8, false, $stopsOnly);
+        $elapsed = round((hrtime(true) - $at) / 1e6, 3);
+        $worker = DB::table('native_fixture_event')->where('kind', 'business_processed')->where('reference', $tag)->value('worker');
+        $this->assertMatchesRegularExpression('/^horizon-\d+$/D', $worker); $pid = (int) substr($worker, 8);
+        $this->assertSame('redis', $this->fixture->liveProcesses()[$pid]['connection'] ?? null);
+        $this->measurements['business_probe_ms'][$tag] = $elapsed; return $pid;
+    }
 
     public function test_horizon_console_is_isolated_and_never_consumes_neighbor_work(): void
     {
         $this->seedRun(); Fixture::control('fault', 'preflight', true); $master = $this->fixture->startMaster(); $this->daemonReady($master);
         $this->awaitCondition(fn () => (int) app('redis')->connection()->get('fixture-barrier:preflight') > 0, 'mock preflight', 20, false);
+        $this->businessProbe('preflight');
         $this->fixture->stopRun(); Fixture::control('release', true, true);
         $this->awaitCondition(fn () => $this->runState() === 'stopped', 'local preflight stop', 20, false);
         $this->assertSame(0, $this->eventTotal('create')); $this->assertSame(0, $this->eventTotal('dns_write'));
@@ -98,17 +123,24 @@ final class NativeFailoverHorizonTest extends TestCase
     {
         $this->seedRun(); Fixture::control('fault', 'create_after', true); $master = $this->fixture->startMaster(); $this->daemonReady($master);
         $this->awaitCondition(fn () => $this->eventTotal('create') === 1, 'initial mock create', 20, false);
-        $this->blockedWorker(); $claimedAt = $this->claimTime(); $runtime = Runtime::query()->findOrFail($this->run['id']);
+        $blocked = $this->blockedWorker(); $claimedAt = $this->claimTime(); $runtime = Runtime::query()->findOrFail($this->run['id']);
         $member = Member::query()->firstOrFail();
         $runTtl = $this->fixture->ttl('machine-native:run:' . $this->run['id']); $memberTtl = $this->fixture->ttl('machine-native:member:' . $member->id);
         $this->assertGreaterThan(110000, $runTtl); $this->assertLessThanOrEqual(120000, $runTtl);
         $this->assertGreaterThan(290000, $memberTtl); $this->assertLessThanOrEqual(300000, $memberTtl);
         $this->assertSame(120, $runtime->lease_until - $claimedAt);
         $this->measurements += ['initial_run_lock_ms' => $runTtl, 'initial_member_lock_ms' => $memberTtl];
+        $redis = app('redis')->connection(); $payload = $redis->zrange('queues:machine_failover:reserved', 0, 0)[0] ?? null;
+        $this->assertIsString($payload); $redis->rpush('queues:machine_failover', $payload, $payload, $payload);
+        $this->assertSame(3, $redis->llen('queues:machine_failover'));
+        $businessPid = $this->businessProbe('saturated'); $this->assertNotSame($blocked, $businessPid);
+        $this->assertSame(3, $redis->llen('queues:machine_failover'));
         $this->awaitCondition(fn () => $this->eventTotal('job_timed_out') === 1, 'real 75 second job timeout', 95, false);
         $timedOutAt = (int) DB::table('native_fixture_event')->where('kind', 'job_timed_out')->value('at');
         $this->assertGreaterThanOrEqual(74, $timedOutAt - $claimedAt); $this->assertLessThan(90, $timedOutAt - $claimedAt);
         $this->awaitCondition(fn () => $this->eventTotal('horizon_worker_boot') >= 3, 'Horizon worker replacement', 15, false);
+        $this->assertSame($businessPid, $this->businessProbe('after-timeout'));
+        $this->measurements['business_worker_unchanged_during_timeout'] = true;
         $this->awaitCondition(fn () => DB::table('v2_machine_failover_runtime_event')->where('execution_id', $this->run['id'])->where('kind', 'recovered')->exists(),
             'real 120 second runtime lease recovery', 65, false);
         $recoveredAt = (int) DB::table('v2_machine_failover_runtime_event')->where('execution_id', $this->run['id'])->where('kind', 'recovered')->orderBy('id')->value('created_at');
@@ -133,12 +165,12 @@ final class NativeFailoverHorizonTest extends TestCase
         $taskId = Attempt::query()->first()->task_id; $this->fixture->crashMaster($first);
         $this->awaitCondition(fn () => $this->fixture->liveProcesses($first) === [], 'orphan supervisor and worker shutdown', 25, false);
         $second = $this->fixture->startMaster();
-        $this->awaitCondition(fn () => $this->eventTotal('horizon_worker_boot') >= 4 && count($this->fixture->liveProcesses($second)) >= 4,
-            'restarted Horizon process tree', 25);
+        $this->daemonReady($second); $this->assertGreaterThanOrEqual(4, $this->eventTotal('horizon_worker_boot'));
         $this->awaitCondition(fn () => $this->runState() === 'completed', 'resume queued original intent', 100);
         $this->assertSame($taskId, Attempt::query()->first()->task_id); $this->assertSame(1, Attempt::query()->count());
         $this->assertNotSame($this->fixture->masterPid($first), $this->fixture->masterPid($second));
         $this->assertSame(1, $this->eventTotal('create')); $this->assertSame(1, $this->eventTotal('dns_write'));
+        $this->businessProbe('after-master-restart');
         $this->assertSame(0, $this->eventTotal('job_failed')); $this->assertNoUnexpectedErrors();
         $this->measurements += ['master_restarted' => true, 'orphan_processes_remaining' => 0, 'original_task_retained' => true];
     }
@@ -149,6 +181,7 @@ final class NativeFailoverHorizonTest extends TestCase
         $claimedAt = $this->claimTime(); $worker = $this->blockedWorker();
         $this->assertSame('stopping', $this->fixture->stopRun()['state']); $this->fixture->killWorker($worker);
         config(['machine_failover.runner_enabled' => false]); app()->instance(MachineFailoverExecutionGate::class, new MachineFailoverExecutionGate());
+        $this->businessProbe('after-stop', true);
         $this->awaitCondition(fn () => $this->runState() === 'stopped', 'real lease expiry with execution closed', 155, false, true);
         $stoppedAt = (int) DB::table('v2_machine_failover_runtime_event')->where('execution_id', $this->run['id'])->where('kind', 'stopped')->value('created_at');
         $this->assertGreaterThanOrEqual(120, $stoppedAt - $claimedAt); $this->assertSame('needs_review', Member::query()->first()->phase);

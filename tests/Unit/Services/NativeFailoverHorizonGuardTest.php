@@ -25,8 +25,12 @@ final class NativeFailoverHorizonGuardTest extends TestCase
         $this->assertNotSame($config['prefix'], HorizonFixture::configuration($this->environment(), $other)['prefix']);
         $this->assertSame([HorizonFixture::ENVIRONMENT], array_keys($config['environments']));
         $supervisor = $config['environments'][HorizonFixture::ENVIRONMENT]['native'];
-        $this->assertSame(['admin_operations'], $supervisor['queue']);
-        $this->assertSame(2, $supervisor['minProcesses']); $this->assertSame(2, $supervisor['maxProcesses']);
+        $this->assertSame(\App\Services\ServerMachine\Cloud\MachineFailoverQueue::supervisor(), $supervisor);
+        $this->assertSame(['machine_failover'], $supervisor['queue']);
+        $this->assertSame('redis_failover', $supervisor['connection']);
+        $this->assertSame(1, $supervisor['minProcesses']); $this->assertSame(1, $supervisor['maxProcesses']);
+        $this->assertSame('redis', $config['environments'][HorizonFixture::ENVIRONMENT]['business']['connection']);
+        $this->assertSame(['admin_operations'], $config['environments'][HorizonFixture::ENVIRONMENT]['business']['queue']);
         $this->assertSame(1, $supervisor['tries']); $this->assertFalse($config['fast_termination']);
         $this->assertSame([], $config['defaults']);
     }
@@ -51,7 +55,7 @@ final class NativeFailoverHorizonGuardTest extends TestCase
     {
         $job = new \App\Jobs\MachineFailoverRunJob('synthetic', 1, 'synthetic');
         $this->assertSame(HorizonFixture::JOB_TIMEOUT, $job->timeout); $this->assertSame(1, $job->tries);
-        $this->assertSame('redis', $job->connection); $this->assertSame('admin_operations', $job->queue);
+        $this->assertSame('redis_failover', $job->connection); $this->assertSame('machine_failover', $job->queue);
         $this->assertLessThan(90, $job->timeout); $this->assertGreaterThan(90, HorizonFixture::RUN_LEASE);
     }
     public function test_workflow_has_only_manual_fixture_services_without_production_inputs(): void

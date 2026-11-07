@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace Tests\Support;
 
 use App\Services\ServerMachine\Cloud\MachineFailoverRunner;
+use App\Services\ServerMachine\Cloud\MachineFailoverQueue;
 use Illuminate\Support\Facades\DB;
 use Laravel\Horizon\HorizonServiceProvider;
 
@@ -19,6 +20,7 @@ final class NativeFailoverHorizonFixture
     private float $heartbeat = 0;
     private float $sweep = 0;
     private string $neighbor;
+    private int $peakFailoverWorkers = 0;
     public array $run;
 
     public static function configuration(array $environment, string $owner): array
@@ -29,10 +31,11 @@ final class NativeFailoverHorizonFixture
             throw new \RuntimeException('Explicit dedicated Horizon CI workflow required.');
         return ['use' => 'default', 'prefix' => 'native-fixture:' . $owner . ':horizon:', 'name' => 'native-horizon-' . substr($owner, 0, 12),
             'env' => self::ENVIRONMENT, 'middleware' => [], 'defaults' => [], 'fast_termination' => false,
-            'waits' => ['redis:admin_operations' => 3600], 'memory_limit' => 192,
-            'environments' => [self::ENVIRONMENT => ['native' => ['connection' => 'redis', 'queue' => ['admin_operations'],
-                'balance' => 'simple', 'minProcesses' => 2, 'maxProcesses' => 2, 'tries' => 1, 'timeout' => 3600,
-                'sleep' => 1, 'memory' => 192, 'maxTime' => 0, 'maxJobs' => 0]]]];
+            'waits' => [MachineFailoverQueue::CONNECTION . ':' . MachineFailoverQueue::NAME => 120], 'memory_limit' => 192,
+            'environments' => [self::ENVIRONMENT => ['native' => MachineFailoverQueue::supervisor(),
+                'business' => ['connection' => 'redis', 'queue' => ['admin_operations'], 'balance' => false,
+                    'minProcesses' => 1, 'maxProcesses' => 1, 'tries' => 1, 'timeout' => 30, 'sleep' => 1,
+                    'memory' => 128, 'maxTime' => 900, 'maxJobs' => 1000]]]];
     }
     public static function configure(): void
     {
@@ -56,7 +59,8 @@ final class NativeFailoverHorizonFixture
         app()->instance('redis', new \Illuminate\Redis\RedisManager(app(), 'phpredis', config('database.redis')));
         $provider->boot();
         app('queue')->addConnector('redis', fn () => new \Laravel\Horizon\Connectors\RedisConnector(app('redis')));
-        if (!app('queue')->connection('redis') instanceof \Laravel\Horizon\RedisQueue) throw new \RuntimeException('Horizon queue connector required.');
+        foreach (['redis', MachineFailoverQueue::CONNECTION] as $connection)
+            if (!app('queue')->connection($connection) instanceof \Laravel\Horizon\RedisQueue) throw new \RuntimeException('Horizon queue connector required.');
         if (app('redis')->connection('horizon')->client()->getOption(\Redis::OPT_PREFIX) !== $horizon['prefix']
             || app('redis')->connection()->client()->getOption(\Redis::OPT_PREFIX) !== NativeFailoverConcurrentFixture::prefix())
             throw new \RuntimeException('Horizon/default Redis prefixes are not isolated.');
@@ -117,9 +121,22 @@ final class NativeFailoverHorizonFixture
             $raw = @file_get_contents($path); if (!$raw || ($end = strrpos($raw, ')')) === false) continue;
             $fields = explode(' ', trim(substr($raw, $end + 1))); $pid = (int) basename(dirname($path));
             if (count($fields) < 4 || $fields[0] === 'Z' || !in_array((int) $fields[3], $sessions, true)) continue;
-            $rows[$pid] = ['pid' => $pid, 'parent' => (int) $fields[1], 'group' => (int) $fields[2], 'session' => (int) $fields[3]];
+            $args = explode("\0", (string) @file_get_contents(dirname($path) . '/cmdline'));
+            $command = array_search('horizon:work', $args, true); $options = [];
+            if ($command !== false) foreach ($args as $arg) {
+                if (preg_match('/^--(memory|timeout|max-time|max-jobs|queue)=(.*)$/D', $arg, $match)) $options[$match[1]] = $match[2];
+            }
+            $rows[$pid] = ['pid' => $pid, 'parent' => (int) $fields[1], 'group' => (int) $fields[2], 'session' => (int) $fields[3],
+                'connection' => $command !== false ? ($args[$command + 1] ?? null) : null, 'worker_options' => $options,
+                'nice' => isset($fields[16]) ? (int) $fields[16] : null];
         }
+        $this->peakFailoverWorkers = max($this->peakFailoverWorkers, count(array_filter($rows, fn ($row) => $row['connection'] === MachineFailoverQueue::CONNECTION)));
         return $rows;
+    }
+    public function workerEvidence(): array
+    {
+        $this->liveProcesses();
+        return ['profile' => MachineFailoverQueue::supervisor(), 'peak_failover_workers' => $this->peakFailoverWorkers];
     }
     public function stopMaster(string $id): void
     {
@@ -129,6 +146,8 @@ final class NativeFailoverHorizonFixture
     public function pulse(bool $initialize = true, bool $stopsOnly = false): void
     {
         $now = microtime(true);
+        if (count(array_filter($this->liveProcesses(), fn ($row) => $row['connection'] === MachineFailoverQueue::CONNECTION)) > 1)
+            throw new \RuntimeException('Failover worker cap exceeded.');
         $runtime = \App\Models\MachineFailoverRuntime::query()->findOrFail($this->run['id']);
         $fault = NativeFailoverConcurrentFixture::control('fault');
         $blocked = in_array($fault, ['preflight', 'create_after'], true)
@@ -167,7 +186,10 @@ final class NativeFailoverHorizonFixture
         if ($this->liveProcesses()) throw new \RuntimeException('Owned Horizon processes survived cleanup.');
         foreach ($this->masters as $master) {
             proc_close($master['process']);
-            if (str_starts_with($master['log'], sys_get_temp_dir() . '/native-horizon-' . NativeFailoverConcurrentFixture::$owner . '-')) @unlink($master['log']);
+            if (!str_starts_with($master['log'], sys_get_temp_dir() . '/native-horizon-' . NativeFailoverConcurrentFixture::$owner . '-'))
+                throw new \RuntimeException('Private console file is not owned.');
+            if (is_file($master['log']) && !unlink($master['log'])) throw new \RuntimeException('Private console cleanup failed.');
+            if (file_exists($master['log'])) throw new \RuntimeException('Private console file survived cleanup.');
         }
         if (!$this->boundaryIntact()) throw new \RuntimeException('Neighbor Redis namespace changed.');
         $this->inner->cleanup();
@@ -179,13 +201,13 @@ final class NativeFailoverHorizonFixture
             $redis->del($this->neighbor . 'queues:business', $this->neighbor . 'horizon:masters');
             if ($redis->dbSize() !== 0 || DB::select('SHOW TABLES') !== []) throw new \RuntimeException('Disposable service cleanup incomplete.');
         } finally { $redis->close(); }
-        return ['live_processes' => 0, 'neighbor_unchanged' => true, 'redis_empty' => true, 'mysql_empty' => true];
+        return ['live_processes' => 0, 'neighbor_unchanged' => true, 'redis_empty' => true, 'mysql_empty' => true, 'private_logs_removed' => true];
     }
     public static function runtimeHashes(): array
     {
         $result = [];
         foreach ([\Laravel\Horizon\MasterSupervisor::class, \Laravel\Horizon\Supervisor::class,
-            \Illuminate\Queue\Worker::class, \App\Jobs\MachineFailoverRunJob::class] as $class)
+            \Illuminate\Queue\Worker::class, \App\Jobs\MachineFailoverRunJob::class, MachineFailoverQueue::class] as $class)
             $result[$class] = hash_file('sha256', (new \ReflectionClass($class))->getFileName());
         return $result;
     }

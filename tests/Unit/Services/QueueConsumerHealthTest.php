@@ -84,6 +84,17 @@ final class QueueConsumerHealthTest extends TestCase
         $this->assertFalse((new QueueConsumerHealth())->snapshot()['healthy']);
     }
 
+    public function test_opted_in_failover_needs_its_own_connection_not_an_admin_worker(): void
+    {
+        config(['horizon.environments.local.MachineFailover' => \App\Services\ServerMachine\Cloud\MachineFailoverQueue::supervisor()]);
+        $this->repositories(['redis:send_email,order_handle,machine_failover' => 1]);
+        $result = (new QueueConsumerHealth())->snapshot();
+        $this->assertFalse($result['healthy']);
+        $this->assertSame(['redis_failover:machine_failover'], $result['missing_queues']);
+        $this->repositories(['redis:send_email,order_handle' => 1, 'redis_failover:machine_failover' => 1]);
+        $this->assertTrue((new QueueConsumerHealth())->snapshot()['healthy']);
+    }
+
     public function test_environment_patterns_and_disabled_supervisors_are_respected(): void
     {
         $plan = config('horizon.environments.local');

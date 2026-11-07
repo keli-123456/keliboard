@@ -75,6 +75,15 @@ return [
             'after_commit' => false,
         ],
 
+        'redis_failover' => [
+            'driver' => 'redis',
+            'connection' => 'default',
+            'queue' => \App\Services\ServerMachine\Cloud\MachineFailoverQueue::NAME,
+            'retry_after' => \App\Services\ServerMachine\Cloud\MachineFailoverQueue::RETRY_AFTER,
+            'block_for' => null,
+            'after_commit' => false,
+        ],
+
         'redis_backup' => [
             'driver' => 'redis',
             'connection' => 'default',

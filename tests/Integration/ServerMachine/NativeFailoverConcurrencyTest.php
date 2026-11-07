@@ -99,33 +99,46 @@ final class NativeFailoverConcurrencyTest extends TestCase
     }
     public function test_duplicate_queue_payloads_are_fenced_across_three_workers(): void
     {
-        $this->seed(); $redis = app('redis')->connection(); $payload = $redis->lindex('queues:admin_operations', 0) ?: ($redis->zrange('queues:admin_operations:delayed', 0, 0)[0] ?? null);
-        $this->assertIsString($payload); $redis->rpush('queues:admin_operations', $payload, $payload);
+        $this->seed(); $redis = app('redis')->connection(); $payload = $redis->lindex('queues:machine_failover', 0) ?: ($redis->zrange('queues:machine_failover:delayed', 0, 0)[0] ?? null);
+        $this->assertIsString($payload); $redis->rpush('queues:machine_failover', $payload, $payload);
         $ids = [$this->spawn(), $this->spawn(), $this->spawn()]; foreach ($ids as $id) $this->join($id);
         $this->cleanWorkers(); $this->assertSame(1, $this->eventCount('create')); $this->assertSame(1, Attempt::query()->count());
         $this->assertSame('waiting_initialization', Task::query()->findOrFail(Attempt::query()->first()->task_id)->status);
     }
     public function test_two_recovery_sweepers_replace_a_lost_ticket_only_once(): void
     {
-        $this->seed(); app('redis')->connection()->del('queues:admin_operations', 'queues:admin_operations:delayed');
+        $this->seed(); app('redis')->connection()->del('queues:machine_failover', 'queues:machine_failover:delayed');
         Runtime::query()->whereKey($this->run['id'])->update(['next_dispatch_at' => 0]);
         $ids = [$this->spawn('recover'), $this->spawn('recover')]; foreach ($ids as $id) $this->join($id);
         $this->assertSame(2, Runtime::query()->find($this->run['id'])->generation);
-        $redis = app('redis')->connection(); $this->assertSame(1, $redis->llen('queues:admin_operations') + $redis->zcard('queues:admin_operations:delayed')); $this->workOnce();
+        $redis = app('redis')->connection(); $this->assertSame(1, $redis->llen('queues:machine_failover') + $redis->zcard('queues:machine_failover:delayed')); $this->workOnce();
+        $this->assertSame(1, $this->eventCount('create')); $this->assertSame(1, Attempt::query()->count());
+    }
+    public function test_legacy_admin_delivery_is_ignored_then_fenced_recovery_uses_the_new_pool(): void
+    {
+        $this->seed(); $redis = app('redis')->connection();
+        $payload = $redis->lindex('queues:machine_failover', 0) ?: ($redis->zrange('queues:machine_failover:delayed', 0, 0)[0] ?? null);
+        $this->assertIsString($payload); $redis->del('queues:machine_failover', 'queues:machine_failover:delayed');
+        $redis->rpush('queues:admin_operations', $payload); $this->join($this->spawn('legacy'));
+        $this->assertSame(0, $this->eventCount('create')); $this->assertSame(0, Attempt::query()->count());
+        $this->assertSame(1, Runtime::query()->find($this->run['id'])->generation);
+        Runtime::query()->whereKey($this->run['id'])->update(['next_dispatch_at' => 0]);
+        $this->join($this->spawn('recover')); $this->assertSame(2, Runtime::query()->find($this->run['id'])->generation);
+        $this->assertSame(0, $redis->llen('queues:admin_operations')); $this->workOnce();
         $this->assertSame(1, $this->eventCount('create')); $this->assertSame(1, Attempt::query()->count());
     }
     public function test_real_queue_connection_failure_preserves_the_ticket_until_recovery(): void
     {
-        $this->seed(); app('redis')->connection()->del('queues:admin_operations', 'queues:admin_operations:delayed');
+        $this->seed(); app('redis')->connection()->del('queues:machine_failover', 'queues:machine_failover:delayed');
         Runtime::query()->whereKey($this->run['id'])->update(['next_dispatch_at' => 0]);
         $socket = stream_socket_server('tcp://127.0.0.1:0', $errno, $message); $this->assertIsResource($socket);
         $port = (int) substr(strrchr(stream_socket_get_name($socket, false), ':'), 1); fclose($socket);
         config(['database.redis.queue_fault' => ['host' => '127.0.0.1', 'port' => $port, 'timeout' => 1, 'read_timeout' => 1, 'database' => 0],
-            'queue.connections.redis.connection' => 'queue_fault']);
+            'queue.connections.redis_failover.connection' => 'queue_fault']);
         app()->instance('redis', new \Illuminate\Redis\RedisManager(app(), 'phpredis', config('database.redis'))); Fixture::queue();
         app(MachineFailoverRunner::class)->advance();
         $this->assertSame('queue_unavailable', Runtime::query()->find($this->run['id'])->reason); $this->assertSame(0, $this->eventCount('create'));
-        config(['queue.connections.redis.connection' => 'default']); Fixture::queue();
+        config(['queue.connections.redis_failover.connection' => 'default']); Fixture::queue();
         Runtime::query()->whereKey($this->run['id'])->update(['next_dispatch_at' => 0]); app(MachineFailoverRunner::class)->advance(); $this->workOnce();
         $this->assertSame(1, $this->eventCount('create')); $this->assertSame(1, Attempt::query()->count());
     }
@@ -136,7 +149,7 @@ final class NativeFailoverConcurrencyTest extends TestCase
         $this->fixture->expire($this->run['id']); $this->join($this->spawn('recover')); Fixture::control('release', true, true); $this->workOnce();
         $this->assertSame(1, $this->eventCount('create')); $this->assertSame(1, Attempt::query()->count());
         $this->assertNotNull(Task::query()->findOrFail(Attempt::query()->first()->task_id)->external_id);
-        $redis = app('redis')->connection(); foreach ($redis->zrange('queues:admin_operations:reserved', 0, -1) as $payload) $redis->zadd('queues:admin_operations:reserved', 0, $payload);
+        $redis = app('redis')->connection(); foreach ($redis->zrange('queues:machine_failover:reserved', 0, -1) as $payload) $redis->zadd('queues:machine_failover:reserved', 0, $payload);
         $this->join($this->spawn()); $this->assertSame(1, $this->eventCount('create')); $this->cleanWorkers(true);
     }
     public function test_expired_live_worker_cannot_overwrite_a_new_workers_reconciliation(): void

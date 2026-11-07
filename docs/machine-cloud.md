@@ -1256,7 +1256,7 @@ every execution gate permits it. The conditional minute command
 `machines:advance-native-failover` recovers at most 20 due tickets per sweep.
 Each queued job carries a generation and random nonce; only its hash is stored.
 A worker claims a 120-second lease under the run lock and advances one member.
-Jobs use the existing `redis:admin_operations` queue, one attempt and a 75-second
+Jobs use the dedicated `redis_failover:machine_failover` queue, one attempt and a 75-second
 timeout, below its 90-second retry visibility. Ordinary progress chains a delayed
 ticket (normally 20 seconds, one
 second for urgent DNS/retry work); the minute sweep is recovery, not the primary
@@ -1381,7 +1381,7 @@ identity guards and no release/deployment path. Never point this fixture at an
 existing Redis server, panel database or production Horizon environment.
 
 Each case starts the locked Horizon v5.45.6 console implementation: a master,
-its supervisor and two actual `horizon:work` processes using Horizon RedisQueue.
+two supervisors and independent failover/admin `horizon:work` processes using Horizon RedisQueue.
 The console-only test bootstrap registers the vendor queue/events/services but
 does not load the panel `.env`, dashboard, production schedules or supervisors.
 Master identity, Horizon/queue/cache prefixes and the Linux session are owned by
@@ -1420,7 +1420,7 @@ files, tables and Redis keys must be gone, neighbor sentinels unchanged, and the
 CI service containers/network removed. Cloud, DNS and verifier remain mocked;
 this is not paid cloud, DNS propagation, WAN or real user acceptance.
 
-Recorded full daemon run:
+Historical full daemon run before the dedicated-pool split:
 [42392469002](https://github.com/keli-123456/keliboard/actions/runs/42392469002),
 test source `275af39b0ab5ea01a1428856893aff6487097825`. All four cases passed in
 both isolation levels (8/8, no errors or skips). Each matrix observed a 75-second
@@ -1440,3 +1440,54 @@ and 21,634 assertions. Earlier smoke failures concerned fixture probe publicatio
 cadence/decision snapshots and are retained separately; the final run did not
 relax production evidence guards. No panel/node runtime code or existing Horizon,
 queue, execution-gate, release or deployment configuration changed in this work.
+
+### Dedicated Failover Queue And Bounded Worker
+
+Native execution uses the `redis_failover` Laravel queue connection and only
+`machine_failover`. This is a separate queue/consumer pool on the existing Redis
+transport, not a new physical Redis server. Generic provisioning, manual power,
+DNS-binding jobs and bounded notification delivery keep their existing queues.
+Native managed provisioning advances inline under the native fenced ticket;
+it does not dispatch an extra generic provisioning job to the admin pool.
+
+`MACHINE_FAILOVER_WORKER_ENABLED=false` is the default. With the flag absent or
+false, Horizon provisions exactly the original Xboard, RiskAI, AdminOperations
+and Backup pools; no failover supervisor/process is added or expected by queue
+health. Opting in adds `MachineFailover` to the same existing master plan in
+production/local. It does not start a second Horizon daemon, resize any original
+pool, subscribe those pools to failover, or grant execution permission. The
+unchanged runner/replacement flags and rejecting execution gate remain closed.
+
+The dedicated profile has balancing disabled, exactly one worker, one attempt,
+an 80-second supervisor timeout, 128 MiB PHP-memory recycling threshold, 100-job
+and 900-second worker recycling bounds, one-second idle sleep and lower CPU
+scheduling priority (`nice=10`). Native jobs
+still time out at 75 seconds, below the 80-second supervisor and 90-second retry
+visibility, while the existing 120/300-second run/member leases are unchanged.
+The memory/age/job thresholds are checked by Laravel between jobs: they are not
+OS RSS/cgroup limits or a CPU quota. Redis, SQL and host CPU/I/O are still shared
+if deployed together; independent consumers prevent queue-capacity borrowing,
+not all possible resource contention. This work does not change OS daemons.
+
+An old serialized native delivery received on the admin connection/queue exits
+before calling the native runner. It is not moved, replayed or paid again. The
+normal fenced sweep can recover its existing runtime ticket onto the dedicated
+queue after the original visibility marker; no new intent is enrolled. A new
+connection failure is recorded as `queue_unavailable`, with no fallback to admin.
+Queue health expects the dedicated consumer only when its supervisor is opted in;
+an admin worker, even with a matching queue label, cannot satisfy that connection.
+
+Isolated acceptance reuses this exact production worker profile. It creates a
+second synthetic admin pool in the same temporary master, deliberately blocks
+the failover worker and leaves three native deliveries queued. Admin probe jobs
+must complete while that backlog remains, and the same admin worker must survive
+the native timeout/replacement. Live-process samples must never exceed one native
+worker. CLI memory/timeout/recycling options, restart/stop behavior and cleanup
+are checked alongside the unchanged real leases and mock paid-intent counts.
+The non-daemon suite also checks old admin delivery rejection/fenced recovery.
+
+No environment flag, config cache, existing queue, active supervisor, production
+database, cloud/DNS endpoint or tanzhen resource is changed by these tests. A
+future activation must load the optional plan through the normal planned Horizon
+lifecycle; changing an environment file alone cannot reconfigure an already
+running master. There is no deployment or daemon reload in this increment.

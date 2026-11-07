@@ -697,7 +697,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $this->assertSame(0, \App\Models\MachineFailoverRuntime::count()); $this->assertSame([], $this->posts);
         Bus::assertNotDispatched(\App\Jobs\MachineFailoverRunJob::class);
         $job = new \App\Jobs\MachineFailoverRunJob($run['id'], 1, str_repeat('a', 48));
-        $this->assertSame('redis', $job->connection); $this->assertSame('admin_operations', $job->queue);
+        $this->assertSame('redis_failover', $job->connection); $this->assertSame('machine_failover', $job->queue);
         $queue = require base_path('config/queue.php');
         $this->assertSame(1, $job->tries); $this->assertLessThan($queue['connections']['redis']['retry_after'], $job->timeout);
     }

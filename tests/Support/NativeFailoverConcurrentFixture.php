@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate;
 use App\Services\ServerMachine\Cloud\MachineFailoverObserver;
 use App\Services\ServerMachine\Cloud\MachineFailoverRunner;
+use App\Services\ServerMachine\Cloud\MachineFailoverQueue;
 use App\Services\ServerMachine\Cloud\MachineProvisionService;
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Illuminate\Database\Eloquent\Model;
@@ -79,7 +80,10 @@ final class NativeFailoverConcurrentFixture
             'default' => ['host' => '127.0.0.1', 'port' => (int) getenv('KELI_NATIVE_REDIS_PORT'), 'database' => 0, 'timeout' => 2, 'read_timeout' => 2]],
             'cache.default' => 'redis', 'cache.prefix' => 'cache:', 'cache.stores.redis' => ['driver' => 'redis', 'connection' => 'default'],
             'queue.default' => 'redis', 'queue.connections.redis' => ['driver' => 'redis', 'connection' => 'default', 'queue' => 'admin_operations',
-                'retry_after' => 90, 'block_for' => null, 'after_commit' => false], 'queue.failed.driver' => null]);
+                'retry_after' => 90, 'block_for' => null, 'after_commit' => false],
+            'queue.connections.' . MachineFailoverQueue::CONNECTION => ['driver' => 'redis', 'connection' => 'default',
+                'queue' => MachineFailoverQueue::NAME, 'retry_after' => MachineFailoverQueue::RETRY_AFTER,
+                'block_for' => null, 'after_commit' => false], 'queue.failed.driver' => null]);
         (new \Illuminate\Redis\RedisServiceProvider(app()))->register();
         $cache = new \Illuminate\Cache\CacheManager(app()); app()->instance('cache', $cache); app()->instance('cache.store', $cache->store());
         \Illuminate\Support\Facades\Facade::clearResolvedInstance('cache');
@@ -172,9 +176,10 @@ final class NativeFailoverConcurrentFixture
         if ($mode === 'stops') { config(['machine_failover.runner_enabled' => false]); app()->instance(MachineFailoverExecutionGate::class, new MachineFailoverExecutionGate()); app(MachineFailoverRunner::class)->advance(true); return 0; }
         $worker = new \Illuminate\Queue\Worker(app('queue'), app('events'), app(\Illuminate\Contracts\Debug\ExceptionHandler::class), fn () => false);
         $options = new \Illuminate\Queue\WorkerOptions(sleep: 0, maxTries: 1, timeout: 75);
-        if ($mode === 'once') { $worker->runNextJob('redis', 'admin_operations', $options); return 0; }
+        if ($mode === 'legacy') { $worker->runNextJob('redis', 'admin_operations', $options); return 0; }
+        if ($mode === 'once') { $worker->runNextJob(MachineFailoverQueue::CONNECTION, MachineFailoverQueue::NAME, $options); return 0; }
         $until = microtime(true) + 45;
-        while (microtime(true) < $until && self::control('exit') !== true) { $worker->runNextJob('redis', 'admin_operations', $options); usleep(50000); }
+        while (microtime(true) < $until && self::control('exit') !== true) { $worker->runNextJob(MachineFailoverQueue::CONNECTION, MachineFailoverQueue::NAME, $options); usleep(50000); }
         return 0;
     }
 
@@ -271,7 +276,7 @@ final class NativeFailoverConcurrentFixture
     public function due(string $id): void
     {
         Runtime::query()->whereKey($id)->update(['next_check_at' => 0]); Task::query()->whereNotIn('status', Task::TERMINAL)->update(['next_check_at' => 0]);
-        $redis = app('redis')->connection(); $key = 'queues:admin_operations:delayed';
+        $redis = app('redis')->connection(); $key = 'queues:' . MachineFailoverQueue::NAME . ':delayed';
         foreach ($redis->zrange($key, 0, -1) as $payload) $redis->zadd($key, 0, $payload);
     }
     public function stop(string $id): array
