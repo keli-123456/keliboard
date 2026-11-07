@@ -48,13 +48,17 @@ class MachineFailoverCredentials
         $pool = $this->pool($policy->credential_group_id, $policy->provider);
         $limit = min($policy->daily_limit, max(1, min(2, (int) config('machine_provision.daily_limit_per_account', 2))));
         $candidates = [];
+        $health = app(MachineCloudCredentialHealth::class);
         foreach ($pool['accounts'] as $account) {
-            $history = Task::query()->where('account_id', $account->id);
+            $full = Account::query()->findOrFail($account->id);
+            if (!$health->status($full, $policy->only(['region', 'size', 'image']))['eligible']) continue;
+            $ids = $health->sameAccountIds($full);
+            $history = Task::query()->whereIn('account_id', $ids);
             $attempts = (clone $history)->where('created_at', '>=', time() - 86400)->count();
             $last = (clone $history)->max('created_at');
             if ($attempts >= $limit || ($last !== null && $last + $policy->cooldown_seconds > time())
                 || (clone $history)->whereNotIn('status', ['accepted', 'failed', 'cancelled'])->exists()
-                || MachineCloudTask::query()->whereIn('resource_id', MachineCloudResource::query()->where('account_id', $account->id)->select('id'))
+                || MachineCloudTask::query()->whereIn('resource_id', MachineCloudResource::query()->whereIn('account_id', $ids)->select('id'))
                     ->whereNotIn('status', MachineCloudTask::TERMINAL)->exists()) continue;
             $candidates[] = ['account' => $account, 'attempts' => $attempts, 'last' => $last ?? 0];
         }
@@ -93,5 +97,27 @@ class MachineFailoverCredentials
         if ($membership && $account->group_id !== $scope['group_id']) throw new CloudException('credential_group_changed');
         if ($snapshot && !hash_equals($this->pool($scope['group_id'], $scope['provider'])['fingerprint'], $scope['fingerprint'])) throw new CloudException('credential_group_changed');
         return $account;
+    }
+
+    public function rotationPlan(Policy $policy, Task $task, array $failure): array
+    {
+        if (!$this->grouped($policy) || !$this->owns($policy, $task)) return ['automatic' => false, 'dispatch_allowed' => false, 'action' => 'stop',
+            'reason' => 'single_credential', 'next_account_id' => null, 'next_account_revision' => null];
+        $health = app(MachineCloudCredentialHealth::class); $pool = $this->pool($policy->credential_group_id, $policy->provider);
+        $current = Account::query()->findOrFail($task->account_id); $plan = $task->payload['plan']; $candidates = [];
+        $limit = min($policy->daily_limit, max(1, min(2, (int) config('machine_provision.daily_limit_per_account', 2))));
+        foreach ($pool['accounts'] as $row) {
+            $account = Account::query()->findOrFail($row->id); $ids = $health->sameAccountIds($account);
+            $history = Task::query()->whereIn('account_id', $ids); $last = (clone $history)->max('created_at');
+            $candidates[] = ['id' => $account->id, 'revision' => $account->revision, 'provider' => $account->provider, 'group_id' => $account->group_id,
+                'credential_key' => $health->credentialKey($account), 'identity_key' => $health->identityKey($account),
+                'eligible' => $health->status($account, $plan)['eligible'] && !(clone $history)->whereNotIn('status', ['accepted', 'failed', 'cancelled'])->exists()
+                    && !MachineCloudTask::query()->whereIn('resource_id', MachineCloudResource::query()->whereIn('account_id', $ids)->select('id'))->whereNotIn('status', MachineCloudTask::TERMINAL)->exists(),
+                'budget_available' => (clone $history)->where('created_at', '>=', time() - 86400)->count() < $limit
+                    && ($last === null || $last + $policy->cooldown_seconds <= time())];
+        }
+        $remaining = max(0, $policy->daily_limit - Task::query()->where('machine_id', $policy->machine_id)->where('slot', $policy->slot)->where('created_at', '>=', time() - 86400)->count());
+        return app(MachineCredentialRotationPlanner::class)->decide($failure, ['id' => $current->id, 'provider' => $current->provider,
+            'group_id' => $policy->credential_group_id, 'credential_key' => $health->credentialKey($current), 'identity_key' => $health->identityKey($current)], $candidates, $remaining, [$task->account_id]);
     }
 }

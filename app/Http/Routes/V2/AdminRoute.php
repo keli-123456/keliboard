@@ -155,7 +155,16 @@ class AdminRoute
                 $router->get('/notices', [\App\Http\Controllers\V2\Admin\Server\MachineOperationNoticeController::class, 'fetch']);
                 $router->post('/notices/policy', [\App\Http\Controllers\V2\Admin\Server\MachineOperationNoticeController::class, 'save']);
                 $router->get('/cloud', [\App\Http\Controllers\V2\Admin\Server\MachineCloudController::class, 'fetch']);
+                $router->get('/cloud/account/health', [\App\Http\Controllers\V2\Admin\Server\MachineCredentialHealthController::class, 'report']);
+                $router->post('/cloud/account/health/verify', [\App\Http\Controllers\V2\Admin\Server\MachineCredentialHealthController::class, 'verify']);
                 $router->get('/cloud/failover', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'fetch']);
+                $router->get('/cloud/failover/services', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'fetch']);
+                $router->post('/cloud/failover/services/save', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'save']);
+                $router->post('/cloud/failover/services/drop', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'drop']);
+                $router->post('/cloud/failover/services/simulate', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'simulate']);
+                $router->get('/cloud/failover/services/run', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'report']);
+                $router->post('/cloud/failover/services/advance', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'advance']);
+                $router->post('/cloud/failover/services/cancel', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'cancel']);
                 $router->get('/cloud/failover/catalog', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'catalog']);
                 $router->get('/cloud/failover/history', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'history']);
                 $router->get('/cloud/failover/replacements', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'replacements']);

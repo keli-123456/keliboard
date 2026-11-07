@@ -44,9 +44,13 @@ class MachineCloudService
         $resources = Resource::query()->orderBy('account_id')->orderBy('id')->limit(500)->get();
         $latest = Task::query()->whereIn('id', $resources->pluck('last_task_id')->filter())->get()->keyBy('id');
         $groups = app(MachineCloudGroupService::class);
-        return ['available' => true, 'providers' => self::PROVIDERS, 'accounts' => Account::query()->orderBy('id')->get(),
+        $credentialHealth = app(MachineCloudCredentialHealth::class);
+        return ['available' => true, 'providers' => self::PROVIDERS, 'accounts' => Account::query()->orderBy('id')->get()->map(fn ($account) => $account->toArray()
+                + ($credentialHealth->available() ? ['credential_health' => $credentialHealth->status($account)] : [])),
+            'credential_health_available' => $credentialHealth->available(),
             'groups_available' => $groups->available(), 'groups' => $groups->overview(),
             'failover_available' => app(MachineFailoverPolicyService::class)->available(),
+            'orchestration_available' => app(MachineFailoverServiceRegistry::class)->available(),
             'acceptance_available' => app(MachineInstanceAcceptance::class)->available(),
             'resources' => $resources->map(fn ($resource) => $resource->toArray() + ['health' => $this->health->snapshot($resource,
                 $resource->dns_hold ? (int) ($latest->get($resource->last_task_id)?->dispatched_at ?? 0) : 0)]),
@@ -133,7 +137,11 @@ class MachineCloudService
                     }
                     $account->fill(['last_sync_at' => time(), 'last_page' => $page, 'pages' => $data['pages'], 'last_error' => null])->save();
                 });
-            } catch (CloudException $error) { $account->last_error = $error->getMessage(); $account->save(); throw $error; }
+                app(MachineCloudCredentialHealth::class)->authenticatedRead($account, 'inventory');
+            } catch (CloudException $error) {
+                if ($error instanceof CloudRequestFailure) app(MachineCloudCredentialHealth::class)->record($account, $error, 'inventory', $account->id . ':' . $page . ':' . intdiv(time(), 60));
+                $account->last_error = $error->getMessage(); $account->save(); throw $error;
+            }
         });
     }
 

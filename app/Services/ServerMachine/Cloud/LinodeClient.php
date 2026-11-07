@@ -72,15 +72,12 @@ class LinodeClient implements CloudClient
             $client = Http::withToken($account->credentials['api_token'])->acceptJson()->connectTimeout(3)->timeout(5)->withoutRedirecting();
             if ($filter) $client = $client->withHeaders(['X-Filter' => json_encode($filter, JSON_THROW_ON_ERROR)]);
             $response = $client->send($method, 'https://api.linode.com/v4' . $path, $method === 'GET' ? ['query' => $query] : ['json' => new \stdClass()]);
-        } catch (\Throwable) { throw new CloudException($method === 'POST' ? 'outcome_uncertain' : 'provider_unavailable'); }
-        if (in_array($response->status(), [401, 403], true)) throw new CloudException('provider_forbidden');
-        if ($response->status() === 404) throw new CloudException('resource_missing');
-        if ($response->status() === 429) throw new CloudException('provider_rate_limited');
-        if ($response->serverError() && $method === 'POST') throw new CloudException('outcome_uncertain');
-        if ($response->serverError()) throw new CloudException('provider_unavailable');
-        if (!$response->successful() || strlen($response->body()) > 524288) throw new CloudException('provider_rejected');
+        } catch (\Throwable) { throw new CloudRequestFailure(app(CloudFailurePolicy::class)->transport('linode', $method)); }
+        $failure = fn () => new CloudRequestFailure(app(CloudFailurePolicy::class)->response('linode', $method, $response->status(),
+            strlen($response->body()) <= 524288 ? $response->json() : null, $response->headers()));
+        if (!$response->successful() || strlen($response->body()) > 524288) throw $failure();
         $data = $response->json();
-        if (!is_array($data)) throw new CloudException($method === 'POST' ? 'outcome_uncertain' : 'provider_invalid');
+        if (!is_array($data)) throw $failure();
         return $data;
     }
 

@@ -125,6 +125,7 @@ class MachineFailoverPolicyService
             DB::transaction(function () use ($id, $revision) {
                 $policy = Policy::query()->whereKey($id)->lockForUpdate()->firstOrFail();
                 if ($policy->revision !== $revision) throw new CloudException('config_changed');
+                if (Schema::hasTable('v2_machine_failover_member') && \App\Models\MachineFailoverMember::query()->where('policy_id', $id)->exists()) throw new CloudException('policy_in_use');
                 if (Schema::hasTable('v2_machine_owned_instance') && \App\Models\MachineOwnedInstance::query()->where('policy_id', $policy->id)->exists()) throw new CloudException('policy_in_use');
                 $policy->delete();
             });

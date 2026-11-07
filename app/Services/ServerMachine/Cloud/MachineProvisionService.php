@@ -24,7 +24,8 @@ class MachineProvisionService
         'panel_origin_changed', 'resource_missing', 'replacement_disabled', 'replacement_not_allowed',
         'replacement_evidence_changed', 'replacement_guard_failed', 'replacement_cooldown', 'source_recovered',
         'replacement_episode_used', 'ownership_mismatch', 'config_changed', 'daily_budget', 'task_active',
-        'release_changed', 'isolated_context_changed', 'isolated_scope_changed', 'isolation_confirmation_required', 'credential_group_changed'];
+        'release_changed', 'isolated_context_changed', 'isolated_scope_changed', 'isolation_confirmation_required', 'credential_group_changed',
+        'credential_health_blocked', 'credential_health_unavailable', 'credential_identity_changed'];
 
     public function __construct(private LinodeProvisionClient $provider, private ProvisionBootstrap $bootstrap,
         private MachineCloudHealth $health, private MachineAddressInventory $addresses) {}
@@ -80,7 +81,7 @@ class MachineProvisionService
         if ($plan['source_ref']) throw new CloudException('source_review_required');
         if (isset($plan['credential_pool']) && $replacementPlan === null && $isolated === null) throw new CloudException('invalid_plan');
         return Cache::lock('machine-provision:slot:' . hash('sha256', $plan['machine_id'] . ':' . $plan['slot']), 120)
-            ->block(2, fn () => $this->locked($plan['account_id'], function () use ($plan, $requestId, $admin, $replacementPlan, $isolated) {
+            ->block(2, fn () => $this->quotaLocked($plan['provider'] ?? 'linode', fn () => $this->locked($plan['account_id'], function () use ($plan, $requestId, $admin, $replacementPlan, $isolated) {
             $this->actor($admin);
             $this->testMachine($plan['machine_id']);
             if ($plan['monthly_limit_usd'] <= 0) throw new CloudException('budget_required');
@@ -97,6 +98,8 @@ class MachineProvisionService
                 return $this->present($existing);
             }
             $account = MachineCloudAccount::query()->findOrFail($plan['account_id']);
+            $health = app(MachineCloudCredentialHealth::class); $health->assertEligible($account, $plan);
+            $accountIds = $health->sameAccountIds($account);
             $machine = ServerMachine::query()->findOrFail($plan['machine_id']);
             if ($account->provider !== 'linode' || $account->provider !== ($plan['provider'] ?? 'linode') || !$machine->is_active) throw new CloudException('invalid_plan');
             if (isset($plan['credential_pool'])) app(MachineFailoverCredentials::class)->assertPlan($plan);
@@ -108,10 +111,10 @@ class MachineProvisionService
             }
             if (Task::query()->where('machine_id', $machine->id)->where('slot', $plan['slot'])
                 ->whereNotIn('status', ['accepted', 'failed', 'cancelled'])->exists()) throw new CloudException('task_active');
-            if (Task::query()->where('account_id', $account->id)->whereNotIn('status', ['accepted', 'failed', 'cancelled'])->exists()
-                || \App\Models\MachineCloudTask::query()->whereIn('resource_id', MachineCloudResource::query()->where('account_id', $account->id)->select('id'))
+            if (Task::query()->whereIn('account_id', $accountIds)->whereNotIn('status', ['accepted', 'failed', 'cancelled'])->exists()
+                || \App\Models\MachineCloudTask::query()->whereIn('resource_id', MachineCloudResource::query()->whereIn('account_id', $accountIds)->select('id'))
                     ->whereNotIn('status', \App\Models\MachineCloudTask::TERMINAL)->exists()) throw new CloudException('task_active');
-            if (Task::query()->where('account_id', $account->id)->where('created_at', '>=', time() - 86400)->count()
+            if (Task::query()->whereIn('account_id', $accountIds)->where('created_at', '>=', time() - 86400)->count()
                 >= max(1, min(2, (int) config('machine_provision.daily_limit_per_account', 2)))) throw new CloudException('daily_budget');
             $id = (string) Str::uuid(); $installation = bin2hex(random_bytes(16)); $secret = bin2hex(random_bytes(32));
             $marker = 'keli-create-' . bin2hex(random_bytes(12));
@@ -140,13 +143,13 @@ class MachineProvisionService
             });
             $this->dispatch($task);
             return $this->present($task->fresh());
-        }));
+        })));
     }
 
     public function process(string $id): void
     {
         if (!$this->available() || !($initial = Task::query()->find($id)) || in_array($initial->status, Task::TERMINAL, true)) return;
-        $this->locked($initial->account_id, function () use ($id) {
+        $this->quotaLocked('linode', fn () => $this->locked($initial->account_id, function () use ($id) {
             $task = Task::query()->find($id);
             if (!$task || in_array($task->status, Task::TERMINAL, true) || $task->next_check_at > time()) return;
             try {
@@ -161,11 +164,18 @@ class MachineProvisionService
                     $this->move($task, $task->dispatched_at ? 'needs_review' : 'failed', $reason); return;
                 }
                 $payload = $task->payload;
+                $health = app(MachineCloudCredentialHealth::class);
+                $credentialState = $health->status($account, $payload['plan'], $task->dispatched_at === null ? null : $task->id);
+                if (!$credentialState['eligible']) {
+                    if ($credentialState['state'] === 'cooldown') { $this->wait($task, $credentialState['retry_at']); return; }
+                    throw new CloudException('credential_health_blocked');
+                }
                 $this->origin($payload['plan']);
                 if (isset($payload['isolated_acceptance'])) app(MachineIsolatedAcceptance::class)->assertTask($task);
                 if (!$task->dispatched_at) {
                     if (isset($payload['plan']['credential_pool'])) app(MachineFailoverCredentials::class)->assertPlan($payload['plan']);
                     $this->provider->preflight($account, $payload['plan']);
+                    $health->authenticatedRead($account, 'preflight');
                     $this->gate(); $this->actor($task->admin_id); $this->testMachine($task->machine_id);
                     if ($account->fresh()?->revision !== $task->account_revision) throw new CloudException('account_changed');
                     $current = $machine->fresh();
@@ -174,6 +184,7 @@ class MachineProvisionService
                     if (isset($payload['plan']['credential_pool'])) app(MachineFailoverCredentials::class)->assertPlan($payload['plan']);
                     if (isset($payload['isolated_acceptance'])) app(MachineIsolatedAcceptance::class)->assertTask($task);
                     if ($task->replacement_id) app(MachineReplacementService::class)->assertDispatch($task);
+                    $health->assertEligible($account, $payload['plan']);
                     $dispatchAt = time();
                     if ($task->deadline_at <= $dispatchAt) throw new CloudException('deadline');
                     // Persist the boundary before POST; retries can only perform reconciliation.
@@ -181,14 +192,17 @@ class MachineProvisionService
                     try {
                         $snapshot = $this->provider->create($account, $payload['request'], $task->dispatched_at);
                         $this->acceptSnapshot($task, $snapshot);
+                        $health->resolveIntent($account, $task->id);
                     } catch (CloudException $error) {
                         if ($error->getMessage() !== 'outcome_uncertain') throw $error;
+                        $this->captureFailure($task, $account, $error, 'create');
                         $this->move($task, 'outcome_unknown', 'outcome_uncertain'); $this->wait($task); return;
                     }
                 } elseif (!$task->external_id) {
                     $snapshot = $this->provider->reconcile($account, $payload['request'], $task->dispatched_at);
                     if (!$snapshot) { $this->move($task, 'outcome_unknown', 'outcome_uncertain'); $this->wait($task); return; }
                     $this->acceptSnapshot($task, $snapshot);
+                    $health->resolveIntent($account, $task->id);
                 }
                 $snapshot = $this->provider->instance($account, $task->external_id);
                 $this->acceptSnapshot($task, $snapshot);
@@ -211,14 +225,15 @@ class MachineProvisionService
                 $this->move($task, 'awaiting_acceptance', null, ['reports' => $health, 'ipv4_probe' => 'reachable',
                     'forwarding_verified' => false, 'dns_changed' => false, 'old_resources_changed' => false]);
             } catch (CloudException $error) {
+                if (isset($account) && $account) $this->captureFailure($task, $account, $error, $task->dispatched_at === null ? 'preflight' : ($task->external_id ? 'readback' : 'create'));
                 $reason = $this->reason($error->getMessage());
                 if (in_array($reason, ['provider_unavailable', 'provider_rate_limited', 'reconcile_incomplete'], true)) {
                     $this->move($task, $task->dispatched_at && !$task->external_id ? 'outcome_unknown' : $task->status, $reason);
-                    $this->wait($task); return;
+                    $this->wait($task, $error instanceof CloudRequestFailure ? time() + $error->decision['cooldown_seconds'] : null); return;
                 }
                 $this->move($task, $task->dispatched_at ? 'needs_review' : ($reason === 'source_recovered' ? 'cancelled' : 'failed'), $reason);
             } catch (\Throwable) { $this->move($task, $task->dispatched_at ? 'needs_review' : 'failed', 'internal_failure'); }
-        });
+        }));
     }
 
     public function callback(string $id, string $installation, string $secret, string $state): bool
@@ -285,6 +300,10 @@ class MachineProvisionService
         if (!$admin || !$admin->is_admin || $admin->banned) throw new CloudException('permission_revoked');
     }
     private function locked(int $account, callable $work): mixed { return Cache::lock('machine-cloud:account:' . $account, 120)->block(2, $work); }
+    private function quotaLocked(string $provider, callable $work): mixed
+    {
+        return app(MachineCloudCredentialHealth::class)->available() ? Cache::lock('machine-cloud:quota:' . $provider, 120)->block(2, $work) : $work();
+    }
     private function reason(string $reason): string { return in_array($reason, self::REASONS, true) ? $reason : 'internal_failure'; }
     private function move(Task $task, string $state, ?string $reason = null, ?array $evidence = null): void
     {
@@ -297,10 +316,28 @@ class MachineProvisionService
         });
         if ($task->replacement_id) app(MachineReplacementService::class)->sync($task);
     }
-    private function wait(Task $task): void
+    private function wait(Task $task, ?int $notBefore = null): void
     {
         $seconds = max(10, min(60, (int) config('machine_provision.poll_seconds', 20)));
-        $task->next_check_at = time() + $seconds; $task->save(); $this->dispatch($task, $seconds);
+        $at = min($task->deadline_at, max(time() + $seconds, $notBefore ?? 0));
+        $task->next_check_at = $at; $task->save(); $this->dispatch($task, max(1, $at - time()));
+    }
+    private function captureFailure(Task $task, MachineCloudAccount $account, CloudException $error, string $operation): void
+    {
+        if (!$error instanceof CloudRequestFailure) return;
+        app(MachineCloudCredentialHealth::class)->record($account, $error, $operation, $task->id . ':' . ($task->next_check_at ?? 0), $task->payload['plan'], $task->id);
+        $evidence = $task->evidence ?? []; $evidence['credential_failure'] = $error->decision;
+        $evidence['credential_rotation'] = ['automatic' => false, 'dispatch_allowed' => false, 'action' => $error->decision['outcome'] === 'unknown' ? 'reconcile' : 'stop',
+            'reason' => $error->decision['outcome'] === 'unknown' ? 'original_intent_only' : 'single_credential', 'next_account_id' => null, 'next_account_revision' => null];
+        if ($task->replacement_id) {
+            $row = MachineReplacementTask::query()->find($task->replacement_id);
+            $policy = $row ? \App\Models\MachineFailoverPolicy::query()->find($row->policy_id) : null;
+            if ($policy) {
+                try { $evidence['credential_rotation'] = app(MachineFailoverCredentials::class)->rotationPlan($policy, $task, $error->decision); }
+                catch (CloudException) { $evidence['credential_rotation']['reason'] = 'credential_context_invalid'; }
+            }
+        }
+        $task->evidence = $evidence; $task->save();
     }
     private function dispatch(Task $task, int $delay = 0): void
     {

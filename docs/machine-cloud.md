@@ -613,6 +613,12 @@ Linux verifier resource isolation, or production DNS propagation.
 
 Before enabling real execution, the remaining work is:
 
+- The multi-member service and automatic state machine described below now run
+  end-to-end in an isolated simulation. They do not yet consume production
+  telemetry or dispatch production member operations. Connecting trusted live
+  adapters, scheduling and separately authorized recovery remains follow-up work;
+  this is not a switch that can be enabled by changing an environment variable.
+
 - Separately authorize one isolated live creation and validate the disabled
   coordinator described above. Its candidate uses one pinned template and a
   matching-provider credential from the configured group (legacy policies keep
@@ -694,3 +700,184 @@ Native catalog references:
 [DigitalOcean images](https://docs.digitalocean.com/reference/api/reference/images/),
 [Vultr plans](https://github.com/vultr/govultr/blob/master/plan.go),
 [Vultr operating systems](https://github.com/vultr/govultr/blob/master/os.go).
+
+### Multi-Member Services And Simulated Orchestration
+
+Migration `2026_11_07_140000_create_machine_failover_services` adds a service,
+member links, runs, member progress and an action journal. A service links 1-10
+existing independent policies. Each policy and logical machine can belong to
+only one service. Members have an explicit policy revision, order and participation
+setting. Policy/provider templates and credential groups remain at the leaf
+policy; a service never invents provider-independent region or image IDs.
+
+Service-wide limits are 1-2 concurrent members, 1-20 creation intents and a
+USD 0-10000 monthly-price reservation cap **per simulated run**. These synthetic
+reservations are not a cloud quote, account quota, stock check or real billing.
+Reservation and member transition commit together; exact-cent totals do not
+multiply the cap per member. Disabled members are not simulated. Once a run
+exists, member removal and service deletion retain audit instead of silently
+discarding history. A referenced policy cannot be deleted. Revision changes
+are explicit; old results do not become proof for the new revision.
+
+The admin-only API is under `/server/machine/cloud/failover/services`:
+
+- `GET /` reads metadata and available synthetic scenarios without provider calls.
+- `POST /save` and `/drop` edit only the new local model using expected revisions.
+- `POST /simulate` captures an actor-scoped request ID, immutable context and
+  member states, then advances the synthetic state machine automatically.
+- `GET /run` reads a run by ID, or resolves an uncertain original
+  `service_id`/`request_id` without starting or replaying anything.
+- `POST /advance` continues that original simulated run after interruption.
+- `POST /cancel` stops further progress and retains dispatched intents and audit.
+
+The single state machine progresses through baseline observation, distinct fresh
+IPv4 failure samples, shared capacity reservation, candidate creation,
+initialization, matching installation/configuration reports, IPv4 availability,
+TCP/UDP verification and fixture cleanup, DNS ownership precheck, one DNS write
+and readback. Any reachable IPv4 target is healthy; expired, duplicate, unknown,
+wrong-source and invalid probe evidence cannot prove a blocked IP. A healthy
+baseline from the same synthetic installation/address is required first.
+IPv6 is not used for the trigger.
+
+Every receipt is tied to the run/member context and the original operation ID.
+Candidate ID, installation, address, binary and configuration hashes must match.
+TCP and UDP synthetic receipts each require exact echoed payload digests,
+3/3 samples, no missing/duplicate samples, and cleanup completion. DNS requires
+the pinned credential revision, hostname, ownership and expected prior address;
+an API success is not completion until readback matches. These are fabricated
+adapter receipts, not proof of WAN forwarding or production DNS propagation.
+
+Creation or DNS mutation intent is journaled **before** calling the synthetic
+driver. An unknown result, interrupted response, or a lost receipt can only
+reconcile that original intent. It cannot issue a second create/write or select
+another member's candidate. An unresolved member pauses new creates for peers.
+Before creation, source recovery stops creation. After candidate creation and
+before DNS dispatch, it retains the candidate without DNS cutover. Recovery
+after DNS dispatch reconciles the prior write rather than silently writing back.
+Stopping or context invalidation also checks durable intents if the progress
+write was interrupted. Service, policy, credential pool, DNS credential or
+original actor changes stop further advancement. Each run is bounded to 200
+virtual five-second ticks, 64 member events and one journal entry per action
+kind. History is bounded to 100 runs per service and 500 total; reaching the cap
+pauses new simulations and does not delete evidence.
+
+`MachineFailoverSimulationDriver` has no network, queue, SSH or notification
+transport. Synthetic source and candidate addresses use documentation ranges.
+All results remain `mode=simulation`, `evidence_origin=synthetic`,
+`business_verified=false`, `execution_enabled=false`, and `dns_cutover=false`.
+`startLive()` always rejects execution, even if older single-policy gates are
+enabled. Synthetic records never enter provision tasks, owned instances,
+acceptance verdicts, DNS transitions, DNS bindings or accounting ledgers.
+
+The admin tab provides member editing, fault injection into one/all participating
+members, per-member progress and virtual timelines, read-only original-intent
+lookup, resume/stop and synthetic report download. Page open, polling and refresh
+are reads only. Session storage retains the simulation intent before POST; loss
+of its response cannot silently create a fresh request on reopen. Capability
+detection hides the tab on older backends. A missing migration is not an empty
+successful service list.
+
+The original 18 scenarios cover healthy operation, full replacement, one reachable
+target, missing baseline, unknown/stale probes, recovery before/after creation,
+rejected/unknown/ambiguous creation, initialization timeout, mismatched reports,
+failed candidate IPv4/UDP verification, DNS conflict, and unknown DNS outcomes.
+Tests also inject persistence interruption, member isolation, revision/actor
+changes, shared caps and lost client responses.
+
+This increment does not implement shared-hostname multi-line/weighted DNS,
+provider fallback, DigitalOcean/Vultr creation, live background orchestration,
+live notices or automatic retained-resource deletion. Each leaf still owns its
+separate DNS intention. It does not import, schedule, modify or take over any
+existing tanzhen service, VM, agent or DNS record. All live repository gates stay
+off. A successful simulation is not production acceptance.
+
+### Credential Health And Safe Rotation Plans
+
+Migration `2026_11_07_160000_create_machine_credential_health` adds local account
+identity proofs, aggregated credential restrictions and sanitized audit events.
+The admin account list reads local health only; opening it does not call a cloud
+provider. The health dialog shows authentication status, verified account aliases,
+read/check times, earliest recheck and failure categories. Create permission is
+always marked unverified: reading an account does not prove permission to create
+paid resources. The new capability is hidden when an older backend lacks it.
+
+- `GET /server/machine/cloud/account/health?id=...` returns local health and at
+  most 50 events, without tokens, provider profiles, raw errors or identity hashes.
+- `POST /server/machine/cloud/account/health/verify` requires an active admin,
+  exact `id`, `expected_revision` and `confirmed=true`. It makes one explicit GET
+  to the provider's fixed official account endpoint, with no redirects/retries.
+  It cannot create, power, delete or change DNS. Clients cannot submit their own
+  health verdict, account identity, cooldown or recovery proof.
+
+Credential identity is an application-keyed HMAC of provider and secret, not the
+local row ID, account name or revision. Renaming cannot clear a fault, and two
+local rows with the same token cannot act as separate credentials. Canonical
+cloud-account IDs are stored only as HMACs with a 24-hour proof lifetime. Linode
+uses `euuid`; DigitalOcean uses `team.uuid` when present, otherwise account `uuid`.
+Vultr's account schema does not expose a stable unique account ID; a valid read
+can prove authentication but leaves account identity unknown. Email, name and
+balance are not account identifiers or proof of create permission.
+
+Verified aliases share account-level restrictions and creation budgets. Unknown
+identities conservatively share the same provider's creation history/budget and
+cannot be assumed to be independent paid accounts. Provider-quota and account
+locks serialize the existing native creation path. Group/leaf/service attempt
+and money limits remain cumulative; adding tokens does not multiply a limit.
+Inventory reads do not extend canonical identity proof lifetime.
+
+`CloudFailurePolicy` distinguishes authentication, permission, billing, quota,
+regional capacity, invalid templates, rate limits, provider availability and
+unknown mutation outcomes. Only narrow recognized provider error fields are
+classified; mixed or unrecognized reasons require review. No raw reason text or
+response body is saved. Retry-After and DigitalOcean rate-reset hints are honored
+with bounded exponential backoff. Excessive server waits require review instead
+of silently retrying early. Rate limits apply conservatively provider-wide, not
+as a reason to jump between tokens.
+
+Cooldown expiry is probation, not evidence of recovery. A fresh normalized read
+of the same credential can recover authentication or that read's malformed
+response restriction and can confirm recovery from an expired transient hold.
+It cannot shorten an active backoff or erase create-permission, billing, quota,
+template or unknown-create restrictions. DigitalOcean `status=locked` remains a
+restriction even when the account GET itself returns 200. There is no public
+force-clear endpoint. All active restrictions are evaluated before eligibility;
+the display limit cannot hide an older active billing block behind newer expired
+cooldowns. Audit events stop growing at 10,000 per local account; aggregate
+health remains enforced, with latest-source deduplication even at that cap.
+Downgrade refuses to erase retained identity, health or event evidence.
+
+`MachineCredentialRotationPlanner` is advisory only. Definite authentication or
+permission rejection can suggest another eligible, distinct credential in the
+same provider/group. Billing/quota rejection requires a verified different cloud
+account, not another token for the same account. Unknown account identity,
+exhaustion, template errors or budget failure stop the plan; rate limits wait;
+unknown mutation results only reconcile the original intent. Every returned
+plan has `automatic=false` and `dispatch_allowed=false`. Native task evidence
+records this plan, but the task's credential, marker, request key and installation
+ID stay pinned. No real fallback task is enqueued. Only trusted reconciliation
+of the exact original create can clear its own unknown-intent restriction.
+
+Ten added credential scenarios bring the synthetic matrix to 28: auth and
+permission rejection, billing on another verified account, same-account quota,
+rate limits, template error, unknown create, exhausted pool, unknown identity
+and duplicate token. They use the same classifier/planner with virtual A/B/C
+credentials and independent synthetic receipts. All attempts consume the shared
+run creation/price reservation caps atomically. Per-member reports show each
+virtual attempt and decision, not real tokens or internal hashes. Synthetic
+failures never poison formal credential health. They prove control flow only,
+not live cloud error compatibility or production recovery.
+
+Real automatic rotation and multi-member live orchestration are not enabled by
+this increment. DigitalOcean/Vultr creation, cross-provider fallback, shared
+multi-line DNS, live orchestration notices and automatic retained-resource
+cleanup still need their trusted execution adapters and isolated acceptance.
+No live gates, production settings, tanzhen services or node processes were
+changed, and no real credential/provider request was used by these tests.
+
+Official API semantics checked for this increment:
+[Linode account identity](https://techdocs.akamai.com/linode-api/reference/get-account),
+[Linode error schema](https://techdocs.akamai.com/linode-api/reference/errors),
+[Linode rate limits](https://techdocs.akamai.com/linode-api/reference/rate-limits),
+[DigitalOcean account and scopes](https://docs.digitalocean.com/reference/api/reference/account/),
+[Vultr account schema](https://github.com/vultr/govultr/blob/master/account.go),
+[Vultr API rate limits](https://docs.vultr.com/support/platform/api/what-rate-limits-apply-to-the-vultr-api).

@@ -35,16 +35,15 @@ class LinodeProvisionClient extends LinodeClient
         try {
             $response = Http::withToken($account->credentials['api_token'])->acceptJson()->withoutRedirecting()
                 ->connectTimeout(3)->timeout(15)->post('https://api.linode.com/v4/linode/instances', $request);
-        } catch (\Throwable) { throw new CloudException('outcome_uncertain'); }
-        if (in_array($response->status(), [401, 403], true)) throw new CloudException('provider_forbidden');
-        if ($response->status() === 429) throw new CloudException('provider_rate_limited');
-        if ($response->serverError() || ($response->successful() && strlen($response->body()) > 524288)) throw new CloudException('outcome_uncertain');
-        if (!$response->successful()) throw new CloudException('provider_rejected');
+        } catch (\Throwable) { throw new CloudRequestFailure(app(CloudFailurePolicy::class)->transport('linode', 'POST')); }
+        $failure = fn () => new CloudRequestFailure(app(CloudFailurePolicy::class)->response('linode', 'POST', $response->status(),
+            strlen($response->body()) <= 524288 ? $response->json() : null, $response->headers()));
+        if (!$response->successful() || strlen($response->body()) > 524288) throw $failure();
         try {
             $row = $response->json();
             if (!$this->matches($row, $request, $since)) throw new CloudException('identity_changed');
             return $this->normalize($row);
-        } catch (\Throwable) { throw new CloudException('outcome_uncertain'); }
+        } catch (\Throwable) { throw $failure(); }
     }
 
     public function reconcile(MachineCloudAccount $account, array $request, int $since): ?array

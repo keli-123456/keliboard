@@ -56,6 +56,7 @@ class MachineProvisionTest extends TestCase
         (require base_path('database/migrations/2026_11_05_170000_create_machine_cloud_tables.php'))->up();
         (require base_path('database/migrations/2026_11_06_010000_add_machine_cloud_providers.php'))->up();
         (require base_path('database/migrations/2026_11_05_220000_create_machine_provision_tasks.php'))->up();
+        (require base_path('database/migrations/2026_11_07_160000_create_machine_credential_health.php'))->up();
         Schema::create('v2_user', function (Blueprint $table) { $table->id(); $table->boolean('is_admin'); $table->boolean('banned')->default(false); $table->timestamps(); });
         Schema::create('v2_server_machine', function (Blueprint $table) { $table->id(); $table->string('name'); $table->string('token'); $table->boolean('is_active'); $table->timestamps(); });
         Schema::create('v2_server', function (Blueprint $table) { $table->id(); $table->integer('machine_id')->nullable(); $table->boolean('enabled'); });
@@ -585,5 +586,52 @@ class MachineProvisionTest extends TestCase
         $routes = file_get_contents(base_path('app/Http/Routes/V2/ServerRoute.php'));
         $this->assertStringContainsString("post('provision/result'", $routes);
         $this->assertStringNotContainsString('provision/queue', $routes);
+    }
+
+    public function test_create_rejection_records_typed_health_without_changing_task_credential_or_dispatching_a_fallback(): void
+    {
+        $task = $this->task(); $this->fake(fn () => Http::response(['errors' => [['reason' => 'Synthetic auth rejection']]], 401));
+        $this->poll($task); $this->assertSame(1, $this->postCalls);
+        $this->assertSame($this->account->id, $task->account_id); $this->assertSame(1, Task::query()->count());
+        $this->assertSame('auth_invalid', $task->evidence['credential_failure']['kind']);
+        $this->assertFalse($task->evidence['credential_rotation']['automatic']); $this->assertFalse($task->evidence['credential_rotation']['dispatch_allowed']);
+        $this->assertFalse(app(\App\Services\ServerMachine\Cloud\MachineCloudCredentialHealth::class)->status($this->account)['eligible']);
+        $this->assertStringNotContainsString('Synthetic auth rejection', json_encode($task->toArray()));
+    }
+
+    public function test_retry_after_is_honored_without_reposting_or_hopping_credentials(): void
+    {
+        $task = $this->task(); $this->fake(fn () => Http::response([], 429, ['Retry-After' => '900']));
+        $this->poll($task); $this->assertGreaterThanOrEqual(time() + 899, $task->next_check_at);
+        $this->assertSame(1, $this->postCalls); $this->poll($task);
+        $this->assertSame(1, $this->postCalls); $this->assertSame(1, Task::query()->count());
+    }
+
+    public function test_unknown_health_does_not_prevent_original_marker_reconciliation(): void
+    {
+        $task = $this->task(); $this->fake(fn () => Http::response([], 503)); $this->poll($task);
+        $health = app(\App\Services\ServerMachine\Cloud\MachineCloudCredentialHealth::class);
+        $this->assertFalse($health->status($this->account)['eligible']);
+        $this->fake(null, fn ($request) => str_contains($request->url(), '/linode/instances?')
+            ? Http::response(['data' => [$this->remote($task->payload['request'], ['created' => gmdate('Y-m-d\TH:i:s', $task->dispatched_at)])], 'pages' => 1]) : null);
+        $this->poll($task); $this->assertSame('987', $task->external_id); $this->assertSame(0, $this->postCalls);
+        $this->assertTrue($health->status($this->account)['eligible']); $this->assertSame(1, Task::query()->count());
+    }
+
+    public function test_identity_read_cannot_clear_a_denied_create_permission(): void
+    {
+        $task = $this->task(); $this->fake(fn () => Http::response([], 403)); $this->poll($task);
+        $this->fake(null, fn ($request) => $request->url() === 'https://api.linode.com/v4/account' ? Http::response(['euuid' => 'account-synthetic-0001']) : null);
+        $report = app(\App\Services\ServerMachine\Cloud\MachineCloudCredentialHealth::class)->verify($this->account->id, 1, $this->admin->id);
+        $this->assertFalse($report['health']['eligible']); $this->assertFalse($report['health']['creation_verified']);
+        $this->assertSame(0, $this->postCalls);
+    }
+
+    public function test_unknown_account_aliases_cannot_multiply_the_account_daily_budget(): void
+    {
+        $task = $this->task(); $task->fill(['status' => 'failed'])->save(); config(['machine_provision.daily_limit_per_account' => 1]);
+        $alias = Account::query()->create(['name' => 'Synthetic alias', 'provider' => 'linode', 'credentials' => ['api_token' => 'synthetic-alias-key'], 'revision' => 1]);
+        $this->code('daily_budget', fn () => $this->service->queue($this->plan(['account_id' => $alias->id, 'slot' => 'isolated:second']), str_repeat('b', 32), $this->admin->id));
+        $this->assertSame(1, Task::query()->count()); Http::assertNothingSent();
     }
 }

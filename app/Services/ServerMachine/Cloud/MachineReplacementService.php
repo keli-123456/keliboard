@@ -99,14 +99,15 @@ class MachineReplacementService
             throw new CloudException('replacement_episode_used');
         }
         $accountId = $input['account_id'];
-        $history = Task::query()->where('account_id', $accountId);
+        $quotaIds = app(MachineCloudCredentialHealth::class)->sameAccountIds(\App\Models\MachineCloudAccount::query()->findOrFail($accountId));
+        $history = Task::query()->whereIn('account_id', $quotaIds);
         $limit = min($policy->daily_limit, max(1, min(2, (int) config('machine_provision.daily_limit_per_account', 2))));
         $attempts = (clone $history)->where('created_at', '>=', time() - 86400)->count();
         if ($attempts >= $limit + ($current ? 1 : 0)) throw new CloudException('daily_budget');
         if ((clone $history)->when($current, fn ($query) => $query->where('id', '!=', $current->id))
             ->whereNotIn('status', ['accepted', 'failed', 'cancelled'])->exists()
             || \App\Models\MachineCloudTask::query()->whereIn('resource_id', \App\Models\MachineCloudResource::query()
-                ->where('account_id', $accountId)->select('id'))->whereNotIn('status', \App\Models\MachineCloudTask::TERMINAL)->exists()) {
+                ->whereIn('account_id', $quotaIds)->select('id'))->whereNotIn('status', \App\Models\MachineCloudTask::TERMINAL)->exists()) {
             throw new CloudException('task_active');
         }
         $previous = (clone $history)->when($current, fn ($query) => $query->where('id', '!=', $current->id))->max('created_at');
