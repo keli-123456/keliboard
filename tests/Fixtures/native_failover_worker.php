@@ -7,7 +7,7 @@ use Tests\Support\NativeFailoverConcurrentFixture as Fixture;
 
 try {
     if ($argc !== 4 || !in_array($argv[3], ['once', 'loop', 'recover', 'stops', 'stop'], true)
-        || !preg_match('/^[a-f0-9]{12}$/D', $argv[2])) throw new RuntimeException('Invalid fixture worker arguments.');
+        || !preg_match('/^w[a-f0-9]{12}$/D', $argv[2])) throw new RuntimeException('Invalid fixture worker arguments.');
     Fixture::attach($argv[1], $argv[2]);
     if ($argv[3] === 'stop') {
         \Illuminate\Support\Facades\DB::listen(function ($query) {

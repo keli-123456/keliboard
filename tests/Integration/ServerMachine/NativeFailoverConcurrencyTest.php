@@ -26,7 +26,7 @@ final class NativeFailoverConcurrencyTest extends TestCase
     {
         if (!isset($this->run)) return;
         Fixture::control('exit', true, true); Fixture::control('release', true, true);
-        foreach (array_keys($this->workers) as $id) $this->join($id, true);
+        foreach (array_keys($this->workers) as $id) $this->join((string) $id, true);
         $summary = ['case' => $this->name(), 'isolation' => getenv('KELI_NATIVE_ISOLATION'), 'workers' => count($this->workers),
             'killed_workers' => $this->killed, 'mock_creates' => $this->eventCount('create'), 'mock_dns_writes' => $this->eventCount('dns_write'),
             'worker_errors' => $this->eventCount('worker_error'), 'exhausted_jobs' => $this->eventCount('queue_exhausted'),
@@ -42,7 +42,7 @@ final class NativeFailoverConcurrencyTest extends TestCase
     private function seed(int $members = 1): void { $this->run = $this->fixture->seed($members); }
     private function spawn(string $mode = 'once'): string
     {
-        $id = bin2hex(random_bytes(6));
+        $id = 'w' . bin2hex(random_bytes(6));
         $process = proc_open([PHP_BINARY, dirname(__DIR__, 2) . '/Fixtures/native_failover_worker.php', Fixture::$owner, $id, $mode],
             [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, dirname(__DIR__, 3));
         $this->assertIsResource($process); fclose($pipes[0]); stream_set_blocking($pipes[1], false); stream_set_blocking($pipes[2], false);

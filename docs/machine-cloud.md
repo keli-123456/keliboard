@@ -1304,10 +1304,69 @@ ambiguous stop response without automatically resending. No nonce, actor ID,
 private queue error or provider response is exposed. Local run completion is not
 presented as real forwarding, DNS propagation or billing acceptance.
 
-Verification uses in-memory SQLite, fake cache locks/queue/cloud/DNS/verifier
+The default unit/browser suite uses in-memory SQLite, fake cache locks/queue/cloud/DNS/verifier
 adapters and local desktop/mobile/dark/English browser cases. It covers full
 multi-member progression, duplicate/lost tickets, worker expiry, deadline/owner
 revocation, pre-dispatch/in-flight stops, lock survival, migration failures and
 stop recovery while all real gates are closed. These tests are not distributed
 Redis/MySQL concurrency acceptance, Linux worker/WAN acceptance or paid cloud
 acceptance. No node binary/configuration or existing tanzhen resource was changed.
+
+### Disposable Redis/MySQL Multi-Worker Acceptance
+
+`Native Failover Isolated Acceptance` is a separate, manual-only GitHub Actions
+workflow. It cannot publish an image or deploy: permissions are contents-read,
+there are no repository secret inputs, and it is not the `CI` workflow consumed
+by the existing image publisher. Code synchronization for this work uses
+`[skip ci]` commits to avoid that automatic image-release chain. The admin source
+and its versioned panel assets are synchronized independently of deployment.
+
+Each matrix job creates disposable MySQL 8.4 and Redis 7 service containers on
+random loopback ports, with a database-scoped non-root MySQL account. It runs
+both REPEATABLE READ and READ COMMITTED. The fixture refuses implicit connections,
+standard database/Redis ports, non-loopback hosts, unexpected database/user/server
+identities, global grants, a nonempty initial database or missing ownership
+markers. It loads only the minimal test application, not the panel `.env` or its
+production bootstrap. SQL tables and Redis keys belong to a random fixture
+namespace; cleanup verifies ownership and removes only that fixture's resources.
+
+The tests use real InnoDB transactions, Redis locks, Laravel Redis queue payloads
+and separate PHP worker processes. Cloud, DNS and forwarding verifier HTTP calls
+are intercepted in every process and backed by shared synthetic fixture tables.
+No real cloud/DNS API, node process, user account, production database or tanzhen
+resource is used. Execution gates are replaced only inside the explicitly
+guarded test processes; repository defaults and the rejecting production gate
+are unchanged. The mock budget guard isolates scheduling from separate finance
+acceptance; this is not a real cloud-cost baseline or invoice check.
+
+The scenarios cover two-worker/two-member completion, three-worker duplicate
+payloads, simultaneous recovery sweepers after lost ready/delayed tickets, a real
+queue-only loopback connection refusal, SIGKILL after a recorded mock creation,
+stale live-worker readback, preflight stop, stop recovery after worker death with
+execution disabled, simultaneous identical stop requests and pre/post DNS-write
+stops. A killed original queue job can exhaust its one allowed attempt; that
+expected queue outcome is counted separately, and the native recovery ticket
+must reconcile the original paid intent without a second mock create. Unexpected
+worker errors or exhausted jobs in the other scenarios fail acceptance.
+
+Fault timers are accelerated only in fixture-owned rows/keys. Normal tests do
+not wait the full 120/300-second production leases: the test expires the recorded
+lease and applies a short real Redis expiry to owned locks. Workers exercise
+Laravel `runNextJob`, not a production Horizon supervisor lifecycle. This suite
+therefore does not certify real-time timeout duration, Horizon daemon recovery,
+WAN forwarding, cloud-provider errors/charges or DNS propagation.
+
+The concurrent stop test holds the runtime row while both child processes take
+their first request snapshot. The replay lookup after acquiring that row now
+uses a current locking read, so REPEATABLE READ cannot mistake the first committed
+stop for an unrelated runtime revision. JSON-backed request/plan/acceptance pins
+compare object members independently of key order; string/boolean/null values,
+list order, concrete resource identities and signed verifier bytes remain
+checked. Native request hashes are stable across MySQL JSON object normalization;
+the forwarding receipt/signature protocol is unchanged.
+
+Artifacts contain JUnit and bounded aggregate JSONL summaries only: scenario,
+isolation, worker/error/exhaustion counts, mock operation counts, whitelisted
+reasons and cleanup results. They do not include serialized queue payloads,
+generated credentials, scripts, raw provider logs or database dumps. Failed runs
+are retained as evidence and are not presented as successful acceptance.

@@ -8,11 +8,11 @@
   "files": {
     "index.html": {
       "bytes": 6902,
-      "sha256": "6668561ca28b57b72d96e93f8f3387779a687de53cd545af689e6865c70f0263"
+      "sha256": "47f5117e65847e3d429aaa2a1ee4973c3e6219f03ec365abaf12b00678ff640c"
     },
     "assets/index.js": {
-      "bytes": 4625409,
-      "sha256": "6a149ec27c67041370bd180fdc310e2571755ac423be706a68ddab53576b607d"
+      "bytes": 4625397,
+      "sha256": "6048db8686baa2c8289d8b30aceb3e14c1d0aea7ebe4bd1c7d43f26976d5edb5"
     },
     "assets/index.css": {
       "bytes": 567053,
