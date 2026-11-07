@@ -1,0 +1,97 @@
+name: Native Failover Horizon Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Isolated smoke or complete real-duration lease acceptance
+        type: choice
+        options: [full, smoke]
+        default: full
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-horizon-isolated-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  daemon:
+    name: Horizon real leases (${{ matrix.isolation }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        isolation: ["REPEATABLE READ", "READ COMMITTED"]
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: keli_acceptance_native_failover
+          MYSQL_USER: keli_native_fixture
+          MYSQL_PASSWORD: ephemeral-native-ci-only
+          MYSQL_ROOT_PASSWORD: ephemeral-native-root-only
+        ports:
+          - 127.0.0.1::3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=24
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 127.0.0.1::6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=12
+    env:
+      KELI_NATIVE_ACCEPTANCE: "1"
+      KELI_NATIVE_HORIZON_ACCEPTANCE: "1"
+      KELI_NATIVE_HOST: "127.0.0.1"
+      KELI_NATIVE_DATABASE: keli_acceptance_native_failover
+      KELI_NATIVE_USER: keli_native_fixture
+      KELI_NATIVE_PASSWORD: ephemeral-native-ci-only
+      KELI_NATIVE_ISOLATION: ${{ matrix.isolation }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          extensions: pdo_mysql, pdo_sqlite, redis, pcntl, posix, mbstring, openssl
+          tools: composer:v2
+          coverage: none
+      - name: Install locked test dependencies without application startup
+        run: composer install --no-interaction --no-progress --prefer-dist --no-scripts
+      - name: Verify scoped Horizon console startup and neighbor isolation
+        if: inputs.scope == 'smoke'
+        env:
+          KELI_NATIVE_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
+          KELI_NATIVE_REDIS_PORT: ${{ job.services.redis.ports[6379] }}
+        run: |
+          mkdir -p artifacts
+          php -d memory_limit=512M vendor/bin/phpunit -c phpunit-native-horizon.xml --filter test_horizon_console_is_isolated --stop-on-error --stop-on-failure --log-junit artifacts/native-horizon.xml
+      - name: Observe actual 75s timeout, 120s lease, 300s member lock and daemon restart
+        if: inputs.scope == 'full'
+        env:
+          KELI_NATIVE_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
+          KELI_NATIVE_REDIS_PORT: ${{ job.services.redis.ports[6379] }}
+        run: |
+          mkdir -p artifacts
+          php -d memory_limit=512M vendor/bin/phpunit -c phpunit-native-horizon.xml --stop-on-error --stop-on-failure --log-junit artifacts/native-horizon.xml
+      - name: Preserve aggregate daemon acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-horizon-${{ strategy.job-index }}
+          path: |
+            artifacts/native-horizon.xml
+            artifacts/native-horizon-summary.jsonl
+          if-no-files-found: ignore
+          retention-days: 7

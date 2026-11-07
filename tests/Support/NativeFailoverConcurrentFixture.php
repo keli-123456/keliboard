@@ -10,6 +10,7 @@ use App\Models\MachineFailoverRuntime as Runtime;
 use App\Models\MachineProvisionTask as Task;
 use App\Models\User;
 use App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate;
+use App\Services\ServerMachine\Cloud\MachineFailoverObserver;
 use App\Services\ServerMachine\Cloud\MachineFailoverRunner;
 use App\Services\ServerMachine\Cloud\MachineProvisionService;
 use Illuminate\Database\Capsule\Manager as Capsule;
@@ -92,7 +93,7 @@ final class NativeFailoverConcurrentFixture
         $redis->close();
     }
 
-    public function seed(int $members = 1): array
+    public function seed(int $members = 1, ?callable $beforeStart = null): array
     {
         self::$owner = bin2hex(random_bytes(16)); self::$worker = 'parent';
         $this->seed = new class('test_runner_defaults_off_and_configuration_alone_cannot_open_the_hard_execution_gate') extends MachineFailoverNativeBridgeTest {
@@ -105,6 +106,7 @@ final class NativeFailoverConcurrentFixture
             if ($members > 1) { $fixtures = $this->property('fixtures'); $fixtures[] = $this->invoke('fixture', [2]); $this->property('fixtures', $fixtures, true); }
             foreach ($this->property('records') as $id => $row) DB::table('native_fixture_dns')->insert(['id' => $id, 'value' => json_encode($row, JSON_THROW_ON_ERROR)]);
             self::transport(); self::queue(); config(['machine_failover.runner_enabled' => true]);
+            if ($beforeStart) $beforeStart();
             $run = $this->invoke('start', [400, $members]);
             foreach (DB::select('SELECT ENGINE AS engine FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()') as $row)
                 if ($row->engine !== 'InnoDB') throw new \RuntimeException('InnoDB tables required.');
@@ -198,6 +200,7 @@ final class NativeFailoverConcurrentFixture
                 if (str_contains($url, '/linode/types/')) return Http::response(['id' => 'g6-standard-4', 'class' => 'standard', 'price' => ['monthly' => 48], 'region_prices' => []]);
                 if (str_contains($url, '/account/settings')) { self::barrier('preflight'); return Http::response(['backups_enabled' => false]); }
                 if (preg_match('~/linode/instances/(\d+)$~', $url, $match)) {
+                    self::event('provider_readback');
                     self::barrier('readback'); return Http::response(json_decode(DB::table('native_fixture_cloud')->where('id', $match[1])->value('value'), true, 512, JSON_THROW_ON_ERROR));
                 }
                 if (str_contains($url, '/linode/instances?')) {
@@ -244,6 +247,21 @@ final class NativeFailoverConcurrentFixture
             $task->refresh()->fill(['dispatched_at' => time() - 2, 'next_check_at' => 0])->save();
             foreach ($this->property('fixtures') as $fixture) if ($fixture['machine']->id === $task->machine_id)
                 $this->invoke('report', [$fixture, $task, $task->public_ips[0], true, time()]);
+        }
+    }
+    public function heartbeat(bool $initialize = true): void
+    {
+        foreach ($this->property('fixtures') as $fixture) {
+            $this->invoke('report', [$fixture, $fixture['source'], $fixture['sourceIp'], false, time()]);
+            app(MachineFailoverObserver::class)->observe($fixture['policy']->id);
+            foreach (Attempt::query()->whereNotNull('task_id')->get() as $attempt) {
+                $task = Task::query()->findOrFail($attempt->task_id);
+                if ($task->machine_id !== $fixture['machine']->id || !$task->external_id || !$initialize) continue;
+                if ($task->status === 'waiting_initialization' && $task->bootstrap_state === null)
+                    app(MachineProvisionService::class)->callback($task->id, $task->installation_id, $this->invoke('callbackSecret', [$task]), 'succeeded');
+                if ($task->fresh()->bootstrap_state === 'succeeded')
+                    $this->invoke('report', [$fixture, $task, $task->public_ips[0], true, time()]);
+            }
         }
     }
     public function due(string $id): void
@@ -295,7 +313,8 @@ final class NativeFailoverConcurrentFixture
     public static function barrier(string $phase): void
     {
         if (self::control('fault') !== $phase) return;
-        self::event('barrier', $phase); app('redis')->connection()->incr('fixture-barrier:' . $phase); $until = microtime(true) + 25;
+        self::event('barrier', $phase); app('redis')->connection()->incr('fixture-barrier:' . $phase);
+        $until = microtime(true) + (getenv('KELI_NATIVE_HORIZON_ACCEPTANCE') === '1' ? 660 : 25);
         while (microtime(true) < $until) { if (self::control('release') === true) return; usleep(30000); }
         throw new \RuntimeException('Fixture barrier expired.');
     }
