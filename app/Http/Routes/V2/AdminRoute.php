@@ -169,6 +169,9 @@ class AdminRoute
                 $router->post('/cloud/failover/services/native/costs', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverBudgetController::class, 'capture']);
                 $router->get('/cloud/failover/services/native/release-preview', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverBudgetController::class, 'preview']);
                 $router->post('/cloud/failover/services/native/release', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverBudgetController::class, 'release']);
+                $router->get('/cloud/failover/services/native/history', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverBudgetController::class, 'history']);
+                $router->post('/cloud/failover/services/native/review', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverBudgetController::class, 'review']);
+                $router->post('/cloud/failover/services/native/resolve', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverBudgetController::class, 'resolve']);
                 $router->post('/cloud/failover/services/advance', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'advance']);
                 $router->post('/cloud/failover/services/cancel', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'cancel']);
                 $router->get('/cloud/failover/catalog', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'catalog']);

@@ -1052,8 +1052,9 @@ This is a compute-instance monthly estimate, not an invoice, accumulated usage,
 credit balance, tax calculation or provider-enforced budget. Only the supported
 standard Linode types with one public IPv4, backups disabled and no attached
 volumes have a verified estimate. Unverified add-ons, types, resource identities,
-untracked resources, incomplete inventory and a history footprint over 100 tasks
-block new reservations instead of becoming zero-cost resources. DigitalOcean and
+untracked resources, incomplete inventory and over 100 unsettled active tasks
+block new reservations instead of becoming zero-cost resources. Audited settled
+entries can now be logically archived as described below. DigitalOcean and
 Vultr pricing/creation are not added by this increment.
 
 A snapshot pins service, policy, machine authority and credential context.
@@ -1099,3 +1100,76 @@ use synthetic adapters only. The finance schema has not been migrated in
 production, no real cloud acceptance has run, and no code was deployed by this
 increment. Automatic creation, automatic credential rotation and DNS cutover
 remain disabled; existing tanzhen and kelinode-rs are untouched.
+
+### Stopped-Run Review And Long-Lived History
+
+The native budget workspace now has a separate stopped-run review path. It
+cannot start, advance, resume, reinstall or replay the old execution. The
+existing execution gate and all creation/rotation/DNS gates stay closed. All
+new provider calls are GETs to the existing fixed Linode endpoint. There is no
+new scheduler, external dependency, deployment or production migration.
+
+An explicit review reads the original credential revision and immutable request.
+The account identity and unrestricted scope must match before and after a
+complete inventory read. A late candidate must uniquely match its marker,
+label, creation-time window, region, instance type and image. Unknown identity,
+duplicate candidates, partial/restricted inventory and changed context stop the
+review. A known ID is never substituted for a different ID, and the browser
+cannot supply an instance ID or a passing verdict.
+
+Each check is persisted with its exact subject, administrator, context and a
+120-second validity window. A newer check supersedes older checks. Claim and
+close operations revalidate current authority, stopped state, immutable lineage
+and the check under the existing registry/quota/account locks. Provider-backed
+actions read the cloud again and require the same result before recording any
+local metadata. Request identities make lost-receipt retries idempotent. A lost
+browser receipt triggers local readback, never automatic replay.
+
+Claim records only the unique external ID, creation timestamp and addresses on
+the original task, and leaves it in `needs_review`. It does not enroll an active
+owned instance, install anything or take over business traffic. Claim or review
+closure permanently fences that old attempt independently of the hard execution
+gate. An active administrator may review an orphaned run without restoring its
+original administrator's authority or changing the run's owner.
+
+Closure records a separate review outcome; it does not overwrite the original
+run's failure/retained status. A retained, positively identified resource keeps
+its reservation and may still incur charges. A no-resource attempt can close
+only after its existing budget-release audit exists. An empty member with no
+attempt can close without inventing a resource or credit. An unknown POST with
+no external ID stays unresolved even after a complete empty inventory. A closed
+review is not proof that a VM was deleted or that clients recovered.
+
+Verified released records are logically archived during closure, with the task,
+attempt, release, review and failure evidence all retained. The archive is pinned
+to the task identity and the exact release audit. A changed identity invalidates
+that archive rather than hiding the task. Unowned terminal ordinary tasks that
+were never dispatched are also excluded from the active footprint without
+deleting their audit. Settled historical failures no longer consume a lifetime
+100-task allowance; unsettled active entries still retain that safety bound.
+Metadata is read in bounded database chunks, and reservation totals keep all
+historical releases and attempts, not just the current page.
+
+Archived known external IDs remain watched in complete cost snapshots. A
+reappearing instance is priced and blocks new reservations until it is reviewed
+and returned to active tracking. Restoring an archive does not undo its budget
+release or remove its execution fence. Every new review observation changes the
+financial context, immediately invalidating older cost evidence; an in-flight
+older cost read cannot overwrite it as fresh.
+
+History has 20-entry keyset pages with open-review, all and handled scopes.
+Unresolved reviews sort before completed history. Service/revision/filter-bound
+encrypted cursors expire after 15 minutes; review-journal changes require a
+fresh first page instead of silently skipping moved entries. The original
+audit remains queryable even after a review closes or an entry is archived.
+
+Forwarding receipts now show their recorded time and validity end, with an
+expired state after that boundary. An unexpired stored receipt is still labelled
+as a historical pass, never a current retest. DNS evidence is labelled as
+historical provider readback with no invented current validity or worldwide
+propagation claim. Legacy receipt-presence booleans remain for compatibility,
+but the UI no longer renders those alone as a fresh passing test.
+
+All verification for this increment uses isolated database/cache/cloud fixtures
+and local browser adapters. No real VM was created, claimed or deleted, no real
+DNS was changed, and no existing tanzhen service or node binary was touched.

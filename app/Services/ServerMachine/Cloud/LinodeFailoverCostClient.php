@@ -30,7 +30,7 @@ class LinodeFailoverCostClient extends LinodeClient
             foreach ($data['data'] as $raw) {
                 $row = $this->normalize($raw); $id = $row['external_id'];
                 if (isset($rows[$id]) || !is_array($raw['tags'] ?? null) || !is_bool($raw['backups']['enabled'] ?? null)) throw new CloudException('cost_inventory_incomplete');
-                $rows[$id] = $row + ['tags' => $raw['tags'], 'backup_enabled' => $raw['backups']['enabled']];
+                $rows[$id] = $row + ['tags' => $raw['tags'], 'backup_enabled' => $raw['backups']['enabled'], 'image' => $raw['image'] ?? null];
             }
             if ($page >= $data['pages']) {
                 if (count($rows) !== $data['results']) throw new CloudException('cost_inventory_incomplete');

@@ -26,7 +26,7 @@ class MachineProvisionService
         'replacement_episode_used', 'ownership_mismatch', 'config_changed', 'daily_budget', 'task_active',
         'release_changed', 'isolated_context_changed', 'isolated_scope_changed', 'isolation_confirmation_required', 'credential_group_changed',
         'credential_health_blocked', 'credential_health_unavailable', 'credential_identity_changed',
-        'orchestration_disabled', 'native_lineage_changed', 'native_context_changed', 'native_intent_expired', 'budget_released'];
+        'orchestration_disabled', 'native_lineage_changed', 'native_context_changed', 'native_intent_expired', 'budget_released', 'review_hold'];
 
     public function __construct(private LinodeProvisionClient $provider, private ProvisionBootstrap $bootstrap,
         private MachineCloudHealth $health, private MachineAddressInventory $addresses) {}

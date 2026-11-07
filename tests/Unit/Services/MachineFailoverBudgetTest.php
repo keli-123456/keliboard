@@ -8,6 +8,8 @@ use App\Models\MachineDnsTransition;
 use App\Models\MachineFailoverAttempt as Attempt;
 use App\Models\MachineFailoverBudgetRelease as Release;
 use App\Models\MachineFailoverCostSnapshot as Snapshot;
+use App\Models\MachineFailoverReviewAction as ReviewAction;
+use App\Models\MachineFailoverReviewCheck as ReviewCheck;
 use App\Models\MachineFailoverExecution as Execution;
 use App\Models\MachineFailoverExecutionMember as ExecutionMember;
 use App\Models\MachineFailoverMember;
@@ -21,6 +23,8 @@ use App\Services\ServerMachine\Cloud\CloudException;
 use App\Services\ServerMachine\Cloud\CloudFailurePolicy;
 use App\Services\ServerMachine\Cloud\MachineCloudCredentialHealth;
 use App\Services\ServerMachine\Cloud\MachineFailoverBudget;
+use App\Services\ServerMachine\Cloud\MachineFailoverReview;
+use App\Services\ServerMachine\Cloud\MachineFailoverHistory;
 use App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate;
 use App\Services\ServerMachine\Cloud\MachineFailoverNativeBridge;
 use App\Services\ServerMachine\Cloud\MachineFailoverServiceRegistry;
@@ -64,7 +68,8 @@ class MachineFailoverBudgetTest extends TestCase
             '2026_11_06_040000_create_machine_failover_observations.php', '2026_11_06_050000_create_machine_acceptance_tables.php',
             '2026_11_07_090000_create_machine_replacement_tasks.php', '2026_11_07_120000_add_provider_groups_to_machine_failover.php',
             '2026_11_07_140000_create_machine_failover_services.php', '2026_11_07_160000_create_machine_credential_health.php',
-            '2026_11_07_180000_create_machine_failover_native_journal.php', '2026_11_07_190000_create_machine_failover_finance.php'] as $file) (require base_path('database/migrations/' . $file))->up();
+            '2026_11_07_180000_create_machine_failover_native_journal.php', '2026_11_07_190000_create_machine_failover_finance.php',
+            '2026_11_07_200000_create_machine_failover_review.php'] as $file) (require base_path('database/migrations/' . $file))->up();
         Schema::create('v2_user', function (Blueprint $t) { $t->id(); $t->boolean('is_admin'); $t->boolean('banned')->default(false); $t->timestamps(); });
         Schema::create('v2_server_machine', function (Blueprint $t) { $t->id(); $t->string('name'); $t->string('token'); $t->boolean('is_active'); $t->timestamps(); });
         Schema::create('v2_server', function (Blueprint $t) { $t->id(); $t->integer('machine_id'); $t->boolean('enabled'); });
@@ -350,5 +355,219 @@ class MachineFailoverBudgetTest extends TestCase
     {
         $this->capture(); $this->expectException(\RuntimeException::class);
         (require base_path('database/migrations/2026_11_07_190000_create_machine_failover_finance.php'))->down();
+    }
+    private function review(): MachineFailoverReview { return app(MachineFailoverReview::class); }
+    private function late(Attempt $attempt, string $id = '9002'): void
+    {
+        $task = Task::query()->findOrFail($attempt->task_id); $request = $task->payload['request'];
+        $this->remote[$id] = ['id' => (int) $id, 'label' => $request['label'], 'tags' => [$task->marker], 'type' => $request['type'],
+            'region' => $request['region'], 'image' => $request['image'], 'status' => 'running',
+            'created' => $task->provider_created_at ?: gmdate('Y-m-d\TH:i:s\Z', $task->dispatched_at + 2),
+            'ipv4' => ['8.8.4.4'], 'ipv6' => '', 'backups' => ['enabled' => false]];
+    }
+    private function settle(Attempt $attempt): void
+    {
+        $preview = $this->finance()->previewRelease($attempt->id, $this->admin->id);
+        $this->finance()->release($attempt->id, $preview['proof_token'], bin2hex(random_bytes(16)), $this->admin->id);
+        $check = $this->review()->read($attempt->id, null, $this->admin->id);
+        $this->review()->act($check['check_id'], 'close', bin2hex(random_bytes(16)), $this->admin->id);
+    }
+    public function test_late_candidate_is_read_only_then_claimed_once_and_never_resumes_the_old_task(): void
+    {
+        $attempt = $this->attempt('unknown'); $this->late($attempt);
+        $before = Task::query()->find($attempt->task_id)->toArray();
+        $check = $this->review()->read($attempt->id, null, $this->admin->id);
+        $this->assertSame('found', $check['state']); $this->assertTrue($check['can_claim']); $this->assertFalse($check['can_close']);
+        $this->assertSame($before, Task::query()->find($attempt->task_id)->toArray());
+        $result = $this->review()->act($check['check_id'], 'claim', str_repeat('a', 32), $this->admin->id);
+        $this->assertSame($result, $this->review()->act($check['check_id'], 'claim', str_repeat('a', 32), $this->admin->id));
+        $task = Task::query()->find($attempt->task_id); $this->assertSame('9002', $task->external_id); $this->assertSame('needs_review', $task->status);
+        $this->assertSame(1, ReviewAction::where('operation', 'claim')->count()); $this->assertSame(0, Release::count());
+        $check = $this->review()->read($attempt->id, null, $this->admin->id); $this->assertTrue($check['can_close']);
+        $this->review()->act($check['check_id'], 'close', str_repeat('b', 32), $this->admin->id);
+        $this->assertSame('retained', $this->review()->summary($attempt->execution_member_id, $attempt->id)['resolution']);
+        $this->assertSame(10000, $this->read()['cost']['reserved_cents']); $this->assertSame(0, $this->read()['cost']['released_cents']);
+        app()->instance(MachineFailoverExecutionGate::class, new class extends MachineFailoverExecutionGate { public function assertAllowed(string $operation): void {} });
+        $this->code('review_hold', fn () => app(MachineFailoverNativeBridge::class)->assertAttempt($attempt->fresh()));
+    }
+    #[DataProvider('unsafeReviewCases')]
+    public function test_late_candidate_review_rejects_unsafe_cloud_views(string $mode): void
+    {
+        $attempt = $this->attempt('unknown'); $this->late($attempt); $reason = 'review_identity_mismatch';
+        if ($mode === 'duplicate') { $this->late($attempt, '9003'); $reason = 'duplicate_candidates'; }
+        elseif ($mode === 'image') $this->remote['9002']['image'] = 'linode/debian11';
+        elseif ($mode === 'created') $this->remote['9002']['created'] = gmdate('Y-m-d\TH:i:s\Z', time() - 86400);
+        elseif ($mode === 'restricted') { $this->mode = 'restricted'; $reason = 'cost_scope_unknown'; }
+        elseif ($mode === 'incomplete') { $this->mode = 'incomplete'; $reason = 'cost_inventory_incomplete'; }
+        $this->code($reason, fn () => $this->review()->read($attempt->id, null, $this->admin->id));
+        $this->assertNull(Task::query()->find($attempt->task_id)->external_id); $this->assertSame(0, ReviewAction::count());
+    }
+    public static function unsafeReviewCases(): array { return [['duplicate'], ['image'], ['created'], ['restricted'], ['incomplete']]; }
+    public function test_review_proof_is_actor_bound_expiring_and_rechecks_cloud_before_claim(): void
+    {
+        $attempt = $this->attempt('unknown'); $this->late($attempt); $check = $this->review()->read($attempt->id, null, $this->admin->id);
+        $other = User::query()->create(['is_admin' => true]);
+        $this->code('review_proof_expired', fn () => $this->review()->act($check['check_id'], 'claim', str_repeat('a', 32), $other->id));
+        ReviewCheck::query()->whereKey($check['check_id'])->update(['valid_until' => time() - 1]);
+        $this->code('review_proof_expired', fn () => $this->review()->act($check['check_id'], 'claim', str_repeat('a', 32), $this->admin->id));
+        $check = $this->review()->read($attempt->id, null, $this->admin->id); unset($this->remote['9002']);
+        $this->code('review_context_changed', fn () => $this->review()->act($check['check_id'], 'claim', str_repeat('a', 32), $this->admin->id));
+        $this->assertSame(0, ReviewAction::count());
+    }
+    public function test_unknown_unidentified_create_cannot_be_closed_or_archived(): void
+    {
+        $attempt = $this->attempt('unknown'); $check = $this->review()->read($attempt->id, null, $this->admin->id);
+        $this->assertSame('unresolved', $check['state']); $this->assertFalse($check['can_close']);
+        $this->code('review_action_blocked', fn () => $this->review()->act($check['check_id'], 'close', str_repeat('a', 32), $this->admin->id));
+        $this->assertSame(0, ReviewAction::count());
+    }
+    public function test_archived_rejections_do_not_create_a_lifetime_hundred_task_limit_or_erase_audit(): void
+    {
+        for ($i = 0; $i < 101; $i++) $this->settle($this->attempt());
+        $cost = $this->capture()['cost'];
+        $this->assertSame('verified', $cost['state'], json_encode($cost)); $this->assertSame(101, $cost['archived_count']);
+        $this->assertSame(4800, $cost['baseline_cents']); $this->assertSame(0, $cost['reserved_cents'] - $cost['released_cents']);
+        $this->assertSame(102, Task::count()); $this->assertSame(101, Attempt::count()); $this->assertSame(101, Release::count());
+        $this->assertSame(101, ReviewAction::where('operation', 'archive')->count());
+        $this->finance()->assertCapacity($this->service->id, 1, 10000);
+    }
+    public function test_archived_absent_resource_is_still_watched_and_reappearance_blocks_budget_until_restored(): void
+    {
+        $attempt = $this->attempt('unknown', '9002'); $this->late($attempt); $saved = $this->remote['9002']; unset($this->remote['9002']);
+        $this->capture(); $this->settle($attempt); $cost = $this->capture()['cost'];
+        $this->assertSame(1, $cost['watched_count']); $this->assertSame(4800, $cost['allocated_cents']);
+        $this->remote['9002'] = $saved; $cost = $this->capture()['cost'];
+        $this->assertSame('incomplete', $cost['state']); $this->assertContains('archived_resource_returned', $cost['blockers']);
+        $this->assertSame(9600, $cost['allocated_cents']); $this->assertNull($cost['available_cents']);
+        $check = $this->review()->read($attempt->id, null, $this->admin->id);
+        $this->review()->act($check['check_id'], 'restore', str_repeat('c', 32), $this->admin->id);
+        $cost = $this->capture()['cost']; $this->assertSame('verified', $cost['state']); $this->assertSame(9600, $cost['allocated_cents']);
+        $this->assertSame(1, Release::count());
+    }
+    public function test_history_keeps_old_unresolved_runs_visible_and_paginates_without_resetting_audit(): void
+    {
+        $attempt = $this->attempt(); $old = Execution::query()->first(); $old->fill(['created_at' => time() - 86400])->save();
+        for ($i = 0; $i < 55; $i++) {
+            $run = $old->replicate(); $run->id = (string) Str::uuid(); $run->request_key = bin2hex(random_bytes(32));
+            $run->status = 'completed'; $run->created_at = time(); $run->save();
+        }
+        $history = app(MachineFailoverHistory::class); $page = $history->page($this->service->id, 1, $this->admin->id, 'all');
+        $this->assertSame($old->id, $page['items'][0]['id']); $this->assertCount(20, $page['items']); $this->assertSame(56, $page['total']);
+        $next = $history->page($this->service->id, 1, $this->admin->id, 'all', $page['next_cursor']);
+        $this->assertEmpty(array_intersect(array_column($page['items'], 'id'), array_column($next['items'], 'id')));
+        $this->code('history_changed', fn () => $history->page($this->service->id, 1, $this->admin->id, 'closed', $page['next_cursor']));
+        $this->settle($attempt);
+        $this->code('history_changed', fn () => $history->page($this->service->id, 1, $this->admin->id, 'all', $page['next_cursor']));
+        $this->assertSame(0, $history->page($this->service->id, 1, $this->admin->id, 'open')['total']);
+    }
+    public function test_stopped_member_without_an_attempt_can_be_closed_without_inventing_resource_or_release(): void
+    {
+        $attempt = $this->attempt(); $member = ExecutionMember::query()->find($attempt->execution_member_id);
+        $attempt->delete(); $member->fill(['attempt_id' => null])->save();
+        $check = $this->review()->read(null, $member->id, $this->admin->id);
+        $this->assertTrue($check['can_close']); $this->assertSame('no_intent', $check['state']);
+        $this->review()->act($check['check_id'], 'close', str_repeat('a', 32), $this->admin->id);
+        $this->assertSame('no_intent', $this->review()->summary($member->id, null)['resolution']);
+        $this->assertSame(0, Release::count()); Http::assertNothingSent();
+    }
+    public function test_proof_view_does_not_describe_an_expired_historical_receipt_as_a_current_pass(): void
+    {
+        $attempt = $this->attempt('unknown', '9002'); $instance = $this->owned(Task::query()->find($attempt->task_id));
+        $instance->fill(['verification' => ['receipt_sha256' => str_repeat('a', 64)], 'verified_until' => time() - 1])->save();
+        DB::table('v2_machine_acceptance_check')->insert(['id' => str_repeat('b', 32), 'instance_id' => $instance->id,
+            'policy_revision' => 1, 'request_sha256' => str_repeat('c', 64), 'state' => 'passed', 'receipt_sha256' => str_repeat('a', 64), 'issued_at' => time() - 120, 'deadline_at' => time() - 1]);
+        $payload = $attempt->payload; $payload['forwarding_receipt'] = str_repeat('d', 64); $attempt->fill(['payload' => $payload])->save();
+        $proof = app(\App\Services\ServerMachine\Cloud\MachineFailoverProofView::class)->forAttempt($attempt);
+        $this->assertSame('expired', $proof['forwarding_proof']['state']); $this->assertSame(time() - 1, $proof['forwarding_proof']['valid_until']);
+        $instance->fill(['verified_until' => time() + 120])->save();
+        $this->assertSame('historical', app(\App\Services\ServerMachine\Cloud\MachineFailoverProofView::class)->forAttempt($attempt)['forwarding_proof']['state']);
+    }
+    public function test_a_review_read_invalidates_older_cost_evidence_even_before_a_claim_or_close(): void
+    {
+        $attempt = $this->attempt('unknown', '9002'); $this->late($attempt); $saved = $this->remote['9002']; unset($this->remote['9002']);
+        $this->capture(); $this->settle($attempt); $this->capture(); $this->assertSame('verified', $this->read()['cost']['state']);
+        $this->remote['9002'] = $saved; $this->review()->read($attempt->id, null, $this->admin->id);
+        $this->assertSame('expired', $this->read()['cost']['state']);
+        $this->code('cost_baseline_required', fn () => $this->finance()->assertCapacity($this->service->id, 1, 1));
+    }
+    public function test_review_cannot_close_a_reserved_attempt_without_a_task_until_its_budget_is_released(): void
+    {
+        $attempt = $this->attempt('queued'); Task::query()->whereKey($attempt->task_id)->delete(); $attempt->fill(['task_id' => null])->save();
+        $check = $this->review()->read($attempt->id, null, $this->admin->id);
+        $this->assertSame('not_created', $check['state']); $this->assertFalse($check['can_close']);
+        $this->code('review_action_blocked', fn () => $this->review()->act($check['check_id'], 'close', str_repeat('a', 32), $this->admin->id));
+        $this->assertSame(10000, $this->read()['cost']['reserved_cents']);
+    }
+    public function test_review_rechecks_authority_and_stopped_state_instead_of_replaying_a_run(): void
+    {
+        $attempt = $this->attempt('unknown'); $this->late($attempt);
+        Execution::query()->update(['status' => 'running']);
+        $this->code('review_not_stopped', fn () => $this->review()->read($attempt->id, null, $this->admin->id));
+        Http::assertNothingSent(); Execution::query()->update(['status' => 'needs_review']);
+        $check = $this->review()->read($attempt->id, null, $this->admin->id);
+        $this->duringRead = function ($url) { if (str_contains($url, '/linode/instances?')) $this->admin->fill(['banned' => true])->save(); };
+        $this->code('permission_revoked', fn () => $this->review()->act($check['check_id'], 'claim', str_repeat('a', 32), $this->admin->id));
+        $this->assertNull(Task::query()->find($attempt->task_id)->external_id); $this->assertSame(0, ReviewAction::count());
+    }
+    public function test_controller_rejects_client_verdicts_in_review_and_history_requests(): void
+    {
+        $controller = new MachineFailoverBudgetController();
+        foreach (['history' => app(MachineFailoverHistory::class), 'review' => $this->review(), 'resolve' => $this->review()] as $method => $service) {
+            $request = Request::create('/synthetic', 'POST', ['passed' => true, 'external_id' => 'attacker-chosen']); $request->setUserResolver(fn () => $this->admin);
+            $this->assertSame(422, $controller->{$method}($request, $service)->getStatusCode());
+        }
+        Http::assertNothingSent();
+    }
+    public function test_superseded_review_check_cannot_authorize_a_later_claim(): void
+    {
+        $attempt = $this->attempt('unknown'); $this->late($attempt); $first = $this->review()->read($attempt->id, null, $this->admin->id);
+        $this->review()->read($attempt->id, null, $this->admin->id);
+        $this->code('review_proof_expired', fn () => $this->review()->act($first['check_id'], 'claim', str_repeat('a', 32), $this->admin->id));
+        $this->assertSame(0, ReviewAction::count());
+    }
+    public function test_review_during_cost_capture_prevents_older_inventory_from_becoming_fresh_again(): void
+    {
+        $attempt = $this->attempt('unknown'); $this->late($attempt); $once = false;
+        $this->duringRead = function ($url) use ($attempt, &$once) {
+            if (!$once && str_contains($url, '/linode/types/')) {
+                $once = true;
+                ReviewCheck::query()->create(['id' => (string) Str::uuid(), 'member_id' => $attempt->execution_member_id, 'attempt_id' => $attempt->id,
+                    'admin_id' => $this->admin->id, 'context_hash' => str_repeat('a', 64), 'payload' => ['state' => 'unresolved', 'candidate' => null],
+                    'checked_at' => time(), 'valid_until' => time() + 120]);
+            }
+        };
+        $this->code('cost_context_changed', fn () => $this->capture());
+        $this->assertNotSame('verified', $this->read()['cost']['state']); $this->assertSame(0, ReviewAction::count());
+    }
+    public function test_a_new_active_admin_can_review_an_orphaned_run_without_restoring_the_original_admins_authority(): void
+    {
+        $attempt = $this->attempt('unknown'); $this->late($attempt); $this->admin->fill(['banned' => true])->save(); $other = User::query()->create(['is_admin' => true]);
+        $check = $this->review()->read($attempt->id, null, $other->id);
+        $this->review()->act($check['check_id'], 'claim', str_repeat('a', 32), $other->id);
+        $this->assertSame($this->admin->id, Execution::query()->first()->admin_id);
+        $this->assertSame('needs_review', Task::query()->find($attempt->task_id)->status); $this->assertSame($other->id, ReviewAction::query()->first()->admin_id);
+    }
+    public function test_proof_expiry_during_provider_readback_rolls_back_claim_metadata(): void
+    {
+        $attempt = $this->attempt('unknown'); $this->late($attempt); $check = $this->review()->read($attempt->id, null, $this->admin->id);
+        $this->duringRead = function ($url) use ($check) {
+            if (str_contains($url, '/linode/instances?')) ReviewCheck::query()->whereKey($check['check_id'])->update(['valid_until' => time() - 1]);
+        };
+        $this->code('review_proof_expired', fn () => $this->review()->act($check['check_id'], 'claim', str_repeat('a', 32), $this->admin->id));
+        $this->assertNull(Task::query()->find($attempt->task_id)->external_id); $this->assertSame(0, ReviewAction::count());
+    }
+    public function test_review_schema_downgrade_never_discards_review_evidence(): void
+    {
+        $this->review()->read($this->attempt()->id, null, $this->admin->id); $this->expectException(\RuntimeException::class);
+        (require base_path('database/migrations/2026_11_07_200000_create_machine_failover_review.php'))->down();
+    }
+    public function test_cancelled_but_unsettled_attempt_stays_in_open_review_until_locally_settled(): void
+    {
+        $attempt = $this->attempt('queued'); Execution::query()->update(['status' => 'cancelled']);
+        ExecutionMember::query()->update(['phase' => 'cancelled']); $history = app(MachineFailoverHistory::class);
+        $this->assertSame(1, $history->page($this->service->id, 1, $this->admin->id, 'open')['total']);
+        $this->assertSame(1, $this->read()['runs'][0]['needs_review']); $this->settle($attempt);
+        $this->assertSame(0, $history->page($this->service->id, 1, $this->admin->id, 'open')['total']);
+        $this->assertSame('closed', $this->read()['runs'][0]['review_state']);
     }
 }

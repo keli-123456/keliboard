@@ -220,6 +220,8 @@ class MachineFailoverNativeBridge
         $this->gate->assertAllowed('native_task');
         if (\Illuminate\Support\Facades\Schema::hasTable('v2_machine_failover_budget_release')
             && \App\Models\MachineFailoverBudgetRelease::query()->where('attempt_id', $attempt->id)->exists()) throw new CloudException('budget_released');
+        if (app(MachineFailoverReview::class)->available() && \App\Models\MachineFailoverReviewAction::query()
+            ->where('attempt_id', $attempt->id)->whereIn('operation', ['claim', 'close'])->exists()) throw new CloudException('review_hold');
         $current = Attempt::query()->find($attempt->id);
         if (!$current || $current->only(['task_id', 'account_id', 'account_revision', 'payload']) !== $attempt->only(['task_id', 'account_id', 'account_revision', 'payload'])) throw new CloudException('native_lineage_changed');
         if ($task === null && $attempt->task_id) $task = Task::query()->findOrFail($attempt->task_id);
