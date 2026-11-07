@@ -101,7 +101,7 @@ final class NativeFailoverConcurrencyTest extends TestCase
     }
     public function test_two_recovery_sweepers_replace_a_lost_ticket_only_once(): void
     {
-        $this->seed(); app('redis')->connection()->del('queues:admin_operations');
+        $this->seed(); app('redis')->connection()->del('queues:admin_operations', 'queues:admin_operations:delayed');
         Runtime::query()->whereKey($this->run['id'])->update(['next_dispatch_at' => 0]);
         $ids = [$this->spawn('recover'), $this->spawn('recover')]; foreach ($ids as $id) $this->join($id);
         $this->assertSame(2, Runtime::query()->find($this->run['id'])->generation);
@@ -110,7 +110,7 @@ final class NativeFailoverConcurrencyTest extends TestCase
     }
     public function test_real_queue_connection_failure_preserves_the_ticket_until_recovery(): void
     {
-        $this->seed(); app('redis')->connection()->del('queues:admin_operations');
+        $this->seed(); app('redis')->connection()->del('queues:admin_operations', 'queues:admin_operations:delayed');
         Runtime::query()->whereKey($this->run['id'])->update(['next_dispatch_at' => 0]);
         $socket = stream_socket_server('tcp://127.0.0.1:0', $errno, $message); $this->assertIsResource($socket);
         $port = (int) substr(strrchr(stream_socket_get_name($socket, false), ':'), 1); fclose($socket);
