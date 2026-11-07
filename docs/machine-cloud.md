@@ -1521,6 +1521,9 @@ its expected-failure-count assertions: it copied already-reserved payloads with
 an advanced attempt count. The corrected test duplicates the original queued
 delivery instead; no production retry limit, lease or evidence check changed.
 
-This increment remains on `codex/failover-queue-isolation`, not merged into main.
-No image publication, production deployment/database connection, environment
-change, daemon restart or tanzhen operation was performed.
+Developed and validated on `codex/failover-queue-isolation`, this increment is
+now merged into main as a code-only synchronization with `[skip ci]` commits.
+The dedicated pool remains disabled by default; real creation, automatic
+credential rotation and DNS cutover remain closed. No image publication,
+production deployment/database connection, environment change, daemon restart
+or tanzhen operation was performed.
