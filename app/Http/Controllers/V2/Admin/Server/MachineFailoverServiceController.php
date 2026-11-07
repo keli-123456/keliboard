@@ -5,6 +5,7 @@ use App\Http\Controllers\Controller;
 use App\Services\ServerMachine\Cloud\CloudException;
 use App\Services\ServerMachine\Cloud\MachineFailoverServiceRegistry;
 use App\Services\ServerMachine\Cloud\MachineFailoverSimulation;
+use App\Services\ServerMachine\Cloud\MachineFailoverShadow;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Http\Request;
 
@@ -54,6 +55,14 @@ class MachineFailoverServiceController extends Controller
             $this->fields($request, ['service_id', 'request_id']);
             $input = $request->validate(['service_id' => 'required|integer|min:1', 'request_id' => 'required|regex:/^[a-f0-9]{32}$/D']);
             return $service->resolve((int) $input['service_id'], $input['request_id'], $admin);
+        });
+    }
+    public function shadow(Request $request, MachineFailoverShadow $service)
+    {
+        return $this->run($request, function ($admin) use ($request, $service) {
+            if (array_diff(array_keys($request->all()), ['service_id', 'service_revision'])) throw new CloudException('invalid_shadow');
+            $input = $request->validate(['service_id' => 'required|integer|min:1', 'service_revision' => 'required|integer|min:1']);
+            return $service->report((int) $input['service_id'], (int) $input['service_revision'], $admin);
         });
     }
     public function advance(Request $request, MachineFailoverSimulation $service)

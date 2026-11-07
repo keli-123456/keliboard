@@ -163,6 +163,7 @@ class AdminRoute
                 $router->post('/cloud/failover/services/drop', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'drop']);
                 $router->post('/cloud/failover/services/simulate', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'simulate']);
                 $router->get('/cloud/failover/services/run', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'report']);
+                $router->get('/cloud/failover/services/shadow', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'shadow']);
                 $router->post('/cloud/failover/services/advance', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'advance']);
                 $router->post('/cloud/failover/services/cancel', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'cancel']);
                 $router->get('/cloud/failover/catalog', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'catalog']);

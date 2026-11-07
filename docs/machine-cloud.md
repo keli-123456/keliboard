@@ -614,9 +614,9 @@ Linux verifier resource isolation, or production DNS propagation.
 Before enabling real execution, the remaining work is:
 
 - The multi-member service and automatic state machine described below now run
-  end-to-end in an isolated simulation. They do not yet consume production
-  telemetry or dispatch production member operations. Connecting trusted live
-  adapters, scheduling and separately authorized recovery remains follow-up work;
+  end-to-end in an isolated simulation. The separate shadow view below can read
+  cached panel evidence, but cannot dispatch production member operations.
+  Connecting trusted mutation/receipt adapters, scheduling and separately authorized recovery remains follow-up work;
   this is not a switch that can be enabled by changing an environment variable.
 
 - Separately authorize one isolated live creation and validate the disabled
@@ -881,3 +881,69 @@ Official API semantics checked for this increment:
 [DigitalOcean account and scopes](https://docs.digitalocean.com/reference/api/reference/account/),
 [Vultr account schema](https://github.com/vultr/govultr/blob/master/account.go),
 [Vultr API rate limits](https://docs.vultr.com/support/platform/api/what-rate-limits-apply-to-the-vultr-api).
+
+### Read-Only Evidence Adapter And Shadow View
+
+`MachineFailoverReadOnlyAdapter` reads the existing observer's cached IPv4
+projection and collected observation/decision records. It has no provider, DNS,
+queue or notification transport. Its execution method always rejects, including
+when legacy live gates are enabled. This is the read-only side of an execution
+boundary, not a real creation or credential-rotation executor.
+
+The admin-only `GET /server/machine/cloud/failover/services/shadow` accepts only
+`service_id` and `service_revision`. The browser cannot submit probe facts,
+timestamps, receipts, verdicts, selected credentials or execution options. It
+returns `mode=shadow`, `evidence_origin=panel_cache`, `dispatch_allowed=false`,
+`execution_enabled=false`, `automatic_rotation=false`, `dns_cutover=false`,
+`business_verified=false` and zero cloud writes. It does not change database
+rows, reserve budget, collect samples, send pings, fetch provider inventories or
+catalogs, issue notices, or call cloud/DNS APIs. No migration or scheduled task is
+added; missing required tables are not treated as an empty successful report.
+
+Any valid reachable IPv4 target makes the source healthy. All-unreachable is
+still a reachability observation, not independent proof of censorship. A proposed
+replacement needs fresh matching collected evidence, a same-source healthy
+baseline, the configured consecutive-failure threshold and a matching immutable
+fault episode. Repeated page reads cannot increment failure counts. A newer
+uncollected report, clock skew, stale/missing samples, changed installation or
+policy, unknown or wrongly attributed probes cannot reuse the old trigger.
+An older decision in the same uninterrupted failure episode remains usable;
+another episode does not. Disabling observation does not silently enable a new
+collector: current reachability can still display, but collected trigger proof
+is unavailable. The new UI never flips that observation setting.
+
+Independent source ownership, active accepted source-task linkage, current
+credential health, provider/template support, creator authority, existing task
+history, cooldowns, already-used fault episodes and supported DNS ownership are
+checked locally. Imported or unowned tanzhen instances cannot authorize a
+forecast. Existing pool selection is reused without token rotation. A virtual
+batch respects member order, service parallelism/attempt/price caps and shared
+cloud-account identities; unknown identities retain the existing conservative
+sharing behavior. Later same-account members wait, not reuse a second allowance.
+
+Forecast price is the configured per-attempt monthly-price reservation upper
+bound, not an API quote, actual charge, cloud capacity guarantee, account spending
+cap or the retained VM bill. `pricing_checked=false`,
+`retained_cost_verified=false`, and `writes_reserved=false` remain explicit.
+Cloud pricing/capacity/create permissions, candidate forwarding and mutation-time
+DNS ownership remain pending checks. A `would_replace` result is a plan only,
+never execution authorization, and cannot be passed into the synthetic state
+machine as a trusted receipt. There is no fabricated candidate VM or IP.
+
+The report rechecks administrator and registry context after reading; credential,
+policy, machine or DNS revision changes invalidate it. Reads have a ten-second
+deadline checked between members. Report validity is at most 30 seconds and no
+longer than its source evidence. The service reads up to ten enabled members;
+there are no background provider calls. This view does not reconcile or retry a
+real mutation, and still needs trusted live receipt adapters and isolated WAN
+acceptance before execution work can proceed.
+
+The multi-member page advertises this capability separately. Opening the page
+does not fetch shadow evidence. An explicit read displays source identity/IP,
+sample freshness/counts, credential/template selection, virtual budget and
+blockers. Optional browser-local observation reads every 15 seconds, skips hidden
+pages and overlapping requests, and stops on unmount. Failed reads retain old
+data only as expired; late responses from another service/revision are ignored.
+No new control enables real creation, credential rotation or DNS cutover. Tests
+use isolated SQLite/cache/provider fixtures and local browser adapters only;
+no production system, cloud VM or existing tanzhen service was contacted.

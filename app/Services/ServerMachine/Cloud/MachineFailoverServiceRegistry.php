@@ -30,6 +30,7 @@ class MachineFailoverServiceRegistry
     {
         $result = ['available' => $this->available(), 'simulation_only' => true, 'execution_enabled' => false, 'dns_cutover' => false,
             'services' => [], 'policies' => [], 'scenarios' => MachineFailoverSimulationDriver::SCENARIOS];
+        $result['shadow_available'] = app(MachineFailoverShadow::class)->available();
         if (!$result['available']) return $result;
         $members = Member::query()->get()->keyBy('policy_id');
         $result['policies'] = Policy::query()->orderBy('id')->limit(100)->get()->map(fn ($policy) => $policy->only(['id', 'name', 'revision', 'machine_id',
