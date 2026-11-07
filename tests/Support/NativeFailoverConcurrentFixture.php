@@ -252,8 +252,12 @@ final class NativeFailoverConcurrentFixture
     public function heartbeat(bool $initialize = true): void
     {
         foreach ($this->property('fixtures') as $fixture) {
-            $this->invoke('report', [$fixture, $fixture['source'], $fixture['sourceIp'], false, time()]);
-            app(MachineFailoverObserver::class)->observe($fixture['policy']->id);
+            $checkedAt = \App\Models\MachineFailoverObservation::query()->where('policy_id', $fixture['policy']->id)->latest('id')->value('checked_at');
+            $interval = app(\App\Services\ServerMachine\MachineEntryProbe::class)->configuration()['interval_seconds'];
+            if ($checkedAt === null || time() - $checkedAt >= $interval) {
+                $this->invoke('report', [$fixture, $fixture['source'], $fixture['sourceIp'], false, time()]);
+                app(MachineFailoverObserver::class)->observe($fixture['policy']->id);
+            }
             foreach (Attempt::query()->whereNotNull('task_id')->get() as $attempt) {
                 $task = Task::query()->findOrFail($attempt->task_id);
                 if ($task->machine_id !== $fixture['machine']->id || !$task->external_id || !$initialize) continue;
