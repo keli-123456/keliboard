@@ -75,16 +75,20 @@ class MachineFailoverNativeBridge
             return $this->report($run->id, $admin);
         }));
         app(\App\Services\ServerMachine\MachineOperationNotifier::class)->failoverRun($result['id']);
+        app(MachineFailoverRunner::class)->enroll($result['id']);
         return $result;
     }
 
-    public function advance(string $id, int $admin): array
+    public function advance(string $id, int $admin, bool $singleMember = false): array
     {
         $this->gate->assertAllowed('advance'); $this->registry->actor($admin);
         $run = Execution::query()->findOrFail($id);
         if ($run->admin_id !== $admin) throw new CloudException('permission_revoked');
         if ($run->status !== 'running') return $this->report($id, $admin);
-        foreach (Member::query()->where('execution_id', $id)->get()->sortBy(fn ($row) => [$row->payload['priority'], $row->id]) as $row) {
+        $runner = app(MachineFailoverRunner::class); $runner->guard($id);
+        $members = Member::query()->where('execution_id', $id)->get();
+        $members = $singleMember ? $runner->order($id, $members) : $members->sortBy(fn ($row) => [$row->payload['priority'], $row->id]);
+        foreach ($members as $row) {
             if (in_array($row->phase, self::FINISHED, true)) continue;
             Cache::lock('machine-native:member:' . $row->id, 300)->block(2, function () use ($row, $run) {
                 $current = $row->fresh();
@@ -92,20 +96,25 @@ class MachineFailoverNativeBridge
                 try { $this->step($current, $run->fresh()); }
                 catch (CloudException|DnsException $error) {
                     $reason = $error->getMessage();
+                    if (in_array($reason, ['native_lease_lost', 'native_stop_requested', 'runner_disabled'], true)) throw $error;
                     if (in_array($reason, ['parallel_budget', 'account_reserved'], true)) return;
                     $attempt = $row->fresh()->attempt_id ? Attempt::query()->find($row->fresh()->attempt_id) : null;
                     $task = $attempt?->task_id ? Task::query()->find($attempt->task_id) : null;
                     if ($reason === 'source_recovered') {
                         if ($task && !$task->dispatched_at) { app(MachineProvisionService::class)->cancel($task->id, $run->admin_id); $task->refresh(); }
-                        if ($attempt) $attempt->fill(['status' => $task?->dispatched_at ? 'retained' : 'cancelled'])->save();
+                        if ($attempt) $this->attemptStatus($attempt, $task?->dispatched_at ? 'retained' : 'cancelled');
                         $this->phase($row, $task?->dispatched_at ? 'retained' : 'cancelled', $reason);
                     } else $this->phase($row, 'needs_review', preg_match('/^[a-z_]{1,60}$/D', $reason) ? $reason : 'internal_failure');
                 } catch (\Throwable) { $this->phase($row, 'needs_review', 'internal_failure'); }
             });
+            if ($singleMember) { $runner->cursor($id, $row->id); break; }
         }
-        $phases = Member::query()->where('execution_id', $id)->pluck('phase')->all();
-        if (!array_diff($phases, self::FINISHED)) $run->fill(['status' => in_array('needs_review', $phases, true) ? 'needs_review'
-            : (count(array_unique($phases)) === 1 ? $phases[0] : 'stopped')])->save();
+        DB::transaction(function () use ($runner, $id, $run) {
+            $runner->guard($id);
+            $phases = Member::query()->where('execution_id', $id)->pluck('phase')->all();
+            if (!array_diff($phases, self::FINISHED)) $run->fill(['status' => in_array('needs_review', $phases, true) ? 'needs_review'
+                : (count(array_unique($phases)) === 1 ? $phases[0] : 'stopped')])->save();
+        });
         app(\App\Services\ServerMachine\MachineOperationNotifier::class)->failoverRun($id);
         return $this->report($id, $admin);
     }
@@ -124,15 +133,16 @@ class MachineFailoverNativeBridge
         $this->assertTask($task);
         if (!in_array($task->status, Task::TERMINAL, true)) $provision->process($task->id);
         $task->refresh();
+        app(MachineFailoverRunner::class)->guard($run->id);
         if ($task->status === 'failed' && $this->definitelyRejected($task)) {
-            $attempt->fill(['status' => 'rejected'])->save(); $this->phase($member, 'retry_ready', $task->reason); return;
+            $this->attemptStatus($attempt, 'rejected'); $this->phase($member, 'retry_ready', $task->reason); return;
         }
         if (in_array($task->status, ['failed', 'cancelled', 'needs_review'], true)) {
-            $attempt->fill(['status' => $task->status])->save();
+            $this->attemptStatus($attempt, $task->status);
             $this->phase($member, $task->status === 'cancelled' ? 'cancelled' : 'needs_review', $task->reason); return;
         }
         if (!in_array($task->status, ['awaiting_acceptance', 'accepted'], true)) {
-            $attempt->fill(['status' => $task->dispatched_at ? 'dispatched' : 'bound'])->save();
+            $this->attemptStatus($attempt, $task->dispatched_at ? 'dispatched' : 'bound');
             $this->phase($member, $task->status === 'outcome_unknown' ? 'reconciling_create' : 'creating', $task->reason); return;
         }
         $payload = $attempt->payload;
@@ -148,7 +158,7 @@ class MachineFailoverNativeBridge
         $this->identity($attempt, $task, $instance);
         if ($transition?->state === 'verified') {
             $this->receipt($attempt, 'dns', $task->fresh(), $instance->fresh(), $transition);
-            $attempt->fill(['status' => 'completed'])->save(); $this->phase($member, 'completed'); return;
+            $this->attemptStatus($attempt, 'completed'); $this->phase($member, 'completed'); return;
         }
         if (!$instance->verification || $instance->verified_until <= time()) {
             if (isset($payload['verification_started_at'])) throw new CloudException('verification_requires_review');
@@ -171,7 +181,7 @@ class MachineFailoverNativeBridge
         $transition->refresh();
         if ($transition->state === 'verified') {
             $this->receipt($attempt, 'dns', $task->fresh(), $instance->fresh(), $transition);
-            $attempt->fill(['status' => 'completed'])->save(); $this->phase($member, 'completed');
+            $this->attemptStatus($attempt, 'completed'); $this->phase($member, 'completed');
         } else $this->phase($member, 'reconciling_dns', 'original_intent_only');
     }
 
@@ -218,7 +228,7 @@ class MachineFailoverNativeBridge
         }));
     }
 
-    public function assertAttempt(Attempt $attempt, ?Task $task = null): void
+    public function assertAttempt(Attempt $attempt, ?Task $task = null, bool $requireLease = true): void
     {
         $this->gate->assertAllowed('native_task');
         if (\Illuminate\Support\Facades\Schema::hasTable('v2_machine_failover_budget_release')
@@ -229,7 +239,7 @@ class MachineFailoverNativeBridge
         if (!$current || $current->only(['task_id', 'account_id', 'account_revision', 'payload']) !== $attempt->only(['task_id', 'account_id', 'account_revision', 'payload'])) throw new CloudException('native_lineage_changed');
         if ($task === null && $attempt->task_id) $task = Task::query()->findOrFail($attempt->task_id);
         $member = Member::query()->findOrFail($attempt->execution_member_id); $run = Execution::query()->findOrFail($member->execution_id);
-        $this->context($run);
+        $this->context($run, $requireLease);
         if ($member->attempt_id !== $attempt->id || in_array($member->phase, self::FINISHED, true)) throw new CloudException('native_lineage_changed');
         $policy = Policy::query()->findOrFail($member->policy_id); $plan = ProvisionPlan::normalize($attempt->payload['plan']);
         $credential = app(MachineFailoverCredentials::class); $account = $credential->assertPlan($plan);
@@ -250,12 +260,12 @@ class MachineFailoverNativeBridge
         $this->assertAttempt($row, $task);
     }
 
-    public function assertTask(Task $task): void
+    public function assertTask(Task $task, bool $requireLease = true): void
     {
         $id = $task->payload['coordinated_attempt'] ?? null;
         if ($id === null) return;
         if (!is_string($id)) throw new CloudException('native_lineage_changed');
-        $attempt = Attempt::query()->findOrFail($id); $this->assertAttempt($attempt, $task);
+        $attempt = Attempt::query()->findOrFail($id); $this->assertAttempt($attempt, $task, $requireLease);
         if (!$task->dispatched_at) {
             $member = Member::query()->findOrFail($attempt->execution_member_id);
             app(MachineReplacementService::class)->validate($member->plan_id, $task->payload['plan'], $task, $attempt);
@@ -289,16 +299,23 @@ class MachineFailoverNativeBridge
     {
         $id = $task->payload['coordinated_attempt'] ?? null;
         if ($id === null) return;
-        $attempt = Attempt::query()->findOrFail($id); $member = Member::query()->findOrFail($attempt->execution_member_id);
-        $run = Execution::query()->findOrFail($member->execution_id); $expected = $member->payload['dns'];
-        $instance = MachineOwnedInstance::query()->where('task_id', $task->id)->firstOrFail();
-        if ($transition->request_key !== hash('sha256', $run->admin_id . ':' . substr($this->hash([$id, 'dns']), 0, 32))
-            || $transition->admin_id !== $run->admin_id || $transition->recovery_of !== null || $transition->dns_id !== $expected['id']
-            || $transition->dns_revision !== $expected['revision'] || $transition->from_instance_id !== $member->payload['source_instance_id']
-            || $transition->from_ip !== $expected['ip'] || $transition->to_instance_id !== $instance->id || $transition->to_ip !== $instance->ip
-            || $transition->policy_revision !== $member->policy_revision
-            || (isset($attempt->payload['transition_id']) && $attempt->payload['transition_id'] !== $transition->id)) throw new CloudException('native_receipt_mismatch');
+        if (!$this->transitionCurrent(Attempt::query()->findOrFail($id), $task, $transition)) throw new CloudException('native_receipt_mismatch');
         $this->assertDns($task, $transition->dispatched_at !== null);
+    }
+
+    public function transitionCurrent(Attempt $attempt, Task $task, MachineDnsTransition $transition): bool
+    {
+        try {
+            $member = Member::query()->findOrFail($attempt->execution_member_id); $run = Execution::query()->findOrFail($member->execution_id);
+            $expected = $member->payload['dns']; $instance = MachineOwnedInstance::query()->where('task_id', $task->id)->firstOrFail();
+            return $this->bindingCurrent($attempt, $task)
+                && $transition->request_key === hash('sha256', $run->admin_id . ':' . substr($this->hash([$attempt->id, 'dns']), 0, 32))
+                && $transition->admin_id === $run->admin_id && $transition->recovery_of === null && $transition->dns_id === $expected['id']
+                && $transition->dns_revision === $expected['revision'] && $transition->from_instance_id === $member->payload['source_instance_id']
+                && $transition->from_ip === $expected['ip'] && $transition->to_instance_id === $instance->id && $transition->to_ip === $instance->ip
+                && $transition->policy_revision === $member->policy_revision
+                && (!isset($attempt->payload['transition_id']) || $attempt->payload['transition_id'] === $transition->id);
+        } catch (\Throwable) { return false; }
     }
 
     public function definitelyRejected(Task $task): bool
@@ -335,9 +352,9 @@ class MachineFailoverNativeBridge
         return Member::query()->where('episode_key', $episode)->when($attempt, fn ($query) => $query->where('id', '!=', $attempt->execution_member_id))->exists();
     }
 
-    private function context(Execution $run): void
+    private function context(Execution $run, bool $requireLease = true): void
     {
-        $this->gate->assertAllowed('context'); $this->registry->actor($run->admin_id);
+        $this->gate->assertAllowed('context'); app(MachineFailoverRunner::class)->guard($run->id, $requireLease); $this->registry->actor($run->admin_id);
         if ($run->status !== 'running' || $run->deadline_at <= time()) throw new CloudException('native_intent_expired');
         if (!hash_equals($run->context_hash, $this->registry->fingerprint($this->registry->snapshot($run->service_id, $run->service_revision)))) throw new CloudException('native_context_changed');
         if ($this->release($run->payload['release']['id']) !== $run->payload['release']) throw new CloudException('release_changed');
@@ -423,6 +440,7 @@ class MachineFailoverNativeBridge
     private function checkpoint(Attempt $attempt, string $key, mixed $value): void
     {
         DB::transaction(function () use ($attempt, $key, $value) {
+            app(MachineFailoverRunner::class)->guard(Member::query()->findOrFail($attempt->execution_member_id)->execution_id);
             $row = Attempt::query()->whereKey($attempt->id)->lockForUpdate()->firstOrFail(); $payload = $row->payload;
             if (array_key_exists($key, $payload) && $payload[$key] !== $value) throw new CloudException('native_receipt_mismatch');
             $payload[$key] = $value; $row->payload = $payload; $row->save();
@@ -430,7 +448,20 @@ class MachineFailoverNativeBridge
         $attempt->refresh();
     }
 
-    private function phase(Member $member, string $phase, ?string $reason = null): void { $member->fill(['phase' => $phase, 'reason' => $reason])->save(); }
+    private function phase(Member $member, string $phase, ?string $reason = null): void
+    {
+        DB::transaction(function () use ($member, $phase, $reason) {
+            app(MachineFailoverRunner::class)->guard($member->execution_id);
+            $member->fill(['phase' => $phase, 'reason' => $reason])->save();
+        });
+    }
+    private function attemptStatus(Attempt $attempt, string $status): void
+    {
+        DB::transaction(function () use ($attempt, $status) {
+            app(MachineFailoverRunner::class)->guard(Member::query()->findOrFail($attempt->execution_member_id)->execution_id);
+            $attempt->fill(['status' => $status])->save();
+        });
+    }
     private function hash(mixed $data): string { return hash('sha256', json_encode($data, JSON_THROW_ON_ERROR)); }
 
     public function report(string $id, int $admin): array

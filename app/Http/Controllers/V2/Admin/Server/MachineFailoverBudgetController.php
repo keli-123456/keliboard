@@ -6,6 +6,7 @@ use App\Services\ServerMachine\Cloud\CloudException;
 use App\Services\ServerMachine\Cloud\MachineFailoverBudget;
 use App\Services\ServerMachine\Cloud\MachineFailoverHistory;
 use App\Services\ServerMachine\Cloud\MachineFailoverReview;
+use App\Services\ServerMachine\Cloud\MachineFailoverRunner;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Http\Request;
 
@@ -60,5 +61,16 @@ class MachineFailoverBudgetController extends Controller
         return $this->run($request, ['check_id', 'operation', 'request_id', 'confirmed'], ['check_id' => 'required|uuid',
             'operation' => 'required|in:claim,close,restore', 'request_id' => 'required|regex:/^[a-f0-9]{32}$/D', 'confirmed' => 'required|accepted'],
             fn ($input, $admin) => $service->act($input['check_id'], $input['operation'], $input['request_id'], $admin));
+    }
+    public function stop(Request $request, MachineFailoverRunner $runner)
+    {
+        return $this->run($request, ['id', 'expected_revision', 'request_id', 'confirmed'], ['id' => 'required|uuid',
+            'expected_revision' => 'required|integer|min:0', 'request_id' => 'required|regex:/^[a-f0-9]{32}$/D', 'confirmed' => 'required|accepted'],
+            fn ($input, $admin) => $runner->stop($input['id'], (int) $input['expected_revision'], $input['request_id'], $admin));
+    }
+    public function runtime(Request $request, MachineFailoverRunner $runner)
+    {
+        return $this->run($request, ['id'], ['id' => 'required|uuid'],
+            fn ($input) => $runner->view(\App\Models\MachineFailoverExecution::query()->findOrFail($input['id'])));
     }
 }

@@ -80,6 +80,7 @@ class MachineFailoverBudget
         $review = app(MachineFailoverReview::class);
         return ['id' => $id, 'service_id' => $run->service_id, 'service_revision' => $run->service_revision, 'status' => $run->status,
             'execution_enabled' => false, 'automatic_rotation' => false, 'dns_cutover' => false, 'cloud_writes' => 0,
+            'runtime' => app(MachineFailoverRunner::class)->view($run),
             'members' => $members->map(function ($member) use ($review) {
                 $name = MachineFailoverMember::query()->whereKey($member->member_id)->value('name');
                 return $member->only(['id', 'member_id', 'policy_id', 'policy_revision', 'phase', 'reason']) + ['name' => $name,

@@ -167,6 +167,7 @@ class MachineProvisionService
     public function process(string $id): void
     {
         if (!$this->available() || !($initial = Task::query()->find($id)) || in_array($initial->status, Task::TERMINAL, true)) return;
+        if (!app(MachineFailoverRunner::class)->workerOwns($initial)) return;
         $this->quotaLocked('linode', fn () => $this->locked($initial->account_id, function () use ($id) {
             $task = Task::query()->find($id);
             if (!$task || in_array($task->status, Task::TERMINAL, true) || $task->next_check_at > time()) return;
@@ -208,24 +209,32 @@ class MachineProvisionService
                     $dispatchAt = time();
                     if ($task->deadline_at <= $dispatchAt) throw new CloudException('deadline');
                     // Persist the boundary before POST; retries can only perform reconciliation.
-                    $task->dispatched_at = $dispatchAt; $this->move($task, 'dispatching');
+                    DB::transaction(function () use ($task, $dispatchAt) {
+                        if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertTask($task);
+                        $task->dispatched_at = $dispatchAt; $this->move($task, 'dispatching');
+                    });
                     try {
                         $snapshot = $this->provider->create($account, $payload['request'], $task->dispatched_at);
                         $this->acceptSnapshot($task, $snapshot);
+                        if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
                         $health->resolveIntent($account, $task->id);
                     } catch (CloudException $error) {
                         if ($error->getMessage() !== 'outcome_uncertain') throw $error;
+                        if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
                         $this->captureFailure($task, $account, $error, 'create');
                         $this->move($task, 'outcome_unknown', 'outcome_uncertain'); $this->wait($task); return;
                     }
                 } elseif (!$task->external_id) {
                     $snapshot = $this->provider->reconcile($account, $payload['request'], $task->dispatched_at);
+                    if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
                     if (!$snapshot) { $this->move($task, 'outcome_unknown', 'outcome_uncertain'); $this->wait($task); return; }
                     $this->acceptSnapshot($task, $snapshot);
                     $health->resolveIntent($account, $task->id);
                 }
+                if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
                 $snapshot = $this->provider->instance($account, $task->external_id);
                 $this->acceptSnapshot($task, $snapshot);
+                if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
                 if ($task->bootstrap_state === 'failed') { $this->move($task, 'needs_review', 'initialization_failed'); return; }
                 if ($snapshot['status'] !== 'running') { $this->move($task, 'waiting_provider'); $this->wait($task); return; }
                 if ($task->bootstrap_state !== 'succeeded') { $this->move($task, 'waiting_initialization'); $this->wait($task); return; }
@@ -245,6 +254,7 @@ class MachineProvisionService
                 $this->move($task, 'awaiting_acceptance', null, ['reports' => $health, 'ipv4_probe' => 'reachable',
                     'forwarding_verified' => false, 'dns_changed' => false, 'old_resources_changed' => false]);
             } catch (CloudException $error) {
+                if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
                 if (isset($account) && $account) $this->captureFailure($task, $account, $error, $task->dispatched_at === null ? 'preflight' : ($task->external_id ? 'readback' : 'create'));
                 $reason = $this->reason($error->getMessage());
                 if (in_array($reason, ['provider_unavailable', 'provider_rate_limited', 'reconcile_incomplete'], true)) {
@@ -253,7 +263,10 @@ class MachineProvisionService
                 }
                 $rejected = isset($task->payload['coordinated_attempt']) && app(MachineFailoverNativeBridge::class)->mayFinishRejected($task, $error);
                 $this->move($task, $task->dispatched_at && !$rejected ? 'needs_review' : ($reason === 'source_recovered' ? 'cancelled' : 'failed'), $reason);
-            } catch (\Throwable) { $this->move($task, $task->dispatched_at ? 'needs_review' : 'failed', 'internal_failure'); }
+            } catch (\Throwable) {
+                if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
+                $this->move($task, $task->dispatched_at ? 'needs_review' : 'failed', 'internal_failure');
+            }
         }));
     }
 
@@ -265,13 +278,13 @@ class MachineProvisionService
         $task = Task::query()->find($id);
         if (!$task || !hash_equals($task->callback_hash, hash('sha256', $secret)) || !hash_equals($task->installation_id, $installation)
             || !$task->dispatched_at || $task->deadline_at < time()) throw new CloudException('invalid_callback');
-        return $this->locked($task->account_id, function () use ($id, $installation, $secret, $state) {
+        return $this->locked($task->account_id, fn () => DB::transaction(function () use ($id, $installation, $secret, $state) {
             $task = Task::query()->findOrFail($id);
             if (config('machine_provision.allow_live') !== true || !hash_equals($task->callback_hash, hash('sha256', $secret))
                 || !hash_equals($task->installation_id, $installation) || !$task->dispatched_at
                 || $task->deadline_at <= time()) throw new CloudException('invalid_callback');
             if (in_array($task->status, Task::TERMINAL, true)) return false;
-            if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertTask($task);
+            if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertTask($task, false);
             if ($task->bootstrap_state !== null) {
                 if ($task->bootstrap_state !== $state) throw new CloudException('bootstrap_conflict');
                 return true;
@@ -280,7 +293,7 @@ class MachineProvisionService
             DB::table('v2_machine_provision_step')->insertOrIgnore(['task_id' => $task->id, 'state' => 'bootstrap_' . $state, 'reason' => '', 'created_at' => time()]);
             $this->dispatch($task);
             return true;
-        });
+        }));
     }
 
     public function cancel(string $id, int $admin): array
@@ -304,8 +317,12 @@ class MachineProvisionService
 
     private function acceptSnapshot(Task $task, array $snapshot): void
     {
-        if ($task->external_id !== null && ($task->external_id !== $snapshot['external_id'] || $task->provider_created_at !== $snapshot['provider_created_at'])) throw new CloudException('identity_changed');
-        $task->fill(['external_id' => $snapshot['external_id'], 'provider_created_at' => $snapshot['provider_created_at'], 'public_ips' => $snapshot['public_ips']])->save();
+        DB::transaction(function () use ($task, $snapshot) {
+            $row = Task::query()->whereKey($task->id)->lockForUpdate()->firstOrFail();
+            if ($row->external_id !== null && ($row->external_id !== $snapshot['external_id'] || $row->provider_created_at !== $snapshot['provider_created_at'])) throw new CloudException('identity_changed');
+            $row->fill(['external_id' => $snapshot['external_id'], 'provider_created_at' => $snapshot['provider_created_at'], 'public_ips' => $snapshot['public_ips']])->save();
+        });
+        $task->refresh();
     }
     private function gate(): void { if (config('machine_provision.allow_live') !== true) throw new CloudException('provisioning_disabled'); }
     private function origin(array $plan): void
@@ -330,6 +347,7 @@ class MachineProvisionService
     private function move(Task $task, string $state, ?string $reason = null, ?array $evidence = null): void
     {
         DB::transaction(function () use ($task, $state, $reason, $evidence) {
+            if ($id = app(MachineFailoverRunner::class)->managed($task)) app(MachineFailoverRunner::class)->guard($id);
             $task->fill(['status' => $state, 'reason' => $reason]);
             if ($evidence !== null) $task->evidence = $evidence;
             if (in_array($state, Task::TERMINAL, true)) $task->finished_at = time();
@@ -342,7 +360,11 @@ class MachineProvisionService
     {
         $seconds = max(10, min(60, (int) config('machine_provision.poll_seconds', 20)));
         $at = min($task->deadline_at, max(time() + $seconds, $notBefore ?? 0));
-        $task->next_check_at = $at; $task->save(); $this->dispatch($task, max(1, $at - time()));
+        DB::transaction(function () use ($task, $at) {
+            if ($id = app(MachineFailoverRunner::class)->managed($task)) app(MachineFailoverRunner::class)->guard($id);
+            $task->next_check_at = $at; $task->save();
+        });
+        $this->dispatch($task, max(1, $at - time()));
     }
     private function captureFailure(Task $task, MachineCloudAccount $account, CloudException $error, string $operation): void
     {
@@ -364,6 +386,7 @@ class MachineProvisionService
     }
     private function dispatch(Task $task, int $delay = 0): void
     {
+        if (app(MachineFailoverRunner::class)->wakeTask($task)) return;
         try { MachineProvisionJob::dispatch($task->id)->delay(now()->addSeconds($delay))->afterCommit(); }
         catch (\Throwable) {
             $task->fill(['reason' => 'queue_unavailable'])->save();

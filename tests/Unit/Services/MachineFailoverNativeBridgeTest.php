@@ -61,6 +61,8 @@ class MachineFailoverNativeBridgeTest extends TestCase
     private $duringPost = null;
     private $duringPreflight = null;
     private $duringDnsRead = null;
+    private $duringDnsWrite = null;
+    private $duringInstanceRead = null;
 
     protected function setUp(): void
     {
@@ -227,7 +229,10 @@ class MachineFailoverNativeBridgeTest extends TestCase
                 if (str_contains($url, '/images/')) return Http::response(['id' => 'linode/debian12', 'status' => 'available', 'deprecated' => false, 'capabilities' => ['cloud-init']]);
                 if (str_contains($url, '/linode/types/')) return Http::response(['id' => 'g6-standard-4', 'class' => 'standard', 'price' => ['monthly' => 48], 'region_prices' => []]);
                 if (str_contains($url, '/account/settings')) { if ($this->duringPreflight) ($this->duringPreflight)(); return Http::response(['backups_enabled' => false]); }
-                if (preg_match('~/linode/instances/(\d+)$~', $url, $m)) return Http::response($this->remote[(int) $m[1]]);
+                if (preg_match('~/linode/instances/(\d+)$~', $url, $m)) {
+                    if ($this->duringInstanceRead) ($this->duringInstanceRead)();
+                    return Http::response($this->remote[(int) $m[1]]);
+                }
                 if (str_contains($url, '/linode/instances?')) {
                     $filter = json_decode($request->header('X-Filter')[0] ?? '{}', true);
                     $rows = array_values(array_filter($this->remote, fn ($row) => !isset($filter['label']) || $filter['label'] === $row['label']));
@@ -253,6 +258,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
                 }
                 $this->assertSame('PATCH', $request->method()); $this->dnsWrites++;
                 $id = basename(parse_url($url, PHP_URL_PATH)); $this->records[$id] = array_replace($this->records[$id], $request->data());
+                if ($this->duringDnsWrite) ($this->duringDnsWrite)();
                 if ($this->mode === 'dns_unknown') throw new ConnectionException('synthetic outcome unknown');
                 return Http::response(['success' => true, 'result' => $this->records[$id]]);
             }
@@ -648,5 +654,344 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $finance->assertCapacity($execution->service_id, 1, 10000);
         $this->code('budget_released', fn () => app(MachineFailoverNativeBridge::class)->assertAttempt($attempt->fresh()));
         $this->advance($run); $this->assertCount(1, $this->posts);
+    }
+
+    private function runtimeSchema(): void
+    {
+        foreach (['2026_11_07_190000_create_machine_failover_finance.php', '2026_11_07_200000_create_machine_failover_review.php',
+            '2026_11_07_220000_create_machine_failover_runtime.php'] as $file) (require base_path('database/migrations/' . $file))->up();
+    }
+    private function runner(): \App\Services\ServerMachine\Cloud\MachineFailoverRunner { return app(\App\Services\ServerMachine\Cloud\MachineFailoverRunner::class); }
+    private function runtimeStart(int $parallel = 1): array
+    {
+        $this->runtimeSchema(); config(['machine_failover.runner_enabled' => true]); return $this->start(400, $parallel);
+    }
+    private function tick(array $run): array
+    {
+        \App\Models\MachineFailoverRuntime::query()->whereKey($run['id'])->update(['next_check_at' => 0]);
+        Task::query()->whereIn('id', Attempt::query()->whereIn('execution_member_id', Member::query()->where('execution_id', $run['id'])->select('id'))->select('task_id'))->update(['next_check_at' => 0]);
+        $this->runner()->advance();
+        $job = Bus::dispatched(\App\Jobs\MachineFailoverRunJob::class)->last(fn ($job) => $job->execution === $run['id']);
+        $this->assertNotNull($job); $job->handle($this->runner());
+        return app(MachineFailoverNativeBridge::class)->report($run['id'], $this->admin->id);
+    }
+    private function runtimeReady(array $run, int $member = 0): void
+    {
+        $task = $this->task($member); $this->assertSame('waiting_initialization', $task->status);
+        $this->assertTrue(app(MachineProvisionService::class)->callback($task->id, $task->installation_id, $this->callbackSecret($task), 'succeeded'));
+        $task->refresh()->fill(['dispatched_at' => time() - 2, 'next_check_at' => 0])->save();
+        $this->report($this->fixtures[$member], $task, $task->public_ips[0], true, time());
+    }
+    private function stopRuntime(array $run): array
+    {
+        $view = $this->runner()->view(Execution::query()->findOrFail($run['id']));
+        return $this->runner()->stop($run['id'], $view['revision'], str_repeat('1', 32), $this->admin->id);
+    }
+
+    public function test_runner_defaults_off_and_configuration_alone_cannot_open_the_hard_execution_gate(): void
+    {
+        $this->runtimeSchema(); $run = $this->start();
+        $this->assertSame(0, \App\Models\MachineFailoverRuntime::count());
+        config(['machine_failover.runner_enabled' => true]); app()->instance(MachineFailoverExecutionGate::class, new MachineFailoverExecutionGate());
+        $this->runner()->enroll($run['id']); $this->assertFalse($this->runner()->advance()['enabled']);
+        $this->assertSame(0, \App\Models\MachineFailoverRuntime::count()); $this->assertSame([], $this->posts);
+        Bus::assertNotDispatched(\App\Jobs\MachineFailoverRunJob::class);
+        $job = new \App\Jobs\MachineFailoverRunJob($run['id'], 1, str_repeat('a', 48));
+        $this->assertSame('redis', $job->connection); $this->assertSame('admin_operations', $job->queue);
+        $queue = require base_path('config/queue.php');
+        $this->assertSame(1, $job->tries); $this->assertLessThan($queue['connections']['redis']['retry_after'], $job->timeout);
+    }
+    public function test_runner_completes_native_queue_callback_forwarding_and_dns_with_duplicate_jobs_ignored(): void
+    {
+        $run = $this->runtimeStart(); $first = Bus::dispatched(\App\Jobs\MachineFailoverRunJob::class)->last();
+        $run = $this->tick($run); $first->handle($this->runner()); $this->assertCount(1, $this->posts);
+        Bus::assertNotDispatched(\App\Jobs\MachineProvisionJob::class);
+        $this->runtimeReady($run); $run = $this->tick($run); $this->assertSame('awaiting_dns', $run['members'][0]['phase']);
+        $run = $this->tick($run); $this->assertSame('completed', $run['status'], json_encode($run));
+        $this->assertSame('finished', $this->runner()->view(Execution::query()->find($run['id']))['state']);
+        $this->assertCount(1, $this->posts); $this->assertSame(1, $this->dnsWrites); $this->assertSame(1, $this->verifications);
+        $this->assertFalse(app()->bound(\App\Services\ServerMachine\Cloud\MachineFailoverLease::class));
+    }
+    public function test_runner_round_robins_members_under_the_shared_parallel_budget(): void
+    {
+        $this->fixtures[] = $this->fixture(2); $run = $this->runtimeStart(2);
+        $run = $this->tick($run); $run = $this->tick($run); $this->assertCount(2, $this->posts);
+        $this->runtimeReady($run); $this->runtimeReady($run, 1);
+        for ($i = 0; $i < 4; $i++) $run = $this->tick($run);
+        $this->assertSame('completed', $run['status'], json_encode($run)); $this->assertSame(2, $this->dnsWrites);
+        $this->assertSame(2, Attempt::count());
+    }
+    public function test_runner_stop_before_create_is_local_and_stale_jobs_cannot_restart_it(): void
+    {
+        $run = $this->runtimeStart(); $job = Bus::dispatched(\App\Jobs\MachineFailoverRunJob::class)->last();
+        $view = $this->runner()->view(Execution::query()->find($run['id'])); $stopped = $this->stopRuntime($run);
+        $this->assertSame('stopped', $stopped['state']); $this->assertFalse($stopped['can_stop']);
+        $again = $this->runner()->stop($run['id'], $view['revision'], str_repeat('1', 32), $this->admin->id);
+        $this->assertEquals($stopped, $again); $job->handle($this->runner()); $this->runner()->advance();
+        $this->assertSame('cancelled', Member::query()->first()->phase); $this->assertSame(0, Attempt::count());
+        $this->assertSame([], $this->posts); $this->assertSame(0, $this->dnsWrites);
+        $this->assertSame(1, DB::table('v2_machine_failover_runtime_event')->where('kind', 'stop_requested')->count());
+    }
+    public function test_runner_stop_during_preflight_prevents_the_create_post(): void
+    {
+        $run = $this->runtimeStart(); $this->duringPreflight = function () use ($run) {
+            $this->duringPreflight = null; $this->assertSame('stopping', $this->stopRuntime($run)['state']);
+        };
+        $this->tick($run); $this->assertSame([], $this->posts); $this->assertSame('cancelled', $this->task()->status);
+        $this->assertSame('stopped', $this->runner()->view(Execution::query()->find($run['id']))['state']);
+        $this->assertSame(10000, Attempt::query()->sum('reserved_cents')); $this->assertSame(0, \App\Models\MachineFailoverBudgetRelease::count());
+    }
+    public function test_runner_stop_after_post_preserves_the_paid_candidate_without_dns_or_more_mutations(): void
+    {
+        $run = $this->runtimeStart(); $this->duringPost = function () use ($run) { $this->duringPost = null; $this->stopRuntime($run); };
+        $this->tick($run); $task = $this->task();
+        $this->assertNotNull($task->external_id); $this->assertSame('needs_review', $task->status);
+        $this->assertSame('retained', Member::query()->first()->phase); $this->assertCount(1, $this->posts); $this->assertSame(0, $this->dnsWrites);
+        $this->runner()->advance(); $this->assertCount(1, $this->posts); $this->assertSame(0, \App\Models\MachineFailoverBudgetRelease::count());
+        $this->assertFalse(app(MachineProvisionService::class)->callback($task->id, $task->installation_id, $this->callbackSecret($task), 'succeeded'));
+    }
+    public function test_runner_unknown_create_stopped_during_post_stays_for_review_and_never_rotates(): void
+    {
+        $this->mode = 'unknown_absent'; $run = $this->runtimeStart();
+        $this->duringPost = function () use ($run) { $this->duringPost = null; $this->stopRuntime($run); };
+        $this->tick($run); $this->assertSame('needs_review', Member::query()->first()->phase);
+        $this->assertNull($this->task()->external_id); $this->assertSame('needs_review', $this->task()->status);
+        $this->runner()->advance(); $this->assertCount(1, $this->posts); $this->assertSame(1, Attempt::count());
+    }
+    public function test_runner_recovers_lost_queue_receipts_and_rejects_the_superseded_ticket(): void
+    {
+        $run = $this->runtimeStart(); $old = Bus::dispatched(\App\Jobs\MachineFailoverRunJob::class)->last();
+        \App\Models\MachineFailoverRuntime::query()->whereKey($run['id'])->update(['next_dispatch_at' => time() - 1]);
+        $this->assertSame(1, $this->runner()->advance()['queued']);
+        $next = Bus::dispatched(\App\Jobs\MachineFailoverRunJob::class)->last(); $this->assertGreaterThan($old->generation, $next->generation);
+        $old->handle($this->runner()); $this->assertSame([], $this->posts);
+        $next->handle($this->runner()); $this->assertCount(1, $this->posts);
+    }
+    public function test_runner_expired_worker_is_fenced_and_recovers_only_the_original_create_intent(): void
+    {
+        $run = $this->runtimeStart(); $old = Bus::dispatched(\App\Jobs\MachineFailoverRunJob::class)->last();
+        $this->duringPost = function () use ($run) {
+            $this->duringPost = null; \App\Models\MachineFailoverRuntime::query()->whereKey($run['id'])->update(['lease_until' => time() - 1]);
+        };
+        $old->handle($this->runner()); $this->assertSame('processing', $this->runner()->view(Execution::query()->find($run['id']))['state']);
+        $this->runner()->advance(); $new = Bus::dispatched(\App\Jobs\MachineFailoverRunJob::class)->last();
+        $old->handle($this->runner()); $new->handle($this->runner());
+        $this->assertCount(1, $this->posts); $this->assertSame(1, Attempt::count()); $this->assertSame('waiting_initialization', $this->task()->status);
+    }
+    public function test_runner_deadline_or_revoked_owner_stops_locally_without_new_cloud_intents(): void
+    {
+        $run = $this->runtimeStart(); Execution::query()->whereKey($run['id'])->update(['deadline_at' => time() - 1]);
+        $this->runner()->advance(); $this->assertSame('stopped', $this->runner()->view(Execution::query()->find($run['id']))['state']);
+        $this->assertSame([], $this->posts); $this->assertSame(0, Attempt::count());
+    }
+    public function test_runner_banned_owner_cannot_dispatch_but_another_active_admin_can_stop_the_run(): void
+    {
+        $run = $this->runtimeStart(); $this->admin->banned = true; $this->admin->save();
+        $this->runner()->advance(); $this->assertSame([], $this->posts);
+        $this->assertSame('permission_revoked', $this->runner()->view(Execution::query()->find($run['id']))['reason']);
+        $this->code('permission_revoked', fn () => $this->stopRuntime($run));
+    }
+    public function test_runner_stop_invalid_revision_and_request_conflict_do_not_change_or_resume_the_run(): void
+    {
+        $run = $this->runtimeStart(); $view = $this->runner()->view(Execution::query()->find($run['id']));
+        $this->code('runtime_changed', fn () => $this->runner()->stop($run['id'], $view['revision'] + 1, str_repeat('1', 32), $this->admin->id));
+        $this->assertNull($this->runner()->view(Execution::query()->find($run['id']))['stop_requested_at']);
+        $this->stopRuntime($run);
+        $this->code('request_conflict', fn () => $this->runner()->stop($run['id'], 999, str_repeat('1', 32), $this->admin->id));
+        $this->assertSame([], $this->posts);
+    }
+    public function test_runner_stopping_a_prepared_dns_transition_cancels_only_local_unsubmitted_work(): void
+    {
+        $run = $this->tick($this->runtimeStart()); $this->runtimeReady($run); $run = $this->tick($run);
+        $dns = MachineDnsTransition::query()->firstOrFail(); $this->assertSame('prepared', $dns->state);
+        $view = $this->stopRuntime($run); $this->assertSame('stopped', $view['state']);
+        $this->assertSame('cancelled', $dns->fresh()->state); $this->assertSame('retained', Member::query()->first()->phase);
+        $this->assertSame(0, $this->dnsWrites); $this->assertSame($this->fixtures[0]['sourceIp'], $this->fixtures[0]['dns']->fresh()->ip);
+    }
+    public function test_runner_stop_is_available_with_hard_gates_closed_and_direct_child_jobs_are_fenced(): void
+    {
+        $run = $this->tick($this->runtimeStart()); $requests = Http::recorded()->count();
+        $task = $this->task(); $task->next_check_at = 0; $task->save();
+        (new \App\Jobs\MachineProvisionJob($task->id))->handle(app(MachineProvisionService::class));
+        $this->assertSame($requests, Http::recorded()->count());
+        config(['machine_failover.runner_enabled' => false]); app()->instance(MachineFailoverExecutionGate::class, new MachineFailoverExecutionGate());
+        $this->assertSame('stopped', $this->stopRuntime($run)['state']);
+        $this->assertCount(1, $this->posts); $this->assertSame(0, $this->dnsWrites);
+    }
+    public function test_runner_disabling_during_preflight_prevents_a_new_create_boundary(): void
+    {
+        $run = $this->runtimeStart(); $this->duringPreflight = function () { $this->duringPreflight = null; config(['machine_failover.runner_enabled' => false]); };
+        $this->tick($run); $this->assertSame([], $this->posts);
+        $view = $this->runner()->view(Execution::query()->find($run['id']));
+        $this->assertSame('stopped', $view['state']); $this->assertSame('runner_disabled', $view['reason']);
+    }
+    public function test_runner_queue_failure_keeps_a_recoverable_ticket_and_hides_transport_errors(): void
+    {
+        $run = $this->runtimeStart(); $original = Bus::getFacadeRoot();
+        $failed = \Mockery::mock(\Illuminate\Contracts\Bus\Dispatcher::class);
+        $failed->shouldReceive('dispatch')->once()->andThrow(new \RuntimeException('PRIVATE_QUEUE_URL'));
+        Bus::swap($failed);
+        \App\Models\MachineFailoverRuntime::query()->whereKey($run['id'])->update(['next_dispatch_at' => time() - 1]);
+        $this->runner()->advance(); $view = $this->runner()->view(Execution::query()->find($run['id']));
+        $this->assertSame('queued', $view['state']); $this->assertSame('queue_unavailable', $view['reason']);
+        $this->assertStringNotContainsString('PRIVATE_QUEUE_URL', json_encode($view));
+        Bus::swap($original); \App\Models\MachineFailoverRuntime::query()->whereKey($run['id'])->update(['next_dispatch_at' => time() - 1]);
+        $this->tick($run); $this->assertCount(1, $this->posts);
+    }
+    public function test_runner_stop_during_dns_preflight_prevents_the_patch(): void
+    {
+        $run = $this->tick($this->runtimeStart()); $this->runtimeReady($run); $run = $this->tick($run);
+        $this->duringDnsRead = function () use ($run) { $this->duringDnsRead = null; $this->stopRuntime($run); };
+        $this->tick($run); $this->assertSame(0, $this->dnsWrites);
+        $this->assertSame('cancelled', MachineDnsTransition::query()->first()->state);
+        $this->assertSame('retained', Member::query()->first()->phase);
+    }
+    public function test_runner_stop_during_an_inflight_dns_patch_preserves_uncertainty_without_reversal(): void
+    {
+        $run = $this->tick($this->runtimeStart()); $this->runtimeReady($run); $run = $this->tick($run);
+        $this->duringDnsWrite = function () use ($run) { $this->duringDnsWrite = null; $this->stopRuntime($run); };
+        $this->tick($run); $this->assertSame(1, $this->dnsWrites);
+        $this->assertSame('needs_review', MachineDnsTransition::query()->first()->state);
+        $this->assertSame('needs_review', Member::query()->first()->phase);
+        $this->runner()->advance(); $this->assertSame(1, $this->dnsWrites);
+        $this->assertSame($this->fixtures[0]['sourceIp'], $this->fixtures[0]['dns']->fresh()->ip);
+    }
+    public function test_runner_expired_worker_recovers_an_unknown_post_without_creating_or_rotating_again(): void
+    {
+        $this->mode = 'unknown_success'; $run = $this->runtimeStart();
+        $this->duringPost = function () use ($run) { $this->duringPost = null; \App\Models\MachineFailoverRuntime::query()->whereKey($run['id'])->update(['lease_until' => time() - 1]); };
+        $this->tick($run); $this->assertNull($this->task()->external_id);
+        $this->tick($run); $this->assertNotNull($this->task()->external_id);
+        $this->assertCount(1, $this->posts); $this->assertSame(1, Attempt::count());
+    }
+    public function test_runner_waits_for_an_old_member_lock_without_stopping_or_allocating_again(): void
+    {
+        $run = $this->runtimeStart(); $member = Member::query()->first();
+        $lock = Cache::lock('machine-native:member:' . $member->id, 300); $this->assertTrue($lock->get());
+        try {
+            $this->tick($run); $view = $this->runner()->view(Execution::query()->find($run['id']));
+            $this->assertNull($view['stop_requested_at']); $this->assertSame(0, Attempt::count()); $this->assertSame([], $this->posts);
+            $this->assertTrue(DB::table('v2_machine_failover_runtime_event')->where('reason', 'worker_busy')->exists());
+        } finally { $lock->release(); }
+        $this->tick($run); $this->assertCount(1, $this->posts);
+    }
+    public function test_runner_stop_request_survives_worker_death_with_execution_disabled(): void
+    {
+        $run = $this->runtimeStart(); $lock = Cache::lock('machine-native:run:' . $run['id'], 120); $this->assertTrue($lock->get());
+        try { $this->assertSame('stopping', $this->stopRuntime($run)['state']); } finally { $lock->release(); }
+        config(['machine_failover.runner_enabled' => false]); app()->instance(MachineFailoverExecutionGate::class, new MachineFailoverExecutionGate());
+        $result = $this->runner()->advance(true); $this->assertSame(1, $result['stopped']); $this->assertFalse($result['enabled']);
+        $this->assertSame('stopped', $this->runner()->view(Execution::query()->find($run['id']))['state']);
+        $this->assertSame([], $this->posts); $this->assertSame(0, Attempt::count());
+    }
+    public function test_runner_early_queue_delivery_cannot_execute_before_its_persisted_due_time(): void
+    {
+        $run = $this->tick($this->runtimeStart()); $job = Bus::dispatched(\App\Jobs\MachineFailoverRunJob::class)->last();
+        $before = Http::recorded()->count(); $job->handle($this->runner());
+        $this->assertSame($before, Http::recorded()->count()); $this->assertCount(1, $this->posts);
+        $view = $this->runner()->view(Execution::query()->find($run['id']));
+        foreach (['ticket_hash', 'ticket', 'request_key', 'intent_hash', 'stop_requested_by'] as $secret) $this->assertArrayNotHasKey($secret, $view);
+    }
+    public function test_runner_scheduler_keeps_local_stop_recovery_separate_from_disabled_execution(): void
+    {
+        $this->runtimeSchema();
+        app()->instance(\Illuminate\Console\Scheduling\EventMutex::class, $this->createMock(\Illuminate\Console\Scheduling\EventMutex::class));
+        app()->instance(\Illuminate\Console\Scheduling\SchedulingMutex::class, $this->createMock(\Illuminate\Console\Scheduling\SchedulingMutex::class));
+        $backup = $this->createMock(\App\Services\Backup\BackupService::class); $backup->method('settings')->willReturn(['enabled' => false]);
+        app()->instance(\App\Services\Backup\BackupService::class, $backup);
+        app()->instance(\App\Services\Plugin\PluginManager::class, $this->createMock(\App\Services\Plugin\PluginManager::class));
+        app()->instance(MachineFailoverExecutionGate::class, new MachineFailoverExecutionGate());
+        foreach ([false, true] as $enabled) {
+            config(['machine_failover.runner_enabled' => $enabled]); $schedule = new \Illuminate\Console\Scheduling\Schedule();
+            $kernel = new \App\Console\Kernel(app(), $this->createMock(\Illuminate\Contracts\Events\Dispatcher::class));
+            (new \ReflectionMethod($kernel, 'schedule'))->invoke($kernel, $schedule);
+            $events = array_values(array_filter($schedule->events(), fn ($event) => str_contains($event->command ?? '', 'machines:advance-native-failover')));
+            $this->assertCount($enabled ? 2 : 1, $events);
+            $this->assertCount(1, array_filter($events, fn ($event) => str_contains($event->command, '--stops-only')));
+            foreach ($events as $event) { $this->assertTrue($event->onOneServer); $this->assertTrue($event->withoutOverlapping); }
+            $command = new \App\Console\Commands\AdvanceMachineFailover(); $command->setLaravel(app());
+            $output = new \Symfony\Component\Console\Output\BufferedOutput();
+            $this->assertSame(0, $command->run(new \Symfony\Component\Console\Input\ArrayInput(['--stops-only' => true]), $output));
+            $this->assertSame(['enabled' => false, 'queued' => 0, 'stopped' => 0], json_decode($output->fetch(), true));
+            $this->assertFalse($this->runner()->advance()['enabled']);
+        }
+        $this->assertSame([], $this->posts); Bus::assertNotDispatched(\App\Jobs\MachineFailoverRunJob::class);
+    }
+    public function test_runner_missing_event_schema_never_turns_a_managed_task_into_a_legacy_worker(): void
+    {
+        $run = $this->tick($this->runtimeStart()); $task = $this->task(); $before = Http::recorded()->count();
+        Schema::drop('v2_machine_failover_runtime_event');
+        $this->assertSame($run['id'], $this->runner()->managed($task)); $this->assertFalse($this->runner()->workerOwns($task));
+        $this->code('runtime_migration_required', fn () => $this->runner()->guard($run['id']));
+        (new \App\Jobs\MachineProvisionJob($task->id))->handle(app(MachineProvisionService::class));
+        $this->assertSame($before, Http::recorded()->count()); $this->assertFalse($this->runner()->view(Execution::query()->find($run['id']))['available']);
+    }
+    public function test_runner_missing_payload_marker_cannot_bypass_reverse_task_ownership(): void
+    {
+        $run = $this->tick($this->runtimeStart()); $task = $this->task(); $payload = $task->payload;
+        unset($payload['coordinated_attempt']); $task->payload = $payload; $task->save(); $before = Http::recorded()->count();
+        $this->assertSame($run['id'], $this->runner()->managed($task)); $this->assertFalse($this->runner()->workerOwns($task));
+        (new \App\Jobs\MachineProvisionJob($task->id))->handle(app(MachineProvisionService::class));
+        $this->stopRuntime($run); $this->assertSame('needs_review', Member::query()->first()->phase);
+        $this->assertSame($before, Http::recorded()->count());
+    }
+    public function test_runner_stop_does_not_cancel_a_dns_transition_with_changed_lineage(): void
+    {
+        $run = $this->tick($this->runtimeStart()); $this->runtimeReady($run); $run = $this->tick($run);
+        $transition = MachineDnsTransition::query()->firstOrFail(); $transition->from_ip = '192.0.2.254'; $transition->save();
+        $before = Http::recorded()->count(); $this->stopRuntime($run);
+        $this->assertSame('prepared', $transition->fresh()->state); $this->assertSame('needs_review', Member::query()->first()->phase);
+        $this->assertSame($before, Http::recorded()->count()); $this->assertSame(0, $this->dnsWrites);
+    }
+    public function test_runner_recovers_a_crash_after_terminal_run_commit_without_replaying_work(): void
+    {
+        $run = $this->runtimeStart(); $job = Bus::dispatched(\App\Jobs\MachineFailoverRunJob::class)->last();
+        Execution::query()->whereKey($run['id'])->update(['status' => 'needs_review']);
+        $this->runner()->advance(); $this->assertSame('finished', $this->runner()->view(Execution::query()->find($run['id']))['state']);
+        $job->handle($this->runner()); $this->assertSame([], $this->posts); $this->assertSame(0, Attempt::count());
+    }
+    public function test_runner_http_stop_and_metadata_require_admin_and_reject_execution_options(): void
+    {
+        $controller = new \App\Http\Controllers\V2\Admin\Server\MachineFailoverBudgetController();
+        foreach (['stop', 'runtime'] as $method) {
+            $request = \Illuminate\Http\Request::create('/synthetic', 'POST', ['passed' => true, 'enabled' => true]);
+            $request->setUserResolver(fn () => $this->admin);
+            $this->assertSame(422, $controller->{$method}($request, $this->runner())->getStatusCode());
+            $request->setUserResolver(fn () => new User(['is_admin' => false]));
+            try { $controller->{$method}($request, $this->runner()); $this->fail('Expected admin denial.'); }
+            catch (\Symfony\Component\HttpKernel\Exception\HttpException $error) { $this->assertSame(403, $error->getStatusCode()); }
+        }
+        $this->assertSame([], $this->posts);
+    }
+    public function test_runner_migration_downgrade_preserves_durable_tickets_and_stop_audit(): void
+    {
+        $this->runtimeStart(); $this->expectException(\RuntimeException::class);
+        (require base_path('database/migrations/2026_11_07_220000_create_machine_failover_runtime.php'))->down();
+    }
+    public function test_runner_late_readback_cannot_overwrite_a_stop_settled_after_its_lock_expired(): void
+    {
+        $run = $this->runtimeStart();
+        $this->duringInstanceRead = function () use ($run) {
+            $this->duringInstanceRead = null;
+            Cache::lock('machine-native:run:' . $run['id'], 120)->forceRelease();
+            $this->assertSame('stopped', $this->stopRuntime($run)['state']);
+        };
+        $this->tick($run);
+        $this->assertSame('needs_review', $this->task()->status); $this->assertSame('retained', Attempt::query()->first()->status);
+        $this->assertSame('retained', Member::query()->first()->phase); $this->assertSame(0, $this->dnsWrites); $this->assertCount(1, $this->posts);
+        $bridge = app(MachineFailoverNativeBridge::class);
+        $this->code('native_stop_requested', fn () => (new \ReflectionMethod($bridge, 'phase'))->invoke($bridge, Member::query()->first(), 'creating'));
+        $this->code('native_stop_requested', fn () => (new \ReflectionMethod($bridge, 'attemptStatus'))->invoke($bridge, Attempt::query()->first(), 'dispatched'));
+        $this->assertSame('retained', Attempt::query()->first()->status); $this->assertSame('retained', Member::query()->first()->phase);
+    }
+    public function test_runner_stop_after_a_simulated_rotation_preserves_the_original_definite_rejection(): void
+    {
+        $this->mode = 'reject'; $run = $this->tick($this->runtimeStart()); $first = Attempt::query()->firstOrFail();
+        $task = Task::query()->findOrFail($first->task_id); $identity = $task->only(['id', 'account_id', 'installation_id', 'status', 'reason', 'evidence']);
+        $this->assertSame('rejected', $first->status); $this->assertSame('retry_ready', Member::query()->first()->phase);
+        $run = $this->tick($run); $this->stopRuntime($run);
+        $this->assertSame('rejected', $first->fresh()->status); $this->assertSame($identity, $task->fresh()->only(array_keys($identity)));
+        $this->assertSame('retained', Member::query()->first()->phase); $this->assertCount(2, $this->posts); $this->assertSame(0, $this->dnsWrites);
+        $this->assertSame(20000, Attempt::query()->sum('reserved_cents')); $this->assertSame(0, \App\Models\MachineFailoverBudgetRelease::count());
     }
 }

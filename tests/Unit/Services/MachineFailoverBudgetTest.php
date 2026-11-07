@@ -126,7 +126,7 @@ class MachineFailoverBudgetTest extends TestCase
             'account_id' => $this->account->id, 'account_revision' => 1, 'reserved_cents' => 10000, 'status' => $state, 'payload' => ['plan' => $task->payload['plan']]]);
         $member->fill(['attempt_id' => $id])->save();
         $fixtureBinder = new class(app(MachineFailoverServiceRegistry::class), new MachineFailoverExecutionGate()) extends MachineFailoverNativeBridge {
-            public function assertAttempt(Attempt $attempt, ?Task $task = null): void {}
+            public function assertAttempt(Attempt $attempt, ?Task $task = null, bool $requireLease = true): void {}
         };
         DB::transaction(fn () => $fixtureBinder->bind($attempt, $task)); return $attempt->fresh();
     }

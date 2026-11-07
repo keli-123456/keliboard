@@ -111,6 +111,8 @@ class MachineOwnedDnsService
                 $this->acceptance->gate($policy->id, 'allow_dns');
                 // Persist the boundary before the request, never around the provider mutation itself.
                 $transition = DB::transaction(function () use ($transition, $record, $instance, $policy, $admin, $kind) {
+                    $task = MachineProvisionTask::query()->findOrFail($instance->task_id);
+                    if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertTask($task);
                     $this->current($record, true); $row = $this->current($transition, true);
                     $this->acceptance->scope($instance, $policy->fresh(), $transition->policy_revision, $admin);
                     $this->acceptance->gate($policy->id, 'allow_dns');

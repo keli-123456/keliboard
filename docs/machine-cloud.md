@@ -616,8 +616,11 @@ Before enabling real execution, the remaining work is:
 - The multi-member service and automatic state machine described below now run
   end-to-end in an isolated simulation. The separate shadow view below can read
   cached panel evidence, but cannot dispatch production member operations.
-  Connecting trusted mutation/receipt adapters, scheduling and separately authorized recovery remains follow-up work;
-  this is not a switch that can be enabled by changing an environment variable.
+  The Linode native bridge, receipt checks, background tickets and local stop
+  recovery described below are now implemented behind a rejecting execution
+  gate. Automatic enrollment from new fault plans, scoped activation and live
+  worker/recovery acceptance remain follow-up work; changing an environment
+  variable cannot activate this path.
 
 - Separately authorize one isolated live creation and validate the disabled
   coordinator described above. Its candidate uses one pinned template and a
@@ -784,9 +787,10 @@ failed candidate IPv4/UDP verification, DNS conflict, and unknown DNS outcomes.
 Tests also inject persistence interruption, member isolation, revision/actor
 changes, shared caps and lost client responses.
 
-This increment does not implement shared-hostname multi-line/weighted DNS,
-provider fallback, DigitalOcean/Vultr creation, live background orchestration,
-live notices or automatic retained-resource deletion. Each leaf still owns its
+This simulation increment does not implement shared-hostname multi-line/weighted
+DNS, provider fallback, DigitalOcean/Vultr creation or automatic retained-resource
+deletion. Later sections describe guarded native scheduling and notices, neither
+of which has live acceptance or activation. Each leaf still owns its
 separate DNS intention. It does not import, schedule, modify or take over any
 existing tanzhen service, VM, agent or DNS record. All live repository gates stay
 off. A successful simulation is not production acceptance.
@@ -869,8 +873,9 @@ not live cloud error compatibility or production recovery.
 
 Real automatic rotation and multi-member live orchestration are not enabled by
 this increment. DigitalOcean/Vultr creation, cross-provider fallback, shared
-multi-line DNS, live orchestration notices and automatic retained-resource
-cleanup still need their trusted execution adapters and isolated acceptance.
+multi-line DNS and automatic retained-resource cleanup still need their trusted
+execution adapters and isolated acceptance. Guarded native notices and scheduling
+are described below; those additions also remain unarmed and not live-accepted.
 No live gates, production settings, tanzhen services or node processes were
 changed, and no real credential/provider request was used by these tests.
 
@@ -960,7 +965,9 @@ The bridge is deliberately unarmed: `MachineFailoverExecutionGate` always
 rejects. There is no environment/configuration switch, controller route, UI
 button or scheduler that enables or starts a native multi-member run. Existing
 provisioning, replacement, allowlist, acceptance and DNS gates remain unchanged
-and must also pass. Tests replace only the gate dependency in an isolated test
+and must also pass. The later runner only advances already recorded internal
+intents; its local stop API cannot start or resume a run. Tests replace only the
+gate dependency in an isolated test
 container; SQLite/cache state, queues, cloud APIs, DNS and the verifier are all
 fixtures. No production database migration, cloud creation, real rotation, DNS
 write, tanzhen operation or kelinode-rs change is performed by this increment.
@@ -1029,9 +1036,10 @@ unknown proof or unresolved failures stop for review while retaining the origina
 mutation identity and reservations. Review is not permission to re-dispatch.
 Progress can resume the same persisted intent within its valid proof/deadline,
 not start a fresh paid operation. The native bridge remains backend-internal and
-has not been exposed as an execution UI. DigitalOcean/Vultr creation adapters,
-live worker/WAN and provider error acceptance, controlled activation and native
-orchestration notices are still outstanding. This does not claim complete live
+has not been exposed as an activation UI. DigitalOcean/Vultr creation adapters,
+live worker/WAN and provider error acceptance and controlled activation are still
+outstanding. The later native notices and background runner sections describe
+their separately guarded additions. This does not claim complete live
 tanzhen v2 parity or authorize a non-business cloud acceptance run.
 The forwarding integration tests exercise the existing isolated HY2 verifier
 profile; they do not add or certify interoperability for every node protocol.
@@ -1232,3 +1240,74 @@ in-memory databases, fake transports and local browser adapters only. This
 increment is not deployed or enabled in production. Real creation, automatic
 rotation and DNS cutover remain hard-disabled. Existing tanzhen and kelinode-rs
 are untouched; no production notification or cloud acceptance has been run.
+
+### Native Background Runner And Local Stop Control
+
+Migration `2026_11_07_220000` adds durable runtime tickets and stop events for
+existing native execution IDs. It refuses to discard populated audit on downgrade.
+`machine_failover.runner_enabled` defaults to false, and the unchanged
+`MachineFailoverExecutionGate` still rejects execution even if that config is
+changed. There is no start/resume/activation HTTP endpoint, automatic fault-plan
+enrollment, tanzhen import or takeover. Real creation, automatic rotation and DNS
+cutover remain disabled. This increment is local and has not been deployed.
+
+The internal start hook can enroll an already authorized native intent only when
+every execution gate permits it. The conditional minute command
+`machines:advance-native-failover` recovers at most 20 due tickets per sweep.
+Each queued job carries a generation and random nonce; only its hash is stored.
+A worker claims a 120-second lease under the run lock and advances one member.
+Jobs use the existing `redis:admin_operations` queue, one attempt and a 75-second
+timeout, below its 90-second retry visibility. Ordinary progress chains a delayed
+ticket (normally 20 seconds, one
+second for urgent DNS/retry work); the minute sweep is recovery, not the primary
+step timer. Members rotate by priority/ID, with acceptance-ready DNS work ahead
+of waiting members so a bounded receipt is not deliberately starved.
+
+Duplicate/early deliveries, replaced tickets and expired workers cannot advance.
+Missing queue receipts and expired leases create a new fenced ticket for the
+same run, not a new paid intent. A surviving member lock causes bounded waiting
+within the original deadline. A crash after the run's terminal commit is settled
+locally so stale runtime rows do not clog the due sweep. The original actor,
+configuration, limits, task lineage and proof validity are rechecked at existing
+boundaries. Lease context is removed after each job, including failure paths.
+Missing runtime event schema fails closed for already managed tasks. A removed
+payload marker cannot bypass the reverse task/attempt ownership check.
+
+The admin-only metadata endpoint is
+`GET /server/machine/cloud/failover/services/native/runtime`. The local stop
+endpoint is `POST /server/machine/cloud/failover/services/native/stop`, accepting
+only the run ID, expected runtime revision, durable request ID and confirmation.
+An active administrator can irreversibly latch a stop; stale revisions and
+conflicting request reuse are rejected. Retrying the same stop intent reads its
+recorded result. The latch invalidates queued tickets and current leases. A
+separate always-registered minute `--stops-only` sweep finishes pending **local**
+stops after worker death, even when execution is disabled; it cannot call cloud
+or DNS adapters. No schedule was installed or executed in production here.
+
+The dispatch marker and stop latch serialize on the runtime row. Once a provider
+request has crossed that boundary, it may still complete: stopping progression
+does not revoke an in-flight HTTP request or prove a VM stopped. Unsubmitted work
+is cancelled locally; a prepared, matching DNS intent may be locally cancelled.
+Known created candidates are retained, while unknown create results or dispatched
+DNS intents remain for review. Earlier definite rejections keep their original
+task/attempt verdict and evidence; stopping a later attempt does not rewrite them
+as uncertain. Changed/foreign task or DNS lineage is left
+untouched and marked for review. Completed members remain completed. Stop never
+deletes or powers off a VM, reverses DNS, releases reservations or retries a paid
+request. Existing initialization callbacks can record pinned facts while active
+without a worker lease, but cannot advance managed tasks or revive a stopped run.
+
+The native record page shows lease/due/stop times, generation and the latest 20
+whitelisted scheduling events. It polls metadata only while visible and idle,
+rejects stale responses, disables stop after an uncertain read and reads back an
+ambiguous stop response without automatically resending. No nonce, actor ID,
+private queue error or provider response is exposed. Local run completion is not
+presented as real forwarding, DNS propagation or billing acceptance.
+
+Verification uses in-memory SQLite, fake cache locks/queue/cloud/DNS/verifier
+adapters and local desktop/mobile/dark/English browser cases. It covers full
+multi-member progression, duplicate/lost tickets, worker expiry, deadline/owner
+revocation, pre-dispatch/in-flight stops, lock survival, migration failures and
+stop recovery while all real gates are closed. These tests are not distributed
+Redis/MySQL concurrency acceptance, Linux worker/WAN acceptance or paid cloud
+acceptance. No node binary/configuration or existing tanzhen resource was changed.
