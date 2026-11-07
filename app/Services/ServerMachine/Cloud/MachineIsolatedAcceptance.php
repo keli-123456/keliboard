@@ -24,6 +24,7 @@ class MachineIsolatedAcceptance
     public function preview(int $id, int $revision, int $releaseId, int $admin): array
     {
         $this->acceptance->actor($admin); $policy = $this->policy($id, $revision); $release = $this->release($releaseId);
+        $plan = $this->plan($policy); $accountId = $plan['account_id'];
         $checks = array_values(array_filter($this->policies->localChecks($policy), fn ($check) => !in_array($check['code'], [
             'execution_disabled', 'dns_not_configured', 'dns_credential_missing', 'dns_credential_changed', 'dns_record_conflict',
             'external_ownership_unverified', 'forwarding_not_verified'], true)));
@@ -38,13 +39,13 @@ class MachineIsolatedAcceptance
         $add('verifier_configured', $verifier !== null);
         $add('slot_empty', !Task::query()->where('machine_id', $policy->machine_id)->where('slot', $policy->slot)->exists()
             && !Instance::query()->where('policy_id', $id)->exists());
-        $add('account_idle', !Task::query()->where('account_id', $policy->account_id)->whereNotIn('status', ['accepted', 'failed', 'cancelled'])->exists()
-            && !MachineCloudTask::query()->whereIn('resource_id', MachineCloudResource::query()->where('account_id', $policy->account_id)->select('id'))
+        $add('account_idle', !Task::query()->where('account_id', $accountId)->whereNotIn('status', ['accepted', 'failed', 'cancelled'])->exists()
+            && !MachineCloudTask::query()->whereIn('resource_id', MachineCloudResource::query()->where('account_id', $accountId)->select('id'))
                 ->whereNotIn('status', MachineCloudTask::TERMINAL)->exists());
-        $attempts = Task::query()->where('account_id', $policy->account_id)->where('created_at', '>=', time() - 86400)->count();
+        $attempts = Task::query()->where('account_id', $accountId)->where('created_at', '>=', time() - 86400)->count();
         $limit = min($policy->daily_limit, max(1, min(2, (int) config('machine_provision.daily_limit_per_account', 2))));
         $add('daily_allowance', $attempts < $limit);
-        $plan = $this->plan($policy); $pin = $this->pin($policy, $release);
+        $pin = $this->pin($policy, $release);
         $fingerprint = hash('sha256', json_encode([$plan, $pin, $checks, $verifier], JSON_THROW_ON_ERROR));
         $expires = time() + 120;
         return ['policy_id' => $id, 'policy_revision' => $revision, 'release' => $pin,
@@ -82,7 +83,7 @@ class MachineIsolatedAcceptance
         if ($intent === null) return;
         $policy = $this->policy($intent['policy_id'], $intent['policy_revision']);
         $release = $this->release($intent['release_id']);
-        if ($intent !== $this->pin($policy, $release) || ProvisionPlan::normalize($task->payload['plan']) !== $this->plan($policy)) throw new CloudException('isolated_context_changed');
+        if ($intent !== $this->pin($policy, $release, $task) || ProvisionPlan::normalize($task->payload['plan']) !== $this->plan($policy, $task)) throw new CloudException('isolated_context_changed');
         if (!$policy->isolation_confirmed) throw new CloudException('isolation_confirmation_required');
         if (!$this->isolatedScope($policy)) throw new CloudException('isolated_scope_changed');
         if (config('machine_acceptance.allow_verification') !== true
@@ -160,7 +161,7 @@ class MachineIsolatedAcceptance
         return $release;
     }
 
-    private function pin(Policy $policy, Release $release): array
+    private function pin(Policy $policy, Release $release, ?Task $task = null): array
     {
         $verifier = null;
         try { $verifier = $this->verifier->configuration($policy->id)['fingerprint']; } catch (CloudException) {}
@@ -168,7 +169,9 @@ class MachineIsolatedAcceptance
         $nodes = Server::query()->where('enabled', true)->where(fn ($query) => $query->where('machine_id', $policy->machine_id)->orWhereIn('id', $bindings))->orderBy('id')->get();
         $projection = $nodes->map(fn ($node) => array_intersect_key($node->getAttributes(), array_flip(['id', 'type', 'host', 'port', 'server_port',
             'network', 'protocol_settings', 'password', 'group_ids', 'route_ids', 'enabled', 'machine_id', 'parent_id'])))->all();
-        return ['schema' => 1, 'policy_id' => $policy->id, 'policy_revision' => $policy->revision, 'release_id' => $release->id,
+        $context = app(MachineFailoverCredentials::class)->context($policy, $task);
+        $group = isset($context['credential_pool']) ? ['credential_fingerprint' => hash('sha256', json_encode($context, JSON_THROW_ON_ERROR))] : [];
+        return $group + ['schema' => 1, 'policy_id' => $policy->id, 'policy_revision' => $policy->revision, 'release_id' => $release->id,
             'version' => $release->version, 'binary_sha256' => $release->binary_sha256,
             'verifier_fingerprint' => $verifier,
             'node_fingerprint' => hash('sha256', json_encode($projection, JSON_THROW_ON_ERROR))];
@@ -180,9 +183,9 @@ class MachineIsolatedAcceptance
             && !(config('machine_acceptance.allow_dns') === true && in_array($policy->id, config('machine_acceptance.allowed_policy_ids', []), true));
     }
 
-    private function plan(Policy $policy): array
+    private function plan(Policy $policy, ?Task $task = null): array
     {
-        return ProvisionPlan::normalize(['account_id' => $policy->account_id, 'machine_id' => $policy->machine_id, 'slot' => $policy->slot,
+        return ProvisionPlan::normalize(app(MachineFailoverCredentials::class)->context($policy, $task) + ['machine_id' => $policy->machine_id, 'slot' => $policy->slot,
             'panel_origin' => app(ProvisionBootstrap::class)->configuredOrigin(), 'region' => $policy->region, 'size' => $policy->size,
             'image' => $policy->image, 'authorized_keys' => [], 'monthly_limit_usd' => $policy->monthly_limit_usd]);
     }

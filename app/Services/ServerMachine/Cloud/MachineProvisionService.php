@@ -24,7 +24,7 @@ class MachineProvisionService
         'panel_origin_changed', 'resource_missing', 'replacement_disabled', 'replacement_not_allowed',
         'replacement_evidence_changed', 'replacement_guard_failed', 'replacement_cooldown', 'source_recovered',
         'replacement_episode_used', 'ownership_mismatch', 'config_changed', 'daily_budget', 'task_active',
-        'release_changed', 'isolated_context_changed', 'isolated_scope_changed', 'isolation_confirmation_required'];
+        'release_changed', 'isolated_context_changed', 'isolated_scope_changed', 'isolation_confirmation_required', 'credential_group_changed'];
 
     public function __construct(private LinodeProvisionClient $provider, private ProvisionBootstrap $bootstrap,
         private MachineCloudHealth $health, private MachineAddressInventory $addresses) {}
@@ -45,6 +45,7 @@ class MachineProvisionService
     {
         $plan = ProvisionPlan::normalize($input);
         $this->origin($plan);
+        if (isset($plan['credential_pool'])) app(MachineFailoverCredentials::class)->assertPlan($plan);
         $machine = ServerMachine::query()->findOrFail($plan['machine_id']);
         $account = MachineCloudAccount::query()->findOrFail($plan['account_id']);
         if (!$machine->is_active || $account->provider !== 'linode') throw new CloudException('invalid_plan');
@@ -77,6 +78,7 @@ class MachineProvisionService
         $plan = ProvisionPlan::normalize($input);
         $this->origin($plan);
         if ($plan['source_ref']) throw new CloudException('source_review_required');
+        if (isset($plan['credential_pool']) && $replacementPlan === null && $isolated === null) throw new CloudException('invalid_plan');
         return Cache::lock('machine-provision:slot:' . hash('sha256', $plan['machine_id'] . ':' . $plan['slot']), 120)
             ->block(2, fn () => $this->locked($plan['account_id'], function () use ($plan, $requestId, $admin, $replacementPlan, $isolated) {
             $this->actor($admin);
@@ -96,7 +98,8 @@ class MachineProvisionService
             }
             $account = MachineCloudAccount::query()->findOrFail($plan['account_id']);
             $machine = ServerMachine::query()->findOrFail($plan['machine_id']);
-            if ($account->provider !== 'linode' || !$machine->is_active) throw new CloudException('invalid_plan');
+            if ($account->provider !== 'linode' || $account->provider !== ($plan['provider'] ?? 'linode') || !$machine->is_active) throw new CloudException('invalid_plan');
+            if (isset($plan['credential_pool'])) app(MachineFailoverCredentials::class)->assertPlan($plan);
             $replacement = $replacementPlan === null ? null : app(MachineReplacementService::class)->validate($replacementPlan, $plan);
             if ($replacementPlan === null && Schema::hasTable('v2_machine_replacement_task')
                 && \App\Models\MachineFailoverPolicy::query()->where('slot', $plan['slot'])
@@ -161,12 +164,14 @@ class MachineProvisionService
                 $this->origin($payload['plan']);
                 if (isset($payload['isolated_acceptance'])) app(MachineIsolatedAcceptance::class)->assertTask($task);
                 if (!$task->dispatched_at) {
+                    if (isset($payload['plan']['credential_pool'])) app(MachineFailoverCredentials::class)->assertPlan($payload['plan']);
                     $this->provider->preflight($account, $payload['plan']);
                     $this->gate(); $this->actor($task->admin_id); $this->testMachine($task->machine_id);
                     if ($account->fresh()?->revision !== $task->account_revision) throw new CloudException('account_changed');
                     $current = $machine->fresh();
                     if (!$current || !$current->is_active || !hash_equals($task->machine_authority, hash('sha256', (string) $current->token))) throw new CloudException('source_changed');
                     $this->origin($payload['plan']);
+                    if (isset($payload['plan']['credential_pool'])) app(MachineFailoverCredentials::class)->assertPlan($payload['plan']);
                     if (isset($payload['isolated_acceptance'])) app(MachineIsolatedAcceptance::class)->assertTask($task);
                     if ($task->replacement_id) app(MachineReplacementService::class)->assertDispatch($task);
                     $dispatchAt = time();

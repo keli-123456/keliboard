@@ -25,6 +25,15 @@ class MachineFailoverController extends Controller
         return $this->run($request, fn () => $service->overview());
     }
 
+    public function catalog(Request $request, \App\Services\ServerMachine\Cloud\MachineCloudCatalog $service)
+    {
+        return $this->run($request, function () use ($request, $service) {
+            if (array_diff(array_keys($request->all()), ['credential_group_id', 'provider', 'refresh'])) throw new CloudException('invalid_policy');
+            $v = $request->validate(['credential_group_id' => 'required|integer|min:1', 'provider' => 'required|in:linode,digitalocean,vultr', 'refresh' => 'nullable|boolean']);
+            return $service->read((int) $v['credential_group_id'], $v['provider'], (bool) ($v['refresh'] ?? false));
+        });
+    }
+
     public function replacements(Request $request, MachineReplacementService $service)
     {
         return $this->run($request, fn () => $service->overview());

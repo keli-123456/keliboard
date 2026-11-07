@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Http;
 
 class LinodeClient implements CloudClient
 {
+    use CloudCatalogReads;
     public function inventory(MachineCloudAccount $account, int $page): array
     {
         $data = $this->request($account, 'GET', '/linode/instances', ['page' => $page, 'page_size' => 100]);

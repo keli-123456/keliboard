@@ -28,7 +28,7 @@ class MachineInstanceOwnership
         foreach ($owned as $instance) {
             $task = MachineProvisionTask::query()->find($instance->task_id);
             if (!$task || $task->installation_id !== $instance->installation_id || $task->machine_id !== $policy->machine_id
-                || $task->account_id !== $policy->account_id || $task->slot !== $policy->slot
+                || !app(MachineFailoverCredentials::class)->owns($policy, $task) || $task->slot !== $policy->slot
                 || !hash_equals($task->machine_authority, hash('sha256', (string) $machine->token))) throw new CloudException('ownership_mismatch');
             if ($instance->resource_id !== null) {
                 $resource = MachineCloudResource::query()->find($instance->resource_id);

@@ -614,8 +614,9 @@ Linux verifier resource isolation, or production DNS propagation.
 Before enabling real execution, the remaining work is:
 
 - Separately authorize one isolated live creation and validate the disabled
-  coordinator described above. Its current candidate is the policy's one pinned
-  template, not an account pool or automatic provider fallback. The observation
+  coordinator described above. Its candidate uses one pinned template and a
+  matching-provider credential from the configured group (legacy policies keep
+  their pinned account). There is no automatic provider fallback. The observation
   evaluator still records decisions only. Importing old V1/V2 services is
   optional, not a prerequisite; drafts, thresholds and simulated matches are not
   authority. Production automatic dispatch still needs separate authorization.
@@ -639,3 +640,57 @@ tanzhen services and DNS records are not changed by that test.
 
 Creation reference:
 [Create a Linode](https://techdocs.akamai.com/linode-api/reference/post-linode-instance).
+
+### Provider Catalogs And Credential Groups
+
+Migration `2026_11_07_120000_add_provider_groups_to_machine_failover` allows a
+draft to select `provider` and `credential_group_id` instead of `account_id`.
+Mixed groups are supported, but only credentials matching that provider are
+eligible. The native region, size and image identifiers stay separate for
+Linode, DigitalOcean and Vultr. Existing single-account policies remain valid;
+owned identity cannot be silently migrated or rebound. A referenced group
+cannot be deleted, and downgrade refuses to discard grouped policies.
+
+The explicit admin-only `GET /server/machine/cloud/failover/catalog` reads
+bounded native catalogs from fixed official API origins. It never creates a
+VM. Normal list, poll and rehearsal reads do not fetch provider catalogs.
+Each collection is limited to three pages of 100 items and the read has a
+20-second deadline checked between bounded five-second requests. Invalid,
+inconsistent or incomplete pages fail closed. Only normalized public image
+metadata is returned. A ten-minute local snapshot is tied to the provider,
+group membership and credential revisions; failed refresh discards its proof.
+Changing provider/group clears all dependent fields. Region, size, image and
+minimum disk compatibility are rechecked on save, not just in the browser.
+
+Linode catalog candidates are standard compute plans in healthy core regions
+supporting Linodes and Metadata, with public cloud-init images. The partial
+premium/GPU availability feed is not treated as a complete standard-plan list.
+DigitalOcean sizes and public distribution images use their regional lists.
+Vultr uses native region IDs, plan location lists and supported x64 Linux OS IDs.
+Catalog compatibility is not inventory, permission, architecture interop or
+final pricing acceptance. Actual selected-account regional pricing and
+preflight, existing reviewed-template allowlists and live gates still apply.
+DigitalOcean/Vultr draft catalogs do not add replacement creation adapters.
+
+At a new precheck/task the matching-provider pool selects an eligible credential
+with the fewest recent attempts, then the oldest attempt and lowest account ID.
+Busy, cooling-down and over-budget credentials are excluded. Both the selected
+account hard cap and the policy-wide rolling 24-hour cap apply, including failed
+and cancelled reservations; adding tokens cannot multiply the policy cap.
+The task captures the selected account and group fingerprint. Changes before
+dispatch invalidate the context and cannot cause a paid POST. Once dispatched,
+uncertain outcomes only reconcile that original credential/task, never select
+another token or issue a second create. Grouped plans can only enter via the
+policy-bound replacement or isolated-acceptance path. Enrollment and subsequent
+actions recheck ownership and live membership separately.
+
+All repository execution gates remain false. Tests here are synthetic; no paid
+VM, production DNS, existing tanzhen or node process was operated for this change.
+
+Native catalog references:
+[Linode regions](https://techdocs.akamai.com/linode-api/reference/get-regions),
+[Linode types](https://techdocs.akamai.com/linode-api/reference/get-linode-types),
+[DigitalOcean sizes](https://docs.digitalocean.com/reference/api/reference/sizes/),
+[DigitalOcean images](https://docs.digitalocean.com/reference/api/reference/images/),
+[Vultr plans](https://github.com/vultr/govultr/blob/master/plan.go),
+[Vultr operating systems](https://github.com/vultr/govultr/blob/master/os.go).

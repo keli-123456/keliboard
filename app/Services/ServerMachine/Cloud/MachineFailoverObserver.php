@@ -50,7 +50,8 @@ class MachineFailoverObserver
         if (!$this->available()) throw new CloudException('migration_required');
         return Cache::lock('machine-failover:write', 60)->block(2, function () use ($id) {
             $policy = Policy::query()->findOrFail($id);
-            return Cache::lock('machine-cloud:account:' . $policy->account_id, 60)->block(2, fn () => DB::transaction(function () use ($id) {
+            $lock = $policy->credential_group_id ? 'machine-cloud:credential-groups' : 'machine-cloud:account:' . $policy->account_id;
+            return Cache::lock($lock, 60)->block(2, fn () => DB::transaction(function () use ($id) {
                 $policy = Policy::query()->whereKey($id)->lockForUpdate()->firstOrFail();
                 $now = now()->getTimestamp();
                 $sample = $this->capture($policy, $now);
@@ -191,9 +192,13 @@ class MachineFailoverObserver
         $actor = User::query()->find($policy->getRawOriginal('updated_by'), ['id', 'is_admin', 'banned']);
         if (!$actor || !$actor->is_admin || $actor->banned) $blockers[] = 'permission_revoked';
         $attempts = null; $lastDispatch = null;
+        $selection = null;
+        try { $selection = app(MachineFailoverCredentials::class)->selection($policy); }
+        catch (CloudException $error) { $blockers[] = $error->getMessage(); }
+        $accountId = $selection['account_id'] ?? null;
         if (!Schema::hasTable('v2_machine_provision_task')) $blockers[] = 'budget_history_unavailable';
-        else {
-            $tasks = MachineProvisionTask::query()->where('account_id', $policy->account_id);
+        elseif ($accountId !== null) {
+            $tasks = MachineProvisionTask::query()->where('account_id', $accountId);
             $attempts = (clone $tasks)->where('created_at', '>=', $now - 86400)->count();
             $limit = min($policy->daily_limit, max(1, min(2, (int) config('machine_provision.daily_limit_per_account', 2))));
             if ($attempts >= $limit) $blockers[] = 'daily_budget_reached';
@@ -202,11 +207,11 @@ class MachineFailoverObserver
             if ($lastDispatch !== null && $lastDispatch + $policy->cooldown_seconds > $now) $blockers[] = 'cooldown_active';
         }
         if (!Schema::hasTable('v2_machine_cloud_task') || !Schema::hasTable('v2_machine_cloud_resource')) $blockers[] = 'cloud_history_unavailable';
-        elseif (MachineCloudTask::query()->whereIn('resource_id', MachineCloudResource::query()->where('account_id', $policy->account_id)->select('id'))
+        elseif (MachineCloudTask::query()->whereIn('resource_id', MachineCloudResource::query()->where('account_id', $accountId)->select('id'))
             ->whereNotIn('status', MachineCloudTask::TERMINAL)->exists()) $blockers[] = 'active_cloud_task';
         $blockers[] = 'pricing_unverified';
         $blockers = array_values(array_unique($blockers)); sort($blockers);
-        $guard = $this->hash([$blockers, $attempts, $lastDispatch]);
+        $guard = $this->hash([$blockers, $attempts, $lastDispatch, $selection]);
         $previous = Plan::query()->where('policy_id', $policy->id)->latest('id')->first();
         if ($previous && $previous->status === 'blocked' && ($previous->evidence['episode_key'] ?? null) === $episode
             && ($previous->evidence['guard_key'] ?? null) === $guard) return;
@@ -218,7 +223,7 @@ class MachineFailoverObserver
             'evidence' => ['episode_key' => $episode, 'guard_key' => $guard,
                 'installation_id' => $row->installation_id, 'baseline_at' => $row->baseline_at, 'first_failure_at' => $row->first_failure_at,
                 'sample_at' => $row->checked_at, 'observed_failures' => $row->consecutive_failures, 'required_failures' => $policy->failure_threshold,
-                'account_id' => $policy->account_id, 'machine_id' => $policy->machine_id, 'slot' => $policy->slot,
+                'account_id' => $accountId, 'credential_group_id' => $policy->credential_group_id, 'machine_id' => $policy->machine_id, 'slot' => $policy->slot,
                 'region' => $policy->region, 'size' => $policy->size, 'image' => $policy->image,
                 'monthly_limit_usd' => $policy->monthly_limit_usd, 'daily_limit' => $policy->daily_limit, 'account_attempts_24h' => $attempts,
                 'last_dispatched_at' => $lastDispatch === null ? null : (int) $lastDispatch,

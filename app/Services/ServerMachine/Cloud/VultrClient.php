@@ -6,6 +6,7 @@ use Illuminate\Support\Str;
 
 class VultrClient extends JsonCloudClient
 {
+    use CloudCatalogReads;
     protected function origin(): string { return 'https://api.vultr.com/v2'; }
     private function id(string $id): void { if (!Str::isUuid($id)) throw new CloudException('invalid_resource'); }
 

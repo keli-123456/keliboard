@@ -54,9 +54,9 @@ class MachineReplacementService
         });
     }
 
-    private function input(Policy $policy): array
+    private function input(Policy $policy, ?Task $task = null): array
     {
-        return ['account_id' => $policy->account_id, 'machine_id' => $policy->machine_id, 'slot' => $policy->slot,
+        return app(MachineFailoverCredentials::class)->context($policy, $task) + ['machine_id' => $policy->machine_id, 'slot' => $policy->slot,
             'panel_origin' => app(ProvisionBootstrap::class)->configuredOrigin(), 'region' => $policy->region,
             'size' => $policy->size, 'image' => $policy->image, 'authorized_keys' => [],
             'monthly_limit_usd' => $policy->monthly_limit_usd];
@@ -70,8 +70,8 @@ class MachineReplacementService
         $this->gate($plan->policy_id);
         $policy = Policy::query()->findOrFail($plan->policy_id);
         if ($plan->policy_revision !== $policy->revision) throw new CloudException('config_changed');
-        if (ProvisionPlan::normalize($this->input($policy)) !== $input) throw new CloudException('source_changed');
-        $checks = app(MachineFailoverPolicyService::class)->localChecks($policy);
+        if (ProvisionPlan::normalize($this->input($policy, $current)) !== $input) throw new CloudException('source_changed');
+        $checks = app(MachineFailoverPolicyService::class)->localChecks($policy, $current);
         foreach ($checks as $check) {
             if ($check['status'] !== 'passed' && !in_array($check['code'], ['execution_disabled', 'provider_not_checked',
                 'external_ownership_unverified', 'forwarding_not_verified'], true)) throw new CloudException('replacement_guard_failed');
@@ -93,23 +93,26 @@ class MachineReplacementService
         if (!$summary['evidence_current'] || !$summary['threshold_reached'] || ($summary['probe']['state'] ?? null) !== 'failed' || !$sameDecision
             || !is_string($plan->evidence['episode_key'] ?? null)) throw new CloudException('replacement_evidence_changed');
         $episode = $plan->evidence['episode_key'];
+        if ($policy->credential_group_id && Task::query()->where('machine_id', $policy->machine_id)->where('slot', $policy->slot)
+            ->when($current, fn ($query) => $query->where('id', '!=', $current->id))->where('created_at', '>=', time() - 86400)->count() >= $policy->daily_limit) throw new CloudException('credential_group_daily_budget');
         if (Replacement::query()->where('episode_key', $episode)->when($current, fn ($query) => $query->where('task_id', '!=', $current->id))->exists()) {
             throw new CloudException('replacement_episode_used');
         }
-        $history = Task::query()->where('account_id', $policy->account_id);
+        $accountId = $input['account_id'];
+        $history = Task::query()->where('account_id', $accountId);
         $limit = min($policy->daily_limit, max(1, min(2, (int) config('machine_provision.daily_limit_per_account', 2))));
         $attempts = (clone $history)->where('created_at', '>=', time() - 86400)->count();
         if ($attempts >= $limit + ($current ? 1 : 0)) throw new CloudException('daily_budget');
         if ((clone $history)->when($current, fn ($query) => $query->where('id', '!=', $current->id))
             ->whereNotIn('status', ['accepted', 'failed', 'cancelled'])->exists()
             || \App\Models\MachineCloudTask::query()->whereIn('resource_id', \App\Models\MachineCloudResource::query()
-                ->where('account_id', $policy->account_id)->select('id'))->whereNotIn('status', \App\Models\MachineCloudTask::TERMINAL)->exists()) {
+                ->where('account_id', $accountId)->select('id'))->whereNotIn('status', \App\Models\MachineCloudTask::TERMINAL)->exists()) {
             throw new CloudException('task_active');
         }
         $previous = (clone $history)->when($current, fn ($query) => $query->where('id', '!=', $current->id))->max('created_at');
         if ($previous !== null && $previous + $policy->cooldown_seconds > time()) throw new CloudException('replacement_cooldown');
         return ['policy_id' => $policy->id, 'policy_revision' => $policy->revision, 'plan_id' => $plan->id,
-            'episode_key' => $episode, 'account_id' => $policy->account_id, 'machine_id' => $policy->machine_id,
+            'episode_key' => $episode, 'account_id' => $accountId, 'machine_id' => $policy->machine_id,
             'source_installation_id' => $source, 'source_context_key' => $context, 'reserved_monthly_usd' => $policy->monthly_limit_usd];
     }
 
@@ -185,7 +188,7 @@ class MachineReplacementService
     {
         $policy = Policy::query()->find($row->policy_id);
         $task = Task::query()->find($row->task_id);
-        $account = $policy ? MachineCloudAccount::query()->find($policy->account_id) : null;
+        $account = $task ? MachineCloudAccount::query()->find($task->account_id) : null;
         $machine = $policy ? ServerMachine::query()->find($policy->machine_id) : null;
         $actor = $task ? User::query()->find($task->admin_id) : null;
         if (!$policy || !$task || !$account || !$machine || !$actor?->is_admin || $actor->banned

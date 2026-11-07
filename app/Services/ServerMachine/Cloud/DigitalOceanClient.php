@@ -5,6 +5,7 @@ use App\Models\MachineCloudAccount;
 
 class DigitalOceanClient extends JsonCloudClient
 {
+    use CloudCatalogReads;
     protected function origin(): string { return 'https://api.digitalocean.com/v2'; }
     private function id(string $id): void { if (!preg_match('/^[1-9][0-9]{0,15}$/D', $id)) throw new CloudException('invalid_resource'); }
 

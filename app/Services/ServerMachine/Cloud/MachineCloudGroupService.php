@@ -69,6 +69,8 @@ class MachineCloudGroupService
             $group = Group::query()->find($id);
             if (!$group) throw new CloudException('group_missing');
             if ($group->revision !== $revision) throw new CloudException('config_changed');
+            if (Schema::hasColumn('v2_machine_failover_policy', 'credential_group_id')
+                && \App\Models\MachineFailoverPolicy::query()->where('credential_group_id', $id)->exists()) throw new CloudException('group_in_use');
             DB::transaction(function () use ($group) {
                 Account::query()->where('group_id', $group->id)->update(['group_id' => null, 'group_revision' => DB::raw('group_revision + 1')]);
                 $group->delete();

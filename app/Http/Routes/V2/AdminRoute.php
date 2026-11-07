@@ -156,6 +156,7 @@ class AdminRoute
                 $router->post('/notices/policy', [\App\Http\Controllers\V2\Admin\Server\MachineOperationNoticeController::class, 'save']);
                 $router->get('/cloud', [\App\Http\Controllers\V2\Admin\Server\MachineCloudController::class, 'fetch']);
                 $router->get('/cloud/failover', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'fetch']);
+                $router->get('/cloud/failover/catalog', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'catalog']);
                 $router->get('/cloud/failover/history', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'history']);
                 $router->get('/cloud/failover/replacements', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'replacements']);
                 $router->post('/cloud/failover/save', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'save']);

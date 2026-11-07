@@ -32,7 +32,10 @@ class MachineInstanceAcceptance
             'policies' => $this->available() ? Policy::query()->orderBy('id')->limit(100)->get()->map(function ($policy) {
                 try { $this->verifier->configuration($policy->id); $ready = true; } catch (CloudException) { $ready = false; }
                 $allowed = in_array($policy->id, config('machine_acceptance.allowed_policy_ids', []), true);
+                $group = $policy->credential_group_id;
                 return $policy->only(['id', 'name', 'revision', 'machine_id', 'account_id', 'dns_hostname', 'dns_credential_id', 'slot', 'failure_threshold'])
+                    + ['provider' => app(MachineFailoverCredentials::class)->provider($policy), 'credential_group_id' => $group,
+                        'credential_group_name' => $group ? \App\Models\MachineCloudGroup::query()->whereKey($group)->value('name') : null]
                     + ['verification_allowed' => $allowed && config('machine_acceptance.allow_verification') === true,
                         'dns_allowed' => $allowed && config('machine_acceptance.allow_dns') === true, 'verifier_ready' => $ready];
             }) : [],
@@ -176,20 +179,23 @@ class MachineInstanceAcceptance
         if (!$this->available()) throw new CloudException('migration_required');
         return Cache::lock('machine-failover:write', 120)->block(2, function () use ($policyId, $work) {
             $policy = Policy::query()->findOrFail($policyId);
+            if ($policy->credential_group_id !== null) return app(MachineCloudGroupService::class)->withGroup($policy->credential_group_id, fn () => $work($policy->fresh()));
             return Cache::lock('machine-cloud:account:' . $policy->account_id, 120)->block(2, fn () => $work($policy->fresh()));
         });
     }
 
     private function task(Policy $policy, Task $task): MachineCloudAccount
     {
-        $machine = ServerMachine::query()->find($policy->machine_id); $account = MachineCloudAccount::query()->find($policy->account_id);
+        $credentials = app(MachineFailoverCredentials::class);
+        $machine = ServerMachine::query()->find($policy->machine_id); $account = MachineCloudAccount::query()->find($task->account_id);
         if (!$policy->isolation_confirmed || !$machine || !$machine->is_active || !$account || $account->provider !== 'linode'
-            || $task->account_id !== $policy->account_id || $task->machine_id !== $policy->machine_id || $task->slot !== $policy->slot
-            || $account->revision !== $task->account_revision || $policy->account_revision !== $account->revision
+            || !$credentials->owns($policy, $task) || $task->machine_id !== $policy->machine_id || $task->slot !== $policy->slot
+            || $account->revision !== $task->account_revision || (!$credentials->grouped($policy) && $policy->account_revision !== $account->revision)
             || !hash_equals($task->machine_authority, hash('sha256', (string) $machine->token))
             || !hash_equals($policy->machine_authority, $task->machine_authority)) throw new CloudException('ownership_mismatch');
         $plan = $task->payload['plan']; $request = $task->payload['request'];
-        foreach (['account_id', 'machine_id', 'slot', 'region', 'size', 'image'] as $key) if (($plan[$key] ?? null) !== $policy->{$key}) throw new CloudException('ownership_mismatch');
+        if ($credentials->grouped($policy)) $credentials->assertPlan($plan, false);
+        foreach (array_merge(['machine_id', 'slot', 'region', 'size', 'image'], $credentials->grouped($policy) ? [] : ['account_id']) as $key) if (($plan[$key] ?? null) !== $policy->{$key}) throw new CloudException('ownership_mismatch');
         if (!in_array($task->status, ['awaiting_acceptance', 'accepted'], true) || !$task->dispatched_at || !$task->external_id || !$task->provider_created_at
             || $task->bootstrap_state !== 'succeeded' || ($plan['source_ref'] ?? null) !== []
             || !in_array($task->marker, $request['tags'] ?? [], true)

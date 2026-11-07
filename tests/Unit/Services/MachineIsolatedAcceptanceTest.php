@@ -41,6 +41,7 @@ class MachineIsolatedAcceptanceTest extends TestCase
     private bool $missingUdp = false;
     private bool $changeDuringPreflight = false;
     private bool $ambiguousCreate = false;
+    private bool $changeGroupDuringPreflight = false;
 
     protected function setUp(): void
     {
@@ -88,6 +89,7 @@ class MachineIsolatedAcceptanceTest extends TestCase
                 if (str_contains($request->url(), '/linode/types/')) return Http::response(['id' => 'g6-standard-4', 'class' => 'standard', 'region_prices' => [], 'price' => ['monthly' => 48]]);
                 if (str_contains($request->url(), '/account/settings')) {
                     if ($this->changeDuringPreflight) $this->release->fill(['binary_sha256' => str_repeat('d', 64)])->save();
+                    if ($this->changeGroupDuringPreflight) MachineCloudAccount::query()->where('id', '!=', Task::query()->firstOrFail()->account_id)->update(['group_revision' => 2]);
                     return Http::response(['backups_enabled' => false]);
                 }
                 $remote = $this->remote(Task::query()->firstOrFail());
@@ -146,6 +148,23 @@ class MachineIsolatedAcceptanceTest extends TestCase
         return MachineOwnedInstance::query()->findOrFail($enrolled['id']);
     }
     private function report(?Task $task = null): array { return $this->service->report($this->policy->id, $this->policy->revision, $task?->id, null, $this->admin->id); }
+    private function useGroup(): void
+    {
+        foreach (['2026_11_06_020000_create_machine_cloud_groups.php', '2026_11_07_120000_add_provider_groups_to_machine_failover.php'] as $file) (require base_path('database/migrations/' . $file))->up();
+        (new \ReflectionProperty(\Illuminate\Database\Eloquent\Model::class, 'guardableColumns'))->setValue(null, []);
+        $group = app(\App\Services\ServerMachine\Cloud\MachineCloudGroupService::class)->save(['name' => 'Synthetic isolated pool']);
+        $account = MachineCloudAccount::query()->findOrFail($this->policy->account_id);
+        $account->fill(['group_id' => $group->id, 'group_revision' => 1])->save();
+        MachineCloudAccount::query()->create(['name' => 'Other synthetic token', 'provider' => 'linode', 'revision' => 1,
+            'group_id' => $group->id, 'group_revision' => 1, 'credentials' => ['api_token' => 'different-synthetic-secret']]);
+        $pool = app(\App\Services\ServerMachine\Cloud\MachineFailoverCredentials::class)->pool($group->id, 'linode');
+        $catalog = ['fingerprint' => str_repeat('f', 64), 'expires_at' => time() + 600, 'checked_at' => time(),
+            'regions' => [['id' => 'sg-sin-2']], 'sizes' => [['id' => 'g6-standard-4', 'regions' => ['sg-sin-2'], 'disk_gib' => 160]],
+            'images' => [['id' => 'linode/debian12', 'regions' => ['sg-sin-2'], 'min_disk_gib' => 0]]];
+        Cache::put('machine-cloud:catalog:' . $pool['fingerprint'], $catalog, 600);
+        $this->policy->fill(['account_id' => null, 'account_revision' => null, 'provider' => 'linode',
+            'credential_group_id' => $group->id, 'catalog_fingerprint' => $catalog['fingerprint'], 'catalog_checked_at' => time()])->save();
+    }
     private function code(string $reason, callable $work): void
     {
         try { $work(); $this->fail('Expected ' . $reason); }
@@ -231,6 +250,40 @@ class MachineIsolatedAcceptanceTest extends TestCase
         $this->assertSame(0, DB::table('v2_machine_dns_transition')->count()); $this->assertSame('awaiting_acceptance', $task->fresh()->status);
         $json = json_encode($report); foreach (['synthetic-machine-secret', 'synthetic-cloud-secret', 'root_pass', 'callback_hash', 'metadata', 'challenge_id'] as $secret) $this->assertStringNotContainsString($secret, $json);
         $before = Http::recorded()->count(); $this->report($task); $this->assertSame($before, Http::recorded()->count());
+    }
+
+    public function test_group_flow_pins_one_account_through_create_reports_and_verification(): void
+    {
+        $this->useGroup(); $task = $this->task();
+        $this->assertSame(1, $task->account_id); $this->assertNull($this->policy->account_id);
+        $this->assertSame($this->policy->credential_group_id, $task->payload['plan']['credential_pool']['group_id']);
+        $instance = $this->ready($task);
+        app(MachineInstanceAcceptance::class)->verify($instance->id, $this->policy->revision, $instance->revision, $this->admin->id);
+        $this->assertSame('passed', $this->report($task)['verdict']); $this->assertSame(1, $this->creates);
+        $this->assertSame(1, Task::query()->count()); $this->assertSame(0, DB::table('v2_machine_dns_transition')->count());
+        $otherPolicy = $this->policy->replicate(); $otherPolicy->credential_group_id = $this->policy->credential_group_id + 1;
+        $this->assertFalse(app(\App\Services\ServerMachine\Cloud\MachineFailoverCredentials::class)->owns($otherPolicy, $task));
+    }
+
+    public function test_group_change_during_preflight_prevents_paid_creation_without_token_fallback(): void
+    {
+        $this->useGroup(); $task = $this->task(); $this->changeGroupDuringPreflight = true;
+        app(MachineProvisionService::class)->process($task->id);
+        $this->assertSame('failed', $task->fresh()->status); $this->assertSame('credential_group_changed', $task->fresh()->reason);
+        $this->assertNull($task->fresh()->dispatched_at); $this->assertSame(0, $this->creates);
+        Http::assertNotSent(fn ($request) => $request->method() !== 'GET');
+    }
+
+    public function test_uncertain_group_create_only_reconciles_original_account_after_membership_changes(): void
+    {
+        $this->useGroup(); $task = $this->task(); $this->ambiguousCreate = true;
+        $provision = app(MachineProvisionService::class); $provision->process($task->id);
+        $this->assertSame('outcome_unknown', $task->fresh()->status);
+        MachineCloudAccount::query()->whereKey($task->account_id)->update(['group_id' => null, 'group_revision' => 2]);
+        $task->refresh()->fill(['next_check_at' => 0])->save(); $provision->process($task->id);
+        $this->assertSame('waiting_initialization', $task->fresh()->status); $this->assertSame(1, $this->creates);
+        $this->assertSame(1, Task::query()->count()); $this->assertSame(1, $task->fresh()->account_id);
+        Http::assertNotSent(fn ($request) => $request->hasHeader('Authorization', 'Bearer different-synthetic-secret'));
     }
 
     public function test_wrong_enrollment_release_and_same_version_different_binary_are_refused(): void
