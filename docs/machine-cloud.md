@@ -1491,3 +1491,36 @@ database, cloud/DNS endpoint or tanzhen resource is changed by these tests. A
 future activation must load the optional plan through the normal planned Horizon
 lifecycle; changing an environment file alone cannot reconfigure an already
 running master. There is no deployment or daemon reload in this increment.
+
+Dedicated-pool daemon acceptance:
+[42395836205](https://github.com/keli-123456/keliboard/actions/runs/42395836205)
+at `a5b78dba7b0524488a870f04e7f0343dc3460a0f`, 8/8 across both isolation
+levels, no JUnit errors/skips or unexpected worker/Horizon errors. All samples
+kept the native worker peak at one and verified the actual CLI recycling/timeout
+options and Linux nice value. Ten synthetic admin probes completed in
+106.075-1065.856 ms, including while three fresh duplicate native tickets waited
+behind a blocked native worker. Its timeout/replacement did not replace the
+admin worker. These timings describe only the disposable CI path, not a
+production latency or resource-contention SLA.
+
+Each isolation observed the actual 75-second timeout and 120-second runtime
+recovery; readback resumed at 316/318 seconds after natural member-lock expiry.
+Creation remained one per intent. The master restart preserved the task; stop
+with a dead worker settled at 120 seconds with no DNS write or budget refund.
+All eight cases verified zero live owned processes, removed private console
+files, empty owned tables/keys and unchanged neighbor sentinels. Both matrix
+jobs removed their two service containers and one network.
+
+The multi-worker suite at `c40b01b2` passed 24/24, including legacy admin delivery
+rejection and recovery to the dedicated connection:
+[42394971041](https://github.com/keli-123456/keliboard/actions/runs/42394971041).
+Full local unit regression passed 3,393 tests / 21,691 assertions; the 22 queue
+and Horizon guard tests were rerun after the final fixture correction. The first
+full daemon attempt, 42395097143, retained four cleaned case records but failed
+its expected-failure-count assertions: it copied already-reserved payloads with
+an advanced attempt count. The corrected test duplicates the original queued
+delivery instead; no production retry limit, lease or evidence check changed.
+
+This increment remains on `codex/failover-queue-isolation`, not merged into main.
+No image publication, production deployment/database connection, environment
+change, daemon restart or tanzhen operation was performed.
