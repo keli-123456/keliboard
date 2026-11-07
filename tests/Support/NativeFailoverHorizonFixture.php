@@ -129,7 +129,16 @@ final class NativeFailoverHorizonFixture
     public function pulse(bool $initialize = true, bool $stopsOnly = false): void
     {
         $now = microtime(true);
-        if ($now - $this->heartbeat >= 3) { $this->inner->heartbeat($initialize); $this->heartbeat = $now; }
+        $runtime = \App\Models\MachineFailoverRuntime::query()->findOrFail($this->run['id']);
+        $fault = NativeFailoverConcurrentFixture::control('fault');
+        $blocked = in_array($fault, ['preflight', 'create_after'], true)
+            && (int) app('redis')->connection()->get('fixture-barrier:' . $fault) > 0
+            && time() - ((int) $runtime->lease_until - self::RUN_LEASE) >= 5;
+        // Publish controlled telemetry between steps, or while the mock transport is deliberately blocked.
+        // Mixing a new Redis probe with an older SQL decision snapshot is a separate evidence-change scenario.
+        if ($now - $this->heartbeat >= 3 && ($runtime->state !== 'processing' || $blocked)) {
+            $this->inner->heartbeat($initialize); $this->heartbeat = $now;
+        }
         if ($now - $this->sweep >= 1) { app(MachineFailoverRunner::class)->advance($stopsOnly); $this->sweep = $now; }
     }
     public function stopRun(): array { return $this->inner->stop($this->run['id']); }
