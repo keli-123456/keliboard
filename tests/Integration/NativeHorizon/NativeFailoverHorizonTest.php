@@ -121,7 +121,11 @@ final class NativeFailoverHorizonTest extends TestCase
     }
     public function test_actual_job_timeout_and_full_leases_recover_the_original_intent(): void
     {
-        $this->seedRun(); Fixture::control('fault', 'create_after', true); $master = $this->fixture->startMaster(); $this->daemonReady($master);
+        $this->seedRun(); $redis = app('redis')->connection();
+        // Duplicate the original delivery, not a reserved payload whose attempts counter has already advanced.
+        $payload = $redis->lindex('queues:machine_failover', 0) ?: ($redis->zrange('queues:machine_failover:delayed', 0, 0)[0] ?? null);
+        $this->assertIsString($payload);
+        Fixture::control('fault', 'create_after', true); $master = $this->fixture->startMaster(); $this->daemonReady($master);
         $this->awaitCondition(fn () => $this->eventTotal('create') === 1, 'initial mock create', 20, false);
         $blocked = $this->blockedWorker(); $claimedAt = $this->claimTime(); $runtime = Runtime::query()->findOrFail($this->run['id']);
         $member = Member::query()->firstOrFail();
@@ -130,8 +134,7 @@ final class NativeFailoverHorizonTest extends TestCase
         $this->assertGreaterThan(290000, $memberTtl); $this->assertLessThanOrEqual(300000, $memberTtl);
         $this->assertSame(120, $runtime->lease_until - $claimedAt);
         $this->measurements += ['initial_run_lock_ms' => $runTtl, 'initial_member_lock_ms' => $memberTtl];
-        $redis = app('redis')->connection(); $payload = $redis->zrange('queues:machine_failover:reserved', 0, 0)[0] ?? null;
-        $this->assertIsString($payload); $redis->rpush('queues:machine_failover', $payload, $payload, $payload);
+        $redis->rpush('queues:machine_failover', $payload, $payload, $payload);
         $this->assertSame(3, $redis->llen('queues:machine_failover'));
         $businessPid = $this->businessProbe('saturated'); $this->assertNotSame($blocked, $businessPid);
         $this->assertSame(3, $redis->llen('queues:machine_failover'));
