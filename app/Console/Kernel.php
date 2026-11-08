@@ -42,6 +42,9 @@ class Kernel extends ConsoleKernel
         if (config('machine_failover.observe_enabled') === true) {
             $schedule->command('machines:observe-failover')->everyFiveSeconds()->onOneServer()->withoutOverlapping(2);
         }
+        if (config('machine_failover.preview_enabled') === true) {
+            $schedule->command('machines:preview-failover')->everyMinute()->onOneServer()->withoutOverlapping(2)->runInBackground();
+        }
         if (config('machine_failover.runner_enabled') === true) {
             $schedule->command('machines:advance-native-failover')->everyMinute()->onOneServer()->withoutOverlapping(2);
         }

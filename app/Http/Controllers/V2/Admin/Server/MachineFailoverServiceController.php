@@ -65,6 +65,16 @@ class MachineFailoverServiceController extends Controller
             return $service->report((int) $input['service_id'], (int) $input['service_revision'], $admin);
         });
     }
+    public function triggerHistory(Request $request, \App\Services\ServerMachine\Cloud\MachineFailoverTriggerPreview $service)
+    {
+        return $this->run($request, function ($admin) use ($request, $service) {
+            $this->fields($request, ['service_id', 'service_revision', 'before_id']);
+            $input = $request->validate(['service_id' => 'required|integer|min:1', 'service_revision' => 'required|integer|min:1',
+                'before_id' => 'nullable|integer|min:1']);
+            return $service->history((int) $input['service_id'], (int) $input['service_revision'], $admin,
+                isset($input['before_id']) ? (int) $input['before_id'] : null);
+        });
+    }
     public function advance(Request $request, MachineFailoverSimulation $service)
     {
         return $this->run($request, function ($admin) use ($request, $service) {

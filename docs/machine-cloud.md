@@ -1527,3 +1527,58 @@ The dedicated pool remains disabled by default; real creation, automatic
 credential rotation and DNS cutover remain closed. No image publication,
 production deployment/database connection, environment change, daemon restart
 or tanzhen operation was performed.
+
+### Cache-Only Automatic Trigger Preview
+
+`MACHINE_FAILOVER_PREVIEW_ENABLED=false` is a separate, default-off audit
+collector. When explicitly enabled in a future deployment, the scheduler runs
+`machines:preview-failover --limit=5` once per minute as a background CLI command,
+with a singleton scheduler mutex, non-overlap guard and a separate sweep lock.
+It does not add a Horizon worker or change any existing consumer pool.
+
+The collector reads existing observer plans, shadow checks, native episode
+claims and cached cost baselines only. It never collects new probe samples,
+refreshes cloud inventory/prices, reserves funds, dispatches native jobs,
+creates resources, rotates credentials, sends notifications or changes DNS.
+Its only database writes are to the new trigger preview and transition audit
+tables. No operation is sent to an external provider or to tanzhen.
+
+At most ten services can be requested per sweep (five by default), rotating
+over the registry's bounded fifty-service catalog. A five-second wall budget
+is checked between services; it is not a hard timeout for an in-progress
+database/shadow read or a five-second detection SLA. Shadow evidence is fresh
+for at most thirty seconds, and scheduling may therefore yield stale or
+missing evidence. Missing cost evidence is unknown, never a zero-cost baseline.
+
+Qualified failure episodes are deduplicated per service/member/policy. Timestamp
+refreshes update the last check without appending repeated transitions. A
+same-source healthy observation withdraws the earlier proposal; a different
+source, revision, permission loss, disabled member or expired evidence blocks,
+cancels or supersedes it. Already claimed native episodes and active native
+runs cannot be proposed again. Preview amounts are hypothetical only and
+consume no attempt, reservation or release ledger entries.
+
+The existing shadow-check page has a collapsed automatic-trigger audit view.
+It issues no request until expanded, supports refresh and cursor-paged
+transitions, ignores late responses after a service change, and marks failed
+reads, expired evidence and disabled collectors as historical. The endpoint is
+admin-only GET, rejects execution parameters, and returns no credentials,
+private episode/context hashes or unfiltered provider errors. Populated audit
+tables cannot be silently discarded by migration rollback.
+
+`would_start` means only that cached preview conditions passed. Provider
+capacity/pricing, creation permission, isolated forwarding, DNS ownership and
+real-world recovery acceptance remain outstanding; this is not an execution
+authorization or end-to-end certification. The existing execution gate and
+all real creation, rotation and DNS cutover switches remain unchanged and
+closed. This is a code-only synchronization; the collector is not deployed or enabled.
+
+Local validation: full unit regression passed 3,426 tests / 22,160 assertions;
+the final collector/queue guard rerun passed 44 tests / 505 assertions after
+the failure-path audit counter correction. Ten frontend suites passed 197
+tests. The single-file build verified JS 4,634,738 / CSS 567,961 bytes against
+the approved 4,638,000 / 568,000 limits. Synthetic Playwright checks covered
+desktop/mobile, dark mode, English, disabled/missing audit schema and failed
+readback, with no page overflow, page errors or write requests. These tests
+used in-memory SQLite, mocked provider/queue boundaries and a local browser
+fixture, not production MySQL/Redis or a live cloud/DNS acceptance.

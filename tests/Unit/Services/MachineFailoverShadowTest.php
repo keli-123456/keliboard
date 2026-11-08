@@ -38,12 +38,12 @@ use Tests\TestCase;
 class MachineFailoverShadowTest extends TestCase
 {
     use InteractsWithInMemoryDatabase;
-    private User $admin;
-    private Account $account;
-    private array $policies = [];
-    private array $machines = [];
-    private array $service;
-    private int $clock;
+    protected User $admin;
+    protected Account $account;
+    protected array $policies = [];
+    protected array $machines = [];
+    protected array $service;
+    protected int $clock;
     protected function setUp(): void
     {
         parent::setUp(); $this->setUpInMemoryDatabase(); $this->bindJsonResponseFactory();
@@ -88,7 +88,7 @@ class MachineFailoverShadowTest extends TestCase
             'members' => array_map(fn ($policy, $i) => ['policy_id' => $policy->id, 'policy_revision' => 1, 'name' => $policy->name, 'priority' => $i + 1, 'enabled' => true], $this->policies, array_keys($this->policies))], $this->admin->id);
     }
     protected function tearDown(): void { Carbon::setTestNow(); parent::tearDown(); }
-    private function sample(int $index, bool $healthy, bool $collect = true, array $changes = []): void
+    protected function sample(int $index, bool $healthy, bool $collect = true, array $changes = []): void
     {
         $policy = $this->policies[$index]; $instance = MachineOwnedInstance::query()->where('policy_id', $policy->id)->firstOrFail();
         $config = app(MachineEntryProbe::class)->configuration();
@@ -97,8 +97,8 @@ class MachineFailoverShadowTest extends TestCase
         app(MachineAddressInventory::class)->record($this->machines[$index], $instance->installation_id, ['public_ipv4' => $instance->ip], $this->clock, [], array_replace($probe, $changes));
         if ($collect) app(MachineFailoverObserver::class)->observe($policy->id);
     }
-    private function tick(int $seconds = 5): void { $this->clock += $seconds; Carbon::setTestNow(Carbon::createFromTimestampUTC($this->clock)); }
-    private function trigger(): void
+    protected function tick(int $seconds = 5): void { $this->clock += $seconds; Carbon::setTestNow(Carbon::createFromTimestampUTC($this->clock)); }
+    protected function trigger(): void
     {
         config(['machine_failover.observe_enabled' => true]);
         foreach ([true, false, false] as $healthy) { foreach ([0, 1] as $i) $this->sample($i, $healthy); $this->tick(); }

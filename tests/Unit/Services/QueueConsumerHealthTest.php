@@ -94,6 +94,21 @@ final class QueueConsumerHealthTest extends TestCase
         $this->repositories(['redis:send_email,order_handle' => 1, 'redis_failover:machine_failover' => 1]);
         $this->assertTrue((new QueueConsumerHealth())->snapshot()['healthy']);
     }
+    public function test_trigger_preview_schedule_is_opt_in_and_background_only(): void
+    {
+        $build = function () {
+            app()->instance(EventMutex::class, $this->createMock(EventMutex::class));
+            app()->instance(SchedulingMutex::class, $this->createMock(SchedulingMutex::class));
+            $backup = $this->createMock(BackupService::class); $backup->method('settings')->willReturn(['enabled' => false]);
+            app()->instance(BackupService::class, $backup); app()->instance(PluginManager::class, $this->createMock(PluginManager::class));
+            $schedule = new Schedule(); $kernel = new Kernel(app(), $this->createMock(Dispatcher::class));
+            (new \ReflectionMethod(Kernel::class, 'schedule'))->invoke($kernel, $schedule);
+            return array_values(array_filter($schedule->events(), fn ($event) => str_contains($event->command ?? '', 'machines:preview-failover')));
+        };
+        $this->assertSame([], $build()); config(['machine_failover.preview_enabled' => true]); $events = $build();
+        $this->assertCount(1, $events); $this->assertSame('* * * * *', $events[0]->expression);
+        $this->assertTrue($events[0]->onOneServer); $this->assertTrue($events[0]->withoutOverlapping); $this->assertTrue($events[0]->runInBackground);
+    }
 
     public function test_environment_patterns_and_disabled_supervisors_are_respected(): void
     {

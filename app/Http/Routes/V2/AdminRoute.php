@@ -164,6 +164,7 @@ class AdminRoute
                 $router->post('/cloud/failover/services/simulate', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'simulate']);
                 $router->get('/cloud/failover/services/run', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'report']);
                 $router->get('/cloud/failover/services/shadow', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'shadow']);
+                $router->get('/cloud/failover/services/trigger-preview', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'triggerHistory']);
                 $router->get('/cloud/failover/services/native', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverBudgetController::class, 'workspace']);
                 $router->get('/cloud/failover/services/native/run', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverBudgetController::class, 'report']);
                 $router->post('/cloud/failover/services/native/stop', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverBudgetController::class, 'stop']);

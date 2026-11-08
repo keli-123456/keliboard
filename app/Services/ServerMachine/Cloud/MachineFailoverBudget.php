@@ -182,6 +182,13 @@ class MachineFailoverBudget
         if ($additionalCents < 1 || $balance['allocated_cents'] + $additionalCents > $balance['cap_cents']) throw new CloudException('shared_monthly_budget');
     }
 
+    public function forecast(int $id, int $revision, int $admin): array
+    {
+        $service = $this->scope($id, $revision, $admin);
+        return array_intersect_key($this->balance($service, $this->graph($service)), array_flip([
+            'state', 'checked_at', 'valid_until', 'cap_cents', 'allocated_cents', 'available_cents']));
+    }
+
     public function previewRelease(string $id, int $admin): array
     {
         $this->registry->actor($admin); if (!$this->available()) throw new CloudException('migration_required');
