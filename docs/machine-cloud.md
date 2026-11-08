@@ -1582,3 +1582,82 @@ desktop/mobile, dark mode, English, disabled/missing audit schema and failed
 readback, with no page overflow, page errors or write requests. These tests
 used in-memory SQLite, mocked provider/queue boundaries and a local browser
 fixture, not production MySQL/Redis or a live cloud/DNS acceptance.
+
+### Isolated Trigger Scheduling Acceptance
+
+`Failover Trigger Preview Isolated Acceptance` is manual-only and uses the
+existing strict disposable connection guard: Linux CI, MySQL 8.4/InnoDB,
+Redis 7, the fixed fixture-only database/user and random loopback ports.
+Both `REPEATABLE READ` and `READ COMMITTED` are tested. There are no repository
+secret inputs, image publication or deployment steps. The fixture refuses any
+other workflow identity, host, default service port, database or root user
+before database I/O. It never boots the production application or reads its
+environment/database configuration.
+
+The real collector, cached finance projection and preview CLI are used without
+overriding the execution gate. All real creation, rotation, verification and
+DNS switches stay false, including inside the fixture. Only synthetic probe
+collection and trigger preview are enabled in the disposable PHP container.
+Provider/DNS/verifier HTTP is prohibited, not merely accepted by a mock server.
+Finance snapshots are explicitly seeded synthetic estimates, not cloud quotes.
+
+The real Laravel schedule is reduced to its existing preview event before
+execution. Two independent scheduler processes use `schedule:run`, background
+CLI execution and `schedule:finish` across natural minute boundaries. Other
+production scheduled commands cannot run. The console entry point accepts
+only the preview and its scheduler finish command; it does not load `artisan`
+or the production bootstrap. Separate cases cover four simultaneous CLI
+collectors, source recovery and a later new episode, a MySQL statement failure
+inside the audit transaction, SIGKILL after the first uncommitted transition,
+budget/permission changes and natural evidence expiry.
+
+The crash case waits out the real 120-second registry lease; it does not delete
+or shorten locks. Fresh collected evidence is required again after recovery.
+Collector processes allow SQL writes only to their two audit tables and
+fixture telemetry, and compare business tables before/after standalone runs.
+Every case checks zero native executions, attempts, new provisioning tasks,
+budget releases, queued jobs and HTTP operations. Owned process sessions are
+terminated and verified, then owner-marked tables and prefixed Redis keys are
+removed. Neighbor queue/master sentinels must remain unchanged. Only aggregate
+counts, decision/reason codes and cleanup flags are retained as evidence.
+
+This validates disposable scheduling/transaction/cache behavior, not a live
+cloud/DNS cutover, production latency, external capacity or an operational
+resource-isolation SLA. No production database, service or tanzhen is involved.
+
+Validated source `64d8614637911a7f109ddb4db2e7c24781c9da0c` passed **18/18**
+cases / 622 assertions in manual run
+[42436215368](https://github.com/keli-123456/keliboard/actions/runs/42436215368),
+with zero failures, errors or skips. Each isolation ran two schedulers across
+three natural minute ticks (127.4-127.6 seconds), producing three collections
+but only two member transitions for the unchanged failure episode. Four
+simultaneous CLI processes also produced only two transitions. Recovery
+withdrew the prior episode; later qualified failure received a distinct one.
+
+Database-local CHECK failure rolled back the complete audit without a partial
+record or inflated write counters. SIGKILL after the first uncommitted
+transition left no partial rows, waited out the unchanged 120-second registry
+lease, and resumed with fresh collected evidence (132.0-132.2 seconds for the
+complete case). Budget changes, permission loss and natural evidence expiry
+remained blocking across fresh PHP processes. Every case verified zero native
+intents/attempts, new provisioning tasks, releases, HTTP calls and queued jobs;
+all owned live processes, tables, keys and private console files were removed,
+and neighboring queue/master sentinels remained unchanged.
+
+Earlier attempts were retained, not counted as passes: backdated synthetic
+probes predated policy activation; Symfony did not inherit a putenv-only
+fixture owner; and a trigger-based fault required an unwanted SUPER privilege.
+The fixture now dates activation before its baseline, explicitly forwards its
+owner to subprocesses, and uses a database-local CHECK constraint instead.
+No production evidence guard, MySQL privilege, runtime lease or execution
+gate was relaxed. The first Windows unit run also lacked its OpenSSL config;
+after restoring the existing runtime configuration, full unit regression
+passed 3,436 tests / 22,182 assertions. Final preview/queue/fixture guard tests
+passed 54 / 525 assertions; frontend regression remained 197 passing tests.
+
+The management source was synchronized as `keli-admin@69f17ba`, and its clean
+build manifest/assets were committed with the preview backend in
+`keliboard@68c2095b`. Implementation, isolated tests and evidence are code-only
+synchronizations using `[skip ci]`; no image or deployment was requested.
+The preview collector and native worker remain default-off. Real creation,
+automatic credential rotation and DNS cutover remain closed.
