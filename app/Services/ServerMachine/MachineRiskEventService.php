@@ -122,6 +122,7 @@ class MachineRiskEventService
             if (count($users) >= 20) continue;
             $ref = substr(hash_hmac('sha256', $episode['episode_key'] . ':' . $user->id, (string) config('app.key')), 0, 16);
             $users[] = ['ref' => $ref, 'user_id' => (int) $user->id, 'site_id' => (int) ($user->site_id ?? 0),
+                'identity_epoch' => app(MachineRiskComparison::class)->identity($user),
                 'activity' => array_diff_key($row, ['node_ids' => true]),
                 'within_5_seconds' => $row['last_at'] >= $episode['detected_at'] - 5,
                 'within_5_minutes' => $row['last_at'] >= $episode['detected_at'] - 300,
@@ -130,12 +131,18 @@ class MachineRiskEventService
         $activity['related_users_lower_bound'] = $eligible;
         $activity['users_included'] = count($users);
         $activity['users_capped'] = $eligible > count($users);
+        try { $comparison = app(MachineRiskComparison::class)->capture($machine, $episode, $users); }
+        catch (\Throwable) { $comparison = ['schema' => 1, 'state' => 'unavailable', 'users' => [], 'absence_is_evidence' => false]; }
         return ['mode' => 'observe_only', 'kind' => 'outbound_probe_failure', 'probe' => $episode['probe'],
+            'collection_context' => ['schema' => 1, 'policy_revision' => $episode['policy_revision']],
             'activity' => $activity, 'users' => $users,
+            'comparison' => $comparison,
             'subscription_generation' => app(SubscriptionRenderEvidence::class)->forMachine((int) $machine->id, $episode['detected_at'], $episode['episode_key']),
             'entry_security' => app(MachineEntryProtection::class)->snapshot((array) $machine->load_status, time()),
             'limits' => ['outbound_icmp_is_not_independent_censorship_proof', 'connection_start_times_not_collected',
                 'online_samples_may_arrive_late_or_be_missing', 'no_account_causality_from_time_correlation',
+                'healthy_probe_controls_are_not_verified_benign_or_client_forwarding_proof',
+                'missing_from_capped_controls_is_not_new_or_suspicious', 'recurrence_is_not_independent_account_misuse_evidence',
                 'unauthenticated_scans_have_no_account_identity', 'high_usage_and_network_changes_can_be_legitimate',
                 'credential_rotation_and_historical_node_binding_are_not_fully_measured']];
     }
@@ -147,18 +154,23 @@ class MachineRiskEventService
         $rows = DB::table(SubscriptionAiBehaviorService::TABLE)->where('user_id', $user->id)
             ->where('site_id', (int) ($user->site_id ?? 0))->where('credential_hash', $service->credential($user))
             ->whereBetween('bucket_at', [$at - 1800, $at])->orderBy('bucket_at')->limit(7)->get();
-        $pulls = 0; $capped = false; $candidate = false; $clients = [];
+        $pulls = 0; $capped = false; $candidate = false; $clients = []; $networks = []; $buckets = 0;
         foreach ($rows as $row) {
             $sample = json_decode($row->sample, true) ?: [];
             // Never include a bucket containing observations after the incident.
             if (($sample['last_at'] ?? PHP_INT_MAX) > $at) { $capped = true; continue; }
+            $buckets++;
             $pulls += max(0, (int) ($sample['pulls'] ?? 0)); $capped = $capped || ($sample['capped'] ?? false);
+            foreach (array_slice((array) ($sample['ips'] ?? []), 0, 16, true) as $key => $count) {
+                if (preg_match('/^[a-f0-9]{64}$/D', (string) $key) && (int) $count > 0) $networks[$key] = true;
+            }
             foreach ((array) ($sample['clients'] ?? []) as $name => $count) {
                 if (preg_match('/^[a-zA-Z0-9_-]{1,40}$/D', (string) $name)) $clients[$name] = min(1000000, ($clients[$name] ?? 0) + max(0, (int) $count));
             }
             if (array_intersect(array_map('intval', array_keys((array) ($sample['response_nodes'] ?? []))), $nodeIds) !== []) $candidate = true;
         }
         return ['state' => $rows->isEmpty() ? 'not_observed' : 'sampled', 'pulls_lower_bound' => min(1000000, $pulls),
+            'observed_buckets' => $buckets, 'sampled_networks' => count($networks),
             'client_categories' => array_slice($clients, 0, 16, true), 'render_candidate_observed' => $candidate,
             'capped' => $capped, 'bucket_seconds' => 300, 'reference' => $this->reference($user, $at, $service)];
     }
@@ -200,6 +212,8 @@ class MachineRiskEventService
         $followup->recoverNotices();
         $result = $followup->advance();
         $result['ai_scheduled'] = app(MachineRiskSettings::class)->enabled() ? app(MachineRiskAnalysis::class)->drain() : 0;
+        try { $result['healthy_controls'] = app(MachineRiskComparison::class)->collect(); }
+        catch (\Throwable) { $result['healthy_controls'] = ['checked' => 0, 'collected' => 0, 'errors' => 1]; }
         return $result;
     }
 }

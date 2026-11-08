@@ -35,6 +35,7 @@ class MachineRiskActivity
             $rows = array_values(array_filter((array) ($state['samples'] ?? []), fn ($row) => ($row['at'] ?? 0) >= $now - 1800));
             $rows[] = ['at' => $at, 'received_at' => $now, 'users' => $users,
                 'total_users' => max(count($users), (int) ($sample['total_users'] ?? 0)),
+                'sampling' => ($sample['sampling'] ?? null) === 'rotating_offset_v1' ? 'rotating_offset_v1' : 'bounded_report_order',
                 'capped' => (bool) ($sample['capped'] ?? false) || (int) ($sample['total_users'] ?? 0) > count($users)];
             $truncated = count($rows) > self::SAMPLES;
             $rows = array_slice($rows, -self::SAMPLES);
@@ -51,17 +52,19 @@ class MachineRiskActivity
         return 'machine_risk:activity:' . $machineId . ':' . $nodeId;
     }
 
-    public function forMachine(int $machineId, int $detectedAt): array
+    public function forMachine(int $machineId, int $detectedAt, int $windowSeconds = 1800): array
     {
+        $windowSeconds = max(1, min(1800, $windowSeconds));
         $nodes = \App\Services\Node\NodeMachineBinding::query($machineId)->where('enabled', true)->limit(33)->get(['id', 'group_ids']);
-        $users = []; $times = []; $capped = $nodes->count() > 32; $samples = 0;
+        $users = []; $times = []; $methods = []; $capped = $nodes->count() > 32; $samples = 0;
         foreach ($nodes->take(32) as $node) {
             $state = json_decode((string) Cache::get($this->key($machineId, (int) $node->id), '{}'), true) ?: [];
             $capped = $capped || (bool) ($state['truncated'] ?? false);
-            foreach ((array) ($state['samples'] ?? []) as $row) {
+            foreach (array_reverse((array) ($state['samples'] ?? [])) as $row) {
                 $at = (int) ($row['at'] ?? 0);
-                if ($at < $detectedAt - 1800 || $at > $detectedAt) continue;
+                if ($at < $detectedAt - $windowSeconds || $at > $detectedAt) continue;
                 $samples++; $times[] = $at; $capped = $capped || (bool) ($row['capped'] ?? false);
+                $methods[$row['sampling'] ?? 'bounded_report_order'] = true;
                 foreach ((array) ($row['users'] ?? []) as $id => $count) {
                     if (!isset($users[$id]) && count($users) >= 128) { $capped = true; continue; }
                     $old = $users[$id] ?? ['first_at' => $at, 'last_at' => $at, 'samples' => 0, 'network_endpoint_peak' => 0, 'node_ids' => []];
@@ -73,9 +76,9 @@ class MachineRiskActivity
             }
         }
         return ['source' => 'existing_online_report_samples', 'exact_connection_times' => false,
-            'requested_from' => $detectedAt - 1800, 'requested_until' => $detectedAt,
+            'requested_from' => $detectedAt - $windowSeconds, 'requested_until' => $detectedAt,
             'first_sample_at' => $times === [] ? null : min($times), 'last_sample_at' => $times === [] ? null : max($times),
-            'sample_count' => $samples, 'capped' => $capped, 'users' => $users,
+            'sample_count' => $samples, 'capped' => $capped, 'sampling_methods' => array_keys($methods), 'representative_sample' => false, 'users' => $users,
             'nodes' => $nodes->take(32)->mapWithKeys(fn ($node) => [(int) $node->id => array_map('strval', (array) $node->group_ids)])->all()];
     }
 }

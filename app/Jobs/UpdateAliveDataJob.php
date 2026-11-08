@@ -168,8 +168,15 @@ class UpdateAliveDataJob implements ShouldQueue
     UserOnlineService::updateRealtimeIndex($realtimeCounts, $updateAt + $ttlSeconds);
     $this->syncOnlineCounts($changedOnlineUpdates);
     $riskUsers = [];
-    foreach (array_slice($currentOnlineIps, 0, 64, true) as $id => $ips) $riskUsers[$id] = count($ips);
-    return ['users' => $riskUsers, 'total_users' => count($currentNodeUserIds), 'capped' => count($currentNodeUserIds) > 64];
+    $total = count($currentNodeUserIds);
+    $limit = \App\Services\ServerMachine\MachineRiskActivity::USERS;
+    // Rotate the bounded slice; report order must not permanently select the same accounts.
+    $offset = $total > $limit ? (intdiv((int) ($this->reportedAt ?? time()), 60) * $limit) % $total : 0;
+    for ($i = 0; $i < min($total, $limit); $i++) {
+      $id = $currentNodeUserIds[($offset + $i) % $total];
+      $riskUsers[$id] = count($currentOnlineIps[$id]);
+    }
+    return ['users' => $riskUsers, 'total_users' => $total, 'capped' => $total > $limit, 'sampling' => 'rotating_offset_v1'];
   }
 
   private function nodeSnapshotVersionCacheKey(): string

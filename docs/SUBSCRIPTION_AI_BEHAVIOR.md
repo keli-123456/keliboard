@@ -24,6 +24,10 @@ store, even when the application's default cache is file-based. All web/worker
 instances must share that store and application key.
 No node upgrade is needed. Subscription requests never invoke a model.
 
+Node-incident association and bounded healthy-window controls are documented in
+[Node Risk Evidence](MACHINE_RISK_EVIDENCE.md). Those observe-only comparisons do
+not grant subscription enforcement or change the paired admission protocol.
+
 ## Evidence And Resource Bounds
 
 Normal and blocked authenticated subscription requests are observed independently
