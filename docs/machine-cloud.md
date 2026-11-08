@@ -3,6 +3,10 @@
 This is a panel-side integration. It does not change kelinode-rs, its report
 frequency, the SSH transport, subscriptions, or the proxy data path.
 
+For the preparation-only checklist and required operator inputs for one new
+non-business candidate, see [the isolated acceptance preparation plan](machine-isolated-acceptance-plan.md).
+That plan does not authorize provisioning, deployment, production access or DNS changes.
+
 ## Setup
 
 Run the included database migrations using the project's normal update workflow.
