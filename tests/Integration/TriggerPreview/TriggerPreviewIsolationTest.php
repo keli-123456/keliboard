@@ -36,6 +36,7 @@ final class TriggerPreviewIsolationTest extends TestCase
             'executions' => DB::table('v2_machine_failover_execution')->count(), 'attempts' => DB::table('v2_machine_failover_attempt')->count(),
             'unexpected_http' => $this->events('forbidden_http'), 'unexpected_sql' => $this->events('forbidden_sql'),
             'process_errors' => $this->events('process_error'), 'scheduler_errors' => $this->events('scheduler_error'),
+            'scheduler_diagnostics' => DB::table('native_fixture_event')->whereIn('kind', ['schedule_probe', 'schedule_output', 'scheduler_error', 'process_error'])->get(['kind', 'reference'])->all(),
             'cloud_mocked' => true, 'dns_mocked' => true, 'production_connections' => 0, 'live_owned_processes' => 0, 'cleanup' => false];
         try {
             $this->assertSame(0, $summary['executions']); $this->assertSame(0, $summary['attempts']);
@@ -94,7 +95,8 @@ final class TriggerPreviewIsolationTest extends TestCase
     {
         $until = microtime(true) + $seconds;
         do { if ($condition()) return; usleep(50000); } while (microtime(true) < $until);
-        $this->fail('Timed out waiting for isolated fixture condition.');
+        $this->fail('Timed out waiting for isolated fixture condition; ' . json_encode(DB::table('native_fixture_event')
+            ->whereIn('kind', ['schedule_probe', 'schedule_output', 'scheduler_error', 'process_error'])->get(['kind', 'reference'])->all()));
     }
     private function collectOnce(): array
     {
@@ -119,6 +121,12 @@ final class TriggerPreviewIsolationTest extends TestCase
             Preview::query()->get()->map(fn ($row) => implode(',', $row->reasons))->implode(';'));
         $this->assertSame(2, $result['events_written']); $this->assertSame(0, $this->collectOnce()['events_written']);
         $this->assertFalse($result['dispatch_allowed']); $this->assertSame(0, $result['cloud_writes']);
+    }
+    public function test_one_real_schedule_event_launches_its_background_preview_and_finishes(): void
+    {
+        $id = $this->spawn('schedule'); $this->join($id);
+        $this->wait(fn () => DB::table('trigger_fixture_result')->count() === 1 && $this->events('schedule_finished') === 1);
+        $this->assertSame(2, Preview::query()->count()); $this->assertSame(1, $this->events('ScheduledTaskStarting'));
     }
     public function test_two_real_schedulers_run_across_natural_minutes_without_duplicate_transitions(): void
     {

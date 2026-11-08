@@ -63,6 +63,7 @@ final class TriggerPreviewFixture
                 '2026_11_08_000000_create_machine_failover_trigger_previews.php'] as $file) (require base_path('database/migrations/' . $file))->up();
             Schema::create('trigger_fixture_result', function (Blueprint $t) { $t->id(); $t->string('worker'); $t->string('kind'); $t->json('payload'); $t->unsignedInteger('at'); });
             NativeFailoverConcurrentFixture::control('scope', $this->scope, true);
+            // Synthetic baseline reports must postdate policy activation, as real reports do.
             DB::table('v2_machine_failover_policy')->update(['created_at' => time() - 60]);
             config(['machine_failover.observe_enabled' => true]); $this->baseline();
             $now = time(); foreach ([$now - 16 => true, $now - 11 => false, $now - 6 => false] as $at => $healthy) $this->seed->reportAt($at, $healthy);
@@ -161,6 +162,13 @@ final class TriggerPreviewFixture
             public function render($request, \Throwable $e) { throw $e; }
             public function renderForConsole($output, \Throwable $e) { $this->report($e); }
         });
+        if ($command === 'schedule:run') {
+            $events = app(\Illuminate\Contracts\Events\Dispatcher::class);
+            foreach (['ScheduledTaskStarting', 'ScheduledTaskSkipped', 'ScheduledTaskFinished'] as $name)
+                $events->listen('Illuminate\\Console\\Events\\' . $name, fn () => NativeFailoverConcurrentFixture::event($name));
+            NativeFailoverConcurrentFixture::event('schedule_probe', json_encode(['events' => count($schedule->events()),
+                'due' => $schedule->dueEvents(app())->count(), 'locked' => app(EventMutex::class)->exists($schedule->events()[0])]));
+        }
         $console = new Console(app(), app(\Illuminate\Contracts\Events\Dispatcher::class), 'trigger-fixture'); $console->setAutoExit(false);
         foreach ([new PreviewMachineFailover(), new ScheduleRunCommand(), new ScheduleFinishCommand()] as $handler) $console->add($handler);
         $output = new BufferedOutput(); $exit = $console->run(new ArrayInput(['command' => $command] + $parameters), $output);
@@ -168,7 +176,14 @@ final class TriggerPreviewFixture
         if ($command === 'machines:preview-failover') {
             $result = json_decode(trim($output->fetch()), true, 512, JSON_THROW_ON_ERROR);
             DB::table('trigger_fixture_result')->insert(['worker' => NativeFailoverConcurrentFixture::$worker, 'kind' => 'collect', 'payload' => json_encode($result), 'at' => time()]);
-        } else NativeFailoverConcurrentFixture::event($command === 'schedule:finish' ? 'schedule_finished' : 'scheduler_tick');
+        } else {
+            if ($command === 'schedule:run') {
+                $text = $output->fetch();
+                NativeFailoverConcurrentFixture::event('schedule_output', str_contains($text, 'No scheduled commands') ? 'none_due'
+                    : (str_contains($text, 'Skipping') ? 'single_server_skip' : (str_contains($text, 'Running') ? 'running' : 'unclassified')));
+            }
+            NativeFailoverConcurrentFixture::event($command === 'schedule:finish' ? 'schedule_finished' : 'scheduler_tick');
+        }
         return $exit;
     }
 
