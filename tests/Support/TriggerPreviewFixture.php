@@ -63,6 +63,7 @@ final class TriggerPreviewFixture
                 '2026_11_08_000000_create_machine_failover_trigger_previews.php'] as $file) (require base_path('database/migrations/' . $file))->up();
             Schema::create('trigger_fixture_result', function (Blueprint $t) { $t->id(); $t->string('worker'); $t->string('kind'); $t->json('payload'); $t->unsignedInteger('at'); });
             NativeFailoverConcurrentFixture::control('scope', $this->scope, true);
+            DB::table('v2_machine_failover_policy')->update(['created_at' => time() - 60]);
             config(['machine_failover.observe_enabled' => true]); $this->baseline();
             $now = time(); foreach ([$now - 16 => true, $now - 11 => false, $now - 6 => false] as $at => $healthy) $this->seed->reportAt($at, $healthy);
             $this->neighbor = 'trigger-neighbor:' . $owner . ':';

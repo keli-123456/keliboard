@@ -32,6 +32,7 @@ final class TriggerPreviewIsolationTest extends TestCase
             'collections' => DB::table('trigger_fixture_result')->where('kind', 'collect')->count(),
             'scheduler_ticks' => $this->events('scheduler_tick'), 'scheduler_finishes' => $this->events('schedule_finished'),
             'records' => Preview::query()->count(), 'transitions' => DB::table('v2_machine_failover_trigger_event')->count(),
+            'preview_states' => Preview::query()->get()->map(fn ($row) => $row->only(['decision', 'reasons', 'source_state']))->all(),
             'executions' => DB::table('v2_machine_failover_execution')->count(), 'attempts' => DB::table('v2_machine_failover_attempt')->count(),
             'unexpected_http' => $this->events('forbidden_http'), 'unexpected_sql' => $this->events('forbidden_sql'),
             'process_errors' => $this->events('process_error'), 'scheduler_errors' => $this->events('scheduler_error'),
@@ -114,7 +115,8 @@ final class TriggerPreviewIsolationTest extends TestCase
     public function test_a_fresh_cli_reads_real_cached_finance_and_only_writes_audit_tables(): void
     {
         $result = $this->collectOnce(); $this->assertSame(0, $result['errors']); $this->assertSame(1, $result['services_checked']);
-        $this->assertSame(['would_start', 'waiting'], Preview::query()->orderBy('member_id')->pluck('decision')->all());
+        $this->assertSame(['would_start', 'waiting'], Preview::query()->orderBy('member_id')->pluck('decision')->all(),
+            Preview::query()->get()->map(fn ($row) => implode(',', $row->reasons))->implode(';'));
         $this->assertSame(2, $result['events_written']); $this->assertSame(0, $this->collectOnce()['events_written']);
         $this->assertFalse($result['dispatch_allowed']); $this->assertSame(0, $result['cloud_writes']);
     }
@@ -137,7 +139,12 @@ final class TriggerPreviewIsolationTest extends TestCase
         Native::control('fault', 'before_collect', true); $ids = [];
         for ($i = 0; $i < 4; $i++) $ids[] = $this->spawn();
         $this->wait(fn () => (int) app('redis')->connection()->get('fixture-barrier:before_collect') === 4);
-        Native::control('release', true, true); foreach ($ids as $id) $this->join($id);
+        $lock = app('cache')->lock('machine-failover:write', 120); $this->assertTrue($lock->get());
+        try {
+            Native::control('release', true, true);
+            $this->wait(fn () => DB::table('trigger_fixture_result')->count() >= 3, 1);
+        } finally { $lock->release(); }
+        foreach ($ids as $id) $this->join($id);
         $this->assertSame(2, Preview::query()->count()); $this->assertSame(2, DB::table('v2_machine_failover_trigger_event')->count());
         $results = DB::table('trigger_fixture_result')->pluck('payload')->map(fn ($value) => json_decode($value, true));
         $this->assertSame(2, $results->sum('events_written')); $this->assertGreaterThanOrEqual(1, $results->where('busy', true)->count());
@@ -187,7 +194,7 @@ final class TriggerPreviewIsolationTest extends TestCase
     }
     public function test_expired_evidence_is_historical_until_fresh_collected_samples_requalify_it(): void
     {
-        $this->collectOnce(); $old = Preview::query()->where('decision', 'would_start')->firstOrFail(); sleep(32);
+        $this->collectOnce(); $old = Preview::query()->where('decision', 'would_start')->firstOrFail(); sleep(42);
         $this->collectOnce(); $this->assertSame('expired', $old->fresh()->decision);
         $this->fixture->sample(false); $this->collectOnce();
         $this->assertSame(0, Preview::query()->where('decision', 'would_start')->whereNull('closed_at')->count());
