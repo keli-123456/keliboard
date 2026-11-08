@@ -12,6 +12,8 @@ try {
         [$owner, $worker, $mode] = array_slice($argv, 1, 3);
         if (!in_array($mode, ['once', 'schedule', 'watch'], true)) throw new RuntimeException('Invalid fixture mode.');
         putenv('KELI_TRIGGER_OWNER=' . $owner);
+        // Symfony Process forwards registered environment keys, not arbitrary putenv-only additions.
+        $_ENV['KELI_TRIGGER_OWNER'] = $_SERVER['KELI_TRIGGER_OWNER'] = $owner;
     } else {
         $owner = (string) getenv('KELI_TRIGGER_OWNER'); $worker = 'w' . bin2hex(random_bytes(6)); $mode = $argv[1] ?? '';
         if (!in_array($mode, ['machines:preview-failover', 'schedule:finish'], true)) throw new RuntimeException('Invalid background fixture command.');
