@@ -37,6 +37,7 @@ final class TriggerPreviewIsolationTest extends TestCase
             'unexpected_http' => $this->events('forbidden_http'), 'unexpected_sql' => $this->events('forbidden_sql'),
             'process_errors' => $this->events('process_error'), 'scheduler_errors' => $this->events('scheduler_error'),
             'scheduler_diagnostics' => DB::table('native_fixture_event')->whereIn('kind', ['schedule_probe', 'schedule_output', 'scheduler_error', 'process_error'])->get(['kind', 'reference'])->all(),
+            'console_diagnostic' => $this->consoleDiagnostic(),
             'cloud_mocked' => true, 'dns_mocked' => true, 'production_connections' => 0, 'live_owned_processes' => 0, 'cleanup' => false];
         try {
             $this->assertSame(0, $summary['executions']); $this->assertSame(0, $summary['attempts']);
@@ -58,6 +59,13 @@ final class TriggerPreviewIsolationTest extends TestCase
         $this->assertTrue($summary['cleanup']);
     }
     private function events(string $kind): int { return DB::table('native_fixture_event')->where('kind', $kind)->count(); }
+    private function consoleDiagnostic(): string
+    {
+        if (!is_file(Fixture::consolePath())) return 'absent';
+        $text = file_get_contents(Fixture::consolePath());
+        if (preg_match('/Trigger fixture failed: ([A-Za-z0-9_:.]+)/', $text, $match)) return $match[1];
+        return $text === '' ? 'empty' : (str_contains($text, 'Fatal error') ? 'php_fatal' : 'output_present');
+    }
     private function sessionActive(int $sid): bool
     {
         foreach (glob('/proc/[0-9]*/stat') ?: [] as $path) {
@@ -95,7 +103,7 @@ final class TriggerPreviewIsolationTest extends TestCase
     {
         $until = microtime(true) + $seconds;
         do { if ($condition()) return; usleep(50000); } while (microtime(true) < $until);
-        $this->fail('Timed out waiting for isolated fixture condition; ' . json_encode(DB::table('native_fixture_event')
+        $this->fail('Timed out waiting for isolated fixture condition; ' . $this->consoleDiagnostic() . '; ' . json_encode(DB::table('native_fixture_event')
             ->whereIn('kind', ['schedule_probe', 'schedule_output', 'scheduler_error', 'process_error'])->get(['kind', 'reference'])->all()));
     }
     private function collectOnce(): array

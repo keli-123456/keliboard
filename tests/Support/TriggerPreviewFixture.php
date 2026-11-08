@@ -142,8 +142,11 @@ final class TriggerPreviewFixture
             throw new \RuntimeException('Unexpected production preview schedule.');
         // Only this real event is runnable; all other production schedules are excluded before execution.
         (new \ReflectionProperty(Schedule::class, 'events'))->setValue($schedule, $owned);
+        $path = self::consolePath(); if (!is_file($path)) { touch($path); chmod($path, 0600); }
+        $owned[0]->sendOutputTo($path);
         return $schedule;
     }
+    public static function consolePath(): string { return sys_get_temp_dir() . '/trigger-preview-' . NativeFailoverConcurrentFixture::$owner . '.log'; }
 
     public static function run(string $command, array $parameters = []): int
     {
@@ -167,7 +170,8 @@ final class TriggerPreviewFixture
             foreach (['ScheduledTaskStarting', 'ScheduledTaskSkipped', 'ScheduledTaskFinished'] as $name)
                 $events->listen('Illuminate\\Console\\Events\\' . $name, fn () => NativeFailoverConcurrentFixture::event($name));
             NativeFailoverConcurrentFixture::event('schedule_probe', json_encode(['events' => count($schedule->events()),
-                'due' => $schedule->dueEvents(app())->count(), 'locked' => app(EventMutex::class)->exists($schedule->events()[0])]));
+                'due' => $schedule->dueEvents(app())->count(), 'locked' => app(EventMutex::class)->exists($schedule->events()[0]),
+                'fixture_binary' => str_contains($schedule->events()[0]->command, '/Fixtures/trigger_preview_console.php')]));
         }
         $console = new Console(app(), app(\Illuminate\Contracts\Events\Dispatcher::class), 'trigger-fixture'); $console->setAutoExit(false);
         foreach ([new PreviewMachineFailover(), new ScheduleRunCommand(), new ScheduleFinishCommand()] as $handler) $console->add($handler);
@@ -199,7 +203,9 @@ final class TriggerPreviewFixture
         $keysGone = $redis->keys($prefix . '*') === []; $redis->close();
         foreach (DB::select('SHOW TABLES') as $row) { $table = (string) array_values((array) $row)[0]; if ($table !== 'native_fixture_owner') Schema::drop($table); }
         Schema::drop('native_fixture_owner'); Carbon::setTestNow();
-        return ['tables_removed' => DB::select('SHOW TABLES') === [], 'keys_removed' => $keysGone, 'neighbor_unchanged' => $neighbor];
+        if (is_file(self::consolePath())) unlink(self::consolePath());
+        return ['tables_removed' => DB::select('SHOW TABLES') === [], 'keys_removed' => $keysGone, 'neighbor_unchanged' => $neighbor,
+            'console_removed' => !is_file(self::consolePath())];
     }
     private static function raw(): \Redis { $redis = new \Redis(); $redis->connect('127.0.0.1', (int) getenv('KELI_NATIVE_REDIS_PORT'), 2); return $redis; }
 }
