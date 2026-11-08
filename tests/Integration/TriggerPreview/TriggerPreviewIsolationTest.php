@@ -178,11 +178,10 @@ final class TriggerPreviewIsolationTest extends TestCase
     public function test_mysql_statement_failure_rolls_back_the_whole_audit_and_the_same_episode_resumes(): void
     {
         $member = DB::table('v2_machine_failover_member')->max('id');
-        DB::unprepared('CREATE TRIGGER trigger_fixture_failure BEFORE INSERT ON v2_machine_failover_trigger_event FOR EACH ROW BEGIN IF NEW.member_id = '
-            . (int) $member . " THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'synthetic audit failure'; END IF; END");
+        DB::statement('ALTER TABLE v2_machine_failover_trigger_event ADD CONSTRAINT trigger_fixture_failure CHECK (member_id <> ' . (int) $member . ')');
         $result = $this->collectOnce(); $this->assertSame(1, $result['errors']); $this->assertSame(0, $result['events_written']);
         $this->assertSame(0, $result['records_changed']); $this->assertSame(0, Preview::query()->count());
-        DB::unprepared('DROP TRIGGER trigger_fixture_failure'); $this->collectOnce();
+        DB::statement('ALTER TABLE v2_machine_failover_trigger_event DROP CHECK trigger_fixture_failure'); $this->collectOnce();
         $this->assertSame(2, Preview::query()->count()); $this->assertSame(2, DB::table('v2_machine_failover_trigger_event')->count());
     }
     public function test_sigkill_inside_transaction_recovers_after_natural_redis_leases_without_partial_records(): void
