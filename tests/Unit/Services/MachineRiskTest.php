@@ -256,12 +256,84 @@ final class MachineRiskTest extends TestCase
         $base = ['user_id' => $user->id, 'site_id' => 2, 'credential_hash' => $credential];
         foreach ([[-600, 3, 2, $credential, -300], [-300, 900, 2, $credential, 10], [-300, 900, 3, $credential, -10], [-300, 900, 2, 'old', -10], [-4000, 4, 2, $credential, -3700]] as [$offset, $pulls, $site, $key, $last]) {
             DB::table(SubscriptionAiBehaviorService::TABLE)->insert(array_replace($base, ['site_id' => $site, 'credential_hash' => $key, 'bucket_at' => $now + $offset,
-                'sample' => json_encode(['last_at' => $now + $last, 'pulls' => $pulls, 'response_nodes' => [$this->node->id => 1], 'clients' => ['mihomo' => $pulls]])]));
+                'sample' => json_encode(['last_at' => $now + $last, 'pulls' => $pulls, 'ips' => [str_repeat('a', 64) => 1],
+                    'response_nodes' => [$this->node->id => 1], 'clients' => ['mihomo' => $pulls]])]));
         }
         $result = $this->event()->evidence['users'][0]['subscription'];
         $this->assertSame(3, $result['pulls_lower_bound']); $this->assertTrue($result['capped']);
         $this->assertTrue($result['render_candidate_observed']); $this->assertSame([4], $result['reference']['pull_counts']);
         $this->assertFalse($result['reference']['verified_legitimate']);
+        $this->assertSame(1, $result['observed_buckets']); $this->assertSame(1, $result['sampled_networks']);
+        $this->assertStringNotContainsString(str_repeat('a', 64), json_encode($result));
+    }
+
+    public function test_online_job_rotates_within_the_original_cap_without_changing_online_counts(): void
+    {
+        $this->enable();
+        Schema::table('v2_user', function (Blueprint $table): void { $table->integer('online_count')->default(0); $table->timestamp('last_online_at')->nullable(); });
+        $data = array_fill_keys(range(1, 70), ['192.0.2.101']); $at = time() - 80;
+        $key = app(MachineRiskActivity::class)->key($this->machine->id, $this->node->id);
+        (new \App\Jobs\UpdateAliveDataJob($data, 'hysteria', $this->node->id, $at))->handle();
+        $first = json_decode(Cache::get($key), true)['samples'][0]['users'];
+        (new \App\Jobs\UpdateAliveDataJob($data, 'hysteria', $this->node->id, $at + 60))->handle();
+        $samples = json_decode(Cache::get($key), true)['samples']; $second = $samples[1]['users'];
+        $this->assertCount(64, $first); $this->assertCount(64, $second); $this->assertNotSame(array_keys($first), array_keys($second));
+        $this->assertCount(70, $first + $second); $this->assertSame('rotating_offset_v1', $samples[1]['sampling']);
+        $this->assertTrue($samples[1]['capped']); $this->assertStringNotContainsString('192.0.2.', Cache::get($key));
+        $this->assertSame(2, app(MachineRiskActivity::class)->forMachine($this->machine->id, time())['sample_count']);
+    }
+
+    public function test_comparisons_and_account_measurements_are_frozen_and_sent_without_private_identifiers(): void
+    {
+        $this->enable(); $user = $this->user(); $this->sample([$user->id => 1]);
+        $event = $this->event(); $original = $event->evidence['comparison'];
+        $this->assertSame(1, $original['schema']); $this->assertFalse($original['absence_is_evidence']);
+        $this->assertSame(64, strlen($event->evidence['users'][0]['identity_epoch']));
+        $analysis = $this->analysis(); $analysis->request($event); $event->refresh(); $analysis->process($event->id, $event->ai_attempt);
+        $messages = app(TicketAiProviderClient::class)->messages; $prompt = json_decode($messages[1]['content'], true);
+        $parts = array_column($prompt['evidence'], 'value', 'id');
+        $this->assertSame($original, $parts['comparison']); $this->assertCount(1, $parts['account_activity']);
+        foreach (['user_id', 'site_id', 'identity_epoch', $event->evidence['users'][0]['identity_epoch'],
+            'private@example.test', 'private-sub-token', 'private-node-uuid', 'private-machine-token'] as $private) {
+            $this->assertStringNotContainsString($private, json_encode($messages));
+        }
+        $this->assertSame('completed', $event->fresh()->ai_status); $this->assertFalse($user->fresh()->banned);
+    }
+
+    public function test_comparison_storage_failure_preserves_incident_and_does_not_block_analysis_or_existing_followup(): void
+    {
+        $this->enable(); $user = $this->user(); $this->sample([$user->id => 1]);
+        app()->instance(\App\Services\ServerMachine\MachineRiskComparison::class, new class extends \App\Services\ServerMachine\MachineRiskComparison {
+            public function capture(ServerMachine $machine, array $episode, array $users): array { throw new \RuntimeException('Synthetic cache outage'); }
+            public function collect(): array { throw new \RuntimeException('Synthetic cache outage'); }
+        });
+        $event = $this->event(); $this->assertSame('unavailable', $event->evidence['comparison']['state']);
+        $analysis = $this->analysis(); $analysis->request($event); $event->refresh(); $analysis->process($event->id, $event->ai_attempt);
+        $this->assertSame('completed', $event->fresh()->ai_status);
+        $this->assertSame(1, app(MachineRiskEventService::class)->advance()['healthy_controls']['errors']);
+        $this->assertFalse($user->fresh()->banned); $this->assertSame('private-sub-token', $user->fresh()->token);
+    }
+
+    public function test_prompt_budget_trims_all_account_sections_together_and_declares_missing_coverage(): void
+    {
+        $this->enable(); $event = $this->event(); $e = $event->evidence;
+        $clients = []; for ($i = 0; $i < 16; $i++) $clients[str_pad((string) $i, 40, 'a')] = 1000000;
+        $e['users'] = []; $e['subscription_generation']['users'] = [];
+        for ($i = 0; $i < 20; $i++) {
+            $ref = 'synthetic-' . $i;
+            $e['users'][] = ['ref' => $ref, 'activity' => [], 'within_5_seconds' => false, 'within_5_minutes' => true,
+                'subscription' => ['state' => 'sampled', 'pulls_lower_bound' => 1000000, 'observed_buckets' => 6,
+                    'sampled_networks' => 96, 'client_categories' => $clients, 'capped' => true,
+                    'reference' => ['bucket_count' => 48, 'pull_counts' => array_fill(0, 48, 1000000)]]];
+            $e['subscription_generation']['users'][] = ['ref' => 'render-' . $i, 'versions' => array_fill(0, 8,
+                ['node_id' => 1000000, 'version' => str_repeat('a', 64)])];
+        }
+        $event->evidence = $e;
+        $p = $this->analysis()->promptEvidence($event); $parts = array_column($p['evidence'], 'value', 'id');
+        $this->assertLessThanOrEqual(65536, strlen(json_encode($p)));
+        $this->assertTrue($parts['coverage']['ai_prompt_truncated']);
+        $this->assertSame(array_column($parts['users'], 'ref'), array_column($parts['account_activity'], 'ref'));
+        $this->assertLessThan(20, count($parts['users']));
     }
 
     public function test_ai_calls_are_budgeted_once_and_duplicate_jobs_do_not_call_again(): void
