@@ -32,6 +32,7 @@ class MachineFailoverServiceRegistry
             'services' => [], 'policies' => [], 'scenarios' => MachineFailoverSimulationDriver::SCENARIOS];
         $result['shadow_available'] = app(MachineFailoverShadow::class)->available();
         $result['budget_available'] = app(MachineFailoverBudget::class)->available();
+        $result['dns_sets_available'] = app(MachineFailoverDnsRegistry::class)->available();
         if (!$result['available']) return $result;
         $members = Member::query()->get()->keyBy('policy_id');
         $result['policies'] = Policy::query()->orderBy('id')->limit(100)->get()->map(fn ($policy) => $policy->only(['id', 'name', 'revision', 'machine_id',
@@ -46,6 +47,7 @@ class MachineFailoverServiceRegistry
         $policies = Policy::query()->whereIn('id', $members->pluck('policy_id'))->get()->keyBy('id');
         $run = Run::query()->where('service_id', $service->id)->latest('created_at')->latest('id')->first();
         return $service->toArray() + ['simulation_only' => true, 'execution_enabled' => false, 'dns_cutover' => false,
+            'dns_sets_count' => Schema::hasTable('v2_machine_failover_dns_set') ? \App\Models\MachineFailoverDnsSet::query()->where('service_id', $service->id)->count() : 0,
             'members' => $members->map(fn ($member) => $member->toArray() + ['policy_name' => $policies->get($member->policy_id)?->name,
                 'policy_current' => $policies->get($member->policy_id)?->revision === $member->policy_revision])->all(),
             'latest_run' => $run?->only(['id', 'status', 'reason', 'service_revision', 'created_at', 'finished_at'])];
@@ -84,6 +86,8 @@ class MachineFailoverServiceRegistry
                 $values[array_key_last($values)]['name'] = $this->name($row['name'] ?? null);
             }
             $removed = $service->exists ? Member::query()->where('service_id', $service->id)->whereNotIn('policy_id', array_keys($seen)) : null;
+            if ($removed && Schema::hasTable('v2_machine_failover_dns_slot') && \App\Models\MachineFailoverDnsSlot::query()
+                ->whereIn('member_id', (clone $removed)->select('id'))->exists()) throw new CloudException('dns_member_in_use');
             if ($removed && (clone $removed)->exists() && (Run::query()->where('service_id', $service->id)->exists() || $this->nativeHistory($service->id))) throw new CloudException('member_audit_retained');
             $removed?->delete();
             $service->fill(['name' => $name, 'max_parallel' => $input['max_parallel'], 'attempt_limit' => $input['attempt_limit'],
@@ -98,6 +102,7 @@ class MachineFailoverServiceRegistry
         $this->locked(fn () => DB::transaction(function () use ($id, $revision, $admin) {
             $this->actor($admin); $service = Service::query()->findOrFail($id);
             if ($service->revision !== $revision) throw new CloudException('config_changed');
+            if (Schema::hasTable('v2_machine_failover_dns_set') && \App\Models\MachineFailoverDnsSet::query()->where('service_id', $id)->exists()) throw new CloudException('dns_set_in_use');
             if (Run::query()->where('service_id', $id)->exists() || $this->nativeHistory($id)) throw new CloudException('service_in_use');
             Member::query()->where('service_id', $id)->delete(); $service->delete();
         }));
@@ -130,11 +135,20 @@ class MachineFailoverServiceRegistry
                 'dns_fingerprint' => $dns ? hash('sha256', $dns->id . ':' . $dns->revision . ':' . $dns->provider) : null];
             $result['members'][] = $projection;
         }
+        if (Schema::hasTable('v2_machine_failover_dns_set') && \App\Models\MachineFailoverDnsSet::query()->where('service_id', $id)->exists()) {
+            if (!Schema::hasTable('v2_machine_failover_dns_slot') || !Schema::hasTable('v2_machine_failover_dns_run')) throw new CloudException('migration_required');
+            $sets = \App\Models\MachineFailoverDnsSet::query()->where('service_id', $id)->orderBy('id')->get();
+            $result['dns_sets'] = $sets->map(fn ($set) => $set->only(['id', 'revision', 'credential_id', 'credential_revision', 'provider', 'zone', 'zone_name', 'hostname', 'ttl'])
+                + ['slots' => \App\Models\MachineFailoverDnsSlot::query()->where('set_id', $set->id)->orderBy('id')->get()
+                    ->map(fn ($slot) => $slot->only(['id', 'member_id', 'type', 'line', 'marker']))->all()])->all();
+        }
         return $result;
     }
     public function fingerprint(array $snapshot): string { return hash('sha256', json_encode($snapshot, JSON_THROW_ON_ERROR)); }
     private function nativeHistory(int $service, bool $active = false): bool
     {
+        if ($active && Schema::hasTable('v2_machine_failover_dns_run') && \App\Models\MachineFailoverDnsRun::query()
+            ->where('service_id', $service)->where('status', 'running')->exists()) return true;
         return Schema::hasTable('v2_machine_failover_execution') && \App\Models\MachineFailoverExecution::query()->where('service_id', $service)
             ->when($active, fn ($query) => $query->where('status', 'running'))->exists();
     }

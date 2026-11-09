@@ -44,6 +44,8 @@ return new class extends Migration {
 
     public function down(): void
     {
+        if (Schema::hasTable('v2_machine_failover_dns_set') && DB::table('v2_machine_failover_dns_set')->exists())
+            throw new RuntimeException('DNS record-set drafts must be retained before service downgrade.');
         if (DB::table('v2_machine_failover_run')->exists()) throw new RuntimeException('Failover simulation audit must be retained before downgrade.');
         foreach (['action', 'run_member', 'run', 'member', 'service'] as $name) Schema::dropIfExists('v2_machine_failover_' . $name);
     }

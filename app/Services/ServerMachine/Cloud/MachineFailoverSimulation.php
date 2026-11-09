@@ -27,6 +27,7 @@ class MachineFailoverSimulation
                 return $this->report($prior->id, $admin);
             }
             $snapshot = $this->registry->snapshot($service, $revision);
+            if (!empty($snapshot['dns_sets'])) throw new CloudException('dns_set_rehearsal_required');
             if ($target !== null && !in_array($target, array_column($snapshot['members'], 'id'), true)) throw new CloudException('member_missing');
             if (Run::query()->where('service_id', $service)->where('status', 'running')->exists()) throw new CloudException('run_active');
             if (Run::query()->count() >= 500 || Run::query()->where('service_id', $service)->count() >= 100) throw new CloudException('simulation_limit');

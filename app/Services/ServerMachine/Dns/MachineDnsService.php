@@ -129,6 +129,7 @@ class MachineDnsService
             $row = MachineDnsCredential::query()->findOrFail($id);
             if ($row->revision !== $revision) throw new DnsException('config_changed');
             if (MachineDnsBinding::query()->where('credential_id', $id)->exists()) throw new DnsException('credential_in_use');
+            if (Schema::hasTable('v2_machine_failover_dns_set') && DB::table('v2_machine_failover_dns_set')->where('credential_id', $id)->exists()) throw new DnsException('credential_in_use');
             if (Schema::hasTable('v2_machine_failover_policy') && DB::table('v2_machine_failover_policy')->where('dns_credential_id', $id)->exists()) throw new DnsException('credential_in_use');
             if (Schema::hasTable('v2_machine_owned_dns') && DB::table('v2_machine_owned_dns')->where('credential_id', $id)->exists()) throw new DnsException('credential_in_use');
             DB::transaction(function () use ($row, $admin) {
@@ -146,6 +147,7 @@ class MachineDnsService
             if (MachineDnsBinding::query()->count() >= 500) throw new DnsException('limit_reached');
             $machine = ServerMachine::query()->findOrFail($input['machine_id']);
             $binding = $this->bindingDraft($input, $credential, $machine);
+            if (Schema::hasTable('v2_machine_failover_dns_set') && DB::table('v2_machine_failover_dns_set')->where('hostname', $binding->hostname)->exists()) throw new DnsException('record_in_use');
             if (Schema::hasTable('v2_machine_failover_policy') && DB::table('v2_machine_failover_policy')->where('dns_hostname', $binding->hostname)->exists()) throw new DnsException('record_in_use');
             if (Schema::hasTable('v2_machine_owned_dns') && DB::table('v2_machine_owned_dns')->where('hostname', $binding->hostname)->exists()) throw new DnsException('record_in_use');
             return $this->lock('record:' . $binding->record_scope, function () use ($input, $admin, $credential, $machine, $binding) {

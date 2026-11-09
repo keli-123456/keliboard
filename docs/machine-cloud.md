@@ -1945,3 +1945,119 @@ Provider references:
 [Cloudflare DNS record listing](https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/list/),
 [record creation](https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/create/),
 [record patching](https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/edit/).
+
+### Service Member DNS Record Sets (Simulation Only)
+
+This increment adds service-scoped DNS configuration and a persistent offline
+rehearsal. It does **not** activate a multi-record live executor or migrate the
+existing single-A ownership rows. A service with record sets is explicitly
+rejected by the legacy scalar DNS rehearsal and the native bridge; its dedicated
+record-set simulation is a separate entry point. Simulated receipts cannot be
+used as forwarding, ownership, propagation or paid-resource acceptance evidence.
+
+The additive `2026_11_09_180000_create_machine_failover_dns_sets.php` migration
+introduces three tables:
+
+- `v2_machine_failover_dns_set`: service, revision, pinned DNS credential revision,
+  provider, zone, zone name, exact hostname and TTL. A hostname has one controller
+  across services, legacy policies, owned DNS and ordinary instance bindings.
+- `v2_machine_failover_dns_slot`: stable member/type/line association and a unique
+  ownership marker per slot. One service can have five record sets, ten members,
+  and up to 120 slots per set. Multiple enabled members can share a hostname while
+  keeping separate records. Markers are hidden from the management response.
+- `v2_machine_failover_dns_run`: original administrator/request, pinned service
+  and record-set revisions, encrypted context and simulated action journal.
+  The same intent resolves to the same audit instead of another dispatch.
+
+Draft writes require administrator permission and both revision checks. Saving
+or deleting a draft increments the parent service revision and invalidates stale
+contexts. Active service work blocks edits. Members with slots cannot be removed,
+referenced DNS credentials cannot be deleted, and parent/draft downgrade refuses
+to orphan retained configuration or simulation audit. An audited set cannot
+change hostname, zone, provider or credential identity. No migration was run
+against a real database during this work.
+
+`MachineDnsRecordSetPlanner` builds a member-scoped diff from complete provider
+inventory and caller-supplied address facts. It preserves non-target member
+records, including their AAAA records when the target is IPv4-only. Missing a
+selected family blocks progress; it is not a reason to delete the old family.
+Duplicate record IDs/markers, shared member addresses, unmanaged records in a
+managed type/line, CNAME conflicts, orphan markers, changed ownership or changed
+non-target members require review. Non-managed TXT records and unselected
+families are not automatically adopted or pruned. Explicit member detach is
+limited to that member's owned slots and cannot withdraw the last enabled member.
+
+The offline `MachineDnsRecordSetProvider` contract maps Cloudflare and Aliyun
+responses and mutation descriptions without accepting secrets or constructing an
+HTTP client. Inventory is capped at three complete pages/150 records, preserving
+long Aliyun record IDs as strings. A/AAAA values are normalized by address family.
+
+- Cloudflare uses its zone/record IDs, A/AAAA, ownership comment and DNS-only
+  records. Only its default line is accepted. TTL is conservatively 60..86400.
+- Aliyun uses domain/RR, A/AAAA, provider-native `default`, `telecom`, `unicom`,
+  `mobile`, `edu` and `oversea` lines. TTL is conservatively 600..86400. These
+  ranges/line names are local schema constraints, **not** proof of the account's
+  paid edition, supported lines or current quota.
+- Aliyun creation and ownership remark are separate operations: an acknowledged
+  `AddDomainRecord` ID is retained before `UpdateDomainRecordRemark`. Recovery
+  resumes from that same ID. If creation is unknown and the record is unclaimed,
+  the simulation stops; matching an IP cannot authorize adopting or tagging it.
+  A lost remark receipt is resolved by readback, not another creation.
+
+The dedicated simulated runner exercises bootstrap, replacement, explicit detach
+and restore, source recovery, missing IPv6, foreign/duplicate records, truncated
+inventory, competing edits, permission rejection, partial multi-line/dual-stack
+failure, unknown outcomes, remark interruptions and readback throttling. It stores
+the dispatch boundary before a simulated mutation, checks context on continuation,
+and permits stopping without discarding earlier audit. Partial failure or unknown
+results do not cause automatic reverse writes or replay. Rate-limit waiting uses
+a labeled virtual clock, not a background sleeper or real provider request.
+
+Administrator routes under `/server/machine/cloud/failover/services/dns` expose
+workspace, draft save/drop, simulate, original-run read, continue and stop. They
+reject caller-supplied execution flags, arbitrary inventories and claimed receipts.
+The management page selects a DNS credential and zone, then member A/AAAA and line
+checkboxes. Simulation results show the affected member, before/after values,
+action state and separately labeled simulated/real counts. It does not offer a
+live activation or provider write button. Existing zone selection remains a
+separately initiated read-only catalog request; all catalogs in the local preview
+and tests are fixtures.
+
+Remaining live work includes a separately reviewed multi-record execution bridge,
+fresh address/forwarding evidence for every published family, dedicated credential
+scope and edition/line/TTL validation, durable real-provider mutation/readback
+integration, isolated concurrency/crash acceptance and external DNS propagation
+checks. The current single-A native bridge remains intact and hard-disabled;
+this record-set model must not silently broaden it. Domestic IPv4 reachability
+classification is unchanged; publishing AAAA does not enable IPv6 domestic probes.
+
+This increment did not change node code, queue/Horizon settings, execution gates,
+cloud instances, production data, DNS records or tanzhen. All real automatic
+creation, credential rotation and DNS cutover remain closed. This source-only
+synchronization includes the new source, tests and locally built admin assets
+from keli-admin commit `e4ed5703c3689e2655641556e890e1342e7d8be8`. It does not
+deploy, publish a release, apply real migrations or change tanzhen scheduling.
+
+Local validation passed 3,695 backend unit tests / 25,065 assertions and syntax
+checks on all 19 added or changed PHP files. The full admin suite passed 2,764
+tests in 287 files; the final HTTP-error receipt hardening then passed 68 focused
+contract/component tests, including three new cases for HTTP 500 and definitive
+rejection. A server error is not treated as proof that no audit was persisted:
+the original intent is read first, and an unresolved result retains its key.
+Admin lint and the clean-source sync build passed at JS 4,663,734 / CSS 570,093
+bytes, within the explicitly approved gates of 4,668,000 / 573,000 bytes. No
+dependencies were added. Playwright checked draft save, synthetic success and
+missing-IPv6 rejection at 1440px and 390px in light/dark themes, with no page
+errors, external requests or page/modal overflow. These are mocked UI and unit
+checks, not isolated MySQL/Redis, paid-provider, forwarding or DNS propagation
+acceptance. The fixture preview is available locally at
+`http://127.0.0.1:5191/audit/machine-cloud-preview.html?orchestration=1&dns_sets=1`.
+The source synchronization rechecked 88 focused backend tests / 1,368 assertions
+and 68 focused admin tests. Synced asset hashes, cache-busting references and the
+clean admin source commit in `build-manifest.json` were also verified locally.
+
+Official wire-contract references:
+[Aliyun subdomain record listing](https://help.aliyun.com/en/dns/api-alidns-2015-01-09-describesubdomainrecords),
+[Aliyun record update](https://api.alibabacloud.com/document/Alidns/2015-01-09/UpdateDomainRecord),
+[Aliyun DNS API operations](https://api.aliyun.com/product/Alidns),
+[Cloudflare record listing](https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/list/).

@@ -285,6 +285,7 @@ class MachineFailoverPolicyService
     private function dnsConflict(string $hostname, ?int $except): bool
     {
         if ($hostname === '') return false;
+        if (Schema::hasTable('v2_machine_failover_dns_set') && DB::table('v2_machine_failover_dns_set')->where('hostname', $hostname)->exists()) return true;
         if (Schema::hasTable('v2_machine_owned_dns') && DB::table('v2_machine_owned_dns')->where('hostname', $hostname)
             ->when($except, fn ($query) => $query->where('policy_id', '!=', $except))->exists()) return true;
         if (Policy::query()->where('dns_hostname', $hostname)->when($except, fn ($query) => $query->where('id', '!=', $except))->exists()) return true;

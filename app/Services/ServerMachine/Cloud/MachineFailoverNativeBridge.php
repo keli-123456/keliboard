@@ -42,7 +42,9 @@ class MachineFailoverNativeBridge
         sort($planIds);
         $result = $this->registry->locked(fn () => DB::transaction(function () use ($service, $revision, $planIds, $releaseId, $request, $admin, $admission) {
             $this->gate->assertAllowed('start'); $this->registry->actor($admin);
-            $snapshot = $this->registry->snapshot($service, $revision); $release = $this->release($releaseId);
+            $snapshot = $this->registry->snapshot($service, $revision);
+            if (!empty($snapshot['dns_sets'])) throw new CloudException('dns_set_simulation_only');
+            $release = $this->release($releaseId);
             $intent = $admission === null ? $this->hash([$service, $revision, $planIds, $release])
                 : hash('sha256', MachineIntentJson::encode([$service, $revision, $planIds, $release, $admission]));
             $key = $this->hash([$admin, $request]);
