@@ -141,6 +141,7 @@ final class NativeFailoverConcurrentFixture
         $policies = \App\Models\MachineFailoverPolicy::query()->pluck('id')->all();
         app()->instance(MachineFailoverExecutionGate::class, new class extends MachineFailoverExecutionGate { public function assertAllowed(string $operation): void {} });
         config(['machine_failover.observe_enabled' => true, 'machine_failover.runner_enabled' => true, 'machine_failover.allow_replacement' => true,
+            'machine_failover.allow_rotation' => true, 'machine_failover.allowed_rotation_policy_ids' => \App\Models\MachineFailoverPolicy::query()->pluck('id')->all(),
             'machine_failover.allowed_replacement_policy_ids' => $policies, 'machine_provision.allow_live' => true,
             'machine_provision.allowed_test_machine_ids' => \App\Models\ServerMachine::query()->pluck('id')->all(),
             'machine_acceptance.allow_verification' => true, 'machine_acceptance.allow_dns' => true, 'machine_acceptance.allowed_policy_ids' => $policies,
@@ -230,7 +231,8 @@ final class NativeFailoverConcurrentFixture
                     $hostname = $query['name_exact'] ?? $query['name'] ?? null;
                     $rows = DB::table('native_fixture_dns')->pluck('value')->map(fn ($raw) => json_decode($raw, true, 512, JSON_THROW_ON_ERROR))
                         ->filter(fn ($row) => $hostname === null || $row['name'] === $hostname)->values()->all();
-                    return Http::response(['success' => true, 'result' => $rows, 'result_info' => ['total_pages' => 1]]);
+                    return Http::response(['success' => true, 'result' => $rows,
+                        'result_info' => ['total_pages' => 1, 'total_count' => count($rows), 'page' => 1, 'per_page' => 50]]);
                 }
                 if ($request->method() !== 'PATCH') throw new \RuntimeException('Unexpected mock DNS operation.');
                 self::event('dns_write'); $id = basename(parse_url($url, PHP_URL_PATH));

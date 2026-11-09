@@ -11,15 +11,27 @@ class DnsProviderClient
 {
     public function ownedRecords(MachineDnsCredential $credential, string $zone, string $hostname): array
     {
-        $this->ownedProvider($credential, $zone); $records = [];
+        $this->ownedProvider($credential, $zone); $hostname = $this->domain($hostname); $records = []; $expected = null; $seen = [];
         for ($page = 1; $page <= 3; $page++) {
             $json = $this->cloudflareRequest($credential, 'GET', '/zones/' . $zone . '/dns_records', [],
                 ['name.exact' => $hostname, 'page' => $page, 'per_page' => 50]);
             $this->assertList($json['result']);
-            foreach ($json['result'] as $row) $records[] = $this->ownedRecordData($credential, $row, $hostname);
-            $pages = $json['result_info']['total_pages'] ?? null;
-            if (!is_int($pages) || $pages < 0 || $pages > 3) throw new DnsException('provider_rejected');
-            if ($page >= $pages) return $records;
+            $meta = $json['result_info'] ?? []; $pages = $meta['total_pages'] ?? null; $total = $meta['total_count'] ?? null;
+            if (!is_int($pages) || $pages < 0 || $pages > 3 || !is_int($total) || $total < 0 || $total > 150
+                || ($meta['page'] ?? null) !== $page || ($meta['per_page'] ?? null) !== 50
+                || ($total === 0 ? !in_array($pages, [0, 1], true) : $pages !== (int) ceil($total / 50))
+                || $expected !== null && $expected !== [$pages, $total]) throw new DnsException('provider_rejected');
+            $expected = [$pages, $total];
+            foreach ($json['result'] as $row) {
+                $record = $this->ownedRecordData($credential, $row, $hostname);
+                if (isset($seen[$record['id']])) throw new DnsException('provider_rejected');
+                $seen[$record['id']] = true; $records[] = $record;
+            }
+            if (count($records) > $total || $page < $pages && count($json['result']) !== 50) throw new DnsException('provider_rejected');
+            if ($page >= $pages) {
+                if (count($records) !== $total) throw new DnsException('provider_rejected');
+                return $records;
+            }
         }
         throw new DnsException('provider_rejected');
     }
@@ -43,7 +55,8 @@ class DnsProviderClient
     {
         if (!is_array($row) || !is_string($row['id'] ?? null) || !preg_match('/^[a-f0-9]{32}$/D', $row['id'])
             || ($row['name'] ?? null) !== $hostname || !is_string($row['comment'] ?? '') || strlen($row['comment'] ?? '') > 1000
-            || !is_string($row['content'] ?? null) || strlen($row['content']) > 1024) throw new DnsException('provider_rejected');
+            || !is_string($row['content'] ?? null) || strlen($row['content']) > 1024 || !is_int($row['ttl'] ?? null) || !is_bool($row['proxied'] ?? null)
+            || isset($row['locked']) && !is_bool($row['locked']) || isset($row['private_routing']) && !is_bool($row['private_routing'])) throw new DnsException('provider_rejected');
         return $this->normalize($credential, $row) + ['id' => $row['id'], 'comment' => $row['comment'] ?? '',
             'private_routing' => $row['private_routing'] ?? false];
     }
@@ -153,7 +166,7 @@ class DnsProviderClient
             $response = Http::withToken($credential->credentials['api_token'])->acceptJson()->connectTimeout(5)->timeout(10)
                 ->withoutRedirecting()->send($method, 'https://api.cloudflare.com/client/v4' . $path,
                     ($data ? ['json' => $data] : []) + ($query ? ['query' => $query] : []));
-        } catch (\Throwable) { throw new DnsException('provider_unavailable'); }
+        } catch (\Throwable) { throw new DnsRequestFailure('provider_unavailable'); }
         $json = $this->decode($response);
         if (($json['success'] ?? false) !== true || !is_array($json['result'] ?? null)) throw new DnsException('provider_rejected');
         return $json;
@@ -176,7 +189,7 @@ class DnsProviderClient
         try {
             $response = Http::asForm()->acceptJson()->connectTimeout(5)->timeout(10)->withoutRedirecting()
                 ->post('https://alidns.aliyuncs.com/', $parameters);
-        } catch (\Throwable) { throw new DnsException('provider_unavailable'); }
+        } catch (\Throwable) { throw new DnsRequestFailure('provider_unavailable'); }
         $json = $this->decode($response);
         if (str_starts_with((string) ($json['Code'] ?? ''), 'Forbidden') || ($json['Code'] ?? '') === 'InvalidAccessKeyId.NotFound') throw new DnsException('provider_forbidden');
         if (isset($json['Code'])) throw new DnsException('provider_rejected');
@@ -206,7 +219,16 @@ class DnsProviderClient
     {
         // Never surface provider bodies or exception URLs: they may contain credentials.
         if (in_array($response->status(), [401, 403], true)) throw new DnsException('provider_forbidden');
-        if ($response->status() === 429) throw new DnsException('provider_rate_limited');
+        if ($response->status() === 429) {
+            $after = $response->header('Retry-After'); $seconds = null;
+            if (is_string($after) && preg_match('/^\d{1,8}$/D', $after)) $seconds = (int) $after;
+            elseif (is_string($after) && strlen($after) < 80 && preg_match('/GMT$/D', $after)) {
+                $at = strtotime($after); if ($at !== false) $seconds = $at - time();
+            }
+            throw new DnsRequestFailure('provider_rate_limited', $seconds !== null && $seconds >= 0 ? min(86400, max(120, $seconds)) : 120,
+                $seconds === null || $seconds <= 86400);
+        }
+        if ($response->status() >= 500) throw new DnsRequestFailure('provider_unavailable');
         if (!$response->successful() || strlen($response->body()) > 262144) throw new DnsException('provider_rejected');
         $json = $response->json();
         if (!is_array($json)) throw new DnsException('provider_rejected');

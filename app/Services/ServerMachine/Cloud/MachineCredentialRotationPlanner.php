@@ -12,11 +12,13 @@ class MachineCredentialRotationPlanner
         $kind = $failure['kind'] ?? null;
         if (in_array($kind, ['rate_limited', 'provider_unavailable'], true)) return $finish('wait', 'provider_backoff');
         if (!in_array($kind, ['auth_invalid', 'permission_denied', 'billing_locked', 'quota_exhausted'], true)
-            || ($failure['outcome'] ?? null) !== 'rejected') return $finish('stop', 'plan_review_required');
+            || ($failure['outcome'] ?? null) !== 'rejected' || ($failure['rotation_candidate'] ?? null) !== true
+            || ($failure['requires_review'] ?? null) !== false) return $finish('stop', 'plan_review_required');
         if (!is_int($current['id'] ?? null) || !is_int($current['group_id'] ?? null) || $current['group_id'] < 1
             || !is_string($current['credential_key'] ?? null) || !preg_match('/^[a-f0-9]{64}$/D', $current['credential_key'])
             || ($current['provider'] ?? null) !== ($failure['provider'] ?? null)) return $finish('stop', 'credential_context_invalid');
-        if ($remaining <= 0 || count($attempted) >= 20) return $finish('stop', 'rotation_budget_exhausted');
+        if (!array_is_list($attempted) || count(array_filter($attempted, fn ($id) => !is_int($id) || $id < 1))) return $finish('stop', 'credential_context_invalid');
+        if ($remaining <= 0 || count(array_unique($attempted)) >= 20) return $finish('stop', 'rotation_budget_exhausted');
         $accountFailure = in_array($kind, ['billing_locked', 'quota_exhausted'], true);
         if ($accountFailure && !$this->identity($current['identity_key'] ?? null)) return $finish('stop', 'account_identity_required');
         $triedKeys = [$current['credential_key']];

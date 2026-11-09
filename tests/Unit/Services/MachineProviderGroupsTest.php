@@ -147,7 +147,8 @@ class MachineProviderGroupsTest extends TestCase
         $this->assertStringNotContainsString('Private snapshot', json_encode($catalog));
         $this->assertSame($catalog, $this->catalog($provider)); Http::assertSentCount(3);
         $result = app(MachineFailoverPolicyService::class)->rehearse($policy->id, $policy->revision, 'initial_setup');
-        if ($provider !== 'linode') $this->assertContains('provider_creation_unsupported', array_column($result['checks'], 'code'));
+        $this->assertNotContains('provider_creation_unsupported', array_column($result['checks'], 'code'));
+        if ($provider !== 'linode') $this->assertContains('template_unsupported', array_column($result['checks'], 'code'));
         $this->assertFalse($result['executed']); Http::assertSentCount(3);
         $this->assertSame(0, Task::query()->count()); Bus::assertNothingDispatched();
         $this->assertFalse(config('machine_provision.allow_live')); $this->assertFalse(config('machine_acceptance.allow_dns')); $this->assertFalse(config('machine_failover.allow_replacement'));

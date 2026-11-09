@@ -23,7 +23,7 @@ use Illuminate\Support\Str;
 
 class MachineFailoverBudget
 {
-    public function __construct(private MachineFailoverServiceRegistry $registry, private LinodeFailoverCostClient $cloud) {}
+    public function __construct(private MachineFailoverServiceRegistry $registry, private MachineProvisionProviders $cloud) {}
 
     public function available(): bool
     {
@@ -117,8 +117,8 @@ class MachineFailoverBudget
                 $items[$task->id] = ['state' => 'not_created', 'monthly_cents' => 0, 'reason' => null, 'absence_verified' => false, 'identity' => $entry['identity']]; continue;
             }
             $account = Account::query()->find($task->account_id);
-            if (!$account || $account->provider !== 'linode' || $account->revision !== $task->account_revision || !$task->external_id || !$task->provider_created_at
-                || !isset($task->payload['request']['label'], $task->payload['request']['tags']) || ($task->payload['plan']['source_ref'] ?? null) !== []) continue;
+            if (!$account || !in_array($account->provider, MachineProvisionProviders::SUPPORTED, true) || $account->revision !== $task->account_revision || !$task->external_id || !$task->provider_created_at
+                || $account->provider !== ($task->payload['plan']['provider'] ?? 'linode') || !isset($task->payload['request']['tags']) || ($task->payload['plan']['source_ref'] ?? null) !== []) continue;
             $groups[$account->id][] = $entry;
         }
         foreach ($groups as $accountId => $entries) {
@@ -127,7 +127,8 @@ class MachineFailoverBudget
                 $result = Cache::lock('machine-cloud:account:' . $accountId, 120)->block(2, function () use ($accountId, $entries, $admin, $deadline) {
                     $this->registry->actor($admin); $account = Account::query()->findOrFail($accountId);
                     foreach ($entries as $entry) if ($entry['task']->account_revision !== $account->revision) throw new CloudException('account_changed');
-                    $unrestricted = $this->cloud->authority($account); $inventory = $this->cloud->completeInventory($account); $result = [];
+                    $client = $this->cloud->cost($account);
+                    $unrestricted = $client->authority($account); $inventory = $client->completeInventory($account); $result = [];
                     foreach ($entries as $entry) {
                         if (microtime(true) > $deadline) throw new CloudException('cost_read_timeout');
                         $task = $entry['task']; $row = $inventory[$task->external_id] ?? null;
@@ -136,16 +137,17 @@ class MachineFailoverBudget
                                 'reason' => $unrestricted ? null : 'cost_scope_unknown', 'absence_verified' => $unrestricted, 'identity' => $entry['identity']]; continue;
                         }
                         try {
-                            $request = $task->payload['request'];
+                            $request = MachineProvisionProviders::requestIdentity($account->provider, $task->payload['request']);
                             if ($row['provider_created_at'] !== $task->provider_created_at || $row['label'] !== $request['label']
                                 || !in_array($task->marker, $row['tags'], true) || $row['region'] !== ($request['region'] ?? null)
-                                || $row['size'] !== ($request['type'] ?? null)) throw new CloudException('cost_identity_unverified');
-                            $result[$task->id] = ['state' => 'present', 'monthly_cents' => $this->cloud->quote($account, $row),
+                                || $row['size'] !== $request['size']
+                                || $account->provider !== 'linode' && ($row['image'] ?? null) !== $request['image']) throw new CloudException('cost_identity_unverified');
+                            $result[$task->id] = ['state' => 'present', 'monthly_cents' => $client->quote($account, $row),
                                 'reason' => null, 'absence_verified' => false, 'identity' => $entry['identity']];
                         } catch (CloudException $error) { $result[$task->id] = ['state' => 'unknown', 'monthly_cents' => null,
                             'reason' => $this->reason($error), 'absence_verified' => false, 'identity' => $entry['identity']]; }
                     }
-                    if ($this->cloud->authority($account) !== $unrestricted || $account->fresh()?->revision !== $account->revision) throw new CloudException('cost_scope_unknown');
+                    if ($client->authority($account) !== $unrestricted || $account->fresh()?->revision !== $account->revision) throw new CloudException('cost_scope_unknown');
                     $this->registry->actor($admin); return $result;
                 });
                 $items = array_replace($items, $result);
@@ -206,7 +208,9 @@ class MachineFailoverBudget
         $this->registry->actor($admin); if (!$this->available()) throw new CloudException('migration_required');
         if (!preg_match('/^[a-f0-9]{32}$/D', $request)) throw new CloudException('invalid_request_id');
         $initial = Attempt::query()->findOrFail($id);
-        return $this->registry->locked(fn () => Cache::lock('machine-cloud:quota:linode', 120)->block(2,
+        $task = $initial->task_id ? Task::query()->find($initial->task_id) : null;
+        $provider = $task?->payload['plan']['provider'] ?? $initial->payload['plan']['provider'] ?? 'linode';
+        return $this->registry->locked(fn () => Cache::lock('machine-cloud:quota:' . $provider, 120)->block(2,
             fn () => Cache::lock('machine-cloud:account:' . $initial->account_id, 120)->block(2, fn () => DB::transaction(function () use ($id, $proof, $request, $admin) {
                 $this->registry->actor($admin); $attempt = Attempt::query()->whereKey($id)->lockForUpdate()->firstOrFail(); $key = hash('sha256', $admin . ':' . $request);
                 $prior = Release::query()->where('request_key', $key)->first();
@@ -262,7 +266,7 @@ class MachineFailoverBudget
         if ($instances->whereNotNull('active_policy_id')->isNotEmpty() || MachineOwnedDns::query()->whereIn('active_instance_id', $instances->pluck('id'))->exists()
             || MachineDnsTransition::query()->whereIn('state', ['prepared', 'dispatching', 'needs_review'])->where(fn ($q) => $q
                 ->whereIn('from_instance_id', $instances->pluck('id'))->orWhereIn('to_instance_id', $instances->pluck('id')))->exists()) return true;
-        if (MachineCloudResource::query()->where('provider', 'linode')->where('external_id', $task->external_id ?? '')
+        if (MachineCloudResource::query()->where('provider', $task->payload['plan']['provider'] ?? 'linode')->where('external_id', $task->external_id ?? '')
             ->where(fn ($q) => $q->where('auto_boot', true)->orWhere('armed', true)->orWhereNotNull('active_task_id'))->exists()) return true;
         $machine = ServerMachine::query()->find($task->machine_id);
         $rows = $machine ? app(\App\Services\ServerMachine\MachineAddressInventory::class)->snapshots([$machine], true)[$machine->id] ?? [] : [];

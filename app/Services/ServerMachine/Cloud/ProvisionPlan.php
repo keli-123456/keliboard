@@ -52,7 +52,8 @@ final class ProvisionPlan
     public static function summary(array $plan): array
     {
         $result = $plan; unset($result['authorized_keys']);
-        return $result + ['authorized_key_count' => count($plan['authorized_keys']), 'root_password_mode' => 'random',
+        return $result + ['authorized_key_count' => count($plan['authorized_keys']),
+            'root_password_mode' => ($plan['provider'] ?? 'linode') === 'linode' ? 'random' : 'provider_generated_ssh_password_disabled',
             'delete_strategy' => 'keep', 'dns_cutover' => false, 'automatic' => false, 'initialization' => 'cloud_init_kelinode_rs',
             'script_review_required' => $plan['source_ref'] !== []];
     }

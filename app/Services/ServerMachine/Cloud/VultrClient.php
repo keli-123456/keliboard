@@ -49,7 +49,7 @@ class VultrClient extends JsonCloudClient
         return [];
     }
 
-    private function normalize(mixed $row): array
+    protected function normalize(mixed $row): array
     {
         if (!is_array($row)) throw new CloudException('provider_invalid');
         $id = (string) ($row['id'] ?? ''); $this->id($id);

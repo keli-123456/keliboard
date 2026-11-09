@@ -17,19 +17,20 @@ use Illuminate\Support\Facades\Schema;
 
 class MachineInstanceAcceptance
 {
-    public function __construct(private LinodeProvisionClient $cloud, private MachineAcceptanceEvidence $evidence,
+    public function __construct(private MachineProvisionProviders $cloud, private MachineAcceptanceEvidence $evidence,
         private MachineForwardingVerifier $verifier) {}
 
     public function available(): bool { return Schema::hasTable('v2_machine_owned_instance') && Schema::hasTable('v2_machine_owned_dns') && Schema::hasTable('v2_machine_dns_transition') && Schema::hasTable('v2_machine_acceptance_check'); }
 
     public function overview(): array
     {
+        $dnsReady = app(MachineOwnedDnsService::class)->available();
         return ['available' => $this->available(), 'verification_enabled' => config('machine_acceptance.allow_verification') === true,
             'isolated_wizard_available' => $this->available() && app(MachineProvisionService::class)->available(),
-            'dns_enabled' => config('machine_acceptance.allow_dns') === true, 'automatic' => false, 'delete_strategy' => 'keep',
+            'dns_enabled' => $dnsReady && config('machine_acceptance.allow_dns') === true, 'automatic' => false, 'delete_strategy' => 'keep',
             'instances' => $this->available() ? Instance::query()->latest('id')->limit(100)->get() : [],
             'checks' => $this->available() ? Check::query()->latest('issued_at')->limit(100)->get() : [],
-            'policies' => $this->available() ? Policy::query()->orderBy('id')->limit(100)->get()->map(function ($policy) {
+            'policies' => $this->available() ? Policy::query()->orderBy('id')->limit(100)->get()->map(function ($policy) use ($dnsReady) {
                 try { $this->verifier->configuration($policy->id); $ready = true; } catch (CloudException) { $ready = false; }
                 $allowed = in_array($policy->id, config('machine_acceptance.allowed_policy_ids', []), true);
                 $group = $policy->credential_group_id;
@@ -37,7 +38,7 @@ class MachineInstanceAcceptance
                     + ['provider' => app(MachineFailoverCredentials::class)->provider($policy), 'credential_group_id' => $group,
                         'credential_group_name' => $group ? \App\Models\MachineCloudGroup::query()->whereKey($group)->value('name') : null]
                     + ['verification_allowed' => $allowed && config('machine_acceptance.allow_verification') === true,
-                        'dns_allowed' => $allowed && config('machine_acceptance.allow_dns') === true, 'verifier_ready' => $ready];
+                        'dns_allowed' => $dnsReady && $allowed && config('machine_acceptance.allow_dns') === true, 'verifier_ready' => $ready];
             }) : [],
             'releases' => $this->available() && Schema::hasTable('v2_server_machine_release') ? ServerMachineRelease::query()
                 ->where('component', 'kelinode-rs')->where('status', 'active')->where('platform', 'linux-x86_64')
@@ -106,13 +107,14 @@ class MachineInstanceAcceptance
                     $this->gate($policy->id, 'allow_verification');
                     if (time() > $instance->challenge_deadline || $this->evidence->capture($instance, $policy) !== $before
                         || $this->verifier->configuration($policy->id)['fingerprint'] !== $configuration['fingerprint']) throw new CloudException('acceptance_evidence_changed');
-                    $resource = MachineCloudResource::query()->where('provider', 'linode')->where('external_id', $task->external_id)->first();
+                    $provider = $task->payload['plan']['provider'] ?? 'linode';
+                    $resource = MachineCloudResource::query()->where('provider', $provider)->where('external_id', $task->external_id)->first();
                     if ($resource && ($resource->account_id !== $task->account_id || $resource->provider_created_at !== $task->provider_created_at
                         || ($resource->machine_id && ($resource->machine_id !== $policy->machine_id || $resource->installation_id !== $instance->installation_id))
                         || $resource->auto_boot || $resource->armed || $resource->active_task_id)) throw new CloudException('resource_already_owned');
                     $resource ??= new MachineCloudResource();
-                    $resource->fill(['account_id' => $task->account_id, 'provider' => 'linode', 'external_id' => $task->external_id,
-                        'provider_created_at' => $task->provider_created_at, 'label' => $task->payload['request']['label'],
+                    $resource->fill(['account_id' => $task->account_id, 'provider' => $provider, 'external_id' => $task->external_id,
+                        'provider_created_at' => $task->provider_created_at, 'label' => MachineProvisionProviders::requestIdentity($provider, $task->payload['request'])['label'],
                         'region' => $policy->region, 'size' => $policy->size, 'status' => 'running', 'public_ips' => $task->public_ips,
                         'machine_id' => $policy->machine_id, 'installation_id' => $instance->installation_id, 'machine_authority' => $task->machine_authority,
                         'observed_at' => time(), 'auto_boot' => false, 'armed' => false, 'manual_hold' => true, 'dns_hold' => true])->save();
@@ -162,7 +164,7 @@ class MachineInstanceAcceptance
             || !MachineIntentJson::same($this->evidence->capture($instance, $policy), $instance->verification['context'])) throw new CloudException('acceptance_expired');
         $this->remote($instance, $task, $account);
         $resource = MachineCloudResource::query()->find($instance->resource_id);
-        if (!$resource || $resource->account_id !== $task->account_id || $resource->external_id !== $task->external_id
+        if (!$resource || $resource->provider !== $account->provider || $resource->account_id !== $task->account_id || $resource->external_id !== $task->external_id
             || $resource->provider_created_at !== $task->provider_created_at || $resource->machine_id !== $policy->machine_id
             || $resource->installation_id !== $instance->installation_id || $resource->auto_boot || $resource->armed || $resource->active_task_id
             || $instance->verified_until <= time() || !MachineIntentJson::same($this->evidence->capture($instance, $policy), $instance->verification['context'])) throw new CloudException('acceptance_expired');
@@ -189,12 +191,13 @@ class MachineInstanceAcceptance
         if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertTask($task);
         $credentials = app(MachineFailoverCredentials::class);
         $machine = ServerMachine::query()->find($policy->machine_id); $account = MachineCloudAccount::query()->find($task->account_id);
-        if (!$policy->isolation_confirmed || !$machine || !$machine->is_active || !$account || $account->provider !== 'linode'
+        $plan = $task->payload['plan'];
+        if (!$policy->isolation_confirmed || !$machine || !$machine->is_active || !$account || $account->provider !== ($plan['provider'] ?? 'linode')
             || !$credentials->owns($policy, $task) || $task->machine_id !== $policy->machine_id || $task->slot !== $policy->slot
             || $account->revision !== $task->account_revision || (!$credentials->grouped($policy) && $policy->account_revision !== $account->revision)
             || !hash_equals($task->machine_authority, hash('sha256', (string) $machine->token))
             || !hash_equals($policy->machine_authority, $task->machine_authority)) throw new CloudException('ownership_mismatch');
-        $plan = $task->payload['plan']; $request = $task->payload['request'];
+        $request = $task->payload['request'];
         if ($credentials->grouped($policy)) $credentials->assertPlan($plan, false);
         foreach (array_merge(['machine_id', 'slot', 'region', 'size', 'image'], $credentials->grouped($policy) ? [] : ['account_id']) as $key) if (($plan[$key] ?? null) !== $policy->{$key}) throw new CloudException('ownership_mismatch');
         if (!in_array($task->status, ['awaiting_acceptance', 'accepted'], true) || !$task->dispatched_at || !$task->external_id || !$task->provider_created_at
@@ -206,7 +209,7 @@ class MachineInstanceAcceptance
 
     private function remote(Instance $instance, Task $task, MachineCloudAccount $account): void
     {
-        $snapshot = $this->cloud->reconcile($account, $task->payload['request'], $task->dispatched_at);
+        $snapshot = $this->cloud->client($account, $task->payload['plan'])->reconcile($account, $task->payload['request'], $task->dispatched_at);
         if (!$snapshot || $snapshot['external_id'] !== $task->external_id || $snapshot['provider_created_at'] !== $task->provider_created_at
             || $snapshot['status'] !== 'running' || !in_array($instance->ip, $snapshot['public_ips'], true)) throw new CloudException('provider_identity_changed');
     }

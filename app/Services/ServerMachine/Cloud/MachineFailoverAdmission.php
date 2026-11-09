@@ -75,7 +75,7 @@ class MachineFailoverAdmission
         $this->fresh($report); $proposals = [];
         foreach ($report['members'] as $member) {
             if ($member['decision'] !== 'would_replace' || $member['blockers'] !== []) continue;
-            if (($member['candidate']['provider'] ?? null) !== 'linode') throw new CloudException('admission_provider_unsupported');
+            if (!in_array($member['candidate']['provider'] ?? null, MachineProvisionProviders::SUPPORTED, true)) throw new CloudException('admission_provider_unsupported');
             $plan = $this->preview->qualifiedPlan($member);
             if (!$plan || ExecutionMember::query()->where('episode_key', $plan->evidence['episode_key'])->exists()) continue;
             $row = Preview::query()->where('service_id', $pin['service_id'])->where('member_id', $member['member_id'])
@@ -154,7 +154,7 @@ class MachineFailoverAdmission
         if ($pin['issued_at'] > $now || $pin['expires_at'] <= $now) throw new CloudException('admission_expired');
         $this->registry->actor($pin['admin_id']); $snapshot = $this->registry->snapshot($pin['service_id'], $pin['service_revision']);
         if (!hash_equals($pin['context_hash'], $this->registry->fingerprint($snapshot))) throw new CloudException('config_changed');
-        foreach ($snapshot['members'] as $member) if ($member['provider'] !== 'linode') throw new CloudException('admission_provider_unsupported');
+        foreach ($snapshot['members'] as $member) if (!in_array($member['provider'], MachineProvisionProviders::SUPPORTED, true)) throw new CloudException('admission_provider_unsupported');
         $release = ServerMachineRelease::query()->find($pin['release']['id']);
         if (!$release || $release->status !== 'active' || !MachineIntentJson::same($release->only(array_keys($pin['release'])), $pin['release']))
             throw new CloudException('release_changed');

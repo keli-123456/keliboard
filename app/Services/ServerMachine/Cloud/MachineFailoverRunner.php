@@ -129,7 +129,12 @@ class MachineFailoverRunner
                 DB::transaction(function () use ($id, $generation, $ticket, $state, $waiting) {
                     $row = Runtime::query()->whereKey($id)->lockForUpdate()->firstOrFail();
                     if (!$this->owns($row, $generation, $ticket)) return;
-                    $urgent = Member::query()->where('execution_id', $id)->whereIn('phase', ['awaiting_dns', 'retry_ready'])->exists();
+                    $urgent = Member::query()->where('execution_id', $id)->where('phase', 'retry_ready')->exists()
+                        || Member::query()->where('execution_id', $id)->where('phase', 'awaiting_dns')->get()->contains(function ($member) {
+                            $attempt = $member->attempt_id ? Attempt::query()->find($member->attempt_id) : null;
+                            $transition = isset($attempt?->payload['transition_id']) ? MachineDnsTransition::query()->find($attempt->payload['transition_id']) : null;
+                            return !$transition || $transition->next_check_at <= time();
+                        });
                     $row->fill(['state' => $state, 'ticket_hash' => null, 'lease_until' => null, 'revision' => $row->revision + 1,
                         'next_check_at' => time() + ($urgent && !$waiting ? 1 : 20), 'next_dispatch_at' => 0, 'reason' => $waiting])->save();
                     $this->event($row, $state === 'finished' ? 'finished' : 'yielded', $waiting);

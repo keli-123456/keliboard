@@ -17,8 +17,8 @@ use Illuminate\Support\Str;
 class MachineProvisionService
 {
     private const REASONS = ['provisioning_disabled', 'test_machine_not_allowed', 'budget_required', 'permission_revoked',
-        'source_changed', 'account_changed', 'provider_forbidden', 'provider_rate_limited', 'provider_rejected',
-        'provider_unavailable', 'provider_invalid', 'bootstrap_unsupported', 'account_backups_enabled', 'budget_exceeded',
+        'source_changed', 'account_changed', 'provider_mismatch', 'provider_forbidden', 'provider_rate_limited', 'provider_rejected',
+        'provider_unavailable', 'provider_invalid', 'bootstrap_unsupported', 'account_backups_enabled', 'budget_exceeded', 'cost_price_unverified',
         'outcome_uncertain', 'reconcile_incomplete', 'duplicate_candidates', 'identity_changed', 'initialization_failed',
         'reports_timeout', 'create_not_resolved', 'deadline', 'queue_unavailable', 'cancelled_by_admin', 'internal_failure',
         'panel_origin_changed', 'resource_missing', 'replacement_disabled', 'replacement_not_allowed',
@@ -26,9 +26,9 @@ class MachineProvisionService
         'replacement_episode_used', 'ownership_mismatch', 'config_changed', 'daily_budget', 'task_active',
         'release_changed', 'isolated_context_changed', 'isolated_scope_changed', 'isolation_confirmation_required', 'credential_group_changed',
         'credential_health_blocked', 'credential_health_unavailable', 'credential_identity_changed',
-        'orchestration_disabled', 'native_lineage_changed', 'native_context_changed', 'native_intent_expired', 'budget_released', 'review_hold'];
+        'orchestration_disabled', 'rotation_disabled', 'native_lineage_changed', 'native_context_changed', 'native_intent_expired', 'budget_released', 'review_hold'];
 
-    public function __construct(private LinodeProvisionClient $provider, private ProvisionBootstrap $bootstrap,
+    public function __construct(private MachineProvisionProviders $provider, private ProvisionBootstrap $bootstrap,
         private MachineCloudHealth $health, private MachineAddressInventory $addresses) {}
 
     public function available(): bool
@@ -50,8 +50,11 @@ class MachineProvisionService
         if (isset($plan['credential_pool'])) app(MachineFailoverCredentials::class)->assertPlan($plan);
         $machine = ServerMachine::query()->findOrFail($plan['machine_id']);
         $account = MachineCloudAccount::query()->findOrFail($plan['account_id']);
-        if (!$machine->is_active || $account->provider !== 'linode') throw new CloudException('invalid_plan');
-        $data = $this->bootstrap->build($machine, $plan['panel_origin'], (string) Str::uuid(), bin2hex(random_bytes(16)), bin2hex(random_bytes(32)));
+        if (!$machine->is_active) throw new CloudException('invalid_plan');
+        $provider = $this->provider->client($account, $plan); $id = (string) Str::uuid();
+        $data = $this->bootstrap->build($machine, $plan['panel_origin'], $id, bin2hex(random_bytes(16)), bin2hex(random_bytes(32)));
+        $request = $provider->buildRequest($plan, $id, 'keli-create-' . bin2hex(random_bytes(12)), $data);
+        if ($account->provider !== 'linode') $data = $account->provider === 'vultr' ? base64_decode($request['user_data'], true) : $request['user_data'];
         return ['plan' => ProvisionPlan::summary($plan), 'bootstrap_bytes' => strlen($data),
             'live_enabled' => config('machine_provision.allow_live') === true, 'provider_checked' => false,
             'budget_approved' => $plan['monthly_limit_usd'] > 0, 'script_exported' => false, 'takeover_performed' => false];
@@ -116,7 +119,8 @@ class MachineProvisionService
             $health = app(MachineCloudCredentialHealth::class); $health->assertEligible($account, $plan);
             $accountIds = $health->sameAccountIds($account);
             $machine = ServerMachine::query()->findOrFail($plan['machine_id']);
-            if ($account->provider !== 'linode' || $account->provider !== ($plan['provider'] ?? 'linode') || !$machine->is_active) throw new CloudException('invalid_plan');
+            if ($account->provider !== ($plan['provider'] ?? 'linode') || !$machine->is_active) throw new CloudException('invalid_plan');
+            $provider = $this->provider->client($account, $plan);
             if (isset($plan['credential_pool'])) app(MachineFailoverCredentials::class)->assertPlan($plan);
             $replacement = $replacementPlan === null ? null : app(MachineReplacementService::class)->validate($replacementPlan, $plan);
             if ($attempt) app(MachineReplacementService::class)->validate($member->plan_id, $plan, null, $attempt);
@@ -135,10 +139,7 @@ class MachineProvisionService
             $id = (string) Str::uuid(); $installation = bin2hex(random_bytes(16)); $secret = bin2hex(random_bytes(32));
             $marker = 'keli-create-' . bin2hex(random_bytes(12));
             $data = $this->bootstrap->build($machine, $plan['panel_origin'], $id, $installation, $secret);
-            $request = ['label' => 'keli-' . str_replace('-', '', $id), 'region' => $plan['region'], 'type' => $plan['size'],
-                'image' => $plan['image'], 'tags' => [$marker], 'booted' => true, 'backups_enabled' => false,
-                'authorized_keys' => $plan['authorized_keys'], 'root_pass' => bin2hex(random_bytes(20)) . 'aA9!',
-                'metadata' => ['user_data' => base64_encode($data)]];
+            $request = $provider->buildRequest($plan, $id, $marker, $data);
             $task = DB::transaction(function () use ($id, $key, $admin, $account, $machine, $plan, $hash, $installation, $secret, $marker, $request, $replacement, $isolated, $attempt) {
                 $replacementId = $replacement === null ? null : MachineReplacementTask::query()->create($replacement + [
                     'task_id' => $id, 'status' => 'queued', 'notice_event' => (string) Str::uuid(),
@@ -168,7 +169,7 @@ class MachineProvisionService
     {
         if (!$this->available() || !($initial = Task::query()->find($id)) || in_array($initial->status, Task::TERMINAL, true)) return;
         if (!app(MachineFailoverRunner::class)->workerOwns($initial)) return;
-        $this->quotaLocked('linode', fn () => $this->locked($initial->account_id, function () use ($id) {
+        $this->quotaLocked($initial->payload['plan']['provider'] ?? 'linode', fn () => $this->locked($initial->account_id, function () use ($id) {
             $task = Task::query()->find($id);
             if (!$task || in_array($task->status, Task::TERMINAL, true) || $task->next_check_at > time()) return;
             try {
@@ -184,6 +185,7 @@ class MachineProvisionService
                     $this->move($task, $task->dispatched_at ? 'needs_review' : 'failed', $reason); return;
                 }
                 $payload = $task->payload;
+                $provider = $this->provider->client($account, $payload['plan']);
                 $health = app(MachineCloudCredentialHealth::class);
                 $credentialState = $health->status($account, $payload['plan'], $task->dispatched_at === null ? null : $task->id);
                 if (!$credentialState['eligible']) {
@@ -194,7 +196,7 @@ class MachineProvisionService
                 if (isset($payload['isolated_acceptance'])) app(MachineIsolatedAcceptance::class)->assertTask($task);
                 if (!$task->dispatched_at) {
                     if (isset($payload['plan']['credential_pool'])) app(MachineFailoverCredentials::class)->assertPlan($payload['plan']);
-                    $this->provider->preflight($account, $payload['plan']);
+                    $provider->preflight($account, $payload['plan']);
                     $health->authenticatedRead($account, 'preflight');
                     $this->gate(); $this->actor($task->admin_id); $this->testMachine($task->machine_id);
                     if ($account->fresh()?->revision !== $task->account_revision) throw new CloudException('account_changed');
@@ -214,7 +216,7 @@ class MachineProvisionService
                         $task->dispatched_at = $dispatchAt; $this->move($task, 'dispatching');
                     });
                     try {
-                        $snapshot = $this->provider->create($account, $payload['request'], $task->dispatched_at);
+                        $snapshot = $provider->create($account, $payload['request'], $task->dispatched_at);
                         $this->acceptSnapshot($task, $snapshot);
                         if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
                         $health->resolveIntent($account, $task->id);
@@ -225,14 +227,14 @@ class MachineProvisionService
                         $this->move($task, 'outcome_unknown', 'outcome_uncertain'); $this->wait($task); return;
                     }
                 } elseif (!$task->external_id) {
-                    $snapshot = $this->provider->reconcile($account, $payload['request'], $task->dispatched_at);
+                    $snapshot = $provider->reconcile($account, $payload['request'], $task->dispatched_at);
                     if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
                     if (!$snapshot) { $this->move($task, 'outcome_unknown', 'outcome_uncertain'); $this->wait($task); return; }
                     $this->acceptSnapshot($task, $snapshot);
                     $health->resolveIntent($account, $task->id);
                 }
                 if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
-                $snapshot = $this->provider->instance($account, $task->external_id);
+                $snapshot = $provider->instance($account, $task->external_id);
                 $this->acceptSnapshot($task, $snapshot);
                 if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
                 if ($task->bootstrap_state === 'failed') { $this->move($task, 'needs_review', 'initialization_failed'); return; }

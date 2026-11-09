@@ -5,7 +5,7 @@ use App\Models\MachineCloudAccount as Account;
 use Illuminate\Support\Facades\Http;
 
 // All requests are bounded GETs. Absence is trusted only for an unrestricted account view.
-class LinodeFailoverCostClient extends LinodeClient
+class LinodeFailoverCostClient extends LinodeClient implements FailoverCostClient
 {
     public function authority(Account $account): bool
     {

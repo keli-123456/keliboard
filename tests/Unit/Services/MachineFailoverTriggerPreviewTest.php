@@ -18,7 +18,7 @@ class MachineFailoverTriggerPreviewTest extends MachineFailoverShadowTest
         parent::setUp();
         foreach (['2026_11_07_180000_create_machine_failover_native_journal.php', '2026_11_07_190000_create_machine_failover_finance.php',
             '2026_11_08_000000_create_machine_failover_trigger_previews.php'] as $file) (require base_path('database/migrations/' . $file))->up();
-        $this->finance = new class(app(\App\Services\ServerMachine\Cloud\MachineFailoverServiceRegistry::class), app(\App\Services\ServerMachine\Cloud\LinodeFailoverCostClient::class)) extends MachineFailoverBudget {
+        $this->finance = new class(app(\App\Services\ServerMachine\Cloud\MachineFailoverServiceRegistry::class), app(\App\Services\ServerMachine\Cloud\MachineProvisionProviders::class)) extends MachineFailoverBudget {
             public array $value = [];
             public function forecast(int $id, int $revision, int $admin): array { return $this->value; }
         };

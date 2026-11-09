@@ -37,7 +37,7 @@ class MachineFailoverPolicyService
         if (!$result['available']) return $result;
         $pool = app(MachineFailoverCredentials::class);
         $result['provider_groups_available'] = $pool->available();
-        $result['provisioning_providers'] = ['linode'];
+        $result['provisioning_providers'] = MachineProvisionProviders::SUPPORTED;
         $result['credential_groups'] = [];
         if ($pool->available()) {
             $result['supported_providers'] = ['linode', 'digitalocean', 'vultr'];
@@ -194,12 +194,10 @@ class MachineFailoverPolicyService
             } catch (CloudException $error) { $add($error->getMessage(), 'blocked'); }
         }
         if (!$account && !$grouped) $add('account_missing', 'blocked');
-        elseif ($account && $account->provider !== 'linode') $add('provider_creation_unsupported', 'blocked');
+        elseif ($account && !in_array($account->provider, MachineProvisionProviders::SUPPORTED, true)) $add('provider_creation_unsupported', 'blocked');
         elseif ($account && !$grouped && $account->revision !== $policy->account_revision) $add('account_changed', 'blocked');
         try { $this->bootstrap->configuredOrigin(); } catch (\Throwable) { $add('panel_origin_invalid', 'blocked'); }
-        $supported = in_array($policy->region, config('machine_provision.supported_regions', []), true)
-            && in_array($policy->size, config('machine_provision.supported_sizes', []), true)
-            && in_array($policy->image, config('machine_provision.supported_images', []), true);
+        $supported = MachineProvisionProviders::templateSupported($credentials->provider($policy) ?? '', $policy->region, $policy->size, $policy->image);
         $add($supported ? 'template_supported' : 'template_unsupported', $supported ? 'passed' : 'blocked');
         if ($grouped && ($task === null || $task->dispatched_at === null)) {
             try { app(MachineCloudCatalog::class)->validate($policy->toArray()); $add('provider_template_valid', 'passed'); }
@@ -208,9 +206,10 @@ class MachineFailoverPolicyService
         $add($policy->monthly_limit_usd > 0 ? 'budget_configured' : 'budget_required', $policy->monthly_limit_usd > 0 ? 'passed' : 'blocked');
         if (!$policy->dns_credential_id || $policy->dns_hostname === '') $add('dns_not_configured', 'blocked');
         else {
-            $credential = Schema::hasTable('v2_machine_dns_credential') ? MachineDnsCredential::query()->find($policy->dns_credential_id, ['id', 'revision']) : null;
+            $credential = Schema::hasTable('v2_machine_dns_credential') ? MachineDnsCredential::query()->find($policy->dns_credential_id, ['id', 'revision', 'provider']) : null;
             if (!$credential) $add('dns_credential_missing', 'blocked');
             elseif ($credential->revision !== $policy->dns_credential_revision) $add('dns_credential_changed', 'blocked');
+            elseif ($credential->provider !== 'cloudflare') $add('owned_dns_unsupported', 'blocked');
             if ($this->dnsConflict($policy->dns_hostname, $policy->id)) $add('dns_record_conflict', 'blocked');
         }
         $add('provider_not_checked', 'unverified');

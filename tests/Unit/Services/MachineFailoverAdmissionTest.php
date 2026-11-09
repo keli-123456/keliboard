@@ -8,7 +8,7 @@ use App\Models\MachineFailoverRuntime as Runtime;
 use App\Models\MachineFailoverTriggerPreview as Preview;
 use App\Models\ServerMachineRelease;
 use App\Services\ServerMachine\Cloud\CloudException;
-use App\Services\ServerMachine\Cloud\LinodeFailoverCostClient;
+use App\Services\ServerMachine\Cloud\MachineProvisionProviders;
 use App\Services\ServerMachine\Cloud\MachineFailoverAdmission;
 use App\Services\ServerMachine\Cloud\MachineFailoverBudget;
 use App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate;
@@ -40,7 +40,7 @@ class MachineFailoverAdmissionTest extends MachineFailoverShadowTest
             '2026_06_12_000002_create_v2_server_machine_release_table.php', '2026_07_14_000001_add_binary_sha256_to_server_machine_release.php'] as $file)
             (require base_path('database/migrations/' . $file))->up();
         config(['app.key' => str_repeat('x', 32)]);
-        $this->finance = new class(app(MachineFailoverServiceRegistry::class), app(LinodeFailoverCostClient::class)) extends MachineFailoverBudget {
+        $this->finance = new class(app(MachineFailoverServiceRegistry::class), app(MachineProvisionProviders::class)) extends MachineFailoverBudget {
             public array $value = [];
             public function forecast(int $id, int $revision, int $admin): array { return $this->value; }
         };
@@ -192,9 +192,9 @@ class MachineFailoverAdmissionTest extends MachineFailoverShadowTest
         $this->release->fill(['sha256' => str_repeat('c', 64)])->save(); $this->blocked('release_changed');
         $this->assertCount(1, $this->starts); $this->assertCount(1, $this->enrollments);
     }
-    public function test_non_linode_provider_is_not_silently_routed_to_linode(): void
+    public function test_unsupported_provider_is_not_silently_routed_to_linode(): void
     {
-        $this->prepareAdmission(); $this->account->fill(['provider' => 'vultr'])->save();
+        $this->prepareAdmission(); $this->account->fill(['provider' => 'unsupported'])->save();
         $registry = app(MachineFailoverServiceRegistry::class); $pins = config('machine_failover.admission_authorizations');
         $pins[0]['context_hash'] = $registry->fingerprint($registry->snapshot($this->service['id'], 1));
         config(['machine_failover.admission_authorizations' => $pins]); $this->blocked('admission_provider_unsupported');

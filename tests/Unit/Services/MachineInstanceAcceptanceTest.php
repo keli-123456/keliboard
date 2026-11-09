@@ -61,7 +61,7 @@ class MachineInstanceAcceptanceTest extends TestCase
             'machine_acceptance' => require base_path('config/machine_acceptance.php')]);
         foreach (['2026_11_05_170000_create_machine_cloud_tables.php', '2026_11_06_010000_add_machine_cloud_providers.php',
             '2026_11_05_160000_create_machine_dns_tables.php', '2026_11_05_220000_create_machine_provision_tasks.php',
-            '2026_11_06_030000_create_machine_failover_policies.php', '2026_11_06_050000_create_machine_acceptance_tables.php',
+            '2026_11_06_030000_create_machine_failover_policies.php', '2026_11_06_050000_create_machine_acceptance_tables.php', '2026_11_09_140000_add_machine_dns_readback_state.php',
             '2026_06_12_000002_create_v2_server_machine_release_table.php', '2026_07_14_000001_add_binary_sha256_to_server_machine_release.php'] as $file) {
             (require base_path('database/migrations/' . $file))->up();
         }
@@ -178,7 +178,10 @@ class MachineInstanceAcceptanceTest extends TestCase
             if (str_starts_with($request->url(), 'https://api.cloudflare.com/')) {
                 if ($request->method() === 'GET') {
                     if ($this->duringDnsRead) ($this->duringDnsRead)();
-                    return Http::response(['success' => true, 'result' => array_values($this->records), 'result_info' => ['total_pages' => 1]]);
+                    if ($this->mode === 'dns_read_rate') return Http::response([], 429, ['Retry-After' => '900']);
+                    if ($this->mode === 'dns_read_unavailable') return Http::response([], 503);
+                    return Http::response(['success' => true, 'result' => array_values($this->records),
+                        'result_info' => ['total_pages' => 1, 'total_count' => count($this->records), 'page' => 1, 'per_page' => 50]]);
                 }
                 $this->dnsWrites++;
                 if ($request->method() === 'POST') {
@@ -256,8 +259,90 @@ class MachineInstanceAcceptanceTest extends TestCase
         $result = $this->dns->execute($intent['id'], $this->admin->id);
         $this->assertSame('needs_review', $result['state']); $this->assertSame(1, $this->dnsWrites);
         $this->assertNull(MachineOwnedDns::query()->first()->active_instance_id);
-        $this->mode = ''; $result = $this->dns->execute($intent['id'], $this->admin->id);
+        $this->mode = ''; MachineDnsTransition::query()->whereKey($intent['id'])->update(['next_check_at' => time() - 1]);
+        $result = $this->dns->execute($intent['id'], $this->admin->id);
         $this->assertSame('verified', $result['state']); $this->assertSame(1, $this->dnsWrites);
+    }
+
+    public function test_dns_retry_after_survives_service_recreation_and_early_polls_make_no_provider_calls(): void
+    {
+        $instance = $this->verified(); $intent = $this->intent($instance);
+        $this->afterDnsWrite = function () { $this->mode = 'dns_read_rate'; };
+        $result = $this->dns->execute($intent['id'], $this->admin->id);
+        $this->assertSame('needs_review', $result['state']); $this->assertSame(1, $result['readback_attempts']);
+        $this->assertGreaterThanOrEqual(time() + 899, $result['next_check_at']); $this->assertNull($result['confirmed_at']);
+        $reads = Http::recorded()->count();
+        $service = new MachineOwnedDnsService($this->service, new \App\Services\ServerMachine\Dns\DnsProviderClient());
+        $this->assertSame($result, $service->execute($intent['id'], $this->admin->id));
+        $this->assertSame($reads, Http::recorded()->count()); $this->assertSame(1, $this->dnsWrites);
+        $this->mode = ''; $this->afterDnsWrite = null;
+        MachineDnsTransition::query()->whereKey($intent['id'])->update(['next_check_at' => time() - 1]);
+        $result = $service->execute($intent['id'], $this->admin->id);
+        $this->assertSame('verified', $result['state']); $this->assertSame(2, $result['readback_attempts']);
+        $this->assertNotNull($result['confirmed_at']); $this->assertNull($result['next_check_at']); $this->assertSame(1, $this->dnsWrites);
+    }
+
+    public function test_preflight_rate_limit_defers_without_setting_a_dispatch_fence_or_creating_dns(): void
+    {
+        $instance = $this->verified(); $intent = $this->intent($instance); $this->mode = 'dns_read_rate';
+        $result = $this->dns->execute($intent['id'], $this->admin->id);
+        $this->assertSame('prepared', $result['state']); $this->assertNull($result['dispatched_at']);
+        $this->assertSame(0, $result['readback_attempts']); $this->assertGreaterThanOrEqual(time() + 899, $result['next_check_at']);
+        $reads = Http::recorded()->count(); $this->dns->execute($intent['id'], $this->admin->id);
+        $this->assertSame($reads, Http::recorded()->count()); $this->assertSame(0, $this->dnsWrites);
+    }
+
+    public function test_last_dns_snapshot_rejects_an_external_change_after_the_first_preflight_read(): void
+    {
+        $first = $this->verified(); $this->dns->execute($this->intent($first)['id'], $this->admin->id);
+        $second = $this->verified(); $intent = $this->intent($second); $reads = 0;
+        $this->duringDnsRead = function () use (&$reads) { if (++$reads === 2) $this->records[array_key_first($this->records)]['content'] = '1.0.0.1'; };
+        $this->code('dns_record_changed', fn () => $this->dns->execute($intent['id'], $this->admin->id));
+        $this->assertSame(1, $this->dnsWrites); $this->assertNull(MachineDnsTransition::query()->findOrFail($intent['id'])->dispatched_at);
+        $this->assertSame('1.0.0.1', $this->records[array_key_first($this->records)]['content']);
+        $this->assertSame('active', $first->fresh()->status); $this->assertNotSame('active', $second->fresh()->status);
+    }
+
+    public function test_readback_exhaustion_is_durable_and_never_rewrites_or_reverses_dns(): void
+    {
+        $instance = $this->verified(); $intent = $this->intent($instance); $this->mode = 'dns_timeout';
+        $this->dns->execute($intent['id'], $this->admin->id); $this->mode = 'dns_read_unavailable';
+        MachineDnsTransition::query()->whereKey($intent['id'])->update(['readback_attempts' => MachineOwnedDnsService::READBACK_LIMIT - 1, 'next_check_at' => time() - 1]);
+        $result = $this->dns->execute($intent['id'], $this->admin->id);
+        $this->assertSame('dns_readback_exhausted', $result['reason']); $this->assertNull($result['next_check_at']);
+        $this->assertSame(MachineOwnedDnsService::READBACK_LIMIT, $result['readback_attempts']); $reads = Http::recorded()->count();
+        $this->dns->execute($intent['id'], $this->admin->id); $this->assertSame($reads, Http::recorded()->count());
+        $this->assertSame(1, $this->dnsWrites); $this->assertNotSame('active', $instance->fresh()->status);
+    }
+
+    public function test_another_administrator_cannot_execute_the_original_administrators_intent(): void
+    {
+        $instance = $this->verified(); $intent = $this->intent($instance);
+        $other = User::query()->create(['is_admin' => true]); $reads = Http::recorded()->count();
+        $this->code('permission_revoked', fn () => $this->dns->execute($intent['id'], $other->id));
+        $this->assertSame($reads, Http::recorded()->count()); $this->assertSame(0, $this->dnsWrites);
+    }
+
+    public function test_readback_migration_is_required_without_losing_prior_transition_evidence(): void
+    {
+        $instance = $this->verified(); $intent = $this->intent($instance);
+        $migration = require base_path('database/migrations/2026_11_09_140000_add_machine_dns_readback_state.php'); $migration->down();
+        $this->assertFalse($this->dns->available()); $this->code('migration_required', fn () => $this->dns->execute($intent['id'], $this->admin->id));
+        $view = $this->service->overview(); $this->assertFalse($view['dns_enabled']); $this->assertFalse($view['policies'][0]['dns_allowed']);
+        $this->assertSame('prepared', MachineDnsTransition::query()->findOrFail($intent['id'])->state);
+        $migration->up(); $this->assertTrue($this->dns->available());
+        $this->assertSame(0, MachineDnsTransition::query()->findOrFail($intent['id'])->readback_attempts);
+        $this->assertSame(0, $this->dnsWrites);
+    }
+
+    public function test_downgrade_refuses_to_discard_used_dns_readback_evidence(): void
+    {
+        $instance = $this->verified(); $intent = $this->intent($instance); $this->dns->execute($intent['id'], $this->admin->id);
+        $migration = require base_path('database/migrations/2026_11_09_140000_add_machine_dns_readback_state.php');
+        try { $migration->down(); $this->fail('Expected evidence-preserving downgrade refusal'); }
+        catch (\RuntimeException $error) { $this->assertStringContainsString('downgrade refused', $error->getMessage()); }
+        $this->assertTrue($this->dns->available());
+        $this->assertNotNull(MachineDnsTransition::query()->findOrFail($intent['id'])->confirmed_at);
     }
 
     public function test_switch_retains_previous_instance_and_recovery_requires_fresh_verification(): void

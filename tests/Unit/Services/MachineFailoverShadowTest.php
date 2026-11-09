@@ -57,7 +57,7 @@ class MachineFailoverShadowTest extends TestCase
             '2026_11_06_020000_create_machine_cloud_groups.php', '2026_11_05_160000_create_machine_dns_tables.php',
             '2026_11_05_200000_create_machine_operation_notices.php', '2026_11_05_220000_create_machine_provision_tasks.php',
             '2026_11_06_030000_create_machine_failover_policies.php', '2026_11_07_120000_add_provider_groups_to_machine_failover.php',
-            '2026_11_06_040000_create_machine_failover_observations.php', '2026_11_06_050000_create_machine_acceptance_tables.php',
+            '2026_11_06_040000_create_machine_failover_observations.php', '2026_11_06_050000_create_machine_acceptance_tables.php', '2026_11_09_140000_add_machine_dns_readback_state.php',
             '2026_11_07_090000_create_machine_replacement_tasks.php', '2026_11_07_140000_create_machine_failover_services.php',
             '2026_11_07_160000_create_machine_credential_health.php'] as $file) (require base_path('database/migrations/' . $file))->up();
         Schema::create('v2_user', function (Blueprint $t) { $t->id(); $t->boolean('is_admin'); $t->boolean('banned')->default(false); $t->timestamps(); });

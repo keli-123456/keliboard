@@ -19,7 +19,7 @@ use Illuminate\Support\Str;
 class MachineFailoverReview
 {
     private bool $ready = false;
-    public function __construct(private MachineFailoverServiceRegistry $registry, private LinodeFailoverCostClient $cloud) {}
+    public function __construct(private MachineFailoverServiceRegistry $registry, private MachineProvisionProviders $cloud) {}
 
     public function available(): bool
     {
@@ -88,22 +88,23 @@ class MachineFailoverReview
         if (!$task || (!$task->dispatched_at && !$task->external_id && $task->bootstrap_state === null)
             || app(MachineFailoverNativeBridge::class)->definitelyRejected($task)) return ['state' => 'not_created', 'candidate' => null];
         $account = Account::query()->find($task->account_id);
-        if (!$account || $account->provider !== 'linode' || $account->revision !== $task->account_revision) throw new CloudException('account_changed');
-        if (!$this->cloud->authority($account)) throw new CloudException('cost_scope_unknown');
-        $inventory = $this->cloud->completeInventory($account); $request = $task->payload['request']; $found = [];
+        if (!$account || $account->provider !== ($task->payload['plan']['provider'] ?? 'linode') || $account->revision !== $task->account_revision) throw new CloudException('account_changed');
+        $client = $this->cloud->cost($account); $unrestricted = $client->authority($account);
+        if ($account->provider === 'linode' && !$unrestricted) throw new CloudException('cost_scope_unknown');
+        $inventory = $client->completeInventory($account); $request = MachineProvisionProviders::requestIdentity($account->provider, $task->payload['request']); $found = [];
         foreach ($inventory as $row) {
             if ($task->external_id ? $row['external_id'] !== $task->external_id
                 : ($row['label'] !== ($request['label'] ?? null) || !in_array($task->marker, $row['tags'], true))) continue;
             $created = strtotime($row['provider_created_at']);
             if ($row['label'] !== ($request['label'] ?? null) || !in_array($task->marker, $row['tags'], true)
-                || $row['region'] !== ($request['region'] ?? null) || $row['size'] !== ($request['type'] ?? null)
+                || $row['region'] !== ($request['region'] ?? null) || $row['size'] !== $request['size']
                 || $row['image'] !== ($request['image'] ?? null) || $created < $task->dispatched_at - 30 || $created > $task->dispatched_at + 1230
                 || ($task->provider_created_at && $task->provider_created_at !== $row['provider_created_at'])) throw new CloudException('review_identity_mismatch');
             $found[] = array_intersect_key($row, array_flip(['external_id', 'provider_created_at', 'public_ips', 'label', 'region', 'size', 'image']));
         }
-        if (!$this->cloud->authority($account) || $account->fresh()?->revision !== $account->revision) throw new CloudException('cost_scope_unknown');
+        if ($client->authority($account) !== $unrestricted || $account->fresh()?->revision !== $account->revision) throw new CloudException('cost_scope_unknown');
         if (count($found) > 1) throw new CloudException('duplicate_candidates');
-        return ['state' => $found ? 'found' : ($task->external_id ? 'absent' : 'unresolved'), 'candidate' => $found[0] ?? null];
+        return ['state' => $found ? 'found' : ($task->external_id && $unrestricted ? 'absent' : 'unresolved'), 'candidate' => $found[0] ?? null];
     }
     private function view(Check $check, array $subject): array
     {
@@ -123,8 +124,10 @@ class MachineFailoverReview
         $this->registry->actor($admin);
         if (!$this->available() || !in_array($operation, ['claim', 'close', 'restore'], true) || !preg_match('/^[a-f0-9]{32}$/D', $request)) throw new CloudException('invalid_review_request');
         $initial = Check::query()->findOrFail($checkId);
-        $task = $initial->attempt_id ? Task::query()->find(Attempt::query()->findOrFail($initial->attempt_id)->task_id) : null;
-        $result = $this->registry->locked(fn () => Cache::lock('machine-cloud:quota:linode', 120)->block(2,
+        $attempt = $initial->attempt_id ? Attempt::query()->findOrFail($initial->attempt_id) : null;
+        $task = $attempt?->task_id ? Task::query()->find($attempt->task_id) : null;
+        $provider = $task?->payload['plan']['provider'] ?? $attempt?->payload['plan']['provider'] ?? 'linode';
+        $result = $this->registry->locked(fn () => Cache::lock('machine-cloud:quota:' . $provider, 120)->block(2,
             fn () => Cache::lock('machine-cloud:account:' . ($task?->account_id ?? 'review-empty'), 120)->block(2,
                 fn () => DB::transaction(function () use ($checkId, $operation, $request, $admin) {
                     $this->registry->actor($admin); $check = Check::query()->whereKey($checkId)->lockForUpdate()->firstOrFail();

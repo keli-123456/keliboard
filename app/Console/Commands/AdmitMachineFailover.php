@@ -7,7 +7,7 @@ use Illuminate\Console\Command;
 class AdmitMachineFailover extends Command
 {
     protected $signature = 'machines:admit-failover {--limit=5}';
-    protected $description = 'Admit pinned Linode fault episodes through the existing closed execution gate';
+    protected $description = 'Admit provider-pinned fault episodes through the existing closed execution gate';
 
     public function handle(MachineFailoverAdmission $admission): int
     {

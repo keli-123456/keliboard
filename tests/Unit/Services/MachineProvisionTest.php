@@ -71,7 +71,8 @@ class MachineProvisionTest extends TestCase
         $this->account = Account::query()->create(['name' => 'Synthetic account', 'provider' => 'linode',
             'credentials' => ['api_token' => 'synthetic-provider-secret'], 'revision' => 1]);
         $this->provider = new LinodeProvisionClient(); $this->inventory = new MachineAddressInventory();
-        $this->service = new MachineProvisionService($this->provider, new ProvisionBootstrap(),
+        app()->instance(LinodeProvisionClient::class, $this->provider);
+        $this->service = new MachineProvisionService(new \App\Services\ServerMachine\Cloud\MachineProvisionProviders(), new ProvisionBootstrap(),
             new MachineCloudHealth($this->inventory, new NodeInstanceRegistry()), $this->inventory);
         $this->fake();
     }

@@ -79,7 +79,7 @@ class MachineFailoverTriggerPreview
                 if (!$episode) $reasons[] = 'decision_snapshot_missing';
                 if ($episode && MachineFailoverExecutionMember::query()->where('episode_key', $episode)->exists()) $reasons[] = 'native_episode_used';
                 if ($active) $reasons[] = 'native_run_active';
-                if (($member['candidate']['provider'] ?? null) !== 'linode') $reasons[] = 'unsupported_provider';
+                if (!in_array($member['candidate']['provider'] ?? null, MachineProvisionProviders::SUPPORTED, true)) $reasons[] = 'unsupported_provider';
                 if (($cost['state'] ?? '') !== 'verified' || !is_int($cost['available_cents'] ?? null) || ($cost['valid_until'] ?? 0) <= $now)
                     $reasons[] = 'cost_baseline_required';
                 else {

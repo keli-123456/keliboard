@@ -27,7 +27,7 @@ class MachineIsolatedAcceptance
         $plan = $this->plan($policy); $accountId = $plan['account_id'];
         $checks = array_values(array_filter($this->policies->localChecks($policy), fn ($check) => !in_array($check['code'], [
             'execution_disabled', 'dns_not_configured', 'dns_credential_missing', 'dns_credential_changed', 'dns_record_conflict',
-            'external_ownership_unverified', 'forwarding_not_verified'], true)));
+            'external_ownership_unverified', 'forwarding_not_verified', 'owned_dns_unsupported'], true)));
         $add = function (string $code, bool $passed) use (&$checks) { $checks[] = ['code' => $code, 'status' => $passed ? 'passed' : 'blocked']; };
         $add('provisioning_enabled', config('machine_provision.allow_live') === true);
         $add('test_machine_allowed', in_array($policy->machine_id, config('machine_provision.allowed_test_machine_ids', []), true));

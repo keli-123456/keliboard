@@ -67,7 +67,7 @@ trait CloudCatalogReads
         return ['regions' => array_values($regions), 'sizes' => array_values($sizes), 'images' => array_values($images)];
     }
 
-    private function catalogPages(MachineCloudAccount $account, string $path, string $key, float $deadline): array
+    protected function catalogPages(MachineCloudAccount $account, string $path, string $key, float $deadline): array
     {
         $rows = []; $cursor = null; $seen = []; $expected = null;
         for ($page = 1; $page <= 3; $page++) {

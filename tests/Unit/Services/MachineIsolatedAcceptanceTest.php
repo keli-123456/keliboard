@@ -56,7 +56,7 @@ class MachineIsolatedAcceptanceTest extends TestCase
             'machine_failover' => require base_path('config/machine_failover.php')]);
         foreach (['2026_11_05_170000_create_machine_cloud_tables.php', '2026_11_06_010000_add_machine_cloud_providers.php',
             '2026_11_05_160000_create_machine_dns_tables.php', '2026_11_05_220000_create_machine_provision_tasks.php',
-            '2026_11_06_030000_create_machine_failover_policies.php', '2026_11_06_050000_create_machine_acceptance_tables.php',
+            '2026_11_06_030000_create_machine_failover_policies.php', '2026_11_06_050000_create_machine_acceptance_tables.php', '2026_11_09_140000_add_machine_dns_readback_state.php',
             '2026_06_12_000002_create_v2_server_machine_release_table.php', '2026_07_14_000001_add_binary_sha256_to_server_machine_release.php'] as $file) {
             (require base_path('database/migrations/' . $file))->up();
         }

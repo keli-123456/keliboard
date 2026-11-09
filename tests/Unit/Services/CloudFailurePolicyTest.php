@@ -61,7 +61,7 @@ class CloudFailurePolicyTest extends TestCase
         $pool[0]['identity_key'] = null;
         $this->assertSame('account_identity_required', $planner->decide($policy->response('linode', 'POST', 402), $pool[0], $pool, 2, [1])['reason']);
     }
-    public static function plannerStops(): array { return [['unknown'], ['rate'], ['template'], ['budget'], ['wrong_provider'], ['wrong_group'], ['duplicate_token'], ['already_tried'], ['unhealthy'], ['no_budget'], ['unverified_account']]; }
+    public static function plannerStops(): array { return [['unknown'], ['rate'], ['template'], ['budget'], ['wrong_provider'], ['wrong_group'], ['duplicate_token'], ['already_tried'], ['unhealthy'], ['no_budget'], ['unverified_account'], ['review_required'], ['not_candidate'], ['missing_proof']]; }
     #[DataProvider('plannerStops')]
     public function test_unsafe_rotation_is_rejected(string $case): void
     {
@@ -70,6 +70,9 @@ class CloudFailurePolicyTest extends TestCase
         if ($case === 'rate') $failure = $policy->response('linode', 'POST', 429);
         if ($case === 'template') $failure = $policy->response('linode', 'POST', 422, ['errors' => [['field' => 'image', 'reason' => 'invalid']]]);
         if ($case === 'budget') $remaining = 0;
+        if ($case === 'review_required') $failure['requires_review'] = true;
+        if ($case === 'not_candidate') $failure['rotation_candidate'] = false;
+        if ($case === 'missing_proof') unset($failure['requires_review']);
         if ($case === 'already_tried') $tried = [1, 2, 3];
         foreach ([1, 2] as $index) {
             if ($case === 'wrong_provider') $pool[$index]['provider'] = 'vultr';

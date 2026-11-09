@@ -77,7 +77,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
             '2026_11_05_200000_create_machine_operation_notices.php', '2026_11_05_220000_create_machine_provision_tasks.php',
             '2026_11_06_010000_add_machine_cloud_providers.php', '2026_11_06_020000_create_machine_cloud_groups.php',
             '2026_11_06_030000_create_machine_failover_policies.php', '2026_11_06_040000_create_machine_failover_observations.php',
-            '2026_11_06_050000_create_machine_acceptance_tables.php', '2026_11_07_090000_create_machine_replacement_tasks.php',
+            '2026_11_06_050000_create_machine_acceptance_tables.php', '2026_11_09_140000_add_machine_dns_readback_state.php', '2026_11_07_090000_create_machine_replacement_tasks.php',
             '2026_11_07_120000_add_provider_groups_to_machine_failover.php', '2026_11_07_140000_create_machine_failover_services.php',
             '2026_11_07_160000_create_machine_credential_health.php', '2026_11_07_180000_create_machine_failover_native_journal.php',
             '2026_06_12_000002_create_v2_server_machine_release_table.php', '2026_07_14_000001_add_binary_sha256_to_server_machine_release.php'] as $file) {
@@ -97,25 +97,31 @@ class MachineFailoverNativeBridgeTest extends TestCase
 
     protected function tearDown(): void { Carbon::setTestNow(); parent::tearDown(); }
 
-    private function fixture(int $n): array
+    private function fixture(int $n, string $provider = 'linode'): array
     {
+        [$region, $size, $image] = match ($provider) {
+            'digitalocean' => ['sgp1', 's-1vcpu-1gb', 'debian-12-x64'], 'vultr' => ['40', 'vc2-1c-1gb', '2136'],
+            default => ['sg-sin-2', 'g6-standard-4', 'linode/debian12'],
+        };
+        if ($provider !== 'linode') foreach (['regions' => $region, 'sizes' => $size, 'images' => $image] as $key => $value)
+            config(['machine_provision.providers.' . $provider . '.' . $key => [$value]]);
         $machine = ServerMachine::query()->create(['name' => 'Isolated fixture ' . $n, 'token' => 'synthetic-machine-' . $n, 'is_active' => true]);
         DB::table('v2_server')->insert(['id' => $n, 'machine_id' => $machine->id, 'enabled' => true, 'type' => 'hysteria', 'port' => 8443, 'server_port' => 8443]);
         $group = MachineCloudGroup::query()->create(['name' => 'Fixture pool ' . $n, 'name_key' => hash('sha256', 'pool' . $n), 'revision' => 1]);
         $accounts = [];
         foreach (['a', 'b'] as $letter) {
-            $account = Account::query()->create(['name' => 'Fixture ' . $n . $letter, 'provider' => 'linode', 'group_id' => $group->id,
+            $account = Account::query()->create(['name' => 'Fixture ' . $n . $letter, 'provider' => $provider, 'group_id' => $group->id,
                 'group_revision' => 1, 'revision' => 1, 'credentials' => ['api_token' => 'synthetic-token-' . $n . $letter]]);
             app(MachineCloudCredentialHealth::class)->verify($account->id, 1, $this->admin->id); $accounts[] = $account;
         }
-        $pool = app(MachineFailoverCredentials::class)->pool($group->id, 'linode'); $fingerprint = hash('sha256', 'synthetic-catalog-' . $n);
+        $pool = app(MachineFailoverCredentials::class)->pool($group->id, $provider); $fingerprint = hash('sha256', 'synthetic-catalog-' . $n);
         Cache::put('machine-cloud:catalog:' . $pool['fingerprint'], ['checked_at' => time(), 'expires_at' => time() + 600, 'fingerprint' => $fingerprint,
-            'regions' => [['id' => 'sg-sin-2']], 'sizes' => [['id' => 'g6-standard-4', 'regions' => ['sg-sin-2'], 'disk_gib' => 80]],
-            'images' => [['id' => 'linode/debian12', 'regions' => ['sg-sin-2'], 'min_disk_gib' => 4]]], 600);
+            'regions' => [['id' => $region]], 'sizes' => [['id' => $size, 'regions' => [$region], 'disk_gib' => 80]],
+            'images' => [['id' => $image, 'regions' => [$region], 'min_disk_gib' => 4]]], 600);
         $credential = MachineDnsCredential::query()->create(['name' => 'Synthetic DNS ' . $n, 'provider' => 'cloudflare', 'revision' => 1, 'credentials' => ['api_token' => 'synthetic-dns-' . $n]]);
-        $saved = app(MachineFailoverPolicyService::class)->save(['name' => 'Fixture ' . $n, 'machine_id' => $machine->id, 'provider' => 'linode',
-            'credential_group_id' => $group->id, 'catalog_fingerprint' => $fingerprint, 'region' => 'sg-sin-2', 'size' => 'g6-standard-4',
-            'image' => 'linode/debian12', 'failure_threshold' => 2, 'stale_after_seconds' => 300, 'cooldown_seconds' => 300,
+        $saved = app(MachineFailoverPolicyService::class)->save(['name' => 'Fixture ' . $n, 'machine_id' => $machine->id, 'provider' => $provider,
+            'credential_group_id' => $group->id, 'catalog_fingerprint' => $fingerprint, 'region' => $region, 'size' => $size,
+            'image' => $image, 'failure_threshold' => 2, 'stale_after_seconds' => 300, 'cooldown_seconds' => 300,
             'monthly_limit_usd' => 100, 'daily_limit' => 2, 'dns_credential_id' => $credential->id, 'dns_hostname' => 'fixture' . $n . '.example.test',
             'isolation_confirmed' => true], $this->admin->id);
         $policy = Policy::query()->findOrFail($saved['id']); $policy->forceFill(['created_at' => time() - 60])->save();
@@ -167,6 +173,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
         app()->instance(MachineFailoverExecutionGate::class, new class extends MachineFailoverExecutionGate { public function assertAllowed(string $operation): void {} });
         config(['machine_provision.allow_live' => true, 'machine_provision.allowed_test_machine_ids' => array_map(fn ($f) => $f['machine']->id, $this->fixtures),
             'machine_failover.allow_replacement' => true, 'machine_failover.allowed_replacement_policy_ids' => array_map(fn ($f) => $f['policy']->id, $this->fixtures),
+            'machine_failover.allow_rotation' => true, 'machine_failover.allowed_rotation_policy_ids' => array_map(fn ($f) => $f['policy']->id, $this->fixtures),
             'machine_acceptance.allow_verification' => true, 'machine_acceptance.allow_dns' => true,
             'machine_acceptance.allowed_policy_ids' => array_map(fn ($f) => $f['policy']->id, $this->fixtures),
             'machine_acceptance.verifier_url' => 'https://verifier.example.test/v1/verify', 'machine_acceptance.verifier_key' => str_repeat('k', 32),
@@ -196,7 +203,8 @@ class MachineFailoverNativeBridgeTest extends TestCase
 
     private function callbackSecret(Task $task): string
     {
-        $data = Yaml::parse(base64_decode($task->payload['request']['metadata']['user_data']));
+        $provider = $task->payload['plan']['provider'] ?? 'linode'; $request = $task->payload['request'];
+        $data = Yaml::parse($provider === 'digitalocean' ? $request['user_data'] : base64_decode($provider === 'vultr' ? $request['user_data'] : $request['metadata']['user_data']));
         preg_match('/Bearer ([a-f0-9]{64})/', $data['write_files'][2]['content'], $match);
         return $match[1];
     }
@@ -206,11 +214,12 @@ class MachineFailoverNativeBridgeTest extends TestCase
         Http::swap(new \Illuminate\Http\Client\Factory()); Http::preventStrayRequests();
         Http::fake(function ($request) {
             $url = $request->url();
+            if (str_starts_with($url, 'https://api.digitalocean.com/') || str_starts_with($url, 'https://api.vultr.com/')) return $this->jsonProvider($request);
             if (str_starts_with($url, 'https://api.linode.com/')) {
                 if ($request->method() === 'POST') {
                     $token = $request->header('Authorization')[0]; $this->posts[] = [$token, $request['label']];
                     if ($this->duringPost) ($this->duringPost)();
-                    if ($this->mode === 'reject' && count($this->posts) === 1) return Http::response(['errors' => [['reason' => 'fixture denial']]], 401);
+                    if ($this->mode === 'reject_all' || $this->mode === 'reject' && count($this->posts) === 1) return Http::response(['errors' => [['reason' => 'fixture denial']]], 401);
                     if ($this->mode === 'billing' && count($this->posts) === 1) return Http::response(['errors' => [['reason' => 'fixture billing']]], 402);
                     if ($this->mode === 'quota' && count($this->posts) === 1) return Http::response(['errors' => [['reason' => 'quota exceeded']]], 422);
                     if ($this->mode === 'rate') return Http::response(['errors' => [['reason' => 'fixture rate']]], 429, ['Retry-After' => '120']);
@@ -254,7 +263,9 @@ class MachineFailoverNativeBridgeTest extends TestCase
                     if ($this->duringDnsRead) ($this->duringDnsRead)();
                     parse_str(parse_url($url, PHP_URL_QUERY) ?? '', $query);
                     $hostname = $query['name_exact'] ?? $query['name'] ?? null;
-                    return Http::response(['success' => true, 'result' => array_values(array_filter($this->records, fn ($row) => $hostname === null || $row['name'] === $hostname)), 'result_info' => ['total_pages' => 1]]);
+                    $rows = array_values(array_filter($this->records, fn ($row) => $hostname === null || $row['name'] === $hostname));
+                    return Http::response(['success' => true, 'result' => $rows,
+                        'result_info' => ['total_pages' => 1, 'total_count' => count($rows), 'page' => 1, 'per_page' => 50]]);
                 }
                 $this->assertSame('PATCH', $request->method()); $this->dnsWrites++;
                 $id = basename(parse_url($url, PHP_URL_PATH)); $this->records[$id] = array_replace($this->records[$id], $request->data());
@@ -264,6 +275,109 @@ class MachineFailoverNativeBridgeTest extends TestCase
             }
             throw new \RuntimeException('Unmocked fixture transport');
         });
+    }
+
+    private function jsonProvider($request)
+    {
+        $provider = str_contains($request->url(), 'api.digitalocean.com') ? 'digitalocean' : 'vultr';
+        $path = substr(parse_url($request->url(), PHP_URL_PATH), 3);
+        if ($path === '/account') return Http::response(['account' => $provider === 'digitalocean'
+            ? ['status' => 'active', 'uuid' => 'fixture-account-' . substr(hash('sha256', $request->header('Authorization')[0]), 0, 16)] : ['balance' => 20]]);
+        if ($request->method() === 'POST') {
+            $this->assertSame($provider === 'digitalocean' ? '/droplets' : '/instances', $path);
+            $label = $request[$provider === 'digitalocean' ? 'name' : 'label'];
+            $this->posts[] = [$request->header('Authorization')[0], $label];
+            if ($this->mode === 'reject_all' || $this->mode === 'reject' && count($this->posts) === 1) return Http::response([], 401);
+            if ($this->mode === 'billing' && count($this->posts) === 1) return Http::response([], 402);
+            if ($this->mode === 'quota' && count($this->posts) === 1) return Http::response([$provider === 'digitalocean' ? 'message' : 'error' => 'Instance limit reached'], 422);
+            if ($this->mode === 'rate') return Http::response([], 429, ['Retry-After' => '120']);
+            $n = count($this->posts);
+            $row = ['tags' => $request['tags'], 'features' => ['ipv6']] + ($provider === 'digitalocean'
+                ? ['id' => 2000 + $n, 'name' => $label, 'region' => ['slug' => $request['region']], 'size_slug' => $request['size'],
+                    'image' => ['slug' => $request['image']], 'created_at' => gmdate('Y-m-d\TH:i:s\Z'), 'status' => 'active', 'locked' => false,
+                    'volume_ids' => [], 'networks' => ['v4' => [['ip_address' => '8.8.4.4', 'type' => 'public']]]]
+                : ['id' => sprintf('20000000-0000-4000-8000-%012d', $n), 'label' => $label, 'region' => $request['region'], 'plan' => $request['plan'],
+                    'os_id' => $request['os_id'], 'date_created' => gmdate('Y-m-d H:i:s'), 'status' => 'active', 'server_status' => 'ok',
+                    'power_status' => 'running', 'main_ip' => '8.8.4.4', 'default_password' => 'never-export-this']);
+            if ($this->mode !== 'unknown_absent') $this->remote[$row['id']] = $row;
+            if (str_starts_with($this->mode, 'unknown')) return Http::response([], 503);
+            return Http::response([$provider === 'digitalocean' ? 'droplet' : 'instance' => $row], 202);
+        }
+        $this->assertSame('GET', $request->method());
+        $key = ltrim($path, '/');
+        $catalog = $provider === 'digitalocean' ? [
+            'regions' => [['slug' => 'sgp1', 'name' => 'Singapore', 'available' => true]],
+            'sizes' => [['slug' => 's-1vcpu-1gb', 'available' => true, 'regions' => ['sgp1'], 'vcpus' => 1, 'memory' => 1024, 'disk' => 25, 'price_monthly' => 6]],
+            'images' => [['slug' => 'debian-12-x64', 'name' => 'Debian', 'public' => true, 'type' => 'base', 'status' => 'available', 'regions' => ['sgp1'], 'min_disk_size' => 4]],
+        ] : ['regions' => [['id' => '40', 'city' => 'Singapore']],
+            'plans' => [['id' => 'vc2-1c-1gb', 'type' => 'vc2', 'locations' => ['40'], 'vcpu_count' => 1, 'ram' => 1024, 'disk' => 25, 'monthly_cost' => 5]],
+            'os' => [['id' => 2136, 'name' => 'Debian', 'arch' => 'x64', 'family' => 'debian']]];
+        if (isset($catalog[$key])) return Http::response([$key => $catalog[$key], 'meta' => ['total' => count($catalog[$key])]]);
+        if (str_ends_with($path, '/availability')) return Http::response(['available_plans' => ['vc2-1c-1gb']]);
+        if (preg_match('~^/(?:droplets|instances)/([^/]+)$~', $path, $m)) return Http::response([$provider === 'digitalocean' ? 'droplet' : 'instance' => $this->remote[$m[1]]]);
+        if (in_array($path, ['/droplets', '/instances'], true)) {
+            $rows = array_values(array_filter($this->remote, fn ($row) => $provider === 'digitalocean' ? isset($row['size_slug']) : isset($row['os_id'])));
+            return Http::response([$provider === 'digitalocean' ? 'droplets' : 'instances' => $rows, 'meta' => ['total' => count($rows)]]);
+        }
+        throw new \RuntimeException('Unmocked JSON provider transport');
+    }
+
+    public static function jsonProviders(): array { return [['digitalocean'], ['vultr']]; }
+    #[DataProvider('jsonProviders')]
+    public function test_json_providers_complete_the_pinned_create_report_forwarding_dns_chain(string $provider): void
+    {
+        $this->fixtures = [$this->fixture(2, $provider)];
+        $run = $this->advance($this->start()); $task = $this->task();
+        $this->assertSame($provider, $task->payload['plan']['provider']); $this->assertCount(1, $this->posts, json_encode($run));
+        $run = $this->ready($run); $this->assertSame('awaiting_dns', $run['members'][0]['phase'], json_encode($run));
+        $this->assertSame(1, $this->verifications); $this->assertSame(0, $this->dnsWrites);
+        $run = $this->advance($run); $this->assertSame('completed', $run['status'], json_encode($run));
+        $this->assertSame(1, $this->dnsWrites); $this->assertCount(1, $this->posts);
+        $resource = \App\Models\MachineCloudResource::query()->findOrFail(MachineOwnedInstance::query()->where('task_id', $task->id)->value('resource_id'));
+        $this->assertSame($provider, $resource->provider); $this->assertSame($task->external_id, $resource->external_id);
+        $this->assertSame($task->installation_id, $resource->installation_id);
+        $this->assertSame('retained', MachineOwnedInstance::query()->where('task_id', $this->fixtures[0]['source']->id)->value('status'));
+        $this->assertArrayHasKey('forwarding_receipt', Attempt::query()->first()->payload); $this->assertArrayHasKey('dns_receipt', Attempt::query()->first()->payload);
+        $this->assertSame($run, $this->advance($run));
+        $this->assertStringNotContainsString('never-export-this', json_encode($run));
+    }
+
+    public static function jsonUnknowns(): array
+    {
+        return [['digitalocean', 'unknown_present'], ['digitalocean', 'unknown_absent'], ['vultr', 'unknown_present'], ['vultr', 'unknown_absent']];
+    }
+    #[DataProvider('jsonUnknowns')]
+    public function test_json_provider_unknown_result_never_duplicates_or_switches_accounts(string $provider, string $mode): void
+    {
+        $this->fixtures = [$this->fixture(2, $provider)]; $this->mode = $mode;
+        $run = $this->advance($this->start()); $task = $this->task(); $identity = $task->only(['id', 'account_id', 'installation_id', 'marker']);
+        $this->assertSame('outcome_unknown', $task->status, json_encode($run));
+        for ($i = 0; $i < 3; $i++) { $task->fill(['next_check_at' => 0])->save(); $run = $this->advance($run); }
+        $this->assertSame($identity, $task->fresh()->only(array_keys($identity))); $this->assertCount(1, $this->posts);
+        $this->assertSame($mode === 'unknown_present' ? 'waiting_initialization' : 'outcome_unknown', $task->fresh()->status, json_encode($run));
+        $this->assertSame(1, Attempt::count()); $this->assertSame(0, $this->dnsWrites);
+    }
+
+    #[DataProvider('jsonProviders')]
+    public function test_json_provider_bad_forwarding_receipt_cannot_switch_dns(string $provider): void
+    {
+        $this->fixtures = [$this->fixture(2, $provider)];
+        $run = $this->advance($this->start()); $this->mode = 'bad_receipt';
+        $run = $this->ready($run);
+        $this->assertSame('needs_review', $run['status'], json_encode($run));
+        $this->assertSame(0, $this->dnsWrites); $this->assertCount(1, $this->posts);
+        $this->assertSame('active', MachineOwnedInstance::query()->where('task_id', $this->fixtures[0]['source']->id)->value('status'));
+        $this->assertArrayNotHasKey('forwarding_receipt', Attempt::query()->first()->payload);
+    }
+
+    public function test_vultr_cannot_rotate_to_an_unproven_distinct_account_after_rejection(): void
+    {
+        $this->fixtures = [$this->fixture(2, 'vultr')]; $this->mode = 'reject';
+        $run = $this->advance($this->start()); $original = $this->task(); $run = $this->advance($run);
+        $this->assertSame('needs_review', $run['status'], json_encode($run));
+        $this->assertSame('credential_group_exhausted', $run['members'][0]['reason']);
+        $this->assertSame($original->id, $this->task()->id); $this->assertSame(1, Attempt::count());
+        $this->assertCount(1, $this->posts); $this->assertSame(0, $this->dnsWrites);
     }
 
     private function code(string $reason, callable $work): void
@@ -373,6 +487,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $run = $this->advance($this->start()); $run = $this->ready($run); $this->mode = 'dns_unknown';
         $run = $this->advance($run); $this->assertSame('reconciling_dns', $run['members'][0]['phase'], json_encode($run));
         $this->assertSame(1, $this->dnsWrites); $this->mode = ''; $this->sourceReport($this->fixtures[0], true);
+        MachineDnsTransition::query()->update(['next_check_at' => time() - 1]);
         $run = $this->advance($run); $this->assertSame('completed', $run['status'], json_encode($run)); $this->assertSame(1, $this->dnsWrites);
         $this->assertSame(1, MachineDnsTransition::count());
     }
@@ -535,6 +650,74 @@ class MachineFailoverNativeBridgeTest extends TestCase
     }
     public static function accountRejections(): array { return [['billing'], ['quota']]; }
 
+    public static function digitalOceanRejections(): array { return [['reject'], ['billing'], ['quota']]; }
+    #[DataProvider('digitalOceanRejections')]
+    public function test_digitalocean_rotation_and_dns_completion_preserve_both_attempt_identities(string $mode): void
+    {
+        $this->fixtures = [$this->fixture(2, 'digitalocean')]; $this->mode = $mode;
+        $run = $this->advance($this->start()); $first = $this->task();
+        $identity = $first->only(['id', 'account_id', 'installation_id', 'marker', 'plan_hash']);
+        $run = $this->advance($run); $second = $this->task();
+        $this->assertNotSame($first->account_id, $second->account_id); $this->assertCount(2, $this->posts, json_encode($run));
+        $run = $this->ready($run); $run = $this->advance($run);
+        $this->assertSame('completed', $run['status'], json_encode($run)); $this->assertSame(1, $this->dnsWrites);
+        $this->assertSame($identity, $first->fresh()->only(array_keys($identity)));
+        $proof = Attempt::query()->latest('ordinal')->firstOrFail()->payload['rotation'];
+        $this->assertSame($first->account_id, $proof['from_account_id']);
+        $this->assertSame('definite_rejection_next_credential', $proof['reason']);
+    }
+
+    public function test_first_create_permission_does_not_authorize_a_rotation(): void
+    {
+        $this->mode = 'reject'; $run = $this->advance($this->start());
+        config(['machine_failover.allow_rotation' => false]);
+        $run = $this->advance($run);
+        $this->assertSame('rotation_disabled', $run['members'][0]['reason']);
+        $this->assertSame('needs_review', $run['status']); $this->assertSame(1, Attempt::count());
+        $this->assertCount(1, $this->posts); $this->assertSame(10000, $run['reserved_cents']);
+    }
+
+    public function test_rotation_revocation_during_preflight_blocks_the_child_post(): void
+    {
+        $this->mode = 'reject'; $run = $this->advance($this->start());
+        $this->duringPreflight = fn () => config(['machine_failover.allow_rotation' => false]);
+        $run = $this->advance($run);
+        $this->assertSame('rotation_disabled', $this->task()->reason); $this->assertNull($this->task()->dispatched_at);
+        $this->assertSame('needs_review', $run['status']); $this->assertSame(2, Attempt::count());
+        $this->assertCount(1, $this->posts); $this->assertSame(0, $this->dnsWrites);
+    }
+
+    public function test_disabling_rotation_after_a_child_post_does_not_resend_or_abandon_its_original_reconciliation(): void
+    {
+        $this->mode = 'reject'; $run = $this->advance($this->start()); $this->mode = 'unknown_present';
+        $run = $this->advance($run); $task = $this->task(); $this->assertSame('outcome_unknown', $task->status);
+        config(['machine_failover.allow_rotation' => false]); $this->mode = ''; $task->fill(['next_check_at' => 0])->save();
+        $run = $this->advance($run);
+        $this->assertSame('waiting_initialization', $task->fresh()->status, json_encode($run));
+        $this->assertCount(2, $this->posts); $this->assertSame(2, Attempt::count()); $this->assertSame(0, $this->dnsWrites);
+    }
+
+    public function test_full_member_history_prevents_a_b_a_rotation_even_after_health_and_cooldown_recover(): void
+    {
+        $this->fixtures = [$this->fixture(2)]; $this->mode = 'reject_all';
+        $run = $this->advance($this->start()); $run = $this->advance($run); $this->assertCount(2, $this->posts);
+        DB::table('v2_machine_credential_health')->update(['cleared_at' => time()]);
+        foreach (Attempt::query()->get() as $attempt) Task::query()->whereKey($attempt->task_id)->update(['created_at' => time() - 86401]);
+        $this->mode = ''; $run = $this->advance($run);
+        $this->assertSame('credential_group_exhausted', $run['members'][0]['reason'], json_encode($run));
+        $this->assertSame('needs_review', $run['status']); $this->assertCount(2, $this->posts); $this->assertSame(2, Attempt::count());
+    }
+
+    public function test_rotation_proof_cannot_survive_a_changed_rejection_or_ancestor_binding(): void
+    {
+        $this->mode = 'reject'; $run = $this->advance($this->advance($this->start()));
+        $first = Attempt::query()->oldest('ordinal')->firstOrFail(); $task = Task::query()->findOrFail($first->task_id);
+        $evidence = $task->evidence; $evidence['credential_failure']['kind'] = 'billing_locked'; $task->evidence = $evidence; $task->save();
+        $run = $this->advance($run);
+        $this->assertSame('native_lineage_changed', $run['members'][0]['reason'], json_encode($run));
+        $this->assertCount(2, $this->posts); $this->assertSame(0, $this->dnsWrites);
+    }
+
     #[DataProvider('unsafeIdentities')]
     public function test_account_aliases_unknown_identity_and_duplicate_tokens_never_gain_a_new_attempt(string $kind): void
     {
@@ -579,6 +762,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
     {
         $run = $this->ready($this->advance($this->start())); $this->mode = 'dns_unknown'; $run = $this->advance($run);
         MachineOwnedInstance::query()->where('task_id', $this->task()->id)->update(['verified_until' => time() - 1]);
+        MachineDnsTransition::query()->update(['next_check_at' => time() - 1]);
         $run = $this->advance($run); $this->assertSame('verification_requires_review', $run['members'][0]['reason'], json_encode($run));
         $this->assertSame(1, $this->dnsWrites); $this->assertSame(1, $this->verifications); $this->assertSame(1, MachineDnsTransition::count());
     }

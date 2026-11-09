@@ -187,6 +187,16 @@ class MachineFailoverPolicyTest extends TestCase
         $this->assertFalse($result['execution_enabled']); Http::assertNothingSent(); Bus::assertNothingDispatched();
     }
 
+    public function test_unsupported_owned_dns_provider_blocks_replacement_before_any_creation_intent(): void
+    {
+        $credential = MachineDnsCredential::query()->create(['name' => 'Synthetic Aliyun', 'provider' => 'aliyun', 'revision' => 1,
+            'credentials' => ['access_key_id' => 'synthetic-id', 'access_key_secret' => 'synthetic-secret']]);
+        $row = $this->save(['dns_credential_id' => $credential->id, 'dns_hostname' => 'isolated.example.test']);
+        $checks = $this->service->localChecks(Policy::query()->findOrFail($row['id']));
+        $this->assertContains(['code' => 'owned_dns_unsupported', 'status' => 'blocked'], $checks);
+        Http::assertNothingSent(); Bus::assertNothingDispatched();
+    }
+
     public static function machineUsage(): array { return [['agent'], ['nodes'], ['cloud'], ['dns']]; }
 
     #[DataProvider('machineUsage')]

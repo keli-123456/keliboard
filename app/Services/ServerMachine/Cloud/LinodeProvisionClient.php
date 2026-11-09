@@ -4,10 +4,18 @@ namespace App\Services\ServerMachine\Cloud;
 use App\Models\MachineCloudAccount;
 use Illuminate\Support\Facades\Http;
 
-class LinodeProvisionClient extends LinodeClient
+class LinodeProvisionClient extends LinodeClient implements ProvisionClient
 {
+    public function buildRequest(array $plan, string $id, string $marker, string $bootstrap): array
+    {
+        return ['label' => 'keli-' . str_replace('-', '', $id), 'region' => $plan['region'], 'type' => $plan['size'],
+            'image' => $plan['image'], 'tags' => [$marker], 'booted' => true, 'backups_enabled' => false,
+            'authorized_keys' => $plan['authorized_keys'], 'root_pass' => bin2hex(random_bytes(20)) . 'aA9!',
+            'metadata' => ['user_data' => base64_encode($bootstrap)]];
+    }
     public function preflight(MachineCloudAccount $account, array $plan): void
     {
+        MachineProvisionProviders::assertProvider($account, 'linode');
         if (!in_array($plan['size'], config('machine_provision.supported_sizes', []), true)
             || !in_array($plan['image'], config('machine_provision.supported_images', []), true)) throw new CloudException('bootstrap_unsupported');
         $region = $this->request($account, 'GET', '/regions/' . rawurlencode($plan['region']));
@@ -31,6 +39,7 @@ class LinodeProvisionClient extends LinodeClient
 
     public function create(MachineCloudAccount $account, array $request, int $since): array
     {
+        MachineProvisionProviders::assertProvider($account, 'linode');
         if (config('machine_provision.allow_live') !== true) throw new CloudException('provisioning_disabled');
         try {
             $response = Http::withToken($account->credentials['api_token'])->acceptJson()->withoutRedirecting()
@@ -48,6 +57,7 @@ class LinodeProvisionClient extends LinodeClient
 
     public function reconcile(MachineCloudAccount $account, array $request, int $since): ?array
     {
+        MachineProvisionProviders::assertProvider($account, 'linode');
         $matches = []; $complete = false;
         for ($page = 1; $page <= 3; $page++) {
             $data = $this->request($account, 'GET', '/linode/instances', ['page' => $page, 'page_size' => 100], ['label' => $request['label']]);

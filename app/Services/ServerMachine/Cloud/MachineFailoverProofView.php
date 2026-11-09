@@ -22,7 +22,12 @@ class MachineFailoverProofView
                 'checked_at' => $forward ? $check?->issued_at : null, 'valid_until' => $forward ? $instance?->verified_until : null,
                 'scope' => 'isolated_forwarding'],
             'dns_proof' => ['state' => !$dns ? 'not_checked' : ($transition?->state === 'verified' ? 'historical' : 'unverified'),
-                'checked_at' => $dns && $transition?->state === 'verified' ? $transition->updated_at : null,
-                'valid_until' => null, 'scope' => 'provider_readback']];
+                'checked_at' => $dns && $transition?->state === 'verified' ? ($transition->confirmed_at ?? $transition->updated_at) : null,
+                'valid_until' => null, 'scope' => 'provider_readback', 'propagation_verified' => false,
+                'readback_attempts' => (int) ($transition?->readback_attempts ?? 0), 'readback_limit' => MachineOwnedDnsService::READBACK_LIMIT,
+                'next_check_at' => $transition?->next_check_at],
+            'rotation_proof' => ['from_attempt_id' => $attempt->payload['rotation']['from_attempt_id'] ?? null,
+                'failure_kind' => $attempt->payload['rotation']['failure_kind'] ?? null,
+                'reason' => $attempt->payload['rotation']['reason'] ?? null]];
     }
 }

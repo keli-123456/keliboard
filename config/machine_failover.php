@@ -13,6 +13,9 @@ return [
     // Separate authorization is required; collecting a plan never enables creation.
     'allow_replacement' => false,
     'allowed_replacement_policy_ids' => [],
+    // A first create authorization never implicitly permits another credential attempt.
+    'allow_rotation' => false,
+    'allowed_rotation_policy_ids' => [],
     'sample_history_limit' => 500,
     'plan_history_limit' => 100,
     'history_days' => 7,

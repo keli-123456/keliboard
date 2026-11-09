@@ -10,25 +10,35 @@ use App\Models\MachineOwnedInstance as Instance;
 use App\Models\MachineProvisionTask;
 use App\Services\ServerMachine\Dns\DnsException;
 use App\Services\ServerMachine\Dns\DnsProviderClient;
+use App\Services\ServerMachine\Dns\DnsRequestFailure;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class MachineOwnedDnsService
 {
+    public const READBACK_LIMIT = 12;
     public function __construct(private MachineInstanceAcceptance $acceptance, private DnsProviderClient $provider) {}
+
+    public function available(): bool
+    {
+        return $this->acceptance->available() && Schema::hasColumns('v2_machine_dns_transition',
+            ['next_check_at', 'readback_attempts', 'last_checked_at', 'confirmed_at']);
+    }
 
     public function overview(): array
     {
-        return ['available' => $this->acceptance->available(), 'automatic' => false, 'delete_strategy' => 'keep',
+        return ['available' => $this->available(), 'automatic' => false, 'delete_strategy' => 'keep',
+            'readback_limit' => self::READBACK_LIMIT, 'propagation_verified' => false,
             'records' => $this->acceptance->available() ? OwnedDns::query()->latest('id')->limit(100)->get() : [],
             'transitions' => $this->acceptance->available() ? Transition::query()->latest('created_at')->limit(100)->get() : []];
     }
 
     public function prepare(int $instanceId, int $policyRevision, int $instanceRevision, string $zone, string $requestId, ?string $recovery, int $admin): array
     {
-        if (!$this->acceptance->available()) throw new CloudException('migration_required');
+        if (!$this->available()) throw new CloudException('migration_required');
         if (!preg_match('/^[a-f0-9]{32}$/D', $requestId) || !preg_match('/^[a-f0-9]{32}$/D', $zone)) throw new CloudException('invalid_dns_intent');
         $initial = Instance::query()->findOrFail($instanceId);
         return $this->acceptance->locked($initial->policy_id, function ($policy) use ($instanceId, $policyRevision, $instanceRevision, $zone, $requestId, $recovery, $admin) {
@@ -79,10 +89,11 @@ class MachineOwnedDnsService
 
     public function execute(string $id, int $admin): array
     {
-        if (!$this->acceptance->available()) throw new CloudException('migration_required');
+        if (!$this->available()) throw new CloudException('migration_required');
         $initial = Transition::query()->findOrFail($id); $dns = OwnedDns::query()->findOrFail($initial->dns_id);
         return $this->acceptance->locked($dns->policy_id, function ($policy) use ($id, $admin) {
             $this->acceptance->gate($policy->id, 'allow_dns'); $transition = Transition::query()->findOrFail($id);
+            if ($transition->admin_id !== $admin) throw new CloudException('permission_revoked');
             $record = OwnedDns::query()->findOrFail($transition->dns_id);
             return $this->dnsLock($record->hostname, $record->credential_id, function () use ($policy, $transition, $record, $admin) {
                 $instance = Instance::query()->findOrFail($transition->to_instance_id);
@@ -90,54 +101,67 @@ class MachineOwnedDnsService
                 $task = MachineProvisionTask::query()->findOrFail($instance->task_id);
                 if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertDnsTransition($task, $transition);
                 if ($transition->state === 'verified') return $transition->toArray();
+                if (!$transition->dispatched_at && ($transition->state !== 'prepared' || $transition->deadline_at <= time() || $record->revision !== $transition->dns_revision))
+                    throw new CloudException('dns_intent_expired');
+                if ($transition->next_check_at > time()) return $transition->toArray();
                 if ($transition->dispatched_at !== null) return $this->reconcile($transition, $record, $instance, $policy, $admin);
-                if ($transition->state !== 'prepared' || $transition->deadline_at <= time() || $record->revision !== $transition->dns_revision) throw new CloudException('dns_intent_expired');
-                $this->acceptance->requireVerified($instance, $policy, $admin);
-                $credential = $this->credential($record->credential_id, $record->credential_revision);
-                $records = $this->provider->ownedRecords($credential, $record->zone, $record->hostname);
-                if ($record->record_id === null) {
-                    if ($records !== []) throw new CloudException('dns_record_conflict');
-                    $kind = 'create';
-                } else {
-                    $current = $this->assertOne($record, $records);
-                    if ($current['content'] !== $transition->from_ip) throw new CloudException('dns_record_changed');
-                    $kind = $current['content'] === $transition->to_ip ? 'none' : 'patch';
-                }
-                $this->acceptance->gate($policy->id, 'allow_dns');
-                $this->acceptance->requireVerified($instance, $policy->fresh(), $admin);
-                if ($transition->deadline_at <= time()) throw new CloudException('dns_intent_expired');
-                $this->credential($record->credential_id, $record->credential_revision);
-                $this->acceptance->scope($instance, $policy->fresh(), $transition->policy_revision, $admin);
-                $this->acceptance->gate($policy->id, 'allow_dns');
-                // Persist the boundary before the request, never around the provider mutation itself.
-                $transition = DB::transaction(function () use ($transition, $record, $instance, $policy, $admin, $kind) {
-                    $task = MachineProvisionTask::query()->findOrFail($instance->task_id);
-                    if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertTask($task);
-                    $this->current($record, true); $row = $this->current($transition, true);
+                try {
+                    $this->acceptance->requireVerified($instance, $policy, $admin);
+                    $credential = $this->credential($record->credential_id, $record->credential_revision);
+                    $records = $this->provider->ownedRecords($credential, $record->zone, $record->hostname);
+                    if ($record->record_id === null) {
+                        if ($records !== []) throw new CloudException('dns_record_conflict');
+                        $kind = 'create';
+                    } else {
+                        $current = $this->assertOne($record, $records);
+                        if ($current['content'] !== $transition->from_ip) throw new CloudException('dns_record_changed');
+                        $kind = $current['content'] === $transition->to_ip ? 'none' : 'patch';
+                    }
+                    $this->acceptance->gate($policy->id, 'allow_dns');
+                    $this->acceptance->requireVerified($instance, $policy->fresh(), $admin);
+                    if ($transition->deadline_at <= time()) throw new CloudException('dns_intent_expired');
+                    $this->credential($record->credential_id, $record->credential_revision);
                     $this->acceptance->scope($instance, $policy->fresh(), $transition->policy_revision, $admin);
                     $this->acceptance->gate($policy->id, 'allow_dns');
-                    $this->credential($record->credential_id, $record->credential_revision);
-                    $task = MachineProvisionTask::query()->findOrFail($instance->task_id);
-                    if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertDnsTransition($task, $row);
-                    if ($row->deadline_at <= time()) throw new CloudException('dns_intent_expired');
-                    $row->fill(['state' => 'dispatching', 'dispatched_at' => time(), 'write_kind' => $kind])->save();
-                    return $row;
-                });
-                try {
+                    $lastRecords = $this->provider->ownedRecords($credential, $record->zone, $record->hostname);
                     if ($kind === 'create') {
-                        $created = $this->provider->createOwnedA($credential, $record->zone, $record->hostname, $transition->to_ip, $record->marker);
-                        $this->assertOne($record, [$created]);
-                        $record = DB::transaction(function () use ($record, $created) {
-                            $row = $this->current($record, true); $row->record_id = $created['id']; $row->save(); return $row;
-                        });
-                    } elseif ($kind === 'patch') {
-                        $binding = new MachineDnsBinding(['zone' => $record->zone, 'hostname' => $record->hostname, 'type' => 'A', 'record_id' => $record->record_id]);
-                        $this->provider->update($credential, $binding, $current, $transition->to_ip);
+                        if ($lastRecords !== []) throw new CloudException('dns_record_conflict');
+                    } elseif ($this->assertOne($record, $lastRecords) !== $current) throw new CloudException('dns_record_changed');
+                    // Persist the boundary before the request, never around the provider mutation itself.
+                    $transition = DB::transaction(function () use ($transition, $record, $instance, $policy, $admin, $kind) {
+                        $task = MachineProvisionTask::query()->findOrFail($instance->task_id);
+                        if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertTask($task);
+                        $this->current($record, true); $row = $this->current($transition, true);
+                        $this->acceptance->scope($instance, $policy->fresh(), $transition->policy_revision, $admin);
+                        $this->acceptance->gate($policy->id, 'allow_dns');
+                        $this->credential($record->credential_id, $record->credential_revision);
+                        $task = MachineProvisionTask::query()->findOrFail($instance->task_id);
+                        if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertDnsTransition($task, $row);
+                        if ($row->deadline_at <= time()) throw new CloudException('dns_intent_expired');
+                        $row->fill(['state' => 'dispatching', 'dispatched_at' => time(), 'write_kind' => $kind, 'reason' => null, 'next_check_at' => null])->save();
+                        return $row;
+                    });
+                    try {
+                        if ($kind === 'create') {
+                            $created = $this->provider->createOwnedA($credential, $record->zone, $record->hostname, $transition->to_ip, $record->marker);
+                            $this->assertOne($record, [$created]);
+                            $record = DB::transaction(function () use ($record, $created) {
+                                $row = $this->current($record, true); $row->record_id = $created['id']; $row->save(); return $row;
+                            });
+                        } elseif ($kind === 'patch') {
+                            $binding = new MachineDnsBinding(['zone' => $record->zone, 'hostname' => $record->hostname, 'type' => 'A', 'record_id' => $record->record_id]);
+                            $this->provider->update($credential, $binding, $current, $transition->to_ip);
+                        }
+                        return $this->reconcile($transition, $record, $instance, $policy, $admin);
+                    } catch (\Throwable $error) {
+                        $reason = $error instanceof CloudException || $error instanceof DnsException ? $error->getMessage() : 'dns_outcome_unknown';
+                        $this->review($transition, $record, $reason, $error);
+                        return $transition->fresh()->toArray();
                     }
-                    return $this->reconcile($transition, $record, $instance, $policy, $admin);
-                } catch (\Throwable $error) {
-                    $reason = $error instanceof CloudException || $error instanceof DnsException ? $error->getMessage() : 'dns_outcome_unknown';
-                    $this->review($transition, $record, $reason);
+                } catch (DnsRequestFailure $error) {
+                    if (!$error->retryable) throw $error;
+                    Transition::query()->whereKey($transition->id)->where('state', 'prepared')->whereNull('dispatched_at')
+                        ->update(['reason' => $error->getMessage(), 'next_check_at' => time() + $error->retryAfterSeconds]);
                     return $transition->fresh()->toArray();
                 }
             });
@@ -159,6 +183,15 @@ class MachineOwnedDnsService
 
     private function reconcile(Transition $transition, OwnedDns $record, Instance $instance, $policy, int $admin): array
     {
+        if ($transition->readback_attempts >= self::READBACK_LIMIT) {
+            $this->review($transition, $record, 'dns_readback_exhausted');
+            return $transition->fresh()->toArray();
+        }
+        $transition = DB::transaction(function () use ($transition) {
+            $row = $this->current($transition, true);
+            $row->fill(['readback_attempts' => $row->readback_attempts + 1, 'last_checked_at' => time(), 'next_check_at' => null])->save();
+            return $row;
+        });
         try {
             $credential = $this->credential($record->credential_id, $record->credential_revision);
             $remote = $this->oneOwned($record, $credential);
@@ -186,13 +219,13 @@ class MachineOwnedDnsService
                 $task = MachineProvisionTask::query()->findOrFail($instance->task_id);
                 $task->fill(['status' => 'accepted', 'evidence' => array_replace($task->evidence ?? [], ['forwarding_verified' => true,
                     'dns_changed' => true, 'acceptance_instance_id' => $instance->id, 'dns_transition_id' => $transition->id])])->save();
-                $transition->fill(['state' => 'verified', 'reason' => null])->save();
+                $transition->fill(['state' => 'verified', 'reason' => null, 'next_check_at' => null, 'confirmed_at' => time()])->save();
                 if ($transition->recovery_of) Transition::query()->whereKey($transition->recovery_of)->update(['state' => 'recovered']);
                 if ($task->replacement_id) app(MachineReplacementService::class)->sync($task);
             });
         } catch (\Throwable $error) {
             $reason = $error instanceof CloudException || $error instanceof DnsException ? $error->getMessage() : 'dns_outcome_unknown';
-            $this->review($transition, $record, $reason);
+            $this->review($transition, $record, $reason, $error);
         }
         return $transition->fresh()->toArray();
     }
@@ -208,15 +241,19 @@ class MachineOwnedDnsService
         $row = ($lock ? $query->lockForUpdate() : $query)->firstOrFail();
         $fields = $expected instanceof OwnedDns
             ? ['policy_id', 'revision', 'credential_id', 'credential_revision', 'zone', 'hostname', 'record_id', 'marker', 'active_instance_id', 'ip', 'status']
-            : ['request_key', 'recovery_of', 'write_kind', 'dns_id', 'dns_revision', 'policy_revision', 'admin_id', 'from_instance_id', 'to_instance_id', 'from_ip', 'to_ip', 'state', 'reason', 'dispatched_at', 'deadline_at'];
+            : ['request_key', 'recovery_of', 'write_kind', 'dns_id', 'dns_revision', 'policy_revision', 'admin_id', 'from_instance_id', 'to_instance_id', 'from_ip', 'to_ip', 'state', 'reason', 'dispatched_at', 'deadline_at',
+                'next_check_at', 'readback_attempts', 'last_checked_at', 'confirmed_at'];
         if ($row->only($fields) !== $expected->only($fields)) throw new CloudException('dns_ownership_changed');
         return $row;
     }
 
-    private function review(Transition $transition, OwnedDns $record, string $reason): void
+    private function review(Transition $transition, OwnedDns $record, string $reason, ?\Throwable $error = null): void
     {
+        $retry = $reason === 'dns_outcome_unknown' || $error instanceof DnsRequestFailure && $error->retryable;
+        if ($retry && $transition->readback_attempts >= self::READBACK_LIMIT) { $retry = false; $reason = 'dns_readback_exhausted'; }
+        $next = $retry ? time() + ($error instanceof DnsRequestFailure ? $error->retryAfterSeconds : 20) : null;
         Transition::query()->whereKey($transition->id)->where('dispatched_at', $transition->dispatched_at)->whereIn('state', ['dispatching', 'needs_review'])
-            ->update(['state' => 'needs_review', 'reason' => $reason]);
+            ->update(['state' => 'needs_review', 'reason' => $reason, 'next_check_at' => $next]);
         OwnedDns::query()->whereKey($record->id)->where('revision', $transition->dns_revision)->update(['status' => 'needs_review']);
     }
 

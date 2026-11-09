@@ -28,7 +28,8 @@ class MachineFailoverNativeBridge
     {
         foreach (['execution', 'execution_member', 'attempt'] as $name) if (!Schema::hasTable('v2_machine_failover_' . $name)) return false;
         return $this->registry->available() && app(MachineCloudCredentialHealth::class)->available()
-            && app(MachineInstanceAcceptance::class)->available() && app(MachineReplacementService::class)->available();
+            && app(MachineInstanceAcceptance::class)->available() && app(MachineReplacementService::class)->available()
+            && app(MachineOwnedDnsService::class)->available();
     }
 
     public function start(int $service, int $revision, array $planIds, int $releaseId, string $request, int $admin, ?array $admission = null): array
@@ -55,7 +56,7 @@ class MachineFailoverNativeBridge
             foreach ($planIds as $id) {
                 $plan = Plan::query()->findOrFail($id);
                 $match = array_values(array_filter($snapshot['members'], fn ($row) => $row['policy_id'] === $plan->policy_id));
-                if (count($match) !== 1 || $match[0]['provider'] !== 'linode') throw new CloudException('native_provider_unsupported');
+                if (count($match) !== 1 || !in_array($match[0]['provider'], MachineProvisionProviders::SUPPORTED, true)) throw new CloudException('native_provider_unsupported');
                 if (isset($seen[$match[0]['id']])) throw new CloudException('duplicate_member');
                 $seen[$match[0]['id']] = true;
                 $policy = Policy::query()->findOrFail($plan->policy_id);
@@ -152,6 +153,14 @@ class MachineFailoverNativeBridge
         $payload = $attempt->payload;
         $transition = isset($payload['transition_id']) ? MachineDnsTransition::query()->findOrFail($payload['transition_id']) : null;
         if (!$transition?->dispatched_at) $this->source($member, $policy);
+        if ($transition && $transition->state !== 'verified') {
+            if (!$transition->dispatched_at && $transition->deadline_at <= time()) throw new CloudException('dns_intent_expired');
+            if ($transition->next_check_at > time()) {
+                $this->phase($member, $transition->dispatched_at ? 'reconciling_dns' : 'awaiting_dns', $transition->reason); return;
+            }
+            if ($transition->dispatched_at && $transition->state === 'needs_review' && !$transition->next_check_at && $transition->reason)
+                throw new CloudException($transition->reason);
+        }
         $acceptance = app(MachineInstanceAcceptance::class);
         $instance = MachineOwnedInstance::query()->where('task_id', $task->id)->first();
         if (!$instance) {
@@ -186,7 +195,9 @@ class MachineFailoverNativeBridge
         if ($transition->state === 'verified') {
             $this->receipt($attempt, 'dns', $task->fresh(), $instance->fresh(), $transition);
             $this->attemptStatus($attempt, 'completed'); $this->phase($member, 'completed');
-        } else $this->phase($member, 'reconciling_dns', 'original_intent_only');
+        } elseif ($transition->state === 'needs_review' && !$transition->next_check_at) {
+            $this->phase($member, 'needs_review', $transition->reason);
+        } else $this->phase($member, $transition->dispatched_at ? 'reconciling_dns' : 'awaiting_dns', $transition->reason ?: 'original_intent_only');
     }
 
     private function reserve(Member $member, Execution $run, Policy $policy, ?Attempt $previous = null): Attempt
@@ -199,13 +210,19 @@ class MachineFailoverNativeBridge
             }
             $this->source($member, $policy);
             $credentials = app(MachineFailoverCredentials::class);
+            $rotation = null;
             if ($previous) {
                 $this->gate->assertAllowed('rotate'); $task = Task::query()->findOrFail($previous->task_id);
+                $this->rotationGate($policy->id);
                 if (!$this->definitelyRejected($task)) throw new CloudException('original_intent_only');
-                $decision = $credentials->rotationPlan($policy, $task, $task->evidence['credential_failure']);
+                $tried = Attempt::query()->where('execution_member_id', $member->id)->orderBy('ordinal')->pluck('account_id')->all();
+                $decision = $credentials->rotationPlan($policy, $task, $task->evidence['credential_failure'], $tried);
                 if ($decision['action'] !== 'rotate' || !$decision['next_account_id']) throw new CloudException('credential_group_exhausted');
                 $choice = $credentials->context($policy, $task);
                 $choice['account_id'] = $decision['next_account_id']; $choice['credential_pool']['account_revision'] = $decision['next_account_revision'];
+                $rotation = ['from_attempt_id' => $previous->id, 'from_account_id' => $task->account_id,
+                    'failure_kind' => $task->evidence['credential_failure']['kind'], 'reason' => $decision['reason'],
+                    'failure_sha256' => hash('sha256', MachineIntentJson::encode($task->evidence['credential_failure']))];
             } else $choice = $credentials->context($policy);
             $plan = $this->input($policy, $choice); $account = $credentials->assertPlan($plan);
             app(MachineCloudCredentialHealth::class)->assertEligible($account, $plan);
@@ -226,7 +243,7 @@ class MachineFailoverNativeBridge
             $attempt = Attempt::query()->create(['id' => (string) Str::uuid(), 'execution_member_id' => $member->id,
                 'ordinal' => Attempt::query()->where('execution_member_id', $member->id)->count() + 1, 'request_id' => bin2hex(random_bytes(16)),
                 'account_id' => $account->id, 'account_revision' => $account->revision, 'reserved_cents' => $cost,
-                'payload' => ['plan' => $plan, 'previous_attempt_id' => $previous?->id]]);
+                'payload' => ['plan' => $plan, 'previous_attempt_id' => $previous?->id] + ($rotation === null ? [] : ['rotation' => $rotation])]);
             $member->fill(['attempt_id' => $attempt->id, 'phase' => 'creating', 'reason' => null])->save();
             return $attempt;
         }));
@@ -246,11 +263,34 @@ class MachineFailoverNativeBridge
         $this->context($run, $requireLease);
         if ($member->attempt_id !== $attempt->id || in_array($member->phase, self::FINISHED, true)) throw new CloudException('native_lineage_changed');
         $policy = Policy::query()->findOrFail($member->policy_id); $plan = ProvisionPlan::normalize($attempt->payload['plan']);
+        if ($attempt->ordinal > 1) {
+            $this->rotationProof($attempt);
+            if (!$task?->dispatched_at) $this->rotationGate($policy->id);
+        }
         $credential = app(MachineFailoverCredentials::class); $account = $credential->assertPlan($plan);
-        if ($account->id !== $attempt->account_id || $account->revision !== $attempt->account_revision || $account->provider !== 'linode'
+        if ($account->id !== $attempt->account_id || $account->revision !== $attempt->account_revision || $account->provider !== ($plan['provider'] ?? 'linode')
             || !MachineIntentJson::same($plan, $this->input($policy, array_intersect_key($plan, array_flip(['account_id', 'provider', 'credential_pool']))))) throw new CloudException('native_lineage_changed');
         if ($task && ($task->admin_id !== $run->admin_id || !$this->bindingCurrent($attempt, $task))) throw new CloudException('native_lineage_changed');
         if (!$task?->dispatched_at) $this->source($member, $policy);
+    }
+
+    private function rotationGate(int $policy): void
+    {
+        if (config('machine_failover.allow_rotation') !== true || !in_array($policy, config('machine_failover.allowed_rotation_policy_ids', []), true))
+            throw new CloudException('rotation_disabled');
+    }
+
+    private function rotationProof(Attempt $attempt): void
+    {
+        $proof = $attempt->payload['rotation'] ?? []; $previous = Attempt::query()->find($attempt->payload['previous_attempt_id'] ?? '');
+        $task = $previous?->task_id ? Task::query()->find($previous->task_id) : null;
+        if (!$previous || !$task || $previous->execution_member_id !== $attempt->execution_member_id || $previous->ordinal + 1 !== $attempt->ordinal
+            || $previous->status !== 'rejected' || !$this->bindingCurrent($previous, $task) || !$this->definitelyRejected($task)
+            || ($proof['from_attempt_id'] ?? null) !== $previous->id || ($proof['from_account_id'] ?? null) !== $previous->account_id
+            || ($proof['failure_kind'] ?? null) !== ($task->evidence['credential_failure']['kind'] ?? null)
+            || ($proof['reason'] ?? null) !== 'definite_rejection_next_credential'
+            || !hash_equals($proof['failure_sha256'] ?? '', hash('sha256', MachineIntentJson::encode($task->evidence['credential_failure'] ?? []))))
+            throw new CloudException('native_lineage_changed');
     }
 
     public function bind(Attempt $attempt, Task $task): void
@@ -432,7 +472,7 @@ class MachineFailoverNativeBridge
             if (!hash_equals($attempt->fresh()->payload['forwarding_receipt'] ?? '', $this->hash($proof))) throw new CloudException('native_receipt_mismatch');
             $expected = $member->payload['dns'];
             $record = MachineOwnedDns::query()->find($dns->dns_id);
-            if ($dns->state !== 'verified' || !$dns->dispatched_at || $dns->recovery_of !== null || $dns->dns_id !== $expected['id']
+            if ($dns->state !== 'verified' || !$dns->dispatched_at || !$dns->confirmed_at || $dns->readback_attempts < 1 || $dns->recovery_of !== null || $dns->dns_id !== $expected['id']
                 || $dns->dns_revision !== $expected['revision'] || $dns->policy_revision !== $member->policy_revision
                 || $dns->from_instance_id !== $member->payload['source_instance_id'] || $dns->from_ip !== $expected['ip']
                 || $dns->to_instance_id !== $instance->id || $dns->to_ip !== $instance->ip || $record?->active_instance_id !== $instance->id

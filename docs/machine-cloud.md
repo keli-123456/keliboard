@@ -3,6 +3,12 @@
 This is a panel-side integration. It does not change kelinode-rs, its report
 frequency, the SSH transport, subscriptions, or the proxy data path.
 
+Current code includes guarded Linode, DigitalOcean and Vultr replacement
+creation adapters. All real execution gates remain closed. The historical
+increments below describe their original scope; the current multi-provider
+boundaries and missing live credentials are recorded under
+[Multi-Provider Replacement Adapters](#multi-provider-replacement-adapters-disabled).
+
 For the preparation-only checklist and required operator inputs for one new
 non-business candidate, see [the isolated acceptance preparation plan](machine-isolated-acceptance-plan.md).
 That plan does not authorize provisioning, deployment, production access or DNS changes.
@@ -263,9 +269,10 @@ a policy rehearsal into a live action.
 Each revisioned draft owns a server-generated slot and records an independent
 machine/node group, cloud account, region/size/image, failure threshold,
 report-expiry interval, cooldown, monthly price ceiling, daily attempt limit and
-an optional DNS credential/hostname intention. Current creation-template drafts
-are Linode-only. DigitalOcean and Vultr inventory/power support does not imply
-replacement creation support. Empty DNS and zero budget may be saved as incomplete
+an optional DNS credential/hostname intention. Legacy single-account drafts
+remain Linode-only. Provider-group drafts support all three catalogs; native
+adapters still require their own reviewed templates and execution gates.
+Empty DNS and zero budget may be saved as incomplete
 drafts, but rehearsal marks them blocked. No tokens, root passwords, generated
 scripts or private SSH material are returned.
 
@@ -645,9 +652,9 @@ Before enabling real execution, the remaining work is:
   the new disabled replacement scope. A retained installation is excluded from
   active fault evaluation but is not stopped, revoked, forgotten or deleted.
 
-DigitalOcean/Vultr replacement creation also needs its own provider adapters;
-their inventory and manual power support must not be presented as provisioning
-support. All creation remains hard-off. A subsequent live test needs separate
+DigitalOcean/Vultr replacement adapters have since been added locally as described
+below; inventory and manual power support alone are not acceptance evidence.
+All creation remains hard-off. A subsequent live test needs separate
 authorization for one non-business VM, a spending boundary, forwarding acceptance
 and its cleanup before independent production use can be considered. Existing
 tanzhen services and DNS records are not changed by that test.
@@ -684,7 +691,7 @@ Vultr uses native region IDs, plan location lists and supported x64 Linux OS IDs
 Catalog compatibility is not inventory, permission, architecture interop or
 final pricing acceptance. Actual selected-account regional pricing and
 preflight, existing reviewed-template allowlists and live gates still apply.
-DigitalOcean/Vultr draft catalogs do not add replacement creation adapters.
+Catalog reads themselves do not enable the separately guarded creation adapters.
 
 At a new precheck/task the matching-provider pool selects an eligible credential
 with the fewest recent attempts, then the oldest attempt and lowest account ID.
@@ -1041,9 +1048,9 @@ unknown proof or unresolved failures stop for review while retaining the origina
 mutation identity and reservations. Review is not permission to re-dispatch.
 Progress can resume the same persisted intent within its valid proof/deadline,
 not start a fresh paid operation. The native bridge remains backend-internal and
-has not been exposed as an activation UI. DigitalOcean/Vultr creation adapters,
-live worker/WAN and provider error acceptance and controlled activation are still
-outstanding. The later native notices and background runner sections describe
+has not been exposed as an activation UI. DigitalOcean/Vultr adapters are now
+implemented locally; live worker/WAN, provider error acceptance and controlled
+activation remain outstanding. The later native notices and background runner sections describe
 their separately guarded additions. This does not claim complete live
 tanzhen v2 parity or authorize a non-business cloud acceptance run.
 The forwarding integration tests exercise the existing isolated HY2 verifier
@@ -1672,7 +1679,7 @@ an issued/expiry interval of at most 24 hours and one exact active kelinode-rs
 Linux x86-64 release. The release pin includes component, platform, version,
 archive SHA256 and binary SHA256. No latest/default release or provider fallback
 is selected. Duplicate services, malformed scopes, future/expired grants and
-non-Linode service members fail closed. These local configuration structures are
+unsupported-provider service members fail closed. These local configuration structures are
 not evidence of operator approval or real acceptance, and cannot bypass the hard
 gate. They have deliberately not been exposed in the browser or environment.
 
@@ -1722,8 +1729,9 @@ runner through initialization, signed forwarding and owned-DNS receipts, along
 with post-commit interruption, revocation before provider writes, stopped/foreign
 run rejection, stale/forged previews, changed releases, unknown finance, scope
 expiry and default-off scheduling. It is not new distributed Redis/MySQL,
-Horizon-daemon, real cloud billing, WAN or DNS-propagation acceptance. No claim of
-DigitalOcean/Vultr provisioning support or production readiness is added.
+Horizon-daemon, real cloud billing, WAN or DNS-propagation acceptance. This earlier
+admission increment did not add DigitalOcean/Vultr adapters; their later local
+implementation below still does not establish production readiness.
 
 Local final regression passed 3,504 unit tests / 22,864 assertions. The focused
 admission/native-boundary run passed 50 tests / 548 assertions. Changed PHP files
@@ -1741,3 +1749,199 @@ build manifest/assets were committed with the preview backend in
 synchronizations using `[skip ci]`; no image or deployment was requested.
 The preview collector and native worker remain default-off. Real creation,
 automatic credential rotation and DNS cutover remain closed.
+
+### Multi-Provider Replacement Adapters (Disabled)
+
+The local creation/acceptance path now selects a `ProvisionClient` through
+`MachineProvisionProviders`, using the pinned plan provider and the selected
+account's exact provider. It never falls back between providers. Linode's
+existing payload and preflight stay unchanged. DigitalOcean and Vultr use
+their own native region, size/plan and image/OS identifiers, not Linode codes.
+Their explicit `machine_provision.providers.<provider>` region/size/image
+allowlists default to **empty**. Catalog compatibility is necessary but is not
+permission to create, and unreviewed templates remain blocked in rehearsal.
+
+- DigitalOcean creates one Droplet at the fixed `/v2/droplets` endpoint, sends
+  cloud-init as plain `user_data`, disables backups and optional monitoring,
+  and checks active account state, regional size/image availability, image disk
+  requirements and the current monthly compute price before dispatch.
+- Vultr creates one instance at the fixed `/v2/instances` endpoint, using an
+  integer `os_id` and base64 cloud-init. Preflight additionally checks the
+  region's `available_plans`. Backups, DDoS add-ons and activation email are
+  explicitly disabled; public IPv4 is not disabled.
+- Optional raw SSH public keys are installed inside the new VM's cloud-init,
+  never imported as account-level provider SSH keys. SSH password authentication
+  is disabled on both JSON-provider templates. Vultr's returned default password
+  is neither stored nor included in normalized resource/task output. This does
+  not hide cloud-init secrets from the cloud provider or VM root.
+- Both adapters reuse the encrypted task, callback authentication, post-dispatch
+  Agent/node evidence, installation ID, exact binary SHA256 and signed forwarding
+  receipt boundary. Acceptance writes the matching provider on the owned resource;
+  a coincident numeric ID on another provider cannot be adopted.
+- A dispatch fence precedes the single create POST. Timeout, 5xx or malformed or
+  mismatched success remains an unknown paid outcome. Recovery only reads the
+  original account and request. Reconciliation validates the marker, name,
+  template and creation-time window, rejects duplicate candidates/IDs, and is
+  limited to three pages/300 resources. It never follows returned pagination
+  URLs or re-sends a POST when no candidate is found.
+- Typed 401/403, billing, quota, rate and capacity failures reuse the existing
+  credential-health/cooldown machinery. Unknown outcomes cannot rotate. Vultr's
+  account read still lacks a stable unique account identity; email and balance
+  do not invent one, so automatic independent-account rotation stays blocked.
+- The cost and review paths use a provider-specific `FailoverCostClient`.
+  Matching positive inventory can establish a supported compute monthly estimate
+  after checking the same identity, one IPv4 and no unverified paid add-ons or
+  attached volumes. This is not a provider bill or a spend cap. Neither JSON API
+  account read proves an unrestricted resource view. A missing resource therefore
+  remains unknown/unresolved: it cannot prove deletion, zero the baseline, release
+  a reservation or authorize another creation. Revision/context expiry and
+  provider-scoped quota locks still apply.
+
+`MachineFailoverExecutionGate` still unconditionally rejects native execution.
+Live creation, replacement, admission, runner enrollment, automatic rotation and
+DNS mutation remain disabled; no activation API or environment bypass was added.
+No queue/Horizon configuration, node binary, production database, existing cloud
+resource, DNS record or tanzhen service was changed. Tests replace gates only
+inside inert in-memory fixtures and fake all provider, verifier and DNS traffic.
+
+The added tests cover native payloads and user-data encoding, closed live gates,
+unapproved/incompatible templates, prices, credentials sent to the wrong provider,
+typed provider failures, duplicate/foreign candidates, bounded reconciliation,
+positive-only cost evidence and missing-resource budget safety. End-to-end
+fixtures for both providers exercise create, authenticated initialization,
+matching reports, signed TCP/UDP forwarding and owned-DNS receipts, plus unknown
+POST recovery without a second VM or credential change. These are simulations,
+not real VM, cloud-init, WAN, billing or DNS-propagation acceptance.
+
+Local regression for this increment passed 3,571 unit tests / 23,443 assertions.
+The focused multi-provider adapter, native receipt and budget tests passed
+67 tests / 564 assertions; all 32 changed or added PHP files passed syntax
+checks. No new Redis/MySQL/Horizon, provider account or WAN acceptance was run.
+Source and bundled-admin synchronization do not authorize deployment, activation
+or queue changes. The live execution gates remain closed.
+
+#### Live Acceptance Still Pending
+
+The operator has not yet prepared API credentials. No cloud/DNS account was
+accessed or charged by this increment. SSH private keys are not the prerequisite:
+dedicated provider API tokens and a dedicated DNS API credential must first be
+added securely to the isolated panel, not sent in chat. Use test-only credential
+groups, provider-native catalogs and expiring, least-privilege tokens. For
+DigitalOcean, verify `account:read`, the catalog/metadata read permissions and
+`droplet:create` plus its documented dependencies (including tag permissions)
+before an explicitly authorized run. Do not grant delete merely to run creation.
+Restrict Vultr API access to the isolated controller's exact egress IP. DNS
+permissions must cover only the dedicated non-business zone/record.
+
+The outstanding confirmation is recorded in the isolated preparation plan:
+test groups per provider, region, monthly quote limit and actual test budget,
+retention deadline, independent controller/verifier, test DNS hostname and
+credential, and who retains or deletes resources afterward. The proposed cap is
+one candidate per provider, run sequentially; this is not approval. Initial
+single-instance readiness and a later owned-DNS replacement trial are separate
+stages. Do not use business DNS or an existing tanzhen member as the source.
+
+References checked against official APIs/clients:
+[DigitalOcean Droplets](https://docs.digitalocean.com/reference/api/reference/droplets/),
+[DigitalOcean token scopes](https://docs.digitalocean.com/reference/api/scopes/),
+[DigitalOcean request schema](https://github.com/digitalocean/godo/blob/main/droplets.go),
+[Vultr instances](https://github.com/vultr/govultr/blob/master/instance.go),
+[Vultr regional availability](https://github.com/vultr/govultr/blob/master/region.go),
+[Vultr block storage](https://github.com/vultr/govultr/blob/master/block_storage.go).
+
+### Rotation Authorization And DNS Readback Hardening (Disabled)
+
+Credential rotation now has its own `machine_failover.allow_rotation=false`
+gate and empty `allowed_rotation_policy_ids` allowlist. Permission for a first
+creation or replacement is not permission to try another credential. There is
+still no browser or environment bypass of the native execution hard gate.
+
+- Only a definite, typed authentication, permission, billing or quota rejection
+  marked as an eligible, non-review rotation candidate can select another
+  credential. A timeout, ambiguous success, provider failure or rate limit does
+  not authorize another paid request. Unknown results stay with the original
+  request/account; transient failures wait rather than cycling tokens.
+- Selection remains in the same provider and credential group, with health,
+  cooldown, account-identity, attempt and budget limits. Full persisted member
+  attempt history prevents A-to-B-to-A reuse after process recovery or expiry of
+  daily counters. Candidates prefer fewer attempts, then the older last attempt.
+- Each child persists its parent attempt/account, typed rejection reason and
+  rejection digest in the encrypted task. The bridge revalidates that lineage
+  and the independent rotation grant before dispatch. Revocation prevents an
+  unsubmitted child POST; a child already dispatched may still be read back under
+  its original request without authorizing another creation.
+- Vultr still cannot prove independent accounts from its account metadata.
+  Email, balance, group membership and token names cannot substitute for that
+  proof. Account-level billing/quota rotation is therefore blocked where the
+  required independent account identity is unavailable.
+
+Native owned-DNS replacement supports **Cloudflare-owned A records only**.
+Unsupported providers, including Aliyun, now block the native policy before VM
+creation rather than failing only after paying for a candidate. This does not
+remove Aliyun from ordinary instance DNS bindings. DNS credentials do not rotate
+automatically: the selected credential, revision, zone, hostname, marker and
+record ID remain pinned throughout the original transition.
+
+The new migration `2026_11_09_140000_add_machine_dns_readback_state.php` adds
+`next_check_at`, `readback_attempts`, `last_checked_at` and `confirmed_at`.
+Owned-DNS execution and its UI allowance fail closed until all columns exist;
+historical records remain readable. Downgrade refuses to discard used readback
+evidence. No production migration was run in this increment.
+
+- Exact-name enumeration requires complete, internally consistent bounded
+  pagination, unique IDs and well-typed DNS data. Missing or truncated inventory
+  is not an empty record set and cannot authorize creation or adoption.
+- Execution rechecks the current record immediately before the durable
+  dispatch fence. A changed marker, IP, identity or record shape blocks the write.
+  This is not atomic compare-and-swap against an external administrator: the
+  provider can still change after the final read. The ownership/readback checks
+  and manual review boundary remain necessary.
+- Only one create or patch is dispatched for each transition. A transient
+  failure before dispatch persists a wait without marking a write sent. An
+  expired unsubmitted intent cannot be extended by its backoff. A source that
+  recovers before dispatch is retained without proceeding to DNS.
+- After dispatch, unknown results and retryable reads persist the next check and
+  count **each** provider readback before sending it. Rate-limit waits honor a
+  bounded `Retry-After`; excessive or non-retryable waits require review.
+  There are at most 12 readback attempts. Exhaustion, permission/ownership
+  changes or expired forwarding evidence stop automatic progress. They do not
+  resend the DNS write, delete a record, roll back DNS, release budget or create
+  another VM.
+- Confirmation still requires the same fresh signed TCP/UDP forwarding and
+  instance evidence. It records the provider readback confirmation time while
+  retaining the previous instance. A stale signed receipt cannot be silently
+  replaced with a new test run merely to finish DNS reconciliation.
+
+The read-only operator view shows the rotation's parent and failure kind,
+DNS readback count/limit and next check time. It continues to label historical
+provider readback separately from current proof and never claims global DNS
+propagation. No new execution or retry control was added.
+
+Synthetic coverage includes independent-grant revocation at dispatch, original
+readback after revocation, no credential cycles, changed rejection lineage,
+DigitalOcean typed rotation through initialization/forwarding/DNS, malformed DNS
+inventory, a competing record change before write, persisted rate-limit recovery,
+the durable readback cap, original-admin binding, migration gating and evidence
+preservation. Provider APIs, verifier and DNS remain faked; none of these tests
+proves real cloud-init, billing, WAN reachability, DNS propagation or distributed
+worker behavior. Dedicated provider/DNS credentials and the isolated acceptance
+parameters below are still missing.
+
+All creation, native execution/admission/runner, automatic rotation and DNS
+cutover gates remain closed. No node binary, queue/Horizon configuration,
+production database, tanzhen service or existing cloud/DNS resource was changed.
+This source-only synchronization does not deploy or activate these changes.
+
+Local regression after hardening passed 3,607 backend unit tests / 23,677
+assertions and 149 focused admin contract/component tests. All 53 changed or
+added PHP files passed syntax checks. Playwright checked the read-only receipts
+at 1440px and 390px in light/dark themes with mocked reads, no external requests
+and no document overflow. The clean-source admin single-bundle build passed at JS 4,637,066 /
+CSS 567,961 bytes, within unchanged gates of 4,638,000 / 568,000 bytes.
+No dependencies or queue/Horizon settings changed; no real provider, DNS,
+database or WAN acceptance was performed.
+
+Provider references:
+[Cloudflare DNS record listing](https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/list/),
+[record creation](https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/create/),
+[record patching](https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/edit/).

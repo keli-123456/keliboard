@@ -65,7 +65,7 @@ class MachineFailoverBudgetTest extends TestCase
             '2026_11_05_200000_create_machine_operation_notices.php',
             '2026_11_05_220000_create_machine_provision_tasks.php', '2026_11_06_010000_add_machine_cloud_providers.php',
             '2026_11_06_020000_create_machine_cloud_groups.php', '2026_11_06_030000_create_machine_failover_policies.php',
-            '2026_11_06_040000_create_machine_failover_observations.php', '2026_11_06_050000_create_machine_acceptance_tables.php',
+            '2026_11_06_040000_create_machine_failover_observations.php', '2026_11_06_050000_create_machine_acceptance_tables.php', '2026_11_09_140000_add_machine_dns_readback_state.php',
             '2026_11_07_090000_create_machine_replacement_tasks.php', '2026_11_07_120000_add_provider_groups_to_machine_failover.php',
             '2026_11_07_140000_create_machine_failover_services.php', '2026_11_07_160000_create_machine_credential_health.php',
             '2026_11_07_180000_create_machine_failover_native_journal.php', '2026_11_07_190000_create_machine_failover_finance.php',
@@ -154,6 +154,42 @@ class MachineFailoverBudgetTest extends TestCase
                 'price' => ['monthly' => $this->price], 'region_prices' => $this->mode === 'regional' ? [['id' => 'sg-sin-2', 'monthly' => 52.3]] : []]);
             throw new \RuntimeException('Unmocked cost fixture');
         });
+    }
+
+    public static function jsonProviders(): array { return [['digitalocean'], ['vultr']]; }
+    #[DataProvider('jsonProviders')]
+    public function test_json_provider_cost_capture_uses_native_identity_and_never_treats_missing_as_zero(string $provider): void
+    {
+        $this->account->fill(['provider' => $provider])->save();
+        [$region, $size, $image] = $provider === 'digitalocean' ? ['sgp1', 's-1vcpu-1gb', 'debian-12-x64'] : ['40', 'vc2-1c-1gb', '2136'];
+        $payload = $this->source->payload; $plan = $payload['plan'];
+        $plan = array_replace($plan, compact('provider', 'region', 'size', 'image'));
+        $factory = new \App\Services\ServerMachine\Cloud\MachineProvisionProviders();
+        $request = $factory->client($this->account, $plan)->buildRequest($plan, $this->source->id, $this->source->marker, "#cloud-config\nruncmd: []\n");
+        $this->source->fill(['payload' => ['plan' => $plan, 'request' => $request]])->save();
+        $row = \App\Services\ServerMachine\Cloud\MachineProvisionProviders::requestIdentity($provider, $request)
+            + ['external_id' => '9001', 'provider_created_at' => $this->source->provider_created_at, 'tags' => [$this->source->marker]];
+        $client = new class($row) implements \App\Services\ServerMachine\Cloud\FailoverCostClient {
+            public array $rows;
+            public function __construct(array $row) { $this->rows = ['9001' => $row]; }
+            public function authority(Account $account): bool { return false; }
+            public function completeInventory(Account $account): array { return $this->rows; }
+            public function quote(Account $account, array $row): int { return 600; }
+        };
+        app()->instance(\App\Services\ServerMachine\Cloud\MachineProvisionProviders::class,
+            new class($client) extends \App\Services\ServerMachine\Cloud\MachineProvisionProviders {
+                public function __construct(private \App\Services\ServerMachine\Cloud\FailoverCostClient $cost) {}
+                public function cost(Account $account): \App\Services\ServerMachine\Cloud\FailoverCostClient { return $this->cost; }
+            });
+        $cost = $this->capture()['cost']; $this->assertSame('verified', $cost['state'], json_encode($cost));
+        $this->assertSame(600, $cost['baseline_cents']);
+        $client->rows['9001']['image'] = 'other-image';
+        $this->assertSame('incomplete', $this->capture()['cost']['state']);
+        $client->rows = []; $cost = $this->capture()['cost'];
+        $this->assertSame('incomplete', $cost['state']); $this->assertNull($cost['baseline_cents']); $this->assertNull($cost['available_cents']);
+        $this->assertSame(0, Release::count());
+        $this->code('cost_baseline_required', fn () => $this->finance()->assertCapacity($this->service->id, 1, 1));
+        Http::assertNothingSent();
     }
 
     public function test_opening_workspace_and_run_reports_never_calls_cloud_or_releases_budget(): void

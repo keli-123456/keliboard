@@ -63,7 +63,7 @@ HY2 拟使用本次独有的自签证书与固定 TLS 名称 `hy2-isolated.test`
 
 ## 隔离资源方案
 
-首轮拟采用 Linode。DigitalOcean / Vultr 的目录和资源管理能力不代表当前单台创建链路已经支持它们；当前 `localChecks()` 对非 Linode 创建仍会阻断。
+首轮原方案仍拟采用 Linode。DigitalOcean / Vultr 的原生创建、回连和验收适配器现已在本地接通模拟流程，但不代表真实环境验收通过。两家的服务商专用模板白名单默认仍为空，`localChecks()` 会阻断未经审定的模板；所有真实执行开关保持关闭。
 
 ```text
 独立测试面板
@@ -163,3 +163,27 @@ HY2 拟使用本次独有的自签证书与固定 TLS 名称 `hy2-isolated.test`
 - [创建门槛和模板白名单](../config/machine_provision.php)、[验收门槛](../config/machine_acceptance.php)、[故障转移默认配置](../config/machine_failover.php)、[原生执行硬闸](../app/Services/ServerMachine/Cloud/MachineFailoverExecutionGate.php)。
 - [凭证分组选取](../app/Services/ServerMachine/Cloud/MachineFailoverCredentials.php) 与 [Linode 创建前校验](../app/Services/ServerMachine/Cloud/LinodeProvisionClient.php)。
 - [验收 worker 准备要求](../tools/machine-acceptance/README.md)、[资源限制样例](../tools/machine-acceptance/keli-verifier.service.example) 与 [回执协议](machine-acceptance-verifier.md)。
+
+## 三服务商真实验收缺项
+
+用户当前尚未准备密钥/令牌。这里需要的是服务商 API 令牌和 DNS API 凭证，不是把 SSH 私钥交给他人。凭证以后仅在隔离面板中添加，聊天和方案中只记录分组、凭证名称或 ID，不记录秘密正文。本轮没有连接账号、创建资源、安装节点或修改 DNS。
+
+| 缺项 | Linode | DigitalOcean | Vultr |
+| --- | --- | --- | --- |
+| 专用测试凭证分组及 API 权限 | 待准备，不复用业务或 tanzhen 令牌 | 待准备，确认账号、Droplet、目录及标签相关权限 | 待准备，限制控制宿主出口 IP |
+| 地区、机型、镜像 | 机型/镜像沿用本方案；地区仍待确认 | 待从本服务商的目录中选择，不使用 Linode 编码 | 待从本服务商的 region/plan/OS ID 中选择 |
+| 月价上限、总费用审批上限、最长保留时长 | 待确认 | 待确认 | 待确认 |
+| 结束后保留或申请删除及责任人 | 待确认 | 待确认 | 待确认 |
+
+三家共用的独立非业务控制/验收宿主、测试入口、来源 IP 和隔离数据库/Redis 部署方案仍待确认。拟每家最多一台候选，顺序验收，不并行；这只是建议数量，尚未授权产生费用。没有 API 令牌时只完成代码和模拟用例，不把“暂无凭证”解释成可以使用正式账号。
+
+单台就绪阶段继续不动 DNS。后续如需覆盖真实 DNS 创建、切换、读回、外部解析和 TTL 传播，另需独立非业务域名/zone、精确测试记录名、面板内 DNS 凭证名称或 ID，以及明确的变更窗口和恢复责任人。现有 owned-DNS 接管仅接受新建的独立记录，不能把业务记录或 tanzhen 记录用于本轮。DNS 凭证及以上参数均为待确认，未做真实验收；模拟 DNS 回执不算真实传播验证。
+
+## 轮换与 DNS 读回的新增隔离检查
+
+- `machine_failover.allow_rotation=false` 和空的 `allowed_rotation_policy_ids` 为独立轮换门槛。单台首次创建的未来授权不包含自动换令牌、换账号或再次付费创建；真实创建、原生调度和 DNS 门槛也继续关闭。
+- 当前原生 owned-DNS 替换仅支持 Cloudflare A 记录。Aliyun 仍可用于普通实例解析绑定，但不能用于本次原生替换；应在建机前阻断，不得为了继续测试而跳过归属校验。DNS 凭证固定，不随云凭证自动轮换。
+- 后续获准搭建隔离库时，须先检查 `2026_11_09_140000_add_machine_dns_readback_state.php` 的四个读回状态字段。缺少迁移时保持 DNS 不可执行；已使用的读回证据不允许通过降级迁移删除。本轮没有执行正式或隔离库迁移，仅测试用内存数据库应用了该结构。
+- DNS 验收应分别记录：单次写入意图、精确归属、服务商读回次数及下次核对时间、转发证据时效、外部解析及 TTL 传播。服务商读回最多 12 次，结果未知只核对原请求，不重复写入、不自动回滚，也不将服务商读回当成全球传播完成。
+- 真实轮换验收须另行准备同组专用测试凭证和可验证的账号归属，并单独授权。仅测试确定拒绝后的安全选择、原请求未知时的禁止轮换、撤权和停止边界；不能以真实反复建机来制造配额/账单故障。Vultr 当前无法取得所需稳定独立账号身份时，应记录阻断，不能用邮箱、Token 名称或分组名称替代证据。
+- 当前仍没有 API 凭证、已批准测试预算或可用隔离宿主。上述项目仅进入清单，未创建、部署、连正式库或操作 tanzhen，未打开任何真实执行开关。

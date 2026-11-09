@@ -48,7 +48,7 @@ class MachineFailoverServicesTest extends TestCase
         foreach (['2026_11_05_170000_create_machine_cloud_tables.php', '2026_11_06_010000_add_machine_cloud_providers.php',
             '2026_11_06_020000_create_machine_cloud_groups.php', '2026_11_05_160000_create_machine_dns_tables.php',
             '2026_11_05_220000_create_machine_provision_tasks.php', '2026_11_06_030000_create_machine_failover_policies.php',
-            '2026_11_07_120000_add_provider_groups_to_machine_failover.php', '2026_11_06_050000_create_machine_acceptance_tables.php',
+            '2026_11_07_120000_add_provider_groups_to_machine_failover.php', '2026_11_06_050000_create_machine_acceptance_tables.php', '2026_11_09_140000_add_machine_dns_readback_state.php',
             '2026_11_07_140000_create_machine_failover_services.php'] as $file) (require base_path('database/migrations/' . $file))->up();
         Schema::create('v2_user', function (Blueprint $t) { $t->id(); $t->boolean('is_admin'); $t->boolean('banned')->default(false); $t->timestamps(); });
         Schema::create('v2_server_machine', function (Blueprint $t) { $t->id(); $t->string('name'); $t->string('token'); $t->boolean('is_active'); $t->timestamps(); });
