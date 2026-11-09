@@ -3,6 +3,8 @@ namespace Tests\Unit\Services;
 
 use App\Models\MachineCloudAccount;
 use App\Models\MachineDnsCredential;
+use App\Models\MachineDnsSetRuntime as Runtime;
+use App\Models\MachineDnsSetFixture as Fixture;
 use App\Models\MachineFailoverDnsRun as Run;
 use App\Models\MachineFailoverDnsSet as DnsSet;
 use App\Models\MachineFailoverDnsSlot as Slot;
@@ -17,6 +19,9 @@ use App\Services\ServerMachine\Cloud\MachineFailoverPolicyService;
 use App\Services\ServerMachine\Cloud\MachineFailoverServiceRegistry;
 use App\Services\ServerMachine\Dns\MachineDnsRecordSetPlanner;
 use App\Services\ServerMachine\Dns\MachineDnsRecordSetProvider;
+use App\Services\ServerMachine\Dns\MachineDnsRecordSetExecution as Engine;
+use App\Services\ServerMachine\Dns\MachineDnsRecordSetSimulationTransport as Driver;
+use Illuminate\Support\Carbon;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Http\Request;
@@ -38,6 +43,8 @@ class MachineFailoverDnsSetsTest extends TestCase
     private MachineDnsCredential $cf;
     private MachineDnsCredential $ali;
 
+    protected function tearDown(): void { Carbon::setTestNow(); parent::tearDown(); }
+
     protected function setUp(): void
     {
         parent::setUp(); $this->setUpInMemoryDatabase(); $this->bindJsonResponseFactory();
@@ -49,7 +56,7 @@ class MachineFailoverDnsSetsTest extends TestCase
             '2026_11_05_220000_create_machine_provision_tasks.php', '2026_11_06_030000_create_machine_failover_policies.php',
             '2026_11_07_120000_add_provider_groups_to_machine_failover.php', '2026_11_06_050000_create_machine_acceptance_tables.php',
             '2026_11_09_140000_add_machine_dns_readback_state.php', '2026_11_07_140000_create_machine_failover_services.php',
-            '2026_11_09_180000_create_machine_failover_dns_sets.php'] as $file) (require base_path('database/migrations/' . $file))->up();
+            '2026_11_09_180000_create_machine_failover_dns_sets.php', '2026_11_09_200000_create_machine_dns_set_runtime.php'] as $file) (require base_path('database/migrations/' . $file))->up();
         Schema::create('v2_user', function (Blueprint $t) { $t->id(); $t->boolean('is_admin'); $t->boolean('banned')->default(false); $t->timestamps(); });
         Schema::create('v2_server_machine', function (Blueprint $t) { $t->id(); $t->string('name'); $t->string('token'); $t->boolean('is_active'); $t->timestamps(); });
         Schema::create('v2_server', function (Blueprint $t) { $t->id(); $t->integer('machine_id'); $t->boolean('enabled'); });
@@ -315,5 +322,217 @@ class MachineFailoverDnsSetsTest extends TestCase
         $this->code('migration_required', fn () => app(\App\Services\ServerMachine\Cloud\MachineFailoverSimulation::class)
             ->start($this->service['id'], $view['service_revision'], 'replace', null, str_repeat('c', 32), $this->admin->id));
         $this->inert();
+    }
+
+    private function hook(?\Closure $read = null, ?\Closure $write = null): void
+    {
+        $driver = new class(app(MachineDnsRecordSetProvider::class), $read, $write) extends Driver {
+            public function __construct($provider, private ?\Closure $read, private ?\Closure $write) { parent::__construct($provider); }
+            public function inventory(string $run, array $set): array
+            {
+                $rows = parent::inventory($run, $set); $hook = $this->read; $this->read = null; $hook?->__invoke($run); return $rows;
+            }
+            public function write(string $run, array $set, array $action, ?string $knownId = null): string
+            {
+                $id = parent::write($run, $set, $action, $knownId); $hook = $this->write; $this->write = null; $hook?->__invoke($run); return $id;
+            }
+        };
+        app()->instance(Driver::class, $driver); $this->simulation = app(MachineFailoverDnsSimulation::class);
+    }
+    private function calls(string $run, string $kind): array
+    {
+        return array_values(array_filter(Fixture::query()->findOrFail($run)->payload['calls'], fn ($r) => $r['kind'] === $kind));
+    }
+    public function test_execution_provider_state_is_independent_from_the_journal_and_preserves_other_members(): void
+    {
+        $view = $this->configure('aliyun', ['default', 'telecom', 'unicom']); $run = $this->start($view, 'replace');
+        $before = Run::query()->findOrFail($run['id'])->payload['records'];
+        app(Engine::class)->tick($run['id'], $this->admin->id);
+        $this->assertSame($before, Run::query()->findOrFail($run['id'])->payload['records']);
+        $this->assertNotSame($before, Fixture::query()->findOrFail($run['id'])->payload['records']);
+        $result = $this->simulation->advance($run['id'], $this->admin->id);
+        $this->assertSame('completed', $result['status']); $this->assertSame(6, $result['verified_actions']);
+        $this->assertCount(6, $this->calls($run['id'], 'update')); $this->assertCount(12, $result['records']);
+        $this->assertNotNull(Runtime::query()->findOrFail($run['id'])->finished_at); $this->inert();
+    }
+    public function test_execution_restart_after_provider_applied_a_write_only_reads_back_the_original_action(): void
+    {
+        $this->hook(write: fn () => throw new \RuntimeException('simulated process interruption'));
+        $run = $this->start($this->configure('aliyun', ['default', 'mobile']), 'replace');
+        try { app(Engine::class)->tick($run['id'], $this->admin->id); $this->fail('Expected interruption'); } catch (\RuntimeException $e) { $this->assertSame('simulated process interruption', $e->getMessage()); }
+        $this->assertSame('dispatched', Run::query()->findOrFail($run['id'])->payload['plan']['actions'][0]['state']);
+        $result = app(MachineFailoverDnsSimulation::class)->advance($run['id'], $this->admin->id);
+        $this->assertSame('completed', $result['status']); $this->assertCount(4, $this->calls($run['id'], 'update'));
+        $this->assertSame(1, $result['actions'][0]['request_count']); $this->inert();
+    }
+    public function test_execution_unknown_aliyun_create_cannot_be_adopted_after_a_crash(): void
+    {
+        $this->hook(write: fn () => throw new \RuntimeException('simulated process interruption'));
+        $run = $this->start($this->configure('aliyun'), 'bootstrap');
+        try { app(Engine::class)->tick($run['id'], $this->admin->id); } catch (\RuntimeException) {}
+        $result = $this->simulation->advance($run['id'], $this->admin->id);
+        $this->assertSame('needs_review', $result['status']); $this->assertSame('dns_unclaimed_record', $result['reason']);
+        $this->assertCount(1, $this->calls($run['id'], 'create')); $this->assertCount(0, $this->calls($run['id'], 'claim')); $this->inert();
+    }
+    public function test_execution_claim_crash_keeps_the_acknowledged_record_id_and_does_not_add_again(): void
+    {
+        $run = $this->start($this->configure('aliyun'), 'bootstrap'); app(Engine::class)->tick($run['id'], $this->admin->id);
+        $known = Run::query()->findOrFail($run['id'])->payload['plan']['actions'][0]['known_id'];
+        $this->hook(write: fn () => throw new \RuntimeException('simulated claim interruption'));
+        try { app(Engine::class)->tick($run['id'], $this->admin->id); } catch (\RuntimeException) {}
+        $result = $this->simulation->advance($run['id'], $this->admin->id);
+        $this->assertSame('completed', $result['status']); $this->assertCount(4, $this->calls($run['id'], 'create')); $this->assertCount(4, $this->calls($run['id'], 'claim'));
+        $this->assertSame($known, $this->calls($run['id'], 'claim')[0]['wire']['parameters']['RecordId']); $this->inert();
+    }
+    public function test_execution_busy_worker_does_no_io_and_expired_lease_can_resume(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-11-09 12:00:00', 'UTC'));
+        $run = $this->start($this->configure('aliyun'), 'replace');
+        Runtime::query()->whereKey($run['id'])->update(['generation' => 8, 'lease_hash' => hash('sha256', 'other-worker'), 'lease_until' => Carbon::now()->timestamp + 120]);
+        $this->assertFalse(app(Engine::class)->tick($run['id'], $this->admin->id)); $this->assertCount(0, Fixture::query()->findOrFail($run['id'])->payload['calls']);
+        Carbon::setTestNow(Carbon::now()->addSeconds(121)); $this->assertTrue(app(Engine::class)->tick($run['id'], $this->admin->id));
+        $this->assertSame(9, Runtime::query()->findOrFail($run['id'])->generation); $this->assertCount(1, $this->calls($run['id'], 'update')); $this->inert();
+    }
+    public function test_execution_stale_worker_cannot_commit_or_release_a_newer_workers_lease(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-11-09 12:00:00', 'UTC'));
+        $this->hook(write: function ($id) { Runtime::query()->whereKey($id)->update(['generation' => 99, 'lease_hash' => hash('sha256', 'successor'), 'lease_until' => Carbon::now()->timestamp + 120]); });
+        $run = $this->start($this->configure('aliyun'), 'replace'); app(Engine::class)->tick($run['id'], $this->admin->id);
+        $r = Runtime::query()->findOrFail($run['id']); $this->assertSame(99, $r->generation); $this->assertSame(hash('sha256', 'successor'), $r->lease_hash);
+        $this->assertSame('dispatched', Run::query()->findOrFail($run['id'])->payload['plan']['actions'][0]['state']);
+        Carbon::setTestNow(Carbon::now()->addSeconds(121));
+        $this->assertSame('completed', $this->simulation->advance($run['id'], $this->admin->id)['status']);
+        $this->assertCount(2, $this->calls($run['id'], 'update')); $this->inert();
+    }
+    public function test_execution_stop_during_preflight_prevents_the_first_write_without_waiting_on_the_worker_lock(): void
+    {
+        $this->hook(read: fn ($id) => app(Engine::class)->stop($id, $this->admin->id));
+        $run = $this->start($this->configure('aliyun'), 'replace'); app(Engine::class)->tick($run['id'], $this->admin->id);
+        $this->assertNotNull(Runtime::query()->findOrFail($run['id'])->stop_requested_at);
+        $result = $this->simulation->advance($run['id'], $this->admin->id);
+        $this->assertSame('stopped', $result['status']); $this->assertSame(0, $result['simulated_writes']); $this->assertCount(0, $this->calls($run['id'], 'update')); $this->inert();
+    }
+    public function test_execution_stop_during_inflight_write_settles_read_only_and_never_rolls_back_or_advances_other_lines(): void
+    {
+        $this->hook(write: fn ($id) => app(Engine::class)->stop($id, $this->admin->id));
+        $run = $this->start($this->configure('aliyun', ['default', 'telecom', 'unicom']), 'replace');
+        $result = $this->simulation->advance($run['id'], $this->admin->id);
+        $this->assertSame('stopped', $result['status']); $this->assertTrue($result['stop_requested']);
+        $this->assertSame(1, $result['verified_actions']); $this->assertSame(1, $result['simulated_writes']);
+        $this->assertCount(1, $this->calls($run['id'], 'update')); $this->assertCount(0, $this->calls($run['id'], 'delete'));
+        $this->assertSame($result, $this->simulation->advance($run['id'], $this->admin->id)); $this->inert();
+    }
+    public function test_execution_stop_between_add_and_remark_keeps_the_unclaimed_record_for_review(): void
+    {
+        $run = $this->start($this->configure('aliyun'), 'bootstrap'); app(Engine::class)->tick($run['id'], $this->admin->id);
+        $result = $this->simulation->stop($run['id'], $this->admin->id);
+        $this->assertSame('needs_review', $result['status']); $this->assertSame('dns_unclaimed_record', $result['reason']);
+        $this->assertCount(1, $this->calls($run['id'], 'create')); $this->assertCount(0, $this->calls($run['id'], 'claim')); $this->assertCount(0, $this->calls($run['id'], 'delete')); $this->inert();
+    }
+    public function test_execution_backoff_and_read_budget_are_persisted_and_do_not_reissue_mutations(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-11-09 12:00:00', 'UTC'));
+        $run = $this->start($this->configure('aliyun'), 'readback_rate_limited'); $engine = app(Engine::class);
+        $engine->tick($run['id'], $this->admin->id); $engine->tick($run['id'], $this->admin->id);
+        $this->assertSame(Carbon::now()->timestamp + 120, Runtime::query()->findOrFail($run['id'])->next_check_at);
+        $calls = count($this->calls($run['id'], 'inventory')); $this->assertFalse($engine->tick($run['id'], $this->admin->id)); $this->assertCount($calls, $this->calls($run['id'], 'inventory'));
+        Carbon::setTestNow(Carbon::now()->addSeconds(121)); $engine->tick($run['id'], $this->admin->id); $this->assertCount(1, $this->calls($run['id'], 'update'));
+        $this->simulation->advance($run['id'], $this->admin->id);
+        $run = $this->start($this->dns->overview($this->service['id'], 2, $this->admin->id), 'unknown_unresolved', str_repeat('b', 32));
+        $result = $this->simulation->advance($run['id'], $this->admin->id);
+        $this->assertSame('needs_review', $result['status']); $this->assertSame(12, Run::query()->findOrFail($run['id'])->payload['plan']['actions'][0]['readback_attempts']);
+        $this->assertCount(1, $this->calls($run['id'], 'update')); $this->inert();
+    }
+    public function test_execution_rechecks_authority_after_preflight_before_dispatch_and_at_final_completion(): void
+    {
+        $this->hook(read: fn () => MachineDnsCredential::query()->whereKey($this->ali->id)->increment('revision'));
+        $run = $this->start($this->configure('aliyun'), 'replace');
+        $result = $this->simulation->advance($run['id'], $this->admin->id);
+        $this->assertSame('blocked', $result['status']); $this->assertSame('dns_credential_changed', $result['reason']);
+        $this->assertSame(0, $result['simulated_writes']); $this->inert();
+    }
+    public function test_execution_final_inventory_cannot_complete_after_credential_revision_changes(): void
+    {
+        $run = $this->start($this->configure('aliyun'), 'replace');
+        for ($i = 0; $i < 4; $i++) app(Engine::class)->tick($run['id'], $this->admin->id);
+        $this->assertSame(2, Run::query()->findOrFail($run['id'])->cursor);
+        $this->hook(read: fn () => MachineDnsCredential::query()->whereKey($this->ali->id)->increment('revision'));
+        $result = $this->simulation->advance($run['id'], $this->admin->id);
+        $this->assertSame('needs_review', $result['status']); $this->assertNull(Runtime::query()->findOrFail($run['id'])->fresh()->next_check_at); $this->inert();
+    }
+    public function test_execution_tampered_journal_and_legacy_history_cannot_be_redispatched(): void
+    {
+        $run = $this->start($this->configure('aliyun'), 'replace'); $row = Run::query()->findOrFail($run['id']); $p = $row->payload;
+        $p['plan']['actions'][0]['after']['content'] = '203.0.113.250'; $row->payload = $p; $row->save();
+        $result = $this->simulation->advance($run['id'], $this->admin->id); $this->assertSame('dns_journal_changed', $result['reason']); $this->assertSame(0, $result['simulated_writes']);
+        Runtime::query()->whereKey($run['id'])->delete(); Fixture::query()->whereKey($run['id'])->delete();
+        $this->assertSame('legacy_plan_v1', $this->simulation->report($run['id'], $this->admin->id)['execution_engine']);
+        $this->code('dns_legacy_read_only', fn () => app(Engine::class)->tick($run['id'], $this->admin->id)); $this->inert();
+    }
+    public function test_execution_driver_downgrade_and_live_entry_points_remain_closed(): void
+    {
+        $run = $this->start($this->configure('aliyun'), 'replace');
+        try { (require base_path('database/migrations/2026_11_09_200000_create_machine_dns_set_runtime.php'))->down(); $this->fail('Expected retained execution'); }
+        catch (\RuntimeException $e) { $this->assertStringContainsString('retained', $e->getMessage()); }
+        config(['machine_provision.allow_live' => true, 'machine_acceptance.allow_dns' => true, 'machine_failover.allow_rotation' => true]);
+        $this->code('orchestration_disabled', fn () => app(Engine::class)->initialize(Run::query()->findOrFail($run['id'])));
+        $set = Run::query()->findOrFail($run['id'])->payload['snapshot']['set'];
+        $this->code('orchestration_disabled', fn () => app(\App\Services\ServerMachine\Dns\MachineDnsRecordSetHttpTransport::class)->inventory($run['id'], $set));
+        $this->code('orchestration_disabled', fn () => app(\App\Services\ServerMachine\Dns\DnsProviderClient::class)->recordSetInventory($this->ali, $set));
+        config(['machine_provision.allow_live' => false, 'machine_acceptance.allow_dns' => false, 'machine_failover.allow_rotation' => false]); $this->inert();
+    }
+    public static function executionLines(): array { return array_map(fn ($s) => [$s], ['replace', 'bootstrap', 'detach', 'restore', 'unknown_applied', 'claim_unknown']); }
+    #[DataProvider('executionLines')]
+    public function test_execution_all_six_aliyun_lines_and_both_families_complete_without_pruning_another_member(string $scenario): void
+    {
+        $view = $this->configure('aliyun', MachineDnsRecordSetProvider::LINES); $run = $this->start($view, $scenario);
+        $result = $this->simulation->advance($run['id'], $this->admin->id);
+        $this->assertSame('completed', $result['status']); $this->assertCount($scenario === 'detach' ? 12 : 24, $result['records']);
+        $this->assertSame($scenario === 'detach' ? ['delete'] : ($scenario === 'bootstrap' || $scenario === 'claim_unknown' ? ['create'] : ['update']), array_values(array_unique(array_column($result['actions'], 'kind'))));
+        $this->assertSame(['A', 'AAAA'], array_values(array_unique(array_column($result['actions'][0]['kind'] === 'delete'
+            ? array_column($result['actions'], 'before') : array_column($result['actions'], 'after'), 'type'))));
+        $this->assertSame(MachineDnsRecordSetProvider::LINES, array_values(array_unique(array_column($result['records'], 'line'))));
+        $this->assertSame(count($result['actions']), $result['verified_actions']); $this->inert();
+    }
+    public function test_execution_transient_preflight_read_is_delayed_and_recovered_without_a_write_retry(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-11-09 12:00:00', 'UTC'));
+        $this->hook(read: fn () => throw new \App\Services\ServerMachine\Dns\DnsRequestFailure('provider_unavailable', 30));
+        $run = $this->start($this->configure('aliyun'), 'replace'); app(Engine::class)->tick($run['id'], $this->admin->id);
+        $this->assertSame('running', Run::query()->findOrFail($run['id'])->status);
+        $this->assertSame(Carbon::now()->timestamp + 30, Runtime::query()->findOrFail($run['id'])->next_check_at);
+        $this->assertCount(0, $this->calls($run['id'], 'update'));
+        Carbon::setTestNow(Carbon::now()->addSeconds(31));
+        $this->assertSame('completed', $this->simulation->advance($run['id'], $this->admin->id)['status']);
+        $this->assertCount(2, $this->calls($run['id'], 'update')); $this->inert();
+    }
+    public function test_execution_stop_after_unknown_unapplied_write_never_retries_or_reports_a_clean_stop(): void
+    {
+        $run = $this->start($this->configure('aliyun'), 'unknown_unresolved'); app(Engine::class)->tick($run['id'], $this->admin->id);
+        $result = $this->simulation->stop($run['id'], $this->admin->id);
+        $this->assertSame('needs_review', $result['status']); $this->assertTrue($result['stop_requested']);
+        $this->assertSame(0, $result['simulated_writes']); $this->assertCount(1, $this->calls($run['id'], 'update')); $this->inert();
+    }
+    public function test_execution_revoked_admin_after_inventory_prevents_dispatch_and_a_changed_wire_journal_cannot_be_accepted(): void
+    {
+        $this->hook(read: fn () => User::query()->whereKey($this->admin->id)->update(['banned' => true]));
+        $run = $this->start($this->configure('aliyun'), 'replace'); app(Engine::class)->tick($run['id'], $this->admin->id);
+        $this->assertSame('blocked', Run::query()->findOrFail($run['id'])->status); $this->assertCount(0, $this->calls($run['id'], 'update'));
+        User::query()->whereKey($this->admin->id)->update(['banned' => false]);
+        $run = $this->start($this->dns->overview($this->service['id'], 2, $this->admin->id), 'replace', str_repeat('b', 32));
+        app(Engine::class)->tick($run['id'], $this->admin->id); $row = Run::query()->findOrFail($run['id']); $p = $row->payload;
+        $p['plan']['actions'][0]['requests'][0]['parameters']['RecordId'] = '999999999999'; $row->payload = $p; $row->save();
+        $result = $this->simulation->advance($run['id'], $this->admin->id); $this->assertSame('dns_journal_changed', $result['reason']);
+        $this->assertSame('needs_review', $result['status']); $this->assertCount(1, $this->calls($run['id'], 'update')); $this->inert();
+    }
+    public function test_execution_fixture_does_not_hide_an_accidental_duplicate_create(): void
+    {
+        $run = $this->start($this->configure(), 'bootstrap'); $p = Run::query()->findOrFail($run['id'])->payload;
+        $driver = app(Driver::class); $first = $driver->write($run['id'], $p['snapshot']['set'], $p['plan']['actions'][0]);
+        $second = $driver->write($run['id'], $p['snapshot']['set'], $p['plan']['actions'][0]);
+        $this->assertNotSame($first, $second); $this->assertCount(2, Fixture::query()->findOrFail($run['id'])->payload['records']);
+        $this->assertCount(2, $this->calls($run['id'], 'create'));
+        $result = $this->simulation->advance($run['id'], $this->admin->id); $this->assertSame('blocked', $result['status']);
+        $this->assertCount(2, $this->calls($run['id'], 'create')); $this->inert();
     }
 }

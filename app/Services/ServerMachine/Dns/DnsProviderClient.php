@@ -9,6 +9,45 @@ use Illuminate\Support\Facades\Http;
 
 class DnsProviderClient
 {
+    public function recordSetInventory(MachineDnsCredential $credential, array $set): array
+    {
+        app(\App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate::class)->assertAllowed('dns_set_read');
+        $this->recordSetScope($credential, $set);
+        $contract = app(MachineDnsRecordSetProvider::class); $pages = [];
+        for ($page = 1; $page <= 3; $page++) {
+            $json = $credential->provider === 'cloudflare'
+                ? $this->cloudflareRequest($credential, 'GET', '/zones/' . $set['zone'] . '/dns_records', [], ['name.exact' => $set['hostname'], 'page' => $page, 'per_page' => 50])
+                : $this->aliyun($credential, 'DescribeSubDomainRecords', ['SubDomain' => $set['hostname'], 'DomainName' => $set['zone'], 'PageNumber' => $page, 'PageSize' => 50], true);
+            $pages[] = $json; $count = $credential->provider === 'cloudflare' ? ($json['result_info']['total_count'] ?? null) : ($json['TotalCount'] ?? null);
+            if (!is_int($count) || $count < 0 || $count > 150) throw new DnsException('dns_inventory_incomplete');
+            if ($page * 50 >= $count) return $contract->inventory($set, $pages);
+        }
+        throw new DnsException('dns_inventory_incomplete');
+    }
+
+    public function recordSetWrite(MachineDnsCredential $credential, array $set, array $action, ?string $knownId = null): string
+    {
+        app(\App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate::class)->assertAllowed('dns_set_write');
+        $this->recordSetScope($credential, $set);
+        $contract = app(MachineDnsRecordSetProvider::class); $wire = $contract->mutation($set, $action, $knownId);
+        $json = $credential->provider === 'cloudflare'
+            ? $this->cloudflareRequest($credential, $wire['method'], $wire['path'], $wire['parameters'])
+            : $this->aliyun($credential, $wire['action'], $wire['parameters'], true);
+        if ($credential->provider === 'aliyun' && (!is_string($json['RequestId'] ?? null) || !$json['RequestId'] || strlen($json['RequestId']) > 100)) throw new DnsException('dns_outcome_unknown');
+        $id = $credential->provider === 'cloudflare' ? ($json['result']['id'] ?? null)
+            : ($json['RecordId'] ?? ($action['kind'] === 'claim' ? $knownId : null));
+        if (!is_string($id) || !preg_match($credential->provider === 'cloudflare' ? '/^[a-f0-9]{32}$/D' : '/^[0-9]{1,40}$/D', $id)) throw new DnsException('dns_outcome_unknown');
+        if ($action['kind'] !== 'create' && $id !== ($knownId ?? $action['before']['id'] ?? null)) throw new DnsException('dns_ownership_changed');
+        return $id;
+    }
+
+    private function recordSetScope(MachineDnsCredential $credential, array $set): void
+    {
+        app(MachineDnsRecordSetProvider::class)->assertSet($set);
+        if ($credential->provider !== $set['provider'] || $credential->id !== ($set['credential_id'] ?? null)
+            || $credential->revision !== ($set['credential_revision'] ?? null)) throw new DnsException('dns_credential_changed');
+    }
+
     public function ownedRecords(MachineDnsCredential $credential, string $zone, string $hostname): array
     {
         $this->ownedProvider($credential, $zone); $hostname = $this->domain($hostname); $records = []; $expected = null; $seen = [];
@@ -180,7 +219,7 @@ class DnsProviderClient
         return $parameters;
     }
 
-    private function aliyun(MachineDnsCredential $credential, string $action, array $parameters): array
+    private function aliyun(MachineDnsCredential $credential, string $action, array $parameters, bool $recordSet = false): array
     {
         $keys = $credential->credentials;
         $parameters = self::signAliyun($parameters + ['Action' => $action, 'Format' => 'JSON', 'Version' => '2015-01-09',
@@ -191,6 +230,11 @@ class DnsProviderClient
                 ->post('https://alidns.aliyuncs.com/', $parameters);
         } catch (\Throwable) { throw new DnsRequestFailure('provider_unavailable'); }
         $json = $this->decode($response);
+        if ($recordSet && isset($json['Code'])) {
+            if (!is_string($json['Code'])) throw new DnsException('provider_rejected');
+            if (str_starts_with($json['Code'], 'Throttling')) throw new DnsRequestFailure('provider_rate_limited', 120);
+            if (in_array($json['Code'], ['InternalError', 'ServiceUnavailable'], true)) throw new DnsRequestFailure('provider_unavailable');
+        }
         if (str_starts_with((string) ($json['Code'] ?? ''), 'Forbidden') || ($json['Code'] ?? '') === 'InvalidAccessKeyId.NotFound') throw new DnsException('provider_forbidden');
         if (isset($json['Code'])) throw new DnsException('provider_rejected');
         return $json;

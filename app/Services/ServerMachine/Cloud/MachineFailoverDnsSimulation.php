@@ -2,12 +2,16 @@
 namespace App\Services\ServerMachine\Cloud;
 
 use App\Models\MachineFailoverDnsRun as Run;
+use App\Models\MachineDnsSetFixture;
+use App\Models\MachineDnsSetRuntime;
+use App\Services\ServerMachine\Dns\MachineDnsRecordSetExecution;
 use App\Services\ServerMachine\Dns\MachineDnsRecordSetPlanner;
 use App\Services\ServerMachine\Dns\MachineDnsRecordSetProvider;
+use App\Services\ServerMachine\Dns\MachineDnsRecordSetSimulationTransport;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
-// Persistent rehearsal only. There is intentionally no cloud, DNS, SSH or queue transport.
+// The public rehearsal always uses the isolated provider fixture, never the HTTP transport.
 class MachineFailoverDnsSimulation
 {
     public const SCENARIOS = ['replace', 'bootstrap', 'detach', 'restore', 'source_recovered', 'missing_ipv6', 'foreign_record',
@@ -15,7 +19,8 @@ class MachineFailoverDnsSimulation
         'unknown_applied', 'unknown_unresolved', 'create_unknown', 'claim_unknown', 'readback_rate_limited'];
 
     public function __construct(private MachineFailoverDnsRegistry $dns, private MachineFailoverServiceRegistry $registry,
-        private MachineDnsRecordSetPlanner $planner, private MachineDnsRecordSetProvider $provider) {}
+        private MachineDnsRecordSetPlanner $planner, private MachineDnsRecordSetProvider $provider,
+        private MachineDnsRecordSetExecution $engine, private MachineDnsRecordSetSimulationTransport $transport) {}
 
     public function executeLive(): never { throw new CloudException('dns_set_simulation_only'); }
 
@@ -53,6 +58,7 @@ class MachineFailoverDnsSimulation
                 'reason' => $reason ?? ($scenario === 'source_recovered' ? 'source_recovered' : null),
                 'payload' => ['snapshot' => $snapshot, 'target' => $target, 'plan' => $plan, 'records' => $records,
                     'initial' => $records, 'writes' => 0, 'reads' => 0, 'virtual_wait_seconds' => 0, 'events' => []]]);
+            $this->engine->initialize($run, 'simulation');
             return $this->report($run->id, $admin);
         }));
     }
@@ -61,101 +67,15 @@ class MachineFailoverDnsSimulation
     {
         $this->registry->actor($admin);
         if ($steps < 1 || $steps > 200) throw new CloudException('invalid_dns_simulation');
-        return $this->registry->locked(function () use ($id, $admin, $steps) {
-            $run = $this->owned($id, $admin);
-            for ($i = 0; $i < $steps && $run->status === 'running'; $i++) {
-                $payload = $run->payload;
-                try {
-                    $this->registry->actor($admin);
-                    $snapshot = $this->dns->snapshot($run->set_id, $run->service_revision, $run->set_revision);
-                    if (!hash_equals($run->context_hash, $this->hash($snapshot))) throw new CloudException('dns_context_changed');
-                    if ($run->cursor >= count($payload['plan']['actions'])) {
-                        $this->verifySet($payload); $run->status = 'completed';
-                    } else $this->step($run, $payload);
-                } catch (CloudException $error) {
-                    $run->status = $payload['writes'] > 0 || $this->hasDispatched($payload) ? 'needs_review' : 'blocked';
-                    $run->reason = $error->getMessage();
-                }
-                $run->payload = $payload; $run->save();
-            }
-            return $this->report($id, $admin);
-        });
-    }
-
-    private function step(Run $run, array &$p): void
-    {
-        $action = &$p['plan']['actions'][$run->cursor]; $set = $p['snapshot']['set'];
-        if (in_array($action['state'], ['awaiting_readback', 'dispatched', 'claim_dispatched'], true)) {
-            $p['reads']++; $this->verifyAction($action, $p['records']); $action['state'] = 'verified'; $run->cursor++; return;
+        $run = $this->owned($id, $admin);
+        for ($i = 0; $i < $steps && $run->fresh()->status === 'running'; $i++) {
+            $runtime = MachineDnsSetRuntime::query()->find($id);
+            if (!$runtime) throw new CloudException('dns_legacy_read_only');
+            if ($runtime->next_check_at > $this->engine->clock($runtime))
+                $this->transport->elapse($id, $runtime->next_check_at - $this->engine->clock($runtime));
+            if (!$this->engine->tick($id, $admin)) break;
         }
-        if ($action['state'] === 'awaiting_claim') {
-            $id = $action['known_id']; $index = $this->index($p['records'], $id);
-            if ($index === null || $p['records'][$index]['marker'] !== '' || !$this->planner->same($p['records'][$index], array_replace($action['after'], ['marker' => ''])))
-                throw new CloudException('dns_ownership_changed');
-            $claim = array_replace($action, ['kind' => 'claim']); $action['requests'][] = $this->provider->mutation($set, $claim, $id);
-            $action['state'] = 'claim_dispatched'; $run->payload = $p; $run->save();
-            $p['records'][$index]['marker'] = $action['after']['marker']; $p['writes']++;
-            $p['events'][] = ['stage' => 'claim', 'slot_id' => $action['slot_id'], 'outcome' => $run->scenario === 'claim_unknown' ? 'unknown' : 'acknowledged'];
-            $action['state'] = 'awaiting_readback'; return;
-        }
-        if ($action['state'] !== 'prepared') throw new CloudException('dns_original_intent_only');
-        if ($run->scenario === 'partial_failure' && $run->cursor === 1) throw new CloudException('dns_partial_failure');
-        if ($run->scenario === 'record_changed' && $run->cursor === 0 && $action['before']) {
-            $index = $this->index($p['records'], $action['before']['id']); $p['records'][$index]['content'] = $action['before']['type'] === 'A' ? '203.0.113.250' : '2001:db8:ffff::1';
-        }
-        $index = $action['before'] ? $this->index($p['records'], $action['before']['id']) : null;
-        if ($action['before'] && ($index === null || $p['records'][$index] !== $action['before'])) throw new CloudException('dns_record_changed');
-        $action['requests'][] = $this->provider->mutation($set, $action); $action['state'] = 'dispatched';
-        $run->payload = $p; $run->save();
-        if ($run->scenario === 'permission_denied') throw new CloudException('provider_forbidden');
-        if ($run->scenario !== 'unknown_unresolved') {
-            if ($action['kind'] === 'delete') array_splice($p['records'], $index, 1);
-            else {
-                $id = $action['before']['id'] ?? ($set['provider'] === 'cloudflare' ? substr($action['id'], 0, 32) : '90000000000000000000' . str_pad((string) $run->cursor, 3, '0', STR_PAD_LEFT));
-                $record = ['id' => $id] + $action['after'];
-                if ($action['kind'] === 'create' && $set['provider'] === 'aliyun') $record['marker'] = '';
-                if ($index === null) $p['records'][] = $record; else $p['records'][$index] = $record;
-                if ($action['kind'] === 'create' && $run->scenario !== 'create_unknown') $action['known_id'] = $id;
-            }
-            $p['writes']++;
-        }
-        $unknown = in_array($run->scenario, ['unknown_applied', 'unknown_unresolved', 'create_unknown'], true);
-        $p['events'][] = ['stage' => $action['kind'], 'slot_id' => $action['slot_id'], 'outcome' => $unknown ? 'unknown' : 'acknowledged'];
-        if ($action['kind'] === 'create' && $set['provider'] === 'aliyun') {
-            if ($action['known_id'] === null) throw new CloudException('dns_unclaimed_record');
-            $action['state'] = 'awaiting_claim'; return;
-        }
-        if ($run->scenario === 'readback_rate_limited' && $run->cursor === 0) {
-            $p['reads']++; $p['virtual_wait_seconds'] += 120;
-            $p['events'][] = ['stage' => 'readback', 'slot_id' => $action['slot_id'], 'outcome' => 'rate_limited'];
-        }
-        $action['state'] = 'awaiting_readback';
-    }
-
-    private function verifyAction(array $action, array $records): void
-    {
-        if ($action['kind'] === 'delete') {
-            if ($this->index($records, $action['before']['id']) !== null) throw new CloudException('dns_original_intent_only');
-            return;
-        }
-        $matches = array_values(array_filter($records, fn ($r) => ($r['marker'] ?? null) === $action['after']['marker']));
-        if (count($matches) !== 1 || !$this->planner->same($matches[0], $action['after'])
-            || $action['before'] && $matches[0]['id'] !== $action['before']['id']) throw new CloudException('dns_original_intent_only');
-    }
-
-    private function verifySet(array &$p): void
-    {
-        $records = $this->inventory($p['snapshot']['set'], $p['records']); $p['reads']++;
-        foreach ([...$p['plan']['protected'], ...$p['plan']['foreign']] as $before) {
-            $index = $this->index($records, $before['id']);
-            if ($index === null || $records[$index] !== $before) throw new CloudException('dns_untargeted_change');
-        }
-        $owned = array_values(array_filter($records, fn ($r) => str_starts_with($r['marker'], 'keli-set-')));
-        if (count($owned) !== count($p['plan']['expected'])) throw new CloudException('dns_set_mismatch');
-        foreach ($p['plan']['expected'] as $wanted) {
-            $matches = array_values(array_filter($owned, fn ($r) => $r['marker'] === $wanted['marker']));
-            if (count($matches) !== 1 || !$this->planner->same($matches[0], $wanted)) throw new CloudException('dns_set_mismatch');
-        }
+        return $this->report($id, $admin);
     }
 
     private function seed(array $snapshot, int $target, string $scenario): array
@@ -199,20 +119,20 @@ class MachineFailoverDnsSimulation
 
     public function stop(string $id, int $admin): array
     {
-        $this->registry->actor($admin);
-        return $this->registry->locked(function () use ($id, $admin) {
-            $run = $this->owned($id, $admin);
-            if ($run->status === 'running') $run->fill(['status' => 'stopped', 'reason' => 'cancelled_by_admin'])->save();
-            return $this->report($id, $admin);
-        });
+        $this->registry->actor($admin); $this->owned($id, $admin); $this->engine->stop($id, $admin);
+        return $this->report($id, $admin);
     }
     public function report(string $id, int $admin): array
     {
         $this->registry->actor($admin); $run = $this->owned($id, $admin); $p = $run->payload;
+        $runtime = MachineDnsSetRuntime::query()->find($id); $fixture = MachineDnsSetFixture::query()->find($id)?->payload;
+        if ($runtime && $runtime->mode !== 'simulation') throw new CloudException('dns_driver_mismatch');
         $publicRecord = fn ($r) => $r === null ? null : array_intersect_key($r, array_flip(['id', 'hostname', 'type', 'line', 'content', 'ttl']));
         return MachineFailoverDnsRegistry::CLOSED + $run->toArray() + ['mode' => 'simulation', 'evidence_origin' => 'synthetic', 'business_verified' => false,
             'target_member_id' => $p['target'], 'provider' => $p['snapshot']['set']['provider'], 'hostname' => $p['snapshot']['set']['hostname'],
-            'simulated_writes' => $p['writes'], 'readback_attempts' => $p['reads'], 'virtual_wait_seconds' => $p['virtual_wait_seconds'],
+            'simulated_writes' => $fixture['writes'] ?? $p['writes'], 'readback_attempts' => $p['reads'], 'virtual_wait_seconds' => $fixture['clock_offset'] ?? 0,
+            'execution_engine' => $runtime ? 'record_set_v2' : 'legacy_plan_v1', 'stop_requested' => $runtime?->stop_requested_at !== null,
+            'next_check_at' => $runtime?->next_check_at, 'verified_actions' => count(array_filter($p['plan']['actions'], fn ($a) => $a['state'] === 'verified')),
             'records' => array_map($publicRecord, $p['records']), 'events' => $p['events'],
             'actions' => array_map(fn ($a) => ['id' => $a['id'], 'member_id' => $a['member_id'], 'slot_id' => $a['slot_id'], 'kind' => $a['kind'], 'state' => $a['state'],
                 'before' => $publicRecord($a['before']), 'after' => $publicRecord($a['after']), 'request_count' => count($a['requests'])], $p['plan']['actions'])];
@@ -233,7 +153,5 @@ class MachineFailoverDnsSimulation
         if ($run->admin_id !== $admin) throw new CloudException('permission_revoked');
         return $run;
     }
-    private function index(array $records, string $id): ?int { foreach ($records as $index => $row) if ($row['id'] === $id) return $index; return null; }
     private function hash(array $value): string { return hash('sha256', json_encode($value, JSON_THROW_ON_ERROR)); }
-    private function hasDispatched(array $p): bool { return count(array_filter($p['plan']['actions'], fn ($a) => $a['state'] !== 'prepared')) > 0; }
 }

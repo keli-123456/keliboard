@@ -7,6 +7,7 @@ use App\Services\ServerMachine\Cloud\CloudException;
 class MachineDnsRecordSetProvider
 {
     public const LINES = ['default', 'telecom', 'unicom', 'mobile', 'edu', 'oversea'];
+    public function assertSet(array $set): void { $this->scope($set); }
 
     public function inventory(array $set, array $pages): array
     {
@@ -20,7 +21,8 @@ class MachineDnsRecordSetProvider
                 if (($page['success'] ?? null) !== true || ($meta['page'] ?? null) !== $index + 1 || ($meta['per_page'] ?? null) !== 50)
                     throw new CloudException('dns_inventory_incomplete');
                 $count = $meta['total_count'] ?? null; $rows = $page['result'] ?? null;
-                if (!is_int($count) || ($meta['total_pages'] ?? null) !== max(1, (int) ceil($count / 50))) throw new CloudException('dns_inventory_incomplete');
+                if (!is_int($count) || ($count === 0 ? !in_array($meta['total_pages'] ?? null, [0, 1], true)
+                    : ($meta['total_pages'] ?? null) !== (int) ceil($count / 50))) throw new CloudException('dns_inventory_incomplete');
             } else {
                 if (($page['PageNumber'] ?? null) !== $index + 1 || ($page['PageSize'] ?? null) !== 50) throw new CloudException('dns_inventory_incomplete');
                 $count = $page['TotalCount'] ?? null; $rows = $page['DomainRecords']['Record'] ?? null;

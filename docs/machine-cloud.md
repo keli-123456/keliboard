@@ -2061,3 +2061,96 @@ Official wire-contract references:
 [Aliyun record update](https://api.alibabacloud.com/document/Alidns/2015-01-09/UpdateDomainRecord),
 [Aliyun DNS API operations](https://api.aliyun.com/product/Alidns),
 [Cloudflare record listing](https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/list/).
+
+### Journaled Record-Set Execution (Closed)
+
+The next increment replaces the payload-only DNS simulator with a shared
+`MachineDnsRecordSetExecution` kernel and independent transport contracts. The
+public rehearsal still always selects the synthetic transport. Native
+initialization, the HTTP transport and the low-level record-set HTTP methods all
+check the unchanged, unconditional `MachineFailoverExecutionGate`. There is no
+new live route or setting that bypasses it. The existing scalar native bridge
+still rejects record-set services: this increment does not invent or authorize
+the missing native candidate/address-family acceptance binding.
+
+`2026_11_09_200000_create_machine_dns_set_runtime.php` adds a per-run runtime row
+and a separate encrypted provider-fixture ledger. A runtime owns a 120-second
+lease with a monotonically increasing generation, hashed private lease ticket,
+persisted next-check time, stop request and terminal time. A stale worker cannot
+commit an old receipt or release its successor's lease. No provider request runs
+inside a database transaction. Draft, member, credential and source revisions
+are checked again before dispatch, and the final inventory cannot complete the
+run after its context changes.
+
+Each action has an immutable plan seal. Its exact provider request and dispatch
+hash are committed before I/O. A recovered dispatch can only read back the
+original action; it cannot repeat a create, patch, delete or remark. Complete
+inventory is compared with the last verified working set before subsequent
+mutations, preserving other members, unmanaged records and unselected families.
+Provider IDs, address families, lines, ownership markers and full expected
+record-set readback must agree. Partial failure never initiates compensating
+reverse writes, credential rotation or further line updates.
+
+Aliyun add and remark have separate durable checkpoints. A successful add must
+acknowledge a string record ID. `UpdateDomainRecordRemark` normally returns only
+`RequestId`; that acknowledgement does not invent another record ID and still
+requires readback against the original acknowledged ID. Unknown unclaimed adds
+stop for review without IP-based adoption. A crash after an applied update or
+remark resumes by readback, not by repeating the mutation. The HTTP adapter
+reuses existing fixed-host signing, redirect restrictions and sanitized error
+classification; it has no automatic mutation retries. HTTP errors and Aliyun
+RPC throttling/internal errors are typed without retaining provider bodies.
+
+Transient preflight/final inventory failures wait with a persisted bounded read
+budget. Per-action readback allows at most 12 attempts and honors the saved
+next-check time; restarting a worker does not reset it. The rehearsal facade can
+advance only the fixture's labeled virtual clock. Direct kernel tests also
+verify that a tick before the due time does no I/O.
+
+Stopping records its request without waiting for the worker lease. It prevents
+future dispatches, but cannot undo an already in-flight request. The kernel may
+settle that one operation with read-only reconciliation. Unknown outcomes or an
+add interrupted before its ownership remark remain `needs_review`, not a false
+clean stop; no automatic deletion or rollback follows. The UI shows verified
+action counts and a pending-stop state. Old payload-only histories are readable
+but are never silently migrated, resumed or resent by the new kernel. Their
+continue and stop controls are disabled. Downgrade retains runtime and fixture
+audit, including blocked/stopped runs.
+
+The provider fixture persists independently from the execution journal and does
+not deduplicate accidental repeated creates. Tests inspect its actual request
+history and records rather than accepting a success flag as evidence. Covered
+cases include all six supported Aliyun lines with A/AAAA, bootstrap, member
+replacement/detach/restore, permission failures, partial success, lost receipts,
+add/remark interruptions, lease takeover, stale receipts, preflight/in-flight
+stop races, throttling, read-budget exhaustion, revision/permission changes and
+tampered journals. All source data and credentials used in these tests are fake.
+
+Local full regression passed 3,730 backend tests / 25,479 assertions before the
+final fixture-only duplicate-create guard, followed by 124 focused executor
+tests / 1,798 assertions. All 13 added or changed PHP files passed syntax checks.
+The full admin suite passed 2,773 tests in 287 files; admin lint and
+the clean-source sync build passed at JS 4,665,749 / CSS 570,217 bytes within the unchanged approved
+gates. Playwright checked stopping and read-only history at 1440px and 390px in
+light/dark themes, including non-collapsed mobile selectors, with no page/modal
+overflow, script errors or external requests. Draft-save, success and blocked
+rehearsal views were also rechecked. Only in-memory SQLite was migrated: no
+production database, real cloud/DNS account, node, queue/Horizon configuration,
+execution gate or tanzhen resource/scheduler was touched. This source-only
+synchronization includes the new source, tests, documentation and locally built
+admin assets from keli-admin commit `b9981744b8ba0787807b1bf3eb25e499061f3da1`.
+It does not publish a release, deploy, apply real migrations or enable any gate.
+The synchronization rechecked 124 focused backend tests / 1,798 assertions and
+74 focused admin tests. The synced asset hashes, cache-busting references and
+clean source commit in `build-manifest.json` were verified locally.
+
+Still required before any future live activation: native candidate/source
+identity and fresh independent forwarding proof for every published family,
+explicitly scoped acceptance/admission binding, isolated MySQL/Redis concurrent
+worker/crash acceptance, account-specific DNS line/edition/TTL permissions,
+real provider receipt reconciliation and external DNS/TTL propagation checks.
+Unit tests and the synthetic fixture are not that authorization or evidence.
+
+Wire references: [Aliyun add](https://help.aliyun.com/en/dns/api-alidns-2015-01-09-adddomainrecord),
+[Aliyun ownership remark](https://help.aliyun.com/en/dns/api-alidns-2015-01-09-updatedomainrecordremark),
+[Aliyun exact subdomain inventory](https://help.aliyun.com/en/dns/api-alidns-2015-01-09-describesubdomainrecords).

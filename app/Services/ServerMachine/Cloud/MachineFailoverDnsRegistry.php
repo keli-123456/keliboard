@@ -22,6 +22,7 @@ class MachineFailoverDnsRegistry
     public function available(): bool
     {
         foreach (['set', 'slot', 'run'] as $name) if (!Schema::hasTable('v2_machine_failover_dns_' . $name)) return false;
+        foreach (['runtime', 'fixture'] as $name) if (!Schema::hasTable('v2_machine_dns_set_' . $name)) return false;
         return $this->registry->available() && Schema::hasTable('v2_machine_dns_credential');
     }
 
