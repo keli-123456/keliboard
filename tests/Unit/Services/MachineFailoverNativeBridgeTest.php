@@ -1020,4 +1020,62 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $result = app(MachineReplacementService::class)->validate($member->plan_id, $input, $task, $attempt->fresh());
         $this->assertSame($member->episode_key, $result['episode_key']); $this->assertCount(1, $this->posts);
     }
+
+    private function automaticAdmission(): array
+    {
+        $this->runtimeSchema();
+        (require base_path('database/migrations/2026_11_08_000000_create_machine_failover_trigger_previews.php'))->up();
+        $this->enable(); config(['app.key' => str_repeat('g', 32), 'machine_failover.runner_enabled' => true, 'machine_failover.preview_enabled' => true]);
+        $finance = app(\App\Services\ServerMachine\Cloud\MachineFailoverBudget::class);
+        $finance->shouldReceive('available')->andReturnTrue();
+        $finance->shouldReceive('forecast')->andReturn(['state' => 'verified', 'available_cents' => 100000, 'checked_at' => time(), 'valid_until' => time() + 300]);
+        $registry = app(MachineFailoverServiceRegistry::class);
+        $service = $registry->save(['name' => 'Automatic fixture', 'max_parallel' => 1, 'attempt_limit' => 2, 'monthly_cap_usd' => 400,
+            'members' => array_map(fn ($f) => ['policy_id' => $f['policy']->id, 'policy_revision' => 1, 'name' => $f['machine']->name,
+                'priority' => $f['machine']->id, 'enabled' => true], $this->fixtures)], $this->admin->id);
+        $collected = app(\App\Services\ServerMachine\Cloud\MachineFailoverTriggerPreview::class)->collect();
+        $this->assertSame(0, $collected['errors']);
+        $pin = ['service_id' => $service['id'], 'service_revision' => 1, 'admin_id' => $this->admin->id,
+            'issued_at' => time() - 1, 'expires_at' => time() + 600,
+            'context_hash' => $registry->fingerprint($registry->snapshot($service['id'], 1)),
+            'release' => $this->release->only(['id', 'component', 'platform', 'version', 'sha256', 'binary_sha256'])];
+        config(['machine_failover.admission_enabled' => true, 'machine_failover.admission_authorizations' => [$pin]]);
+        $result = app(\App\Services\ServerMachine\Cloud\MachineFailoverAdmission::class)->advance();
+        $this->assertSame(1, $result['started'], json_encode($result));
+        return app(MachineFailoverNativeBridge::class)->report($result['services'][0]['execution_id'], $this->admin->id);
+    }
+    public function test_automatic_admission_runs_the_real_bridge_runner_and_signed_receipts_with_mocked_transports(): void
+    {
+        $run = $this->automaticAdmission();
+        $again = app(\App\Services\ServerMachine\Cloud\MachineFailoverAdmission::class)->advance();
+        $this->assertSame(1, $again['resumed']); $this->assertSame(1, Execution::count());
+        $this->assertSame($run['id'], $again['services'][0]['execution_id']);
+        $this->assertCount(1, Bus::dispatched(\App\Jobs\MachineFailoverRunJob::class));
+        $run = $this->tick($run); $this->runtimeReady($run); $run = $this->tick($run); $run = $this->tick($run);
+        $this->assertSame('completed', $run['status'], json_encode($run));
+        $this->assertCount(1, $this->posts); $this->assertSame(1, $this->verifications); $this->assertSame(1, $this->dnsWrites);
+        $this->assertSame(1, Attempt::count()); Bus::assertNotDispatched(\App\Jobs\MachineProvisionJob::class);
+        $this->assertFalse(app()->bound(\App\Services\ServerMachine\Cloud\MachineFailoverLease::class));
+    }
+    public function test_automatic_authorization_revoked_during_create_preflight_prevents_the_post(): void
+    {
+        $run = $this->automaticAdmission();
+        $this->duringPreflight = function () { $this->duringPreflight = null; config(['machine_failover.admission_authorizations' => []]); };
+        $this->tick($run); $this->assertCount(0, $this->posts); $this->assertSame(0, $this->dnsWrites);
+        $this->assertSame(1, Execution::count());
+        $this->assertSame(0, app(\App\Services\ServerMachine\Cloud\MachineFailoverAdmission::class)->advance()['checked']);
+    }
+    public function test_automatic_authorization_revoked_during_dns_preflight_prevents_the_patch(): void
+    {
+        $run = $this->tick($this->automaticAdmission()); $this->runtimeReady($run); $run = $this->tick($run);
+        $this->duringDnsRead = function () { $this->duringDnsRead = null; config(['machine_failover.admission_authorizations' => []]); };
+        $this->tick($run); $this->assertSame(0, $this->dnsWrites); $this->assertCount(1, $this->posts);
+        $this->assertSame(1, Execution::count()); $this->assertSame(1, Attempt::count());
+    }
+    public function test_archive_digest_change_cannot_reuse_a_native_release_pin(): void
+    {
+        $run = $this->start(); $this->release->fill(['sha256' => str_repeat('c', 64)])->save(); $run = $this->advance($run);
+        $this->assertSame('needs_review', $run['status']); $this->assertSame('release_changed', $run['members'][0]['reason']);
+        $this->assertCount(0, $this->posts); $this->assertSame(0, $this->dnsWrites);
+    }
 }

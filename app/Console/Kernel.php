@@ -48,6 +48,9 @@ class Kernel extends ConsoleKernel
         if (config('machine_failover.runner_enabled') === true) {
             $schedule->command('machines:advance-native-failover')->everyMinute()->onOneServer()->withoutOverlapping(2);
         }
+        if (config('machine_failover.admission_enabled') === true) {
+            $schedule->command('machines:admit-failover')->everyMinute()->onOneServer()->withoutOverlapping(2)->runInBackground();
+        }
         // A stop survives worker death even while native execution remains disabled.
         $schedule->command('machines:advance-native-failover', ['--stops-only' => true])->everyMinute()->onOneServer()->withoutOverlapping(2);
         $schedule->command('check:commission')->everyMinute()->onOneServer();

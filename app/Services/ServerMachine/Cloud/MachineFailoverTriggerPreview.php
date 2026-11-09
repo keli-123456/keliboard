@@ -107,6 +107,10 @@ class MachineFailoverTriggerPreview
     }
     private function episode(array $member): ?string
     {
+        return $this->qualifiedPlan($member)?->evidence['episode_key'] ?? null;
+    }
+    public function qualifiedPlan(array $member): ?MachineFailoverPlan
+    {
         $source = $member['source'];
         if ($source['state'] !== 'failed' || !$source['evidence_current'] || !$source['threshold_reached']) return null;
         $plan = MachineFailoverPlan::query()->where('policy_id', $member['policy_id'])->where('policy_revision', $member['policy_revision'])
@@ -115,7 +119,7 @@ class MachineFailoverTriggerPreview
         if (!$row || !$plan || $row->installation_id !== $source['installation_id'] || $row->checked_at !== $source['checked_at']
             || !$row->threshold_reached || !$row->first_failure_at || $row->baseline_at === null) return null;
         $expected = hash('sha256', json_encode([$member['policy_id'], $member['policy_revision'], $row->context_key, $row->baseline_at, $row->first_failure_at], JSON_THROW_ON_ERROR));
-        return is_string($plan->evidence['episode_key'] ?? null) && hash_equals($expected, $plan->evidence['episode_key']) ? $expected : null;
+        return is_string($plan->evidence['episode_key'] ?? null) && hash_equals($expected, $plan->evidence['episode_key']) ? $plan : null;
     }
     private function record(Service $service, string $context, array $entry, array &$result): void
     {

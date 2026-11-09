@@ -7,6 +7,9 @@ return [
     'observe_enabled' => false,
     // Recovers existing native intents only; the separate hard gate still rejects all execution.
     'runner_enabled' => false,
+    // Internal, revision-pinned admission only; the execution gate still rejects it.
+    'admission_enabled' => false,
+    'admission_authorizations' => [],
     // Separate authorization is required; collecting a plan never enables creation.
     'allow_replacement' => false,
     'allowed_replacement_policy_ids' => [],

@@ -31,7 +31,7 @@ class MachineFailoverNativeBridge
             && app(MachineInstanceAcceptance::class)->available() && app(MachineReplacementService::class)->available();
     }
 
-    public function start(int $service, int $revision, array $planIds, int $releaseId, string $request, int $admin): array
+    public function start(int $service, int $revision, array $planIds, int $releaseId, string $request, int $admin, ?array $admission = null): array
     {
         $this->gate->assertAllowed('start'); $this->registry->actor($admin);
         if (!$this->available()) throw new CloudException('migration_required');
@@ -39,12 +39,15 @@ class MachineFailoverNativeBridge
             || count(array_unique($planIds, SORT_REGULAR)) !== count($planIds)) throw new CloudException('invalid_native_intent');
         foreach ($planIds as $id) if (!is_int($id) || $id < 1) throw new CloudException('invalid_native_intent');
         sort($planIds);
-        $result = $this->registry->locked(fn () => DB::transaction(function () use ($service, $revision, $planIds, $releaseId, $request, $admin) {
+        $result = $this->registry->locked(fn () => DB::transaction(function () use ($service, $revision, $planIds, $releaseId, $request, $admin, $admission) {
             $this->gate->assertAllowed('start'); $this->registry->actor($admin);
             $snapshot = $this->registry->snapshot($service, $revision); $release = $this->release($releaseId);
-            $intent = $this->hash([$service, $revision, $planIds, $release]); $key = $this->hash([$admin, $request]);
+            $intent = $admission === null ? $this->hash([$service, $revision, $planIds, $release])
+                : hash('sha256', MachineIntentJson::encode([$service, $revision, $planIds, $release, $admission]));
+            $key = $this->hash([$admin, $request]);
             if ($old = Execution::query()->where('request_key', $key)->first()) {
                 if (!hash_equals($old->intent_hash, $intent)) throw new CloudException('request_conflict');
+                if ($admission !== null) app(MachineFailoverAdmission::class)->assertRun($old);
                 return $this->report($old->id, $admin);
             }
             if (Execution::query()->where('service_id', $service)->where('status', 'running')->exists()) throw new CloudException('run_active');
@@ -68,9 +71,10 @@ class MachineFailoverNativeBridge
                     'episode_key' => $source['episode_key'], 'payload' => ['source' => $source, 'priority' => $match[0]['priority'],
                         'source_instance_id' => $active->id, 'dns' => $dns->only(['id', 'revision', 'zone', 'record_id', 'marker', 'ip', 'active_instance_id'])]];
             }
+            if ($admission !== null) app(MachineFailoverAdmission::class)->assertStart($admission, $snapshot, $release, array_column($rows, 'episode_key', 'plan_id'));
             $run = Execution::query()->create(['id' => (string) Str::uuid(), 'service_id' => $service, 'service_revision' => $revision,
                 'admin_id' => $admin, 'request_key' => $key, 'intent_hash' => $intent, 'context_hash' => $this->registry->fingerprint($snapshot),
-                'payload' => ['snapshot' => $snapshot, 'release' => $release], 'deadline_at' => time() + 1200]);
+                'payload' => ['snapshot' => $snapshot, 'release' => $release] + ($admission === null ? [] : ['admission' => $admission]), 'deadline_at' => time() + 1200]);
             foreach ($rows as $row) Member::query()->create($row + ['execution_id' => $run->id]);
             return $this->report($run->id, $admin);
         }));
@@ -358,6 +362,7 @@ class MachineFailoverNativeBridge
         if ($run->status !== 'running' || $run->deadline_at <= time()) throw new CloudException('native_intent_expired');
         if (!hash_equals($run->context_hash, $this->registry->fingerprint($this->registry->snapshot($run->service_id, $run->service_revision)))) throw new CloudException('native_context_changed');
         if (!MachineIntentJson::same($this->release($run->payload['release']['id']), $run->payload['release'])) throw new CloudException('release_changed');
+        if (array_key_exists('admission', $run->payload)) app(MachineFailoverAdmission::class)->assertRun($run);
     }
 
     private function source(Member $member, Policy $policy): void
@@ -380,8 +385,9 @@ class MachineFailoverNativeBridge
     {
         $row = ServerMachineRelease::query()->find($id);
         if (!$row || $row->component !== 'kelinode-rs' || $row->status !== 'active' || $row->platform !== 'linux-x86_64'
-            || !preg_match('/^[a-f0-9]{64}$/D', $row->binary_sha256 ?? '')) throw new CloudException('release_unavailable');
-        return $row->only(['id', 'version', 'binary_sha256']);
+            || !preg_match('/^[a-f0-9]{64}$/D', $row->binary_sha256 ?? '')
+            || !preg_match('/^[a-f0-9]{64}$/D', $row->sha256 ?? '')) throw new CloudException('release_unavailable');
+        return $row->only(['id', 'component', 'platform', 'version', 'sha256', 'binary_sha256']);
     }
 
     private function candidateIp(Task $task): string

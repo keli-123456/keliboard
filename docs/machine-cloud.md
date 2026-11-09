@@ -622,9 +622,10 @@ Before enabling real execution, the remaining work is:
   cached panel evidence, but cannot dispatch production member operations.
   The Linode native bridge, receipt checks, background tickets and local stop
   recovery described below are now implemented behind a rejecting execution
-  gate. Automatic enrollment from new fault plans, scoped activation and live
-  worker/recovery acceptance remain follow-up work; changing an environment
-  variable cannot activate this path.
+  gate. The gated automatic admission described below now links current collected
+  proposals to native intents in local tests. Scoped production authorization,
+  live cloud/WAN/DNS acceptance and deployment remain outstanding; changing an
+  environment variable cannot activate this path.
 
 - Separately authorize one isolated live creation and validate the disabled
   coordinator described above. Its candidate uses one pinned template and a
@@ -1653,6 +1654,81 @@ probes predated policy activation; Symfony did not inherit a putenv-only
 fixture owner; and a trigger-based fault required an unwanted SUPER privilege.
 The fixture now dates activation before its baseline, explicitly forwards its
 owner to subprocesses, and uses a database-local CHECK constraint instead.
+
+### Gated Linode Automatic Admission (Disabled)
+
+`machines:admit-failover` is an internal, default-off link from collected trigger
+proposals to the existing native bridge and dedicated worker. It is not an
+activation HTTP endpoint and does not turn the cache-only preview collector into
+an executor. `admission_enabled=false`, an empty `admission_authorizations` list,
+all original creation/rotation/DNS gates and the unconditionally rejecting
+`MachineFailoverExecutionGate` remain unchanged in effect. No production schedule,
+queue configuration, database, cloud resource, DNS record or tanzhen service is
+modified by this work.
+
+A future, separately reviewed server-side authorization must pin one service ID
+and revision, the current complete registry context hash, an active administrator,
+an issued/expiry interval of at most 24 hours and one exact active kelinode-rs
+Linux x86-64 release. The release pin includes component, platform, version,
+archive SHA256 and binary SHA256. No latest/default release or provider fallback
+is selected. Duplicate services, malformed scopes, future/expired grants and
+non-Linode service members fail closed. These local configuration structures are
+not evidence of operator approval or real acceptance, and cannot bypass the hard
+gate. They have deliberately not been exposed in the browser or environment.
+
+Before enrollment, the link requires a current cache-only shadow report, a
+qualified collected failure plan, an unclosed matching `would_start` preview,
+fresh source identity/threshold/baseline, unchanged member/policy/context,
+unclaimed episode and a fresh verified cached cost baseline with enough capacity.
+Future/backdated finance timestamps and validity windows exceeding the existing
+five-minute baseline lifetime are rejected, not treated as a current quote.
+The preview's decision alone is never authority. The native bridge repeats the
+authorization, proposal, source and finance checks within its existing serialized
+start transaction before writing the execution and episode claims. Existing
+per-policy creation allowlists, credential health, ownership, price/capacity
+checks and per-attempt budget reservations still apply downstream.
+
+The encrypted native intent stores its admission authorization and bounded
+proposal pins atomically with member episode claims. A deterministic private
+request key makes identical admission attempts converge. A crash after commit,
+notification error or missing queue receipt can recover only the matching running
+execution. A foreign/manual run is not adopted, stopped or replaced. An existing
+stop latch, expired execution, claimed episode, changed grant or release cannot
+authorize another creation. Fresh shadow/preview evidence is required for a new
+intent; already-committed executions recover under their original pins and the
+native runner's normal fresh-source and lease checks, not an invented new episode.
+
+Authorization and both release digests are checked again at native create and
+DNS boundaries. Revocation/expiry blocks new work; it does not revoke an in-flight
+provider request, prove a paid resource absent, refund a reservation, reverse DNS
+or authorize cleanup. Earlier unarmed native records with the smaller release pin
+fail closed for review rather than being silently upgraded to a new intent.
+
+The sweep accepts at most ten scopes (five by default), rotates a cursor over at
+most fifty explicitly pinned services, and has nonblocking sweep/per-service
+locks. A five-second wall budget is checked between services, not a hard timeout
+or detection SLA. The minute schedule exists only when admission is explicitly
+configured; the command remains blocked by the execution gate. Native tasks use
+the existing bounded `redis_failover:machine_failover` worker; no worker/pool is
+added or resized here. Output contains bounded execution/service identifiers,
+counters and whitelisted failure codes only, not grants, private context/episode
+hashes, credentials, provider errors or account data. Committed intent audit stays
+in the native journal; pre-start rejection counters are command results, not a
+new durable cloud-operation ledger.
+
+Validation uses the minimal in-memory SQLite/array-cache application, fake queue
+and provider/verifier/DNS transports. It exercises the real native bridge and
+runner through initialization, signed forwarding and owned-DNS receipts, along
+with post-commit interruption, revocation before provider writes, stopped/foreign
+run rejection, stale/forged previews, changed releases, unknown finance, scope
+expiry and default-off scheduling. It is not new distributed Redis/MySQL,
+Horizon-daemon, real cloud billing, WAN or DNS-propagation acceptance. No claim of
+DigitalOcean/Vultr provisioning support or production readiness is added.
+
+Local final regression passed 3,504 unit tests / 22,864 assertions. The focused
+admission/native-boundary run passed 50 tests / 548 assertions. Changed PHP files
+passed syntax checks. These are local code results, not a new CI/distributed or
+live-cloud acceptance; the changes are not deployed and all real gates stay shut.
 No production evidence guard, MySQL privilege, runtime lease or execution
 gate was relaxed. The first Windows unit run also lacked its OpenSSL config;
 after restoring the existing runtime configuration, full unit regression
