@@ -9,6 +9,9 @@ use App\Models\MachineFailoverExecution as Execution;
 use App\Models\MachineFailoverExecutionMember as Member;
 use App\Models\MachineFailoverRuntime as Runtime;
 use App\Models\MachineProvisionTask as Task;
+use App\Models\MachineNativeAddressProof as Proof;
+use App\Models\MachineFailoverDnsRun as DnsRun;
+use App\Models\MachineDnsSetRuntime as DnsRuntime;
 use App\Services\ServerMachine\Cloud\MachineFailoverRunner;
 use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\TestCase;
@@ -32,6 +35,11 @@ final class NativeFailoverConcurrencyTest extends TestCase
             'worker_errors' => $this->eventCount('worker_error'), 'exhausted_jobs' => $this->eventCount('queue_exhausted'),
             'failed_queue_jobs' => $this->eventCount('job_failed'), 'member_reasons' => Member::query()->whereNotNull('reason')->pluck('reason')->all(),
             'runtime_reason' => Runtime::query()->find($this->run['id'])->reason,
+            'record_sets' => Fixture::control('record_sets') === true, 'forced_expiries' => (int) Fixture::control('forced_expiries'),
+            'address_proofs' => \Illuminate\Support\Facades\Schema::hasTable('v2_machine_native_address_proof')
+                ? Proof::query()->selectRaw('family, state, COUNT(*) AS total')->groupBy('family', 'state')->get()->toArray() : [],
+            'dns_children' => \Illuminate\Support\Facades\Schema::hasTable('v2_machine_failover_dns_run')
+                ? DnsRun::query()->selectRaw('status, COUNT(*) AS total')->groupBy('status')->get()->toArray() : [],
             'cloud_mocked' => true, 'dns_mocked' => true, 'production_connections' => 0, 'cleanup' => false];
         try { $this->fixture->cleanup(); $summary['cleanup'] = true; }
         finally {
@@ -40,6 +48,18 @@ final class NativeFailoverConcurrencyTest extends TestCase
         }
     }
     private function seed(int $members = 1): void { $this->run = $this->fixture->seed($members); }
+    private function seedSets(int $members = 1): void { $this->run = $this->fixture->seed($members, null, true); }
+    private function preparedSets(): void
+    {
+        $this->seedSets(); $this->workOnce(); $this->fixture->initialized(); $this->workOnce();
+        $this->assertSame('awaiting_dns', Member::query()->first()->phase, $this->errors());
+        $this->assertSame(2, Proof::query()->where('state', 'passed')->count()); $this->assertSame(0, $this->eventCount('dns_write'));
+    }
+    private function finishSets(): void
+    {
+        for ($i = 0; $i < 12 && $this->runStatus() === 'running'; $i++) $this->workOnce();
+        $this->assertNotSame('running', $this->runStatus(), $this->errors());
+    }
     private function spawn(string $mode = 'once'): string
     {
         $id = 'w' . bin2hex(random_bytes(6));
@@ -96,6 +116,104 @@ final class NativeFailoverConcurrencyTest extends TestCase
         $this->cleanWorkers(); $this->assertSame('completed', $this->runStatus());
         $this->assertSame(2, $this->eventCount('create')); $this->assertSame(2, $this->eventCount('dns_write'));
         $this->assertSame(2, Attempt::query()->count()); $this->assertSame(2, Member::query()->where('phase', 'completed')->count());
+    }
+    public function test_two_workers_complete_two_native_dual_stack_members_with_separate_proofs(): void
+    {
+        $this->seedSets(2); $ids = [$this->spawn('loop'), $this->spawn('loop')]; $until = microtime(true) + 35;
+        while ($this->runStatus() === 'running' && microtime(true) < $until) {
+            $this->fixture->initialized(); $this->fixture->due($this->run['id']); usleep(80000);
+        }
+        Fixture::control('exit', true, true); foreach ($ids as $id) $this->join($id); $this->cleanWorkers();
+        $this->assertSame('completed', $this->runStatus(), $this->errors());
+        $this->assertSame(2, $this->eventCount('create')); $this->assertSame(4, $this->eventCount('dns_write'));
+        $this->assertSame(2, Proof::query()->where('family', 'A')->where('state', 'passed')->count());
+        $this->assertSame(2, Proof::query()->where('family', 'AAAA')->where('state', 'passed')->count());
+        $this->assertSame(2, DnsRun::query()->where('status', 'completed')->count()); $this->assertSame(2, Attempt::query()->count());
+    }
+    public function test_three_duplicate_deliveries_do_not_reissue_family_proofs_or_dns_writes(): void
+    {
+        $this->preparedSets(); $redis = app('redis')->connection();
+        $payload = $redis->lindex('queues:machine_failover', 0) ?: ($redis->zrange('queues:machine_failover:delayed', 0, 0)[0] ?? null);
+        $this->assertIsString($payload); $redis->rpush('queues:machine_failover', $payload, $payload);
+        $this->fixture->due($this->run['id']); $ids = [$this->spawn(), $this->spawn(), $this->spawn()]; foreach ($ids as $id) $this->join($id);
+        $this->assertSame(1, $this->eventCount('dns_write')); $this->assertSame(3, $this->eventCount('verify'));
+        $this->finishSets(); $this->assertSame('completed', $this->runStatus()); $this->assertSame(2, $this->eventCount('dns_write'));
+        $this->assertSame(2, Proof::query()->count()); $this->assertSame(1, DnsRun::query()->count()); $this->assertSame(1, $this->eventCount('create'));
+    }
+    public function test_sigkill_during_ipv6_challenge_retains_the_original_spent_proof_for_review(): void
+    {
+        $this->seedSets(); $this->workOnce(); $this->fixture->initialized(); Fixture::control('fault', 'verify_AAAA', true);
+        $this->fixture->due($this->run['id']); $id = $this->spawn(); $this->barrier('verify_AAAA');
+        $proof = Proof::query()->where('family', 'AAAA')->firstOrFail(); $this->assertSame('issued', $proof->state);
+        $this->kill($id); $this->fixture->expire($this->run['id']); $this->join($this->spawn('recover'));
+        Fixture::control('release', true, true); $this->workOnce();
+        $this->assertSame('needs_review', $this->runStatus()); $this->assertSame($proof->id, Proof::query()->where('family', 'AAAA')->first()->id);
+        $this->assertSame('issued', $proof->fresh()->state); $this->assertSame(3, $this->eventCount('verify'));
+        $this->assertSame(1, $this->eventCount('create')); $this->assertSame(0, $this->eventCount('dns_write')); $this->assertSame(0, DnsRun::query()->count());
+    }
+    public function test_candidate_revision_changes_while_ipv6_reply_is_in_flight_cannot_authorize_dns(): void
+    {
+        $this->seedSets(); $this->workOnce(); $this->fixture->initialized(); Fixture::control('fault', 'verify_AAAA', true);
+        $this->fixture->due($this->run['id']); $id = $this->spawn(); $this->barrier('verify_AAAA');
+        $proof = Proof::query()->where('family', 'AAAA')->firstOrFail();
+        \App\Models\MachineOwnedInstance::query()->whereKey($proof->instance_id)->increment('revision');
+        Fixture::control('release', true, true); $this->join($id); $this->cleanWorkers();
+        $this->assertSame('needs_review', $this->runStatus()); $this->assertSame('failed', $proof->fresh()->state);
+        $this->assertSame(0, $this->eventCount('dns_write')); $this->assertSame(1, $this->eventCount('create'));
+    }
+    public function test_wrong_family_signed_receipt_is_rejected_in_a_separate_worker(): void
+    {
+        $this->seedSets(); $this->workOnce(); $this->fixture->initialized(); Fixture::control('wrong_family', true, true); $this->workOnce();
+        $this->assertSame('needs_review', $this->runStatus()); $this->assertSame('passed', Proof::query()->where('family', 'A')->first()->state);
+        $this->assertSame('failed', Proof::query()->where('family', 'AAAA')->first()->state);
+        $this->assertSame(0, $this->eventCount('dns_write')); $this->assertSame(0, DnsRun::query()->count());
+    }
+    public function test_stop_during_ipv6_verification_retains_candidate_without_publishing(): void
+    {
+        $this->seedSets(); $this->workOnce(); $this->fixture->initialized(); Fixture::control('fault', 'verify_AAAA', true);
+        $this->fixture->due($this->run['id']); $id = $this->spawn(); $this->barrier('verify_AAAA');
+        $this->assertSame('stopping', $this->fixture->stop($this->run['id'])['state']);
+        Fixture::control('release', true, true); $this->join($id); $this->cleanWorkers();
+        $this->assertSame('stopped', $this->runStatus()); $this->assertSame('retained', Member::query()->first()->phase);
+        $this->assertSame(0, $this->eventCount('dns_write')); $this->assertSame(1, $this->eventCount('create'));
+    }
+    public function test_native_stop_during_inventory_fences_prepared_children_before_dispatch(): void
+    {
+        $this->preparedSets(); Fixture::control('fault', 'dns_after_intent', true);
+        $this->fixture->due($this->run['id']); $id = $this->spawn(); $this->barrier('dns_after_intent');
+        $this->fixture->stop($this->run['id']); Fixture::control('release', true, true); $this->join($id); $this->cleanWorkers();
+        $this->assertSame('stopped', $this->runStatus()); $this->assertSame(0, $this->eventCount('dns_write'));
+        $runtime = DnsRuntime::query()->first(); $this->assertNotNull($runtime->stop_requested_at); $this->assertNull($runtime->lease_hash);
+        $this->assertSame('retained', Member::query()->first()->phase);
+    }
+    public function test_native_stop_after_ipv4_write_is_partial_review_not_rollback_or_ipv6_dispatch(): void
+    {
+        $this->preparedSets(); Fixture::control('fault', 'dns_after', true);
+        $this->fixture->due($this->run['id']); $id = $this->spawn(); $this->barrier('dns_after');
+        $this->fixture->stop($this->run['id']); Fixture::control('release', true, true); $this->join($id); $this->cleanWorkers();
+        $this->assertSame('stopped', $this->runStatus()); $this->assertSame('needs_review', Member::query()->first()->phase);
+        $this->assertSame(1, $this->eventCount('dns_write')); $this->assertSame('needs_review', DnsRun::query()->first()->status);
+        $this->assertSame(0, DB::table('native_fixture_event')->where('kind', 'dns_write')->where('reference', 'AAAA')->count());
+    }
+    public function test_sigkill_after_native_dns_write_reads_original_intent_without_a_second_patch(): void
+    {
+        $this->preparedSets(); $child = DnsRun::query()->first(); Fixture::control('fault', 'dns_after', true);
+        $this->fixture->due($this->run['id']); $id = $this->spawn(); $this->barrier('dns_after'); $this->kill($id);
+        $this->assertSame('dispatched', $child->fresh()->payload['plan']['actions'][0]['state']);
+        $this->fixture->expire($this->run['id']); $this->join($this->spawn('recover')); Fixture::control('release', true, true);
+        $this->finishSets(); $this->assertSame('completed', $this->runStatus());
+        $this->assertSame(2, $this->eventCount('dns_write')); $this->assertSame(3, $this->eventCount('verify'));
+        $this->assertSame($child->id, DnsRun::query()->first()->id); $this->assertSame(1, $this->eventCount('create'));
+    }
+    public function test_late_native_dns_ack_cannot_overwrite_successor_lease_or_readback(): void
+    {
+        $this->preparedSets(); Fixture::control('fault', 'dns_after', true);
+        $this->fixture->due($this->run['id']); $old = $this->spawn(); $this->barrier('dns_after');
+        $this->fixture->expire($this->run['id']); $this->join($this->spawn('recover')); $this->workOnce();
+        $child = DnsRun::query()->first(); $payload = $child->payload; $this->assertSame(1, $child->cursor);
+        Fixture::control('release', true, true); $this->join($old); $this->cleanWorkers();
+        $this->assertSame($payload, $child->fresh()->payload); $this->assertSame(1, $this->eventCount('dns_write'));
+        $this->finishSets(); $this->assertSame('completed', $this->runStatus()); $this->assertSame(2, $this->eventCount('dns_write'));
     }
     public function test_duplicate_queue_payloads_are_fenced_across_three_workers(): void
     {

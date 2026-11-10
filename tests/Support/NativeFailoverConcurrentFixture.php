@@ -97,7 +97,7 @@ final class NativeFailoverConcurrentFixture
         $redis->close();
     }
 
-    public function seed(int $members = 1, ?callable $beforeStart = null): array
+    public function seed(int $members = 1, ?callable $beforeStart = null, bool $recordSets = false): array
     {
         self::$owner = bin2hex(random_bytes(16)); self::$worker = 'parent';
         $this->seed = new class('test_runner_defaults_off_and_configuration_alone_cannot_open_the_hard_execution_gate') extends MachineFailoverNativeBridgeTest {
@@ -108,10 +108,11 @@ final class NativeFailoverConcurrentFixture
             $this->seed->bootFixture(); $this->owned = true;
             $this->invoke('runtimeSchema');
             if ($members > 1) { $fixtures = $this->property('fixtures'); $fixtures[] = $this->invoke('fixture', [2]); $this->property('fixtures', $fixtures, true); }
-            foreach ($this->property('records') as $id => $row) DB::table('native_fixture_dns')->insert(['id' => $id, 'value' => json_encode($row, JSON_THROW_ON_ERROR)]);
             self::transport(); self::queue(); config(['machine_failover.runner_enabled' => true]);
+            self::control('record_sets', $recordSets, true);
             if ($beforeStart) $beforeStart();
-            $run = $this->invoke('start', [400, $members]);
+            $run = $recordSets ? $this->invoke('startSets') : $this->invoke('start', [400, $members]);
+            foreach ($this->property('records') as $id => $row) DB::table('native_fixture_dns')->insert(['id' => $id, 'value' => json_encode($row, JSON_THROW_ON_ERROR)]);
             foreach (DB::select('SELECT ENGINE AS engine FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()') as $row)
                 if ($row->engine !== 'InnoDB') throw new \RuntimeException('InnoDB tables required.');
             return $run;
@@ -141,6 +142,7 @@ final class NativeFailoverConcurrentFixture
         $policies = \App\Models\MachineFailoverPolicy::query()->pluck('id')->all();
         app()->instance(MachineFailoverExecutionGate::class, new class extends MachineFailoverExecutionGate { public function assertAllowed(string $operation): void {} });
         config(['machine_failover.observe_enabled' => true, 'machine_failover.runner_enabled' => true, 'machine_failover.allow_replacement' => true,
+            'app.key' => str_repeat('n', 32),
             'machine_failover.allow_rotation' => true, 'machine_failover.allowed_rotation_policy_ids' => \App\Models\MachineFailoverPolicy::query()->pluck('id')->all(),
             'machine_failover.allowed_replacement_policy_ids' => $policies, 'machine_provision.allow_live' => true,
             'machine_provision.allowed_test_machine_ids' => \App\Models\ServerMachine::query()->pluck('id')->all(),
@@ -188,13 +190,14 @@ final class NativeFailoverConcurrentFixture
     {
         Http::swap(new \Illuminate\Http\Client\Factory()); Http::preventStrayRequests();
         Http::fake(function ($request) {
+            if (DB::transactionLevel() !== 0) throw new \RuntimeException('Mock provider I/O inside SQL transaction refused.');
             $url = $request->url();
             if (str_starts_with($url, 'https://api.linode.com/')) {
                 if ($request->method() === 'POST') {
                     $id = 1000 + self::event('create', hash('sha256', $request['label']));
                     $row = ['id' => $id, 'label' => $request['label'], 'tags' => $request['tags'], 'region' => $request['region'],
                         'type' => $request['type'], 'image' => $request['image'], 'created' => gmdate('Y-m-d\TH:i:s'), 'status' => 'running',
-                        'ipv4' => ['8.8.4.' . (10 + $id % 200)], 'ipv6' => '', 'backups' => ['enabled' => false]];
+                        'ipv4' => ['8.8.4.' . (10 + $id % 200)], 'ipv6' => self::control('record_sets') ? '2600:3c00::' . $id : '', 'backups' => ['enabled' => false]];
                     DB::table('native_fixture_cloud')->insert(['id' => (string) $id, 'value' => json_encode($row, JSON_THROW_ON_ERROR)]);
                     self::barrier('create_after'); return Http::response($row);
                 }
@@ -217,17 +220,25 @@ final class NativeFailoverConcurrentFixture
                 }
             }
             if ($url === 'https://verifier.example.test/v1/verify') {
-                self::event('verify'); $challenge = json_decode($request->body(), true, 512, JSON_THROW_ON_ERROR);
+                $challenge = json_decode($request->body(), true, 512, JSON_THROW_ON_ERROR);
+                $family = $challenge['schema'] === 2 ? $challenge['address_family'] : 'legacy';
+                self::event('verify', $family); self::barrier('verify_' . $family);
                 $echo = ['sent' => 3, 'received' => 3, 'missing' => 0, 'duplicates' => 0, 'bytes' => 96, 'sha256' => $challenge['echo_sha256']];
-                $reply = ['schema' => 1, 'challenge_id' => $challenge['challenge_id'], 'request_sha256' => hash('sha256', $request->body()),
+                $reply = ['schema' => $challenge['schema'], 'challenge_id' => $challenge['challenge_id'], 'request_sha256' => hash('sha256', $request->body()),
                     'finished_at' => time(), 'cleanup_complete' => true, 'results' => array_map(fn ($node) => ['node_id' => $node['id'],
                         'endpoint_authenticated' => true, 'tcp' => $echo, 'udp' => $echo], $challenge['nodes'])];
+                if ($challenge['schema'] === 2) foreach (['address_family', 'target_ip', 'task_id', 'installation_id', 'attempt_id',
+                    'native_context_sha256', 'source_installation_id', 'session', 'binary_sha256', 'configuration_fingerprint'] as $field)
+                    $reply[$field] = $challenge[$field];
+                if ($family === 'AAAA' && self::control('wrong_family') === true) $reply['address_family'] = 'A';
                 $body = json_encode($reply, JSON_THROW_ON_ERROR);
                 return Http::response($body, 200, ['X-Keli-Signature' => hash_hmac('sha256', "response\n" . $body, config('machine_acceptance.verifier_key'))]);
             }
             if (str_starts_with($url, 'https://api.cloudflare.com/')) {
                 if ($request->method() === 'GET') {
-                    self::barrier('dns_preflight'); parse_str(parse_url($url, PHP_URL_QUERY) ?? '', $query);
+                    self::barrier('dns_preflight');
+                    if (self::control('record_sets') && \App\Models\MachineFailoverDnsRun::query()->exists()) self::barrier('dns_after_intent');
+                    parse_str(parse_url($url, PHP_URL_QUERY) ?? '', $query);
                     $hostname = $query['name_exact'] ?? $query['name'] ?? null;
                     $rows = DB::table('native_fixture_dns')->pluck('value')->map(fn ($raw) => json_decode($raw, true, 512, JSON_THROW_ON_ERROR))
                         ->filter(fn ($row) => $hostname === null || $row['name'] === $hostname)->values()->all();
@@ -235,9 +246,9 @@ final class NativeFailoverConcurrentFixture
                         'result_info' => ['total_pages' => 1, 'total_count' => count($rows), 'page' => 1, 'per_page' => 50]]);
                 }
                 if ($request->method() !== 'PATCH') throw new \RuntimeException('Unexpected mock DNS operation.');
-                self::event('dns_write'); $id = basename(parse_url($url, PHP_URL_PATH));
+                self::event('dns_write', $request['type'] ?? 'A'); $id = basename(parse_url($url, PHP_URL_PATH));
                 $row = json_decode(DB::table('native_fixture_dns')->where('id', $id)->value('value'), true, 512, JSON_THROW_ON_ERROR);
-                $row['content'] = $request['content']; DB::table('native_fixture_dns')->where('id', $id)->update(['value' => json_encode($row, JSON_THROW_ON_ERROR)]);
+                $row = array_replace($row, $request->data()); DB::table('native_fixture_dns')->where('id', $id)->update(['value' => json_encode($row, JSON_THROW_ON_ERROR)]);
                 self::barrier('dns_after'); return Http::response(['success' => true, 'result' => $row]);
             }
             throw new \RuntimeException('Unexpected outbound HTTP blocked by fixture.');
@@ -288,7 +299,9 @@ final class NativeFailoverConcurrentFixture
     }
     public function expire(string $id): void
     {
+        self::control('forced_expiries', (int) self::control('forced_expiries') + 1, true);
         Runtime::query()->whereKey($id)->update(['lease_until' => time() - 1, 'next_dispatch_at' => 0, 'next_check_at' => 0]);
+        if (Schema::hasTable('v2_machine_dns_set_runtime')) \App\Models\MachineDnsSetRuntime::query()->whereNull('finished_at')->update(['lease_until' => time() - 1]);
         $raw = self::rawRedis();
         foreach (['machine-native:run:' . $id, ...Member::query()->where('execution_id', $id)->pluck('id')->map(fn ($n) => 'machine-native:member:' . $n)->all(),
             'machine-cloud:quota:linode', ...Task::query()->pluck('account_id')->unique()->map(fn ($n) => 'machine-cloud:account:' . $n)->all()] as $key)

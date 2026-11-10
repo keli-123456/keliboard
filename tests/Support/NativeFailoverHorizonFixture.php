@@ -71,11 +71,11 @@ final class NativeFailoverHorizonFixture
         \Laravel\Horizon\WorkerCommandString::$command = 'exec ' . $entry . ' horizon:work';
         app('events')->listen(\Illuminate\Queue\Events\JobTimedOut::class, fn () => NativeFailoverConcurrentFixture::event('job_timed_out'));
     }
-    public function seed(): array
+    public function seed(bool $recordSets = false): array
     {
         self::configuration(getenv(), str_repeat('a', 32));
         $this->inner = new NativeFailoverConcurrentFixture();
-        $this->run = $this->inner->seed(1, self::configure(...));
+        $this->run = $this->inner->seed(1, self::configure(...), $recordSets);
         $this->neighbor = 'native-neighbor:' . NativeFailoverConcurrentFixture::$owner . ':';
         $redis = self::raw(); $redis->rpush($this->neighbor . 'queues:business', 'guard-one', 'guard-two');
         $redis->set($this->neighbor . 'horizon:masters', 'guarded-other-master'); $redis->close();

@@ -8,6 +8,7 @@ use App\Models\MachineFailoverExecution as Execution;
 use App\Models\MachineFailoverExecutionMember as Member;
 use App\Models\MachineFailoverRuntime as Runtime;
 use App\Models\MachineProvisionTask as Task;
+use App\Models\MachineNativeAddressProof as Proof;
 use App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate;
 use App\Services\ServerMachine\Cloud\MachineFailoverQueue;
 use Illuminate\Support\Facades\DB;
@@ -38,6 +39,9 @@ final class NativeFailoverHorizonTest extends TestCase
             'job_timeouts' => $this->eventTotal('job_timed_out'), 'failed_queue_jobs' => $this->eventTotal('job_failed'),
             'exhausted_jobs' => $this->eventTotal('queue_exhausted'), 'worker_errors' => $this->eventTotal('worker_error'),
             'horizon_errors' => $this->eventTotal('horizon_error'), 'measurements' => $this->measurements,
+            'record_sets' => Fixture::control('record_sets') === true,
+            'address_proofs' => \Illuminate\Support\Facades\Schema::hasTable('v2_machine_native_address_proof')
+                ? Proof::query()->selectRaw('family, state, COUNT(*) AS total')->groupBy('family', 'state')->get()->toArray() : [],
             'cloud_mocked' => true, 'dns_mocked' => true, 'production_connections' => 0, 'cleanup' => false];
         try { $summary['cleanup_evidence'] = $this->fixture->cleanup(); $summary['cleanup'] = true; }
         finally {
@@ -45,7 +49,7 @@ final class NativeFailoverHorizonTest extends TestCase
             file_put_contents($dir . '/native-horizon-summary.jsonl', json_encode($summary, JSON_THROW_ON_ERROR) . "\n", FILE_APPEND | LOCK_EX);
         }
     }
-    private function seedRun(): void { $this->run = $this->fixture->seed(); }
+    private function seedRun(bool $recordSets = false): void { $this->run = $this->fixture->seed($recordSets); }
     private function elapsed(): float { return round((hrtime(true) - $this->started) / 1e9, 3); }
     private function eventTotal(string $kind): int { return DB::table('native_fixture_event')->where('kind', $kind)->count(); }
     private function runState(): string { return Execution::query()->findOrFail($this->run['id'])->status; }
@@ -91,9 +95,9 @@ final class NativeFailoverHorizonTest extends TestCase
     {
         return (int) DB::table('v2_machine_failover_runtime_event')->where('execution_id', $this->run['id'])->where('kind', 'claimed')->orderBy('id')->value('created_at');
     }
-    private function blockedWorker(): int
+    private function blockedWorker(string $phase = 'create_after'): int
     {
-        $worker = DB::table('native_fixture_event')->where('kind', 'barrier')->where('reference', 'create_after')->orderBy('id')->value('worker');
+        $worker = DB::table('native_fixture_event')->where('kind', 'barrier')->where('reference', $phase)->orderBy('id')->value('worker');
         $this->assertMatchesRegularExpression('/^horizon-\d+$/D', (string) $worker); return (int) substr($worker, 8);
     }
     private function businessProbe(string $tag, bool $stopsOnly = false): int
@@ -118,6 +122,51 @@ final class NativeFailoverHorizonTest extends TestCase
         $this->assertSame(0, $this->eventTotal('create')); $this->assertSame(0, $this->eventTotal('dns_write'));
         $this->assertSame(0, $this->eventTotal('job_failed')); $this->assertNoUnexpectedErrors();
         $this->assertTrue($this->fixture->boundaryIntact());
+    }
+    public function test_native_ipv6_reply_after_the_actual_challenge_deadline_is_review_not_publication(): void
+    {
+        $this->seedRun(true); Fixture::control('fault', 'verify_AAAA', true);
+        $master = $this->fixture->startMaster(); $this->daemonReady($master);
+        $this->awaitCondition(fn () => (int) app('redis')->connection()->get('fixture-barrier:verify_AAAA') > 0, 'issued IPv6 proof', 60);
+        $proof = Proof::query()->where('family', 'AAAA')->firstOrFail(); $this->assertSame('issued', $proof->state);
+        $this->assertSame(45, $proof->deadline_at - $proof->issued_at); $this->businessProbe('during-ipv6-challenge');
+        $this->awaitCondition(fn () => time() > $proof->deadline_at, 'natural 45 second challenge expiry', 55);
+        $elapsed = time() - $proof->issued_at; Fixture::control('release', true, true);
+        $this->awaitCondition(fn () => $this->runState() === 'needs_review', 'expired signed IPv6 receipt rejected', 25);
+        $this->assertSame('failed', $proof->fresh()->state); $this->assertSame(1, Proof::query()->where('family', 'AAAA')->count());
+        $this->assertSame(3, $this->eventTotal('verify')); $this->assertSame(1, $this->eventTotal('create')); $this->assertSame(0, $this->eventTotal('dns_write'));
+        $this->assertSame(0, $this->eventTotal('job_timed_out')); $this->assertSame(0, $this->eventTotal('job_failed'));
+        $this->businessProbe('after-ipv6-expiry'); $this->assertNoUnexpectedErrors(); $this->assertTrue($this->fixture->boundaryIntact());
+        $this->measurements += ['ipv6_challenge_wait_seconds' => $elapsed, 'ipv6_challenge_deadline_seconds' => 45,
+            'proof_reissued' => false, 'candidate_published' => false];
+    }
+    public function test_native_ipv6_worker_timeout_and_real_leases_do_not_renew_or_reissue_proofs(): void
+    {
+        $this->seedRun(true); Fixture::control('fault', 'verify_AAAA', true);
+        $master = $this->fixture->startMaster(); $this->daemonReady($master);
+        $this->awaitCondition(fn () => (int) app('redis')->connection()->get('fixture-barrier:verify_AAAA') > 0, 'IPv6 verifier blocked after durable issue', 60);
+        $proof = Proof::query()->where('family', 'AAAA')->firstOrFail(); $member = Member::query()->firstOrFail();
+        $runtime = Runtime::query()->findOrFail($this->run['id']); $claimed = $runtime->lease_until - HorizonFixture::RUN_LEASE;
+        $worker = $this->blockedWorker('verify_AAAA'); $business = $this->businessProbe('native-proof-timeout');
+        $this->assertNotSame($worker, $business); $this->assertGreaterThan(290000, $this->fixture->ttl('machine-native:member:' . $member->id));
+        $this->awaitCondition(fn () => $this->eventTotal('job_timed_out') === 1, 'real 75 second IPv6-proof worker timeout', 95);
+        $timedOut = (int) DB::table('native_fixture_event')->where('kind', 'job_timed_out')->value('at');
+        $this->assertGreaterThanOrEqual(74, $timedOut - $claimed); $this->assertLessThan(90, $timedOut - $claimed);
+        $this->assertSame('issued', $proof->fresh()->state); $this->assertSame(0, $this->eventTotal('dns_write'));
+        $this->assertSame($business, $this->businessProbe('native-after-timeout'));
+        $this->awaitCondition(fn () => DB::table('v2_machine_failover_runtime_event')->where('kind', 'recovered')->exists(), 'natural 120 second native lease recovery', 70);
+        $recovered = (int) DB::table('v2_machine_failover_runtime_event')->where('kind', 'recovered')->orderBy('id')->value('created_at');
+        $this->assertGreaterThanOrEqual(120, $recovered - $claimed); $this->assertGreaterThan(0, $this->fixture->ttl('machine-native:member:' . $member->id));
+        $this->awaitCondition(fn () => $this->runState() === 'needs_review', 'natural member-lock expiry holds stale candidate for review', 300);
+        $finished = (int) DB::table('v2_machine_failover_runtime_event')->where('kind', 'finished')->orderByDesc('id')->value('created_at');
+        $this->assertGreaterThanOrEqual(299, $finished - $claimed);
+        $this->assertSame($proof->id, Proof::query()->where('family', 'AAAA')->first()->id); $this->assertSame('issued', $proof->fresh()->state);
+        $this->assertSame(3, $this->eventTotal('verify')); $this->assertSame(2, Proof::query()->count()); $this->assertSame(1, Attempt::query()->count());
+        $this->assertSame(1, $this->eventTotal('create')); $this->assertSame(0, $this->eventTotal('dns_write'));
+        $this->assertSame(1, $this->eventTotal('job_failed')); $this->assertSame(0, $this->eventTotal('queue_exhausted')); $this->assertNoUnexpectedErrors();
+        $this->assertTrue($this->fixture->boundaryIntact());
+        $this->measurements += ['native_timeout_seconds' => $timedOut - $claimed, 'native_runtime_recovery_seconds' => $recovered - $claimed,
+            'native_member_review_seconds' => $finished - $claimed, 'proof_reissued' => false, 'candidate_published' => false];
     }
     public function test_actual_job_timeout_and_full_leases_recover_the_original_intent(): void
     {
