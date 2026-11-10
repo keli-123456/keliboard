@@ -63,7 +63,7 @@ class MachineReplacementService
     }
 
     // Called under the provisioning account lock, again immediately before the provider POST.
-    public function validate(int $planId, array $input, ?Task $current = null, ?\App\Models\MachineFailoverAttempt $attempt = null): array
+    public function validate(int $planId, array $input, ?Task $current = null, ?\App\Models\MachineFailoverAttempt $attempt = null, ?array $dnsScope = null): array
     {
         $input = ProvisionPlan::normalize($input);
         $plan = Plan::query()->findOrFail($planId);
@@ -73,6 +73,11 @@ class MachineReplacementService
         if ($attempt) app(MachineFailoverNativeBridge::class)->assertAttempt($attempt, $current);
         if (!MachineIntentJson::same(ProvisionPlan::normalize($attempt ? $attempt->payload['plan'] : $this->input($policy, $current)), $input)) throw new CloudException('source_changed');
         $checks = app(MachineFailoverPolicyService::class)->localChecks($policy, $current);
+        if ($attempt) {
+            $member = \App\Models\MachineFailoverExecutionMember::query()->findOrFail($attempt->execution_member_id);
+            if (isset($member->payload['dns_source'])) $dnsScope = \App\Models\MachineFailoverExecution::query()->findOrFail($member->execution_id)->payload['snapshot'];
+        }
+        $checks = app(MachineNativeDnsAdmission::class)->policyChecks($policy, $checks, $dnsScope);
         foreach ($checks as $check) {
             if ($check['status'] !== 'passed' && !in_array($check['code'], ['execution_disabled', 'provider_not_checked',
                 'external_ownership_unverified', 'forwarding_not_verified'], true)) throw new CloudException('replacement_guard_failed');
@@ -185,6 +190,12 @@ class MachineReplacementService
 
     private function completed(Replacement $row, Task $task): bool
     {
+        if (isset($task->evidence['native_dns_completion'])) {
+            $attempt = \App\Models\MachineFailoverAttempt::query()->find($task->payload['coordinated_attempt'] ?? '');
+            $member = $attempt ? \App\Models\MachineFailoverExecutionMember::query()->find($attempt->execution_member_id) : null;
+            return $member && $member->policy_id === $row->policy_id && $member->policy_revision === $row->policy_revision
+                && app(MachineNativeDnsAdmission::class)->completionCurrent($attempt, $task);
+        }
         $instance = MachineOwnedInstance::query()->where('task_id', $task->id)->where('active_policy_id', $row->policy_id)->first();
         return $instance && ($task->evidence['forwarding_verified'] ?? false) === true && ($task->evidence['dns_changed'] ?? false) === true
             && MachineDnsTransition::query()->whereKey($task->evidence['dns_transition_id'] ?? '')->where('state', 'verified')

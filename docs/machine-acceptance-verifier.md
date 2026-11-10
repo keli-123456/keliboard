@@ -127,3 +127,69 @@ enable failover scheduling.
 
 Three echoes are a minimal readiness check, not a performance benchmark, UDP
 P99 measurement, loss-free guarantee or evidence about all client regions.
+
+## Native Address-Family Contract (Schema 2, Closed)
+
+Schema 1 remains the legacy single-IPv4 acceptance contract. Native DNS
+record-set admission additionally issues a separate schema-2 challenge for each
+published address family. A schema-1 receipt is never IPv6 evidence, and a
+schema-2 IPv4 receipt cannot authorize an AAAA record.
+
+Schema 2 retains every schema-1 field and adds these required fields:
+
+| Field | Meaning |
+| --- | --- |
+| `address_family` | Exactly `A` or `AAAA`; must match the literal target |
+| `attempt_id` | Original native attempt UUID, not a worker-selected ID |
+| `native_context_sha256` | Canonical digest of the panel's pinned native context |
+| `source_installation_id` | Original source installation, different from the candidate |
+
+The signed response must use schema 2 and exactly echo `address_family`,
+`target_ip`, `task_id`, `installation_id`, `attempt_id`,
+`native_context_sha256`, `source_installation_id`, `session`, `binary_sha256`
+and `configuration_fingerprint`. Request/response raw-body HMAC, challenge
+digest, all TCP/UDP frame checks, expiry and cleanup remain mandatory. Worker
+profiles may explicitly allow canonical public IPv4 and IPv6 literals, never
+CIDRs, hostnames, metadata, private, link-local, mapped or transition addresses.
+There is still no production loopback override or automatic profile renewal.
+
+The native context pins the execution, service/member/policy revisions,
+attempt/ordinal, original source instance and provider creation identity,
+candidate task/account/creation identity, installation, resource, release and
+binary digest, current process session, expected configuration, all expected
+nodes, selected addresses, DNS-set topology and verifier fingerprint. Each
+published address must independently occur in the candidate's provider task,
+held resource, fresh own-installation address report and fresh provider read.
+An observed request-source IP, another installation's IPv6, or an ambiguous
+multi-IPv6 selection is not sufficient. Domestic reachability classification
+remains IPv4-only; this contract does not add IPv6 ICMP probing.
+Candidate awaiting-acceptance state and resource revision/status/holds are also
+pinned; an accepted/retained candidate or released/stopped resource is not a
+substitute for the originally verified held candidate.
+
+The additive native-proof table retains a unique challenge per attempt/family,
+encrypted bounded context/results, request/receipt digests and an application-key
+HMAC seal. It stores no raw frames, worker bodies or credentials. Proofs expire
+no later than the existing candidate verification (at most 120 seconds after
+that verification); starting a DNS task does not extend them. Interrupted,
+failed, stale or changed-context challenges require review, not silent reissue.
+
+Native DNS children are bound to these proof IDs, exact source pins, snapshot,
+immutable publication plan and original inventory by a separate HMAC seal.
+Proofs and permissions are rechecked before dispatch and final completion;
+provider I/O remains outside database transactions. DNS ownership must already
+match all managed source slots. This path cannot bootstrap, adopt unmanaged
+records or infer ownership from a matching IP. All children must complete fresh
+readback before the candidate becomes active in one transaction. Completion is
+not proof of external DNS propagation or permission to delete retained sources.
+Before activation, all required sets are read again from the native provider
+outside SQL and compared with the sealed desired plan and verified inventory.
+The transaction rechecks those journal digests and read timestamps; a completed
+flag alone, or a provider change after a child's readback, cannot activate the
+candidate.
+
+All of this remains behind the unchanged unconditional execution gate. Tests
+use an isolated gate double and fake cloud/DNS/verifier transports. Passing
+those tests is not real forwarding, cloud permission, DNS-line entitlement or
+live deployment evidence; an independently authorized isolated acceptance is
+still required.

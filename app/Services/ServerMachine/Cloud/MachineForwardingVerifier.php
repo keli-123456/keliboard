@@ -29,11 +29,18 @@ class MachineForwardingVerifier
         if (!$response->successful() || strlen($raw) > 32768 || !is_string($signature)
             || !preg_match('/^[a-f0-9]{64}$/D', $signature) || !hash_equals(hash_hmac('sha256', "response\n" . $raw, $configuration['key']), $signature)) throw new CloudException('verification_invalid');
         $data = json_decode($raw, true);
-        if (!is_array($data) || ($data['schema'] ?? null) !== 1 || ($data['challenge_id'] ?? null) !== $challenge['challenge_id']
+        $schema = $challenge['schema'] ?? null;
+        if (!in_array($schema, [1, 2], true) || !is_array($data) || ($data['schema'] ?? null) !== $schema || ($data['challenge_id'] ?? null) !== $challenge['challenge_id']
             || ($data['request_sha256'] ?? null) !== hash('sha256', $body) || ($data['cleanup_complete'] ?? null) !== true
             || !is_int($data['finished_at'] ?? null) || $data['finished_at'] < $challenge['issued_at'] || $data['finished_at'] > time() + 3
             || time() > $challenge['deadline_at'] || !is_array($data['results'] ?? null) || !array_is_list($data['results'])
             || count($data['results']) !== count($challenge['nodes'])) throw new CloudException('verification_invalid');
+        if ($schema === 2) {
+            if (!in_array($challenge['address_family'] ?? null, ['A', 'AAAA'], true)) throw new CloudException('verification_invalid');
+            foreach (['address_family', 'target_ip', 'task_id', 'installation_id', 'attempt_id', 'native_context_sha256',
+                'source_installation_id', 'session', 'binary_sha256', 'configuration_fingerprint'] as $field)
+                if (($data[$field] ?? null) !== ($challenge[$field] ?? null)) throw new CloudException('verification_identity_mismatch');
+        }
         $results = [];
         foreach ($challenge['nodes'] as $index => $node) {
             $result = $data['results'][$index] ?? [];
@@ -47,6 +54,8 @@ class MachineForwardingVerifier
             $results[] = ['node_id' => $node['id'], 'tcp_echoes' => 3, 'udp_echoes' => 3];
         }
         return ['finished_at' => $data['finished_at'], 'receipt_sha256' => hash('sha256', $raw), 'results' => $results,
-            'cleanup_complete' => true, 'verifier_fingerprint' => $configuration['fingerprint']];
+            'cleanup_complete' => true, 'verifier_fingerprint' => $configuration['fingerprint']]
+            + ($schema === 2 ? array_intersect_key($challenge, array_flip(['address_family', 'target_ip', 'task_id', 'installation_id',
+                'attempt_id', 'native_context_sha256', 'source_installation_id', 'session', 'binary_sha256', 'configuration_fingerprint'])) : []);
     }
 }

@@ -17,7 +17,7 @@ class MachineFailoverReadOnlyAdapter
 
     public function execute(): never { throw new CloudException('shadow_execution_disabled'); }
 
-    public function read(Policy $policy, int $now): array
+    public function read(Policy $policy, int $now, ?array $dnsScope = null): array
     {
         $current = $this->observer->summary($policy, $now); $probe = $current['probe'] ?? [];
         $signal = $probe['state'] ?? 'unknown';
@@ -46,8 +46,11 @@ class MachineFailoverReadOnlyAdapter
         $author = \App\Models\User::query()->find($policy->getRawOriginal('updated_by'), ['id', 'is_admin', 'banned']);
         if (!$author || !$author->is_admin || $author->banned) $blockers[] = 'permission_revoked';
         $dns = \App\Models\MachineDnsCredential::query()->find($policy->dns_credential_id, ['id', 'provider']);
-        if ($dns && $dns->provider !== 'cloudflare') $blockers[] = 'dns_provider_unsupported';
-        foreach (app(MachineFailoverPolicyService::class)->localChecks($policy) as $check) {
+        if ($dns && $dns->provider !== 'cloudflare' && empty($dnsScope['dns_sets'])) $blockers[] = 'dns_provider_unsupported';
+        $checks = app(MachineFailoverPolicyService::class)->localChecks($policy);
+        try { $checks = app(MachineNativeDnsAdmission::class)->policyChecks($policy, $checks, $dnsScope); }
+        catch (CloudException $error) { $blockers[] = $error->getMessage(); }
+        foreach ($checks as $check) {
             if ($check['status'] !== 'passed' && !in_array($check['code'], ['execution_disabled', 'provider_not_checked',
                 'external_ownership_unverified', 'forwarding_not_verified'], true)) $blockers[] = $check['code'];
         }

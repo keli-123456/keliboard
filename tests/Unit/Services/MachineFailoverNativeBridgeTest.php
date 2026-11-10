@@ -63,6 +63,10 @@ class MachineFailoverNativeBridgeTest extends TestCase
     private $duringDnsRead = null;
     private $duringDnsWrite = null;
     private $duringInstanceRead = null;
+    private $duringVerification = null;
+    private bool $dualStack = false;
+    private string $addressFailure = '';
+    private array $challenges = [];
 
     protected function setUp(): void
     {
@@ -160,7 +164,9 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $config = app(MachineEntryProbe::class)->configuration();
         $probe = ['schema' => 1, 'revision' => $config['revision'], 'state' => 'ready', 'checked_at' => $at,
             'targets' => array_map(fn ($target, $index) => ['id' => $target['id'], 'status' => $healthy && $index === 0 ? 'reachable' : 'unreachable', 'source_ip' => $ip], $config['targets'], array_keys($config['targets']))];
-        app(MachineAddressInventory::class)->record($f['machine'], $task->installation_id, ['public_ipv4' => $ip], $at,
+        $addresses = ['public_ipv4' => $ip];
+        if ($this->dualStack && ($v6 = array_values(array_filter($task->public_ips ?? [], fn ($v) => str_contains($v, ':'))))) $addresses['public_ipv6'] = $v6[0];
+        app(MachineAddressInventory::class)->record($f['machine'], $task->installation_id, $addresses, $at,
             ['version' => $this->release->version, 'binary_sha256' => $this->release->binary_sha256, 'observation_session' => str_repeat('e', 32),
                 'configured_nodes' => [['id' => $f['machine']->id, 'protocol' => 'hysteria2', 'port' => 8443]]], $probe);
         $rows = Cache::get('node_instances:' . $f['machine']->id, []);
@@ -213,6 +219,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
     {
         Http::swap(new \Illuminate\Http\Client\Factory()); Http::preventStrayRequests();
         Http::fake(function ($request) {
+            if ($this->dualStack) $this->assertSame(0, DB::transactionLevel(), 'Native provider/verifier I/O must not hold SQL locks');
             $url = $request->url();
             if (str_starts_with($url, 'https://api.digitalocean.com/') || str_starts_with($url, 'https://api.vultr.com/')) return $this->jsonProvider($request);
             if (str_starts_with($url, 'https://api.linode.com/')) {
@@ -225,7 +232,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
                     if ($this->mode === 'rate') return Http::response(['errors' => [['reason' => 'fixture rate']]], 429, ['Retry-After' => '120']);
                     $row = ['id' => 1000 + count($this->posts), 'label' => $request['label'], 'tags' => $request['tags'], 'region' => $request['region'],
                         'type' => $request['type'], 'image' => $request['image'], 'created' => gmdate('Y-m-d\TH:i:s'), 'status' => 'running',
-                        'ipv4' => [count($this->posts) === 1 ? '8.8.4.4' : '9.9.9.11'], 'ipv6' => ''];
+                        'ipv4' => [count($this->posts) === 1 ? '8.8.4.4' : '9.9.9.11'], 'ipv6' => $this->dualStack ? '2600:3c00::' . (100 + count($this->posts)) : ''];
                     $row['backups'] = ['enabled' => false];
                     if ($this->mode !== 'unknown_absent') $this->remote[$row['id']] = $row;
                     if (str_starts_with($this->mode, 'unknown')) return Http::response([], 503);
@@ -250,13 +257,36 @@ class MachineFailoverNativeBridgeTest extends TestCase
             }
             if ($url === 'https://verifier.example.test/v1/verify') {
                 $this->verifications++; $challenge = json_decode($request->body(), true);
+                $this->challenges[] = $challenge;
                 $echo = ['sent' => 3, 'received' => 3, 'missing' => 0, 'duplicates' => 0, 'bytes' => 96, 'sha256' => $challenge['echo_sha256']];
-                $reply = ['schema' => 1, 'challenge_id' => $challenge['challenge_id'], 'request_sha256' => hash('sha256', $request->body()),
+                $reply = ['schema' => $challenge['schema'], 'challenge_id' => $challenge['challenge_id'], 'request_sha256' => hash('sha256', $request->body()),
                     'finished_at' => time(), 'cleanup_complete' => true, 'results' => array_map(fn ($node) => ['node_id' => $node['id'],
                         'endpoint_authenticated' => true, 'tcp' => $echo, 'udp' => $echo], $challenge['nodes'])];
                 if ($this->mode === 'bad_receipt') $reply['challenge_id'] = str_repeat('0', 32);
+                if ($challenge['schema'] === 2) {
+                    foreach (['address_family', 'target_ip', 'task_id', 'installation_id', 'attempt_id', 'native_context_sha256',
+                        'source_installation_id', 'session', 'binary_sha256', 'configuration_fingerprint'] as $field) $reply[$field] = $challenge[$field];
+                    if ($this->addressFailure === 'legacy') $reply['schema'] = 1;
+                    elseif ($this->addressFailure === 'udp_missing') $reply['results'][0]['udp']['received'] = 2;
+                    elseif ($this->addressFailure === 'cleanup') $reply['cleanup_complete'] = false;
+                    elseif ($this->addressFailure !== '') $reply[$this->addressFailure] = 'foreign-receipt';
+                }
+                if ($this->duringVerification) ($this->duringVerification)($challenge);
                 $raw = json_encode($reply);
                 return Http::response($raw, 200, ['X-Keli-Signature' => hash_hmac('sha256', "response\n" . $raw, config('machine_acceptance.verifier_key'))]);
+            }
+            if ($url === 'https://alidns.aliyuncs.com/') {
+                $this->assertSame(0, DB::transactionLevel(), 'Provider I/O must not hold database locks');
+                if ($request['Action'] === 'DescribeSubDomainRecords') {
+                    if ($this->duringDnsRead) ($this->duringDnsRead)();
+                    $rows = array_values(array_filter($this->records, fn ($r) => isset($r['DomainName']) && $r['RR'] . '.' . $r['DomainName'] === $request['SubDomain']));
+                    return Http::response(['RequestId' => 'fixture-read', 'PageNumber' => 1, 'PageSize' => 50,
+                        'TotalCount' => count($rows), 'DomainRecords' => ['Record' => $rows]]);
+                }
+                $this->assertSame('UpdateDomainRecord', $request['Action']); $this->dnsWrites++;
+                $id = $request['RecordId']; foreach (['RR', 'Type', 'Value', 'TTL', 'Line'] as $field) $this->records[$id][$field] = $request[$field];
+                if ($this->duringDnsWrite) ($this->duringDnsWrite)();
+                return Http::response(['RequestId' => 'fixture-write', 'RecordId' => $id]);
             }
             if (str_starts_with($url, 'https://api.cloudflare.com/')) {
                 if ($request->method() === 'GET') {
@@ -299,6 +329,10 @@ class MachineFailoverNativeBridgeTest extends TestCase
                 : ['id' => sprintf('20000000-0000-4000-8000-%012d', $n), 'label' => $label, 'region' => $request['region'], 'plan' => $request['plan'],
                     'os_id' => $request['os_id'], 'date_created' => gmdate('Y-m-d H:i:s'), 'status' => 'active', 'server_status' => 'ok',
                     'power_status' => 'running', 'main_ip' => '8.8.4.4', 'default_password' => 'never-export-this']);
+            if ($this->dualStack) {
+                if ($provider === 'digitalocean') $row['networks']['v6'] = [['ip_address' => '2600:3c00::100', 'type' => 'public']];
+                else $row['v6_main_ip'] = '2600:3c00::100';
+            }
             if ($this->mode !== 'unknown_absent') $this->remote[$row['id']] = $row;
             if (str_starts_with($this->mode, 'unknown')) return Http::response([], 503);
             return Http::response([$provider === 'digitalocean' ? 'droplet' : 'instance' => $row], 202);
@@ -323,6 +357,336 @@ class MachineFailoverNativeBridgeTest extends TestCase
     }
 
     public static function jsonProviders(): array { return [['digitalocean'], ['vultr']]; }
+
+    private function startSets(array $types = ['A', 'AAAA'], string $dnsProvider = 'cloudflare', int $setCount = 1, bool $legacyDns = true): array
+    {
+        foreach (['2026_11_09_180000_create_machine_failover_dns_sets.php', '2026_11_09_200000_create_machine_dns_set_runtime.php',
+            '2026_11_10_010000_create_machine_native_address_proofs.php'] as $file) (require base_path('database/migrations/' . $file))->up();
+        config(['app.key' => str_repeat('n', 32)]); $this->dualStack = in_array('AAAA', $types, true); $this->enable();
+        foreach ($this->fixtures as $i => $f) {
+            if (!$legacyDns) {
+                $f['policy']->fill(['dns_credential_id' => null, 'dns_credential_revision' => null, 'dns_hostname' => '', 'dns_scope' => null])->save();
+                MachineOwnedDns::query()->where('policy_id', $f['policy']->id)->delete();
+            }
+            $task = $f['source']; $ips = [$f['sourceIp']]; if ($this->dualStack) $ips[] = '2600:3c00::' . ($i + 1);
+            $task->fill(['external_id' => (string) (900 + $i), 'provider_created_at' => gmdate('Y-m-d\TH:i:s\Z', time() - 86400), 'public_ips' => $ips])->save();
+            $resource = \App\Models\MachineCloudResource::query()->create(['account_id' => $task->account_id, 'provider' => $f['accounts'][0]->provider,
+                'external_id' => $task->external_id, 'provider_created_at' => $task->provider_created_at, 'public_ips' => $ips, 'status' => 'running',
+                'label' => $task->marker, 'region' => $f['policy']->region, 'size' => $f['policy']->size,
+                'machine_id' => $task->machine_id, 'installation_id' => $task->installation_id, 'machine_authority' => $task->machine_authority, 'observed_at' => time()]);
+            MachineOwnedInstance::query()->where('task_id', $task->id)->update(['resource_id' => $resource->id]);
+        }
+        $service = app(MachineFailoverServiceRegistry::class)->save(['name' => 'Native sets fixture', 'max_parallel' => count($this->fixtures),
+            'attempt_limit' => 4, 'monthly_cap_usd' => 400, 'members' => array_map(fn ($f) => ['policy_id' => $f['policy']->id,
+                'policy_revision' => $f['policy']->revision, 'name' => $f['machine']->name, 'priority' => $f['machine']->id, 'enabled' => true], $this->fixtures)], $this->admin->id);
+        $credential = $dnsProvider === 'cloudflare' ? MachineDnsCredential::query()->first() : MachineDnsCredential::query()->create([
+            'name' => 'Aliyun fixture', 'provider' => 'aliyun', 'revision' => 1, 'credentials' => ['access_key_id' => 'synthetic', 'access_key_secret' => 'synthetic']]);
+        $input = ['service_id' => $service['id'], 'service_revision' => 1,
+            'credential_id' => $credential->id, 'credential_revision' => 1, 'zone' => $dnsProvider === 'cloudflare' ? str_repeat('c', 32) : 'example.test',
+            'zone_name' => 'example.test', 'hostname' => 'native-sets.example.test', 'ttl' => $dnsProvider === 'cloudflare' ? 60 : 600,
+            'members' => array_map(fn ($m) => ['member_id' => $m['id'], 'types' => $types, 'lines' => $dnsProvider === 'cloudflare'
+                ? ['default'] : ['default', 'telecom', 'unicom']], $service['members'])];
+        for ($i = 0; $i < $setCount; $i++) {
+            $input['service_revision'] = 1 + $i; $input['hostname'] = 'native-sets' . ($i ? '-' . $i : '') . '.example.test';
+            $view = app(\App\Services\ServerMachine\Cloud\MachineFailoverDnsRegistry::class)->save($input, $this->admin->id);
+        }
+        foreach ($view['sets'] as $set) foreach (\App\Models\MachineFailoverDnsSlot::query()->where('set_id', $set['id'])->get() as $slot) {
+            $index = array_search($slot['member_id'], array_column($service['members'], 'id'), true);
+            $ip = $slot['type'] === 'A' ? $this->fixtures[$index]['sourceIp'] : '2600:3c00::' . ($index + 1);
+            $id = $dnsProvider === 'cloudflare' ? hash('md5', (string) $slot['id']) : (string) (5000 + $slot['id']);
+            $this->records[$id] = $dnsProvider === 'cloudflare' ? ['id' => $id, 'type' => $slot['type'], 'content' => $ip, 'name' => $set['hostname'],
+                'ttl' => 60, 'proxied' => false, 'locked' => false, 'comment' => $slot['marker']] : ['RecordId' => $id, 'Type' => $slot['type'], 'Value' => $ip,
+                    'RR' => substr($set['hostname'], 0, -strlen('.example.test')), 'DomainName' => 'example.test', 'Line' => $slot['line'], 'TTL' => 600, 'Remark' => $slot['marker'], 'Status' => 'ENABLE', 'Locked' => false];
+        }
+        return app(MachineFailoverNativeBridge::class)->start($service['id'], $view['service_revision'], array_map(fn ($f) => MachineFailoverPlan::query()
+            ->where('policy_id', $f['policy']->id)->latest('id')->value('id'), $this->fixtures), $this->release->id, str_repeat('d', 32), $this->admin->id);
+    }
+    private function finishSets(array $run): array
+    {
+        for ($i = 0; $i < 45 && $run['status'] === 'running'; $i++) $run = $this->advance($run);
+        return $run;
+    }
+    public function test_native_record_set_pins_independent_signed_address_family_evidence(): void
+    {
+        $run = $this->ready($this->advance($this->startSets()));
+        $this->assertSame('awaiting_dns', $run['members'][0]['phase'], json_encode($run));
+        $this->assertSame([1, 2, 2], array_column($this->challenges, 'schema'));
+        $this->assertSame(['A', 'AAAA'], array_column(array_slice($this->challenges, 1), 'address_family'));
+        $this->assertSame(0, $this->dnsWrites); $this->assertSame(2, \App\Models\MachineNativeAddressProof::count());
+        $run = $this->finishSets($run); $this->assertSame('completed', $run['status'], json_encode($run));
+        $this->assertSame(2, $this->dnsWrites); $this->assertSame('accepted', $this->task()->status);
+        $this->assertTrue(app(\App\Services\ServerMachine\Cloud\MachineNativeDnsAdmission::class)->completionCurrent(Attempt::query()->first(), $this->task()));
+        $completion = new \ReflectionMethod(MachineReplacementService::class, 'completed');
+        $row = (new \App\Models\MachineReplacementTask())->forceFill(['policy_id' => $this->fixtures[0]['policy']->id, 'policy_revision' => 1]);
+        $this->assertTrue($completion->invoke(app(MachineReplacementService::class), $row, $this->task()));
+        $row->policy_id = 999; $this->assertFalse($completion->invoke(app(MachineReplacementService::class), $row, $this->task()));
+        $this->assertSame($run, $this->advance($run)); $this->assertCount(1, $this->posts);
+    }
+    public function test_native_a_only_record_set_does_not_require_ipv6_or_accept_legacy_receipts(): void
+    {
+        $run = $this->ready($this->advance($this->startSets(['A'])));
+        $this->assertSame('awaiting_dns', $run['members'][0]['phase'], json_encode($run));
+        $this->assertSame(['A'], array_column(array_slice($this->challenges, 1), 'address_family'));
+        $run = $this->finishSets($run); $this->assertSame('completed', $run['status'], json_encode($run)); $this->assertSame(1, $this->dnsWrites);
+    }
+    public function test_native_aliyun_three_lines_publish_only_after_both_family_proofs(): void
+    {
+        $run = $this->ready($this->advance($this->startSets(['A', 'AAAA'], 'aliyun')));
+        $this->assertSame('awaiting_dns', $run['members'][0]['phase'], json_encode($run));
+        $run = $this->finishSets($run); $this->assertSame('completed', $run['status'], json_encode($run));
+        $this->assertSame(6, $this->dnsWrites); $this->assertCount(1, $this->posts); $this->assertSame(3, $this->verifications);
+    }
+    public function test_service_aliyun_scope_needs_no_dummy_cloudflare_or_legacy_owned_dns(): void
+    {
+        $run = $this->startSets(['A', 'AAAA'], 'aliyun', 1, false); $parent = Execution::query()->first();
+        $this->assertSame(0, MachineOwnedDns::count());
+        $raw = app(MachineFailoverPolicyService::class)->localChecks($this->fixtures[0]['policy']);
+        $this->assertContains('dns_not_configured', array_column($raw, 'code'));
+        $unregistered = $parent->payload['snapshot']; $unregistered['dns_sets'][0]['credential_revision']++;
+        $this->code('native_context_changed', fn () => app(\App\Services\ServerMachine\Cloud\MachineNativeDnsAdmission::class)->policyChecks($this->fixtures[0]['policy'], $raw, $unregistered));
+        $view = app(\App\Services\ServerMachine\Cloud\MachineFailoverShadow::class)->report($parent->service_id, $parent->service_revision, $this->admin->id);
+        $this->assertSame('would_replace', $view['members'][0]['decision'], json_encode($view));
+        $run = $this->ready($this->advance($run)); $run = $this->finishSets($run);
+        $this->assertSame('completed', $run['status'], json_encode($run)); $this->assertSame(6, $this->dnsWrites);
+        $this->assertSame(0, MachineOwnedDns::count()); $this->assertCount(1, $this->posts);
+    }
+    #[DataProvider('jsonProviders')]
+    public function test_native_json_provider_record_set_uses_the_same_identity_and_dual_stack_admission(string $provider): void
+    {
+        $this->fixtures = [$this->fixture(2, $provider)];
+        $run = $this->ready($this->advance($this->startSets())); $run = $this->finishSets($run);
+        $this->assertSame('completed', $run['status'], json_encode($run)); $this->assertSame(2, $this->dnsWrites);
+        $this->assertSame(['A', 'AAAA'], array_column(array_slice($this->challenges, 1), 'address_family'));
+        $this->assertSame($provider, \App\Models\MachineCloudResource::query()->where('external_id', $this->task()->external_id)->value('provider'));
+    }
+    public function test_native_two_members_share_one_set_without_overwriting_the_other_member(): void
+    {
+        $this->fixtures[] = $this->fixture(2);
+        $run = $this->advance($this->startSets()); $run = $this->ready($run); $run = $this->ready($run, 1);
+        $run = $this->finishSets($run); $this->assertSame('completed', $run['status'], json_encode($run));
+        $this->assertSame(4, $this->dnsWrites); $this->assertSame(4, \App\Models\MachineNativeAddressProof::count());
+        $this->assertCount(2, $this->posts);
+        foreach (Attempt::query()->get() as $attempt) $this->assertTrue(app(\App\Services\ServerMachine\Cloud\MachineNativeDnsAdmission::class)
+            ->completionCurrent($attempt, Task::query()->findOrFail($attempt->task_id)));
+    }
+    public static function changedContexts(): array
+    {
+        return array_map(fn ($kind) => [$kind], ['expired', 'seal', 'origin', 'proof_links', 'source', 'task_ip', 'task_identity', 'resource',
+            'authority', 'session', 'configuration', 'release', 'dns_binding', 'publication', 'initial_inventory', 'dns_permission', 'verification_permission',
+            'candidate_retained', 'candidate_accepted', 'resource_stopped', 'manual_hold', 'dns_hold']);
+    }
+    #[DataProvider('changedContexts')]
+    public function test_native_context_or_publication_changes_after_proof_cannot_write_dns(string $kind): void
+    {
+        $run = $this->ready($this->advance($this->startSets())); $task = $this->task();
+        $proof = \App\Models\MachineNativeAddressProof::query()->first(); $attempt = Attempt::query()->first();
+        $dns = \App\Models\MachineFailoverDnsRun::query()->first();
+        if ($kind === 'expired') $proof->fill(['valid_until' => time() - 1])->save();
+        elseif ($kind === 'seal') $proof->fill(['seal' => str_repeat('0', 64)])->save();
+        elseif ($kind === 'origin') { $p = $proof->payload; $p['origin'] = 'synthetic'; $proof->payload = $p; $proof->save(); }
+        elseif ($kind === 'proof_links') { $p = $attempt->payload; $p['address_proofs'] = array_reverse($p['address_proofs'], true); $attempt->payload = $p; $attempt->save(); }
+        elseif ($kind === 'source') MachineOwnedInstance::query()->where('task_id', $this->fixtures[0]['source']->id)->increment('revision');
+        elseif ($kind === 'task_ip') $task->fill(['public_ips' => ['8.8.4.4', '2600:3c00::999']])->save();
+        elseif ($kind === 'task_identity') $task->fill(['provider_created_at' => '2000-01-01T00:00:00Z'])->save();
+        elseif ($kind === 'resource') \App\Models\MachineCloudResource::query()->where('external_id', $task->external_id)->update(['provider_created_at' => '2000-01-01T00:00:00Z']);
+        elseif ($kind === 'authority') $this->fixtures[0]['machine']->fill(['token' => 'changed-synthetic-authority'])->save();
+        elseif ($kind === 'session') {
+            app(MachineAddressInventory::class)->record($this->fixtures[0]['machine'], $task->installation_id,
+                ['public_ipv4' => $task->public_ips[0], 'public_ipv6' => $task->public_ips[1]], time() + 1,
+                ['version' => $this->release->version, 'binary_sha256' => $this->release->binary_sha256,
+                    'observation_session' => str_repeat('f', 32), 'configured_nodes' => [['id' => 1, 'protocol' => 'hysteria2', 'port' => 8443]]]);
+        } elseif ($kind === 'configuration') DB::table('v2_server')->where('id', 1)->update(['server_port' => 9443]);
+        elseif ($kind === 'release') $this->release->fill(['binary_sha256' => str_repeat('c', 64)])->save();
+        elseif ($kind === 'dns_permission') config(['machine_acceptance.allow_dns' => false]);
+        elseif ($kind === 'verification_permission') config(['machine_acceptance.allow_verification' => false]);
+        elseif ($kind === 'candidate_retained') MachineOwnedInstance::query()->where('task_id', $task->id)->update(['status' => 'retained']);
+        elseif ($kind === 'candidate_accepted') $task->fill(['status' => 'accepted'])->save();
+        elseif ($kind === 'resource_stopped') \App\Models\MachineCloudResource::query()->where('external_id', $task->external_id)->update(['status' => 'offline']);
+        elseif (in_array($kind, ['manual_hold', 'dns_hold'], true)) \App\Models\MachineCloudResource::query()->where('external_id', $task->external_id)->update([$kind => false]);
+        else {
+            $p = $dns->payload;
+            if ($kind === 'dns_binding') $p['native_binding']['attempt_id'] = (string) Str::uuid();
+            elseif ($kind === 'publication') $p['plan']['actions'][0]['after']['content'] = '1.0.0.1';
+            else $p['initial'] = [];
+            $dns->payload = $p; $dns->save();
+        }
+        $run = $this->finishSets($run); $this->assertSame('needs_review', $run['status'], json_encode($run));
+        $this->assertSame(0, $this->dnsWrites); $this->assertCount(1, $this->posts); $this->assertSame(3, $this->verifications);
+    }
+    public function test_ipv6_must_be_fresh_and_reported_by_the_candidate_installation(): void
+    {
+        $run = $this->advance($this->startSets());
+        $this->duringVerification = function ($challenge) {
+            if ($challenge['schema'] !== 1) return;
+            $task = $this->task(); $this->dualStack = false;
+            $this->report($this->fixtures[0], $task, $task->public_ips[0], true, time());
+        };
+        $run = $this->ready($run); $this->assertSame('needs_review', $run['status'], json_encode($run));
+        $this->assertSame(0, $this->dnsWrites); $this->assertSame(0, \App\Models\MachineNativeAddressProof::count());
+    }
+    public function test_context_change_while_ipv6_measurement_is_running_rejects_the_late_receipt(): void
+    {
+        $run = $this->advance($this->startSets());
+        $this->duringVerification = function ($challenge) {
+            if (($challenge['address_family'] ?? null) === 'AAAA') MachineOwnedInstance::query()->where('task_id', $this->fixtures[0]['source']->id)->increment('revision');
+        };
+        $run = $this->ready($run); $this->assertSame('needs_review', $run['status'], json_encode($run));
+        $this->assertSame(0, $this->dnsWrites); $this->assertSame(['passed', 'failed'], \App\Models\MachineNativeAddressProof::query()->orderBy('family')->pluck('state')->all());
+    }
+    public function test_lost_dns_acknowledgement_resumes_only_the_original_journal(): void
+    {
+        $run = $this->ready($this->advance($this->startSets())); $this->mode = 'dns_unknown';
+        $run = $this->finishSets($run); $this->assertSame('completed', $run['status'], json_encode($run));
+        $this->assertSame(2, $this->dnsWrites); $this->assertSame(1, \App\Models\MachineFailoverDnsRun::count());
+        $this->assertSame(3, $this->verifications); $this->assertCount(1, $this->posts);
+    }
+    public function test_native_bridge_waits_for_dns_due_time_without_polling_cloud_or_verifier(): void
+    {
+        $run = $this->ready($this->advance($this->startSets()));
+        $child = \App\Models\MachineDnsSetRuntime::query()->first(); $child->fill(['next_check_at' => time() + 60])->save();
+        $calls = Http::recorded()->count();
+        for ($i = 0; $i < 3; $i++) $run = $this->advance($run);
+        $this->assertSame('running', $run['status']); $this->assertSame($calls, Http::recorded()->count());
+        $this->assertSame(0, $this->dnsWrites); $this->assertSame(3, $this->verifications);
+        $child->fill(['next_check_at' => null])->save(); $run = $this->finishSets($run);
+        $this->assertSame('completed', $run['status'], json_encode($run)); $this->assertSame(2, $this->dnsWrites);
+    }
+    public function test_dns_receipt_from_a_revoked_lease_cannot_commit_and_recovery_does_not_rewrite(): void
+    {
+        $run = $this->ready($this->advance($this->startSets()));
+        $this->duringDnsWrite = function () {
+            $this->duringDnsWrite = null;
+            \App\Models\MachineDnsSetRuntime::query()->update(['generation' => 99, 'lease_hash' => null, 'lease_until' => null]);
+        };
+        $run = $this->advance($run); $dns = \App\Models\MachineFailoverDnsRun::query()->first();
+        $this->assertSame('dispatched', $dns->payload['plan']['actions'][0]['state']);
+        $this->assertSame(0, $dns->payload['writes']); $this->assertSame(1, $this->dnsWrites);
+        $run = $this->finishSets($run); $this->assertSame('completed', $run['status'], json_encode($run)); $this->assertSame(2, $this->dnsWrites);
+    }
+    public function test_source_recovery_after_one_family_write_is_review_not_clean_retention(): void
+    {
+        $run = $this->ready($this->advance($this->startSets())); $run = $this->advance($run);
+        $this->assertSame(1, $this->dnsWrites); $this->sourceReport($this->fixtures[0], true, time() + 1);
+        $run = $this->finishSets($run); $this->assertSame('needs_review', $run['status'], json_encode($run));
+        $this->assertSame(1, $this->dnsWrites); $this->assertSame('needs_review', \App\Models\MachineFailoverDnsRun::query()->first()->status);
+        $this->assertSame('active', MachineOwnedInstance::query()->where('task_id', $this->fixtures[0]['source']->id)->value('status'));
+    }
+    public function test_candidate_address_challenge_is_not_reissued_after_a_worker_crash(): void
+    {
+        $run = $this->advance($this->startSets());
+        $this->duringVerification = function ($challenge) {
+            if ($challenge['schema'] !== 2) return;
+            $proof = \App\Models\MachineNativeAddressProof::query()->findOrFail($challenge['challenge_id']);
+            $this->assertSame('issued', $proof->state); $this->assertSame(0, DB::transactionLevel());
+            $proof->fill(['state' => 'interrupted'])->save();
+        };
+        $run = $this->ready($run); $this->assertSame('needs_review', $run['status'], json_encode($run));
+        $this->assertSame(0, $this->dnsWrites); $this->assertSame(2, $this->verifications);
+        $attempt = Attempt::query()->first(); $instance = MachineOwnedInstance::query()->where('task_id', $attempt->task_id)->first();
+        $this->code('native_intent_expired', fn () => app(\App\Services\ServerMachine\Cloud\MachineNativeAddressProofs::class)->ensure($attempt, $instance));
+        $this->assertSame(2, $this->verifications);
+    }
+    public function test_all_live_native_and_http_gates_remain_closed_even_with_valid_simulated_receipts(): void
+    {
+        $run = $this->ready($this->advance($this->startSets())); $attempt = Attempt::query()->first();
+        $instance = MachineOwnedInstance::query()->where('task_id', $attempt->task_id)->first(); $dns = \App\Models\MachineFailoverDnsRun::query()->first();
+        app()->instance(MachineFailoverExecutionGate::class, new MachineFailoverExecutionGate());
+        Http::swap(new \Illuminate\Http\Client\Factory()); Http::preventStrayRequests(); Http::fake();
+        $this->code('orchestration_disabled', fn () => app(\App\Services\ServerMachine\Cloud\MachineNativeAddressProofs::class)->ensure($attempt, $instance));
+        $this->code('orchestration_disabled', fn () => app(\App\Services\ServerMachine\Cloud\MachineNativeDnsAdmission::class)->prepare($attempt, $instance));
+        $this->code('orchestration_disabled', fn () => app(\App\Services\ServerMachine\Dns\MachineDnsRecordSetExecution::class)->tick($dns->id, $this->admin->id));
+        $this->code('orchestration_disabled', fn () => app(\App\Services\ServerMachine\Dns\MachineDnsRecordSetHttpTransport::class)->inventory($dns->id, $dns->payload['snapshot']['set']));
+        Http::assertNothingSent(); $this->assertSame(0, $this->dnsWrites);
+        $this->assertSame(2, \App\Models\MachineNativeAddressProof::count()); $this->assertSame('running', Execution::query()->find($run['id'])->status);
+    }
+    public function test_prepare_interruption_between_sets_reuses_the_existing_child_and_address_proofs(): void
+    {
+        $run = $this->advance($this->startSets(['A', 'AAAA'], 'cloudflare', 2)); $task = $this->task();
+        $this->assertTrue(app(MachineProvisionService::class)->callback($task->id, $task->installation_id, $this->callbackSecret($task), 'succeeded'));
+        $task->refresh()->fill(['dispatched_at' => time() - 2, 'next_check_at' => 0])->save();
+        $this->report($this->fixtures[0], $task, $task->public_ips[0], true, time());
+        $this->duringDnsRead = function () {
+            if (\App\Models\MachineFailoverDnsRun::count() === 1) throw new ConnectionException('isolated preparation interruption');
+        };
+        try {
+            // Invoke the step without the outer supervisor to model a worker dying between durable child commits.
+            (new \ReflectionMethod(MachineFailoverNativeBridge::class, 'step'))->invoke(app(MachineFailoverNativeBridge::class), Member::query()->first(), Execution::query()->first());
+            $this->fail('Expected interrupted read');
+        } catch (\App\Services\ServerMachine\Dns\DnsRequestFailure $error) { $this->assertSame('provider_unavailable', $error->getMessage()); }
+        $original = \App\Models\MachineFailoverDnsRun::query()->firstOrFail()->id;
+        $this->assertSame(1, \App\Models\MachineFailoverDnsRun::count()); $this->assertSame(3, $this->verifications); $this->assertSame(0, $this->dnsWrites);
+        $this->duringDnsRead = null; $run = $this->finishSets($run);
+        $this->assertSame('completed', $run['status'], json_encode($run)); $this->assertSame(2, \App\Models\MachineFailoverDnsRun::count());
+        $this->assertNotNull(\App\Models\MachineFailoverDnsRun::query()->find($original));
+        $this->assertSame(4, $this->dnsWrites); $this->assertSame(3, $this->verifications); $this->assertCount(1, $this->posts);
+    }
+    public function test_missing_source_dns_record_is_not_silently_created_or_adopted(): void
+    {
+        $run = $this->advance($this->startSets());
+        foreach ($this->records as $id => $record) if (($record['name'] ?? null) === 'native-sets.example.test' && $record['type'] === 'AAAA') unset($this->records[$id]);
+        $run = $this->ready($run); $this->assertSame('needs_review', $run['status'], json_encode($run));
+        $this->assertSame('native_dns_source_unverified', $run['members'][0]['reason']);
+        $this->assertSame(0, $this->dnsWrites); $this->assertSame(0, \App\Models\MachineFailoverDnsRun::count());
+    }
+    public function test_completed_dns_journal_or_simulation_cannot_replace_fresh_native_address_proofs(): void
+    {
+        $run = $this->ready($this->advance($this->startSets())); $dns = \App\Models\MachineFailoverDnsRun::query()->first();
+        $p = $dns->payload; $p['native_binding']['origin'] = 'synthetic'; $dns->fill(['payload' => $p, 'status' => 'completed'])->save();
+        $run = $this->finishSets($run); $this->assertSame('needs_review', $run['status'], json_encode($run));
+        $this->assertSame(0, $this->dnsWrites); $this->assertSame('awaiting_acceptance', $this->task()->status);
+        $this->assertSame('active', MachineOwnedInstance::query()->where('task_id', $this->fixtures[0]['source']->id)->value('status'));
+    }
+    public function test_completed_flag_without_actual_provider_publication_cannot_activate_a_candidate(): void
+    {
+        $run = $this->ready($this->advance($this->startSets())); $dns = \App\Models\MachineFailoverDnsRun::query()->first();
+        $p = $dns->payload; foreach ($p['plan']['actions'] as &$a) $a['state'] = 'verified'; unset($a);
+        $dns->fill(['payload' => $p, 'status' => 'completed', 'cursor' => count($p['plan']['actions'])])->save();
+        \App\Models\MachineDnsSetRuntime::query()->whereKey($dns->id)->update(['finished_at' => time()]);
+        $run = $this->finishSets($run); $this->assertSame('needs_review', $run['status'], json_encode($run));
+        $this->assertSame(0, $this->dnsWrites); $this->assertSame('awaiting_acceptance', $this->task()->status);
+    }
+    public function test_dns_change_after_kernel_readback_is_rechecked_before_candidate_activation(): void
+    {
+        $run = $this->ready($this->advance($this->startSets()));
+        for ($i = 0; $i < 10 && \App\Models\MachineFailoverDnsRun::query()->first()->status !== 'completed'; $i++) $run = $this->advance($run);
+        $this->assertSame('completed', \App\Models\MachineFailoverDnsRun::query()->first()->status);
+        foreach ($this->records as &$record) if (($record['name'] ?? null) === 'native-sets.example.test' && $record['type'] === 'A') $record['content'] = '1.0.0.1'; unset($record);
+        $run = $this->finishSets($run); $this->assertSame('needs_review', $run['status'], json_encode($run));
+        $this->assertSame(2, $this->dnsWrites); $this->assertSame('awaiting_acceptance', $this->task()->status);
+        $this->assertSame('active', MachineOwnedInstance::query()->where('task_id', $this->fixtures[0]['source']->id)->value('status'));
+    }
+    public static function stopStages(): array { return [[false], [true]]; }
+    #[DataProvider('stopStages')]
+    public function test_parent_stop_fences_native_dns_children_without_replay_or_rollback(bool $written): void
+    {
+        $run = $this->ready($this->advance($this->startSets()));
+        if ($written) $run = $this->advance($run);
+        (require base_path('database/migrations/2026_11_07_220000_create_machine_failover_runtime.php'))->up();
+        $runtime = \App\Models\MachineFailoverRuntime::query()->create(['execution_id' => $run['id']]);
+        $view = app(\App\Services\ServerMachine\Cloud\MachineFailoverRunner::class)->stop($run['id'], $runtime->fresh()->revision, str_repeat('a', 32), $this->admin->id);
+        $this->assertSame('stopped', $view['state']);
+        $this->assertSame($written ? 'needs_review' : 'retained', Member::query()->first()->phase);
+        $this->assertSame($written ? 'needs_review' : 'stopped', \App\Models\MachineFailoverDnsRun::query()->first()->status);
+        $child = \App\Models\MachineDnsSetRuntime::query()->first(); $this->assertNotNull($child->stop_requested_at); $this->assertNull($child->lease_hash);
+        app(\App\Services\ServerMachine\Dns\MachineDnsRecordSetExecution::class)->tick($child->run_id, $this->admin->id);
+        $this->assertSame($written ? 1 : 0, $this->dnsWrites); $this->assertCount(1, $this->posts);
+        $this->assertSame('active', MachineOwnedInstance::query()->where('task_id', $this->fixtures[0]['source']->id)->value('status'));
+    }
+    public static function addressFailures(): array
+    {
+        return array_map(fn ($field) => [$field], ['legacy', 'address_family', 'target_ip', 'task_id', 'installation_id', 'attempt_id',
+            'native_context_sha256', 'source_installation_id', 'session', 'binary_sha256', 'configuration_fingerprint', 'udp_missing', 'cleanup']);
+    }
+    #[DataProvider('addressFailures')]
+    public function test_native_rejects_unbound_or_incomplete_address_receipts_before_dns(string $failure): void
+    {
+        $run = $this->advance($this->startSets()); $this->addressFailure = $failure; $run = $this->ready($run);
+        $this->assertSame('needs_review', $run['status'], json_encode($run)); $this->assertSame(0, $this->dnsWrites);
+        $this->assertSame(0, \App\Models\MachineFailoverDnsRun::count());
+        $this->assertSame('failed', \App\Models\MachineNativeAddressProof::query()->first()->state);
+        $this->assertSame('active', MachineOwnedInstance::query()->where('task_id', $this->fixtures[0]['source']->id)->value('status'));
+        $calls = $this->verifications; $this->advance($run); $this->assertSame($calls, $this->verifications);
+    }
     #[DataProvider('jsonProviders')]
     public function test_json_providers_complete_the_pinned_create_report_forwarding_dns_chain(string $provider): void
     {

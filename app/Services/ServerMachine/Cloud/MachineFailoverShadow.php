@@ -25,7 +25,7 @@ class MachineFailoverShadow
         foreach ($snapshot['members'] as $member) {
             if (now()->getTimestamp() - $now > 10) throw new CloudException('shadow_read_expired');
             $policy = Policy::query()->findOrFail($member['policy_id']);
-            $fact = $this->adapter->read($policy, $now); $source = $fact['source']; $blockers = $fact['blockers'];
+            $fact = $this->adapter->read($policy, $now, $snapshot); $source = $fact['source']; $blockers = $fact['blockers'];
             if ($source['state'] !== 'unknown' && is_int($source['valid_until'])) $validUntil = min($validUntil, $source['valid_until']);
             $decision = $source['state'] === 'healthy' ? 'healthy' : (!$source['evidence_current'] ? 'insufficient_evidence'
                 : (!$source['threshold_reached'] ? 'awaiting_samples' : ($blockers ? 'blocked' : 'would_replace')));

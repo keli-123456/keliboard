@@ -2069,9 +2069,9 @@ The next increment replaces the payload-only DNS simulator with a shared
 public rehearsal still always selects the synthetic transport. Native
 initialization, the HTTP transport and the low-level record-set HTTP methods all
 check the unchanged, unconditional `MachineFailoverExecutionGate`. There is no
-new live route or setting that bypasses it. The existing scalar native bridge
-still rejects record-set services: this increment does not invent or authorize
-the missing native candidate/address-family acceptance binding.
+new live route or setting that bypasses it. At this increment the scalar native
+bridge still rejected record-set services; the subsequent closed native binding
+is described below.
 
 `2026_11_09_200000_create_machine_dns_set_runtime.php` adds a per-run runtime row
 and a separate encrypted provider-fixture ledger. A runtime owns a 120-second
@@ -2144,13 +2144,108 @@ The synchronization rechecked 124 focused backend tests / 1,798 assertions and
 74 focused admin tests. The synced asset hashes, cache-busting references and
 clean source commit in `build-manifest.json` were verified locally.
 
-Still required before any future live activation: native candidate/source
-identity and fresh independent forwarding proof for every published family,
-explicitly scoped acceptance/admission binding, isolated MySQL/Redis concurrent
-worker/crash acceptance, account-specific DNS line/edition/TTL permissions,
+Still required before any future live activation: real candidate/source
+identity and fresh independent forwarding acceptance for every published family,
+isolated MySQL/Redis concurrent worker/crash acceptance of the native binding,
+account-specific DNS line/edition/TTL permissions,
 real provider receipt reconciliation and external DNS/TTL propagation checks.
 Unit tests and the synthetic fixture are not that authorization or evidence.
 
 Wire references: [Aliyun add](https://help.aliyun.com/en/dns/api-alidns-2015-01-09-adddomainrecord),
 [Aliyun ownership remark](https://help.aliyun.com/en/dns/api-alidns-2015-01-09-updatedomainrecordremark),
 [Aliyun exact subdomain inventory](https://help.aliyun.com/en/dns/api-alidns-2015-01-09-describesubdomainrecords).
+
+### Native Candidate and Address Proof Binding (Closed)
+
+The native bridge now selects the record-set admission path when a service has
+DNS sets, while preserving the legacy single-A path for services without sets.
+It still checks the unconditional execution gate before every entry. There is
+no new public activation route, gate relaxation or default-enable setting.
+Service-scoped shadow and native admission validate the registered set's
+credentials/revisions and membership instead of requiring dummy legacy
+Cloudflare configuration. Independent legacy policy/single-A checks remain
+unchanged; a caller-supplied unregistered snapshot cannot replace those checks.
+
+`2026_11_10_010000_create_machine_native_address_proofs.php` is additive and
+retains its audit on downgrade. The admission pins all managed source members
+and their accepted task, held cloud resource, installation, provider creation
+identity, release and selected A/AAAA values. Unknown or ambiguous addresses
+fail closed. It requires exact existing ownership for every source slot before
+preparing a replacement; this is not an importer or bootstrap/adoption path.
+
+Each published family requires its own schema-2 signed worker challenge. The
+full contract is in `machine-acceptance-verifier.md`. Addresses must belong to
+the same candidate task, held resource, fresh identified Agent report and
+fresh provider identity. A request's observed source IP or another Agent's
+IPv6 is insufficient. Every requested node needs authenticated TCP and UDP
+echoes plus cleanup. Proof IDs, request/receipt/context hashes and application-
+key seals bind the original attempt to the candidate, process, release, expected
+configuration, topology and verifier. The generic IPv4 acceptance is retained
+but cannot substitute for either native family proof. Nothing changes the
+IPv4-only domestic probe rule or the node binary.
+
+Each DNS child has its own durable original intent and sealed publication plan,
+inventory, source pins and proof links. Changed identity, stale proof, revoked
+permission or synthetic/unbound receipt cannot authorize a write. The existing
+kernel rechecks this binding at preparation, execution, just before dispatch
+and final completion. No cloud/verifier/DNS I/O runs in SQL transactions.
+Prepared child links are reused after interruption, not replaced with new
+requests. A lost acknowledgement or superseded worker lease can only reconcile
+the original recorded operation, never resend the mutation.
+
+Cloud creation can retain its existing concurrency, but DNS handoff is
+serialized across members of one service. A later member rebases only onto a
+sealed, completed handoff from that same execution, not an arbitrary new
+active instance. Partial or uncertain earlier handoffs block later members.
+The runner respects persisted DNS due times and can promptly advance due native
+DNS steps without changing queue routing, worker counts or resource limits.
+Proof validity is not extended: a slow/throttled or large handoff that exceeds
+its freshness budget requires review rather than automatic re-verification.
+
+All required DNS children must pass fresh complete readback before one SQL
+transaction activates the candidate, retains the old source, records a sealed
+completion and marks the member/attempt complete. Completed-task reporting
+checks that sealed original lineage rather than a bare success flag. Existing
+unrelated scalar DNS records are not migrated or deleted. Service-provider
+readback is not global DNS/TTL propagation evidence.
+Activation also independently reads all required provider inventories again
+outside SQL and checks their captured timestamps and journal digests inside the
+commit. A completed flag with unpublished records or an intervening DNS change
+cannot substitute for that readback. Before a persisted DNS due time the native
+bridge does not poll the cloud or verifier just to wait.
+
+Parent stop revokes child lease generations locally. Undispatched children stop;
+any dispatched/partial or unknown outcome is retained for review. Late replies
+cannot complete or clear a successor lease. Source recovery after a partial
+handoff is review, not a clean retention or an automatic reverse cutover.
+
+Only in-memory SQLite, fake cloud/DNS HTTP and fake signed verifier receipts
+are used for this round. Worker unit tests mock client measurement. Production,
+real MySQL/Redis, cloud accounts, DNS, node processes, queue/Horizon settings and
+tanzhen are untouched. Actual isolated multi-worker native acceptance, live
+per-family forwarding, provider/DNS permission checks and external propagation
+remain required. Real creation, automatic rotation and DNS cutover remain off.
+
+Local validation for this increment: the final backend Unit suite passed 3,788
+tests / 27,876 assertions. The preceding focused native/registry/shadow/admission
+regression passed 290 tests / 5,453 assertions, with subsequent targeted checks
+for due-time waiting, final provider readback and replacement-policy binding.
+All 12 added/changed PHP files passed syntax checks and `git diff --check`
+passed. The worker passed 11 unit tests; five optional real-protocol loopback
+tests were skipped without explicitly configured binaries. No real forwarding
+or public IPv6 acceptance is claimed. Only backend, verifier source/tests and
+documentation changed; admin and node worktrees remain unchanged. This round
+was implemented without publishing, deployment or production migrations.
+
+The subsequent source-only synchronization includes this native admission,
+candidate identity and address-family proof binding together with its migration,
+worker contract, tests and documentation. The commit uses `[skip ci]` to avoid
+automatic CI-triggered image publishing; it does not dispatch an acceptance or
+release workflow. Existing admin assets remain unchanged and pass their manifest
+verification. Real automatic creation, credential rotation and DNS cutover stay
+disabled. No production database, cloud account, DNS, node, queue/Horizon setting
+or tanzhen resource/scheduler is accessed or changed by this synchronization.
+The synchronization rechecked 293 focused backend tests / 5,640 assertions,
+12 PHP syntax checks, the unchanged admin asset manifest and 11 worker unit
+tests. The five optional real-protocol tests remain skipped without configured
+binaries; no real cloud, DNS or public IPv6 acceptance is implied.

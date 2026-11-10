@@ -49,6 +49,51 @@ class WorkerFixture:
         return raw, hmac.new(self.verifier.key, b"request\n" + raw, "sha256").hexdigest()
 
 class WorkerTests(WorkerFixture, unittest.TestCase):
+    def native(self, family="AAAA"):
+        target = "2600:3c00::100" if family == "AAAA" else "8.8.8.8"
+        self.config["profiles"]["test-profile"]["allowed_targets"] = [target]
+        self.request.update(schema=2, address_family=family, target_ip=target, attempt_id=str(uuid.uuid4()),
+                            native_context_sha256="e" * 64, source_installation_id="f" * 32)
+
+    def test_native_receipts_bind_each_family_and_original_candidate_context(self):
+        for family in ["A", "AAAA"]:
+            with self.subTest(family=family):
+                self.native(family); self.request["challenge_id"] = secrets.token_hex(16)
+                with patch.object(self.verifier, "measure", return_value=({"node_id": 10}, True)) as measure:
+                    receipt = self.verifier.handle(*self.signed())
+                self.assertEqual(receipt["schema"], 2)
+                for field in ["address_family", "target_ip", "task_id", "installation_id", "attempt_id", "native_context_sha256",
+                              "source_installation_id", "session", "binary_sha256", "configuration_fingerprint"]:
+                    self.assertEqual(receipt[field], self.request[field])
+                self.assertEqual(measure.call_count, 1)
+                with patch.object(self.verifier, "measure") as measure, self.assertRaisesRegex(worker.Rejected, "challenge_replayed"):
+                    worker.Verifier(self.config).handle(*self.signed())
+                measure.assert_not_called()
+
+    def test_native_malformed_cross_family_and_non_public_targets_never_launch(self):
+        self.native(); original = json.dumps(self.request)
+        mutations = [dict(address_family="A"), dict(address_family="AAAA", target_ip="8.8.8.8"), dict(target_ip="::1"),
+                     dict(target_ip="fe80::1"), dict(target_ip="fd00::1"), dict(target_ip="2001:db8::1"),
+                     dict(target_ip="2002:808:808::1"), dict(target_ip="64:ff9b::808:808"), dict(target_ip="::ffff:8.8.8.8"),
+                     dict(target_ip="2600:3c00::200"), dict(target_ip="2600:3c00:0:0::100"), dict(target_ip="https://example.test"),
+                     dict(source_installation_id="a" * 32), dict(native_context_sha256="wrong"), dict(attempt_id="wrong")]
+        for change in mutations:
+            with self.subTest(change=change):
+                self.request = json.loads(original); self.request.update(change)
+                with patch.object(self.verifier, "measure") as measure, self.assertRaises(worker.Rejected):
+                    self.verifier.handle(*self.signed())
+                measure.assert_not_called()
+
+    def test_legacy_challenge_cannot_publish_ipv6_or_smuggle_native_fields(self):
+        self.config["profiles"]["test-profile"]["allowed_targets"] = ["2600:3c00::100"]
+        self.request["target_ip"] = "2600:3c00::100"
+        with patch.object(self.verifier, "measure") as measure, self.assertRaises(worker.Rejected):
+            self.verifier.handle(*self.signed())
+        measure.assert_not_called()
+        self.request.update(target_ip="8.8.8.8", address_family="A")
+        with self.assertRaises(worker.Rejected):
+            self.verifier.validate(self.request)
+
     def test_no_launch_without_a_valid_signature(self):
         with patch.object(self.verifier, "measure") as measure, self.assertRaisesRegex(worker.Rejected, "unauthorized"):
             self.verifier.handle(self.signed()[0], "0" * 64)

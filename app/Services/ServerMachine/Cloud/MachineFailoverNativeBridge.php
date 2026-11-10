@@ -43,7 +43,6 @@ class MachineFailoverNativeBridge
         $result = $this->registry->locked(fn () => DB::transaction(function () use ($service, $revision, $planIds, $releaseId, $request, $admin, $admission) {
             $this->gate->assertAllowed('start'); $this->registry->actor($admin);
             $snapshot = $this->registry->snapshot($service, $revision);
-            if (!empty($snapshot['dns_sets'])) throw new CloudException('dns_set_simulation_only');
             $release = $this->release($releaseId);
             $intent = $admission === null ? $this->hash([$service, $revision, $planIds, $release])
                 : hash('sha256', MachineIntentJson::encode([$service, $revision, $planIds, $release, $admission]));
@@ -54,6 +53,11 @@ class MachineFailoverNativeBridge
                 return $this->report($old->id, $admin);
             }
             if (Execution::query()->where('service_id', $service)->where('status', 'running')->exists()) throw new CloudException('run_active');
+            $sources = [];
+            if (!empty($snapshot['dns_sets'])) {
+                $sources = app(MachineNativeDnsAdmission::class)->pinSources($snapshot);
+                if (\App\Models\MachineFailoverDnsRun::query()->where('service_id', $service)->where('status', 'running')->exists()) throw new CloudException('dns_set_busy');
+            }
             $rows = []; $seen = [];
             foreach ($planIds as $id) {
                 $plan = Plan::query()->findOrFail($id);
@@ -63,21 +67,28 @@ class MachineFailoverNativeBridge
                 $seen[$match[0]['id']] = true;
                 $policy = Policy::query()->findOrFail($plan->policy_id);
                 $input = $this->input($policy, app(MachineFailoverCredentials::class)->context($policy));
-                $source = app(MachineReplacementService::class)->validate($id, $input);
+                $source = app(MachineReplacementService::class)->validate($id, $input, null, null, $sources ? $snapshot : null);
                 $active = MachineOwnedInstance::query()->where('active_policy_id', $policy->id)->firstOrFail();
-                $dns = MachineOwnedDns::query()->where('policy_id', $policy->id)->first();
-                if (!$dns || $dns->status !== 'live' || !$dns->record_id || $dns->active_instance_id !== $active->id || $dns->ip !== $active->ip
-                    || $dns->credential_id !== $policy->dns_credential_id || $dns->credential_revision !== $policy->dns_credential_revision
-                    || $dns->hostname !== $policy->dns_hostname) throw new CloudException('dns_ownership_changed');
+                if ($sources) {
+                    app(MachineNativeDnsAdmission::class)->families($snapshot, $match[0]['id']);
+                    $dnsPayload = ['dns_source' => $sources[$match[0]['id']]];
+                } else {
+                    $dns = MachineOwnedDns::query()->where('policy_id', $policy->id)->first();
+                    if (!$dns || $dns->status !== 'live' || !$dns->record_id || $dns->active_instance_id !== $active->id || $dns->ip !== $active->ip
+                        || $dns->credential_id !== $policy->dns_credential_id || $dns->credential_revision !== $policy->dns_credential_revision
+                        || $dns->hostname !== $policy->dns_hostname) throw new CloudException('dns_ownership_changed');
+                    $dnsPayload = ['dns' => $dns->only(['id', 'revision', 'zone', 'record_id', 'marker', 'ip', 'active_instance_id'])];
+                }
                 if (Member::query()->where('episode_key', $source['episode_key'])->exists()) throw new CloudException('replacement_episode_used');
                 $rows[] = ['member_id' => $match[0]['id'], 'policy_id' => $policy->id, 'policy_revision' => $policy->revision, 'plan_id' => $id,
                     'episode_key' => $source['episode_key'], 'payload' => ['source' => $source, 'priority' => $match[0]['priority'],
-                        'source_instance_id' => $active->id, 'dns' => $dns->only(['id', 'revision', 'zone', 'record_id', 'marker', 'ip', 'active_instance_id'])]];
+                        'source_instance_id' => $active->id] + $dnsPayload];
             }
             if ($admission !== null) app(MachineFailoverAdmission::class)->assertStart($admission, $snapshot, $release, array_column($rows, 'episode_key', 'plan_id'));
             $run = Execution::query()->create(['id' => (string) Str::uuid(), 'service_id' => $service, 'service_revision' => $revision,
                 'admin_id' => $admin, 'request_key' => $key, 'intent_hash' => $intent, 'context_hash' => $this->registry->fingerprint($snapshot),
-                'payload' => ['snapshot' => $snapshot, 'release' => $release] + ($admission === null ? [] : ['admission' => $admission]), 'deadline_at' => time() + 1200]);
+                'payload' => ['snapshot' => $snapshot, 'release' => $release] + ($sources ? ['dns_sources' => $sources] : [])
+                    + ($admission === null ? [] : ['admission' => $admission]), 'deadline_at' => time() + 1200]);
             foreach ($rows as $row) Member::query()->create($row + ['execution_id' => $run->id]);
             return $this->report($run->id, $admin);
         }));
@@ -104,13 +115,15 @@ class MachineFailoverNativeBridge
                 catch (CloudException|DnsException $error) {
                     $reason = $error->getMessage();
                     if (in_array($reason, ['native_lease_lost', 'native_stop_requested', 'runner_disabled'], true)) throw $error;
-                    if (in_array($reason, ['parallel_budget', 'account_reserved'], true)) return;
+                    if (in_array($reason, ['parallel_budget', 'account_reserved', 'dns_set_busy'], true)) return;
                     $attempt = $row->fresh()->attempt_id ? Attempt::query()->find($row->fresh()->attempt_id) : null;
                     $task = $attempt?->task_id ? Task::query()->find($attempt->task_id) : null;
+                    $partial = $attempt && !empty($attempt->payload['dns_set_runs'])
+                        ? DB::transaction(fn () => app(MachineNativeDnsAdmission::class)->stopForAttempt($attempt)) : false;
                     if ($reason === 'source_recovered') {
                         if ($task && !$task->dispatched_at) { app(MachineProvisionService::class)->cancel($task->id, $run->admin_id); $task->refresh(); }
                         if ($attempt) $this->attemptStatus($attempt, $task?->dispatched_at ? 'retained' : 'cancelled');
-                        $this->phase($row, $task?->dispatched_at ? 'retained' : 'cancelled', $reason);
+                        $this->phase($row, $partial ? 'needs_review' : ($task?->dispatched_at ? 'retained' : 'cancelled'), $reason);
                     } else $this->phase($row, 'needs_review', preg_match('/^[a-z_]{1,60}$/D', $reason) ? $reason : 'internal_failure');
                 } catch (\Throwable) { $this->phase($row, 'needs_review', 'internal_failure'); }
             });
@@ -154,7 +167,17 @@ class MachineFailoverNativeBridge
         }
         $payload = $attempt->payload;
         $transition = isset($payload['transition_id']) ? MachineDnsTransition::query()->findOrFail($payload['transition_id']) : null;
-        if (!$transition?->dispatched_at) $this->source($member, $policy);
+        $sets = isset($member->payload['dns_source']);
+        if ($sets) foreach ($payload['dns_set_runs'] ?? [] as $id) {
+            $child = \App\Models\MachineFailoverDnsRun::query()->findOrFail($id);
+            if ($child->status === 'completed') continue;
+            $runtime = \App\Models\MachineDnsSetRuntime::query()->findOrFail($id);
+            if ($child->status === 'running' && $runtime->next_check_at > time()) {
+                $this->phase($member, 'reconciling_dns', 'original_intent_only'); return;
+            }
+            break;
+        }
+        if (!$transition?->dispatched_at && (!$sets || empty($payload['dns_set_runs']))) $this->source($member, $policy);
         if ($transition && $transition->state !== 'verified') {
             if (!$transition->dispatched_at && $transition->deadline_at <= time()) throw new CloudException('dns_intent_expired');
             if ($transition->next_check_at > time()) {
@@ -171,6 +194,7 @@ class MachineFailoverNativeBridge
             $instance = MachineOwnedInstance::query()->findOrFail($row['id']);
         }
         $this->identity($attempt, $task, $instance);
+        if ($sets) app(MachineNativeDnsAdmission::class)->assertTurn($attempt->fresh());
         if ($transition?->state === 'verified') {
             $this->receipt($attempt, 'dns', $task->fresh(), $instance->fresh(), $transition);
             $this->attemptStatus($attempt, 'completed'); $this->phase($member, 'completed'); return;
@@ -183,6 +207,9 @@ class MachineFailoverNativeBridge
             if (!$instance->verification || $instance->verified_until <= time()) throw new CloudException('forwarding_not_verified');
         }
         $acceptance->requireVerified($instance, $policy, $run->admin_id);
+        if ($sets) {
+            $this->recordSets($member, $attempt->fresh(), $instance, $run); return;
+        }
         $this->receipt($attempt, 'forwarding', $task, $instance);
         $this->assertDns($task, $transition?->dispatched_at !== null);
         if (!$transition) {
@@ -200,6 +227,25 @@ class MachineFailoverNativeBridge
         } elseif ($transition->state === 'needs_review' && !$transition->next_check_at) {
             $this->phase($member, 'needs_review', $transition->reason);
         } else $this->phase($member, $transition->dispatched_at ? 'reconciling_dns' : 'awaiting_dns', $transition->reason ?: 'original_intent_only');
+    }
+
+    private function recordSets(Member $member, Attempt $attempt, MachineOwnedInstance $instance, Execution $run): void
+    {
+        $admission = app(MachineNativeDnsAdmission::class);
+        if (empty($attempt->payload['dns_set_runs'])) {
+            app(MachineNativeAddressProofs::class)->ensure($attempt, $instance);
+            $admission->prepare($attempt->fresh(), $instance); $this->phase($member, 'awaiting_dns'); return;
+        }
+        foreach ($admission->prepare($attempt, $instance) as $id) {
+            $dns = \App\Models\MachineFailoverDnsRun::query()->findOrFail($id);
+            if ($dns->status === 'completed') continue;
+            if ($dns->status !== 'running') throw new CloudException($dns->reason ?: 'native_dns_receipt_required');
+            app(\App\Services\ServerMachine\Dns\MachineDnsRecordSetExecution::class)->tick($id, $run->admin_id);
+            $dns->refresh();
+            if (!in_array($dns->status, ['running', 'completed'], true)) throw new CloudException($dns->reason ?: 'native_dns_receipt_required');
+            $this->phase($member, 'reconciling_dns', 'original_intent_only'); return;
+        }
+        $admission->complete($attempt->fresh(), $instance);
     }
 
     private function reserve(Member $member, Execution $run, Policy $policy, ?Attempt $previous = null): Attempt
@@ -325,6 +371,11 @@ class MachineFailoverNativeBridge
         $this->gate->assertAllowed($reconcile ? 'dns_readback' : 'dns_write');
         $attempt = Attempt::query()->findOrFail($id); $this->assertAttempt($attempt, $task);
         $member = Member::query()->findOrFail($attempt->execution_member_id); $policy = Policy::query()->findOrFail($member->policy_id);
+        if (isset($member->payload['dns_source'])) {
+            app(MachineNativeDnsAdmission::class)->sourceForMember($member);
+            if (!$reconcile) $this->source($member, $policy);
+            return;
+        }
         if (!$reconcile) {
             $this->source($member, $policy); $expected = $member->payload['dns'];
             $dns = MachineOwnedDns::query()->find($expected['id']);
@@ -338,6 +389,7 @@ class MachineFailoverNativeBridge
         if ($id === null) return;
         $this->assertDns($task, false); $attempt = Attempt::query()->findOrFail($id);
         $member = Member::query()->findOrFail($attempt->execution_member_id);
+        if (isset($member->payload['dns_source'])) throw new CloudException('native_receipt_mismatch');
         if ($recovery !== null || $zone !== $member->payload['dns']['zone'] || $request !== substr($this->hash([$id, 'dns']), 0, 32)) throw new CloudException('native_receipt_mismatch');
     }
 
@@ -353,6 +405,7 @@ class MachineFailoverNativeBridge
     {
         try {
             $member = Member::query()->findOrFail($attempt->execution_member_id); $run = Execution::query()->findOrFail($member->execution_id);
+            if (isset($member->payload['dns_source'])) return false;
             $expected = $member->payload['dns']; $instance = MachineOwnedInstance::query()->where('task_id', $task->id)->firstOrFail();
             return $this->bindingCurrent($attempt, $task)
                 && $transition->request_key === hash('sha256', $run->admin_id . ':' . substr($this->hash([$attempt->id, 'dns']), 0, 32))

@@ -51,6 +51,17 @@ def public_ipv4(value):
         return False
 
 
+def public_ipv6(value):
+    try:
+        address = ipaddress.ip_address(value)
+        excluded = ["2001::/23", "2001:db8::/32", "2002::/16"]
+        return (isinstance(value, str) and address.version == 6 and address.is_global
+                and address in ipaddress.ip_network("2000::/3") and str(address) == value
+                and not any(address in ipaddress.ip_network(net) for net in excluded))
+    except (ValueError, TypeError):
+        return False
+
+
 def private_file(path, limit=131072):
     path = Path(path)
     require(path.is_absolute() and not path.is_symlink() and path.is_file(), "invalid_private_file")
@@ -105,7 +116,10 @@ class Verifier:
 
     def validate(self, request):
         fields = {"schema", "challenge_id", "issued_at", "deadline_at", "profile", "task_id", "installation_id", "target_ip", "configuration_fingerprint", "session", "binary_sha256", "nodes", "echo_frames", "echo_sha256"}
-        require(isinstance(request, dict) and set(request) == fields and type(request["schema"]) is int and request["schema"] == 1)
+        require(isinstance(request, dict) and type(request.get("schema")) is int and request["schema"] in (1, 2))
+        if request["schema"] == 2:
+            fields |= {"address_family", "attempt_id", "native_context_sha256", "source_installation_id"}
+        require(set(request) == fields)
         now = int(time.time())
         require(integer(request["issued_at"], now - 45, now + 3) and integer(request["deadline_at"], now + 1, now + 48)
                 and request["deadline_at"] == request["issued_at"] + 45, "challenge_expired")
@@ -115,14 +129,23 @@ class Verifier:
             require(str(uuid.UUID(request["task_id"])) == request["task_id"])
         except (ValueError, AttributeError, TypeError):
             raise Rejected("invalid_request") from None
-        require(public_ipv4(request["target_ip"]), "target_not_allowed")
+        if request["schema"] == 2:
+            require(request["address_family"] in ("A", "AAAA") and hex_value(request["native_context_sha256"], 64)
+                    and hex_value(request["source_installation_id"], 32)
+                    and request["source_installation_id"] != request["installation_id"])
+            try:
+                require(str(uuid.UUID(request["attempt_id"])) == request["attempt_id"])
+            except (ValueError, AttributeError, TypeError):
+                raise Rejected("invalid_request") from None
+        require((public_ipv6 if request.get("address_family") == "AAAA" else public_ipv4)(request["target_ip"]), "target_not_allowed")
         require(isinstance(request["profile"], str) and re.fullmatch(r"[a-z0-9_-]{1,64}", request["profile"]), "profile_not_configured")
         profile = self.profiles.get(request["profile"])
         require(isinstance(profile, dict) and set(profile) == {"isolated", "expires_at", "allowed_targets", "echo_address", "echo_port", "nodes"}
                 and profile["isolated"] is True, "profile_not_configured")
         require(integer(profile["expires_at"], now + 30, now + 3600), "profile_expired")
         require(isinstance(profile["allowed_targets"], list) and len(profile["allowed_targets"]) <= 16
-                and request["target_ip"] in profile["allowed_targets"] and all(public_ipv4(ip) for ip in profile["allowed_targets"]), "target_not_allowed")
+                and request["target_ip"] in profile["allowed_targets"]
+                and all(public_ipv4(ip) or public_ipv6(ip) for ip in profile["allowed_targets"]), "target_not_allowed")
         try:
             echo = ipaddress.ip_address(profile["echo_address"])
             require(str(echo) == profile["echo_address"] and not echo.is_unspecified and not echo.is_multicast and not echo.is_link_local, "invalid_echo_target")
@@ -201,8 +224,12 @@ class Verifier:
                 cleanup = cleanup and cleaned
                 if not cleaned:
                     break
-            return {"schema": 1, "challenge_id": request["challenge_id"], "request_sha256": hashlib.sha256(raw).hexdigest(),
-                    "finished_at": int(time.time()), "cleanup_complete": cleanup, "results": results}
+            receipt = {"schema": request["schema"], "challenge_id": request["challenge_id"], "request_sha256": hashlib.sha256(raw).hexdigest(),
+                       "finished_at": int(time.time()), "cleanup_complete": cleanup, "results": results}
+            if request["schema"] == 2:
+                receipt.update({key: request[key] for key in ("address_family", "target_ip", "task_id", "installation_id", "attempt_id",
+                                "native_context_sha256", "source_installation_id", "session", "binary_sha256", "configuration_fingerprint")})
+            return receipt
         finally:
             self.mutex.release()
 

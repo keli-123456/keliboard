@@ -130,8 +130,14 @@ class MachineFailoverRunner
                     $row = Runtime::query()->whereKey($id)->lockForUpdate()->firstOrFail();
                     if (!$this->owns($row, $generation, $ticket)) return;
                     $urgent = Member::query()->where('execution_id', $id)->where('phase', 'retry_ready')->exists()
-                        || Member::query()->where('execution_id', $id)->where('phase', 'awaiting_dns')->get()->contains(function ($member) {
+                        || Member::query()->where('execution_id', $id)->whereIn('phase', ['awaiting_dns', 'reconciling_dns'])->get()->contains(function ($member) {
                             $attempt = $member->attempt_id ? Attempt::query()->find($member->attempt_id) : null;
+                            if (!empty($attempt?->payload['dns_set_runs'])) {
+                                $children = \App\Models\MachineDnsSetRuntime::query()->whereIn('run_id', array_values($attempt->payload['dns_set_runs']))->get();
+                                $pending = $children->whereNull('finished_at');
+                                return $pending->isEmpty() || $pending->contains(fn ($child) => !$child->stop_requested_at && (!$child->next_check_at || $child->next_check_at <= time()));
+                            }
+                            if ($member->phase !== 'awaiting_dns') return false;
                             $transition = isset($attempt?->payload['transition_id']) ? MachineDnsTransition::query()->find($attempt->payload['transition_id']) : null;
                             return !$transition || $transition->next_check_at <= time();
                         });
@@ -247,7 +253,8 @@ class MachineFailoverRunner
                     $dns = isset($attempt->payload['transition_id']) ? MachineDnsTransition::query()->find($attempt->payload['transition_id']) : null;
                     if ($dns && (!$task || !app(MachineFailoverNativeBridge::class)->transitionCurrent($attempt, $task, $dns))) { $phase = 'needs_review'; continue; }
                     if ($dns && !$dns->dispatched_at && $dns->state === 'prepared') $dns->fill(['state' => 'cancelled', 'reason' => 'native_stop_requested'])->save();
-                    $uncertain = $dns?->dispatched_at || $task?->dispatched_at && !$task->external_id;
+                    $setUncertain = app(MachineNativeDnsAdmission::class)->stopForAttempt($attempt);
+                    $uncertain = $setUncertain || $dns?->dispatched_at || $task?->dispatched_at && !$task->external_id;
                     $held = $task !== null && $task->external_id !== null;
                     $next = $uncertain ? 'needs_review' : ($held ? 'retained' : 'cancelled');
                     if ($next === 'needs_review' || $phase !== 'needs_review' && $next === 'retained') $phase = $next;

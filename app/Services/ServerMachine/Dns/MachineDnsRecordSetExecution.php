@@ -26,6 +26,7 @@ class MachineDnsRecordSetExecution
         if ($mode !== 'simulation') $this->gate->assertAllowed('dns_set_start');
         if (!$this->available()) throw new CloudException('migration_required');
         if (!in_array($mode, ['native', 'simulation'], true) || Runtime::query()->whereKey($run->id)->exists()) throw new CloudException('dns_original_intent_only');
+        if ($mode === 'native') app(\App\Services\ServerMachine\Cloud\MachineNativeDnsAdmission::class)->guard($run, false);
         $p = $run->payload; $p['engine_version'] = 2; $p['deadline_at'] = $this->now() + 1800;
         foreach ($p['plan']['actions'] as &$action) { $action['seal'] = $this->seal($action); $action['readback_attempts'] = 0; }
         unset($action); $run->payload = $p; $run->save();
@@ -159,18 +160,20 @@ class MachineDnsRecordSetExecution
     private function save(Run $run, array $p, string $token, int $generation, ?string $status = null, ?string $reason = null, ?int $next = null, bool $dispatch = false): bool
     {
         return DB::transaction(function () use ($run, $p, $token, $generation, $status, $reason, $next, $dispatch) {
+            if ($this->runtime($run->id)->mode === 'native')
+                app(\App\Services\ServerMachine\Cloud\MachineNativeDnsAdmission::class)->lockParent($run);
             $r = Runtime::query()->whereKey($run->id)->lockForUpdate()->firstOrFail();
             if (!$this->owns($r, $token, $generation) || $dispatch && $r->stop_requested_at) return false;
             $current = Run::query()->whereKey($run->id)->lockForUpdate()->firstOrFail();
             if ($current->status !== 'running') return false;
-            if ($dispatch || $status === 'completed') $this->context($current, $current->admin_id, true);
+            if ($dispatch || $status === 'completed') $this->context($current, $current->admin_id, true, $dispatch);
             // A stop arriving during I/O may retain the receipt, but cannot complete the full run.
             $status = $status === 'completed' && $r->stop_requested_at ? 'stopped' : $status;
             $current->fill(['payload' => $p, 'cursor' => $run->cursor, 'reason' => $reason, 'status' => $status ?? 'running'])->save();
             $r->fill(['next_check_at' => $next, 'finished_at' => $status !== null ? $this->now() : null])->save(); return true;
         });
     }
-    private function context(Run $run, int $admin, bool $lock = false): void
+    private function context(Run $run, int $admin, bool $lock = false, bool $dispatch = false): void
     {
         $this->registry->actor($admin);
         if ($lock) {
@@ -180,10 +183,15 @@ class MachineDnsRecordSetExecution
         $snapshot = $this->dns->snapshot($run->set_id, $run->service_revision, $run->set_revision);
         if (!hash_equals($run->context_hash, $this->hash($snapshot))) throw new CloudException('dns_context_changed');
         if ($run->payload['deadline_at'] <= $this->clock($this->runtime($run->id))) throw new CloudException('dns_intent_expired');
+        if ($this->runtime($run->id)->mode === 'native')
+            app(\App\Services\ServerMachine\Cloud\MachineNativeDnsAdmission::class)->guard($run, $dispatch, !$lock);
     }
     private function mayWrite(string $id, string $token, int $generation): bool
     {
-        $r = $this->runtime($id); return !$r->stop_requested_at && $this->owns($r, $token, $generation);
+        $r = $this->runtime($id);
+        if ($r->stop_requested_at || !$this->owns($r, $token, $generation)) return false;
+        if ($r->mode === 'native') app(\App\Services\ServerMachine\Cloud\MachineNativeDnsAdmission::class)->guard(Run::query()->findOrFail($id), true);
+        return true;
     }
     private function owns(Runtime $r, string $token, int $generation): bool
     {
@@ -222,6 +230,11 @@ class MachineDnsRecordSetExecution
             $matches = array_values(array_filter($owned, fn ($r) => $r['marker'] === $wanted['marker']));
             if (count($matches) !== 1 || !$this->planner->same($matches[0], $wanted)) throw new CloudException('dns_set_mismatch');
         }
+    }
+    public function verifyReadback(Run $run, array $records): void
+    {
+        if ($run->status !== 'completed' || $run->cursor !== count($run->payload['plan']['actions'])) throw new CloudException('native_dns_receipt_required');
+        $this->verifySet($run->payload, $records);
     }
     private function equal(array $a, array $b): bool
     {

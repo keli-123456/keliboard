@@ -49,8 +49,10 @@ explicit isolated profile after separate live-test authorization. A profile has:
 
 - `isolated: true` and `expires_at` (epoch, at least 30 seconds in the future and
   no more than one hour ahead). Renewal is explicit, not automatic.
-- `allowed_targets`: exact public IPv4 addresses, not CIDRs, DNS names or metadata
-  addresses. There is **no production loopback override**.
+- `allowed_targets`: exact canonical public IPv4/IPv6 addresses, not CIDRs, DNS
+  names, mapped/transition IPv6 or metadata addresses. Schema 1 remains IPv4-only;
+  schema 2 explicitly binds each target's `A`/`AAAA` family. There is **no
+  production loopback override**.
 - `echo_address` / `echo_port`: an exact fixed isolated destination reachable
   through the candidate. Never a user-selected arbitrary destination.
 - `nodes`: one to four ordered `{id, protocol, port, outbound}` entries. The tuple
@@ -86,6 +88,16 @@ patches the public-address predicate; that option is not exposed in config/CLI.
 Windows loopback passing does not establish Linux sandbox or WAN readiness.
 TUIC/Trojan/VLESS are supported config adapters but still need their own real
 protocol interop fixtures before being recommended for live cutover.
+
+The native record-set path uses schema 2 from
+`docs/machine-acceptance-verifier.md`. It echoes the candidate/task/attempt,
+source installation, family, target, process/configuration and context digest
+inside the signed receipt. It still runs the pinned sing-box protocol client,
+not a ping or an HTTP readiness check. Changing family/target requires a new
+challenge; spent challenges are not replayed after worker restart. The local
+unit tests mock measurement to verify this binding and the address/replay
+policy; they are not a real public IPv6 forwarding acceptance. No worker or
+profile is automatically installed or changed by the panel code.
 
 References: [sing-box direct inbound](https://sing-box.sagernet.org/configuration/inbound/direct/),
 [TLS identity fields](https://sing-box.sagernet.org/configuration/shared/tls/).
