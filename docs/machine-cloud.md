@@ -35,6 +35,57 @@ are never returned by the API. Editing with an empty token retains the stored
 value. Editing an account disarms all its recovery policies. Account deletion
 only removes local cached metadata and is refused while bound or busy.
 
+## Admin Navigation
+
+The server-machine toolbar has a direct **Failover** entry. It opens the existing
+multi-member service workspace, ahead of inventory and credential tabs. Older
+panels fall back to their supported independent drafts or inventory without
+requesting an unsupported orchestration endpoint. The separate **More > Cloud
+Resources** entry and instance-specific cloud links still open inventory.
+
+Inventory retains cloud state, reported identity, addresses, reporting health
+and explicit installation binding. It no longer exposes whole-VM power actions
+or auto-boot switches. **Advanced Maintenance** contains three separate views:
+
+- **Power Tasks** opens first and retains queued, uncertain and historical
+  completed/failed records, including their reasons and timestamps. The existing
+  pre-dispatch cancellation restriction remains; this is not deletion or replay.
+- **Instance Maintenance** retains the existing explicitly confirmed power,
+  auto-boot authorization and recovery-verification controls. Provider and
+  instance identity checks, disabled states and ambiguous-request IDs are unchanged.
+- **Notices** retains the existing cloud notification history and expandable
+  audit details, with resource-scoped reads and the explicit notification-policy
+  confirmation. It is loaded only when selected.
+
+Re-entering Advanced Maintenance starts with task history, not power buttons.
+Opening or switching views does not issue a provider mutation, arm auto boot,
+rotate a credential or change a notification policy. Existing policy values are
+displayed as received, never overwritten to manufacture an off state. This is
+an admin navigation change only: it deletes no task/audit records, introduces no
+migration, changes no queue or execution gate, and does not deploy or operate
+existing cloud instances, DNS or tanzhen. All live-automation settings remain as
+previously authorized; this UI change grants no additional execution authority.
+
+Local UI verification on 2026-11-11 passed 797 server tests in 76 files and twelve
+Playwright scenarios, with 34 desktop/mobile, Chinese/English and light/dark
+screenshots. The browser run includes the full server-list-to-failover entry,
+legacy fallback, retained task/audit views and cancelled power confirmation;
+all browser requests stay on local fixtures, with zero mutation requests.
+The mobile navigation checks reject clipped tabs and overflowing toolbar text.
+The single-file build passed the unchanged limits at 4,667,944 JS bytes and
+570,603 CSS bytes, without new dependencies. Aggregate reports and screenshots
+are in the ignored workspace `.codex-audit/cloud-maintenance-20261111/` directory.
+This is UI/synthetic acceptance, not authorization or testing of real VM power.
+
+The subsequent source-only synchronization builds from clean keli-admin commit
+`c42ab1c` and includes the navigation, fixtures and regression tests above.
+The normalized committed assets are 4,667,914 JS bytes and 570,603 CSS bytes;
+their content-hash URL versions are `60e6982dc675` and `262c502cd66f` respectively.
+The build manifest pins the full clean source commit and all three entry-file
+digests. The asset verifier, unchanged bundle limits and 103 focused navigation
+regression tests passed. This synchronization does not publish an image, deploy,
+change an automation setting or operate cloud power, DNS or tanzhen.
+
 ## Power Tasks
 
 - Every manual operation requires explicit confirmation and an exact resource
