@@ -157,7 +157,9 @@ final class NativeFailoverHorizonTest extends TestCase
         $this->awaitCondition(fn () => DB::table('v2_machine_failover_runtime_event')->where('kind', 'recovered')->exists(), 'natural 120 second native lease recovery', 70);
         $recovered = (int) DB::table('v2_machine_failover_runtime_event')->where('kind', 'recovered')->orderBy('id')->value('created_at');
         $this->assertGreaterThanOrEqual(120, $recovered - $claimed); $this->assertGreaterThan(0, $this->fixture->ttl('machine-native:member:' . $member->id));
-        $this->awaitCondition(fn () => $this->runState() === 'needs_review', 'natural member-lock expiry holds stale candidate for review', 300);
+        $this->awaitCondition(fn () => $this->runState() === 'needs_review'
+            && DB::table('v2_machine_failover_runtime_event')->where('kind', 'finished')->exists(),
+            'natural member-lock expiry and durable runner completion hold stale candidate for review', 300);
         $finished = (int) DB::table('v2_machine_failover_runtime_event')->where('kind', 'finished')->orderByDesc('id')->value('created_at');
         $this->assertGreaterThanOrEqual(299, $finished - $claimed);
         $this->assertSame($proof->id, Proof::query()->where('family', 'AAAA')->first()->id); $this->assertSame('issued', $proof->fresh()->state);
