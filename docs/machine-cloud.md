@@ -2249,3 +2249,113 @@ The synchronization rechecked 293 focused backend tests / 5,640 assertions,
 12 PHP syntax checks, the unchanged admin asset manifest and 11 worker unit
 tests. The five optional real-protocol tests remain skipped without configured
 binaries; no real cloud, DNS or public IPv6 acceptance is implied.
+
+### Disposable Native Dual-Stack Concurrency and Daemon Acceptance (2026-11-10)
+
+The native admission and address-family binding above were subsequently tested
+with real isolated MySQL 8.4/InnoDB, Redis 7, separate Linux PHP workers and the
+locked Horizon daemon. This extends the earlier in-memory-only evidence for the
+specific paths below; provider creation, DNS HTTP and signed verifier measurement
+are still synthetic. No production connection or real forwarding is involved.
+
+Only the temporary `acceptance/native-dualstack-20261110` branch was uploaded.
+The manual concurrency run used `2bf1daf862444aadfbbeecf9df4236a22a4c7894`;
+the complete corrected daemon run used
+`e931d54f054a368b0c435b432722b0b5cc55948b`. Main remained at
+`bc6653b2e94c739032d3977a126bede844f1acd1`. No main merge, image publishing,
+deployment, application/configuration/workflow change or production migration
+is part of this acceptance. Real automatic creation, automatic credential
+rotation and DNS cutover remain closed by the unchanged hard execution gate.
+The existing tanzhen deployment and scheduler are untouched.
+
+| Final run | MySQL isolation | Tests | Assertions | Failures/errors/skips |
+| --- | --- | ---: | ---: | --- |
+| [Concurrent workers](https://github.com/keli-123456/keliboard/actions/runs/42759265517) | REPEATABLE READ | 22 | 523 | 0/0/0 |
+| Same concurrent run | READ COMMITTED | 22 | 523 | 0/0/0 |
+| [Full Horizon recheck](https://github.com/keli-123456/keliboard/actions/runs/42760797159) | REPEATABLE READ | 6 | 208 | 0/0/0 |
+| Same daemon recheck | READ COMMITTED | 6 | 208 | 0/0/0 |
+
+The 44 concurrent cases include ten native record-set cases in each isolation:
+two competing workers completing two dual-stack members with four distinct
+family proofs; duplicate deliveries without another proof or mutation; SIGKILL
+during an issued IPv6 challenge; candidate revision changes while a receipt is
+in flight; a validly signed wrong-family receipt; stop during verification;
+stop during prepared DNS inventory; stop after the IPv4 write; SIGKILL after a
+DNS mutation but before acknowledgement; and an old acknowledgement returning
+after a successor's readback. Original intents and child IDs are retained.
+Partial writes require review without an automatic rollback or AAAA dispatch;
+ambiguous or stale evidence cannot authorize candidate publication.
+
+Six of the 22 concurrent cases per isolation explicitly force lease expiry for
+fast fencing/crash tests. Their summaries record `forced_expiries`; these are
+not real-duration lease evidence. The separate full Horizon run does not
+accelerate clocks or locks. Observed seconds below are relative to the original
+claim/issue and include scheduler polling, not latency or throughput benchmarks.
+
+| Daemon measurement | REPEATABLE READ | READ COMMITTED |
+| --- | ---: | ---: |
+| IPv6 reply returned after the actual 45-second challenge deadline | 46 | 46 |
+| Native IPv6 worker's actual job timeout | 75 | 75 |
+| Native runtime lease recovery | 120 | 120 |
+| Native stale-candidate review after the natural 300-second member lock | 311 | 312 |
+| Legacy original-intent provider readback after the same natural member lock | 317 | 317 |
+| Stop settled after worker death and natural runtime lease expiry | 121 | 121 |
+
+In the expired-receipt case the IPv6 proof fails with no DNS write. In the
+worker-timeout case the original IPv6 proof stays issued and spent for review;
+neither a new challenge nor another cloud creation or DNS write is dispatched.
+The daemon restart case retains the original task, with one synthetic creation
+and no orphan processes. Stop recovery continues even with the execution gate
+closed, but does not release an uncertain resource's budget.
+
+The isolated failover worker peak is one, with the existing configured 128 MiB
+worker memory threshold and `nice=10`; no operating-system memory limit is
+inferred from that setting. Separate synthetic business jobs remained responsive
+(107-1,063 ms observed across the final daemon cases), including the same
+business worker surviving failover-worker timeout. Neighbor queue/master
+sentinels remained unchanged. This is isolation evidence, not a production
+capacity guarantee. There were no unexpected worker/Horizon errors. Deliberate
+job timeouts/failures and stop-related queue exhaustion are asserted fault
+outcomes, not hidden errors.
+
+Every concurrent case reported cleanup complete. All twelve final daemon cases
+additionally verified zero owned live processes, unchanged neighbor state,
+empty disposable Redis/MySQL and removed private console files. Cleanup is
+scoped to the owned fixture; no global queue purge or production process action
+is used. Service containers are disposable CI services on random loopback ports,
+with a database-scoped non-root SQL account, never a formal panel database.
+
+The [first daemon run](https://github.com/keli-123456/keliboard/actions/runs/42759271061)
+is retained as a failed run: REPEATABLE READ passed all six cases, while READ
+COMMITTED stopped at the native timeout case because the test read a terminal
+execution status before its separate durable `finished` runtime event existed.
+The missing timestamp became zero in the assertion. The test now awaits both
+the terminal state and that event. No runtime timer, evidence guard or application
+code was relaxed. The two complete daemon matrices were then rerun, not merely
+the previously failing assertion. Cleanup passed even in the failed case.
+
+Final local regression on the corrected test source passed 3,788 Unit tests /
+27,878 assertions and all eleven independent-worker unit tests. The fixture
+guard subset passed 33 tests / 79 assertions. These are not real protocol-client
+results. The four changed PHP test files passed syntax checks and
+`git diff --check` passed. Only tests and this documentation differ from main.
+
+Aggregate JUnit/JSONL evidence, including the failed first run, was downloaded to
+the ignored workspace directory `.codex-audit/native-dualstack-20261110/` before
+the seven-day CI artifact expiry. Final JSONL SHA256 digests are:
+
+| Artifact | SHA256 |
+| --- | --- |
+| `42759265517-native-failover-0` | `de43f057064125b967b23368be72311a6a8153f5e88b02a5d9de6696a5bffe2b` |
+| `42759265517-native-failover-1` | `475c8ecab96956c2c666f5205aa11920945eec587d99076059f63ac8a8871981` |
+| `42760797159-native-horizon-0` | `4f223d86137e298254dda97e266d546916e622786c7f34a24e561fae63763316` |
+| `42760797159-native-horizon-1` | `ea6551ed17b679d43c3109d22e028d7211f57b8ca713553e07fce0f31e4795ac` |
+
+Remaining live gates are unchanged: account-specific provider receipts, actual
+authenticated forwarding through every selected public IPv4/IPv6 endpoint,
+DNS ownership/edition/line/TTL permissions, external propagation and an explicit
+single-machine non-business acceptance authorization. The blocked verifier
+fixture validates application challenge expiry and daemon timeout handling,
+not actual HTTP-client timeout behavior, WAN availability, packet loss, mainland
+reachability or a live DNS account. Passing these finite scenarios is not proof
+that all failover behavior is complete or permission to enable live automation.
