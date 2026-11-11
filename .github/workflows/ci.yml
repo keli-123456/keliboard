@@ -9,6 +9,27 @@ permissions:
   contents: read
 
 jobs:
+  machine-acceptance-tools:
+    name: Isolated acceptance tools (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check control staging and synthetic verifier guards
+        working-directory: tools/machine-acceptance
+        run: python -m unittest -v test_staging test_worker.WorkerTests
+
   unit-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 20

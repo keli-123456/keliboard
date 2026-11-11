@@ -80,6 +80,82 @@ $env:KELI_TEST_OPENSSL = '<absolute OpenSSL executable>'
 python -m unittest test_worker.RealHysteriaTests
 ```
 
+## Control-Bundle Staging Preflight
+
+`staging.py` is a separate, read-only preparation tool. It addresses a failure
+observed during the closed 2026-11-11 isolated trial: certificate preparation
+started before the control run-scope file finished uploading. It is not an
+execution controller, a certificate issuer, an uploader or a new panel endpoint.
+It does not reopen that trial or touch its authorization, resources or evidence.
+
+The operator must first prepare and approve a new isolated run separately. Its
+reviewed artifact list must include **every** script, hook, release and scope
+file that the next stage will use, including the DNS certificate hook. The
+expected manifest SHA256 and required filenames come from the trusted local
+packaging record, not from the remote bundle's own description. Complete and
+verify the uploads before publishing `staging-manifest.json` last via an atomic
+rename in the same private directory. Upload temporary names must not overwrite
+files used by a running stage.
+
+The manifest has exactly `schema: 1`, `run_id`, `role: "control"`, and `files`.
+`files` maps each reviewed basename to its exact `{bytes, sha256}`. One required
+entry is `run-scope.json`, which contains `schema: 1`, the same `run_id` and
+`role`, and integer `started_at`/`expires_at` Unix timestamps. Other reviewed
+scope fields may be present; its entire file is pinned. A run is at most two
+hours. The private state directory must have an `owner.json` containing exactly
+`{"schema":1,"run_id":"<new-run-id>","role":"control"}`. Either a `closed.json`
+or `stop-request.json` path blocks preparation, including dangling symlinks.
+
+Run the tool through the already verified SSH transport on the isolated Linux
+control host, immediately before any credential envelope, certificate intent or
+provider/DNS operation. For example, after separately approving and staging a
+new run (the values below are placeholders, not executable authorization):
+
+```sh
+python3 staging.py --bundle /private/new-run/bundle --state /private/new-run/state \
+  --run-id keli-accept-new-approved-run --manifest-sha256 '<trusted-manifest-sha256>' \
+  --require run-scope.json --require control.py --require certificate-hook.php \
+  --require application.tar.gz --minimum-remaining 300
+```
+
+The guard checks exact required membership, identity, bounded sizes and SHA256,
+rejects links/path traversal and unsafe Linux ownership/permissions, and checks
+stop, file identity and remaining time again after hashing. It reads at most
+256 MiB per artifact and 512 MiB in total; JSON is capped at 128 KiB. Insufficient
+remaining time blocks the next stage, without renewing or extending the scope.
+The default five-minute margin covers the planned certificate stage, not the
+entire trial. Larger stages need their own appropriate remaining-time check.
+
+Failure returns a nonzero exit and a fixed reason without file content, paths,
+credentials or raw exceptions. Success is only a current preparation snapshot:
+`authorizes_execution` always remains false. The caller must stop on failure and
+must require `private_permissions_checked=true` for the actual Linux controller;
+Windows tests do not establish Linux filesystem protection. This is not a lock
+against later changes or a transaction with a provider. Recheck the current
+authorization, stop state, context and immutable inputs at the operation's own
+dispatch boundary. Do not cache this result to bypass execution gates or time
+limits, and never use it to repeat an ambiguous create/certificate request.
+
+Local synthetic regression (no cloud, DNS, SSH or production database):
+
+```powershell
+python -m unittest -v test_staging test_worker.WorkerTests
+```
+
+The existing `CI` workflow has a separate Windows/Linux job for these synthetic
+tests. It uses only Python's standard library and does not start the application,
+MySQL, Redis, protocol client or a cloud/DNS transport; the verifier replay tests
+use only temporary SQLite files. Adding the job does not
+dispatch CI; this local change has not run the Linux job yet.
+
+The staging guard is not automatically wired into historical one-run controllers
+or the panel's live runner. Future authorized test packaging must explicitly
+integrate it and pin this tool/worker code as well as the run artifacts. Linux
+runtime ownership, certificate issuance, cloud-init and WAN failover still need
+a new independently authorized isolated acceptance.
+
+## Protocol Interoperability
+
 The real HY2 tests bind temporary endpoints only to 127.0.0.1/127.0.0.2, generate
 fresh certificates and fixture credentials, run the actual sing-box client and
 server, and check TCP/UDP byte equality, wrong credentials/TLS identity, missing
