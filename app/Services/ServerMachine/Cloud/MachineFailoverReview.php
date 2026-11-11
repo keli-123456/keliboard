@@ -115,7 +115,8 @@ class MachineFailoverReview
         return ['check_id' => $check->id, 'member_id' => $member->id, 'attempt_id' => $attempt?->id, 'state' => $state,
             'external_id' => $check->payload['candidate']['external_id'] ?? $task?->external_id, 'checked_at' => $check->checked_at,
             'valid_until' => $check->valid_until, 'can_claim' => !$summary['closed'] && !$released && $state === 'found' && !$claimed,
-            'can_close' => !$summary['closed'] && ($state === 'no_intent' || $claimed || ($released && in_array($state, ['not_created', 'absent'], true))),
+            'can_close' => !$summary['closed'] && ($state === 'no_intent' || $claimed
+                || (($released || $attempt?->reserved_cents === 0) && in_array($state, ['not_created', 'absent'], true))),
             'closed' => $summary['closed'], 'archived' => $summary['archived'],
             'cloud_writes' => 0, 'execution_enabled' => false, 'automatic_rotation' => false, 'dns_cutover' => false];
     }
@@ -137,7 +138,7 @@ class MachineFailoverReview
                         return $prior->payload['result'];
                     }
                     $subject = $this->subject($check->attempt_id, $check->attempt_id ? null : $check->member_id, $admin);
-                    [$member, $attempt, $task] = $subject;
+                    [$member, $attempt, $task, $run] = $subject;
                     $latest = Check::query()->where('member_id', $member->id)->where('attempt_id', $attempt?->id)->orderByDesc('sequence')->first();
                     if ($check->admin_id !== $admin || $check->valid_until <= time() || $latest?->id !== $checkId
                         || !hash_equals($check->context_hash, $this->context($subject))) throw new CloudException('review_proof_expired');
@@ -162,6 +163,19 @@ class MachineFailoverReview
                         } else {
                             $resolution = $check->payload['state'] === 'found' ? 'retained' : ($attempt ? 'released' : 'no_intent');
                             if ($resolution === 'released' && $task) app(MachineFailoverBudget::class)->requireUnused($task);
+                            // A zero-amount attempt still needs a durable terminal fence, not a money-release step.
+                            if ($resolution === 'released' && $attempt->reserved_cents === 0 && !Release::query()->where('attempt_id', $attempt->id)->exists()) {
+                                $proof = $check->payload['state'] === 'absent' ? 'confirmed_absent' : ($task?->dispatched_at ? 'definite_rejection' : 'not_dispatched');
+                                Release::query()->create(['id' => (string) Str::uuid(), 'attempt_id' => $attempt->id, 'service_id' => $run->service_id,
+                                    'admin_id' => $admin, 'request_key' => hash('sha256', $key . ':unreserved'), 'amount_cents' => 0,
+                                    'proof_kind' => $proof, 'proof_hash' => $this->hash([$checkId, $check->context_hash, $check->payload]),
+                                    'payload' => ['review_check_id' => $checkId, 'checked_at' => $check->checked_at, 'valid_until' => $check->valid_until]]);
+                                $attempt->fill(['status' => 'released'])->save();
+                                if ($task && !in_array($task->status, Task::TERMINAL, true)) {
+                                    $task->fill(['status' => 'cancelled', 'reason' => 'review_hold', 'finished_at' => time()])->save();
+                                    DB::table('v2_machine_provision_step')->insertOrIgnore(['task_id' => $task->id, 'state' => 'cancelled', 'reason' => 'review_hold', 'created_at' => time()]);
+                                }
+                            }
                         }
                     }
                     $result = ['operation' => $operation, 'attempt_id' => $attempt?->id, 'member_id' => $member->id,

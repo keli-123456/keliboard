@@ -124,7 +124,7 @@ trait CloudCatalogReads
     }
     private function catalogNumber(mixed $value, bool $nullable = false): ?float
     {
-        if ($nullable && $value === null) return null;
+        if ($nullable && (!is_numeric($value) || !is_finite((float) $value) || $value < 0 || $value > 100000000)) return null;
         if (!is_numeric($value) || !is_finite((float) $value) || $value < 0 || $value > 100000000) throw new CloudException('provider_invalid');
         return (float) $value;
     }

@@ -137,7 +137,7 @@ final class NativeFailoverConcurrentFixture
         $bootstrap->bootFixture();
         app()->instance('encrypter', new \Illuminate\Encryption\Encrypter(str_repeat('n', 32), 'AES-256-CBC'));
         foreach (['machine_failover', 'machine_provision', 'machine_acceptance'] as $key) config([$key => require base_path('config/' . $key . '.php')]);
-        $budget = \Mockery::mock(\App\Services\ServerMachine\Cloud\MachineFailoverBudget::class); $budget->shouldReceive('assertCapacity')->andReturnNull();
+        $budget = \Mockery::mock(\App\Services\ServerMachine\Cloud\MachineFailoverBudget::class); $budget->shouldNotReceive('forecast');
         app()->instance(\App\Services\ServerMachine\Cloud\MachineFailoverBudget::class, $budget);
         $policies = \App\Models\MachineFailoverPolicy::query()->pluck('id')->all();
         app()->instance(MachineFailoverExecutionGate::class, new class extends MachineFailoverExecutionGate { public function assertAllowed(string $operation): void {} });

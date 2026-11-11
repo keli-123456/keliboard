@@ -14,10 +14,10 @@ class MachineFailoverAdmission
     private const REASONS = ['orchestration_disabled', 'admission_disabled', 'admission_scope_invalid', 'admission_revoked',
         'admission_expired', 'config_changed', 'release_changed', 'permission_revoked', 'admission_unavailable',
         'native_run_active', 'native_stop_requested', 'native_intent_expired', 'admission_evidence_changed',
-        'admission_budget_required', 'admission_provider_unsupported', 'admission_no_proposal', 'admission_busy'];
+        'service_attempt_limit', 'service_parallel_limit', 'admission_provider_unsupported', 'admission_no_proposal', 'admission_busy'];
 
     public function __construct(private MachineFailoverServiceRegistry $registry, private MachineFailoverShadow $shadow,
-        private MachineFailoverBudget $budget, private MachineFailoverTriggerPreview $preview) {}
+        private MachineFailoverTriggerPreview $preview) {}
 
     public function advance(int $limit = 5): array
     {
@@ -136,8 +136,9 @@ class MachineFailoverAdmission
         $ids = []; $plans = []; $episodes = [];
         foreach ($admission['proposals'] as $row) {
             if (!is_array($row) || count($row) !== 5) throw new CloudException('admission_scope_invalid');
-            foreach (['preview_id', 'preview_revision', 'plan_id', 'planned_cents'] as $key)
+            foreach (['preview_id', 'preview_revision', 'plan_id'] as $key)
                 if (!is_int($row[$key] ?? null) || $row[$key] < 1) throw new CloudException('admission_scope_invalid');
+            if (!is_int($row['planned_cents'] ?? null) || $row['planned_cents'] < 0) throw new CloudException('admission_scope_invalid');
             if (!is_string($row['episode_key'] ?? null) || !preg_match('/^[a-f0-9]{64}$/D', $row['episode_key'])
                 || isset($ids[$row['preview_id']]) || isset($plans[$row['plan_id']]) || isset($episodes[$row['episode_key']])) throw new CloudException('admission_scope_invalid');
             $ids[$row['preview_id']] = $plans[$row['plan_id']] = $episodes[$row['episode_key']] = true;
@@ -171,18 +172,15 @@ class MachineFailoverAdmission
             || !hash_equals($row->context_hash, $pin['context_hash']) || $row->source_checked_at !== $member['source']['checked_at']
             || !hash_equals($row->source_hash, hash('sha256', json_encode([$member['source']['installation_id'], $member['source']['ipv4']], JSON_THROW_ON_ERROR)))
             || !$plan || $plan->id !== $planId || $row->episode_key !== $plan->evidence['episode_key']
-            || $row->planned_cents !== (int) round($member['budget']['monthly_reservation_usd'] * 100) || $row->planned_cents < 1)
+            || $row->planned_cents !== 0)
             throw new CloudException('admission_evidence_changed');
     }
 
     private function capacity(array $pin, array $proposals): void
     {
-        $cost = $this->budget->forecast($pin['service_id'], $pin['service_revision'], $pin['admin_id']);
-        $now = now()->getTimestamp();
-        if (($cost['state'] ?? null) !== 'verified' || !is_int($cost['available_cents'] ?? null)
-            || !is_int($cost['checked_at'] ?? null) || $cost['checked_at'] > $now || $cost['checked_at'] < $now - 300
-            || !is_int($cost['valid_until'] ?? null) || $cost['valid_until'] <= $now || $cost['valid_until'] > $cost['checked_at'] + 300
-            || array_sum(array_column($proposals, 'planned_cents')) > $cost['available_cents']) throw new CloudException('admission_budget_required');
+        $limits = $this->registry->snapshot($pin['service_id'], $pin['service_revision'])['service'];
+        if (count($proposals) > $limits['attempt_limit']) throw new CloudException('service_attempt_limit');
+        if (count($proposals) > $limits['max_parallel']) throw new CloudException('service_parallel_limit');
     }
     private function fresh(array $report): void
     {

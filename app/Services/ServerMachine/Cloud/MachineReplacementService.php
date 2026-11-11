@@ -125,7 +125,7 @@ class MachineReplacementService
         if ($previous !== null && $previous + $policy->cooldown_seconds > time()) throw new CloudException('replacement_cooldown');
         return ['policy_id' => $policy->id, 'policy_revision' => $policy->revision, 'plan_id' => $plan->id,
             'episode_key' => $episode, 'account_id' => $accountId, 'machine_id' => $policy->machine_id,
-            'source_installation_id' => $source, 'source_context_key' => $context, 'reserved_monthly_usd' => $policy->monthly_limit_usd];
+            'source_installation_id' => $source, 'source_context_key' => $context, 'reserved_monthly_usd' => 0];
     }
 
     public function assertDispatch(Task $task): void

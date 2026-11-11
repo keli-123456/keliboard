@@ -188,8 +188,45 @@ class MachineFailoverBudgetTest extends TestCase
         $client->rows = []; $cost = $this->capture()['cost'];
         $this->assertSame('incomplete', $cost['state']); $this->assertNull($cost['baseline_cents']); $this->assertNull($cost['available_cents']);
         $this->assertSame(0, Release::count());
-        $this->code('cost_baseline_required', fn () => $this->finance()->assertCapacity($this->service->id, 1, 1));
+        $this->assertNotSame('verified', $this->finance()->forecast($this->service->id, 1, $this->admin->id)['state']);
         Http::assertNothingSent();
+    }
+
+    public static function unreservedClosures(): array { return [['queued', null], ['rejected', null], ['unknown', '9002']]; }
+    #[DataProvider('unreservedClosures')]
+    public function test_unreserved_attempts_close_once_with_current_noncreation_or_absence_evidence(string $state, ?string $external): void
+    {
+        $attempt = $this->attempt($state, $external); $attempt->fill(['reserved_cents' => 0])->save();
+        if ($external) unset($this->remote[$external]);
+        $check = $this->review()->read($attempt->id, null, $this->admin->id);
+        $this->assertTrue($check['can_close'], json_encode($check));
+        $result = $this->review()->act($check['check_id'], 'close', str_repeat('a', 32), $this->admin->id);
+        $this->assertSame($result, $this->review()->act($check['check_id'], 'close', str_repeat('a', 32), $this->admin->id));
+        $this->assertSame(0, Release::query()->firstOrFail()->amount_cents); $this->assertSame(1, Release::count());
+        $this->assertSame('released', $attempt->fresh()->status);
+        $this->assertSame(1, ReviewAction::query()->where('operation', 'archive')->count());
+        $this->assertTrue($this->review()->summary($attempt->execution_member_id, $attempt->id)['closed']);
+        Http::assertNotSent(fn ($request) => $request->method() !== 'GET');
+        $this->assertFalse(config('machine_provision.allow_live')); $this->assertFalse(config('machine_acceptance.allow_dns'));
+    }
+    public function test_unreserved_amount_does_not_turn_an_unknown_create_into_a_closed_case(): void
+    {
+        $attempt = $this->attempt('unknown'); $attempt->fill(['reserved_cents' => 0])->save();
+        $check = $this->review()->read($attempt->id, null, $this->admin->id);
+        $this->assertFalse($check['can_close']); $this->assertSame('unresolved', $check['state']);
+        $this->code('review_action_blocked', fn () => $this->review()->act($check['check_id'], 'close', str_repeat('a', 32), $this->admin->id));
+        $this->assertSame(0, Release::count()); $this->assertSame(0, ReviewAction::count());
+    }
+
+    public function test_unreserved_candidate_without_a_quote_is_not_presented_as_free(): void
+    {
+        $this->capture(); $attempt = $this->attempt('unknown', '9002'); $attempt->fill(['reserved_cents' => 0])->save();
+        $cost = $this->read()['cost'];
+        $this->assertSame('incomplete', $cost['state']); $this->assertGreaterThan(0, $cost['unknown_count']);
+        $this->assertNull($cost['available_cents']); $this->assertSame(0, $cost['reserved_cents']);
+        $cost = $this->capture()['cost']; $this->assertSame('verified', $cost['state']);
+        $this->assertSame(9600, $cost['allocated_cents']);
+        Http::assertNotSent(fn ($request) => $request->method() !== 'GET');
     }
 
     public function test_opening_workspace_and_run_reports_never_calls_cloud_or_releases_budget(): void
@@ -214,8 +251,7 @@ class MachineFailoverBudgetTest extends TestCase
     {
         $this->mode = 'regional'; $this->attempt(); $cost = $this->capture()['cost'];
         $this->assertSame(5230, $cost['baseline_cents']); $this->assertSame(15230, $cost['allocated_cents']);
-        $this->finance()->assertCapacity($this->service->id, 1, 14770);
-        $this->code('shared_monthly_budget', fn () => $this->finance()->assertCapacity($this->service->id, 1, 14771));
+        $this->assertSame(14770, $this->finance()->forecast($this->service->id, 1, $this->admin->id)['available_cents']);
     }
     #[DataProvider('unverifiedCosts')]
     public function test_unverified_cost_or_inventory_is_never_presented_as_zero(string $mode): void
@@ -227,7 +263,7 @@ class MachineFailoverBudgetTest extends TestCase
         $cost = $this->capture()['cost'];
         $this->assertSame('incomplete', $cost['state'], json_encode($cost)); $this->assertNull($cost['baseline_cents']); $this->assertNull($cost['available_cents']);
         $this->assertNull($cost['source_cents']);
-        $this->code('cost_baseline_required', fn () => $this->finance()->assertCapacity($this->service->id, 1, 1));
+        $this->assertNotSame('verified', $this->finance()->forecast($this->service->id, 1, $this->admin->id)['state']);
     }
     public static function unverifiedCosts(): array { return array_map(fn ($value) => [$value], ['failed', 'incomplete', 'restricted', 'scope_changes', 'backup', 'ipv4', 'volume', 'unsupported', 'identity']); }
     public function test_unknown_retained_cost_does_not_hide_verified_source_cost_or_turn_into_zero(): void
@@ -239,17 +275,17 @@ class MachineFailoverBudgetTest extends TestCase
     public function test_new_retained_resource_or_expired_snapshot_blocks_new_reservations(): void
     {
         $this->capture(); Snapshot::query()->update(['valid_until' => time() - 1]);
-        $this->code('cost_baseline_required', fn () => $this->finance()->assertCapacity($this->service->id, 1, 1));
+        $this->assertNotSame('verified', $this->finance()->forecast($this->service->id, 1, $this->admin->id)['state']);
         $this->capture(); $this->owned($this->task('accepted', '9002'));
         $this->assertSame('expired', $this->read()['cost']['state']);
-        $this->code('cost_baseline_required', fn () => $this->finance()->assertCapacity($this->service->id, 1, 1));
+        $this->assertNotSame('verified', $this->finance()->forecast($this->service->id, 1, $this->admin->id)['state']);
     }
     public function test_failed_refresh_does_not_leave_an_older_verified_baseline_usable(): void
     {
         $previous = $this->capture()['cost']['snapshot_id']; $this->mode = 'failed'; $cost = $this->capture()['cost'];
         $this->assertNotSame($previous, $cost['snapshot_id']); $this->assertSame('incomplete', $cost['state']);
         $this->assertNull($cost['baseline_cents']); $this->assertNull($cost['available_cents']);
-        $this->code('cost_baseline_required', fn () => $this->finance()->assertCapacity($this->service->id, 1, 1));
+        $this->assertNotSame('verified', $this->finance()->forecast($this->service->id, 1, $this->admin->id)['state']);
     }
     public function test_canonical_account_aliases_do_not_count_the_same_cloud_instance_twice(): void
     {
@@ -365,7 +401,7 @@ class MachineFailoverBudgetTest extends TestCase
         $this->assertSame(14800, $cost['allocated_cents']); $this->assertSame(1, $cost['pending_quote_count']);
         $this->capture(); $this->assertSame(14800, $this->read()['cost']['allocated_cents']);
         $this->price = 150; $this->capture(); $this->assertSame(30000, $this->read()['cost']['allocated_cents']);
-        $this->code('shared_monthly_budget', fn () => $this->finance()->assertCapacity($this->service->id, 1, 1));
+        $this->assertSame(0, $this->finance()->forecast($this->service->id, 1, $this->admin->id)['available_cents']);
     }
     public function test_explicitly_unverified_candidate_cost_blocks_new_reservations_despite_its_upper_bound(): void
     {
@@ -374,7 +410,7 @@ class MachineFailoverBudgetTest extends TestCase
         $this->remote['9002']['backups']['enabled'] = true; $cost = $this->capture()['cost'];
         $this->assertSame('incomplete', $cost['state']); $this->assertNull($cost['available_cents']);
         $this->assertSame(10000, $cost['reserved_cents']); $this->assertSame(0, $cost['released_cents']);
-        $this->code('cost_baseline_required', fn () => $this->finance()->assertCapacity($this->service->id, 1, 1));
+        $this->assertNotSame('verified', $this->finance()->forecast($this->service->id, 1, $this->admin->id)['state']);
     }
     public function test_controller_rejects_verdicts_and_requires_admin_before_validation(): void
     {
@@ -465,7 +501,7 @@ class MachineFailoverBudgetTest extends TestCase
         $this->assertSame(4800, $cost['baseline_cents']); $this->assertSame(0, $cost['reserved_cents'] - $cost['released_cents']);
         $this->assertSame(102, Task::count()); $this->assertSame(101, Attempt::count()); $this->assertSame(101, Release::count());
         $this->assertSame(101, ReviewAction::where('operation', 'archive')->count());
-        $this->finance()->assertCapacity($this->service->id, 1, 10000);
+        $this->assertSame('verified', $this->finance()->forecast($this->service->id, 1, $this->admin->id)['state']);
     }
     public function test_archived_absent_resource_is_still_watched_and_reappearance_blocks_budget_until_restored(): void
     {
@@ -524,7 +560,7 @@ class MachineFailoverBudgetTest extends TestCase
         $this->capture(); $this->settle($attempt); $this->capture(); $this->assertSame('verified', $this->read()['cost']['state']);
         $this->remote['9002'] = $saved; $this->review()->read($attempt->id, null, $this->admin->id);
         $this->assertSame('expired', $this->read()['cost']['state']);
-        $this->code('cost_baseline_required', fn () => $this->finance()->assertCapacity($this->service->id, 1, 1));
+        $this->assertNotSame('verified', $this->finance()->forecast($this->service->id, 1, $this->admin->id)['state']);
     }
     public function test_review_cannot_close_a_reserved_attempt_without_a_task_until_its_budget_is_released(): void
     {

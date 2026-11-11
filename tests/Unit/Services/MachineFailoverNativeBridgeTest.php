@@ -74,7 +74,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
         app()->instance('encrypter', new Encrypter(str_repeat('n', 32), 'AES-256-CBC'));
         app()->instance(\Illuminate\Contracts\Bus\Dispatcher::class, new \Illuminate\Bus\Dispatcher(app())); Bus::fake();
         $budget = \Mockery::mock(\App\Services\ServerMachine\Cloud\MachineFailoverBudget::class);
-        $budget->shouldReceive('assertCapacity')->andReturnNull();
+        $budget->shouldNotReceive('forecast');
         app()->instance(\App\Services\ServerMachine\Cloud\MachineFailoverBudget::class, $budget);
         foreach (['machine_provision', 'machine_failover', 'machine_acceptance'] as $key) config([$key => require base_path('config/' . $key . '.php')]);
         foreach (['2026_11_05_160000_create_machine_dns_tables.php', '2026_11_05_170000_create_machine_cloud_tables.php',
@@ -767,7 +767,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $run = $this->ready($run); $this->assertSame('awaiting_dns', $run['members'][0]['phase'], json_encode($run));
         $this->assertSame(1, $this->verifications); $this->assertSame(0, $this->dnsWrites);
         $run = $this->advance($run); $this->assertSame('completed', $run['status'], json_encode($run));
-        $this->assertCount(1, $this->posts); $this->assertSame(1, $this->dnsWrites); $this->assertSame(10000, $run['reserved_cents']); $this->assertSame(1, $this->verifications);
+        $this->assertCount(1, $this->posts); $this->assertSame(1, $this->dnsWrites); $this->assertSame(0, $run['reserved_cents']); $this->assertSame(1, $this->verifications);
         $this->assertSame('retained', MachineOwnedInstance::query()->where('task_id', $this->fixtures[0]['source']->id)->value('status'));
         $again = $this->advance($run); $this->assertSame($run, $again); $this->assertSame(1, $this->dnsWrites);
         $payload = Attempt::query()->first()->payload; $this->assertArrayHasKey('forwarding_receipt', $payload); $this->assertArrayHasKey('dns_receipt', $payload);
@@ -782,7 +782,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $run = $this->advance($run); $second = $this->task();
         $this->assertNotSame($first->id, $second->id); $this->assertNotSame($first->installation_id, $second->installation_id);
         $this->assertNotSame($first->account_id, $second->account_id); $this->assertSame($oldIdentity, $first->fresh()->only(array_keys($oldIdentity)));
-        $this->assertCount(2, $this->posts); $this->assertSame(20000, $run['reserved_cents']);
+        $this->assertCount(2, $this->posts); $this->assertSame(0, $run['reserved_cents']);
         $this->assertSame('waiting_initialization', $second->status, json_encode($run));
         $this->assertSame(1, Member::count()); $this->assertSame(2, Attempt::count());
         $this->assertSame(Attempt::query()->oldest('ordinal')->value('id'), Attempt::query()->latest('ordinal')->first()->payload['previous_attempt_id']);
@@ -820,9 +820,9 @@ class MachineFailoverNativeBridgeTest extends TestCase
     {
         $this->mode = 'reject'; $run = $this->advance($this->start($cap, 1, $limit)); $run = $this->advance($run);
         $this->assertSame('needs_review', $run['status']); $this->assertSame($reason, $run['members'][0]['reason'], json_encode($run));
-        $this->assertSame(10000, $run['reserved_cents']); $this->assertCount(1, $this->posts); $this->assertSame(1, Attempt::count());
+        $this->assertSame(0, $run['reserved_cents']); $this->assertCount(1, $this->posts); $this->assertSame(1, Attempt::count());
     }
-    public static function budgetCases(): array { return [[100, 4, 'shared_monthly_budget'], [400, 1, 'attempt_budget']]; }
+    public static function budgetCases(): array { return [[0, 1, 'attempt_budget'], [400, 1, 'attempt_budget']]; }
 
     public function test_parallel_limit_is_shared_by_members_and_unknown_results_keep_the_slot_reserved(): void
     {
@@ -843,7 +843,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
     {
         $run = $this->advance($this->start()); $run = $this->ready($run); $this->sourceReport($this->fixtures[0], true);
         $run = $this->advance($run); $this->assertSame('retained', $run['status'], json_encode($run));
-        $this->assertCount(1, $this->posts); $this->assertSame(0, $this->dnsWrites); $this->assertSame(10000, $run['reserved_cents']);
+        $this->assertCount(1, $this->posts); $this->assertSame(0, $this->dnsWrites); $this->assertSame(0, $run['reserved_cents']);
     }
 
     public function test_ambiguous_dns_write_is_read_back_once_without_a_second_patch_even_if_source_recovers(): void
@@ -886,7 +886,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $this->fixtures[] = $this->fixture(2); $run = $this->advance($this->start(400, 2));
         $this->assertCount(2, $this->posts); $this->assertSame(2, Attempt::count());
         $run = $this->ready($run); $run = $this->ready($run, 1); $run = $this->advance($run);
-        $this->assertSame('completed', $run['status'], json_encode($run)); $this->assertSame(20000, $run['reserved_cents']);
+        $this->assertSame('completed', $run['status'], json_encode($run)); $this->assertSame(0, $run['reserved_cents']);
         $this->assertSame(2, $this->verifications); $this->assertSame(2, $this->dnsWrites);
         $this->assertCount(2, array_unique(Attempt::query()->get()->map(fn ($row) => $row->payload['forwarding_receipt'])->all()));
     }
@@ -1010,7 +1010,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $this->mode = $mode; $run = $this->advance($this->start()); $first = $this->task();
         $this->assertSame('retry_ready', $run['members'][0]['phase'], json_encode($run));
         $run = $this->advance($run); $this->assertCount(2, $this->posts); $this->assertSame(2, Attempt::count());
-        $this->assertNotSame($first->account_id, $this->task()->account_id); $this->assertSame(20000, $run['reserved_cents']);
+        $this->assertNotSame($first->account_id, $this->task()->account_id); $this->assertSame(0, $run['reserved_cents']);
     }
     public static function accountRejections(): array { return [['billing'], ['quota']]; }
 
@@ -1038,7 +1038,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $run = $this->advance($run);
         $this->assertSame('rotation_disabled', $run['members'][0]['reason']);
         $this->assertSame('needs_review', $run['status']); $this->assertSame(1, Attempt::count());
-        $this->assertCount(1, $this->posts); $this->assertSame(10000, $run['reserved_cents']);
+        $this->assertCount(1, $this->posts); $this->assertSame(0, $run['reserved_cents']);
     }
 
     public function test_rotation_revocation_during_preflight_blocks_the_child_post(): void
@@ -1099,7 +1099,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
     }
     public static function unsafeIdentities(): array { return [['alias'], ['unknown'], ['duplicate']]; }
 
-    public function test_shared_price_reservation_is_not_reset_by_a_new_run_for_another_member(): void
+    public function test_legacy_price_caps_do_not_block_an_independent_member_after_a_definite_rejection(): void
     {
         $this->fixtures[] = $this->fixture(2); $this->enable();
         $service = app(MachineFailoverServiceRegistry::class)->save(['name' => 'Shared native cap', 'max_parallel' => 1, 'attempt_limit' => 1,
@@ -1110,8 +1110,9 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $first = $bridge->start($service['id'], 1, [$plans[0]], $this->release->id, str_repeat('a', 32), $this->admin->id);
         $first = $this->advance($this->advance($first)); $this->assertSame('needs_review', $first['status']);
         $second = $bridge->start($service['id'], 1, [$plans[1]], $this->release->id, str_repeat('b', 32), $this->admin->id);
-        $second = $this->advance($second); $this->assertSame('shared_monthly_budget', $second['members'][0]['reason'], json_encode($second));
-        $this->assertSame(1, Attempt::count()); $this->assertCount(1, $this->posts);
+        $second = $this->advance($second); $this->assertNull($second['members'][0]['reason'], json_encode($second));
+        $this->assertSame(2, Attempt::count()); $this->assertCount(2, $this->posts);
+        $this->assertSame(0, $second['reserved_cents']);
     }
 
     public function test_revocation_while_post_is_in_flight_retains_review_instead_of_authorizing_a_child(): void
@@ -1182,26 +1183,20 @@ class MachineFailoverNativeBridgeTest extends TestCase
         return app(\App\Services\ServerMachine\Cloud\MachineFailoverBudget::class);
     }
 
-    public function test_native_reserve_requires_a_fresh_real_cost_baseline_even_when_all_execution_gates_are_test_injected(): void
+    public function test_native_reserve_does_not_require_a_cost_baseline_when_execution_is_test_injected(): void
     {
-        $this->realCostGuard(); $run = $this->advance($this->start());
-        $this->assertSame('cost_baseline_required', $run['members'][0]['reason'], json_encode($run));
-        $this->assertSame(0, Attempt::count()); $this->assertSame([], $this->posts);
+        $this->realCostGuard(); $run = $this->advance($this->start(0));
+        $this->assertSame(1, Attempt::count()); $this->assertCount(1, $this->posts);
+        $this->assertSame(0, $run['reserved_cents']); $this->assertSame('waiting_initialization', $this->task()->status);
     }
 
-    public function test_native_rotation_consumes_existing_source_cost_and_release_never_resumes_the_old_attempt(): void
+    public function test_native_rotation_uses_credential_availability_not_legacy_cost_capacity(): void
     {
-        $finance = $this->realCostGuard(); $this->mode = 'reject'; $run = $this->start(230);
-        $execution = Execution::query()->find($run['id']);
-        $finance->capture($execution->service_id, 1, $this->admin->id);
+        $this->realCostGuard(); $this->mode = 'reject'; $run = $this->start(0);
         $run = $this->advance($run); $run = $this->advance($run);
-        $this->assertSame('shared_monthly_budget', $run['members'][0]['reason'], json_encode($run));
-        $this->assertCount(1, $this->posts); $attempt = Attempt::query()->first();
-        $preview = $finance->previewRelease($attempt->id, $this->admin->id); $this->assertTrue($preview['eligible'], json_encode($preview));
-        $finance->release($attempt->id, $preview['proof_token'], str_repeat('f', 32), $this->admin->id);
-        $finance->assertCapacity($execution->service_id, 1, 10000);
-        $this->code('budget_released', fn () => app(MachineFailoverNativeBridge::class)->assertAttempt($attempt->fresh()));
-        $this->advance($run); $this->assertCount(1, $this->posts);
+        $this->assertCount(2, $this->posts); $this->assertSame(2, Attempt::count());
+        $this->assertSame(0, $run['reserved_cents']);
+        $this->assertNotSame(Attempt::query()->first()->account_id, Attempt::query()->latest('ordinal')->first()->account_id);
     }
 
     private function runtimeSchema(): void
@@ -1287,7 +1282,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
         };
         $this->tick($run); $this->assertSame([], $this->posts); $this->assertSame('cancelled', $this->task()->status);
         $this->assertSame('stopped', $this->runner()->view(Execution::query()->find($run['id']))['state']);
-        $this->assertSame(10000, Attempt::query()->sum('reserved_cents')); $this->assertSame(0, \App\Models\MachineFailoverBudgetRelease::count());
+        $this->assertSame(0, Attempt::query()->sum('reserved_cents')); $this->assertSame(0, \App\Models\MachineFailoverBudgetRelease::count());
     }
     public function test_runner_stop_after_post_preserves_the_paid_candidate_without_dns_or_more_mutations(): void
     {
@@ -1540,7 +1535,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $run = $this->tick($run); $this->stopRuntime($run);
         $this->assertSame('rejected', $first->fresh()->status); $this->assertSame($identity, $task->fresh()->only(array_keys($identity)));
         $this->assertSame('retained', Member::query()->first()->phase); $this->assertCount(2, $this->posts); $this->assertSame(0, $this->dnsWrites);
-        $this->assertSame(20000, Attempt::query()->sum('reserved_cents')); $this->assertSame(0, \App\Models\MachineFailoverBudgetRelease::count());
+        $this->assertSame(0, Attempt::query()->sum('reserved_cents')); $this->assertSame(0, \App\Models\MachineFailoverBudgetRelease::count());
     }
     public function test_runner_accepts_mysql_object_key_normalization_without_relaxing_pinned_values(): void
     {

@@ -27,8 +27,6 @@ trait JsonProvisioning
         $image = collect($catalog['images'])->firstWhere('id', $plan['image']);
         if (!$region || !$size || !$image || !in_array($plan['region'], $size['regions'], true) || !in_array($plan['region'], $image['regions'], true)
             || $size['disk_gib'] < $image['min_disk_gib']) throw new CloudException('bootstrap_unsupported');
-        $price = MachineProvisionProviders::cents($size['monthly_usd']);
-        if ($price < 1 || $plan['monthly_limit_usd'] <= 0 || $price > (int) round($plan['monthly_limit_usd'] * 100)) throw new CloudException('budget_exceeded');
         if ($account->provider === 'digitalocean') {
             $body = $this->request($account, 'GET', '/account');
             if (($body['account']['status'] ?? null) !== 'active') throw new CloudException('provider_forbidden');

@@ -161,10 +161,10 @@ class MachineFailoverAdmissionTest extends MachineFailoverShadowTest
         $this->beforeStart = fn () => Preview::query()->where('decision', 'would_start')->update(['revision' => 99]);
         $this->blocked('admission_evidence_changed'); $this->assertSame(0, Execution::query()->count());
     }
-    public function test_budget_deterioration_between_selection_and_start_prevents_commit(): void
+    public function test_cost_deterioration_between_selection_and_start_does_not_gate_execution(): void
     {
         $this->prepareAdmission(); $this->beforeStart = function () { $this->finance->value['available_cents'] = 3999; };
-        $this->blocked('admission_budget_required'); $this->assertSame(0, Execution::query()->count());
+        $this->assertSame(1, $this->advanceAdmission()['started']); $this->assertSame(1, Execution::query()->count());
     }
     public function test_replacing_the_grant_before_start_and_after_enrollment_revokes_progress(): void
     {
@@ -259,24 +259,24 @@ class MachineFailoverAdmissionTest extends MachineFailoverShadowTest
         Preview::query()->where('decision', 'would_start')->update(['checked_at' => $this->clock - 31]);
         $this->blocked('admission_evidence_changed'); $this->assertCount(0, $this->starts);
     }
-    public function test_unknown_expired_and_insufficient_finance_are_not_free_capacity(): void
+    public function test_unknown_expired_and_insufficient_finance_does_not_block_or_duplicate_execution(): void
     {
         $this->prepareAdmission();
         foreach ([['state' => 'unread'], ['available_cents' => null], ['available_cents' => 3999], ['valid_until' => $this->clock]] as $change) {
             $this->finance->value = array_replace(['state' => 'verified', 'available_cents' => 10000, 'checked_at' => $this->clock, 'valid_until' => $this->clock + 300], $change);
-            $this->blocked('admission_budget_required');
+            $result = $this->advanceAdmission(); $this->assertSame(1, $result['started'] + $result['resumed']);
         }
-        $this->assertSame(0, Execution::count()); $this->assertCount(0, $this->starts);
+        $this->assertSame(1, Execution::count()); $this->assertCount(1, $this->starts);
     }
-    public function test_future_backdated_and_overlong_cost_windows_never_authorize_a_create(): void
+    public function test_cost_windows_do_not_participate_in_admission_or_replay(): void
     {
         $this->prepareAdmission();
         foreach ([['checked_at' => $this->clock + 1], ['checked_at' => $this->clock - 301], ['valid_until' => $this->clock + 301],
             ['checked_at' => (string) $this->clock], ['valid_until' => (string) ($this->clock + 300)]] as $change) {
             $this->finance->value = array_replace(['state' => 'verified', 'available_cents' => 10000, 'checked_at' => $this->clock, 'valid_until' => $this->clock + 300], $change);
-            $this->blocked('admission_budget_required');
+            $result = $this->advanceAdmission(); $this->assertSame(1, $result['started'] + $result['resumed']);
         }
-        $this->assertSame(0, Execution::count()); $this->assertCount(0, $this->starts);
+        $this->assertSame(1, Execution::count()); $this->assertCount(1, $this->starts);
     }
     public function test_expired_authorization_and_banned_owner_never_resume_an_existing_run(): void
     {

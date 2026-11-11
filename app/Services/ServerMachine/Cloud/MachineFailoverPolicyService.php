@@ -74,6 +74,7 @@ class MachineFailoverPolicyService
                 $credentialWork = fn () => DB::transaction(function () use ($input, $values, $admin) {
                     $this->actor($admin);
                     $policy = isset($input['id']) ? Policy::query()->findOrFail($input['id']) : new Policy();
+                    if (!$policy->exists && !array_key_exists('monthly_limit_usd', $values)) $policy->monthly_limit_usd = 0;
                     if ($policy->exists && $policy->revision !== $input['expected_revision']) throw new CloudException('config_changed');
                     if ($policy->exists && Schema::hasTable('v2_machine_owned_instance') && \App\Models\MachineOwnedInstance::query()->where('policy_id', $policy->id)->exists()) {
                         foreach (array_merge(['machine_id', 'account_id', 'region', 'size', 'image', 'dns_credential_id', 'dns_hostname'], isset($values['credential_group_id']) ? ['credential_group_id', 'provider'] : []) as $field) {
@@ -203,7 +204,6 @@ class MachineFailoverPolicyService
             try { app(MachineCloudCatalog::class)->validate($policy->toArray()); $add('provider_template_valid', 'passed'); }
             catch (CloudException $error) { $add($error->getMessage(), 'blocked'); }
         }
-        $add($policy->monthly_limit_usd > 0 ? 'budget_configured' : 'budget_required', $policy->monthly_limit_usd > 0 ? 'passed' : 'blocked');
         if (!$policy->dns_credential_id || $policy->dns_hostname === '') $add('dns_not_configured', 'blocked');
         else {
             $credential = Schema::hasTable('v2_machine_dns_credential') ? MachineDnsCredential::query()->find($policy->dns_credential_id, ['id', 'revision', 'provider']) : null;
@@ -246,7 +246,7 @@ class MachineFailoverPolicyService
         foreach (['region' => '/^[a-z0-9-]{1,60}$/D', 'size' => '/^[a-z0-9-]{1,60}$/D', 'image' => !$grouped || $input['provider'] === 'linode' ? '~^linode/[a-z0-9-]{1,60}$~D' : '/^[a-z0-9-]{1,80}$/D'] as $key => $pattern) {
             if (!is_string($input[$key] ?? null) || !preg_match($pattern, $input[$key])) throw new CloudException('invalid_policy');
         }
-        $budget = $input['monthly_limit_usd'] ?? null;
+        $budget = $input['monthly_limit_usd'] ?? 0;
         if (!is_numeric($budget) || !is_finite((float) $budget) || $budget < 0 || $budget > 1000
             || round((float) $budget, 2) !== (float) $budget) throw new CloudException('invalid_budget');
         if (!is_bool($input['isolation_confirmed'] ?? null)) throw new CloudException('invalid_policy');
@@ -261,7 +261,8 @@ class MachineFailoverPolicyService
         $values = array_intersect_key($input, array_flip(array_diff($allowed, ['id', 'expected_revision'])));
         if ($grouped) $values['account_id'] = null;
         elseif (app(MachineFailoverCredentials::class)->available()) $values += ['provider' => null, 'credential_group_id' => null, 'catalog_fingerprint' => null, 'catalog_checked_at' => null];
-        return array_replace($values, ['name' => $name, 'monthly_limit_usd' => (float) $budget,
+        if (array_key_exists('monthly_limit_usd', $values)) $values['monthly_limit_usd'] = (float) $budget;
+        return array_replace($values, ['name' => $name,
             'dns_credential_id' => $credential, 'dns_hostname' => $hostname]);
     }
 

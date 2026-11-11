@@ -122,7 +122,7 @@ class MachineFailoverShadowTest extends TestCase
         $this->trigger(); $before = $this->database(); DB::enableQueryLog(); $view = $this->view(); $queries = DB::getQueryLog(); DB::disableQueryLog();
         $this->assertSame(['would_replace', 'waiting'], array_column($view['members'], 'decision'));
         $this->assertContains('shared_account_wait', $view['members'][1]['blockers']); $this->assertSame(1, $view['planned_attempts']);
-        $this->assertEquals(40, $view['planned_monthly_reservation_usd']); $this->assertFalse($view['pricing_checked']); $this->assertFalse($view['writes_reserved']);
+        $this->assertEquals(0, $view['planned_monthly_reservation_usd']); $this->assertFalse($view['monetary_gate']); $this->assertFalse($view['writes_reserved']);
         $this->assertSame($before, $this->database());
         foreach ($queries as $query) $this->assertDoesNotMatchRegularExpression('/^\s*(insert|update|delete|replace|alter|create|drop)\b/i', $query['query']);
         $json = json_encode($view); foreach (['synthetic-secret', 'synthetic-dns-secret', 'synthetic-machine-', 'credential_key', 'episode_key', 'quota_ids'] as $secret) $this->assertStringNotContainsString($secret, $json);
@@ -159,7 +159,7 @@ class MachineFailoverShadowTest extends TestCase
         $this->trigger();
         foreach ([['attempt_limit' => 1, 'max_parallel' => 2, 'monthly_cap_usd' => 100, 'reason' => 'service_attempt_limit', 'attempts' => 1],
             ['attempt_limit' => 2, 'max_parallel' => 1, 'monthly_cap_usd' => 100, 'reason' => 'service_parallel_limit', 'attempts' => 1],
-            ['attempt_limit' => 2, 'max_parallel' => 2, 'monthly_cap_usd' => 30, 'reason' => 'service_reservation_limit', 'attempts' => 0]] as $case) {
+            ['attempt_limit' => 2, 'max_parallel' => 2, 'monthly_cap_usd' => 0, 'reason' => 'shared_account_wait', 'attempts' => 1]] as $case) {
             MachineFailoverService::query()->whereKey($this->service['id'])->update(array_intersect_key($case, array_flip(['attempt_limit', 'max_parallel', 'monthly_cap_usd'])));
             $view = $this->view(); $this->assertSame($case['attempts'], $view['planned_attempts']);
             $this->assertSame('waiting', $view['members'][1]['decision']); $this->assertContains($case['reason'], $view['members'][1]['blockers']);

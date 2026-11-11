@@ -57,7 +57,7 @@ class MachineProvisionService
         if ($account->provider !== 'linode') $data = $account->provider === 'vultr' ? base64_decode($request['user_data'], true) : $request['user_data'];
         return ['plan' => ProvisionPlan::summary($plan), 'bootstrap_bytes' => strlen($data),
             'live_enabled' => config('machine_provision.allow_live') === true, 'provider_checked' => false,
-            'budget_approved' => $plan['monthly_limit_usd'] > 0, 'script_exported' => false, 'takeover_performed' => false];
+            'monetary_gate' => false, 'script_exported' => false, 'takeover_performed' => false];
     }
 
     public function queue(array $input, string $requestId, int $admin): array
@@ -94,7 +94,6 @@ class MachineProvisionService
             ->block(2, fn () => $this->quotaLocked($plan['provider'] ?? 'linode', fn () => $this->locked($plan['account_id'], function () use ($plan, $requestId, $admin, $replacementPlan, $isolated, $attemptId) {
             $this->actor($admin);
             $this->testMachine($plan['machine_id']);
-            if ($plan['monthly_limit_usd'] <= 0) throw new CloudException('budget_required');
             $key = hash('sha256', $admin . ':' . $requestId);
             $hash = hash('sha256', json_encode($plan, JSON_THROW_ON_ERROR));
             if ($isolated !== null) $hash = hash('sha256', $hash . ':' . json_encode($isolated, JSON_THROW_ON_ERROR));

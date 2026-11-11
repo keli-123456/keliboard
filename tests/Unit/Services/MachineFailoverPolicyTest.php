@@ -104,6 +104,18 @@ class MachineFailoverPolicyTest extends TestCase
         Http::assertNothingSent(); Bus::assertNothingDispatched();
     }
 
+    public function test_money_can_be_omitted_and_legacy_values_are_preserved_without_gating(): void
+    {
+        $input = $this->input(); unset($input['monthly_limit_usd']);
+        $row = $this->service->save($input, $this->admin->id);
+        $this->assertSame(0.0, $row['monthly_limit_usd']);
+        $this->assertNotContains('budget_required', array_column($this->service->rehearse($row['id'], 1, 'current')['checks'], 'code'));
+        Policy::query()->whereKey($row['id'])->update(['monthly_limit_usd' => 48]);
+        $row = $this->service->save($input + ['id' => $row['id'], 'expected_revision' => 1], $this->admin->id);
+        $this->assertSame(48.0, $row['monthly_limit_usd']);
+        $this->assertFalse($row['execution_enabled']); Http::assertNothingSent(); Bus::assertNothingDispatched();
+    }
+
     public function test_overview_and_results_export_only_selected_metadata(): void
     {
         $row = $this->save(); $overview = $this->service->overview();
@@ -181,7 +193,7 @@ class MachineFailoverPolicyTest extends TestCase
         $row = $this->save(['monthly_limit_usd' => 0, 'isolation_confirmed' => false, 'dns_credential_id' => null, 'dns_hostname' => '']);
         DB::table('v2_server')->delete();
         $result = $this->service->rehearse($row['id'], 1, 'current');
-        foreach (['budget_required', 'dns_not_configured', 'isolation_confirmation_required', 'node_group_empty'] as $code) {
+        foreach (['dns_not_configured', 'isolation_confirmation_required', 'node_group_empty'] as $code) {
             $this->assertContains(['code' => $code, 'status' => 'blocked'], $result['checks']);
         }
         $this->assertFalse($result['execution_enabled']); Http::assertNothingSent(); Bus::assertNothingDispatched();

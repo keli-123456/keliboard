@@ -136,11 +136,11 @@ class MachineJsonProvisionTest extends TestCase
     public static function incompatible(): array
     {
         $cases = [];
-        foreach (['digitalocean', 'vultr'] as $provider) foreach (['unapproved', 'region', 'size', 'image', 'disk', 'price'] as $fault) $cases[] = [$provider, $fault];
+        foreach (['digitalocean', 'vultr'] as $provider) foreach (['unapproved', 'region', 'size', 'image', 'disk'] as $fault) $cases[] = [$provider, $fault];
         return $cases;
     }
     #[DataProvider('incompatible')]
-    public function test_incompatible_templates_or_prices_never_post(string $provider, string $fault): void
+    public function test_incompatible_templates_never_post(string $provider, string $fault): void
     {
         [$account, $plan, $client] = $this->fixture($provider);
         if ($fault === 'unapproved') config(['machine_provision.providers.' . $provider . '.regions' => []]);
@@ -149,9 +149,22 @@ class MachineJsonProvisionTest extends TestCase
         if ($fault === 'size') $this->catalog[$size][0][$provider === 'digitalocean' ? 'regions' : 'locations'] = ['other-region'];
         if ($fault === 'image') $this->catalog[$image][0][$provider === 'digitalocean' ? 'status' : 'arch'] = 'unsupported';
         if ($fault === 'disk') $this->catalog[$image][0]['min_disk_size'] = 80;
-        if ($fault === 'price') $this->catalog[$size][0][$provider === 'digitalocean' ? 'price_monthly' : 'monthly_cost'] = 20;
         try { $client->preflight($account, $plan); $this->fail('Expected preflight rejection'); }
-        catch (CloudException $e) { $this->assertContains($e->getMessage(), ['bootstrap_unsupported', 'catalog_empty', 'budget_exceeded']); }
+        catch (CloudException $e) { $this->assertContains($e->getMessage(), ['bootstrap_unsupported', 'catalog_empty']); }
+        $this->assertSame(0, $this->posts);
+    }
+
+    #[DataProvider('providers')]
+    public function test_prices_are_optional_and_never_an_execution_limit(string $provider): void
+    {
+        [$account, $plan, $client] = $this->fixture($provider);
+        unset($plan['monthly_limit_usd']);
+        $size = $provider === 'digitalocean' ? 'sizes' : 'plans';
+        $key = $provider === 'digitalocean' ? 'price_monthly' : 'monthly_cost';
+        foreach ([null, 'unknown', 20000] as $price) {
+            $this->catalog[$size][0][$key] = $price;
+            $client->preflight($account, $plan);
+        }
         $this->assertSame(0, $this->posts);
     }
 

@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
-// This collector reads cached evidence and finance snapshots. Only its two audit tables may be written.
+// This collector reads cached evidence. Only its two audit tables may be written.
 class MachineFailoverTriggerPreview
 {
     private const EVENTS = 'v2_machine_failover_trigger_event';
@@ -30,13 +30,12 @@ class MachineFailoverTriggerPreview
         'panel_origin_invalid', 'template_unsupported', 'shared_node_group', 'ownership_mismatch', 'credentials_required',
         'groups_migration_required', 'budget_history_unavailable', 'credential_group_daily_budget', 'credential_group_exhausted',
         'catalog_expired', 'provider_template_mismatch', 'shadow_read_expired', 'shadow_context_changed'];
-    public function __construct(private MachineFailoverServiceRegistry $registry, private MachineFailoverShadow $shadow,
-        private MachineFailoverBudget $budget) {}
+    public function __construct(private MachineFailoverServiceRegistry $registry, private MachineFailoverShadow $shadow) {}
 
     public function available(): bool
     {
         return Schema::hasTable('v2_machine_failover_trigger_preview') && Schema::hasTable(self::EVENTS)
-            && Schema::hasTable('v2_machine_failover_execution_member') && $this->shadow->available() && $this->budget->available();
+            && Schema::hasTable('v2_machine_failover_execution_member') && $this->shadow->available();
     }
     public function collect(int $limit = 5): array
     {
@@ -67,30 +66,21 @@ class MachineFailoverTriggerPreview
         $context = $this->registry->fingerprint($this->registry->snapshot($service->id, $service->revision));
         $report = $this->shadow->report($service->id, $service->revision, $admin); $now = now()->getTimestamp();
         if ($report['valid_until'] <= $now) throw new CloudException('evidence_expired');
-        $cost = in_array('would_replace', array_column($report['members'], 'decision'), true)
-            ? $this->budget->forecast($service->id, $service->revision, $admin) : null;
-        $planned = 0; $entries = []; $active = MachineFailoverExecution::query()->where('service_id', $service->id)->where('status', 'running')->exists();
+        $entries = []; $active = MachineFailoverExecution::query()->where('service_id', $service->id)->where('status', 'running')->exists();
         foreach ($report['members'] as $member) {
             $reasons = $this->reasons($member['blockers']); $decision = $member['decision'] === 'would_replace' ? 'would_start' : $member['decision'];
             if ($decision === 'insufficient_evidence') $reasons[] = $this->safe($member['source']['evidence_reason']);
             if ($decision === 'awaiting_samples') $reasons[] = 'awaiting_samples';
-            $episode = $this->episode($member); $price = (int) round($member['budget']['monthly_reservation_usd'] * 100); $valid = $report['valid_until'];
+            $episode = $this->episode($member); $valid = $report['valid_until'];
             if ($decision === 'would_start') {
                 if (!$episode) $reasons[] = 'decision_snapshot_missing';
                 if ($episode && MachineFailoverExecutionMember::query()->where('episode_key', $episode)->exists()) $reasons[] = 'native_episode_used';
                 if ($active) $reasons[] = 'native_run_active';
                 if (!in_array($member['candidate']['provider'] ?? null, MachineProvisionProviders::SUPPORTED, true)) $reasons[] = 'unsupported_provider';
-                if (($cost['state'] ?? '') !== 'verified' || !is_int($cost['available_cents'] ?? null) || ($cost['valid_until'] ?? 0) <= $now)
-                    $reasons[] = 'cost_baseline_required';
-                else {
-                    $valid = min($valid, $cost['valid_until']);
-                    if ($price < 1) $reasons[] = 'budget_required';
-                    elseif ($planned + $price > $cost['available_cents']) $reasons[] = 'shared_monthly_budget';
-                }
-                if ($reasons) $decision = 'blocked'; else $planned += $price;
+                if ($reasons) $decision = 'blocked';
             }
             $entries[] = ['member' => $member, 'episode' => $episode, 'decision' => $decision, 'reasons' => $this->reasons($reasons),
-                'planned_cents' => $decision === 'would_start' ? $price : 0, 'checked_at' => $report['checked_at'], 'valid_until' => $valid];
+                'planned_cents' => 0, 'checked_at' => $report['checked_at'], 'valid_until' => $valid];
         }
         $this->registry->locked(function () use ($service, $admin, $context, $entries, &$result) {
             $this->registry->actor($admin);

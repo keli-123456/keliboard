@@ -495,12 +495,16 @@ class MachineProvisionTest extends TestCase
         $this->assertSame(1, Task::query()->count()); Http::assertNothingSent();
     }
 
-    public function test_request_permissions_and_budget_are_required_even_with_live_gate(): void
+    public function test_scope_and_permissions_remain_required_but_money_can_be_omitted(): void
     {
         config(['machine_provision.allow_live' => true]);
         $this->code('test_machine_not_allowed', fn () => $this->service->queue($this->plan(), str_repeat('a', 32), $this->admin->id));
         $this->enable();
-        $this->code('budget_required', fn () => $this->service->queue($this->plan(['monthly_limit_usd' => 0]), str_repeat('a', 32), $this->admin->id));
+        $plan = $this->plan(); unset($plan['monthly_limit_usd']);
+        $first = $this->service->queue($plan, str_repeat('a', 32), $this->admin->id);
+        $this->assertSame(0.0, (float) $first['plan']['monthly_limit_usd']);
+        $this->assertSame($first['id'], $this->service->queue($plan, str_repeat('a', 32), $this->admin->id)['id']);
+        $this->assertSame(1, Task::count());
         $this->admin->fill(['is_admin' => false])->save();
         $this->code('permission_revoked', fn () => $this->service->queue($this->plan(), str_repeat('a', 32), $this->admin->id));
         Http::assertNothingSent();
@@ -529,9 +533,7 @@ class MachineProvisionTest extends TestCase
             'image lacks cloud init' => ['image', ['id' => 'linode/debian12', 'status' => 'available', 'capabilities' => [], 'deprecated' => false], 'bootstrap_unsupported'],
             'image retired' => ['image', ['id' => 'linode/debian12', 'status' => 'available', 'capabilities' => ['cloud-init'], 'deprecated' => true], 'bootstrap_unsupported'],
             'backups override' => ['settings', ['backups_enabled' => true], 'account_backups_enabled'],
-            'settings unknown' => ['settings', [], 'provider_invalid'],
-            'price exceeds budget' => ['type', ['id' => 'g6-standard-4', 'class' => 'standard', 'price' => ['monthly' => 110], 'region_prices' => []], 'budget_exceeded'],
-            'regional price exceeds budget' => ['type', ['id' => 'g6-standard-4', 'class' => 'standard', 'price' => ['monthly' => 48], 'region_prices' => [['id' => 'sg-sin-2', 'monthly' => 110]]], 'budget_exceeded']];
+            'settings unknown' => ['settings', [], 'provider_invalid']];
     }
     #[DataProvider('unsupportedPreflight')]
     public function test_preflight_blocks_incompatible_or_unapproved_charges(string $field, array $body, string $reason): void
@@ -541,6 +543,18 @@ class MachineProvisionTest extends TestCase
         $this->fake(null, fn ($request) => str_contains($request->url(), $fragment) ? Http::response($body) : null);
         $this->poll($task); $this->assertSame('failed', $task->status); $this->assertSame($reason, $task->reason);
         $this->assertNull($task->dispatched_at); $this->assertSame(0, $this->postCalls);
+    }
+
+    public function test_preflight_does_not_require_prices_or_a_monetary_allowance(): void
+    {
+        foreach ([[], ['price' => ['monthly' => 10000], 'region_prices' => [['id' => 'sg-sin-2', 'monthly' => 20000]]],
+            ['price' => ['monthly' => 'unknown'], 'region_prices' => null]] as $quote) {
+            $this->fake(null, fn ($request) => str_contains($request->url(), '/linode/types/')
+                ? Http::response(['id' => 'g6-standard-4', 'class' => 'standard'] + $quote) : null);
+            $plan = $this->plan(['monthly_limit_usd' => 0]);
+            $this->provider->preflight($this->account, ProvisionPlan::normalize($plan));
+        }
+        $this->assertSame(0, $this->postCalls);
     }
 
     public function test_unreviewed_sizes_and_images_never_reach_provider(): void

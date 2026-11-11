@@ -276,21 +276,15 @@ class MachineFailoverNativeBridge
             app(MachineCloudCredentialHealth::class)->assertEligible($account, $plan);
             $service = $run->payload['snapshot']['service'];
             $members = Member::query()->whereIn('execution_id', Execution::query()->where('service_id', $run->service_id)->select('id'))->pluck('id');
-            $history = Attempt::query()->whereIn('execution_member_id', $members);
             $currentMembers = Member::query()->where('execution_id', $run->id)->pluck('id');
             if (Attempt::query()->whereIn('execution_member_id', $currentMembers)->count() >= $service['attempt_limit']) throw new CloudException('attempt_budget');
-            $cost = (int) round($policy->monthly_limit_usd * 100);
-            $released = \Illuminate\Support\Facades\Schema::hasTable('v2_machine_failover_budget_release')
-                ? (int) \App\Models\MachineFailoverBudgetRelease::query()->where('service_id', $run->service_id)->sum('amount_cents') : 0;
-            if ($cost <= 0 || (clone $history)->sum('reserved_cents') - $released + $cost > (int) round($service['monthly_cap_usd'] * 100)) throw new CloudException('shared_monthly_budget');
-            app(MachineFailoverBudget::class)->assertCapacity($run->service_id, $run->service_revision, $cost);
             $active = Attempt::query()->whereNotIn('status', ['rejected', 'failed', 'cancelled', 'completed', 'retained', 'released'])->get();
             if ($active->whereIn('execution_member_id', $members->all())->count() >= $service['max_parallel']) throw new CloudException('parallel_budget');
             $ids = app(MachineCloudCredentialHealth::class)->sameAccountIds($account);
             if ($active->whereIn('account_id', $ids)->isNotEmpty()) throw new CloudException('account_reserved');
             $attempt = Attempt::query()->create(['id' => (string) Str::uuid(), 'execution_member_id' => $member->id,
                 'ordinal' => Attempt::query()->where('execution_member_id', $member->id)->count() + 1, 'request_id' => bin2hex(random_bytes(16)),
-                'account_id' => $account->id, 'account_revision' => $account->revision, 'reserved_cents' => $cost,
+                'account_id' => $account->id, 'account_revision' => $account->revision, 'reserved_cents' => 0,
                 'payload' => ['plan' => $plan, 'previous_attempt_id' => $previous?->id] + ($rotation === null ? [] : ['rotation' => $rotation])]);
             $member->fill(['attempt_id' => $attempt->id, 'phase' => 'creating', 'reason' => null])->save();
             return $attempt;

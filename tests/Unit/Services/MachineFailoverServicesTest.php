@@ -74,6 +74,16 @@ class MachineFailoverServicesTest extends TestCase
             'members' => array_map(fn ($row) => ['policy_id' => $row['id'], 'policy_revision' => $row['revision'], 'name' => $row['name'],
                 'priority' => $row['id'], 'enabled' => true], $this->policies)];
     }
+    public function test_service_money_is_optional_and_old_values_are_not_erased_on_edit(): void
+    {
+        $this->registry->drop($this->service['id'], 1, $this->admin->id);
+        $input = $this->input(); unset($input['monthly_cap_usd']);
+        $row = $this->registry->save($input, $this->admin->id); $this->assertSame(0.0, $row['monthly_cap_usd']);
+        Service::query()->whereKey($row['id'])->update(['monthly_cap_usd' => 48]);
+        $row = $this->registry->save($input + ['id' => $row['id'], 'expected_revision' => 1], $this->admin->id);
+        $this->assertSame(48.0, $row['monthly_cap_usd']); $this->assertFalse($row['execution_enabled']); $this->untouched();
+    }
+
     private function start(string $scenario = 'replace', ?int $target = 1, string $key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'): array
     {
         return $this->simulation->start($this->service['id'], $this->service['revision'], $scenario, $target, $key, $this->admin->id);
@@ -131,7 +141,7 @@ class MachineFailoverServicesTest extends TestCase
     {
         Service::query()->whereKey($this->service['id'])->update(['attempt_limit' => 1]);
         $run = $this->simulation->advance($this->start('credential_auth_rotate')['id'], $this->admin->id);
-        $this->assertSame('failed', $run['status']); $this->assertSame(1, $run['attempts']); $this->assertSame(100.0, $run['reserved_usd']);
+        $this->assertSame('failed', $run['status']); $this->assertSame(1, $run['attempts']); $this->assertSame(0.0, $run['reserved_usd']);
         $this->assertSame('rotation_budget_exhausted', $run['members'][0]['credential_attempts'][0]['reason']); $this->untouched();
     }
 
@@ -168,11 +178,11 @@ class MachineFailoverServicesTest extends TestCase
             $run = $this->simulation->advance($run['id'], $this->admin->id, 1);
             $this->assertLessThanOrEqual(1, RunMember::query()->whereIn('phase', array_keys(MachineFailoverStateMachine::ACTIONS))->count());
         }
-        $this->assertSame('completed', $run['status']); $this->assertSame(2, $run['attempts']); $this->assertSame(200.0, $run['reserved_usd']);
+        $this->assertSame('completed', $run['status']); $this->assertSame(2, $run['attempts']); $this->assertSame(0.0, $run['reserved_usd']);
         $this->assertSame(['completed', 'completed'], array_column($run['members'], 'phase')); $this->untouched();
     }
 
-    public static function budgetCases(): array { return [['attempt_limit', 1, 'service_attempt_limit'], ['monthly_cap_usd', 100, 'service_budget_limit']]; }
+    public static function budgetCases(): array { return [['attempt_limit', 1, 'service_attempt_limit']]; }
     #[DataProvider('budgetCases')]
     public function test_service_caps_do_not_multiply_per_member(string $field, int $value, string $reason): void
     {
@@ -189,7 +199,7 @@ class MachineFailoverServicesTest extends TestCase
         Service::query()->whereKey($this->service['id'])->update(['monthly_cap_usd' => 0.3]);
         $result = $this->simulation->advance($this->start('replace', null)['id'], $this->admin->id);
         $this->assertSame('completed', $result['status']); $this->assertSame(2, $result['attempts']);
-        $this->assertSame(0.3, $result['reserved_usd']); $this->untouched();
+        $this->assertSame(0.0, $result['reserved_usd']); $this->untouched();
     }
 
     public function test_unknown_create_and_dns_intents_are_reconciled_without_replaying_writes(): void

@@ -69,13 +69,13 @@ class MachineFailoverTriggerPreviewTest extends MachineFailoverShadowTest
         $this->assertSame(2, Preview::query()->where('member_id', $old->member_id)->whereNotNull('episode_key')->count());
         $this->assertSame('cancelled', $old->fresh()->decision); Http::assertNothingSent(); Bus::assertNothingDispatched();
     }
-    public function test_missing_or_insufficient_cost_evidence_blocks_without_reserving_money(): void
+    public function test_missing_or_insufficient_cost_evidence_does_not_block_or_reserve_money(): void
     {
         $this->trigger(); $this->enablePreview(); $this->finance->value['available_cents'] = 3999;
         $this->collectPreview(); $row = Preview::query()->orderBy('member_id')->first();
-        $this->assertSame('blocked', $row->decision); $this->assertContains('shared_monthly_budget', $row->reasons);
+        $this->assertSame('would_start', $row->decision); $this->assertSame([], $row->reasons); $this->assertSame(0, $row->planned_cents);
         $this->finance->value['state'] = 'expired'; $this->collectPreview();
-        $this->assertContains('cost_baseline_required', $row->fresh()->reasons);
+        $this->assertSame('would_start', $row->fresh()->decision);
         $this->assertSame(0, DB::table('v2_machine_failover_attempt')->count());
         $this->assertSame(0, DB::table('v2_machine_failover_budget_release')->count()); Http::assertNothingSent(); Bus::assertNothingDispatched();
     }
@@ -83,7 +83,7 @@ class MachineFailoverTriggerPreviewTest extends MachineFailoverShadowTest
     {
         $this->trigger(); $this->enablePreview(); app()->forgetInstance(MachineFailoverBudget::class);
         $before = $this->businessState(); $this->collectPreview();
-        $this->assertContains('cost_baseline_required', Preview::query()->orderBy('member_id')->first()->reasons);
+        $this->assertSame('would_start', Preview::query()->orderBy('member_id')->first()->decision);
         $this->assertSame($before, $this->businessState()); Http::assertNothingSent(); Bus::assertNothingDispatched();
     }
     public function test_stale_reports_expire_old_plans_and_history_is_read_only_redacted_and_stale(): void
@@ -170,8 +170,12 @@ class MachineFailoverTriggerPreviewTest extends MachineFailoverShadowTest
     public function test_transition_cursor_is_stable_and_history_performs_no_writes(): void
     {
         $this->trigger(); $this->enablePreview();
+        $run = \App\Models\MachineFailoverExecution::query()->create(['id' => (string) \Illuminate\Support\Str::uuid(),
+            'service_id' => $this->service['id'], 'service_revision' => 1, 'admin_id' => $this->admin->id,
+            'request_key' => str_repeat('f', 64), 'context_hash' => str_repeat('a', 64), 'intent_hash' => str_repeat('b', 64),
+            'payload' => [], 'deadline_at' => $this->clock + 600]);
         for ($i = 0; $i < 25; $i++) {
-            $this->finance->value['available_cents'] = $i % 2 ? 3999 : 10000; $this->collectPreview();
+            $run->fill(['status' => $i % 2 ? 'running' : 'stopped'])->save(); $this->collectPreview();
         }
         DB::enableQueryLog(); $first = $this->historyPreview(); $second = $this->historyPreview($first['next_before_id']);
         $queries = DB::getQueryLog(); DB::disableQueryLog();

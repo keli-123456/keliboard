@@ -174,16 +174,6 @@ class MachineFailoverBudget
         return $result;
     }
 
-    public function assertCapacity(int $id, int $revision, int $additionalCents): void
-    {
-        if (!$this->available()) throw new CloudException('cost_baseline_required');
-        $service = Service::query()->findOrFail($id);
-        if ($service->revision !== $revision) throw new CloudException('config_changed');
-        $balance = $this->balance($service, $this->graph($service));
-        if ($balance['state'] !== 'verified') throw new CloudException('cost_baseline_required');
-        if ($additionalCents < 1 || $balance['allocated_cents'] + $additionalCents > $balance['cap_cents']) throw new CloudException('shared_monthly_budget');
-    }
-
     public function forecast(int $id, int $revision, int $admin): array
     {
         $service = $this->scope($id, $revision, $admin);
@@ -357,7 +347,8 @@ class MachineFailoverBudget
             $price = $valid ? $item['monthly_cents'] : null; $attempt = $entry['attempt'];
             $groups[$entry['resource_key']][] = ['kind' => $entry['kind'], 'price' => $price, 'attempt' => $attempt];
             if ($attempt && $price === null) $pendingQuotes++;
-            if ($attempt && $valid && $item['state'] === 'unknown') $unknown++;
+            if ($attempt && $price === null && (($valid && $item['state'] === 'unknown')
+                || $attempt->reserved_cents - ($releases->get($attempt->id)?->amount_cents ?? 0) === 0)) $unknown++;
             if ($entry['archived'] && $valid && $item['state'] === 'present') { $unknown++; $graph['blockers'][] = 'archived_resource_returned'; }
             if ($entry['archived'] && $valid && $item['state'] === 'absent') continue;
             $items[] = ['task_id' => $task->id, 'attempt_id' => $attempt?->id, 'member_name' => $entry['name'], 'account_name' => $entry['account_name'],

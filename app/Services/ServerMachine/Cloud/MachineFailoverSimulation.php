@@ -94,11 +94,9 @@ class MachineFailoverSimulation
                 $reason = RunMember::query()->where('run_id', $run->id)->where('phase', 'needs_review')->exists() ? 'service_review_required'
                     : (!$context['isolation_confirmed'] ? 'isolation_confirmation_required'
                     : (!$context['dns_exists'] || !$context['dns_hostname'] ? 'dns_not_configured'
-                    : ($context['monthly_limit_usd'] <= 0 || $limits['monthly_cap_usd'] <= 0 ? 'budget_required'
-                    : ($run->attempts >= $limits['attempt_limit'] ? 'service_attempt_limit'
-                    : (round($run->reserved_usd + $context['monthly_limit_usd'], 2) > $limits['monthly_cap_usd'] ? 'service_budget_limit' : null)))));
+                    : ($run->attempts >= $limits['attempt_limit'] ? 'service_attempt_limit' : null)));
                 DB::transaction(function () use ($reason, $run, $context, $row, $payload, $state, $now) {
-                    if ($reason === null) { $run->attempts++; $run->reserved_usd = round($run->reserved_usd + $context['monthly_limit_usd'], 2); $run->save(); }
+                    if ($reason === null) { $run->attempts++; $run->save(); }
                     $next = $this->machine->reserve($state, $reason === null, $reason);
                     $this->saveMember($row, $payload, $next, $now);
                 });
@@ -120,13 +118,13 @@ class MachineFailoverSimulation
                 $fact = $action->receipt;
                 if (!$fact) {
                     $limits = $run->payload['snapshot']['service'];
-                    $remaining = min(1 + $limits['attempt_limit'] - $run->attempts, (int) floor(($limits['monthly_cap_usd'] - $run->reserved_usd + $context['monthly_limit_usd'] + .0001) / max(.01, $context['monthly_limit_usd'])));
+                    $remaining = 1 + $limits['attempt_limit'] - $run->attempts;
                     try { $fact = $this->driver->execute($kind, $context + ['credential_attempt_limit' => max(1, min(3, $remaining))], $state, $scenario, $action->id, $now); }
                     catch (\Throwable) { $fact = $this->unknown($context, $action->id, $now); }
                     $extra = $kind === 'create' ? max(0, count(is_array($fact['credential_attempts'] ?? null) ? $fact['credential_attempts'] : []) - 1) : 0;
                     if ($extra >= max(1, $remaining)) { $fact = $this->unknown($context, $action->id, $now); $extra = 0; }
                     DB::transaction(function () use ($action, $fact, $extra, $run, $context) {
-                        if ($extra) { $run->attempts += $extra; $run->reserved_usd = round($run->reserved_usd + $extra * $context['monthly_limit_usd'], 2); $run->save(); }
+                        if ($extra) { $run->attempts += $extra; $run->save(); }
                         $action->fill(['receipt' => $fact, 'status' => ($fact['status'] ?? null) === 'ok' ? 'confirmed' : 'uncertain'])->save();
                     });
                 }

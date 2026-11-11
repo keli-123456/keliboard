@@ -61,7 +61,7 @@ class MachineFailoverServiceRegistry
         foreach (['max_parallel' => [1, 2], 'attempt_limit' => [1, 20]] as $key => [$min, $max]) {
             if (!is_int($input[$key] ?? null) || $input[$key] < $min || $input[$key] > $max) throw new CloudException('invalid_service');
         }
-        $cap = $input['monthly_cap_usd'] ?? null;
+        $cap = $input['monthly_cap_usd'] ?? 0;
         if (!is_numeric($cap) || !is_finite((float) $cap) || $cap < 0 || $cap > 10000 || round((float) $cap, 2) !== (float) $cap) throw new CloudException('invalid_budget');
         if (!is_array($input['members'] ?? null) || !array_is_list($input['members']) || count($input['members']) < 1 || count($input['members']) > 10) throw new CloudException('invalid_members');
         if (isset($input['id']) && (!is_int($input['id']) || $input['id'] < 1 || !is_int($input['expected_revision'] ?? null))) throw new CloudException('config_changed');
@@ -91,7 +91,8 @@ class MachineFailoverServiceRegistry
             if ($removed && (clone $removed)->exists() && (Run::query()->where('service_id', $service->id)->exists() || $this->nativeHistory($service->id))) throw new CloudException('member_audit_retained');
             $removed?->delete();
             $service->fill(['name' => $name, 'max_parallel' => $input['max_parallel'], 'attempt_limit' => $input['attempt_limit'],
-                'monthly_cap_usd' => (float) $cap, 'revision' => $service->exists ? $service->revision + 1 : 1, 'updated_by' => $admin])->save();
+                'monthly_cap_usd' => array_key_exists('monthly_cap_usd', $input) ? (float) $cap : ($service->monthly_cap_usd ?? 0),
+                'revision' => $service->exists ? $service->revision + 1 : 1, 'updated_by' => $admin])->save();
             foreach ($values as $row) Member::query()->updateOrCreate(['service_id' => $service->id, 'policy_id' => $row['policy_id']], $row);
             return $this->present($service->fresh());
         }));

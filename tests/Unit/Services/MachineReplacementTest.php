@@ -195,12 +195,12 @@ class MachineReplacementTest extends TestCase
         $this->assertSame(1, Task::count()); $this->assertSame(0, Replacement::count()); Http::assertNothingSent(); Bus::assertNothingDispatched();
     }
 
-    public function test_atomic_budget_reservation_and_episode_deduplication_are_idempotent(): void
+    public function test_episode_deduplication_is_idempotent_without_a_money_reservation(): void
     {
         $task = $this->queue(); $again = $this->queue();
         $this->assertSame($task->id, $again->id); $this->assertSame(1, Replacement::count());
         $row = Replacement::query()->firstOrFail();
-        $this->assertSame($task->replacement_id, $row->id); $this->assertSame(100.0, $row->reserved_monthly_usd);
+        $this->assertSame($task->replacement_id, $row->id); $this->assertSame(0.0, $row->reserved_monthly_usd);
         $this->assertSame($task->id, $row->task_id); $this->assertSame('queued', $row->status);
         $this->code('replacement_episode_used', fn () => $this->queue(str_repeat('c', 32)));
         $this->assertSame(2, Task::count()); Http::assertNothingSent();
@@ -239,11 +239,11 @@ class MachineReplacementTest extends TestCase
         Http::assertNothingSent(); $this->assertSame(0, $this->posts);
     }
 
-    public function test_provider_price_is_checked_before_the_only_create_post(): void
+    public function test_legacy_money_does_not_block_the_only_create_post(): void
     {
         $task = $this->queue(); $this->fake(price: 101); $task = $this->poll($task);
-        $this->assertSame('failed', $task->status); $this->assertSame('budget_exceeded', $task->reason);
-        $this->assertSame(0, $this->posts); $this->assertSame(100.0, Replacement::query()->firstOrFail()->reserved_monthly_usd);
+        $this->assertSame('waiting_initialization', $task->status);
+        $this->assertSame(1, $this->posts); $this->assertSame(0.0, Replacement::query()->firstOrFail()->reserved_monthly_usd);
     }
 
     public function test_revoked_actor_after_preflight_prevents_creation(): void

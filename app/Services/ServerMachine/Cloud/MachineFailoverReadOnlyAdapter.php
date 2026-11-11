@@ -95,7 +95,7 @@ class MachineFailoverReadOnlyAdapter
         return ['source' => $source, 'candidate' => $account ? ['account_id' => $account->id, 'account_revision' => $account->revision,
             'account_name' => $account->name, 'provider' => $account->provider, 'health' => $health['state'] ?? 'unknown',
             'identity' => $health['identity'] ?? 'unknown', 'region' => $policy->region, 'size' => $policy->size, 'image' => $policy->image] : null,
-            'budget' => ['account_attempts_24h' => $attempts, 'cooldown_until' => $cooldown, 'monthly_reservation_usd' => $policy->monthly_limit_usd],
+            'budget' => ['account_attempts_24h' => $attempts, 'cooldown_until' => $cooldown, 'monthly_reservation_usd' => 0],
             'blockers' => array_values(array_unique($blockers)), 'quota_ids' => $ids];
     }
 }
