@@ -8,6 +8,34 @@ use Symfony\Component\Yaml\Yaml;
 
 class ProvisionBootstrap
 {
+    // Bound local parsing/compression independently of each provider's wire limit.
+    private const MAX_CONFIG_BYTES = 65535;
+
+    public static function compactFiles(string $bootstrap): string
+    {
+        if (strlen($bootstrap) > self::MAX_CONFIG_BYTES) throw new CloudException('bootstrap_too_large');
+        if (!str_starts_with($bootstrap, '#cloud-config')) throw new CloudException('invalid_bootstrap_identity');
+        try { $data = Yaml::parse($bootstrap); }
+        catch (\Throwable) { throw new CloudException('invalid_bootstrap_identity'); }
+        if (!is_array($data)) throw new CloudException('invalid_bootstrap_identity');
+        if (!isset($data['write_files'])) return $bootstrap;
+        if (!is_array($data['write_files']) || !array_is_list($data['write_files'])) throw new CloudException('invalid_bootstrap_identity');
+        $changed = false;
+        foreach ($data['write_files'] as &$file) {
+            if (!is_array($file)) throw new CloudException('invalid_bootstrap_identity');
+            if (!is_string($file['content'] ?? null) || strlen($file['content']) < 1024
+                || ($file['encoding'] ?? 'text/plain') !== 'text/plain') continue;
+            if (!function_exists('gzencode')) throw new CloudException('bootstrap_compression_unavailable');
+            $compressed = gzencode($file['content'], 9);
+            if ($compressed === false) throw new CloudException('bootstrap_compression_unavailable');
+            $encoded = base64_encode($compressed);
+            if (strlen($encoded) + 32 >= strlen($file['content'])) continue;
+            $file['encoding'] = 'gz+b64'; $file['content'] = $encoded; $changed = true;
+        }
+        unset($file);
+        return $changed ? "#cloud-config\n" . Yaml::dump($data, 8, 2, Yaml::DUMP_MULTI_LINE_LITERAL_BLOCK) : $bootstrap;
+    }
+
     public function origin(string $url): string
     {
         $parts = parse_url($url);
@@ -75,7 +103,7 @@ SH;
         foreach (['install.sh' => $install, 'bootstrap.sh' => $script, 'callback.conf' => $callback] as $name => $body) {
             $files[] = ['path' => $directory . '/' . $name, 'owner' => 'root:root', 'permissions' => '0600', 'content' => $body];
         }
-        $data = "#cloud-config\n" . Yaml::dump(['write_files' => $files, 'runcmd' => [['bash', $directory . '/bootstrap.sh']]], 8, 2, Yaml::DUMP_MULTI_LINE_LITERAL_BLOCK);
+        $data = self::compactFiles("#cloud-config\n" . Yaml::dump(['write_files' => $files, 'runcmd' => [['bash', $directory . '/bootstrap.sh']]], 8, 2, Yaml::DUMP_MULTI_LINE_LITERAL_BLOCK));
         if (strlen(base64_encode($data)) > 65535) throw new CloudException('bootstrap_too_large');
         return $data;
     }

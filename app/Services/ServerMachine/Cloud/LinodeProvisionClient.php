@@ -6,11 +6,23 @@ use Illuminate\Support\Facades\Http;
 
 class LinodeProvisionClient extends LinodeClient implements ProvisionClient
 {
-    public const MAX_METADATA_BYTES = 65535;
+    // Conservative local budgets after the real rejection, not a claimed provider threshold.
+    public const MAX_USER_DATA_BYTES = 16384;
+    public const MAX_METADATA_BYTES = 21848;
+
+    public static function assertMetadataSize(mixed $encoded): void
+    {
+        if (!is_string($encoded) || $encoded === '') throw new CloudException('invalid_bootstrap_identity');
+        if (strlen($encoded) > self::MAX_METADATA_BYTES) throw new CloudException('bootstrap_too_large');
+        $decoded = base64_decode($encoded, true);
+        if ($decoded === false) throw new CloudException('invalid_bootstrap_identity');
+        if (strlen($decoded) > self::MAX_USER_DATA_BYTES) throw new CloudException('bootstrap_too_large');
+    }
+
     public function buildRequest(array $plan, string $id, string $marker, string $bootstrap): array
     {
-        $encoded = base64_encode($bootstrap);
-        if (strlen($encoded) > self::MAX_METADATA_BYTES) throw new CloudException('bootstrap_too_large');
+        $encoded = base64_encode(ProvisionBootstrap::compactFiles($bootstrap));
+        self::assertMetadataSize($encoded);
         return ['label' => 'keli-' . str_replace('-', '', $id), 'region' => $plan['region'], 'type' => $plan['size'],
             'image' => $plan['image'], 'tags' => [$marker], 'booted' => true, 'backups_enabled' => false,
             'authorized_keys' => $plan['authorized_keys'], 'root_pass' => bin2hex(random_bytes(20)) . 'aA9!',
@@ -37,6 +49,7 @@ class LinodeProvisionClient extends LinodeClient implements ProvisionClient
     {
         MachineProvisionProviders::assertProvider($account, 'linode');
         if (config('machine_provision.allow_live') !== true) throw new CloudException('provisioning_disabled');
+        self::assertMetadataSize($request['metadata']['user_data'] ?? null);
         try {
             $response = Http::withToken($account->credentials['api_token'])->acceptJson()->withoutRedirecting()
                 ->connectTimeout(3)->timeout(15)->post('https://api.linode.com/v4/linode/instances', $request);

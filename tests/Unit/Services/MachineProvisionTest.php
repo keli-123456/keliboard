@@ -170,7 +170,8 @@ class MachineProvisionTest extends TestCase
     public function test_preview_is_local_and_never_exports_installation_secrets(): void
     {
         $result = $this->service->preview($this->plan()); $encoded = json_encode($result);
-        $this->assertGreaterThan(10000, $result['bootstrap_bytes']);
+        $this->assertGreaterThan(1000, $result['bootstrap_bytes']);
+        $this->assertLessThanOrEqual(LinodeProvisionClient::MAX_USER_DATA_BYTES, $result['bootstrap_bytes']);
         foreach (['synthetic-machine-secret', 'synthetic-provider-secret', '"root_pass":', '#cloud-config', 'Bearer', 'authorized_keys'] as $secret) $this->assertStringNotContainsString($secret, $encoded);
         $this->assertSame('keep', $result['plan']['delete_strategy']);
         $this->assertFalse($result['provider_checked']); $this->assertFalse($result['takeover_performed']);
@@ -260,7 +261,10 @@ class MachineProvisionTest extends TestCase
         $data = Yaml::parse(base64_decode($request['metadata']['user_data']));
         $this->assertCount(3, $data['write_files']);
         foreach ($data['write_files'] as $file) { $this->assertSame('root:root', $file['owner']); $this->assertSame('0600', $file['permissions']); }
-        $install = $data['write_files'][0]['content']; $bootstrap = $data['write_files'][1]['content'];
+        $this->assertSame('gz+b64', $data['write_files'][0]['encoding']);
+        $this->assertSame('gz+b64', $data['write_files'][1]['encoding']);
+        $install = gzdecode(base64_decode($data['write_files'][0]['content'], true));
+        $bootstrap = gzdecode(base64_decode($data['write_files'][1]['content'], true));
         $this->assertStringNotContainsString("\r", $install); $this->assertStringNotContainsString("\r", $bootstrap);
         $this->assertStringContainsString('AGENT_TYPE="kelinode-rs"', $install);
         foreach (['INSTALL_DEPS', 'ENABLE_BBR', 'ENABLE_SYS_TUNING', 'ENABLE_EGRESS_GUARD'] as $flag) $this->assertStringContainsString($flag . '="1"', $install);
@@ -636,16 +640,49 @@ class MachineProvisionTest extends TestCase
             $this->assertStringNotContainsString($secret, json_encode($task->toArray()));
         $this->poll($task); $this->assertSame(1, $this->postCalls); $this->assertSame(1, Task::query()->count());
     }
-    public function test_linode_metadata_size_uses_encoded_bytes_without_rejecting_the_previous_27303_byte_shape(): void
+    public function test_linode_local_budgets_reject_both_previous_rejected_sizes_without_http(): void
     {
         $client = new \App\Services\ServerMachine\Cloud\LinodeProvisionClient();
         $plan = $this->plan(); $id = '10000000-0000-4000-8000-000000000001';
-        $r = $client->buildRequest($plan, $id, 'synthetic-marker', str_repeat('x', 27303));
-        $this->assertSame(36404, strlen($r['metadata']['user_data']));
-        $this->assertSame(27303, strlen(base64_decode($r['metadata']['user_data'], true)));
-        $maximum = $client->buildRequest($plan, $id, 'synthetic-marker', str_repeat('x', 49149));
-        $this->assertSame(65532, strlen($maximum['metadata']['user_data']));
-        $this->code('bootstrap_too_large', fn () => $client->buildRequest($plan, $id, 'synthetic-marker', str_repeat('x', 49150)));
+        $prefix = "#cloud-config\nruncmd: []\n#";
+        $maximum = $client->buildRequest($plan, $id, 'synthetic-marker', str_pad($prefix, 16384, 'x'));
+        $this->assertSame(21848, strlen($maximum['metadata']['user_data']));
+        foreach ([16385, 27303, 27373, 49150] as $bytes) {
+            $this->code('bootstrap_too_large', fn () => $client->buildRequest($plan, $id, 'synthetic-marker', str_pad($prefix, $bytes, 'x')));
+        }
+        $this->code('bootstrap_too_large', fn () => LinodeProvisionClient::assertMetadataSize(str_repeat('A', 21849)));
+        Http::assertNothingSent();
+    }
+
+    public function test_oversized_legacy_queued_request_stops_before_any_provider_read_or_create(): void
+    {
+        $task = $this->task(); $payload = $task->payload;
+        $payload['request']['metadata']['user_data'] = base64_encode(str_pad("#cloud-config\nruncmd: []\n#", 27373, 'x'));
+        $task->payload = $payload; $task->save();
+        $this->poll($task);
+        $this->assertSame('failed', $task->status); $this->assertSame('bootstrap_too_large', $task->reason);
+        $this->assertNull($task->dispatched_at); $this->assertNull($task->external_id);
+        $this->assertSame($payload['request'], $task->payload['request']);
+        Http::assertNothingSent();
+    }
+
+    public function test_oversized_already_dispatched_request_can_still_reconcile_its_original_identity(): void
+    {
+        $task = $this->task(); $payload = $task->payload;
+        $payload['request']['metadata']['user_data'] = base64_encode(str_pad("#cloud-config\nruncmd: []\n#", 27373, 'x'));
+        $task->fill(['payload' => $payload, 'dispatched_at' => time() - 1, 'status' => 'outcome_unknown'])->save();
+        $this->fake(null, fn ($request) => str_contains($request->url(), '/linode/instances?')
+            ? Http::response(['data' => [$this->remote($task->payload['request'], ['created' => gmdate('Y-m-d\TH:i:s', $task->dispatched_at)])], 'pages' => 1]) : null);
+        $this->poll($task);
+        $this->assertSame('987', $task->external_id); $this->assertSame(0, $this->postCalls);
+        $this->assertSame($payload['request'], $task->payload['request']);
+    }
+
+    public function test_direct_create_also_refuses_oversized_metadata_without_http(): void
+    {
+        $task = $this->task(); $request = $task->payload['request'];
+        $request['metadata']['user_data'] = base64_encode(str_repeat('x', 16385));
+        $this->code('bootstrap_too_large', fn () => $this->provider->create($this->account, $request, time()));
         Http::assertNothingSent();
     }
 

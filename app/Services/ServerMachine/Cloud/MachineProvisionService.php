@@ -26,7 +26,8 @@ class MachineProvisionService
         'replacement_episode_used', 'ownership_mismatch', 'config_changed', 'daily_budget', 'task_active',
         'release_changed', 'isolated_context_changed', 'isolated_scope_changed', 'isolation_confirmation_required', 'credential_group_changed',
         'credential_health_blocked', 'credential_health_unavailable', 'credential_identity_changed',
-        'orchestration_disabled', 'rotation_disabled', 'native_lineage_changed', 'native_context_changed', 'native_intent_expired', 'budget_released', 'review_hold'];
+        'orchestration_disabled', 'rotation_disabled', 'native_lineage_changed', 'native_context_changed', 'native_intent_expired', 'budget_released', 'review_hold',
+        'bootstrap_too_large', 'invalid_bootstrap_identity', 'bootstrap_compression_unavailable'];
 
     public function __construct(private MachineProvisionProviders $provider, private ProvisionBootstrap $bootstrap,
         private MachineCloudHealth $health, private MachineAddressInventory $addresses) {}
@@ -194,6 +195,8 @@ class MachineProvisionService
                 $this->origin($payload['plan']);
                 if (isset($payload['isolated_acceptance'])) app(MachineIsolatedAcceptance::class)->assertTask($task);
                 if (!$task->dispatched_at) {
+                    // Old queued payloads must fail locally, never be silently rewritten or posted again.
+                    if ($account->provider === 'linode') LinodeProvisionClient::assertMetadataSize($payload['request']['metadata']['user_data'] ?? null);
                     if (isset($payload['plan']['credential_pool'])) app(MachineFailoverCredentials::class)->assertPlan($payload['plan']);
                     $provider->preflight($account, $payload['plan']);
                     $health->authenticatedRead($account, 'preflight');
