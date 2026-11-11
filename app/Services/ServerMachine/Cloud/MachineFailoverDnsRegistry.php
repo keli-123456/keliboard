@@ -37,7 +37,7 @@ class MachineFailoverDnsRegistry
             'credentials' => MachineDnsCredential::query()->whereIn('provider', ['cloudflare', 'aliyun'])->orderBy('id')
                 ->limit(100)->get(['id', 'name', 'provider', 'revision'])->toArray(),
             'sets' => DnsSet::query()->where('service_id', $service)->orderBy('id')->get()->map(fn ($set) => $this->present($set))->all(),
-            'scenarios' => MachineFailoverDnsSimulation::SCENARIOS];
+            'propagation_available' => true, 'scenarios' => MachineFailoverDnsSimulation::SCENARIOS];
     }
 
     public function present(DnsSet $set): array

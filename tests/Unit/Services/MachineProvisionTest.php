@@ -621,6 +621,33 @@ class MachineProvisionTest extends TestCase
         $this->assertSame(1, $this->postCalls); $this->poll($task);
         $this->assertSame(1, $this->postCalls); $this->assertSame(1, Task::query()->count());
     }
+    public function test_create_400_retains_safe_validation_evidence_without_retry_or_secrets(): void
+    {
+        $task = $this->task();
+        $this->fake(fn () => Http::response(['errors' => [['field' => 'metadata.user_data', 'reason' => 'Value too long: synthetic-private-payload']]], 400));
+        $this->poll($task); $this->assertSame('needs_review', $task->status); $this->assertSame(1, $this->postCalls);
+        $diagnostic = $task->evidence['credential_failure']['diagnostics'];
+        $this->assertSame([['field' => 'metadata.user_data', 'code' => 'metadata_size_limit']], $diagnostic['issues']);
+        $this->assertSame(strlen($task->payload['request']['metadata']['user_data']), $diagnostic['request_shape']['metadata_encoded_bytes']);
+        $this->assertSame(strlen(base64_decode($task->payload['request']['metadata']['user_data'])), $diagnostic['request_shape']['metadata_decoded_bytes']);
+        $this->assertFalse($task->evidence['credential_failure']['rotation_candidate']);
+        $this->assertFalse($task->evidence['credential_rotation']['dispatch_allowed']);
+        foreach (['synthetic-private-payload', 'synthetic-machine-secret', 'synthetic-provider-secret', $task->payload['request']['root_pass']] as $secret)
+            $this->assertStringNotContainsString($secret, json_encode($task->toArray()));
+        $this->poll($task); $this->assertSame(1, $this->postCalls); $this->assertSame(1, Task::query()->count());
+    }
+    public function test_linode_metadata_size_uses_encoded_bytes_without_rejecting_the_previous_27303_byte_shape(): void
+    {
+        $client = new \App\Services\ServerMachine\Cloud\LinodeProvisionClient();
+        $plan = $this->plan(); $id = '10000000-0000-4000-8000-000000000001';
+        $r = $client->buildRequest($plan, $id, 'synthetic-marker', str_repeat('x', 27303));
+        $this->assertSame(36404, strlen($r['metadata']['user_data']));
+        $this->assertSame(27303, strlen(base64_decode($r['metadata']['user_data'], true)));
+        $maximum = $client->buildRequest($plan, $id, 'synthetic-marker', str_repeat('x', 49149));
+        $this->assertSame(65532, strlen($maximum['metadata']['user_data']));
+        $this->code('bootstrap_too_large', fn () => $client->buildRequest($plan, $id, 'synthetic-marker', str_repeat('x', 49150)));
+        Http::assertNothingSent();
+    }
 
     public function test_unknown_health_does_not_prevent_original_marker_reconciliation(): void
     {

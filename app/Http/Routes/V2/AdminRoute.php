@@ -168,6 +168,7 @@ class AdminRoute
                 $router->get('/cloud/failover/services/dns/run', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverDnsController::class, 'report']);
                 $router->post('/cloud/failover/services/dns/stop', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverDnsController::class, 'stop']);
                 $router->post('/cloud/failover/services/dns/advance', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverDnsController::class, 'advance']);
+                $router->post('/cloud/failover/services/dns/propagation', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverDnsController::class, 'propagation']);
                 $router->post('/cloud/failover/services/simulate', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'simulate']);
                 $router->get('/cloud/failover/services/run', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'report']);
                 $router->get('/cloud/failover/services/shadow', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'shadow']);

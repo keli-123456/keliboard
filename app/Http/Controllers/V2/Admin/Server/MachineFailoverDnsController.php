@@ -71,4 +71,11 @@ class MachineFailoverDnsController extends Controller
             $v = $request->validate(['id' => 'required|uuid']); return $service->advance($v['id'], $admin);
         });
     }
+    public function propagation(Request $request, MachineFailoverDnsSimulation $service)
+    {
+        return $this->run($request, ['id', 'scenario'], function ($admin) use ($request, $service) {
+            $v = $request->validate(['id' => 'required|uuid', 'scenario' => 'required|string|max:30']);
+            return $service->propagation($v['id'], $v['scenario'], $admin);
+        });
+    }
 }

@@ -46,6 +46,24 @@ class CloudFailurePolicyTest extends TestCase
         $this->assertSame('unknown', $policy->transport('linode', 'POST')['outcome']);
         $this->assertSame('provider_unavailable', $policy->transport('linode', 'GET')['kind']);
     }
+    public function test_linode_validation_diagnostics_are_allowlisted_without_affecting_rotation(): void
+    {
+        $decision = (new CloudFailurePolicy())->response('linode', 'POST', 400, ['errors' => [
+            ['field' => 'metadata.user_data', 'reason' => 'Maximum size exceeded: synthetic-secret'],
+            ['field' => 'authorized_keys.0', 'reason' => 'Invalid synthetic-key'],
+            ['field' => 'root_pass', 'reason' => 'Password strength invalid synthetic-password'],
+            ['field' => 'private-synthetic-email', 'reason' => 'synthetic-token'],
+        ]]);
+        $this->assertSame([['field' => 'metadata.user_data', 'code' => 'metadata_size_limit'],
+            ['field' => 'authorized_keys', 'code' => 'ssh_key_rejected'], ['field' => 'root_pass', 'code' => 'password_strength'],
+            ['field' => 'other', 'code' => 'invalid_value']], $decision['diagnostics']['issues']);
+        $this->assertSame('request_rejected', $decision['kind']); $this->assertTrue($decision['requires_review']);
+        $this->assertFalse($decision['rotation_candidate']); $this->assertStringNotContainsString('synthetic-', json_encode($decision));
+        $unknown = (new CloudFailurePolicy())->response('linode', 'POST', 503, ['errors' => [['field' => 'root_pass', 'reason' => 'weak']]]);
+        $this->assertArrayNotHasKey('diagnostics', $unknown); $this->assertSame('unknown', $unknown['outcome']);
+        $missing = (new CloudFailurePolicy())->response('linode', 'POST', 400);
+        $this->assertSame('reason_not_available', $missing['diagnostics']['issues'][0]['code']);
+    }
     private function pool(): array
     {
         return array_map(fn ($id) => ['id' => $id, 'revision' => 1, 'group_id' => 1, 'provider' => 'linode', 'credential_key' => hash('sha256', 'token:' . $id),

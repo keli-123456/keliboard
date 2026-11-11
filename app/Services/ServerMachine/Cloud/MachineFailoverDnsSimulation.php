@@ -8,6 +8,7 @@ use App\Services\ServerMachine\Dns\MachineDnsRecordSetExecution;
 use App\Services\ServerMachine\Dns\MachineDnsRecordSetPlanner;
 use App\Services\ServerMachine\Dns\MachineDnsRecordSetProvider;
 use App\Services\ServerMachine\Dns\MachineDnsRecordSetSimulationTransport;
+use App\Services\ServerMachine\Dns\MachineDnsPropagationSimulation;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -122,6 +123,22 @@ class MachineFailoverDnsSimulation
         $this->registry->actor($admin); $this->owned($id, $admin); $this->engine->stop($id, $admin);
         return $this->report($id, $admin);
     }
+    public function propagation(string $id, string $scenario, int $admin): array
+    {
+        $this->registry->actor($admin);
+        return $this->registry->locked(fn () => DB::transaction(function () use ($id, $scenario, $admin) {
+            $run = $this->owned($id, $admin); $runtime = MachineDnsSetRuntime::query()->find($id);
+            if ($run->status !== 'completed' || !$runtime || $runtime->mode !== 'simulation' || $runtime->stop_requested_at || ($run->payload['engine_version'] ?? null) !== 2)
+                throw new CloudException('dns_propagation_not_ready');
+            $snapshot = $this->dns->snapshot($run->set_id, $run->service_revision, $run->set_revision);
+            if (!hash_equals($run->context_hash, $this->hash($snapshot))) throw new CloudException('dns_context_changed');
+            $p = $run->payload; $previous = $p['propagation'] ?? null;
+            if (($previous['checks'] ?? 0) >= 12) throw new CloudException('dns_propagation_limit');
+            $next = app(MachineDnsPropagationSimulation::class)->check($p, $scenario, $previous);
+            $p['propagation'] = $next + ['checks' => ($previous['checks'] ?? 0) + 1]; $run->payload = $p; $run->save();
+            return $this->report($id, $admin);
+        }));
+    }
     public function report(string $id, int $admin): array
     {
         $this->registry->actor($admin); $run = $this->owned($id, $admin); $p = $run->payload;
@@ -133,6 +150,7 @@ class MachineFailoverDnsSimulation
             'simulated_writes' => $fixture['writes'] ?? $p['writes'], 'readback_attempts' => $p['reads'], 'virtual_wait_seconds' => $fixture['clock_offset'] ?? 0,
             'execution_engine' => $runtime ? 'record_set_v2' : 'legacy_plan_v1', 'stop_requested' => $runtime?->stop_requested_at !== null,
             'next_check_at' => $runtime?->next_check_at, 'verified_actions' => count(array_filter($p['plan']['actions'], fn ($a) => $a['state'] === 'verified')),
+            'propagation' => $p['propagation'] ?? null,
             'records' => array_map($publicRecord, $p['records']), 'events' => $p['events'],
             'actions' => array_map(fn ($a) => ['id' => $a['id'], 'member_id' => $a['member_id'], 'slot_id' => $a['slot_id'], 'kind' => $a['kind'], 'state' => $a['state'],
                 'before' => $publicRecord($a['before']), 'after' => $publicRecord($a['after']), 'request_count' => count($a['requests'])], $p['plan']['actions'])];

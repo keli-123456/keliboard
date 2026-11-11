@@ -41,6 +41,9 @@ class CloudFailurePolicy
             if (count($matches) === 1) $kind = $matches[0];
         }
         $result = $this->result($provider, $kind, $status);
+        if ($provider === 'linode' && in_array($status, [400, 422], true)) {
+            $result['diagnostics'] = $this->linodeDiagnostics($this->reasons($provider, $body));
+        }
         if ($kind === 'rate_limited') {
             $headers = array_change_key_case($headers, CASE_LOWER);
             $after = $headers['retry-after'] ?? null;
@@ -58,6 +61,27 @@ class CloudFailurePolicy
             elseif ($seconds !== null && $seconds > 86400) $result['requires_review'] = true;
         }
         return $result;
+    }
+
+    private function linodeDiagnostics(array $reasons): array
+    {
+        $fields = ['label', 'region', 'type', 'image', 'tags', 'authorized_keys', 'root_pass', 'metadata', 'metadata.user_data', 'interface_generation', 'firewall_id'];
+        $issues = [];
+        foreach ($reasons as $reason) {
+            $field = strtolower($reason['field']);
+            if (preg_match('/^authorized_keys(?:\[\d{1,2}\]|\.\d{1,2})$/D', $field)) $field = 'authorized_keys';
+            if (!in_array($field, $fields, true)) $field = 'other';
+            $text = strtolower($reason['text']); $code = 'invalid_value';
+            if (in_array($field, ['metadata', 'metadata.user_data'], true)) {
+                if (preg_match('/\b(too (?:large|long)|maximum|max length|size limit|exceeds?)\b/', $text)) $code = 'metadata_size_limit';
+                elseif (str_contains($text, 'base64') || str_contains($text, 'base-64')) $code = 'metadata_encoding';
+            } elseif ($field === 'root_pass' && preg_match('/\b(strength|strong|complexity|weak)\b/', $text)) $code = 'password_strength';
+            elseif ($field === 'authorized_keys') $code = 'ssh_key_rejected';
+            elseif (in_array($field, ['region', 'type', 'image'], true)) $code = 'template_rejected';
+            $issue = ['field' => $field, 'code' => $code];
+            if (!in_array($issue, $issues, true)) $issues[] = $issue;
+        }
+        return ['schema' => 1, 'issues' => $issues ?: [['field' => 'other', 'code' => 'reason_not_available']]];
     }
 
     private function reasons(string $provider, mixed $body): array

@@ -6,12 +6,15 @@ use Illuminate\Support\Facades\Http;
 
 class LinodeProvisionClient extends LinodeClient implements ProvisionClient
 {
+    public const MAX_METADATA_BYTES = 65535;
     public function buildRequest(array $plan, string $id, string $marker, string $bootstrap): array
     {
+        $encoded = base64_encode($bootstrap);
+        if (strlen($encoded) > self::MAX_METADATA_BYTES) throw new CloudException('bootstrap_too_large');
         return ['label' => 'keli-' . str_replace('-', '', $id), 'region' => $plan['region'], 'type' => $plan['size'],
             'image' => $plan['image'], 'tags' => [$marker], 'booted' => true, 'backups_enabled' => false,
             'authorized_keys' => $plan['authorized_keys'], 'root_pass' => bin2hex(random_bytes(20)) . 'aA9!',
-            'metadata' => ['user_data' => base64_encode($bootstrap)]];
+            'metadata' => ['user_data' => $encoded]];
     }
     public function preflight(MachineCloudAccount $account, array $plan): void
     {
@@ -38,8 +41,18 @@ class LinodeProvisionClient extends LinodeClient implements ProvisionClient
             $response = Http::withToken($account->credentials['api_token'])->acceptJson()->withoutRedirecting()
                 ->connectTimeout(3)->timeout(15)->post('https://api.linode.com/v4/linode/instances', $request);
         } catch (\Throwable) { throw new CloudRequestFailure(app(CloudFailurePolicy::class)->transport('linode', 'POST')); }
-        $failure = fn () => new CloudRequestFailure(app(CloudFailurePolicy::class)->response('linode', 'POST', $response->status(),
-            strlen($response->body()) <= 524288 ? $response->json() : null, $response->headers()));
+        $failure = function () use ($response, $request) {
+            $decision = app(CloudFailurePolicy::class)->response('linode', 'POST', $response->status(),
+                strlen($response->body()) <= 524288 ? $response->json() : null, $response->headers());
+            if (isset($decision['diagnostics'])) {
+                $encoded = $request['metadata']['user_data'] ?? null;
+                $decoded = is_string($encoded) ? base64_decode($encoded, true) : false;
+                $decision['diagnostics']['request_shape'] = ['metadata_encoded_bytes' => is_string($encoded) ? strlen($encoded) : null,
+                    'metadata_decoded_bytes' => $decoded === false ? null : strlen($decoded),
+                    'ssh_key_count' => is_array($request['authorized_keys'] ?? null) ? count($request['authorized_keys']) : null];
+            }
+            return new CloudRequestFailure($decision);
+        };
         if (!$response->successful() || strlen($response->body()) > 524288) throw $failure();
         try {
             $row = $response->json();

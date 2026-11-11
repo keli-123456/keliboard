@@ -151,6 +151,55 @@ class MachineFailoverDnsSetsTest extends TestCase
         $this->assertSame(['default', 'telecom', 'unicom'], array_values(array_unique(array_column($run['records'], 'line'))));
         $this->inert();
     }
+    public static function propagationScenarios(): array
+    {
+        return [['ttl_wait', 'waiting_ttl'], ['converged', 'converged'], ['old_cache', 'waiting_ttl'], ['nxdomain', 'waiting_ttl'],
+            ['timeout', 'unknown'], ['mixed', 'waiting_ttl'], ['cname', 'unknown'], ['servfail', 'unknown']];
+    }
+    #[DataProvider('propagationScenarios')]
+    public function test_external_propagation_rehearsal_does_not_repeat_dns_writes(string $scenario, string $state): void
+    {
+        $view = $this->configure(); $run = $this->simulation->advance($this->start($view, 'replace')['id'], $this->admin->id);
+        $before = app(Driver::class)->metrics($run['id']);
+        $result = $this->simulation->propagation($run['id'], $scenario, $this->admin->id);
+        $this->assertSame($state, $result['propagation']['state']); $this->assertSame(1, $result['propagation']['checks']);
+        $this->assertSame('synthetic', $result['propagation']['evidence_origin']); $this->assertSame(0, $result['propagation']['network_queries']);
+        $this->assertFalse($result['propagation_verified']); $this->assertFalse($result['propagation']['propagation_verified']);
+        $this->assertFalse($result['propagation']['global_propagation_verified']); $this->assertCount(4, $result['propagation']['rows']);
+        $this->assertSame($before, app(Driver::class)->metrics($run['id']));
+        $this->assertSame($result, $this->simulation->report($run['id'], $this->admin->id)); $this->inert();
+    }
+    public function test_aliyun_nondefault_lines_are_not_certified_by_global_recursive_observations(): void
+    {
+        $view = $this->configure('aliyun', ['default', 'telecom', 'unicom']);
+        $run = $this->simulation->advance($this->start($view, 'replace')['id'], $this->admin->id);
+        $result = $this->simulation->propagation($run['id'], 'converged', $this->admin->id);
+        $this->assertSame('partial_scope', $result['propagation']['state']);
+        $this->assertSame(['telecom', 'unicom'], $result['propagation']['unobserved_lines']); $this->inert();
+    }
+    public function test_propagation_preserves_original_ttl_wait_across_process_reconstruction_and_bounds_checks(): void
+    {
+        $view = $this->configure(); $run = $this->simulation->advance($this->start($view, 'replace')['id'], $this->admin->id);
+        $first = $this->simulation->propagation($run['id'], 'nxdomain', $this->admin->id)['propagation'];
+        $result = app(MachineFailoverDnsSimulation::class)->propagation($run['id'], 'converged', $this->admin->id)['propagation'];
+        $this->assertGreaterThanOrEqual($first['wait_until'], $result['checked_at']); $this->assertSame('converged', $result['state']);
+        for ($i = 2; $i < 12; $i++) $this->simulation->propagation($run['id'], 'converged', $this->admin->id);
+        $this->code('dns_propagation_limit', fn () => $this->simulation->propagation($run['id'], 'converged', $this->admin->id));
+        $this->inert();
+    }
+    public function test_propagation_rejects_incomplete_stopped_stale_foreign_and_freeform_contexts(): void
+    {
+        $view = $this->configure(); $run = $this->start($view, 'replace');
+        $this->code('dns_propagation_not_ready', fn () => $this->simulation->propagation($run['id'], 'converged', $this->admin->id));
+        $this->simulation->advance($run['id'], $this->admin->id);
+        $this->code('invalid_dns_propagation', fn () => $this->simulation->propagation($run['id'], 'http://127.0.0.1', $this->admin->id));
+        $request = Request::create('/', 'POST', ['id' => $run['id'], 'scenario' => 'converged', 'hostname' => 'other.example.test']);
+        $request->setUserResolver(fn () => $this->admin);
+        $this->assertSame(422, (new \App\Http\Controllers\V2\Admin\Server\MachineFailoverDnsController())->propagation($request, $this->simulation)->getStatusCode());
+        Service::query()->whereKey($this->service['id'])->increment('revision');
+        $this->code('config_changed', fn () => $this->simulation->propagation($run['id'], 'converged', $this->admin->id));
+        $this->inert();
+    }
 
     public function test_create_claim_interruption_resumes_with_original_id_without_a_second_add(): void
     {
