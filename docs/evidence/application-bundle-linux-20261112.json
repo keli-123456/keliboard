@@ -1,0 +1,99 @@
+{
+  "schema": 1,
+  "scope": "offline_application_archive_line_endings",
+  "verdict": "local_and_isolated_linux_regressions_passed_not_live_acceptance",
+  "base_commit": "aba1ce17a8a4304a14a515bc7ecdff6382fd8178",
+  "ci": {
+    "run_id": 43215000991,
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/43215000991",
+    "workflow": "Application Bundle Linux Isolated Acceptance",
+    "branch": "audit/application-bundle-linux-20261112-aba1ce17",
+    "commit": "5c6fce2bc1f401277f0fea7957239b8661ecafd7",
+    "conclusion": "success",
+    "platform": "linux",
+    "python": "3.11.18",
+    "uid": 1001,
+    "tests_run": 139,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "windows_native_explicitly_excluded": 4,
+    "aggregate_zip_sha256": "2509eb65e23b3449007f7225b4341c3f5a4738352dc9044198a846604cdc949b",
+    "verified_source_pins": 18,
+    "all_source_pins_match_git_blobs": true,
+    "local_main_text_files_lf_normalized_match": 17,
+    "source_unchanged_during_tests": true,
+    "only_dedicated_workflow_observed": true,
+    "temporary_workflow_and_push_filter_not_in_main": true,
+    "temporary_branch_not_merged": true,
+    "forbidden_process_or_socket_attempts": 0,
+    "allowed_local_git_processes": 151,
+    "allowed_two_line_bash_processes": 6
+  },
+  "windows_local": {
+    "python": "3.12.10",
+    "tests_run": 143,
+    "passed": 135,
+    "failures": 0,
+    "errors": 0,
+    "platform_skips": 8
+  },
+  "archive_checks": {
+    "legacy_windows_profile_crlf_reproduced_from_public_base_commit": true,
+    "legacy_archive_rejected": true,
+    "r8_closed_archive_read_only_rejected": "bundle_shell_cr_refused",
+    "canonical_host_profiles_same_archive": true,
+    "canonical_base_archive": {
+      "bytes": 11201957,
+      "sha256": "6572f3b1090a703582bfed02d20933369ea0a05d326c14a1e0168667b8c481c6"
+    },
+    "canonical_ci_snapshot_archive": {
+      "bytes": 11210924,
+      "sha256": "148244fd491c696abd680931ab39ef6c5b4e7456270412d7f2ed4352a4f5e59d"
+    },
+    "archived_shell_files_lf_verified": 13,
+    "mandatory_installer_helper_blobs_verified": 4,
+    "bash_prefix_exit_codes": {
+      "legacy_crlf": 2,
+      "canonical_windows_host_profile": 0,
+      "canonical_linux_host_profile": 0,
+      "canonical_ci_snapshot": 0
+    },
+    "installer_body_executed": false,
+    "temporary_archives_removed": true,
+    "binary_bytes_and_executable_mode_preserved_in_fixtures": true,
+    "crlf_or_invalid_archive_rejected_before_round_intent_even_with_matching_hashes": true,
+    "closed_ancestor_existing_output_and_publish_race_regressions_passed": true,
+    "lfs_filter_downloads": false,
+    "authority_created": false
+  },
+  "immutable_rounds": {
+    "r8_files": 114,
+    "r8_changed": 0,
+    "r8_added": 0,
+    "r7_files": 105,
+    "r7_changed": 0,
+    "r7_added": 0,
+    "r8_remote_root_cause_confirmed": false,
+    "r8_reopened_or_retried": false
+  },
+  "boundaries": {
+    "production_or_tanzhen_contacted": false,
+    "production_database_or_queue_used": false,
+    "cloud_or_dns_api_used": false,
+    "ssh_used": false,
+    "vm_created": false,
+    "deployment_or_image_publication": false,
+    "automatic_switches_changed": false,
+    "kelinode_rs_modified": false,
+    "main_committed_or_pushed": false
+  },
+  "limitations": [
+    "Linux ran only two archived shell prefix lines, not a full installer or a real VM installation.",
+    "The reproducible archive defect is consistent with R8 line 2 and exit 2; it does not rewrite the original remote root-cause verdict.",
+    "The producer preserves committed Git bytes; LFS pointers are not materialized assets.",
+    "Exclusive publication requires same-filesystem hard-link support; unsupported filesystems fail closed.",
+    "Archive hashes belong to exact CI/public-base snapshots and do not pin a future live package or authorize execution.",
+    "Future live work requires a fresh approved identity and complete immutable packaging/preflight; R8 cannot be reused."
+  ]
+}

@@ -1,0 +1,205 @@
+{
+  "schema": 1,
+  "run_id": "keli-accept-20261112-r8-aba1ce17",
+  "scope": "control_and_source_installation_only",
+  "user_approved": true,
+  "verdict": "blocked_not_passed",
+  "run_closed": true,
+  "started_beijing": "2026-11-12T18:58:02+08:00",
+  "finished_beijing": "2026-11-12T19:10:30.864836+08:00",
+  "application_commit": "aba1ce17a8a4304a14a515bc7ecdff6382fd8178",
+  "companion_installer_commit": "8fff3a03a600cdee1d35ed9a937acb0acdc6cedc",
+  "node_version": "v0.1.387",
+  "expected_archive_sha256": "b26b78f57004225f8c9cf63996b4937202f1e4bbaf3e762231c93be0788ee97a",
+  "expected_binary_sha256": "1f966dd8951da23ee365f65bd36f90dd6f4bea2d314b6915cf89643211e4da8d",
+  "offline": {
+    "run": 219,
+    "failures": 0,
+    "errors": 0,
+    "platform_skipped": 7,
+    "php_lint": true,
+    "archive_and_binary_hash_verified": true,
+    "provider_calls": 0,
+    "database_connections": 0,
+    "source_decoded_bytes": 15572,
+    "source_base64_bytes": 20764,
+    "source_roundtrip": true,
+    "control_decoded_bytes": 3025,
+    "control_base64_bytes": 4036,
+    "frozen_files": 51,
+    "all_frozen_pins_match_after_closure": true
+  },
+  "local_setup_events": {
+    "first_offline_guard_failed_closed": true,
+    "windows_php_audit_compatibility_corrected_before_freeze": true,
+    "isolated_python_missing_cryptography_refused_before_claim": true,
+    "round_or_create_intent_existed_during_refused_claim": false,
+    "successful_claim_used_the_same_python_as_offline_regression": true,
+    "package_modified_after_freeze": false
+  },
+  "preflight": {
+    "credential_revision_matches": true,
+    "probe_scope_matches": true,
+    "region_image_types_available": true,
+    "cloud_inventory_complete": true,
+    "previous_test_instances": 0,
+    "new_labels_occupied": 0,
+    "new_dns_records": 0,
+    "production_gates_closed": true,
+    "production_health_before_passed": true,
+    "provider_writes_during_preflight": 0,
+    "dns_writes_during_preflight": 0
+  },
+  "creates": {
+    "control": 1,
+    "source": 1,
+    "candidate": 0,
+    "total": 2,
+    "creation_retried": false
+  },
+  "control": {
+    "installation_passed": true,
+    "linux_staging_verified": true,
+    "isolated_database_and_redis": true,
+    "certificate_issued": true,
+    "certificate_txt_cleanup_confirmed": true,
+    "http_checks_passed": 6,
+    "http_statuses": [
+      200,
+      403,
+      200,
+      200,
+      200,
+      401
+    ],
+    "tls_verified": true,
+    "isolated_preflight_passed": true,
+    "early_default_http_listener_observed_during_package_installation": true,
+    "all_ready_and_port_80_closed_verified_before_application_transfer": true,
+    "application_or_credentials_transferred_during_early_listener": false
+  },
+  "source": {
+    "create_confirmed": true,
+    "last_status": "needs_review",
+    "bootstrap_state": "failed",
+    "installation_passed": false,
+    "native_installer_completed": false,
+    "agent_binary_present": false,
+    "configuration_present": false,
+    "service_load_state": "not-found",
+    "three_fresh_agent_reports_verified": false,
+    "process_identity_verified": false,
+    "actual_binary_sha256_verified": false,
+    "source_oom_count": null,
+    "source_resource_limit_runtime_verified": false
+  },
+  "failure": {
+    "phase": "source_installation",
+    "driver_error_class": "Refused",
+    "local_windows_permission_error_observed": false,
+    "first_error_persisted": true,
+    "diagnostic_collected": true,
+    "diagnostic_persisted": true,
+    "diagnostic_fallback_used": false,
+    "owner_and_private_permissions_verified": true,
+    "execution": {
+      "bootstrap": {
+        "state": "observed",
+        "error_code": 2,
+        "exit_line": null,
+        "phase": "installer",
+        "event": "exit",
+        "error_line": 127,
+        "exit_code": 2
+      },
+      "installer": {
+        "state": "observed",
+        "error_code": 2,
+        "exit_line": null,
+        "phase": "native_install",
+        "event": "exit",
+        "error_line": 38,
+        "exit_code": 2
+      },
+      "native_installer": {
+        "state": "observed",
+        "error_code": 2,
+        "exit_line": null,
+        "phase": "native_install",
+        "event": "exit",
+        "error_line": 2,
+        "exit_code": 2
+      }
+    },
+    "installer_text_marker_phase": "installer_download",
+    "root_cause_confirmed_by_remote_probe": false,
+    "raw_logs_exported": false
+  },
+  "postmortem": {
+    "read_only_local_archive_check": true,
+    "crlf_shell_members": {
+      "resources/server-machine/install-script.sh": 414,
+      "resources/server-machine/kelinode-rs-install.sh": 1035,
+      "resources/server-machine/provision-diagnostics.sh": 69
+    },
+    "native_installer_line_2_has_cr": true,
+    "native_download_endpoint_returns_resource_bytes_without_line_ending_normalization": true,
+    "provision_bootstrap_normalizes_outer_installer_but_not_the_downloaded_native_resource": true,
+    "local_bash_option_token_test": {
+      "only_set_option_executed": true,
+      "trailing_cr_pipefail_exit": 2,
+      "normal_pipefail_exit": 0,
+      "full_installer_executed": false,
+      "remote_calls": 0
+    },
+    "raw_crlf_prefix_on_windows_git_bash_did_not_reproduce_linux_failure": true,
+    "assessment": "confirmed_archive_line_ending_defect_consistent_with_native_line_2_exit_2_not_a_complete_remote_root_cause_proof",
+    "linux_crlf_reproduction_performed": false,
+    "frozen_artifact_repaired_or_trial_restarted": false
+  },
+  "cleanup": {
+    "complete": true,
+    "independent_absence_reads": 2,
+    "minimum_gap_seconds": 5,
+    "absence_finished_utc": [
+      "2026-11-12T11:10:20.921667+00:00",
+      "2026-11-12T11:10:29.385604+00:00"
+    ],
+    "owned_cloud_remaining": 0,
+    "both_dns_names_absent": true,
+    "synthetic_users_revoked": 2,
+    "isolated_services_inactive": true,
+    "isolated_containers_and_volumes_removed": true,
+    "certificate_private_material_removed": true,
+    "private_files_and_credentials_cleanup_verified": true,
+    "remaining_owned_clients": 0,
+    "needs_review": false
+  },
+  "production": {
+    "healthy": true,
+    "container_identity_unchanged": true,
+    "nginx_hash_unchanged": true,
+    "queue_healthy": true,
+    "missing_queues": [],
+    "paused_masters": 0,
+    "execution_gates_closed": true,
+    "deployed": false,
+    "database_written": false,
+    "queues_or_supervisors_changed": false,
+    "business_nodes_restarted_or_upgraded": false,
+    "tanzhen_accessed": false
+  },
+  "r7_integrity": {
+    "files": 105,
+    "unchanged": true
+  },
+  "limitations": [
+    "Source installation failed; there are no valid runtime/PID/three-report/forwarding/performance results.",
+    "Zero log-marker category counts do not mean zero errors; structured exit records show failure.",
+    "Archive CRLF and the public raw download path form a strong packaging lead; the exact remote error text was not exported.",
+    "The local option-token test is not a full Linux installer reproduction.",
+    "Control boot briefly had a default HTTP listener before its readiness gate; no application/credentials were transferred then.",
+    "R8 is closed; no repair, reinstall, new machine or intent reuse is authorized. R7 remains unchanged."
+  ],
+  "new_execution_authorized": false
+}

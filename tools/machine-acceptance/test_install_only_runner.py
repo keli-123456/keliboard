@@ -2,11 +2,13 @@
 import copy
 import errno
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import socket
 import subprocess
+import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -15,6 +17,7 @@ from unittest.mock import Mock, patch
 import diagnostic_capture
 import driver_journal
 import install_only_runner as driver
+import application_bundle
 from test_diagnostic_capture import response, TASK
 from test_driver_journal import SECRET, sharing_error, windows_handle
 
@@ -40,8 +43,9 @@ class SyntheticDriverCase(unittest.TestCase):
                      **dict.fromkeys(driver.FORBIDDEN_FLAGS, False)}
         for name in driver.REQUIRED:
             source = Path(driver.__file__).with_name(name)
-            value = source.read_bytes() if name in {'driver_journal.py', 'install_only_runner.py'} else b'# inert fixture\n'
+            value = source.read_bytes() if name in {'driver_journal.py', 'install_only_runner.py', 'application_bundle.py'} else b'# inert fixture\n'
             (self.base / name).write_bytes(value)
+        self.write_bundle()
         self.write('authorization.json', self.auth)
         self.repin()
         self.campaign = SimpleNamespace(BASE=self.base, RUN=RUN, AUTH=self.auth,
@@ -83,6 +87,16 @@ class SyntheticDriverCase(unittest.TestCase):
     def write(self, name, value, exclusive=False):
         with (self.base / name).open('x' if exclusive else 'w', encoding='utf-8') as stream:
             json.dump(value, stream)
+
+    def write_bundle(self, *, crlf=False):
+        with tarfile.open(self.base / 'application.tar.gz', 'w:gz') as archive:
+            for name in application_bundle.REQUIRED_SHELLS:
+                raw = b'#!/usr/bin/env bash\nset -euo pipefail\n'
+                if crlf:
+                    raw = raw.replace(b'\n', b'\r\n')
+                member = tarfile.TarInfo(name)
+                member.size, member.mode = len(raw), 0o755
+                archive.addfile(member, io.BytesIO(raw))
 
     def read(self, name):
         return json.loads((self.base / name).read_text(encoding='utf-8'))
@@ -400,6 +414,18 @@ class DriverTests(SyntheticDriverCase):
             with self.assertRaisesRegex(driver.Refused, 'fresh_run_identity_required'):
                 driver.InstallRunner(run_id=run_id, application_commit=COMMIT, binary_sha256=BINARY,
                                      loader=Mock(side_effect=AssertionError('imports forbidden')))
+
+    def test_matching_hashes_do_not_authorize_crlf_or_invalid_archive(self):
+        self.write_bundle(crlf=True)
+        self.repin()
+        self.assertFalse(self.runner.run()['ok'])
+        self.assertFalse((self.base / 'round-intent.json').exists())
+        (self.base / 'application.tar.gz').write_bytes(b'not-an-archive')
+        self.repin()
+        self.assertFalse(self.runner.run()['ok'])
+        self.campaign.create_control.assert_not_called()
+        self.operator.command.assert_not_called()
+        self.cleanup.main.assert_not_called()
 
     @unittest.skipUnless(os.name == 'nt', 'real Windows sharing semantics')
     def test_real_progress_handle_lock_does_not_prevent_capture_and_cleanup(self):

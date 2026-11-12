@@ -28,7 +28,7 @@ jobs:
           python-version: "3.11"
       - name: Check staging, driver journal, diagnostics and synthetic verifier guards
         working-directory: tools/machine-acceptance
-        run: python -m unittest -v test_staging test_bootstrap_diagnostics test_diagnostic_capture test_driver_journal test_install_only_runner test_worker.WorkerTests test_driver_linux
+        run: python -m unittest -v test_staging test_bootstrap_diagnostics test_diagnostic_capture test_driver_journal test_install_only_runner test_worker.WorkerTests test_driver_linux test_application_bundle
 
   unit-tests:
     runs-on: ubuntu-latest

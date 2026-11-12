@@ -80,6 +80,72 @@ $env:KELI_TEST_OPENSSL = '<absolute OpenSSL executable>'
 python -m unittest test_worker.RealHysteriaTests
 ```
 
+## Canonical Application Archives (2026-11-12)
+
+`application_bundle.py` prepares a local archive from an exact, immutable Git
+commit. It never creates authorization, contacts a provider, uploads a bundle,
+installs anything or resumes a live round. R8's failed archive and closed evidence
+must remain unchanged. Its CRLF bytes and native-installer line-2/exit-2 evidence
+are a packaging lead, not retrospective proof of the original remote root cause.
+
+The repository attributes require LF for `*.sh`. The producer also overrides
+host Git EOL settings for each export; it does not edit system/user Git config,
+use a dirty working tree or normalize arbitrary binary members. LFS downloads
+are disabled: committed LFS pointers remain pointers, not verified materialized
+assets. Any required external assets still need their own reviewed/pinned step.
+
+From the repository root, with a new, existing private output directory and an
+explicit reviewed 40-character commit (placeholders below are not authorization):
+
+```sh
+python3 -B tools/machine-acceptance/application_bundle.py build \
+  --repo /absolute/repository --commit '<full-reviewed-commit>' \
+  --output /private/fresh-preparation/application.tar.gz
+python3 -B tools/machine-acceptance/application_bundle.py check \
+  --archive /private/fresh-preparation/application.tar.gz
+```
+
+Before publishing, the producer checks actual archived shell bytes for CR,
+UTF-8 BOM, NUL and invalid UTF-8, including extensionless shell shebangs. It
+compares the four mandatory installer/helper members to their immutable Git
+blobs. Unsafe paths, links/special files, duplicate members, private `.env`/Git/
+audit entries and exceeded compressed/expanded/member/shell limits fail closed.
+The report contains only hashes, sizes and fixed checks, not script contents.
+
+Publication is exclusive and same-directory: an existing destination is never
+overwritten, and a racing writer's file is preserved. The filesystem must
+support hard links; there is no unsafe overwrite fallback. Stop, dispatch,
+cleanup and closed markers in any ancestor refuse output. Only this writer's
+temporary file is removed on failure. An I/O failure after publication remains
+an uncertain preparation result, not permission to overwrite or dispatch it.
+
+Future `install_only_runner.py` bundles must now include and pin
+`application_bundle.py` alongside the runner, journal and every existing input.
+The entry checks the archive again **before binding the journal or creating the
+round intent**, even when the file matches its frozen digest. It rejects a
+CRLF/invalid archive instead of repairing a downloaded file. No historical
+package is patched, and passing these checks does not authorize execution.
+
+Offline regression, from this tools directory:
+
+```sh
+python3 -B -m unittest -q test_application_bundle test_install_only_runner
+```
+
+Fixtures reproduce host-dependent CRLF export, verify LF/blob/binary/mode
+preservation and reject malformed archives, closed outputs and output races.
+The POSIX Bash test executes only two archived prefix lines, never an installer
+body. Windows-only runs cannot establish that Linux behavior. Current verified
+platform counts and exact CI snapshot pins are recorded separately in
+`docs/evidence/application-bundle-linux-20261112.json`. The isolated Linux run
+[43215000991](https://github.com/keli-123456/keliboard/actions/runs/43215000991)
+passed 139 tests with zero skips, excluding four native Windows tests explicitly.
+All 18 aggregate source hashes matched commit
+`5c6fce2bc1f401277f0fea7957239b8661ecafd7`. Public-base legacy CRLF prefixes
+returned 2; canonical LF prefixes returned 0 on real Linux. All 13 archived
+shells passed the LF checks. Only the dedicated temporary-branch workflow ran;
+it was not merged, and no image publication or deployment was triggered.
+
 ## Control-Bundle Staging Preflight
 
 `staging.py` is a separate, read-only preparation tool. It addresses a failure
