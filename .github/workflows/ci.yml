@@ -26,9 +26,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Check control staging and synthetic verifier guards
+      - name: Check staging, pre-cleanup diagnostics and synthetic verifier guards
         working-directory: tools/machine-acceptance
-        run: python -m unittest -v test_staging test_worker.WorkerTests
+        run: python -m unittest -v test_staging test_bootstrap_diagnostics test_diagnostic_capture test_worker.WorkerTests
 
   unit-tests:
     runs-on: ubuntu-latest

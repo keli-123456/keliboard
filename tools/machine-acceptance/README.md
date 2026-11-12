@@ -145,14 +145,218 @@ python -m unittest -v test_staging test_worker.WorkerTests
 The existing `CI` workflow has a separate Windows/Linux job for these synthetic
 tests. It uses only Python's standard library and does not start the application,
 MySQL, Redis, protocol client or a cloud/DNS transport; the verifier replay tests
-use only temporary SQLite files. Adding the job does not
-dispatch CI; this local change has not run the Linux job yet.
+use only temporary SQLite files. Adding the job does not dispatch CI.
+
+On 2026-11-12, a separately authorized, Linux-only temporary-branch run
+[43055064649](https://github.com/keli-123456/keliboard/actions/runs/43055064649)
+passed all 35 tests with zero skips, including the real POSIX directory/file
+permission test (Python 3.11.18, UID 1001). The four tool/test file hashes match
+main commit `a701aa72a61d7fe4314263833d63d078c6e655b2`; temporary CI commit
+`b64e811dfab6f4e62f47a3c4ba1fb403811d5f2d` changed only that branch's workflow.
+Network/DNS and subprocess dispatch were blocked during tests, with zero denied
+attempts. The branch was not merged and no release workflow, production database,
+cloud API or DNS write was used. This closes the skipped Linux filesystem check,
+not real cloud-init, certificate issuance or public-network forwarding acceptance.
 
 The staging guard is not automatically wired into historical one-run controllers
 or the panel's live runner. Future authorized test packaging must explicitly
 integrate it and pin this tool/worker code as well as the run artifacts. Linux
 runtime ownership, certificate issuance, cloud-init and WAN failover still need
 a new independently authorized isolated acceptance.
+
+## Bootstrap Diagnostics Before Cleanup
+
+`bootstrap_diagnostics.py` and `diagnostic_capture.py` address an evidence gap
+in the closed R5 trial: the source reported initialization failure, but deletion
+started before its installation summary could be collected. The old trial and
+its evidence remain unchanged; these tools cannot recover its deleted logs.
+
+For a **new, separately approved isolated run**, package and pin these three
+files alongside the reviewed one-shot driver and all its existing dependencies:
+
+- `bootstrap_diagnostics.py`: standard-library, read-only probe on the owned node.
+- `diagnostic_capture.py`: controller-side schema filtering and cleanup adapter.
+- `diagnostic_round_runner.py`: fresh-scope entry using the driver's existing
+  `RoundRunner(loader=...)` interface. It does not patch application queues,
+  Horizon, the agent, production settings or the historical one-run scripts.
+
+Freeze all files, including these tools and `authorization.json`, in the new
+run's `offline-result.json` file-digest map. Use the copied entry from that same
+new bundle, never an old directory or a previously dispatched intent:
+
+```sh
+python3 /private/new-approved-run/diagnostic_round_runner.py \
+  --work /private/new-approved-run
+```
+
+The entry refuses closed/stopped/cleanup rounds and existing create/round
+intents **before importing the driver**. It checks the approved disabled flags,
+bounded scope, frozen file membership/hashes and the exact diagnostic tool
+bytes. These local records are preparation evidence, not a substitute for the
+user's live-test authorization or the driver's operation-specific gates.
+
+Immediately before the original `cleanup.main()` starts, the adapter attempts
+one collection per recorded source/candidate using the existing `node.task()`
+and `node.execute()` bridges. Those bridges must keep the original resource
+receipt, stable host alias, pinned host key, key-only SSH and strict host-key
+checking. No new SSH implementation, key discovery, password fallback, host-key
+bypass, provider operation, retry, service restart or configuration write is
+introduced. The probe rechecks the exact private node owner marker before any
+other observation. A role with no original receipt, or whose delete intent is
+already present, is not contacted.
+
+Collection has a 20-second shared budget, at most 10 seconds per role, and no
+retries. The final minute of the existing campaign window is reserved for
+cleanup; diagnostics never extend that window. Each installation log is read
+only as a maximum 256 KiB tail. Result/owner JSON is bounded, rejects duplicate
+keys and does not follow links. The only service query is the fixed read-only
+`systemctl show kelinode` with a two-second limit. Config/installer/callback
+contents, private keys and user data are not read for export.
+
+`bootstrap-diagnostics.json` is saved before deletion and contains only fixed
+schema fields: sampled installation phase, marker category counts, curl/HTTP
+error numbers, bootstrap result, service state/exit numbers and binary/config
+presence. The controller validates the entire response before saving it. Raw
+logs, URLs, credentials, configuration bodies and arbitrary exception messages
+are never stored in the exported report. Missing, unsafe, unreadable, timed-out
+and expired observations remain explicitly unavailable, not zero failures.
+Counts describe markers in the sampled tail, not distinct incidents or a
+confirmed root cause. A successful collection is not a successful installation.
+
+Transport, classification or summary-write failure must still call the original
+cleanup exactly once. Cleanup failures remain visible and are not swallowed or
+retried by this adapter. The diagnostic intent prevents repeated SSH collection
+on cleanup resume. A missing summary with an existing diagnostic intent is an
+incomplete observation, not permission to replay the test or report no errors.
+The adapter does not change the original acceptance verdict or create new VMs.
+
+Synthetic local regression (no real SSH, cloud/DNS, application or database):
+
+```sh
+python -m unittest -v test_bootstrap_diagnostics test_diagnostic_capture
+```
+
+Tests cover secret-bearing/untrusted log text, unknown observations, byte/time
+bounds, symlinks/hard links, identity rejection, collection-before-delete,
+transport/storage failures, cleanup exceptions, closed-round refusal and the
+fresh entry with an inert synthetic driver. Windows tests cannot establish
+POSIX file protection; that check belongs to the Linux CI job. New real-node
+diagnostics and the still-unconfirmed R5 installer failure require a separately
+authorized live round. This change does not create or deploy that round.
+
+### Linux Diagnostic CI Evidence (2026-11-12)
+
+The isolated [Linux CI run 43137719391](https://github.com/keli-123456/keliboard/actions/runs/43137719391)
+passed **74/74 tests with zero skips**, including both actual POSIX ownership
+and file-mode checks, on Python 3.11.18 as non-root UID 1001. The temporary
+`audit/bootstrap-diagnostics-linux-20261112-a701aa72` branch contains test snapshot
+`f7e61713a1d97d35b0a3245709e2d3caf77bfc12`, based on application commit
+`a701aa72a61d7fe4314263833d63d078c6e655b2`. All nine pinned Python source hashes
+matched the downloaded aggregate artifact. Transport mocks and a Python audit
+guard denied external process/network operations; no attempt reached either
+guard. Cloud creation, DNS writes and production connections were zero.
+
+Only the dedicated acceptance workflow ran for that branch/commit; no image
+publication or deployment was triggered. The snapshot was not merged to main.
+This is synthetic evidence for staging and pre-delete diagnostics, not a live
+SSH, service, installer, protocol or failover acceptance. R5 remains failed with
+an unconfirmed installation cause; its closed scope must not be resumed. A
+future real trial still needs a fresh approved scope and frozen bundle.
+
+### Structured Installer Execution Evidence (Local Only)
+
+The local follow-up after R6 adds execution records independent of log-text
+classification. `ProvisionBootstrap` embeds the reviewed
+`resources/server-machine/provision-diagnostics.sh` prefix in its existing
+bootstrap file. For this one task it explicitly uses that file as `BASH_ENV`;
+child shells return before the provisioning body, callback or identity writes.
+Only the fixed bootstrap, panel installer and native-installer paths install the
+hooks. Unrelated Bash children do not inherit new shell options or diagnostics.
+There is no `DEBUG` trap, command tracing, `BASH_COMMAND` capture or `eval`.
+
+The callback remains exactly `task_id`, `installation_id`, `state`. New private
+`diagnostic-bootstrap.json`, `diagnostic-installer.json` and
+`diagnostic-native_installer.json` files contain schema 1, the same task and
+installation identities, a fixed script/phase/event, exit status, ERR status and
+line, and an explicitly supplied exit line. Writers use private temporary files
+and atomic replacement; storage failure is best effort and cannot replace the
+installer or callback exit status. Native cleanup still releases its original
+lock/work directory and exits with the original code. Standalone installers
+without this task's helper only use no-op optional hooks; the node binary,
+runtime configuration and service definition are not changed by this work.
+
+An ERR line is a Bash failure/call-site line in the named generated script, not
+a complete stack trace or proof of the deepest failure. Explicit installer
+exits pass their own `LINENO` before exit. Ordinary EXIT trap `LINENO` is not
+used: it can be 1 regardless of the actual exit location. If no explicit line
+hook ran, `exit_line` is null. Signals, shell syntax errors, killed children or
+old installers can leave only a phase or a caller's timeout/error code; absence
+of a final record does not mean success. An `event=phase` record has no final
+exit status. Error markers and the final service status remain separate evidence.
+
+The new probe wire schema is **2**, with one `execution` entry per fixed script.
+Each JSON read is at most 16 KiB, private, bounded, link-safe and duplicate-key
+checked. Records must match both the task and the installation ID in the valid
+bootstrap result. Unknown fields, phases, non-integer codes/lines and inconsistent
+events are rejected without exporting their values. Missing legacy records and
+invalid/unreadable evidence retain null code/line fields, never zero. A missing
+systemd unit no longer exports its default zero exit/restart numbers as a run.
+Old schema-1 trial reports stay unchanged; new tools must be frozen together in
+a fresh bundle, not substituted into a dispatched or closed round.
+
+Local Bash/PHP tests exercise command, pipeline, subshell and function errors,
+explicit exits, callback/storage failures, the timeout boundary, the actual
+native cleanup trap with inert steps, and the Python parser of the resulting
+JSON. Cloud-init round-trip checks retain the original 16 KiB decoded/21,848-byte
+encoded Linode limits and reject oversized synthetic extensions before HTTP.
+At the initial local-only checkpoint these tests did not establish a real
+timeout/signal lifecycle or new Linux filesystem protection. The earlier
+74-test CI snapshot predates this schema. The later execution CI below is the
+evidence for the modified tools; it does not reopen R6 or retrospectively
+establish R6's installation cause from aggregate markers.
+
+### Linux Execution CI (2026-11-12)
+
+The source integration keeps the normal main-branch CI workflow. The temporary
+snapshot-only `ci_linux_evidence.py` and `ci-source-pins.json` remain in the tested
+commit history, not as runnable main-branch entry points. The permanent sanitized
+record is [bootstrap-execution-linux-20261112.json](../../docs/evidence/bootstrap-execution-linux-20261112.json).
+It preserves both the source pins and failure/fix provenance; it is not a new
+post-merge CI run or permission to deploy/create a live trial.
+
+The final [run 43163637072](https://github.com/keli-123456/keliboard/actions/runs/43163637072)
+passed 198 PHP/Bash tests and 84 Python tests with zero skips, failures or errors
+on temporary branch `audit/bootstrap-lifecycle-linux-20261112-a701aa72`, commit
+`1b811f5f0fb7475b2d5b0856b7a0de2b0ef07a67`. After dependency installation the
+tests ran as UID 1001 in an isolated network namespace with only loopback.
+Twenty pinned hashes matched. No production, cloud or DNS connections occurred.
+
+The initial failing run is preserved: TERM could be recorded as exit zero by
+the native EXIT trap, while terminating only bootstrap could report success
+and orphan its installer. Bootstrap now forwards TERM only to its own timeout
+child and waits for it; installer TERM traps preserve 143 through cleanup.
+The original 600-second/15-second timeout and callback shape are unchanged.
+
+`linux_bootstrap_lifecycle.py` accepts only private, explicitly marked synthetic
+`/tmp/keli-provision-test-*` fixtures on non-root Linux. It starts a fresh session,
+verifies PID/start-time/session membership, signals only the owned target and
+uses an independent bounded TERM/KILL fallback for test cleanup. No service
+names, host reboots or cloud operations are involved. The fixtures use the
+actual native cleanup function/TERM trap and the actual panel TERM trap, with
+inert installation steps and a callback returning synthetic transport failure.
+
+Real GNU timeout returns 124 (both installer layers record 143). External TERM
+to the native fixture or bootstrap returns 143 in all three layers. All three
+cases record exactly one failed callback, clear the owned lock/work directory
+and have zero remaining session processes before the harness fallback, as well
+as after it. Linux ownership/modes, ERR lines and explicit exit lines also pass.
+Only aggregate results were uploaded; no release workflow or image publication
+ran. The test branch is not merged and nothing was deployed or created.
+
+The synthetic timeout is shortened to two seconds; this is not a full-duration
+600-second test, uncatchable SIGKILL/host-loss recovery, real cloud installation
+or WAN/DNS failover acceptance. It does not identify R6's original cause. New
+live work still requires its own approved scope and fresh frozen bundle.
 
 ## Protocol Interoperability
 

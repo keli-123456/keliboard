@@ -58,7 +58,13 @@ class MachineProvisionCompressionTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_extended_cloud_init_with_real_synthetic_host_keys_fits_and_roundtrips_every_file(): void
+    public static function extendedPayloads(): array
+    {
+        return ['bounded envelope fixture' => [2048, true], 'oversized opaque fixture' => [4096, false]];
+    }
+
+    #[DataProvider('extendedPayloads')]
+    public function test_extended_cloud_init_with_real_synthetic_host_keys_fits_and_roundtrips_every_file(int $opaqueBytes, bool $fits): void
     {
         $machine = new ServerMachine(); $machine->forceFill(['id' => 17, 'name' => 'Synthetic isolated source', 'token' => str_repeat('d', 64)]);
         $origin = 'https://control-keli-accept-20261111-r2-fixture-1234.example.test';
@@ -73,13 +79,29 @@ class MachineProvisionCompressionTest extends TestCase
         $this->assertNotFalse($certificate);
         $this->assertTrue(openssl_x509_export($certificate, $pem)); $this->assertTrue(openssl_pkey_export($key, $private));
         foreach (['/etc/kelinode/acceptance-cert.pem' => $pem, '/etc/kelinode/acceptance-key.pem' => $private,
-            '/root/opaque-test-input' => base64_encode(random_bytes(3072)),
+            // Larger synthetic opaque inputs are tested separately as rejected payloads.
+            '/root/opaque-test-input' => base64_encode(random_bytes($opaqueBytes)),
             '/root/isolation.sh' => "#!/bin/bash\n" . str_repeat("# Bounded synthetic fixture setup; never run by this test\n", 30)] as $path => $content) {
             $data['write_files'][] = ['path' => $path, 'content' => $content, 'permissions' => '0600', 'owner' => 'root:root'];
         }
         $plain = $data;
         foreach ($plain['write_files'] as &$file) { $file['content'] = $this->decode($file); unset($file['encoding']); } unset($file);
         $this->assertGreaterThan(27373, strlen($this->yaml($plain)));
+        $compact = ProvisionBootstrap::compactFiles($this->yaml($data));
+        if (!$fits) {
+            $this->assertGreaterThan(LinodeProvisionClient::MAX_USER_DATA_BYTES, strlen($compact));
+            try {
+                (new LinodeProvisionClient())->buildRequest(['region' => 'sg-sin-2', 'size' => 'g6-standard-4', 'image' => 'linode/debian12', 'authorized_keys' => []],
+                    '10000000-0000-4000-8000-000000000001', 'synthetic-marker', $this->yaml($data));
+                $this->fail('Expected provider payload limit');
+            } catch (CloudException $error) {
+                $this->assertSame('bootstrap_too_large', $error->getMessage());
+            }
+            Http::assertNothingSent();
+            return;
+        }
+        $this->assertLessThanOrEqual(LinodeProvisionClient::MAX_USER_DATA_BYTES, strlen($compact), 'Decoded fixture bytes: ' . strlen($compact));
+        $this->assertLessThanOrEqual(LinodeProvisionClient::MAX_METADATA_BYTES, strlen(base64_encode($compact)), 'Encoded fixture bytes: ' . strlen(base64_encode($compact)));
         $request = (new LinodeProvisionClient())->buildRequest(['region' => 'sg-sin-2', 'size' => 'g6-standard-4', 'image' => 'linode/debian12', 'authorized_keys' => []],
             '10000000-0000-4000-8000-000000000001', 'synthetic-marker', $this->yaml($data));
         $wire = $request['metadata']['user_data']; $decoded = base64_decode($wire, true);
