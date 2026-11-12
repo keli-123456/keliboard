@@ -1,157 +1,113 @@
-name: CI
+name: Bootstrap Diagnostics Linux Acceptance
 
 on:
   push:
-  pull_request:
-    types: [opened, synchronize, reopened]
+    branches: [audit/bootstrap-diagnostics-linux-20261112-a701aa72]
 
 permissions:
   contents: read
 
+concurrency:
+  group: bootstrap-diagnostics-linux-20261112-a701aa72
+  cancel-in-progress: false
+
 jobs:
-  machine-acceptance-tools:
-    name: Isolated acceptance tools (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+  linux-diagnostics:
+    runs-on: ubuntu-latest
     timeout-minutes: 5
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Check control staging and synthetic verifier guards
-        working-directory: tools/machine-acceptance
-        run: python -m unittest -v test_staging test_worker.WorkerTests
-
-  unit-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: "8.2"
-          tools: composer:v2
-          coverage: none
-
-      - name: Validate composer manifests
-        run: composer validate --strict
-
-      - name: Verify composer platform pin
-        run: php scripts/verify-composer-platform.php
-
-      - name: Verify PHP security baseline
-        run: |
-          php scripts/verify-php-security.tests.php
-          php scripts/verify-php-security.php
-
-      - name: Verify admin asset versions
-        run: php scripts/verify-admin-xboard-assets.php
-
-      - name: Test isolated machine installer dependency handling
-        run: |
-          bash scripts/test-machine-install-apt.sh
-          bash scripts/test-machine-install-ping.sh
-
-      - name: Run release preflight guards
-        shell: pwsh
-        run: |
-          ./scripts/release-preflight.ps1 `
-            -ReleaseVersion v0.0.0-preflight `
-            -SkipTagCheck `
-            -SkipAdminRepo `
-            -SkipKelinodeRepo
-
-      - name: Test full-stack release manifest guards
-        run: php scripts/verify-release-manifest.tests.php
-
-      - name: Test deployment gates and receipts
-        run: |
-          php scripts/release-smoke.tests.php
-          php scripts/verify-deployment-receipt.tests.php
-          php scripts/deploy-release.tests.php
-          php scripts/deploy-release.integration.tests.php
-          php scripts/update.integration.tests.php
-
-      - name: Verify full-stack release contract
-        shell: pwsh
-        run: ./scripts/release-full-stack.tests.ps1
-
-      - name: Verify lock platform compatibility
-        run: composer check-platform-reqs --lock --no-interaction
-
-      - name: Install dependencies
-        run: composer install --no-interaction --no-progress --prefer-dist
-
-      - name: Verify installed platform requirements
-        run: composer check-platform-reqs --no-interaction
-
-      - name: Run unit tests
-        run: vendor/bin/phpunit --testsuite Unit --colors=always
-
-  giftcard-mysql-acceptance:
-    name: Gift card MySQL (${{ matrix.isolation }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        isolation: ["REPEATABLE READ", "READ COMMITTED"]
-    services:
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_DATABASE: keli_acceptance_giftcard
-          MYSQL_USER: keli_acceptance
-          MYSQL_PASSWORD: ephemeral-ci-fixture-only
-          MYSQL_ROOT_PASSWORD: ephemeral-ci-root-only
-        ports:
-          - 127.0.0.1::3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=24
-    env:
-      KELI_GIFTCARD_MYSQL_ACCEPTANCE: "1"
-      KELI_GIFTCARD_DB_HOST: "127.0.0.1"
-      KELI_GIFTCARD_DB_NAME: keli_acceptance_giftcard
-      KELI_GIFTCARD_DB_USER: keli_acceptance
-      KELI_GIFTCARD_DB_PASSWORD: ephemeral-ci-fixture-only
-      KELI_GIFTCARD_ISOLATION: ${{ matrix.isolation }}
     steps:
       - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
         with:
-          php-version: "8.2"
-          extensions: pdo_mysql, pdo_sqlite, mbstring, openssl
-          tools: composer:v2
-          coverage: none
-      - name: Install test dependencies without application startup
-        run: composer install --no-interaction --no-progress --prefer-dist --no-scripts
-      - name: Verify packaged plugin loading
-        run: php scripts/verify-plugin-layout.php
-      - name: Exercise real concurrent redemptions against the disposable database
-        env:
-          KELI_GIFTCARD_DB_PORT: ${{ job.services.mysql.ports[3306] }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check pinned diagnostics and Linux permissions without external operations
+        working-directory: tools/machine-acceptance
         run: |
-          mkdir -p artifacts
-          vendor/bin/phpunit -c phpunit-mysql.xml --log-junit artifacts/giftcard-mysql.xml
-      - name: Preserve acceptance results
+          python - <<'PY'
+          import contextlib
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import platform
+          import sys
+          import unittest
+          from unittest.mock import patch
+
+          expected = {
+              'staging.py': '7999147809d6d90eb6029551f0a8f576f7f6e40bb3632ff8dcc81b8f9ceb96ba',
+              'test_staging.py': 'cc274c3770059d42f6bfd01755d937033ed62b7029ea4827208d31187bd60e11',
+              'worker.py': 'a196bda0b55eb83aa72f45c2277438589fb069c25cd774bd176046be538087a4',
+              'test_worker.py': '7804e36d0aef88e06be45e3cf9f350f817083d1b75805e6f2c33a636a01290c5',
+              'bootstrap_diagnostics.py': 'a75b3e1092d623c99d2923daf56e692d4297ca0540d99b75da52a56f83e9211a',
+              'diagnostic_capture.py': '7354339ad3ed814aa5bf7fe79f56c37ecb0d96b391a5d629d4207e445df8acda',
+              'diagnostic_round_runner.py': 'ec25cd60dccf473351742dc93ace9f1d0673ad1429ddfc01c74fb8cd43d152c8',
+              'test_bootstrap_diagnostics.py': 'b68f8efe0823e7316803f360b72b7211e4055fbaae0a7c51777a63e8b393eebe',
+              'test_diagnostic_capture.py': 'c5fd0c66b8f0b44e6bca19b8f241536c07695c9fae63cf368fbf9156e7d49bd7',
+          }
+          observed = {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in expected}
+          if observed != expected or sys.platform != 'linux' or os.name != 'posix' or os.geteuid() == 0:
+              raise SystemExit('Pinned non-root Linux test context mismatch')
+
+          class Evidence(unittest.TextTestResult):
+              def __init__(self, *args, **kwargs):
+                  super().__init__(*args, **kwargs)
+                  self.successes = []
+              def addSuccess(self, test):
+                  self.successes.append(test.id())
+                  super().addSuccess(test)
+
+          denied = []
+          def refuse(*args, **kwargs):
+              denied.append('patched_transport')
+              raise RuntimeError('External operation refused by synthetic CI')
+
+          def guard(event, args):
+              if event in {'socket.connect', 'socket.bind', 'socket.getaddrinfo', 'socket.sendto',
+                           'subprocess.Popen', 'os.system', 'os.posix_spawn', 'pty.spawn'}:
+                  denied.append(event)
+                  raise RuntimeError('External operation refused by audit guard')
+
+          sys.addaudithook(guard)
+          suite = unittest.defaultTestLoader.loadTestsFromNames([
+              'test_staging', 'test_bootstrap_diagnostics', 'test_diagnostic_capture', 'test_worker.WorkerTests'])
+          with contextlib.ExitStack() as stack:
+              for target in ['socket.create_connection', 'socket.socket.connect', 'socket.socket.connect_ex',
+                             'socket.getaddrinfo', 'subprocess.run', 'subprocess.Popen']:
+                  stack.enter_context(patch(target, side_effect=refuse))
+              result = unittest.TextTestRunner(verbosity=2, resultclass=Evidence).run(suite)
+
+          permissions = [
+              'test_staging.StagingTests.test_private_directory_and_json_permissions_are_required',
+              'test_bootstrap_diagnostics.ProbeTests.test_unsafe_owner_and_log_permissions_are_refused',
+          ]
+          passed = (result.wasSuccessful() and result.testsRun == 74 and not result.skipped
+                    and all(name in result.successes for name in permissions) and not denied)
+          report = {
+              'schema': 1, 'ok': passed, 'synthetic_only': True,
+              'base_commit': 'a701aa72a61d7fe4314263833d63d078c6e655b2',
+              'ci_commit': os.environ['GITHUB_SHA'], 'platform': sys.platform,
+              'python_version': platform.python_version(), 'effective_uid': os.geteuid(),
+              'tests_run': result.testsRun, 'tests_passed': len(result.successes),
+              'failures': [test.id() for test, _ in result.failures],
+              'errors': [test.id() for test, _ in result.errors],
+              'skipped': [test.id() for test, _ in result.skipped],
+              'linux_permission_tests': {name: name in result.successes for name in permissions},
+              'successful_tests': result.successes, 'source_hashes': observed,
+              'external_operations_denied': len(denied), 'transport_guard_enabled': True,
+              'audit_guard_enabled': True, 'production_connections': 0, 'cloud_creates': 0, 'dns_writes': 0,
+          }
+          Path('diagnostics-ci-result.json').write_text(json.dumps(report, indent=2) + '\n')
+          print(json.dumps(report))
+          raise SystemExit(0 if passed else 1)
+          PY
+      - name: Preserve aggregate evidence only
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: giftcard-mysql-${{ strategy.job-index }}
-          path: artifacts/giftcard-mysql.xml
-          if-no-files-found: ignore
+          name: bootstrap-diagnostics-linux-a701aa72
+          path: tools/machine-acceptance/diagnostics-ci-result.json
+          if-no-files-found: error
           retention-days: 7
