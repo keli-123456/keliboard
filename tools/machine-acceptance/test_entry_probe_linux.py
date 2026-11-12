@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -57,7 +58,7 @@ class LinuxEntryProbeTests(unittest.TestCase):
     def assert_reaped(self):
         self.assertTrue(self.children)
         for child in self.children:
-            self.assertIsNotNone(child.poll())
+            self.assertIsNotNone(child.returncode)
             self.assertTrue(child.stdout.closed)
             with self.assertRaises(ChildProcessError):
                 os.waitpid(child.pid, os.WNOHANG)
@@ -94,6 +95,7 @@ class LinuxEntryProbeTests(unittest.TestCase):
         row = self.child("sleep", timeout=0.2)
         self.assertEqual(row.state, "timeout")
         self.assertEqual(row.output, b"")
+        self.assertEqual(self.children[-1].returncode, -signal.SIGKILL)
         self.assertLess(time.monotonic() - start, 5)
         self.assert_reaped()
 
@@ -101,11 +103,13 @@ class LinuxEntryProbeTests(unittest.TestCase):
         row = self.child("overflow", limit=4096)
         self.assertEqual(row.state, "oversized")
         self.assertEqual(row.output, b"")
+        self.assertEqual(self.children[-1].returncode, -signal.SIGKILL)
         self.assert_reaped()
 
     def test_real_eof_before_exit_still_obeys_wait_timeout_and_reaps(self):
         row = self.child("eof_sleep", timeout=0.2)
         self.assertEqual(row.state, "timeout")
+        self.assertEqual(self.children[-1].returncode, -signal.SIGKILL)
         self.assert_reaped()
 
     def test_real_nonzero_without_packet_summary_is_unknown_not_zero(self):
@@ -184,6 +188,7 @@ class LinuxEntryProbeTests(unittest.TestCase):
             def cleanup():
                 events.append("cleanup")
                 self.assert_reaped()
+                self.assertTrue(all(child.returncode == -signal.SIGKILL for child in self.children))
                 self.assertTrue((base / capture.REPORT).is_file())
                 return {"ok": True}
             original_cleanup = Mock(side_effect=cleanup)
