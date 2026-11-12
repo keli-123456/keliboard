@@ -1,0 +1,128 @@
+{
+  "schema": 1,
+  "observed_at": "2026-11-12T15:56:48.3657813+08:00",
+  "scope": "local_driver_repair_only",
+  "status": "local_regressions_passed_not_live_acceptance",
+  "platform": {
+    "os": "Windows",
+    "python": "3.12.10"
+  },
+  "r7": {
+    "run_id": "keli-accept-20261112-r7-8c3a3d2c",
+    "status": "blocked_not_passed_closed_cleaned",
+    "exact_permissionerror_cause_confirmed": false,
+    "original_errno_or_callsite_available": false,
+    "frozen_campaign_sha256": "eeb4a2ae4c9d0bb7c3c11bb31b717eff43bf6830a3fb55e32e0e18bbbb37f05b",
+    "integrity": {
+      "before_count": 105,
+      "after_count": 105,
+      "changed_count": 0,
+      "added_count": 0,
+      "all_unchanged": true
+    },
+    "original_round_imported_or_run": false
+  },
+  "reproduction": {
+    "fixture": "only_pinned_save_function_ast_with_temporary_base",
+    "native_handle_without_delete_sharing": true,
+    "error_class": "PermissionError",
+    "errno": 13,
+    "winerror": 5,
+    "old_snapshot_retained": true,
+    "save_after_handle_closed": true,
+    "original_diagnostic_gap": "progress_write_before_diagnostic_try"
+  },
+  "repair": {
+    "unique_temporary_snapshots": true,
+    "flush_and_fsync": true,
+    "rename_retry_attempts_max": 8,
+    "rename_retry_window_ms": 500,
+    "retryable_windows_codes": [
+      5,
+      32,
+      33
+    ],
+    "only_local_rename_retried": true,
+    "exclusive_intent_retried": false,
+    "partial_intent_remains_spent": true,
+    "immutable_authority_and_closed_round_guards": true,
+    "progress_failure_cannot_skip_diagnostics_or_cleanup": true,
+    "diagnostic_unique_fallback": true,
+    "first_error_preserved": true,
+    "all_write_failure_reported_not_persisted": true,
+    "error_fields": [
+      "phase",
+      "site",
+      "logical_record",
+      "operation",
+      "error_class",
+      "errno",
+      "winerror",
+      "trusted_module_function_line"
+    ],
+    "raw_messages_paths_arguments_or_logs_exported": false,
+    "live_cli_or_authorization_generated": false
+  },
+  "tests": {
+    "new_tests": {
+      "run": 37,
+      "passed": 37,
+      "skipped": 0
+    },
+    "combined": {
+      "run": 121,
+      "passed": 119,
+      "skipped": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped_reason": "actual_POSIX_permission_checks_on_Windows"
+    },
+    "native_windows_cases": 4,
+    "initial_full_repeat": {
+      "errors": 1,
+      "case": "continuous_observer",
+      "error_class": "PermissionError",
+      "errno": 13,
+      "winerror": 5,
+      "operation": "replace_snapshot",
+      "finding": "unpaced_readers_can_exhaust_the_bounded_retry_window",
+      "correction": "assert_atomic_success_or_diagnosed_bounded_failure_retaining_complete_snapshot_then_success_after_reader_stops",
+      "retry_limits_enlarged": false,
+      "failure_hidden_or_counted_as_success": false
+    },
+    "continuous_observer_followup": {
+      "runs": 5,
+      "passed": 5,
+      "failures": 0,
+      "errors": 0
+    },
+    "external_transports": "mocked_blocked",
+    "ci_workflow_test_command_updated": true,
+    "ci_dispatched": false
+  },
+  "source_digests": {
+    "test_driver_journal.py": "5d2d862441f1f08e14047bce27339394ec676117725e079e1e05bc87574b2e9e",
+    "install_only_runner.py": "360aed514a1d26f35eb8a63bdbcee32b765f92b68af6258d997726fe69b6a58a",
+    "test_install_only_runner.py": "cadec40d3b1635849905f62402221553f3185873a047a7bd563e2f83ddbcd677",
+    "driver_journal.py": "b18cc621856b8f389358753ff6bb9dd6f7349f7428a28356c0cece0640440408"
+  },
+  "external_operations": {
+    "ssh_connections": 0,
+    "production_connections": 0,
+    "production_database_connections": 0,
+    "cloud_create_calls": 0,
+    "dns_api_calls": 0,
+    "deployments": 0,
+    "ci_dispatches": 0,
+    "automatic_flags_modified": false,
+    "queues_modified": false,
+    "tanzhen_accessed": false
+  },
+  "limits": [
+    "Original R7 cause is unconfirmed; missing installation evidence is not recovered.",
+    "Persistent sharing or ACL denial still blocks; no permission bypass or privilege escalation.",
+    "Bounded rename retry is not a guarantee against a blocked OS call.",
+    "These patches have not run Linux CI, live installation, host-loss or power-loss recovery.",
+    "A future run needs a separately approved fresh scope, frozen complete bundle and reviewed entry."
+  ]
+}

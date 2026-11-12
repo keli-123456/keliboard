@@ -244,6 +244,91 @@ POSIX file protection; that check belongs to the Linux CI job. New real-node
 diagnostics and the still-unconfirmed R5 installer failure require a separately
 authorized live round. This change does not create or deploy that round.
 
+### Local Driver Journal Repair (2026-11-12)
+
+R7 stopped on a local `PermissionError`; its saved evidence did not include an
+errno, WinError or callsite. Its exact cause is **not established**. A local-only
+AST fixture extracted only the old `save()` function from the pinned public
+source, with `BASE` redirected to disposable files. On this Windows host, a
+native read handle without delete sharing reproduced `PermissionError`,
+`errno=13`, `winerror=5` during snapshot replacement. The old JSON survived and
+the same save succeeded after the handle closed. This demonstrates a defect,
+not proof that the original R7 failure had the same cause.
+
+The new standard-library `driver_journal.py` provides:
+
+- Unique, same-directory temporary snapshots, flush/fsync before atomic
+  replacement, and cleanup of only the writer's own temporary file.
+- At most eight local rename attempts over a 0.5-second retry window, only for
+  Windows permission/sharing errors 5/32/33. The bound is on retries, not a
+  guarantee against a blocked OS/filesystem call. No API, SSH, installation,
+  callback, cloud creation or DNS operation is retried.
+- Exclusive intent creation once only. Existing, partially written or fsync-
+  failed intents remain spent; unknown completion is never permission to replay.
+- Promptly closed native Windows read handles requesting read/write/delete
+  sharing. This reduces reader interference; it does not guarantee replacement
+  while arbitrary third-party handles remain open. Observers must use a bounded
+  polling cadence rather than continuously reopening the file in a tight loop.
+- Closed-round write refusal, immutable authorization/frozen inputs, bounded
+  JSON, duplicate-key rejection and link/special-file checks. This is not a
+  replacement for the bundle's private-directory ACL and ownership preflight.
+- Safe local failure records containing only phase, logical record kind,
+  operation, exception class, errno/WinError, and bounded trusted module/function/
+  line information. Messages, full paths, arguments, locals and raw logs are
+  never exported. If even the failure file cannot be written, the returned
+  aggregate explicitly says `persisted=false` and preserves the first error.
+
+`install_only_runner.py` is a reusable **future-bundle template**, not a live
+entry or new authorization. It requires explicit run/commit/binary pins and the
+original campaign's approved two-role scope. It rejects R6/R7 identities and
+existing/closed intents, checks the complete frozen bundle and its own two
+module hashes, and only then binds journal I/O. A future separately approved
+package must pin both new modules, use an explicitly reviewed `install_runner.py`
+entry and retain all original operation-specific identity, transport and cleanup
+guards. Do not import a closed round's campaign to adapt or resume it. No new
+package, authorization, private material or live invocation was produced here.
+
+The template protects progress writes before diagnostics/cleanup, keeps the
+first fatal stage error, and attempts the original cleanup even when local
+progress, diagnostics or outcome writes fail. The original cleanup journal's
+path/scope guards remain in force. Diagnostic intent is exclusive and collection
+is at most once; a denied canonical output can use a unique sanitized fallback
+record without collecting again. Cached results require the exact safe schema
+and task/run identity. Missing or unpersisted required diagnostics cannot pass.
+An existing dispatch intent without a resource receipt remains unavailable, not
+evidence that no source was created.
+Finalization never writes another progress record after the closing marker.
+
+Local regression (all transports/providers/cleanup endpoints are synthetic):
+
+```sh
+python -B -m unittest -q test_driver_journal test_install_only_runner
+python -B -m unittest -q test_staging test_bootstrap_diagnostics test_diagnostic_capture test_driver_journal test_install_only_runner test_worker.WorkerTests
+```
+
+On Windows/Python 3.12, the 37 new tests passed without skips, including native
+short/long read-handle locks, concurrent observations, no repeated stage
+dispatch, output fallback, spent intent, disk-full/total-write failures and
+cleanup/finalization errors. The combined suite ran 121 tests: 119 passed and
+two actual POSIX permission tests were skipped. The existing Windows/Linux CI
+test command now includes these modules, but **no CI run was dispatched** for
+this patch; its Linux behavior and true process/host-loss recovery are not
+established by this local run. No new durability claim covers power loss or
+storage-device failure.
+
+A full-suite repeat exposed a too-strong stress-test assumption: a continuous,
+unpaced observer can exhaust the retry window even with delete sharing. The
+regression now checks both valid outcomes: an atomic update, or a numerically
+diagnosed bounded failure retaining the previous complete JSON and removing the
+temporary file. After the observer stops, saving must succeed. The retry limits
+were not enlarged and permanent contention is never reported as success.
+
+All 105 original R7 files matched their pre-repair hashes, with no added files.
+R7 remains failed, cleaned and closed; its missing source-installation evidence
+cannot be reconstructed. No production, cloud/DNS, SSH, database or tanzhen
+connection was made, and no execution flag was changed. See
+`docs/evidence/linode-local-driver-io-20261112.json` for the sanitized aggregate.
+
 ### Linux Diagnostic CI Evidence (2026-11-12)
 
 The isolated [Linux CI run 43137719391](https://github.com/keli-123456/keliboard/actions/runs/43137719391)
