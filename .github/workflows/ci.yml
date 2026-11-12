@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches-ignore:
+      - audit/entry-probe-linux-20261113-e634b437
   pull_request:
     types: [opened, synchronize, reopened]
 

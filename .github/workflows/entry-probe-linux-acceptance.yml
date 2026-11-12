@@ -1,0 +1,50 @@
+name: Entry Probe Linux Isolated Acceptance
+
+on:
+  push:
+    branches: [audit/entry-probe-linux-20261113-e634b437]
+
+permissions:
+  contents: read
+
+jobs:
+  offline-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check synthetic evidence and real process lifecycle without networking
+        shell: bash
+        run: |
+          set -euo pipefail
+          ulimit -c 0
+          uid="$(id -u)"
+          gid="$(id -g)"
+          py="$(command -v python)"
+          libdir="$("$py" -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"
+          parent_ns="$(readlink /proc/self/ns/net)"
+          private_home="$(mktemp -d "$RUNNER_TEMP/keli-entry-probe-home.XXXXXX")"
+          chmod 700 "$private_home"
+          trap 'rmdir -- "$private_home" 2>/dev/null || true' EXIT
+          timeout --signal=TERM --kill-after=5s 300s \
+            sudo /usr/bin/unshare --net --pid --fork --mount-proc --kill-child=SIGKILL \
+            /usr/bin/setpriv --reuid "$uid" --regid "$gid" --clear-groups \
+            --inh-caps=-all --ambient-caps=-all --bounding-set=-all --no-new-privs \
+            /usr/bin/env -i PATH="$(dirname "$py"):/usr/bin:/bin" HOME="$private_home" \
+            LD_LIBRARY_PATH="$libdir" LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_LFS_SKIP_SMUDGE=1 \
+            CI_COMMIT="$GITHUB_SHA" CI_PARENT_NETNS="$parent_ns" \
+            "$py" -B tools/machine-acceptance/entry_probe_linux_ci.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: entry-probe-linux-aggregate
+          path: artifacts/entry-probe-ci.json
+          if-no-files-found: error
+          retention-days: 7
