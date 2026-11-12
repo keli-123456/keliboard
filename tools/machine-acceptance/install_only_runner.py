@@ -7,6 +7,7 @@ import re
 import time
 import uuid
 from driver_journal import DriverJournal, Rejected, safe_error
+from application_bundle import inspect_archive
 
 READY = ('owner_matches', 'bootstrap_ready', 'cloud_init_done', 'php_ready', 'docker_ready',
          'firewall_ready', 'ssh_key_only', 'public_http_80_closed')
@@ -17,7 +18,8 @@ REQUIRED = {'authorization.json', 'campaign.py', 'read_only.py', 'discover.php',
             'runtime_install.py', 'application.tar.gz', 'vendor.tar.gz', 'bootstrap_diagnostics.py', 'diagnostic_capture.py',
             'node.py', 'controller.py', 'live_operator.py', 'staging_control.py', 'certificate.py', 'certificate_dns.php',
             'control_setup.py', 'control_transfer.py', 'control_run.py', 'production_guard.py', 'finalize_local.py',
-            'http_smoke.php', 'test_router.php', 'staging.py', 'worker.py', 'install_only_runner.py', 'driver_journal.py'}
+            'http_smoke.php', 'test_router.php', 'staging.py', 'worker.py', 'install_only_runner.py', 'driver_journal.py',
+            'application_bundle.py'}
 CLOSED_ROUNDS = {'keli-accept-20261112-r7-8c3a3d2c', 'keli-accept-20261112-r6-f7e61713'}
 FORBIDDEN_FLAGS = ('production_deployment', 'production_database_writes', 'production_queue_changes',
                    'production_automatic_creation', 'production_automatic_rotation', 'production_dns_switch',
@@ -180,9 +182,10 @@ class InstallRunner:
             path = self.campaign.BASE / name
             require(path.is_file() and not path.is_symlink() and path.name == name
                     and hashlib.sha256(path.read_bytes()).hexdigest() == pin, 'frozen_file_changed')
-        for name in ('driver_journal.py', 'install_only_runner.py'):
+        for name in ('driver_journal.py', 'install_only_runner.py', 'application_bundle.py'):
             require(hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
                     == offline['file_digests'][name], 'loaded_local_io_tool_changed')
+        inspect_archive(self.campaign.BASE / 'application.tar.gz')
         self.bind_journal()
         self.campaign.save('round-intent.json', {'run_id': self.run_id, 'source_commit': self.application_commit, 'approved_roles': ['control', 'source'],
                            'maximum_total_create_attempts': 2, 'restart_allowed': False, 'at': int(self.wall())}, exclusive=True)
