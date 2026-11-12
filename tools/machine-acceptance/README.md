@@ -411,14 +411,34 @@ These observations never change the acceptance result or establish censorship.
 Local synthetic regression (fake commands/SSH/cloud/DNS, temporary files only):
 
 ```sh
-python -B -m unittest -v test_entry_probe_diagnostics test_entry_probe_capture test_diagnostic_capture
+python -B -m unittest -v test_entry_probe_diagnostics test_entry_probe_capture test_diagnostic_capture test_entry_probe_linux
 ```
 
-The normal existing Windows/Linux CI test list includes these tests. No CI run,
-image publication, deployment, VM creation or live probe is dispatched by this
-local change. Windows mocks do not validate real Linux capabilities, namespaces,
-nft behavior, pipe lifecycle or WAN reachability; Linux and new live acceptance
-remain separate work. See `docs/evidence/entry-probe-diagnostics-local-20261113.json`.
+The existing Windows/Linux tools job includes these tests. The Linux step keeps
+the same unprivileged network/PID namespace boundary as the isolated acceptance
+so procfs counters are not shared with unrelated runner traffic. Windows skips
+the Linux-only cases. This normal test-list integration uses no dedicated
+temporary workflow, branch filter or CI aggregation script.
+
+On 2026-11-13, isolated Linux run
+[43267496580](https://github.com/keli-123456/keliboard/actions/runs/43267496580)
+passed 213 tests with zero failures or skips, excluding four Windows-native
+tests explicitly. The 12 additional Linux tests used 13 fixed synthetic Python
+children to check actual pipes, timeout/overflow SIGKILL, already-reaped PIDs,
+nonroot permission refusal, procfs and diagnostic-before-cleanup ordering. Test
+assertions inspect the recorded return code before `waitpid`; they do not call
+`poll()` to perform the reaping that the implementation must have completed.
+All 27 source digests matched the tested Git snapshot, and the diagnostic
+implementation remained unchanged from `e634b437`.
+
+Main retains the tested Linux regression file exactly, but excludes the temporary
+workflow, its push filter and the CI-only aggregation harness. The merge is
+marked `[skip ci]`; this integration does not dispatch a new CI run, publish an
+image, deploy, create VMs, replay R10 or change automatic flags. Linux ICMP/error
+streams, nft rulesets and the SSH/cloud/DNS bridges remain synthetic; this is
+not real-node network, HY2 or DNS-cutover acceptance. See
+[Linux evidence](../../docs/evidence/entry-probe-linux-20261113.json) and the
+earlier `docs/evidence/entry-probe-diagnostics-local-20261113.json` snapshot.
 
 Primary format references: [iputils ping](https://manpages.debian.org/bookworm/iputils-ping/ping.8.en.html)
 and [libnftables JSON](https://manpages.debian.org/bookworm/libnftables1/libnftables-json.5.en.html).
