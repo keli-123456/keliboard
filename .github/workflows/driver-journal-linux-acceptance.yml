@@ -1,0 +1,38 @@
+name: Driver Journal Linux Isolated Acceptance
+
+on:
+  push:
+    branches:
+      - audit/driver-journal-linux-20261112-695a2746
+    paths:
+      - tools/machine-acceptance/**
+      - .github/workflows/driver-journal-linux-acceptance.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: driver-journal-linux-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  driver-io:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run non-root kernel denials and mocked driver cleanup
+        run: python -I -B tools/machine-acceptance/driver_journal_ci.py
+      - name: Preserve sanitized aggregate only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: driver-journal-linux
+          path: artifacts/driver-journal-ci.json
+          if-no-files-found: error
+          retention-days: 7

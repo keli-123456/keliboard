@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches-ignore:
+      - audit/driver-journal-linux-20261112-695a2746
   pull_request:
     types: [opened, synchronize, reopened]
 
