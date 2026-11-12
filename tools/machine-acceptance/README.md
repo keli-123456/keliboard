@@ -144,7 +144,16 @@ All 18 aggregate source hashes matched commit
 `5c6fce2bc1f401277f0fea7957239b8661ecafd7`. Public-base legacy CRLF prefixes
 returned 2; canonical LF prefixes returned 0 on real Linux. All 13 archived
 shells passed the LF checks. Only the dedicated temporary-branch workflow ran;
-it was not merged, and no image publication or deployment was triggered.
+at validation time it was not merged, and no image publication or deployment
+was triggered.
+
+The subsequent main integration preserves that tested commit in merge history,
+but excludes its dedicated workflow, temporary branch filter and
+`application_bundle_ci.py` entry from the final tree. Main keeps the producer,
+pre-intent archive guard, offline regressions and normal CI test invocation.
+Source and merge commits use `[skip ci]`; the recorded Linux result is still
+the exact snapshot above, not a new Linux run of the merge. No deployment, VM
+creation, R8 retry, automatic-switch change or tanzhen operation is included.
 
 ## Control-Bundle Staging Preflight
 

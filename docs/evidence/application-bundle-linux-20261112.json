@@ -25,7 +25,7 @@
     "source_unchanged_during_tests": true,
     "only_dedicated_workflow_observed": true,
     "temporary_workflow_and_push_filter_not_in_main": true,
-    "temporary_branch_not_merged": true,
+    "temporary_branch_not_merged_at_validation": true,
     "forbidden_process_or_socket_attempts": 0,
     "allowed_local_git_processes": 151,
     "allowed_two_line_bash_processes": 6
@@ -86,7 +86,25 @@
     "deployment_or_image_publication": false,
     "automatic_switches_changed": false,
     "kelinode_rs_modified": false,
-    "main_committed_or_pushed": false
+    "main_committed_or_pushed_during_validation": false
+  },
+  "main_integration": {
+    "fix_source_commit": "9e34e7785f90cc152ecd461cfc0aebb12c7d8fa5",
+    "tested_commit_retained_in_merge_history": true,
+    "tested_source_files_preserved": 17,
+    "temporary_dedicated_workflow_excluded": true,
+    "temporary_push_filter_excluded": true,
+    "temporary_ci_aggregate_entry_excluded": true,
+    "normal_ci_keeps_application_bundle_regression": true,
+    "commit_skip_ci": true,
+    "new_linux_ci_run_for_merge": false,
+    "local_windows_recheck_tests": 143,
+    "local_windows_recheck_passed": 135,
+    "local_windows_recheck_failures": 0,
+    "local_windows_recheck_errors": 0,
+    "local_windows_recheck_platform_skips": 8,
+    "deployment_or_image_publication_requested": false,
+    "live_round_or_automatic_flags_changed": false
   },
   "limitations": [
     "Linux ran only two archived shell prefix lines, not a full installer or a real VM installation.",
