@@ -73,6 +73,16 @@ umask 077
 directory='{{DIRECTORY}}'
 identity='{{IDENTITY}}'
 id_file=/etc/kelinode/report-instance-id
+installer_pid=
+terminate_installer() {
+    trap '' TERM
+    child="${installer_pid:-${!:-}}"
+    if [ -n "$child" ]; then
+        kill -TERM "$child" 2>/dev/null || true
+        wait "$child" 2>/dev/null || true
+    fi
+    exit 143
+}
 report_result() {
     code=$?
     trap - EXIT
@@ -86,6 +96,7 @@ report_result() {
     exit "$code"
 }
 trap report_result EXIT
+trap terminate_installer TERM
 if declare -F keli_provision_stage >/dev/null; then keli_provision_stage identity || true; fi
 if [ -L /etc/kelinode ] || [ -L "$id_file" ]; then keli_provision_exit 82 "$LINENO"; exit 82; fi
 mkdir -p /etc/kelinode
@@ -108,7 +119,10 @@ if declare -F keli_provision_stage >/dev/null; then
     keli_provision_stage installer || true
     export BASH_ENV="$directory/bootstrap.sh"
 fi
-timeout --signal=TERM --kill-after=15s 600s bash "$directory/install.sh" > "$directory/install.log" 2>&1
+timeout --signal=TERM --kill-after=15s 600s bash "$directory/install.sh" > "$directory/install.log" 2>&1 &
+installer_pid=$!
+wait "$installer_pid"
+installer_pid=
 if declare -F keli_provision_stage >/dev/null; then keli_provision_stage complete || true; fi
 SH;
         $script = str_replace(["\r\n", "\r"], "\n", strtr($script, ['{{DIRECTORY}}' => $directory, '{{IDENTITY}}' => $installation,

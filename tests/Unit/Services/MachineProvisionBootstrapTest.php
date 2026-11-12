@@ -242,8 +242,10 @@ SH;
         mkdir($this->directory . '/native', 0700);
         $source = str_replace("\r\n", "\n", file_get_contents(resource_path('server-machine/kelinode-rs-install.sh')));
         $this->assertSame(1, preg_match('/^native_installer_exit\(\) \{\n.*?^\}/ms', $source, $match));
+        $this->assertSame(1, preg_match('/^trap .* TERM$/m', $source, $term));
         $native = "#!/bin/bash\nset -Eeuo pipefail\nLOCK_DIR=./native-lock\nWORK_DIR=./native-work\n" . $match[0]
-            . "\nmkdir \"\$LOCK_DIR\" \"\$WORK_DIR\"\ntrap native_installer_exit EXIT\nkeli_provision_stage base_dependencies\nprintf '%s' \"\$BASHPID\" > ./native-ready.pid\nwhile :; do sleep 0.1; done\n";
+            . "\nmkdir \"\$LOCK_DIR\" \"\$WORK_DIR\"\ntrap native_installer_exit EXIT\n" . $term[0]
+            . "\nkeli_provision_stage base_dependencies\nprintf '%s' \"\$BASHPID\" > ./native-ready.pid\nwhile :; do sleep 0.1; done\n";
         file_put_contents($this->directory . '/native/keli-native-node-install.sh', $native);
         file_put_contents($this->directory . '/fixture-scope.json', json_encode(['schema' => 1, 'synthetic' => true,
             'directory' => realpath($this->directory)], JSON_THROW_ON_ERROR));

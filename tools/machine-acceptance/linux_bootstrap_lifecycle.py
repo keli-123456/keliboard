@@ -79,7 +79,7 @@ def run(base, scenario):
                     break
                 time.sleep(.2)
             process.wait(timeout=3)
-            result['remaining_owned_processes'] = sum(alive(pid, row) for pid, row in owned.items())
+            result['remaining_owned_processes'] = sum(row[2] == process.pid and row[4] != 'Z' for row in processes().values())
     return result
 
 

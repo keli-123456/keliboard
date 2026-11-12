@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'exit 143' TERM
 
 red='\033[0;31m'
 green='\033[0;32m'

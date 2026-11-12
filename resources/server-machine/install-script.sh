@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+trap 'exit 143' TERM
 
 # ===== 每台机器只改这里 =====
 AGENT_TYPE={{AGENT_TYPE}} # kelinode / kelinode-rs
