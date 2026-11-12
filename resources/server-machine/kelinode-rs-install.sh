@@ -23,6 +23,23 @@ PURGE_CONFIG="false"
 SKIP_GEO_RULES="false"
 LOCK_DIR="/tmp/keli-native-node-install.lock"
 
+keli_install_stage() {
+    if declare -F keli_provision_stage >/dev/null; then keli_provision_stage "$1" || true; fi
+}
+
+keli_install_exit() {
+    if declare -F keli_provision_exit >/dev/null; then keli_provision_exit "$1" "$2" || true; fi
+    exit "$1"
+}
+
+native_installer_exit() {
+    local code=$?
+    trap - EXIT
+    if declare -F keli_provision_exit >/dev/null; then keli_provision_exit "$code" "" || true; fi
+    rm -rf "$LOCK_DIR" "$WORK_DIR" 2>/dev/null || true
+    exit "$code"
+}
+
 usage() {
     cat <<'EOF'
 Usage:
@@ -72,11 +89,11 @@ parse_args() {
             --uninstall|--remove)
                 ACTION="uninstall"; shift ;;
             -h|--help)
-                usage; exit 0 ;;
+                usage; keli_install_exit 0 "$LINENO" ;;
             --*)
                 echo -e "${red}Unknown option: $1${plain}" >&2
                 usage
-                exit 1 ;;
+                keli_install_exit 1 "$LINENO" ;;
             *)
                 if [[ -z "$VERSION_ARG" ]]; then
                     VERSION_ARG="$1"
@@ -94,18 +111,18 @@ validate_args() {
     if [[ -z "$MACHINE_URL_ARG" || -z "$MACHINE_ID_ARG" || -z "$MACHINE_TOKEN_ARG" ]]; then
         echo -e "${red}machine mode requires --machine-url, --machine-id, and --machine-token${plain}" >&2
         usage
-        exit 1
+        keli_install_exit 1 "$LINENO"
     fi
     if ! [[ "$MACHINE_ID_ARG" =~ ^[0-9]+$ ]] || [[ "$MACHINE_ID_ARG" -le 0 ]]; then
         echo -e "${red}--machine-id must be a positive integer${plain}" >&2
-        exit 1
+        keli_install_exit 1 "$LINENO"
     fi
 }
 
 require_root() {
     if [[ "${EUID}" -ne 0 ]]; then
         echo -e "${red}This installer must run as root.${plain}" >&2
-        exit 1
+        keli_install_exit 1 "$LINENO"
     fi
 }
 
@@ -115,13 +132,13 @@ acquire_lock() {
     while ! mkdir "$LOCK_DIR" 2>/dev/null; do
         if [[ $waited -ge $max_wait ]]; then
             echo -e "${red}Another Keli native node install is still running. Try again later.${plain}" >&2
-            exit 1
+            keli_install_exit 1 "$LINENO"
         fi
         echo -e "${yellow}Waiting for another install task... (${waited}/${max_wait}s)${plain}"
         sleep 2
         waited=$((waited + 2))
     done
-    trap 'rm -rf "$LOCK_DIR" "$WORK_DIR" 2>/dev/null || true' EXIT
+    trap native_installer_exit EXIT
 }
 
 # BEGIN KELI_APT_DEPENDENCIES (keep in sync with the panel dependency helper)
@@ -305,7 +322,7 @@ install_base_packages() {
         pacman -Sy --noconfirm --needed curl tar ca-certificates iptables >/dev/null
     else
         echo -e "${red}Missing required commands: ${missing[*]}; install them and retry.${plain}" >&2
-        exit 1
+        keli_install_exit 1 "$LINENO"
     fi
 }
 
@@ -317,7 +334,7 @@ detect_target() {
             printf 'linux-x86_64' ;;
         *)
             echo -e "${red}Unsupported architecture: ${arch}. Current native release supports linux-x86_64 only.${plain}" >&2
-            exit 1 ;;
+            keli_install_exit 1 "$LINENO" ;;
     esac
 }
 
@@ -369,7 +386,7 @@ resolve_version() {
     fi
     if [[ -z "$version" ]]; then
         echo -e "${red}Failed to resolve latest kelinode-rs version. Pass --version manually.${plain}" >&2
-        exit 1
+        keli_install_exit 1 "$LINENO"
     fi
     printf '%s' "$version"
 }
@@ -723,7 +740,7 @@ stop_systemd_service() {
     while systemctl is-active --quiet "$name" >/dev/null 2>&1; do
         if [[ $waited -ge $max_wait ]]; then
             echo -e "${red}${name}.service did not stop in ${max_wait}s. Please inspect: systemctl status ${name}${plain}" >&2
-            exit 1
+            keli_install_exit 1 "$LINENO"
         fi
         sleep 1
         waited=$((waited + 1))
@@ -919,6 +936,7 @@ install_native_node() {
     fi
 
     echo -e "${green}Installing Keli native node ${version} (${target})${plain}"
+    keli_install_stage manifest_download
     echo "Manifest: ${manifest_url}"
     curl -fL "$manifest_url" -o "$manifest"
     local manifest_sha
@@ -927,17 +945,21 @@ install_native_node() {
     manifest_binary="$(sed -n 's/.*"binary"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$manifest" | head -n 1)"
     if [[ -z "$manifest_sha" ]]; then
         echo -e "${red}Release manifest is missing sha256.${plain}" >&2
-        exit 1
+        keli_install_exit 1 "$LINENO"
     fi
     if [[ -n "$manifest_binary" && "$manifest_binary" != "$BINARY_NAME" ]]; then
         echo -e "${red}Release manifest binary mismatch: ${manifest_binary}.${plain}" >&2
-        exit 1
+        keli_install_exit 1 "$LINENO"
     fi
 
+    keli_install_stage archive_download
     echo "Download: ${archive_url}"
     curl -fL "$archive_url" -o "$archive"
+    keli_install_stage archive_verify
     (cd "$WORK_DIR" && printf '%s  %s\n' "$manifest_sha" "${asset}.tar.gz" | sha256sum -c -)
+    keli_install_stage unpack
     tar -xzf "$archive" -C "$WORK_DIR" --strip-components=1
+    keli_install_stage binary_install
     stop_existing_service
     (cd "$WORK_DIR" && sh ./install.sh "$INSTALL_DIR")
 }
@@ -950,44 +972,56 @@ verify_installed_binary() {
     echo -e "${red}Installed binary cannot run on this system.${plain}" >&2
     echo -e "${yellow}If the error mentions GLIBC, install v0.1.32 or newer so the static Linux binary is used.${plain}" >&2
     "${INSTALL_DIR}/${BINARY_NAME}" version 2>&1 || true
-    exit 1
+    keli_install_exit 1 "$LINENO"
 }
 
 WORK_DIR=""
 
 main() {
+    keli_install_stage arguments
     parse_args "$@"
     validate_args
     require_root
 
     if [[ "$ACTION" == "uninstall" ]]; then
         uninstall_native_node
-        exit 0
+        keli_install_exit 0 "$LINENO"
     fi
 
+    keli_install_stage lock
     WORK_DIR="$(mktemp -d)"
     acquire_lock
+    keli_install_stage base_dependencies
     install_base_packages
     keli_install_optional_ping
 
     local target
     local version
+    keli_install_stage version_resolution
     target="$(detect_target)"
     version="$(resolve_version)"
     if ! [[ "$version" =~ ^v[0-9] ]]; then
         echo -e "${red}Invalid version: ${version}${plain}" >&2
-        exit 1
+        keli_install_exit 1 "$LINENO"
     fi
 
+    keli_install_stage native_install
     install_native_node "$version" "$target"
+    keli_install_stage binary_verify
     verify_installed_binary
     write_installed_version_markers "$version"
+    keli_install_stage legacy_cleanup
     remove_legacy_native_command_alias
+    keli_install_stage configuration
     write_machine_config
+    keli_install_stage geo_rules
     download_geo_route_rules
+    keli_install_stage legacy_cleanup
     disable_legacy_native_service
+    keli_install_stage service_install
     install_service
 
+    keli_install_stage complete
     echo "------------------------------------------"
     echo -e "${green}Keli native node installed.${plain}"
     echo "Config: ${CONFIG_FILE}"

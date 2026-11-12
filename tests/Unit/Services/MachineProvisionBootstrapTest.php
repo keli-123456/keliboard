@@ -36,12 +36,13 @@ class MachineProvisionBootstrapTest extends TestCase
         parent::tearDown();
     }
 
-    private function files(int $exit = 0, bool $large = false): array
+    private function files(int $exit = 0, bool $large = false, ?string $script = null): array
     {
-        app()->instance(MachineInstallScript::class, new class($exit, $large) extends MachineInstallScript {
-            public function __construct(private int $exit, private bool $large) {}
+        app()->instance(MachineInstallScript::class, new class($exit, $large, $script) extends MachineInstallScript {
+            public function __construct(private int $exit, private bool $large, private ?string $script) {}
             public function render(string $url, ServerMachine $machine, string $agent): string
             {
+                if ($this->script !== null) return $this->script;
                 return "#!/usr/bin/env bash\n" . ($this->large ? str_repeat("# Preserved synthetic installer comment\n", 800) : '')
                     . "printf 'installed\\n' >> ./install-count\nexit " . $this->exit . "\n";
             }
@@ -60,10 +61,10 @@ class MachineProvisionBootstrapTest extends TestCase
         return $files;
     }
 
-    private function runBootstrap(int $callbackExit = 0): Process
+    private function runBootstrap(int $callbackExit = 0, string $prefix = ''): Process
     {
         // Only the generated bootstrap runs: installer and curl are inert local fixtures.
-        $shell = "curl() { printf 'reported\\n' >> ./callback-count; return " . $callbackExit . "; }; export -f curl; exec bash ./private/bootstrap.sh";
+        $shell = $prefix . "curl() { printf 'reported\\n' >> ./callback-count; return " . $callbackExit . "; }; export -f curl; exec bash ./private/bootstrap.sh";
         $process = new Process([$this->bash, '-c', $shell], $this->directory, null, null, 15);
         $process->run(); return $process;
     }
@@ -71,6 +72,210 @@ class MachineProvisionBootstrapTest extends TestCase
     private function receiptData(): array
     {
         return json_decode(file_get_contents($this->directory . '/private/result.json'), true, 8, JSON_THROW_ON_ERROR);
+    }
+
+    private function diagnostics(string $script): array
+    {
+        return json_decode(file_get_contents($this->directory . '/private/diagnostic-' . $script . '.json'), true, 8, JSON_THROW_ON_ERROR);
+    }
+
+    public function test_explicit_installer_exit_records_phase_code_and_exit_line_without_command_text(): void
+    {
+        $this->files(script: "#!/bin/bash\nset -Eeuo pipefail\nkeli_provision_stage installer_download\nprintf 'synthetic-secret-not-for-export\\n'\nkeli_provision_exit 23 \"\$LINENO\"; exit 23\n");
+        $process = $this->runBootstrap();
+        $this->assertSame(23, $process->getExitCode(), $process->getErrorOutput());
+        $step = $this->diagnostics('installer');
+        $this->assertSame('installer_download', $step['phase']);
+        $this->assertSame('exit', $step['event']);
+        $this->assertSame(23, $step['exit_code']);
+        $this->assertSame(5, $step['exit_line']);
+        $this->assertNull($step['error_line']);
+        $this->assertStringNotContainsString('synthetic-secret', json_encode($step));
+        $this->assertSame(23, $this->diagnostics('bootstrap')['exit_code']);
+        $this->assertSame(['task_id', 'installation_id', 'state'], array_keys($this->receiptData()));
+    }
+
+    public static function shellErrors(): array
+    {
+        return ['simple command' => ['false', 1], 'pipeline' => ["printf fixture | (exit 37)", 37],
+            'subshell' => ['(exit 39)', 39], 'function' => ['fail_step() { return 41; }; fail_step', 41]];
+    }
+
+    #[DataProvider('shellErrors')]
+    public function test_err_trap_records_bash_call_site_and_preserves_exit(string $command, int $code): void
+    {
+        $this->files(script: "#!/bin/bash\nset -Eeuo pipefail\nkeli_provision_stage dependencies\n" . $command . "\n");
+        $process = $this->runBootstrap();
+        $this->assertSame($code, $process->getExitCode(), $process->getErrorOutput());
+        $step = $this->diagnostics('installer');
+        $this->assertSame('dependencies', $step['phase']);
+        $this->assertSame($code, $step['exit_code']);
+        $this->assertSame($code, $step['error_code']);
+        $this->assertSame(4, $step['error_line']);
+        $this->assertSame('failed', $this->receiptData()['state']);
+    }
+
+    public function test_diagnostic_storage_failure_cannot_change_exit_or_callback(): void
+    {
+        $this->files(23);
+        $process = $this->runBootstrap(22, 'mv() { return 77; }; export -f mv; ');
+        $this->assertSame(23, $process->getExitCode(), $process->getErrorOutput());
+        $this->assertSame('failed', $this->receiptData()['state']);
+        $this->assertSame("reported\n", file_get_contents($this->directory . '/callback-count'));
+        $this->assertSame([], glob($this->directory . '/private/.diagnostic-*'));
+    }
+
+    public function test_timeout_status_is_not_replaced_by_diagnostic_or_callback_status(): void
+    {
+        $this->files();
+        $process = $this->runBootstrap(22, 'timeout() { return 124; }; export -f timeout; ');
+        $this->assertSame(124, $process->getExitCode(), $process->getErrorOutput());
+        $this->assertSame(124, $this->diagnostics('bootstrap')['exit_code']);
+        $this->assertSame('installer', $this->diagnostics('bootstrap')['phase']);
+        $this->assertSame('failed', $this->receiptData()['state']);
+        $this->assertFileDoesNotExist($this->directory . '/private/diagnostic-installer.json');
+    }
+
+    public function test_unknown_phase_and_unrelated_bash_child_do_not_export_arbitrary_data(): void
+    {
+        $this->files(script: "#!/bin/bash\nset -Eeuo pipefail\nkeli_provision_stage dependencies\nkeli_provision_stage 'synthetic-secret-argument'\nbash -c 'false; true'\nexit 0\n");
+        $process = $this->runBootstrap(22);
+        $this->assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        $this->assertSame('dependencies', $this->diagnostics('installer')['phase']);
+        $this->assertSame(0, $this->diagnostics('installer')['exit_code']);
+        $this->assertStringNotContainsString('synthetic-secret', file_get_contents($this->directory . '/private/diagnostic-installer.json'));
+    }
+
+    public function test_plain_explicit_exit_without_a_line_hook_stays_unknown_instead_of_bash_exit_line_one(): void
+    {
+        $this->files(23);
+        $this->assertSame(23, $this->runBootstrap()->getExitCode());
+        $this->assertSame(23, $this->diagnostics('installer')['exit_code']);
+        $this->assertNull($this->diagnostics('installer')['exit_line']);
+        $this->assertNull($this->diagnostics('installer')['error_line']);
+    }
+
+    public static function nativeContexts(): array
+    {
+        return ['task diagnostics' => [true], 'standalone without hooks' => [false]];
+    }
+
+    #[DataProvider('nativeContexts')]
+    public function test_native_installer_cleanup_trap_preserves_explicit_exit_code_and_line(bool $withDiagnostics): void
+    {
+        $this->files(script: "#!/bin/bash\nset -Eeuo pipefail\nbash ./native/keli-native-node-install.sh --machine-url https://synthetic.invalid --machine-id 1 --machine-token synthetic\n");
+        $bootstrap = $this->directory . '/private/bootstrap.sh';
+        file_put_contents($bootstrap, str_replace('/tmp/keli-native-node-install.sh', './native/keli-native-node-install.sh', file_get_contents($bootstrap)));
+        mkdir($this->directory . '/native', 0700);
+        mkdir($this->directory . '/native-work', 0700);
+        $this->assertSame(realpath($this->directory), dirname(realpath($this->directory . '/native-work')));
+        $native = str_replace("\r\n", "\n", file_get_contents(resource_path('server-machine/kelinode-rs-install.sh')));
+        $mock = <<<'SH'
+LOCK_DIR=./native-lock
+require_root() { :; }
+install_base_packages() { :; }
+keli_install_optional_ping() { :; }
+resolve_version() { printf '%s' v0.0.1; }
+install_native_node() { keli_install_stage archive_verify; keli_install_exit 53 "$LINENO"; }
+SH;
+        $this->assertSame(1, substr_count($native, "\nmain \"\$@\"\n"));
+        $native = str_replace("\nmain \"\$@\"\n", "\n" . $mock . "\nmain \"\$@\"\n", $native);
+        $native = str_replace('WORK_DIR="$(mktemp -d)"', 'WORK_DIR=./native-work', $native);
+        $expectedLine = substr_count(substr($native, 0, strpos($native, 'keli_install_exit 53')), "\n") + 1;
+        file_put_contents($this->directory . '/native/keli-native-node-install.sh', $native);
+        if (!$withDiagnostics) {
+            $process = new Process([$this->bash, './native/keli-native-node-install.sh', '--machine-url', 'https://synthetic.invalid',
+                '--machine-id', '1', '--machine-token', 'synthetic'], $this->directory, ['BASH_ENV' => false], null, 15);
+            $process->run();
+            $this->assertSame(53, $process->getExitCode(), $process->getErrorOutput());
+            $this->assertDirectoryDoesNotExist($this->directory . '/native-lock');
+            $this->assertDirectoryDoesNotExist($this->directory . '/native-work');
+            $this->assertFileDoesNotExist($this->directory . '/private/diagnostic-native_installer.json');
+            $this->assertFileDoesNotExist($this->directory . '/callback-count');
+            return;
+        }
+        $process = $this->runBootstrap(22);
+        $this->assertSame(53, $process->getExitCode(), $process->getErrorOutput());
+        $step = $this->diagnostics('native_installer');
+        $this->assertSame('archive_verify', $step['phase']);
+        $this->assertSame('exit', $step['event']);
+        $this->assertSame(53, $step['exit_code']);
+        $this->assertSame($expectedLine, $step['exit_line']);
+        $this->assertDirectoryDoesNotExist($this->directory . '/native-lock');
+        $this->assertDirectoryDoesNotExist($this->directory . '/native-work');
+        $this->assertSame('failed', $this->receiptData()['state']);
+        $python = new Process([PHP_OS_FAMILY === 'Windows' ? 'python' : 'python3', '-c',
+            "import json,sys\nsys.path.insert(0,sys.argv[1])\nimport bootstrap_diagnostics as p\nr=json.load(sys.stdin)\nprint(json.dumps(p.execution_summary({'state':'observed'},json.dumps(r).encode(),r['task_id'],r['installation_id'],'native_installer')))",
+            base_path('tools/machine-acceptance')]);
+        $python->setInput(json_encode($step, JSON_THROW_ON_ERROR)); $python->run();
+        $this->assertSame(0, $python->getExitCode(), $python->getErrorOutput());
+        $safe = json_decode($python->getOutput(), true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame('observed', $safe['state']);
+        $this->assertSame(53, $safe['exit_code']);
+        $this->assertSame($expectedLine, $safe['exit_line']);
+    }
+
+    public function test_diagnostic_template_has_no_command_capture_or_external_debug_trap(): void
+    {
+        $script = file_get_contents(resource_path('server-machine/provision-diagnostics.sh'));
+        foreach (['BASH_COMMAND', 'set -x', ' DEBUG', 'eval ', 'machine_token', 'MACHINE_TOKEN'] as $text) {
+            $this->assertStringNotContainsString($text, $script);
+        }
+    }
+
+    public static function linuxLifecycleCases(): array
+    {
+        return ['timeout' => ['timeout', 124], 'installer SIGTERM' => ['installer_term', 143],
+            'bootstrap SIGTERM' => ['bootstrap_term', 143]];
+    }
+
+    #[DataProvider('linuxLifecycleCases')]
+    public function test_real_linux_timeout_and_signals_preserve_callback_and_native_cleanup(string $scenario, int $expected): void
+    {
+        if (PHP_OS_FAMILY !== 'Linux') $this->markTestSkipped('Real Linux process groups and signals required');
+        $this->files(script: "#!/bin/bash\nset -Eeuo pipefail\nbash ./native/keli-native-node-install.sh\n");
+        $path = $this->directory . '/private/bootstrap.sh';
+        $bootstrap = str_replace('/tmp/keli-native-node-install.sh', './native/keli-native-node-install.sh', file_get_contents($path));
+        $needle = 'timeout --signal=TERM --kill-after=15s 600s';
+        $this->assertSame(1, substr_count($bootstrap, $needle));
+        file_put_contents($path, str_replace($needle, '/usr/bin/timeout --signal=TERM --kill-after=1s ' . ($scenario === 'timeout' ? '2s' : '10s'), $bootstrap));
+        mkdir($this->directory . '/native', 0700);
+        $source = str_replace("\r\n", "\n", file_get_contents(resource_path('server-machine/kelinode-rs-install.sh')));
+        $this->assertSame(1, preg_match('/^native_installer_exit\(\) \{\n.*?^\}/ms', $source, $match));
+        $native = "#!/bin/bash\nset -Eeuo pipefail\nLOCK_DIR=./native-lock\nWORK_DIR=./native-work\n" . $match[0]
+            . "\nmkdir \"\$LOCK_DIR\" \"\$WORK_DIR\"\ntrap native_installer_exit EXIT\nkeli_provision_stage base_dependencies\nprintf '%s' \"\$BASHPID\" > ./native-ready.pid\nwhile :; do sleep 0.1; done\n";
+        file_put_contents($this->directory . '/native/keli-native-node-install.sh', $native);
+        file_put_contents($this->directory . '/fixture-scope.json', json_encode(['schema' => 1, 'synthetic' => true,
+            'directory' => realpath($this->directory)], JSON_THROW_ON_ERROR));
+        file_put_contents($this->directory . '/run-fixture.sh', "#!/bin/bash\ncurl() { printf 'reported\\n' >> ./callback-count; return 22; }; export -f curl\nexec bash ./private/bootstrap.sh\n");
+        foreach (glob($this->directory . '/private/*') as $file) chmod($file, 0600);
+        foreach (['fixture-scope.json', 'run-fixture.sh'] as $file) chmod($this->directory . '/' . $file, 0600);
+        $process = new Process(['python3', base_path('tools/machine-acceptance/linux_bootstrap_lifecycle.py'),
+            '--work', $this->directory, '--scenario', $scenario], $this->directory, null, null, 35);
+        $process->run();
+        $this->assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        $result = json_decode($process->getOutput(), true, 16, JSON_THROW_ON_ERROR);
+        $evidence = getenv('KELI_LINUX_CI_EVIDENCE_DIR');
+        if ($evidence !== false && $evidence !== '') {
+            $this->assertSame(realpath(base_path('artifacts')), realpath($evidence));
+            $result['callback_state'] = is_file($this->directory . '/private/result.json') ? $this->receiptData()['state'] : null;
+            $result['callback_count'] = is_file($this->directory . '/callback-count') ? substr_count(file_get_contents($this->directory . '/callback-count'), "reported\n") : 0;
+            foreach (['bootstrap', 'native_installer'] as $script) {
+                $result[$script . '_exit_code'] = is_file($this->directory . '/private/diagnostic-' . $script . '.json') ? $this->diagnostics($script)['exit_code'] : null;
+            }
+            file_put_contents($evidence . '/lifecycle-' . $scenario . '.json', json_encode($result, JSON_THROW_ON_ERROR));
+        }
+        $this->assertSame($expected, $result['exit_code']);
+        $this->assertSame(0, $result['remaining_owned_processes']);
+        $this->assertTrue($result['native_cleanup_before_harness']);
+        $this->assertSame('failed', $this->receiptData()['state']);
+        $this->assertSame("reported\n", file_get_contents($this->directory . '/callback-count'));
+        $this->assertSame($expected, $this->diagnostics('bootstrap')['exit_code']);
+        $this->assertSame(143, $this->diagnostics('native_installer')['exit_code']);
+        foreach (glob($this->directory . '/private/diagnostic-*.json') as $file) {
+            $this->assertSame(0600, fileperms($file) & 0777);
+            $this->assertSame(posix_geteuid(), fileowner($file));
+        }
     }
 
     public function test_shell_parses_and_success_is_idempotent_with_repeat_receipts(): void

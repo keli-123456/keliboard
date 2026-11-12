@@ -20,7 +20,15 @@ ENABLE_EGRESS_GUARD="1"
 
 log() { printf '\033[1;32m[INFO]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[WARN]\033[0m %s\n' "$*"; }
-die() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
+die() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; keli_install_exit 1 "$LINENO"; }
+
+keli_install_stage() {
+  if declare -F keli_provision_stage >/dev/null; then keli_provision_stage "$1" || true; fi
+}
+keli_install_exit() {
+  if declare -F keli_provision_exit >/dev/null; then keli_provision_exit "$1" "$2" || true; fi
+  exit "$1"
+}
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -368,6 +376,7 @@ run_installer() {
 }
 
 main() {
+  keli_install_stage arguments
   [ -n "$MACHINE_URL" ] || die "MACHINE_URL 不能为空"
   [ -n "$MACHINE_ID" ] || die "MACHINE_ID 不能为空"
   [ -n "$MACHINE_TOKEN" ] || die "MACHINE_TOKEN 不能为空"
@@ -376,20 +385,28 @@ main() {
   select_agent
 
   log "开始准备系统环境"
+  keli_install_stage dependencies
   install_packages
   ensure_downloader
 
+  keli_install_stage bbr
   enable_bbr
+  keli_install_stage system_tuning
   tune_system_for_traffic
+  keli_install_stage egress_guard
   apply_egress_guard
 
   log "下载安装脚本: $INSTALL_SCRIPT_URL"
+  keli_install_stage installer_download
   download_file "$INSTALL_SCRIPT_URL" "$INSTALLER"
+  keli_install_stage installer_permissions
   chmod +x "$INSTALLER"
 
   log "开始安装 $AGENT_TYPE: $MACHINE_NAME"
+  keli_install_stage native_install
   run_installer
 
+  keli_install_stage complete
   log "安装完成"
 }
 

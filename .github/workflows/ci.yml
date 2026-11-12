@@ -1,157 +1,61 @@
-name: CI
+name: Bootstrap Execution Linux Acceptance
 
 on:
   push:
-  pull_request:
-    types: [opened, synchronize, reopened]
+    branches: [audit/bootstrap-lifecycle-linux-20261112-a701aa72]
 
 permissions:
   contents: read
 
+concurrency:
+  group: bootstrap-lifecycle-linux-20261112-a701aa72
+  cancel-in-progress: false
+
 jobs:
-  machine-acceptance-tools:
-    name: Isolated acceptance tools (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Check control staging and synthetic verifier guards
-        working-directory: tools/machine-acceptance
-        run: python -m unittest -v test_staging test_worker.WorkerTests
-
-  unit-tests:
+  linux-lifecycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: "8.2"
-          tools: composer:v2
-          coverage: none
-
-      - name: Validate composer manifests
-        run: composer validate --strict
-
-      - name: Verify composer platform pin
-        run: php scripts/verify-composer-platform.php
-
-      - name: Verify PHP security baseline
-        run: |
-          php scripts/verify-php-security.tests.php
-          php scripts/verify-php-security.php
-
-      - name: Verify admin asset versions
-        run: php scripts/verify-admin-xboard-assets.php
-
-      - name: Test isolated machine installer dependency handling
-        run: |
-          bash scripts/test-machine-install-apt.sh
-          bash scripts/test-machine-install-ping.sh
-
-      - name: Run release preflight guards
-        shell: pwsh
-        run: |
-          ./scripts/release-preflight.ps1 `
-            -ReleaseVersion v0.0.0-preflight `
-            -SkipTagCheck `
-            -SkipAdminRepo `
-            -SkipKelinodeRepo
-
-      - name: Test full-stack release manifest guards
-        run: php scripts/verify-release-manifest.tests.php
-
-      - name: Test deployment gates and receipts
-        run: |
-          php scripts/release-smoke.tests.php
-          php scripts/verify-deployment-receipt.tests.php
-          php scripts/deploy-release.tests.php
-          php scripts/deploy-release.integration.tests.php
-          php scripts/update.integration.tests.php
-
-      - name: Verify full-stack release contract
-        shell: pwsh
-        run: ./scripts/release-full-stack.tests.ps1
-
-      - name: Verify lock platform compatibility
-        run: composer check-platform-reqs --lock --no-interaction
-
-      - name: Install dependencies
-        run: composer install --no-interaction --no-progress --prefer-dist
-
-      - name: Verify installed platform requirements
-        run: composer check-platform-reqs --no-interaction
-
-      - name: Run unit tests
-        run: vendor/bin/phpunit --testsuite Unit --colors=always
-
-  giftcard-mysql-acceptance:
-    name: Gift card MySQL (${{ matrix.isolation }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        isolation: ["REPEATABLE READ", "READ COMMITTED"]
-    services:
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_DATABASE: keli_acceptance_giftcard
-          MYSQL_USER: keli_acceptance
-          MYSQL_PASSWORD: ephemeral-ci-fixture-only
-          MYSQL_ROOT_PASSWORD: ephemeral-ci-root-only
-        ports:
-          - 127.0.0.1::3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=24
-    env:
-      KELI_GIFTCARD_MYSQL_ACCEPTANCE: "1"
-      KELI_GIFTCARD_DB_HOST: "127.0.0.1"
-      KELI_GIFTCARD_DB_NAME: keli_acceptance_giftcard
-      KELI_GIFTCARD_DB_USER: keli_acceptance
-      KELI_GIFTCARD_DB_PASSWORD: ephemeral-ci-fixture-only
-      KELI_GIFTCARD_ISOLATION: ${{ matrix.isolation }}
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: "8.2"
-          extensions: pdo_mysql, pdo_sqlite, mbstring, openssl
+          php-version: '8.2'
+          extensions: pdo_sqlite, sqlite3, curl, mbstring, xml, openssl, zip, intl, bcmath, gd, posix
           tools: composer:v2
           coverage: none
-      - name: Install test dependencies without application startup
+      - name: Install pinned dependencies without application startup
         run: composer install --no-interaction --no-progress --prefer-dist --no-scripts
-      - name: Verify packaged plugin loading
-        run: php scripts/verify-plugin-layout.php
-      - name: Exercise real concurrent redemptions against the disposable database
-        env:
-          KELI_GIFTCARD_DB_PORT: ${{ job.services.mysql.ports[3306] }}
+      - name: Verify isolated source context
         run: |
           mkdir -p artifacts
-          vendor/bin/phpunit -c phpunit-mysql.xml --log-junit artifacts/giftcard-mysql.xml
-      - name: Preserve acceptance results
+          python tools/machine-acceptance/ci_linux_evidence.py verify
+      - name: Run real Bash lifecycle and PHP regressions without a network
+        run: |
+          sudo unshare --net -- runuser -u "$(id -un)" -- env PATH="$PATH" HOME="$HOME" HOST_NET_NS="$(readlink /proc/self/ns/net)" KELI_LINUX_CI_EVIDENCE_DIR="$PWD/artifacts" bash -c '
+            set -e
+            python tools/machine-acceptance/ci_linux_evidence.py namespace
+            php vendor/bin/phpunit --colors=never --filter "MachineProvisionBootstrapTest|MachineProvisionCompressionTest|MachineControllerInstallCommandTest|MachineReleaseControllerTest|MachineProvisionTest|MachineJsonProvisionTest" --log-junit artifacts/phpunit.xml
+          '
+      - name: Run synthetic probe and permission checks without a network
+        if: always()
+        run: |
+          sudo unshare --net -- runuser -u "$(id -un)" -- env PATH="$PATH" HOME="$HOME" HOST_NET_NS="$(readlink /proc/self/ns/net)" bash -c '
+            cd tools/machine-acceptance
+            python ci_linux_evidence.py python-tests
+          '
+      - name: Validate aggregate evidence
+        if: always()
+        run: python tools/machine-acceptance/ci_linux_evidence.py aggregate
+      - name: Preserve aggregate evidence only
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: giftcard-mysql-${{ strategy.job-index }}
-          path: artifacts/giftcard-mysql.xml
-          if-no-files-found: ignore
+          name: bootstrap-lifecycle-linux
+          path: artifacts/linux-execution-result.json
+          if-no-files-found: error
           retention-days: 7
