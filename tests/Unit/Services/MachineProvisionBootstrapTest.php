@@ -243,6 +243,10 @@ SH;
         $source = str_replace("\r\n", "\n", file_get_contents(resource_path('server-machine/kelinode-rs-install.sh')));
         $this->assertSame(1, preg_match('/^native_installer_exit\(\) \{\n.*?^\}/ms', $source, $match));
         $this->assertSame(1, preg_match('/^trap .* TERM$/m', $source, $term));
+        $panel = str_replace("\r\n", "\n", file_get_contents(resource_path('server-machine/install-script.sh')));
+        $this->assertSame(1, preg_match('/^trap .* TERM$/m', $panel, $panelTerm));
+        $installer = $this->directory . '/private/install.sh';
+        file_put_contents($installer, str_replace("set -Eeuo pipefail\n", "set -Eeuo pipefail\n" . $panelTerm[0] . "\n", file_get_contents($installer)));
         $native = "#!/bin/bash\nset -Eeuo pipefail\nLOCK_DIR=./native-lock\nWORK_DIR=./native-work\n" . $match[0]
             . "\nmkdir \"\$LOCK_DIR\" \"\$WORK_DIR\"\ntrap native_installer_exit EXIT\n" . $term[0]
             . "\nkeli_provision_stage base_dependencies\nprintf '%s' \"\$BASHPID\" > ./native-ready.pid\nwhile :; do sleep 0.1; done\n";
@@ -262,18 +266,20 @@ SH;
             $this->assertSame(realpath(base_path('artifacts')), realpath($evidence));
             $result['callback_state'] = is_file($this->directory . '/private/result.json') ? $this->receiptData()['state'] : null;
             $result['callback_count'] = is_file($this->directory . '/callback-count') ? substr_count(file_get_contents($this->directory . '/callback-count'), "reported\n") : 0;
-            foreach (['bootstrap', 'native_installer'] as $script) {
+            foreach (['bootstrap', 'installer', 'native_installer'] as $script) {
                 $result[$script . '_exit_code'] = is_file($this->directory . '/private/diagnostic-' . $script . '.json') ? $this->diagnostics($script)['exit_code'] : null;
             }
             file_put_contents($evidence . '/lifecycle-' . $scenario . '.json', json_encode($result, JSON_THROW_ON_ERROR));
         }
         $this->assertSame($expected, $result['exit_code']);
         $this->assertSame(0, $result['remaining_owned_processes']);
+        $this->assertSame(0, $result['remaining_before_harness']);
         $this->assertTrue($result['native_cleanup_before_harness']);
         $this->assertSame('failed', $this->receiptData()['state']);
         $this->assertSame("reported\n", file_get_contents($this->directory . '/callback-count'));
         $this->assertSame($expected, $this->diagnostics('bootstrap')['exit_code']);
         $this->assertSame(143, $this->diagnostics('native_installer')['exit_code']);
+        $this->assertSame(143, $this->diagnostics('installer')['exit_code']);
         foreach (glob($this->directory . '/private/diagnostic-*.json') as $file) {
             $this->assertSame(0600, fileperms($file) & 0777);
             $this->assertSame(posix_geteuid(), fileowner($file));

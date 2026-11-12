@@ -63,6 +63,10 @@ def run(base, scenario):
             result['exit_code'] = process.wait(timeout=18)
             result['elapsed_seconds'] = round(time.monotonic() - started, 3)
             result['native_cleanup_before_harness'] = not (base / 'native-lock').exists() and not (base / 'native-work').exists()
+            grace = time.monotonic() + .5
+            while time.monotonic() < grace and any(row[2] == process.pid and row[4] != 'Z' for row in processes().values()):
+                time.sleep(.02)
+            result['remaining_before_harness'] = sum(row[2] == process.pid and row[4] != 'Z' for row in processes().values())
         finally:
             snapshot = processes()
             owned.update({pid: row for pid, row in snapshot.items() if row[2] == process.pid})

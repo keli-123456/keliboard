@@ -89,7 +89,8 @@ def aggregate():
         row = json.loads(path.read_text()) if path.exists() else {}
         lifecycle[scenario] = row
         row['passed'] = (row.get('exit_code') == expected and row.get('bootstrap_exit_code') == expected
-                         and row.get('native_installer_exit_code') == 143 and row.get('callback_state') == 'failed'
+                         and row.get('native_installer_exit_code') == 143 and row.get('installer_exit_code') == 143
+                         and row.get('callback_state') == 'failed' and row.get('remaining_before_harness') == 0
                          and row.get('callback_count') == 1 and row.get('native_cleanup_before_harness') is True
                          and row.get('remaining_owned_processes') == 0 and row.get('synthetic_only') is True)
     permissions = ['test_staging.StagingTests.test_private_directory_and_json_permissions_are_required',
