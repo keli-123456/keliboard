@@ -245,6 +245,25 @@ class EntryTests(unittest.TestCase):
         with self.assertRaisesRegex(entry.Refused, "pinned_diagnostics_required"):
             entry.prepare(self.base)
 
+    def test_network_diagnostic_tools_require_their_own_frozen_pins(self):
+        path = self.base / "offline-result.json"
+        original = json.loads(path.read_text())
+        for name in ["entry_probe_diagnostics.py", "entry_probe_capture.py"]:
+            data = json.loads(json.dumps(original))
+            del data["file_digests"][name]
+            path.write_text(json.dumps(data))
+            with self.assertRaisesRegex(entry.Refused, "pinned_diagnostics_required"):
+                entry.prepare(self.base)
+
+    def test_invalid_network_probe_scope_refuses_before_import_or_dispatch(self):
+        auth = dict(self.auth, entry_probe_diagnostics={"schema": 1, "enabled": True, "targets": ["127.0.0.1"], "timeout_seconds": 2})
+        (self.base / "authorization.json").write_text(json.dumps(auth))
+        self.repin()
+        with patch.object(entry.importlib, "import_module") as load:
+            with self.assertRaisesRegex(entry.Refused, "probe_diagnostic_scope_invalid"):
+                entry.run(self.base)
+        load.assert_not_called()
+
     def test_non_integer_scope_limits_are_refused(self):
         for key in ['peak_instance_count', 'maximum_total_create_attempts', 'maximum_campaign_seconds']:
             auth = dict(self.auth, **{key: float(self.auth[key])})

@@ -10,13 +10,15 @@ import sys
 
 import bootstrap_diagnostics
 import diagnostic_capture
+import entry_probe_capture
 
 
 STOP_FILES = ("closed.json", "stop-request.json", "cleanup-intent.json", "round-intent.json", "control-intent.json",
               "campaign-window.json", "control-pipeline-intent.json", "resource-ledger.json")
 FLAGS = ("production_automatic_creation", "production_automatic_rotation", "production_dns_switch", "production_deployment",
          "production_queue_changes", "production_database_writes", "tanzhen_access", "business_machine_5_access")
-TOOLS = ("bootstrap_diagnostics.py", "diagnostic_capture.py", "diagnostic_round_runner.py")
+TOOLS = ("bootstrap_diagnostics.py", "diagnostic_capture.py", "diagnostic_round_runner.py",
+         "entry_probe_diagnostics.py", "entry_probe_capture.py")
 REQUIRED = {*TOOLS, "campaign.py", "node.py", "cleanup.py", "round_runner.py", "authorization.json"}
 
 
@@ -46,6 +48,10 @@ def prepare(work):
                 [("peak_instance_count", 3), ("maximum_total_create_attempts", 3), ("maximum_campaign_seconds", 7200)]),
             "bounded_scope_required")
     bootstrap_diagnostics.validate_identity(auth.get("run_id"), "11111111-1111-4111-8111-111111111111", "source")
+    try:
+        entry_probe_capture.configuration(auth, auth["run_id"])
+    except bootstrap_diagnostics.Refused:
+        raise Refused("probe_diagnostic_scope_invalid") from None
     prepared = read_json(base / "offline-result.json")
     require(prepared.get("ok") is True and prepared.get("run_id") == auth["run_id"], "offline_preflight_required")
     pins = prepared.get("file_digests")

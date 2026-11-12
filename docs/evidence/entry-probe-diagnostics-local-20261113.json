@@ -1,0 +1,78 @@
+{
+  "schema": 1,
+  "date": "2026-11-13",
+  "timezone": "Asia/Shanghai",
+  "status": "local_regression_passed_linux_and_live_not_run",
+  "source_snapshot": "uncommitted_working_tree",
+  "scope": "isolated_acceptance_tools_only_no_agent_or_application_change",
+  "changes": [
+    "Explicitly opted-in diagnostics require frozen targets, tool hashes, original role receipt and exact private node ownership.",
+    "Record public route source and before/after kelinode PID/network-namespace context; source or namespace mismatch suppresses extra echo requests.",
+    "Bound and merge ping stdout/stderr; distinguish valid echoes, no echo by deadline, returned ICMP errors, permission/bind/route errors and process/output failures.",
+    "Read-only nft snapshots retain hashed chain/rule references, hook/priority/policy, rule position/verdict, literal receipt-address membership and counters without raw rule/config text.",
+    "Counter deltas require unchanged structure and nondecreasing counters; reset, named, missing or unreadable counters remain unknown, not zero.",
+    "Read fixed procfs ICMP counters with a byte cap instead of trusting their virtual zero file size; shared counters are not individual packet attribution.",
+    "An exclusive intent prevents diagnostic replay; closed/deleting/expired contexts refuse contact, and existing stop requests suppress active ICMP.",
+    "The fresh driver's baseline-failure branch may collect once before writing stop, while the later cleanup adapter preserves the first report and never reprobes.",
+    "Diagnostics, transport and persistence failures cannot suppress or retry original cleanup; summaries never change acceptance or confirm censorship."
+  ],
+  "local_validation": {
+    "platform": "Windows",
+    "python": "3.12",
+    "command": "python -B -m unittest -q test_staging test_bootstrap_diagnostics test_diagnostic_capture test_entry_probe_diagnostics test_entry_probe_capture test_driver_journal test_install_only_runner test_worker.WorkerTests test_driver_linux test_application_bundle",
+    "tests_run": 205,
+    "passed": 197,
+    "skipped": 8,
+    "failures": 0,
+    "errors": 0,
+    "elapsed_seconds": 22.219,
+    "new_synthetic_tests": 62,
+    "new_diagnostic_module_tests": 60,
+    "new_fresh_entry_guard_tests": 2,
+    "commands_and_transports": "synthetic_fixtures_and_mocks_only",
+    "skip_reasons": {
+      "POSIX_directory_or_owner_permissions": 2,
+      "actual_Linux_kernel_permission_denial": 5,
+      "actual_Linux_Bash_line_parsing": 1
+    },
+    "ci_test_list_updated": true,
+    "ci_dispatched": false
+  },
+  "limits": [
+    "Windows fixtures and mocks do not establish real Linux capability, namespace, nft, procfs or pipe-lifecycle behavior.",
+    "The nft outline is not a complete rule evaluator; literal address membership does not mean the whole rule matched or establish effective allow/drop.",
+    "Named sets/maps, regular-chain direction and other conditions remain unmodelled. Legacy iptables, XDP/eBPF, provider and transit filters are not evaluated.",
+    "Rule and host counters are shared with other traffic and cannot attribute individual diagnostic packets or prove a drop location.",
+    "A stopped branch receives only passive diagnostics; fresh ICMP error evidence requires the new reviewed driver to call capture before its stop intent.",
+    "This does not recover R10's deleted source or historical packets, confirm censorship, or pass WAN/HY2/DNS failover acceptance.",
+    "Linux CI and any new live acceptance need separate execution; no historical campaign is patched or resumed."
+  ],
+  "safety": {
+    "deployments": 0,
+    "new_cloud_instances": 0,
+    "cloud_requests": 0,
+    "dns_operations": 0,
+    "ssh_connections": 0,
+    "live_icmp_requests": 0,
+    "node_restarts_or_upgrades": 0,
+    "production_database_or_queue_operations": 0,
+    "automatic_switch_changes": 0,
+    "tanzhen_access": false,
+    "r10_rerun": false,
+    "r10_closed_files_hash_checked": 129,
+    "r10_closed_files_changed": 0,
+    "kelinode_rs_worktree_clean": true,
+    "commit_or_push": false
+  },
+  "working_tree_sha256": {
+    "tools/machine-acceptance/entry_probe_diagnostics.py": "9a1e513b71879cd0de69eb94bb03f0a7dc9a0e632abdea742320822cb17d156a",
+    "tools/machine-acceptance/entry_probe_capture.py": "a7b5744772ce60f0cdc6bb28718d07849d0d61105794f7c7db3f2a36675e9738",
+    "tools/machine-acceptance/diagnostic_capture.py": "cedd02b77d44be049b8c0553a6fb9e96c27b4ab26f65ae27dc230b1ba9035cf3",
+    "tools/machine-acceptance/diagnostic_round_runner.py": "f4006fd4d5d2899315aceb89df50fd8cd2724e35396e6c3c374622041242c482",
+    "tools/machine-acceptance/test_entry_probe_diagnostics.py": "2e98af1b16f3a5826b7c799b28cfa621795f6174550607111f3af1a39ed737de",
+    "tools/machine-acceptance/test_entry_probe_capture.py": "7520d30876927ce47e2d3a6bba62f3847fdff8bf52234df360c18c59be2e0282",
+    "tools/machine-acceptance/test_diagnostic_capture.py": "2767f9eeeadae55c94076f37f409e71efc2ea7a5a6822760a4fe76d7a07b1a6e",
+    ".github/workflows/ci.yml": "982396254543387234844ad1831a36f893100a2bba06f1e21cd52a6a69557bb5",
+    "tools/machine-acceptance/README.md": "912e2584f84fb4423c35fe47848644446a2e82cd97107ceb44bef10d76ea93d2"
+  }
+}

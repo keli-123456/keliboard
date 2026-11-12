@@ -246,7 +246,7 @@ in the closed R5 trial: the source reported initialization failure, but deletion
 started before its installation summary could be collected. The old trial and
 its evidence remain unchanged; these tools cannot recover its deleted logs.
 
-For a **new, separately approved isolated run**, package and pin these three
+For a **new, separately approved isolated run**, package and pin these five
 files alongside the reviewed one-shot driver and all its existing dependencies:
 
 - `bootstrap_diagnostics.py`: standard-library, read-only probe on the owned node.
@@ -254,6 +254,8 @@ files alongside the reviewed one-shot driver and all its existing dependencies:
 - `diagnostic_round_runner.py`: fresh-scope entry using the driver's existing
   `RoundRunner(loader=...)` interface. It does not patch application queues,
   Horizon, the agent, production settings or the historical one-run scripts.
+- `entry_probe_diagnostics.py` and `entry_probe_capture.py`: the separately
+  opted-in ICMP evidence collector and its strict controller-side filter.
 
 Freeze all files, including these tools and `authorization.json`, in the new
 run's `offline-result.json` file-digest map. Use the copied entry from that same
@@ -318,6 +320,108 @@ fresh entry with an inert synthetic driver. Windows tests cannot establish
 POSIX file protection; that check belongs to the Linux CI job. New real-node
 diagnostics and the still-unconfirmed R5 installer failure require a separately
 authorized live round. This change does not create or deploy that round.
+
+### Source, ICMP and Firewall Evidence (2026-11-13)
+
+R10's source and independent root pings received no echo replies, but the old
+aggregate did not preserve complete returned ICMP error classifications. That
+source was deleted. The following new code cannot recover the old packets or
+identify their historical drop point, and must not be copied into a closed run.
+It does not change the Rust agent, its five-second loop, report verdicts, panel
+settings, queues or automatic execution gates.
+
+The frozen `authorization.json` of a **new, separately authorized isolated run**
+may opt in with the following member. Absence or `enabled: false` means no new
+network collection. This example is documentation, not live authorization:
+
+```json
+{
+  "entry_probe_diagnostics": {
+    "schema": 1,
+    "enabled": true,
+    "targets": ["39.156.70.37", "111.33.167.71", "123.150.76.218", "157.255.219.143"],
+    "timeout_seconds": 2
+  }
+}
+```
+
+Only one to four distinct canonical public unicast IPv4 targets and a one- or
+two-second response wait are accepted; no domains, CIDRs, multicast, IPv6,
+metadata/private addresses or arbitrary commands. Both new tools, the original
+three diagnostic tools, authorization and every other input must have reviewed
+SHA256 pins in the fresh bundle. The entry refuses missing pins or invalid
+diagnostic scope before importing the driver. Existing strict SSH and host-key
+checks remain the responsibility of the pinned `node.execute()` bridge; there
+is no new transport, credential discovery or fallback.
+
+After bootstrap diagnostics, but before original cleanup, one exclusive
+`entry-probe-diagnostics-intent.json` bounds this extra phase to 44 seconds total
+and 22 seconds per role, with a 20-second remote body budget. The final campaign
+minute remains reserved for cleanup. Missing receipts, already-started delete,
+closed or expired rounds never initiate collection. Existing intents are never
+replayed, including when their report is missing. A stop request permits passive
+observation only and suppresses extra ICMP echo requests.
+
+For a baseline-failure branch that needs fresh ICMP error classification, the
+reviewed new driver must call `entry_probe_capture.capture(campaign, node)`
+before it writes its stop intent, then proceed to stop/cleanup regardless of
+diagnostic success. The exclusive intent makes the later cleanup adapter skip
+a second collection. A branch already marked stopped must not remove that
+marker or reactivate ping to fill a missing sample. No historical driver or
+closed round is patched by this change.
+
+The node verifies the exact private run/task owner before commands. It checks
+the running kelinode PID's network namespace against its own, and records this
+again after collection. Unknown or different namespaces suppress active ping;
+a changed PID/context is explicit, not stable evidence. Each target's route
+lookup retains only the public selected source and a fixed route type. Active
+ping requires that source to equal the original role receipt's IPv4 and uses
+`-I SOURCE -4 -n -c 1 -W TIMEOUT -w TIMEOUT_PLUS_ONE -- TARGET`, at most one echo
+request per target with no retries. Missing/non-iputils tools remain unknown.
+
+Both stdout and stderr enter one bounded pipe. Fixed categories distinguish
+permission, bind and local-route failures, returned ICMP unreachable/prohibited,
+fragmentation, TTL, parameter and redirect errors, no echo before deadline, and
+process timeout/output overflow. Echo success requires a matching target reply,
+a one-packet summary and exit zero. Returned ICMP errors are not erased into
+timeouts; missing/unreadable samples never become zero received/error counts.
+No raw ping text, error-sender IPs, logs or arbitrary exception text is exported.
+
+Two read-only `nft -j list ruleset` snapshots retain hashed chain/rule references,
+hook/priority/default policy, rule position/verdict, literal receipt-address
+membership and anonymous counters. Catch-all drops and jumps remain visible,
+not only rules mentioning ICMP. Table/chain names, comments, full predicates and
+unrelated IPs are not exported. Named sets/maps, regular-chain direction and
+other conditions stay unknown. This is **not** a complete nft evaluator: rule
+address membership is not an effective allow/drop verdict. Counter deltas require
+unchanged structure and nondecreasing values; missing/named/reset counters stay
+unavailable. Shared rule and host ICMP counters cannot attribute individual
+packets to this diagnostic. `/proc/self/net/snmp` is read with a byte cap rather
+than its virtual zero size. Legacy iptables, XDP/eBPF, provider and transit filters
+are not covered by this current-network-namespace nft snapshot.
+
+Every command has a time/output cap and its child is killed/reaped on failure.
+No firewall rule/counter reset, tcpdump, sysctl write, namespace switch, package
+install, service restart, cloud/DNS operation or agent change is performed.
+`entry-probe-diagnostics.json` accepts only the exact fixed schema and original
+role/source/target context. Collection, transport or save failure still invokes
+original cleanup once; original cleanup failures remain visible and are not retried.
+These observations never change the acceptance result or establish censorship.
+
+Local synthetic regression (fake commands/SSH/cloud/DNS, temporary files only):
+
+```sh
+python -B -m unittest -v test_entry_probe_diagnostics test_entry_probe_capture test_diagnostic_capture
+```
+
+The normal existing Windows/Linux CI test list includes these tests. No CI run,
+image publication, deployment, VM creation or live probe is dispatched by this
+local change. Windows mocks do not validate real Linux capabilities, namespaces,
+nft behavior, pipe lifecycle or WAN reachability; Linux and new live acceptance
+remain separate work. See `docs/evidence/entry-probe-diagnostics-local-20261113.json`.
+
+Primary format references: [iputils ping](https://manpages.debian.org/bookworm/iputils-ping/ping.8.en.html)
+and [libnftables JSON](https://manpages.debian.org/bookworm/libnftables1/libnftables-json.5.en.html).
 
 ### Local Driver Journal Repair (2026-11-12)
 

@@ -166,6 +166,20 @@ def loader_with_diagnostics(loader):
                                                   "status": "collector_failed", "records": []}, exclusive=True)
                     except BaseException:
                         pass
+            try:
+                if campaign is not None:
+                    import entry_probe_capture
+                    entry_probe_capture.capture(campaign, loader("node"))
+            except BaseException:
+                # The opt-in network summary must not suppress or retry original cleanup.
+                try:
+                    if (campaign is not None and not os.path.lexists(Path(campaign.BASE) / "closed.json")
+                            and (Path(campaign.BASE) / "authorization.json").is_file()
+                            and entry_probe_capture.configuration(campaign.load("authorization.json"), campaign.RUN) is not None):
+                        campaign.save(entry_probe_capture.REPORT, {"schema": 1, "run_id": campaign.RUN, "read_only": True,
+                                                                 "status": "collector_failed", "records": []}, exclusive=True)
+                except BaseException:
+                    pass
             return module.main(*args, **kwargs)
         return SimpleNamespace(main=main)
     return load
