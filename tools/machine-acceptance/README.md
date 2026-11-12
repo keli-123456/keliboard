@@ -329,6 +329,41 @@ cannot be reconstructed. No production, cloud/DNS, SSH, database or tanzhen
 connection was made, and no execution flag was changed. See
 `docs/evidence/linode-local-driver-io-20261112.json` for the sanitized aggregate.
 
+### Linux Driver Journal CI Evidence (2026-11-12)
+
+The isolated [CI run 43195970920](https://github.com/keli-123456/keliboard/actions/runs/43195970920)
+passed **122 tests, zero failures/errors/skips** on Linux, Python 3.11.18,
+non-root UID 1001. Four native Windows handle tests were explicitly excluded
+from this Linux selection, not counted as passes. The tested snapshot is
+`7a20dac98d72f0a09421a4ef98af0e62d5ffc66c` on temporary branch
+`audit/driver-journal-linux-20261112-695a2746`, based on main `695a2746`.
+
+Five added tests use actual disposable POSIX modes: directory-write/read denial,
+private file modes, unique diagnostic fallback, a kernel denial before mock
+cleanup, and another kernel denial during cleanup. The first error and durable
+diagnostics remain distinguishable from subsequent cleanup failure. All cloud,
+SSH and DNS operations remain mocks. A process/socket audit guard was active
+before test imports; no attempted external dispatch reached it. Fifteen source
+hashes in the downloaded aggregate matched the exact Git snapshot.
+
+Only the dedicated acceptance workflow ran during that trial. Main remained
+unchanged then, no image publication/deployment ran, and all 105 frozen R7 files
+were unchanged. No live run was imported or resumed and no production/tanzhen
+connection was made. Full evidence is in
+`docs/evidence/driver-journal-linux-20261112.json`.
+
+The main integration preserves the CI snapshot in merge history but brings in
+only `test_driver_linux.py`, the evidence/documentation and that test module's
+normal CI invocation. The temporary branch filter, dedicated workflow and
+`driver_journal_ci.py` remain only in the acceptance history. The merge uses
+`[skip ci]` to avoid automatic image publication. The passing Linux result still
+belongs to the precise snapshot above, not a new run of the merge commit.
+
+These are kernel-permission and synthetic-driver checks, not a new VM install,
+real cloud cleanup, power-loss/host-loss recovery or an explanation of the
+original R7 error. A new live round still requires separate approval, a fresh
+identity, a frozen complete bundle and preflight.
+
 ### Linux Diagnostic CI Evidence (2026-11-12)
 
 The isolated [Linux CI run 43137719391](https://github.com/keli-123456/keliboard/actions/runs/43137719391)

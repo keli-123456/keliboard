@@ -1,0 +1,120 @@
+{
+  "schema": 1,
+  "scope": "linux_synthetic_driver_io_acceptance",
+  "ci": {
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/43195970920",
+    "run_id": 43195970920,
+    "job_id": 131106909849,
+    "conclusion": "success",
+    "branch": "audit/driver-journal-linux-20261112-695a2746",
+    "tested_commit": "7a20dac98d72f0a09421a4ef98af0e62d5ffc66c",
+    "base_main_commit": "695a27464808fc33596cafd3be92197eeebb8f85",
+    "run_attempt": 1,
+    "started_utc": "2026-11-12T09:57:03Z",
+    "completed_utc": "2026-11-12T09:57:13Z",
+    "image_or_deployment_workflow_triggered": false,
+    "only_observed_workflow": "Driver Journal Linux Isolated Acceptance"
+  },
+  "artifact": {
+    "name": "driver-journal-linux",
+    "zip_sha256": "82d23eb1a9c0e10697181bc1561b6a83b15b281a452735dfc5f096063985f743",
+    "source_files": 15,
+    "all_source_pins_match_git_blobs": true,
+    "contents": "sanitized_aggregate_only"
+  },
+  "result": {
+    "schema": 1,
+    "ok": true,
+    "scope": "linux_synthetic_driver_io_only",
+    "commit": "7a20dac98d72f0a09421a4ef98af0e62d5ffc66c",
+    "python": "3.11.18",
+    "platform": "linux",
+    "uid": 1001,
+    "run_attempt": "1",
+    "external_attempts": {},
+    "cloud_ssh_dns": "synthetic_only",
+    "live_round_loaded": false,
+    "source_digests": {
+      "driver_journal.py": "b18cc621856b8f389358753ff6bb9dd6f7349f7428a28356c0cece0640440408",
+      "install_only_runner.py": "360aed514a1d26f35eb8a63bdbcee32b765f92b68af6258d997726fe69b6a58a",
+      "driver_journal_ci.py": "ea2a7ca9a57668ee792ad3b0ece574e201a4231f234cbc40b3bb48571cfb8ddb",
+      "test_driver_linux.py": "2530a0730334ed3893953df74a35d74a1609ecf2c675b9a2c4452416b089271e",
+      "test_driver_journal.py": "5d2d862441f1f08e14047bce27339394ec676117725e079e1e05bc87574b2e9e",
+      "test_install_only_runner.py": "cadec40d3b1635849905f62402221553f3185873a047a7bd563e2f83ddbcd677",
+      "bootstrap_diagnostics.py": "91582116c19364612b58dccedca8f779ed4820410063a877a7b68eae6886e0dd",
+      "diagnostic_capture.py": "84b17412333ff8a6182fb627f7e4099b81742908b1b1a26c927904ae2acacc9f",
+      "diagnostic_round_runner.py": "ec25cd60dccf473351742dc93ace9f1d0673ad1429ddfc01c74fb8cd43d152c8",
+      "staging.py": "7999147809d6d90eb6029551f0a8f576f7f6e40bb3632ff8dcc81b8f9ceb96ba",
+      "worker.py": "a196bda0b55eb83aa72f45c2277438589fb069c25cd774bd176046be538087a4",
+      "test_staging.py": "cc274c3770059d42f6bfd01755d937033ed62b7029ea4827208d31187bd60e11",
+      "test_bootstrap_diagnostics.py": "ec952e2c153e3115b904211284ca79ae73934225f6066d20f19fcbf4c631c161",
+      "test_diagnostic_capture.py": "72b32a26d1f320fc46894f169d2196aa3fb790361cccdb3152e3fe378760910d",
+      "test_worker.py": "7804e36d0aef88e06be45e3cf9f350f817083d1b75805e6f2c33a636a01290c5"
+    },
+    "tests_run": 122,
+    "failures": [],
+    "errors": [],
+    "skipped": [],
+    "windows_native_excluded": [
+      "test_driver_journal.WindowsSharingTests.test_real_observer_closes_promptly_without_corrupting_snapshots",
+      "test_driver_journal.WindowsSharingTests.test_real_sharing_lock_exhausts_with_numeric_evidence",
+      "test_driver_journal.WindowsSharingTests.test_real_short_lock_releases_during_bounded_replacement",
+      "test_install_only_runner.DriverTests.test_real_progress_handle_lock_does_not_prevent_capture_and_cleanup"
+    ],
+    "captured_output_characters": 0,
+    "source_unchanged": true
+  },
+  "real_linux_cases": [
+    "readonly_directory_denial_retains_old_snapshot_no_retry",
+    "unreadable_record_preserves_numeric_failure_in_private_report",
+    "private_output_modes_and_unique_diagnostic_fallback",
+    "kernel_denial_preserves_first_error_and_diagnostics_before_mock_cleanup",
+    "second_kernel_denial_in_mock_cleanup_never_masks_original_error"
+  ],
+  "boundaries": {
+    "cloud_ssh_dns": "all_synthetic_with_process_and_socket_audit_guards",
+    "production_connections": 0,
+    "production_database_connections": 0,
+    "cloud_vm_creates": 0,
+    "dns_api_operations": 0,
+    "production_deployments": 0,
+    "queue_changes": false,
+    "automatic_flags_changed": false,
+    "tanzhen_accessed": false,
+    "r7_reexecuted": false,
+    "main_merged": false,
+    "main_head_unchanged": true,
+    "r7_integrity": {
+      "files": 105,
+      "unchanged": true
+    }
+  },
+  "limitations": [
+    "Four native Windows handle cases were explicitly excluded, not counted as Linux successes.",
+    "Cloud, SSH and DNS cleanup were mocks; no live machine installation or failover was validated.",
+    "The exact original R7 failure cause remains unconfirmed.",
+    "No power-loss, host-loss, SIGKILL or full real installer lifetime was tested.",
+    "The temporary branch's workflow filter and dedicated CI entry are acceptance-only, not a production deployment change."
+  ],
+  "integration": {
+    "scope": "main_tests_and_evidence_only",
+    "ci_snapshot_preserved_in_merge_history": true,
+    "linux_test_and_existing_driver_sources_unchanged_from_ci_snapshot": true,
+    "source_files_compared_with_ci_snapshot": 14,
+    "temporary_branch_filter_included": false,
+    "temporary_workflow_included": false,
+    "temporary_ci_entry_included": false,
+    "normal_ci_test_module_added": "test_driver_linux",
+    "merge_commit_ci_dispatched": false,
+    "merge_commit_ci_claimed_passed": false,
+    "skip_ci_to_avoid_image_publication": true,
+    "deployment_or_new_live_trial_authorized": false,
+    "local_windows_regression": {
+      "run": 126,
+      "passed": 119,
+      "platform_skipped": 7,
+      "failures": 0,
+      "errors": 0
+    }
+  }
+}
