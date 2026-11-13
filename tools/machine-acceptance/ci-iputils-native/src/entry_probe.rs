@@ -514,12 +514,9 @@ mod tests {
         assert_eq!(std::env::var("KELI_IPUTILS_ISOLATED").as_deref(), Ok("1"));
         let mode = std::env::var("KELI_IPUTILS_MODE").unwrap();
         assert!(mode == "echo" || mode == "drop");
-        let mut cmd = ping_command(
-            "/usr/bin/ping",
-            "127.0.0.2",
-            2,
-            Some("127.0.0.1".parse().unwrap()),
-        );
+        let program = std::env::var("KELI_IPUTILS_BINARY").unwrap();
+        assert!(program.starts_with("/tmp/keli-iputils-namespace-"));
+        let mut cmd = ping_command(program, "127.0.0.2", 2, Some("127.0.0.1".parse().unwrap()));
         let status = tokio::time::timeout(Duration::from_secs(4), cmd.status())
             .await
             .unwrap()

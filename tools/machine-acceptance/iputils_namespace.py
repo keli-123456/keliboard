@@ -65,9 +65,10 @@ def rule(mode):
     command(['/usr/sbin/nft', '-f', '-'], body=batch.encode())
 
 
-def run_child(args, uid, gid, home, mode, timeout):
+def run_child(args, uid, gid, home, mode, timeout, ping):
     env = {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C', 'HOME': str(home),
-           'PYTHONDONTWRITEBYTECODE': '1', 'KELI_IPUTILS_ISOLATED': '1', 'KELI_IPUTILS_MODE': mode}
+           'PYTHONDONTWRITEBYTECODE': '1', 'KELI_IPUTILS_ISOLATED': '1', 'KELI_IPUTILS_MODE': mode,
+           'KELI_IPUTILS_BINARY': str(ping)}
     process = subprocess.Popen(['/usr/bin/setpriv', '--reuid', str(uid), '--regid', str(gid), '--clear-groups',
                                 '--inh-caps=-all', '--ambient-caps=-all', '--bounding-set=-all', '--no-new-privs',
                                 *args], cwd=home, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -101,6 +102,15 @@ def run(options):
     root.chmod(0o755)
     table_created = False
     try:
+        # Copy bytes, not file capabilities: zero-capability children must not gain CAP_NET_RAW.
+        ping = root / 'iputils-ping'
+        shutil.copyfile('/usr/bin/ping', ping)
+        ping.chmod(0o555)
+        require('security.capability' not in os.listxattr(ping), 'file_capabilities_not_allowed')
+        system_pin = hashlib.sha256(Path('/usr/bin/ping').read_bytes()).hexdigest()
+        require(hashlib.sha256(ping.read_bytes()).hexdigest() == system_pin, 'iputils_copy_bytes_changed')
+        value['iputils_binary_sha256'] = system_pin
+        value['capability_free_copy_matches_system_binary'] = True
         command(['/usr/sbin/ip', 'link', 'set', 'lo', 'up'])
         command(['/usr/sbin/nft', '-f', '-'], body=('add table inet ' + TABLE + '\nadd counter inet ' + TABLE + ' ' + COUNTER
             + '\nadd chain inet ' + TABLE + ' output { type filter hook output priority -50; policy accept; }\n').encode())
@@ -118,7 +128,7 @@ def run(options):
             os.chown(home, options.uid, options.gid)
             before = counter()
             code, raw = run_child(['/usr/bin/python3', '-B', str(HERE / 'test_entry_probe_iputils.py'), name],
-                                  options.uid, options.gid, home, mode, 16)
+                                  options.uid, options.gid, home, mode, 16, ping)
             observed = json.loads(raw)
             delta = counter() - before
             observed.update(kernel_echo_requests=delta, packet_counter_matches=delta == observed.get('expected_packets'),
@@ -138,7 +148,7 @@ def run(options):
                 os.chown(home, options.uid, options.gid)
                 before = counter()
                 code, raw = run_child([str(binary), '--ignored', '--exact', 'entry_probe::tests::real_iputils_in_isolated_namespace',
-                                      '--test-threads=1'], options.uid, options.gid, home, mode, 8)
+                                      '--test-threads=1'], options.uid, options.gid, home, mode, 8, ping)
                 delta = counter() - before
                 value['cases'].append({'case': 'rust_' + mode, 'ok': code == 0 and delta == 1 and not no_remaining_children(),
                                        'kernel_echo_requests': delta, 'expected_packets': 1, 'exit_success': code == 0,

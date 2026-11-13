@@ -29,6 +29,11 @@ class RealIputilsTests(unittest.TestCase):
         self.real_popen = subprocess.Popen
         self.addCleanup(self.reap)
         self.summary = {'expected_packets': 0, 'measurements': []}
+        self.ping = Path(os.environ['KELI_IPUTILS_BINARY']).resolve()
+        self.assertTrue(str(self.ping).startswith('/tmp/keli-iputils-namespace-'))
+        self.assertEqual(self.ping.stat().st_uid, 0)
+        self.assertEqual(self.ping.stat().st_mode & 0o222, 0)
+        self.assertNotIn('security.capability', os.listxattr(self.ping))
 
     def reap(self):
         for child in self.children:
@@ -40,23 +45,28 @@ class RealIputilsTests(unittest.TestCase):
 
     def measure(self, target='127.0.0.2', *, timeout=4, legacy=False):
         # The production collector still requires public addresses. This tests its pure argv builder.
-        args = probe.ping_arguments('/usr/bin/ping', target, '127.0.0.1', 2)
+        args = probe.ping_arguments(str(self.ping), target, '127.0.0.1', 2)
         if legacy:
             args[-2:-2] = ['-w', '3']
         def launch(*a, **kw):
-            child = self.real_popen(*a, **kw)
+            try:
+                child = self.real_popen(*a, **kw)
+            except OSError as error:
+                self.summary['launch_error'] = {'error_class': type(error).__name__, 'errno': error.errno}
+                raise
             self.children.append(child)
             return child
         start = time.monotonic()
         with patch.object(probe.subprocess, 'Popen', side_effect=launch):
             result = probe.command(args, timeout)
         row = probe.classify_ping(result, target)
+        self.summary['measurements'].append(row)
         self.assertLess(time.monotonic() - start, 5)
+        self.assertTrue(self.children, 'real iputils child did not start')
         self.assertIsNotNone(self.children[-1].returncode)
         self.assertTrue(self.children[-1].stdout.closed)
         with self.assertRaises(ChildProcessError):
             os.waitpid(self.children[-1].pid, os.WNOHANG)
-        self.summary['measurements'].append(row)
         return row
 
     def test_echo(self):
