@@ -1,0 +1,354 @@
+{
+  "schema": 1,
+  "scope": "offline_single_packet_diagnostics_fix_and_isolated_real_iputils_regression",
+  "date": "2026-11-13",
+  "verdict": "passed_for_offline_and_isolated_kernel_scope_only",
+  "repository_bases": {
+    "keliboard": "4eefa62b05db9ce6e6b66b1b9d9f9b44ab0aebd1",
+    "kelinode-rs": "8fff3a03a600cdee1d35ed9a937acb0acdc6cedc"
+  },
+  "changes": {
+    "single_packet_command": "Removed iputils -w from diagnostics and node probe; retained source binding, IPv4, -c 1, -W and bounded outer timeout.",
+    "statistics": "Retain bounded transmitted/received/error counts; multiple packets are packet_budget_exceeded and stop remaining active probes.",
+    "unknown_handling": "Missing, ambiguous, overflowed or zero-transmission statistics cannot be a successful echo or a single-packet no-reply result.",
+    "node_scheduler": "Lease, interval, concurrency, any-target-success policy and disabled-by-default configuration unchanged.",
+    "main_project_dependencies_added": false,
+    "node_release_version_changed": false
+  },
+  "local_checks": {
+    "python": {
+      "tests": 234,
+      "passed": 208,
+      "skipped_for_platform_or_dedicated_namespace": 26,
+      "failures": 0,
+      "errors": 0
+    },
+    "node_actual_crate_windows": {
+      "command": "cargo test --offline --locked --lib entry_probe::tests",
+      "passed": 14,
+      "failed": 0,
+      "filtered_unrelated_tests": 717
+    },
+    "node_module_minimal_harness_windows": {
+      "passed": 14,
+      "failed": 0
+    }
+  },
+  "ci": {
+    "id": 43348999369,
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/43348999369",
+    "commit": "b6ec439cdf111a15aaec8d05f1ed8ef1d952a28f",
+    "branch": "audit/iputils-single-packet-20261113-4eefa62b",
+    "conclusion": "success",
+    "authorized_temporary_branch": true,
+    "normal_ci_and_image_workflows_not_dispatched": true,
+    "merged_into_main": false,
+    "synthetic_linux": {
+      "tests": 224,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "windows_only_excluded": 4,
+      "isolation": {
+        "nonroot": true,
+        "pid_namespace_init": true,
+        "network_namespace_changed": true,
+        "only_loopback_interface": true,
+        "no_ipv4_routes": true,
+        "capabilities_cleared": true,
+        "no_new_privileges": true,
+        "credential_environment_absent": true,
+        "ok": true
+      },
+      "icmp_out_echoes": 0,
+      "forbidden_external_dispatch_attempts": 0
+    },
+    "native_linux_module": {
+      "ok": true,
+      "tests": 14,
+      "failed": 0,
+      "ignored": 1,
+      "ignored_kernel_case_executed_separately": true,
+      "focused_module_harness_not_full_node_binary_build": true
+    },
+    "real_iputils": {
+      "tests": 8,
+      "all_passed": true,
+      "isolation": {
+        "independent_network_namespace": true,
+        "private_pid_namespace": true,
+        "only_loopback": true,
+        "external_routes": 0,
+        "child_non_root": true,
+        "child_capabilities": 0,
+        "no_new_privileges": true
+      },
+      "system_binary_sha256": "2369424506d87f336f41e6df9ebb07cee14e93dfff9b526f04c55bd1aebc937f",
+      "capability_free_copy_matches_system_binary": true,
+      "host_system_binary_not_modified": true,
+      "native_binary_sha256": "2e58848a6549c7a290d31a1ed9326d5111e9011dd63e1a04f5f8b8224c738957",
+      "cases": [
+        {
+          "ok": true,
+          "case": "echo",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "expected_packets": 1,
+          "measurements": [
+            {
+              "state": "observed",
+              "exit_code": 0,
+              "classification": "echo_reply",
+              "sent": 1,
+              "received": 1,
+              "reported_errors": 0,
+              "error_categories": []
+            }
+          ],
+          "kernel_echo_requests": 1,
+          "packet_counter_matches": true,
+          "no_remaining_children": true
+        },
+        {
+          "ok": true,
+          "case": "no_reply",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "expected_packets": 1,
+          "measurements": [
+            {
+              "state": "observed",
+              "exit_code": 1,
+              "classification": "no_echo_by_deadline",
+              "sent": 1,
+              "received": 0,
+              "reported_errors": 0,
+              "error_categories": []
+            }
+          ],
+          "kernel_echo_requests": 1,
+          "packet_counter_matches": true,
+          "no_remaining_children": true
+        },
+        {
+          "ok": true,
+          "case": "four_no_reply_targets",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "expected_packets": 4,
+          "measurements": [
+            {
+              "state": "observed",
+              "exit_code": 1,
+              "classification": "no_echo_by_deadline",
+              "sent": 1,
+              "received": 0,
+              "reported_errors": 0,
+              "error_categories": []
+            },
+            {
+              "state": "observed",
+              "exit_code": 1,
+              "classification": "no_echo_by_deadline",
+              "sent": 1,
+              "received": 0,
+              "reported_errors": 0,
+              "error_categories": []
+            },
+            {
+              "state": "observed",
+              "exit_code": 1,
+              "classification": "no_echo_by_deadline",
+              "sent": 1,
+              "received": 0,
+              "reported_errors": 0,
+              "error_categories": []
+            },
+            {
+              "state": "observed",
+              "exit_code": 1,
+              "classification": "no_echo_by_deadline",
+              "sent": 1,
+              "received": 0,
+              "reported_errors": 0,
+              "error_categories": []
+            }
+          ],
+          "kernel_echo_requests": 4,
+          "packet_counter_matches": true,
+          "no_remaining_children": true
+        },
+        {
+          "ok": true,
+          "case": "legacy_deadline_reference",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "expected_packets": 3,
+          "measurements": [
+            {
+              "state": "observed",
+              "exit_code": 1,
+              "classification": "packet_budget_exceeded",
+              "sent": 3,
+              "received": 0,
+              "reported_errors": 0,
+              "error_categories": []
+            }
+          ],
+          "legacy_extra_packets_reproduced": true,
+          "kernel_echo_requests": 3,
+          "packet_counter_matches": true,
+          "no_remaining_children": true
+        },
+        {
+          "ok": true,
+          "case": "forced_timeout_reaps_real_ping",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "expected_packets": 1,
+          "measurements": [
+            {
+              "state": "timeout",
+              "exit_code": null,
+              "classification": "unavailable",
+              "sent": null,
+              "received": null,
+              "reported_errors": null,
+              "error_categories": []
+            }
+          ],
+          "kernel_echo_requests": 1,
+          "packet_counter_matches": true,
+          "no_remaining_children": true
+        },
+        {
+          "ok": true,
+          "case": "permission_denied_is_not_packet_loss",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "expected_packets": 0,
+          "measurements": [
+            {
+              "state": "observed",
+              "exit_code": 2,
+              "classification": "execution_error",
+              "sent": null,
+              "received": null,
+              "reported_errors": null,
+              "error_categories": [
+                "permission_denied"
+              ]
+            }
+          ],
+          "kernel_echo_requests": 0,
+          "packet_counter_matches": true,
+          "no_remaining_children": true
+        },
+        {
+          "case": "rust_echo",
+          "ok": true,
+          "kernel_echo_requests": 1,
+          "expected_packets": 1,
+          "exit_success": true,
+          "no_remaining_children": true,
+          "raw_output_retained": false
+        },
+        {
+          "case": "rust_drop",
+          "ok": true,
+          "kernel_echo_requests": 1,
+          "expected_packets": 1,
+          "exit_success": true,
+          "no_remaining_children": true,
+          "raw_output_retained": false
+        }
+      ],
+      "cleanup": {
+        "temporary_directory_removed": true,
+        "owned_firewall_removed": true,
+        "no_remaining_children": true
+      }
+    },
+    "all_source_digests_match_ci_git_blobs": true,
+    "native_binary_matches_compilation_manifest": true
+  },
+  "ci_attempt_history": [
+    {
+      "id": 43347777492,
+      "conclusion": "failure",
+      "stage": "kernel_preflight_no_aggregate_preserved"
+    },
+    {
+      "id": 43348127957,
+      "conclusion": "failure",
+      "stage": "kernel_preflight_loopback_interface_view"
+    },
+    {
+      "id": 43348512276,
+      "conclusion": "failure",
+      "stage": "strict_zero_capability_iputils_process_start"
+    },
+    {
+      "id": 43348999369,
+      "conclusion": "success",
+      "stage": "complete"
+    }
+  ],
+  "tested_current_worktree_source_digests": {
+    "keliboard/tools/machine-acceptance/entry_probe_diagnostics.py": "d4dbd5ee82bd260fcdb394c51a9288500b4e6d63f88b474d5ac28acb9f5d01ec",
+    "keliboard/tools/machine-acceptance/entry_probe_capture.py": "9a7d7524439d0309d415848ab28a329fad537fe57e9cc598480403920883dc16",
+    "keliboard/tools/machine-acceptance/test_entry_probe_diagnostics.py": "b99c828617f571d0dcf86868a78f195fb4c5ac433ad0be915a751416e2922c99",
+    "keliboard/tools/machine-acceptance/test_entry_probe_capture.py": "48f39eb042ada3d007d794cec095ca1a7d272d408d7e36801fe9d042c28c72c4",
+    "keliboard/tools/machine-acceptance/test_entry_probe_iputils.py": "85ae8cbabde60c803a500d913bd44b79b5ea6da09c94eb11eafb9d49aac2eaa5",
+    "keliboard/tools/machine-acceptance/iputils_namespace.py": "45e9285891488095276b178d68bb3ca0da7033ae5953ce1289e892abaa2ef05d",
+    "keliboard/tools/machine-acceptance/test_iputils_namespace.py": "446fa4825211fe12f553724af13115372fb295d66fc6183561551cb3d21ea316",
+    "kelinode-rs/src/entry_probe.rs": "0b26270ab9e3cd6d5a8b40f9a373165d39a4f1819e82ef6acf62ceeac3ca0a67"
+  },
+  "closed_round_checks": [
+    {
+      "round": "r11",
+      "files": 129,
+      "changed": 0,
+      "unchanged": true
+    },
+    {
+      "round": "r10",
+      "files": 129,
+      "changed": 0,
+      "unchanged": true
+    }
+  ],
+  "safety": {
+    "production_deployment": false,
+    "provider_instances_created": 0,
+    "production_database_access": false,
+    "ssh_access": false,
+    "business_dns_access_or_mutation": false,
+    "production_queue_changes": false,
+    "automatic_switch_changes": false,
+    "r11_rerun_or_modified": false,
+    "tanzhen_access": false,
+    "main_branches_committed_or_pushed": false,
+    "cloud_api_or_credential_material_uploaded": false
+  },
+  "limitations": [
+    "Only loopback addresses inside a fresh isolated namespace were used for real ICMP; this is not a WAN, censorship or failover acceptance.",
+    "Old count+deadline behavior sent three packets in the isolated no-reply reference; that does not reconstruct the lost per-target raw output from R11.",
+    "Real kernel tests use a byte-identical capability-free copy so children retain no capabilities and NoNewPrivs; production ping executable metadata was not changed.",
+    "Linux native checks compile the exact modified entry_probe module using a minimal panel type stub; actual crate focused tests were additionally run on Windows.",
+    "R11 remains blocked_not_passed and immutable. Its closed one-off control adapter was not patched; future live drivers must be newly adapted/frozen against the fixed command helper and reject packet_budget_exceeded.",
+    "A new live round still needs a separately confirmed scope and cleanup plan; no such execution was started."
+  ]
+}

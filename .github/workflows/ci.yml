@@ -29,7 +29,7 @@ jobs:
       - name: Check staging, driver journal, diagnostics and synthetic verifier guards (Windows)
         if: runner.os == 'Windows'
         working-directory: tools/machine-acceptance
-        run: python -m unittest -v test_staging test_bootstrap_diagnostics test_diagnostic_capture test_entry_probe_diagnostics test_entry_probe_capture test_driver_journal test_install_only_runner test_worker.WorkerTests test_driver_linux test_application_bundle test_entry_probe_linux
+        run: python -m unittest -v test_staging test_bootstrap_diagnostics test_diagnostic_capture test_entry_probe_diagnostics test_entry_probe_capture test_driver_journal test_install_only_runner test_worker.WorkerTests test_driver_linux test_application_bundle test_entry_probe_linux test_entry_probe_iputils test_iputils_namespace
       - name: Check staging, driver journal, diagnostics and synthetic verifier guards (isolated Linux)
         if: runner.os == 'Linux'
         working-directory: tools/machine-acceptance
@@ -53,7 +53,42 @@ jobs:
             GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_LFS_SKIP_SMUDGE=1 \
             "$py" -B -m unittest -v test_staging test_bootstrap_diagnostics test_diagnostic_capture \
             test_entry_probe_diagnostics test_entry_probe_capture test_driver_journal test_install_only_runner \
-            test_worker.WorkerTests test_driver_linux test_application_bundle test_entry_probe_linux
+            test_worker.WorkerTests test_driver_linux test_application_bundle test_entry_probe_linux test_entry_probe_iputils test_iputils_namespace
+
+  entry-probe-real-iputils:
+    name: Real iputils single-packet kernel regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install isolated kernel test tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends iputils-ping iproute2 nftables
+      - name: Check real ICMP on private loopback only
+        working-directory: tools/machine-acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          ulimit -c 0
+          parent_netns="$(readlink /proc/self/ns/net)"
+          timeout --signal=TERM --kill-after=5s 90s \
+            sudo /usr/bin/unshare --net --pid --fork --mount-proc --kill-child=SIGKILL \
+            /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            HOME=/nonexistent PYTHONDONTWRITEBYTECODE=1 KELI_IPUTILS_NAMESPACE=1 \
+            /usr/bin/python3 -B iputils_namespace.py --uid "$(id -u)" --gid "$(id -g)" \
+            --parent-netns "$parent_netns" --output "$RUNNER_TEMP/iputils-kernel.json"
+      - name: Upload aggregate kernel evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iputils-kernel-aggregate
+          path: ${{ runner.temp }}/iputils-kernel.json
+          if-no-files-found: error
+          retention-days: 7
 
   unit-tests:
     runs-on: ubuntu-latest

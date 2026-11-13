@@ -22,7 +22,8 @@ STATES = {"observed", "missing", "unavailable", "invalid", "timeout", "oversized
 ROUTE_TYPES = {"unicast", "local", "broadcast", "unreachable", "prohibit", "blackhole", "throw", "unknown"}
 HOOKS = {"input", "output", "prerouting", "postrouting", "forward", "ingress", "egress"}
 VERDICTS = {"accept", "drop", "reject", "return", "jump", "goto", "continue", "unknown"}
-CLASSIFICATIONS = {"echo_reply", "no_echo_by_deadline", "icmp_error", "execution_error", "unavailable"}
+CLASSIFICATIONS = {"echo_reply", "no_echo_by_deadline", "icmp_error", "execution_error", "packet_budget_exceeded", "unavailable"}
+MAX_PACKET_COUNT = 2**32 - 1
 ERROR_PATTERNS = {
     "permission_denied": r"operation not permitted|permission denied|cap_net_raw",
     "source_bind_error": r"cannot assign requested address|bind:|invalid source address",
@@ -116,6 +117,11 @@ def command(args, timeout, limit=MAX_BYTES):
                     process.stdout.close()
 
 
+def ping_arguments(program, target, source, timeout):
+    """The caller validates scope; -w would override the no-reply transmit-count cutoff."""
+    return [program, "-I", source, "-4", "-n", "-c", "1", "-W", str(timeout), "--", target]
+
+
 def classify_ping(result, target):
     row = {"state": result.state, "exit_code": result.exit_code, "classification": "unavailable", "sent": None,
            "received": None, "reported_errors": None, "error_categories": []}
@@ -123,15 +129,20 @@ def classify_ping(result, target):
         return row
     text = result.output.decode("utf-8", errors="replace")
     row["error_categories"] = [name for name, pattern in ERROR_PATTERNS.items() if re.search(pattern, text, re.I)]
-    summary = re.search(r"\b([0-9]+) packets transmitted, ([0-9]+) (?:packets )?received(?:, \+([0-9]+) errors)?", text)
-    if summary and all(int(value or 0) <= limit for value, limit in zip(summary.groups(), [1, 1, 1024])):
-        row.update(sent=int(summary[1]), received=int(summary[2]), reported_errors=int(summary[3] or 0))
+    summaries = re.findall(r"(?m)^[ \t]*([0-9]{1,10})[ \t]+packets?[ \t]+transmitted,[ \t]*"
+                           r"([0-9]{1,10})[ \t]+(?:packets?[ \t]+)?received"
+                           r"(?:,[ \t]*\+([0-9]{1,10})[ \t]+errors?)?(?!,[ \t]*[+-])(?=,|[ \t]*$)", text)
+    if len(summaries) == 1 and all(int(value or 0) <= MAX_PACKET_COUNT for value in summaries[0]):
+        sent, received, errors = (int(value or 0) for value in summaries[0])
+        row.update(sent=sent, received=received, reported_errors=errors)
     echo = re.search(r"\bbytes from " + re.escape(target) + r"(?:\s|:)\s*.*\bicmp_seq=1\b", text)
-    if result.exit_code == 0 and row["received"] == 1 and echo:
+    if any(row[key] is not None and row[key] > 1 for key in ["sent", "received"]):
+        row["classification"] = "packet_budget_exceeded"
+    elif result.exit_code == 0 and row["sent"] == row["received"] == 1 and not row["reported_errors"] and echo:
         row["classification"] = "echo_reply"
     elif any(name.startswith("icmp_") for name in row["error_categories"]) or row["reported_errors"]:
         row["classification"] = "icmp_error"
-    elif result.exit_code == 1 and row["received"] == 0 and not row["error_categories"]:
+    elif result.exit_code == 1 and row["sent"] == 1 and row["received"] == 0 and not row["error_categories"]:
         row["classification"] = "no_echo_by_deadline"
     else:
         row["classification"] = "execution_error"
@@ -386,16 +397,17 @@ def collect(run_id, task_id, role, targets, expected_source, timeout=2, maximum_
         version = invoke([ping_program, "-V"])
         iputils = version.state == "observed" and version.exit_code == 0 and b"iputils" in version.output
         rows = []
+        packet_budget_exceeded = False
         for target in targets:
             route = route_summary(invoke([ip, "-j", "-4", "route", "get", target]), expected_source)
-            reason = ("stop_requested" if not active else "tool_unavailable" if not iputils else
+            reason = ("stop_requested" if not active else "packet_budget_exceeded" if packet_budget_exceeded else "tool_unavailable" if not iputils else
                       "network_namespace_unverified" if namespace["matches_agent"] is not True else
                       "route_unavailable" if route["state"] != "observed" or route["route_type"] != "unicast" else
                       "source_mismatch" if not route["source_matches_receipt"] else None)
             ping = classify_ping(CommandResult("unavailable"), target)
             if reason is None:
-                ping = classify_ping(invoke([ping_program, "-I", expected_source, "-4", "-n", "-c", "1", "-W", str(timeout),
-                                            "-w", str(timeout + 1), "--", target], timeout + 2), target)
+                ping = classify_ping(invoke(ping_arguments(ping_program, target, expected_source, timeout), timeout + 2), target)
+                packet_budget_exceeded = ping["classification"] == "packet_budget_exceeded"
             rows.append({"target": target, "route": route, "skip_reason": reason, "ping": ping})
         host_after = icmp_counters(root)
         after = firewall_summary(invoke([nft, "-j", "list", "ruleset"], limit=MAX_BYTES), targets, expected_source)

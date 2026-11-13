@@ -26,6 +26,25 @@ class WireTests(unittest.TestCase):
     def test_valid_fixed_schema_is_accepted(self):
         self.assertEqual(self.validate(self.value), self.value)
 
+    def test_multi_packet_evidence_is_retained_but_cannot_claim_echo_or_no_reply(self):
+        runner = FakeCommands()
+        runner.ping_output, runner.ping_exit = b'3 packets transmitted, 0 received, 100% packet loss', 1
+        value = make_record(commands=runner)
+        safe = self.validate(value)
+        self.assertIsNotNone(safe)
+        self.assertEqual(safe['rows'][0]['ping']['sent'], 3)
+        self.assertEqual(safe['rows'][0]['ping']['classification'], 'packet_budget_exceeded')
+        for category in ['echo_reply', 'no_echo_by_deadline', 'execution_error', 'unavailable']:
+            changed = copy.deepcopy(value)
+            changed['rows'][0]['ping']['classification'] = category
+            self.assertIsNone(self.validate(changed))
+
+    def test_no_packet_sent_or_timeout_cannot_be_reported_as_no_reply(self):
+        for mutation in [{'sent': 0}, {'exit_code': 2}, {'reported_errors': 1}, {'state': 'timeout'}]:
+            value = copy.deepcopy(self.value)
+            value['rows'][0]['ping'].update(classification='no_echo_by_deadline', received=0, **mutation)
+            self.assertIsNone(self.validate(value))
+
     def test_failure_observations_are_accepted_but_never_become_success_counts(self):
         runner = FakeCommands()
         runner.nft_result = observed(b"permission denied " + SECRET.encode(), 1)
