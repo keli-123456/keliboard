@@ -766,6 +766,91 @@ behavior on Linux. R2's frozen source, reports and archive are unchanged. Any
 future Linux rerun requires a new approved identity and a newly pinned bundle;
 no closed round or live preparation is modified or reopened here.
 
+## Repeated Runtime Projection Repair (2026-11-13)
+
+Runtime-R3 is closed, failed and cleanup-confirmed. The Linux bootstrap passed
+7/7 cases and the functional process exited zero, but the collector rejected
+the iputils evidence after a second projection dropped required proof fields.
+The retained six case counters do not reconstruct the lost raw report. Its
+failure and the unexecuted five control cases are not reclassified as passed.
+
+`project_iputils` now keeps only the typed per-case packet/child proofs and
+allowlisted cleanup/isolation maps. Each boundary recomputes success from them;
+cached `ok`, verification booleans or an "already projected" marker cannot
+replace evidence. Original case cardinality remains when unknown rows are
+filtered, and ordered six-case completeness remains mandatory. Matching packet
+counters must also fit the case: 1/1/4/(1-4)/1/0. Legitimate producer
+`first_error: null` is accepted, but malformed diagnostics, dropped/truncated
+error history, missing proofs, skips and cleanup failures remain failures.
+
+`project_runtime` shares the strict error ingestion with the iputils projector.
+A newly prepared public harness must delegate `safe_runtime` to this pinned
+function, including at control pre-admission. `runtime_report_projection.py`
+is the pure collector boundary. It preserves the first error, deduplicates
+secondary summaries, rechecks identity/resources and retains canonical failure
+shapes across persistence. It contains no launcher, credentials or authority.
+Never substitute these files into a dispatched or closed bundle.
+
+Local regression:
+
+```sh
+python -B -m unittest -q test_runtime_diagnostics test_runtime_projection_chain test_iputils_namespace
+```
+
+The authority-free public-helper snapshot additionally exercises the actual
+`collect_component` and `persist_report` functions, JSON readback, collector
+reprojection, cleanup aggregation and real control pre-admission (stopping
+before any cgroup/process operation). It also checks truncated final reports,
+checkpoint recovery, nonzero exits and legacy missing-proof failures. The
+focused suite has 263 tests without skips; the related 349-test tool suite has
+26 Windows/platform/isolation skips. Counts overlap, not additive.
+
+Evidence:
+[runtime-r3-projection-local-20261113.json](../../docs/evidence/runtime-r3-projection-local-20261113.json).
+This is local synthetic/JSON validation, not another Linux kernel, HY2 or
+timeout/SIGTERM acceptance. All 58 closed R3 files and 52 earlier R2 files are
+verified unchanged. No cloud, SSH, DNS, GitHub, production, queue or switch
+operation occurs. Any further real Linux run needs a new authorized identity,
+new helper adapter and freshly pinned bundle; R3 is not reopened.
+
+## Runtime R4 Linux Acceptance (2026-11-13)
+
+The separately approved `keli-runtime-20261113-r4-75604ea5` round passed on one
+new Debian 12/x86_64 Linode and is closed with cleanup confirmed. Its fresh LF
+bundle passed 308 offline tests without skips before the read-only provider
+preflight and sole create dispatch. No previous round or approval was reused.
+
+Real Linux results: 7/7 bootstrap cases with 39 checks; all six real iputils
+cases with exact kernel counters 1/1/4/3/1/0 and no skips; byte-exact HY2 TCP and
+two UDP echoes with one attempt per transport and no protocol retries. All five
+serial controls passed: communicate timeout, external SIGTERM, GNU timeout,
+socket negatives and filesystem/report recovery. The expected negative exit
+statuses are assertions, not unexpected application failures.
+
+The staged supervisor used the pinned strict runtime/iputils projectors. It
+ran a separate 12-check synthetic projection smoke, explicitly not counted as
+kernel traffic. The collector serialized and reprojected each aggregate, then
+exclusively persisted/fsynced the exact runtime proof read by real control
+pre-admission. Bootstrap, functional and control reports all survived this
+roundtrip. The new driver also separated cloud ownership from SSH address
+selection so missing or ambiguous IPv4 cannot by itself block owned-VM deletion.
+
+Tests were serial, private-loopback-only and non-root under CPUQuota=25%,
+MemoryMax=448MiB, swap=0 and TasksMax=96. No OOM was observed. All owned units
+stopped and the private directory was removed only after sanitized evidence
+was saved and read back locally. One DELETE was dispatched; two independent
+GET-404 plus complete-inventory checks, 9.8 seconds apart, confirmed absence.
+The 58 closed R3 and 52 earlier R2 files remain unchanged and failed as recorded.
+
+Evidence:
+[runtime-r4-linux-20261113.json](../../docs/evidence/runtime-r4-linux-20261113.json).
+No production deployment, business-node restart/upgrade, queue/default/switch
+change, DNS operation, GitHub action or tanzhen access occurred. This is not
+WAN/mainland reachability, censorship, DNS/TTL cutover or full failover
+acceptance. Build flags are not ECH/Brutal activation evidence; sampled RSS is
+not peak performance or a high-user-count memory test. Further end-to-end
+failover testing still needs a fresh scope and authorization.
+
 ## Protocol Interoperability
 
 The real HY2 tests bind temporary endpoints only to 127.0.0.1/127.0.0.2, generate

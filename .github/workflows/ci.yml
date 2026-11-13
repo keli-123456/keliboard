@@ -29,7 +29,7 @@ jobs:
       - name: Check staging, driver journal, diagnostics and synthetic verifier guards (Windows)
         if: runner.os == 'Windows'
         working-directory: tools/machine-acceptance
-        run: python -m unittest -v test_staging test_bootstrap_diagnostics test_diagnostic_capture test_entry_probe_diagnostics test_entry_probe_capture test_driver_journal test_install_only_runner test_worker.WorkerTests test_driver_linux test_application_bundle test_entry_probe_linux test_entry_probe_iputils test_iputils_namespace
+        run: python -m unittest -v test_staging test_bootstrap_diagnostics test_diagnostic_capture test_entry_probe_diagnostics test_entry_probe_capture test_driver_journal test_install_only_runner test_worker.WorkerTests test_driver_linux test_application_bundle test_entry_probe_linux test_entry_probe_iputils test_iputils_namespace test_runtime_diagnostics test_runtime_projection_chain
       - name: Check staging, driver journal, diagnostics and synthetic verifier guards (isolated Linux)
         if: runner.os == 'Linux'
         working-directory: tools/machine-acceptance
@@ -53,7 +53,7 @@ jobs:
             GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_LFS_SKIP_SMUDGE=1 \
             "$py" -B -m unittest -v test_staging test_bootstrap_diagnostics test_diagnostic_capture \
             test_entry_probe_diagnostics test_entry_probe_capture test_driver_journal test_install_only_runner \
-            test_worker.WorkerTests test_driver_linux test_application_bundle test_entry_probe_linux test_entry_probe_iputils test_iputils_namespace
+            test_worker.WorkerTests test_driver_linux test_application_bundle test_entry_probe_linux test_entry_probe_iputils test_iputils_namespace test_runtime_diagnostics test_runtime_projection_chain
 
   entry-probe-real-iputils:
     name: Real iputils single-packet kernel regression

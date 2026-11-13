@@ -1,0 +1,816 @@
+{
+  "acceptance_proven": true,
+  "child_bootstrap": {
+    "cases": [
+      {
+        "case": "smoke",
+        "checks": 6,
+        "exit_code": 0,
+        "flags": {
+          "both_helpers_loaded": true,
+          "helpers_0644": true,
+          "listdir_denied": true,
+          "owner_read_denied": true,
+          "protocol_not_run": true,
+          "stage_0711": true
+        },
+        "identity": {
+          "capabilities_zero": true,
+          "gid": 61113,
+          "no_new_privs": true,
+          "private_namespaces": true,
+          "uid": 61113
+        },
+        "ok": true
+      },
+      {
+        "case": "missing_helper",
+        "checks": 5,
+        "exit_code": 1,
+        "first_error": {
+          "errno": 2,
+          "error_class": "FileNotFoundError",
+          "frames": [
+            {
+              "file": "test_entry_probe_iputils.py",
+              "line": 203
+            },
+            {
+              "file": "test_entry_probe_iputils.py",
+              "line": 45
+            }
+          ],
+          "reason": "child_import_failed",
+          "stage": "child_import"
+        },
+        "flags": {
+          "bounded_diagnostics": true,
+          "diagnostic_expected": true,
+          "fixture_verified": true,
+          "protocol_not_run": true,
+          "status_expected": true
+        },
+        "identity": {
+          "capabilities_zero": true,
+          "gid": 61113,
+          "no_new_privs": true,
+          "private_namespaces": true,
+          "uid": 61113
+        },
+        "ok": true
+      },
+      {
+        "case": "access_denial",
+        "checks": 5,
+        "exit_code": 1,
+        "first_error": {
+          "errno": 13,
+          "error_class": "PermissionError",
+          "frames": [
+            {
+              "file": "test_entry_probe_iputils.py",
+              "line": 203
+            },
+            {
+              "file": "test_entry_probe_iputils.py",
+              "line": 52
+            }
+          ],
+          "reason": "child_import_failed",
+          "stage": "child_import"
+        },
+        "flags": {
+          "bounded_diagnostics": true,
+          "diagnostic_expected": true,
+          "fixture_verified": true,
+          "protocol_not_run": true,
+          "status_expected": true
+        },
+        "identity": {
+          "capabilities_zero": true,
+          "gid": 61113,
+          "no_new_privs": true,
+          "private_namespaces": true,
+          "uid": 61113
+        },
+        "ok": true
+      },
+      {
+        "case": "syntax_error",
+        "checks": 5,
+        "exit_code": 1,
+        "first_error": {
+          "error_class": "SyntaxError",
+          "frames": [
+            {
+              "file": "test_entry_probe_iputils.py",
+              "line": 203
+            },
+            {
+              "file": "test_entry_probe_iputils.py",
+              "line": 52
+            },
+            {
+              "file": "entry_probe_diagnostics.py",
+              "line": 1
+            }
+          ],
+          "reason": "child_import_failed",
+          "stage": "child_import"
+        },
+        "flags": {
+          "bounded_diagnostics": true,
+          "diagnostic_expected": true,
+          "fixture_verified": true,
+          "protocol_not_run": true,
+          "status_expected": true
+        },
+        "identity": {
+          "capabilities_zero": true,
+          "gid": 61113,
+          "no_new_privs": true,
+          "private_namespaces": true,
+          "uid": 61113
+        },
+        "ok": true
+      },
+      {
+        "case": "stdout_noise",
+        "checks": 5,
+        "exit_code": 1,
+        "first_error": {
+          "error_class": "RuntimeError",
+          "frames": [],
+          "reason": "child_output_contaminated",
+          "stage": "child_output"
+        },
+        "flags": {
+          "bounded_diagnostics": true,
+          "diagnostic_expected": true,
+          "fixture_verified": true,
+          "protocol_not_run": true,
+          "status_expected": true
+        },
+        "identity": {
+          "capabilities_zero": true,
+          "gid": 61113,
+          "no_new_privs": true,
+          "private_namespaces": true,
+          "uid": 61113
+        },
+        "ok": true
+      },
+      {
+        "case": "stderr_noise",
+        "checks": 5,
+        "exit_code": 1,
+        "first_error": {
+          "error_class": "RuntimeError",
+          "frames": [],
+          "reason": "child_output_contaminated",
+          "stage": "child_output"
+        },
+        "flags": {
+          "bounded_diagnostics": true,
+          "diagnostic_expected": true,
+          "fixture_verified": true,
+          "protocol_not_run": true,
+          "status_expected": true
+        },
+        "identity": {
+          "capabilities_zero": true,
+          "gid": 61113,
+          "no_new_privs": true,
+          "private_namespaces": true,
+          "uid": 61113
+        },
+        "ok": true
+      },
+      {
+        "case": "first_error_immutable",
+        "checks": 8,
+        "exit_code": 1,
+        "first_error": {
+          "error_class": "SyntaxError",
+          "frames": [
+            {
+              "file": "test_entry_probe_iputils.py",
+              "line": 203
+            },
+            {
+              "file": "test_entry_probe_iputils.py",
+              "line": 52
+            },
+            {
+              "file": "entry_probe_diagnostics.py",
+              "line": 1
+            }
+          ],
+          "reason": "child_import_failed",
+          "stage": "child_import"
+        },
+        "flags": {
+          "bounded_diagnostics": true,
+          "checkpoint_immutable": true,
+          "diagnostic_expected": true,
+          "first_error_immutable": true,
+          "fixture_verified": true,
+          "noise_secondary": true,
+          "protocol_not_run": true,
+          "status_expected": true
+        },
+        "identity": {
+          "capabilities_zero": true,
+          "gid": 61113,
+          "no_new_privs": true,
+          "private_namespaces": true,
+          "uid": 61113
+        },
+        "ok": true
+      }
+    ],
+    "cgroup_limits": {
+      "cpu_period_us": 100000,
+      "cpu_quota_us": 25000,
+      "memory_max_bytes": 469762048,
+      "pids_max": 96,
+      "swap_max_bytes": 0
+    },
+    "checks": 39,
+    "cleanup": {
+      "fixture_files_removed": true,
+      "namespace_reaped": true,
+      "owned_pids_only": true,
+      "streams_closed": true,
+      "temporary_files_removed": true,
+      "workers_reaped": true
+    },
+    "completed": 7,
+    "deadline_seconds": 120,
+    "elapsed_ms": 7515,
+    "expected": 7,
+    "isolation": {
+      "capabilities_zero": true,
+      "loopback_only": true,
+      "no_network_traffic": true,
+      "no_new_privs": true,
+      "no_routes": true,
+      "nonroot_uid_gid": true,
+      "owner_read_denied": true,
+      "private_mount": true,
+      "private_net": true,
+      "private_pid": true,
+      "private_tmp_mount": true
+    },
+    "ok": true,
+    "packets": 0,
+    "projection_valid": true,
+    "protocol_started": false,
+    "raw_outputs_retained": false,
+    "resources": {
+      "cpu_usage_usec": 1758301,
+      "oom_after": 0,
+      "oom_before": 0,
+      "oom_kill_after": 0,
+      "oom_kill_before": 0,
+      "oom_kills": 0,
+      "rss_samples": 122,
+      "rss_sum_sampled_max_bytes": 89837568
+    },
+    "run_id": "keli-runtime-20261113-r4-75604ea5",
+    "schema": 1,
+    "skipped": 0,
+    "staged_inputs_verified": true
+  },
+  "cleanup": {
+    "deleted_resource_id": 110932488,
+    "dns_created": false,
+    "guest_cleanup": {
+      "durable_aggregate_sha256": "f18604f5644a0c6ae66eae57ed77ff49d8341c1f8d4e26f0377e3e6d439a58f2",
+      "evidence_saved_before_removal": true,
+      "ok": true,
+      "private_directory_removed": true,
+      "projection_checks": {
+        "report_roundtrips": {
+          "child-bootstrap-result.json": true,
+          "control-result.json": true,
+          "runtime-result.json": true
+        },
+        "runtime_collector_proof_persisted": true,
+        "synthetic_smoke": {
+          "completed": 12,
+          "kernel_test_executed": false,
+          "ok": true
+        }
+      },
+      "run_id": "keli-runtime-20261113-r4-75604ea5",
+      "source_report_sha256": {
+        "child-bootstrap-result.json": "0599d84f3b367f4d329753b858f399e346e773bebd43a165ee481cbcaea65a09",
+        "control-result.json": "b076bc3b7e8552bbfedea5cc5b6baf028798b9a7ee7d517e822132a371b2a450",
+        "runtime-collector-proof.json": "b4f8350f29d41d12b45bdb58a081e5c12e764cdb73e7ea5aecedce5a4fecd9f0",
+        "runtime-result.json": "6126bfbc2ac56993cdeb910684f4bf9c486e4f725a41d0f0fca716e99c556ab9"
+      },
+      "unavailable_reports": [],
+      "units_stopped": true
+    },
+    "independent_absence_checks": [
+      {
+        "checked_utc": "2026-11-13T10:28:16.807930+00:00",
+        "complete_inventory": true,
+        "confirmed_absent": true,
+        "get_absent": true,
+        "owned_count": 0
+      },
+      {
+        "checked_utc": "2026-11-13T10:28:26.611383+00:00",
+        "complete_inventory": true,
+        "confirmed_absent": true,
+        "get_absent": true,
+        "owned_count": 0
+      }
+    ],
+    "instance_created": true,
+    "ok": true
+  },
+  "client_binary_sha256": "1264361b5f8868c8768f7555d3e77e20118bf503c41ac08bb290a0d99056aa3a",
+  "closed_r4_regular_files_verified_unchanged": 64,
+  "combined_test_seconds_including_collection_gaps": 80.688463,
+  "configured_limits": {
+    "cpu_quota_percent_of_one_core": 25,
+    "memory_max_mib": 448,
+    "memory_swap_max_mib": 0,
+    "serial_units_only": true,
+    "tasks_max": 96
+  },
+  "controls": {
+    "cgroup_limits": {
+      "cpu_period_us": 100000,
+      "cpu_quota_us": 25000,
+      "memory_max_bytes": 469762048
+    },
+    "completed": 5,
+    "controls": [
+      {
+        "case": "communicate_timeout",
+        "checks": 4,
+        "exit_code": -9,
+        "first_error": {
+          "error_class": "TimeoutExpired",
+          "frames": [
+            {
+              "file": "iputils_namespace.py",
+              "line": 251
+            }
+          ],
+          "reason": "child_timeout",
+          "stage": "child_wait",
+          "timed_out": true
+        },
+        "flags": {
+          "checkpoint_before_teardown": true,
+          "children_reaped": true,
+          "first_error_immutable": true,
+          "stdout_closed": true
+        },
+        "ok": true
+      },
+      {
+        "case": "sigterm",
+        "checks": 5,
+        "exit_code": 0,
+        "first_error": {
+          "error_class": "Failure",
+          "frames": [
+            {
+              "file": "remote_validate.py",
+              "line": 281
+            },
+            {
+              "file": "remote_validate.py",
+              "line": 273
+            },
+            {
+              "file": "remote_validate.py",
+              "line": 1012
+            }
+          ],
+          "reason": "deadline_or_signal",
+          "stage": "runtime"
+        },
+        "flags": {
+          "checkpoint_before_teardown": true,
+          "children_reaped": true,
+          "first_error_immutable": true,
+          "ready_verified": true,
+          "status_expected": true
+        },
+        "ok": true
+      },
+      {
+        "case": "gnu_timeout",
+        "checks": 5,
+        "exit_code": 124,
+        "first_error": {
+          "error_class": "Failure",
+          "frames": [
+            {
+              "file": "remote_validate.py",
+              "line": 281
+            },
+            {
+              "file": "remote_validate.py",
+              "line": 273
+            },
+            {
+              "file": "remote_validate.py",
+              "line": 1012
+            }
+          ],
+          "reason": "deadline_or_signal",
+          "stage": "runtime"
+        },
+        "flags": {
+          "checkpoint_before_teardown": true,
+          "children_reaped": true,
+          "first_error_immutable": true,
+          "ready_verified": true,
+          "status_expected": true
+        },
+        "ok": true
+      },
+      {
+        "case": "sockets",
+        "checks": 8,
+        "exit_code": 0,
+        "first_error": null,
+        "flags": {
+          "guarded_allowance": true,
+          "kernel_tables": true,
+          "negative_rejections": true,
+          "sockets_closed": true
+        },
+        "ok": true
+      },
+      {
+        "case": "filesystem",
+        "checks": 5,
+        "exit_code": 0,
+        "first_error": {
+          "error_class": "Failure",
+          "frames": [],
+          "reason": "child_timeout",
+          "stage": "runtime"
+        },
+        "flags": {
+          "children_reaped": true,
+          "cleanup_failure": true,
+          "collector_failure": true,
+          "first_error_immutable": true,
+          "recovered": true
+        },
+        "ok": true
+      }
+    ],
+    "current_case": "filesystem",
+    "expected": 5,
+    "first_error_persisted": false,
+    "fixture_files_removed": true,
+    "namespace_reaped": true,
+    "ok": true,
+    "phase": "complete",
+    "protocol_retries": 0,
+    "resources": {
+      "cpu_usage_usec": 1505171,
+      "oom_kills": 0,
+      "rss_samples": 89,
+      "rss_sum_sampled_max_bytes": 111820800
+    },
+    "run_id": "keli-runtime-20261113-r4-75604ea5",
+    "schema": 1,
+    "secondary_errors": [],
+    "skipped": 0,
+    "temporary_files_removed": true
+  },
+  "create_dispatches": 1,
+  "current_round_adaptations": [
+    "Fresh scope, approval, ownership, host identity, units and source/helper pins; no earlier authority reused.",
+    "Pinned strict iputils/runtime projection used by supervisor, collector and real control pre-admission.",
+    "12-check explicitly synthetic projector smoke precedes six actual kernel cases; not counted as ICMP evidence.",
+    "Collector serializes and reprojects reports, then exclusively persists/fsyncs the exact runtime proof consumed by controls.",
+    "Cloud ownership validation is independent of unique SSH IPv4 availability, including owned-resource cleanup."
+  ],
+  "delete_dispatches": 1,
+  "ended_beijing": "2026-11-13T18:28:26.615148+08:00",
+  "ended_utc": "2026-11-13T10:28:26.615148+00:00",
+  "frozen_archive_bytes": 35284533,
+  "frozen_archive_sha256": "a3005e05358452bddd241fa9bd5fe29bdf002e77417bfc90a622c44608d200d9",
+  "functional": {
+    "cgroup_limits": {
+      "cpu_period_us": 100000,
+      "cpu_quota_us": 25000,
+      "memory_max_bytes": 469762048
+    },
+    "first_error_persisted": false,
+    "iputils": {
+      "cases": [
+        {
+          "case": "echo",
+          "errors": 0,
+          "expected_packets": 1,
+          "failures": 0,
+          "kernel_echo_requests": 1,
+          "no_remaining_children": true,
+          "ok": true,
+          "packet_counter_matches": true,
+          "skipped": 0,
+          "tests": 1
+        },
+        {
+          "case": "no_reply",
+          "errors": 0,
+          "expected_packets": 1,
+          "failures": 0,
+          "kernel_echo_requests": 1,
+          "no_remaining_children": true,
+          "ok": true,
+          "packet_counter_matches": true,
+          "skipped": 0,
+          "tests": 1
+        },
+        {
+          "case": "four_no_reply_targets",
+          "errors": 0,
+          "expected_packets": 4,
+          "failures": 0,
+          "kernel_echo_requests": 4,
+          "no_remaining_children": true,
+          "ok": true,
+          "packet_counter_matches": true,
+          "skipped": 0,
+          "tests": 1
+        },
+        {
+          "case": "legacy_deadline_reference",
+          "errors": 0,
+          "expected_packets": 3,
+          "failures": 0,
+          "kernel_echo_requests": 3,
+          "no_remaining_children": true,
+          "ok": true,
+          "packet_counter_matches": true,
+          "skipped": 0,
+          "tests": 1
+        },
+        {
+          "case": "forced_timeout_reaps_real_ping",
+          "errors": 0,
+          "expected_packets": 1,
+          "failures": 0,
+          "kernel_echo_requests": 1,
+          "no_remaining_children": true,
+          "ok": true,
+          "packet_counter_matches": true,
+          "skipped": 0,
+          "tests": 1
+        },
+        {
+          "case": "permission_denied_is_not_packet_loss",
+          "errors": 0,
+          "expected_packets": 0,
+          "failures": 0,
+          "kernel_echo_requests": 0,
+          "no_remaining_children": true,
+          "ok": true,
+          "packet_counter_matches": true,
+          "skipped": 0,
+          "tests": 1
+        }
+      ],
+      "cases_complete": true,
+      "cleanup": {
+        "no_remaining_children": true,
+        "owned_firewall_removed": true,
+        "temporary_directory_removed": true
+      },
+      "cleanup_verified": true,
+      "current_case": "permission_denied_is_not_packet_loss",
+      "isolation": {
+        "child_capabilities": 0,
+        "child_non_root": true,
+        "external_routes": 0,
+        "independent_network_namespace": true,
+        "no_new_privileges": true,
+        "only_loopback": true,
+        "private_pid_namespace": true
+      },
+      "isolation_verified": true,
+      "ok": true,
+      "reported_case_count": 6,
+      "rust_test_executed": false,
+      "validation_errors": []
+    },
+    "limitations": [
+      "Private loopback synthetic acceptance only; no WAN or censorship evidence.",
+      "No P99, throughput, peak-memory, or formal-billing claim.",
+      "Build flags do not prove ECH handshakes or Brutal activation.",
+      "RSS is a sampled sum, including shared pages; stderr counts are a line heuristic.",
+      "No Rust test binary is executed or claimed. No failed protocol probe is retried."
+    ],
+    "network_scope": "fresh_private_loopback_only",
+    "node_sha256": "654a8344d22bc3373b114345d49d5f6a2804be98e6f51bc2ce85e309fbda0be0",
+    "ok": true,
+    "resources": {
+      "cpu_usage_usec": 2857214,
+      "oom_kills": 0,
+      "rss_samples": 310,
+      "rss_sum_sampled_max_bytes": 178913280
+    },
+    "run_id": "keli-runtime-20261113-r4-75604ea5",
+    "runtime": {
+      "build": {
+        "allocator": "jemalloc",
+        "embedded_core": true,
+        "hy2_brutal": true,
+        "hy2_ech": true,
+        "sing_box_version": "1.14.4",
+        "version": "0.1.387"
+      },
+      "children_reaped": 36,
+      "doctor_listener": true,
+      "leftover_processes_killed": 0,
+      "listeners_closed": true,
+      "no_remaining_children": true,
+      "ok": true,
+      "post_probe_doctor": true,
+      "protocol_retries": 0,
+      "socket_checks": [
+        {
+          "checked_sockets": 6,
+          "ok": true,
+          "phase": "before_probe",
+          "private_outbound_udp": [],
+          "violations": []
+        },
+        {
+          "checked_sockets": 8,
+          "ok": true,
+          "phase": "after_probe",
+          "private_outbound_udp": [
+            {
+              "address_class": "wildcard",
+              "family": 4,
+              "inode": 18260,
+              "owner": "node",
+              "port": 50620,
+              "protocol": "udp",
+              "state": "07"
+            }
+          ],
+          "violations": []
+        }
+      ],
+      "stderr_error_lines": 0,
+      "tcp_attempts": 1,
+      "tcp_exact_echo": true,
+      "udp_attempts": 1,
+      "udp_exact_datagrams": 2
+    },
+    "schema": 1,
+    "sing_box_sha256": "1264361b5f8868c8768f7555d3e77e20118bf503c41ac08bb290a0d99056aa3a",
+    "staged_inputs_verified": true,
+    "supervisor_stderr_error_lines": 0,
+    "temporary_files_removed": true
+  },
+  "github_used": false,
+  "guest_preflight": {
+    "architecture": "x86_64",
+    "bootstrap": {
+      "exit_code": 0,
+      "ok": true,
+      "phase": "complete",
+      "run_id": "keli-runtime-20261113-r4-75604ea5",
+      "schema": 1
+    },
+    "default_drop_ingress": true,
+    "kernel": "6.1.0-54-amd64",
+    "key_only_ssh": true,
+    "owner_verified": true,
+    "public_tcp_ports": [
+      "22"
+    ],
+    "ready": true,
+    "terminal": false
+  },
+  "independent_absence_interval_seconds": 9.803453,
+  "instance_seconds_from_dispatch_to_confirmation": 281.391775,
+  "kind": "single_host_real_linux_loopback_runtime_acceptance",
+  "known_legacy_local_compatibility": {
+    "exact_approved_fingerprint": true,
+    "exact_approved_missing_key_shape": true,
+    "explicit_all_closed": false,
+    "legacy_not_deployed": true,
+    "ok": true
+  },
+  "limitations": [
+    "One new Debian 12 Linode, fresh private loopback namespaces only; not WAN or mainland censorship evidence.",
+    "The four production mainland IPv4 targets were not probed and no WAN failure or DNS change was injected.",
+    "No full failover, candidate replacement or DNS/TTL propagation acceptance is established.",
+    "HY2 TCP/UDP is proven here; build-info flags do not prove ECH handshakes or Brutal activation.",
+    "No Rust test binary, mobile/GUI client, production accounting or capacity/peak-throughput acceptance.",
+    "RSS is sampled process-sum memory, not a true peak, leakage trend or 70000-user memory comparison.",
+    "Expected negative control diagnostics and exit statuses are successful assertions, not unexpected application failures.",
+    "R2 and R3 remain failed and closed; this new result does not reconstruct or reclassify their missing evidence."
+  ],
+  "local_regression": {
+    "checked_utc": "2026-11-13T10:21:06.944871+00:00",
+    "exit_code": 0,
+    "raw_output_retained": false,
+    "run_id": "keli-runtime-20261113-r4-75604ea5",
+    "skipped": 0,
+    "tests": 308
+  },
+  "maximum_new_instances": 1,
+  "next_step": "sync_reviewed_local_repair_and_R4_evidence_then_prepare_a_new_separately_approved_end_to_end_isolated_failover_scope",
+  "node_binary_sha256": "654a8344d22bc3373b114345d49d5f6a2804be98e6f51bc2ce85e309fbda0be0",
+  "overall_passed": true,
+  "previous_round_preservation": [
+    {
+      "directory": "linux-runtime-validation-20261113-r3-f83a2fa4",
+      "original_failure_not_reclassified": true,
+      "regular_files_unchanged": 58
+    },
+    {
+      "directory": "linux-runtime-validation-20261113-r2-27de97aa-preparation-v3",
+      "original_failure_not_reclassified": true,
+      "regular_files_unchanged": 52
+    }
+  ],
+  "processes": {
+    "bootstrap": {
+      "ended_utc": "2026-11-13T10:26:52.104556+00:00",
+      "exit_code": 0,
+      "raw_output_retained": false,
+      "run_id": "keli-runtime-20261113-r4-75604ea5",
+      "script": "child_bootstrap_validate.py",
+      "stderr_bytes": 0,
+      "stdout_bytes": 4813,
+      "unit": "keli-runtime-r4-75604ea5-bootstrap"
+    },
+    "controls": {
+      "ended_utc": "2026-11-13T10:28:01.699246+00:00",
+      "exit_code": 0,
+      "raw_output_retained": false,
+      "run_id": "keli-runtime-20261113-r4-75604ea5",
+      "script": "control_validate.py",
+      "stderr_bytes": 0,
+      "stdout_bytes": 2345,
+      "unit": "keli-runtime-r4-75604ea5-controls"
+    },
+    "functional": {
+      "ended_utc": "2026-11-13T10:27:31.591967+00:00",
+      "exit_code": 0,
+      "raw_output_retained": false,
+      "run_id": "keli-runtime-20261113-r4-75604ea5",
+      "script": "remote_validate.py",
+      "stderr_bytes": 0,
+      "stdout_bytes": 3851,
+      "unit": "keli-runtime-r4-75604ea5-functional"
+    }
+  },
+  "production_business_queues_dns_defaults_or_automatic_switches_changed": false,
+  "production_node_upgraded_or_restarted": false,
+  "production_safety_observations": {
+    "machine_acceptance.allow_dns": "closed",
+    "machine_acceptance.allow_verification": "closed",
+    "machine_failover.allow_replacement": "closed",
+    "machine_failover.allow_rotation": "missing",
+    "machine_failover.runner_enabled": "missing",
+    "machine_provision.allow_live": "closed"
+  },
+  "projection_evidence": {
+    "report_roundtrips": {
+      "child-bootstrap-result.json": true,
+      "control-result.json": true,
+      "runtime-result.json": true
+    },
+    "runtime_collector_proof_persisted": true,
+    "synthetic_smoke": {
+      "completed": 12,
+      "kernel_test_executed": false,
+      "ok": true
+    }
+  },
+  "replay_allowed": false,
+  "run_id": "keli-runtime-20261113-r4-75604ea5",
+  "run_started_utc": "2026-11-13T10:23:40.628874+00:00",
+  "schema": 1,
+  "source_result_sha256": "a5a528084929838c60cf25e63941b1eb8666b963d9eddc58e8dae38658133dc7",
+  "status": "passed_closed_cleanup_confirmed",
+  "syntax_checks": {
+    "php_executable_sha256": "2f372d8bcd4dd20ac60b223cadeb1c5ddb5994725dd244108cd67e25ed5bab96",
+    "php_exit": 0,
+    "shell_executable_sha256": "c6c8f31cbf913a7d50c60a37319197b180d2cc497951f20d67dcd4743a6cfed2",
+    "shell_exit": 0
+  },
+  "tanzhen_accessed": false
+}

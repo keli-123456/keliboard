@@ -68,6 +68,13 @@ CLASSES |= frozenset({'Exception', 'CalledProcessError', 'ChildProcessError', 'F
 FRAME_FILES = frozenset({'remote_validate.py', 'runtime_diagnostics.py', 'iputils_namespace.py',
     'test_entry_probe_iputils.py', 'entry_probe_diagnostics.py', 'bootstrap_diagnostics.py', 'subprocess.py'})
 MAX_ERRORS = 8
+ISOLATION_FLAGS = ('independent_network_namespace', 'private_pid_namespace', 'only_loopback',
+                   'child_non_root', 'no_new_privileges')
+IPUTILS_CLEANUP_FLAGS = ('temporary_directory_removed', 'owned_firewall_removed', 'no_remaining_children')
+IPUTILS_PACKET_BUDGETS = {'echo': (1,), 'no_reply': (1,), 'four_no_reply_targets': (4,),
+    'legacy_deadline_reference': (1, 2, 3, 4), 'forced_timeout_reaps_real_ping': (1,),
+    'permission_denied_is_not_packet_loss': (0,)}
+SEMVER = re.compile(r'[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?')
 
 
 class DiagnosticError(RuntimeError):
@@ -174,10 +181,61 @@ def inherit_errors(report, source, stage):
                 remember_error(report, item, stage)
 
 
+def remember_projected_error(report, error, stage):
+    """Projection is a summary, not a second occurrence of an existing error."""
+    item = project_error(error, stage)
+    first = report.get('first_error')
+    if not isinstance(first, dict):
+        report['first_error'] = item
+    elif item != first and item not in report.get('secondary_errors', []):
+        secondary = report.setdefault('secondary_errors', [])
+        if len(secondary) < MAX_ERRORS:
+            secondary.append(item)
+        else:
+            report['secondary_errors_truncated'] = True
+    report['ok'] = False
+    report['error_code'] = report['first_error']['reason']
+    if 'error_class' in report['first_error']:
+        report['error_class'] = report['first_error']['error_class']
+
+
+def inherit_projected_errors(report, source, stage):
+    if not isinstance(source, dict):
+        return
+    first = source.get('first_error')
+    if first is not None:
+        remember_projected_error(report, first if isinstance(first, dict) else
+                                 {'reason': 'report_missing_or_invalid'}, stage)
+    elif any(key in source for key in ('error_code', 'reason', 'error_class')):
+        remember_projected_error(report, source, stage)
+    secondary = source.get('secondary_errors', [])
+    if not isinstance(secondary, list):
+        remember_projected_error(report, {'reason': 'report_missing_or_invalid'}, stage)
+    else:
+        for item in secondary[:MAX_ERRORS]:
+            remember_projected_error(report, item if isinstance(item, dict) else
+                                     {'reason': 'report_missing_or_invalid'}, stage)
+        if len(secondary) > MAX_ERRORS:
+            report['secondary_errors_truncated'] = True
+    if 'secondary_errors_truncated' in source:
+        truncated = source['secondary_errors_truncated']
+        if type(truncated) is not bool or truncated and 'first_error' not in report:
+            remember_projected_error(report, {'reason': 'report_missing_or_invalid'}, stage)
+        if truncated is True:
+            report['secondary_errors_truncated'] = True
+            report['ok'] = False
+    if 'secondary_errors_dropped' in source:
+        dropped = count(source['secondary_errors_dropped'], 65535)
+        report['secondary_errors_dropped'] = dropped
+        if dropped is None or dropped and 'first_error' not in report:
+            remember_projected_error(report, {'reason': 'report_missing_or_invalid'}, stage)
+        if dropped:
+            report['ok'] = False
+
+
 def isolation_verified(value):
-    return isinstance(value, dict) and all(value.get(key) is True for key in (
-        'independent_network_namespace', 'private_pid_namespace', 'only_loopback', 'child_non_root',
-        'no_new_privileges')) and type(value.get('external_routes')) is int and value['external_routes'] == 0 \
+    return isinstance(value, dict) and all(value.get(key) is True for key in ISOLATION_FLAGS) \
+        and type(value.get('external_routes')) is int and value['external_routes'] == 0 \
         and type(value.get('child_capabilities')) is int and value['child_capabilities'] == 0
 
 
@@ -185,13 +243,21 @@ def project_iputils(value):
     out = {'ok': False, 'cases': [], 'cases_complete': False, 'cleanup_verified': False,
            'isolation_verified': False, 'rust_test_executed': False, 'validation_errors': []}
     if not isinstance(value, dict):
-        remember_error(out, {'reason': 'iputils_report_invalid'}, 'iputils_projection')
-        return out
-    inherit_errors(out, value, 'iputils')
+        remember_projected_error(out, {'reason': 'iputils_report_invalid'}, 'iputils_projection')
+        value = {}
+    inherit_projected_errors(out, value, 'iputils')
     if value.get('current_case') in IPUTILS_CASES:
         out['current_case'] = value['current_case']
     rows = value.get('cases', [])
-    out['cases_complete'] = isinstance(rows, list) and [row.get('case') if isinstance(row, dict) else None for row in rows] == list(IPUTILS_CASES)
+    reported_count = count(len(rows), 65535) if isinstance(rows, list) else None
+    if 'reported_case_count' in value:
+        previous_count = count(value['reported_case_count'], 65535)
+        reported_count = previous_count if reported_count is not None and previous_count is not None and previous_count >= reported_count else None
+    # Retain original cardinality when filtering unknown rows; filtering cannot repair completeness.
+    out['reported_case_count'] = reported_count
+    out['cases_complete'] = (reported_count == len(IPUTILS_CASES) and isinstance(rows, list)
+        and len(rows) == len(IPUTILS_CASES)
+        and [row.get('case') if isinstance(row, dict) else None for row in rows] == list(IPUTILS_CASES))
     if not out['cases_complete']:
         out['validation_errors'].append('six_iputils_cases_required')
     for row in rows[:8] if isinstance(rows, list) else []:
@@ -200,32 +266,87 @@ def project_iputils(value):
         summary = {'case': row['case'], 'ok': False}
         for key in ('tests', 'skipped', 'errors', 'failures', 'kernel_echo_requests', 'expected_packets'):
             summary[key] = count(row.get(key), 4)
+        summary['packet_counter_matches'] = row.get('packet_counter_matches') is True
+        summary['no_remaining_children'] = row.get('no_remaining_children') is True
         summary['ok'] = (row.get('ok') is True and summary['tests'] == 1 and summary['skipped'] == 0
             and summary['errors'] == 0 and summary['failures'] == 0
             and summary['kernel_echo_requests'] is not None and summary['expected_packets'] is not None
             and summary['kernel_echo_requests'] == summary['expected_packets']
-            and row.get('packet_counter_matches') is True and row.get('no_remaining_children') is True)
-        inherit_errors(summary, row, 'case_execution')
+            and summary['expected_packets'] in IPUTILS_PACKET_BUDGETS[row['case']]
+            and summary['packet_counter_matches'] and summary['no_remaining_children'])
+        inherit_projected_errors(summary, row, 'case_execution')
+        if summary['expected_packets'] is not None and summary['expected_packets'] not in IPUTILS_PACKET_BUDGETS[row['case']]:
+            remember_projected_error(summary, {'reason': 'iputils_packet_count_invalid', 'case': row['case']}, 'case_counter')
         if not summary['ok'] and 'first_error' not in summary:
-            remember_error(summary, {'reason': 'iputils_case_failed', 'case': row['case']}, 'case_execution')
+            remember_projected_error(summary, {'reason': 'iputils_case_failed', 'case': row['case']}, 'case_execution')
         out['cases'].append(summary)
     cleanup = value.get('cleanup', {})
-    out['cleanup_verified'] = isinstance(cleanup, dict) and all(cleanup.get(key) is True for key in (
-        'temporary_directory_removed', 'owned_firewall_removed', 'no_remaining_children'))
-    out['isolation_verified'] = isolation_verified(value.get('isolation'))
+    out['cleanup'] = {key: isinstance(cleanup, dict) and cleanup.get(key) is True for key in IPUTILS_CLEANUP_FLAGS}
+    out['cleanup_verified'] = all(out['cleanup'].values())
+    isolation = value.get('isolation', {})
+    isolation = isolation if isinstance(isolation, dict) else {}
+    out['isolation'] = {key: isolation.get(key) is True for key in ISOLATION_FLAGS}
+    out['isolation'].update(external_routes=count(isolation.get('external_routes'), 65535),
+                            child_capabilities=count(isolation.get('child_capabilities'), 2**64 - 1))
+    out['isolation_verified'] = isolation_verified(out['isolation'])
     if not out['cleanup_verified']:
         out['validation_errors'].append('iputils_cleanup_unverified')
     if not out['isolation_verified']:
         out['validation_errors'].append('iputils_isolation_unverified')
     for row in out['cases']:
         if not row['ok']:
-            inherit_errors(out, row, 'case_execution')
+            inherit_projected_errors(out, row, 'case_execution')
     for reason in out['validation_errors']:
-        remember_error(out, {'reason': reason}, 'iputils_projection')
+        remember_projected_error(out, {'reason': reason}, 'iputils_projection')
     if value.get('ok') is not True and 'first_error' not in out:
-        remember_error(out, {'reason': 'iputils_child_failed'}, 'iputils')
+        remember_projected_error(out, {'reason': 'iputils_child_failed'}, 'iputils')
     out['ok'] = (value.get('ok') is True and out['cases_complete'] and all(row['ok'] for row in out['cases'])
                  and out['cleanup_verified'] and out['isolation_verified'] and 'first_error' not in out)
+    return out
+
+
+def project_runtime(value):
+    """Revalidate the HY2 child proof at supervisor, collector and control admission."""
+    out = {'ok': False}
+    if not isinstance(value, dict):
+        remember_projected_error(out, {'reason': 'report_missing_or_invalid'}, 'runtime_projection')
+        value = {}
+    inherit_projected_errors(out, value, 'runtime')
+    flags = ('doctor_listener', 'post_probe_doctor', 'tcp_exact_echo', 'no_remaining_children', 'listeners_closed')
+    out.update({key: value.get(key) is True for key in flags})
+    for key in ('tcp_attempts', 'udp_attempts', 'udp_exact_datagrams', 'protocol_retries',
+                'children_reaped', 'stderr_error_lines', 'leftover_processes_killed'):
+        out[key] = count(value.get(key), 100000)
+        if out[key] is None:
+            remember_projected_error(out, {'reason': 'runtime_report_counter_invalid'}, 'runtime_projection')
+    build = value.get('build', {})
+    if (isinstance(build, dict) and isinstance(build.get('version'), str) and SEMVER.fullmatch(build['version'])
+            and all(build.get(key) is True for key in ('embedded_core', 'hy2_ech', 'hy2_brutal'))
+            and build.get('allocator') == 'jemalloc' and build.get('sing_box_version') == '1.14.4'):
+        out['build'] = {key: build[key] for key in ('version', 'embedded_core', 'hy2_ech', 'hy2_brutal',
+                                                  'allocator', 'sing_box_version')}
+    elif build:
+        remember_projected_error(out, {'reason': 'runtime_build_report_invalid'}, 'runtime_projection')
+    out['socket_checks'] = []
+    try:
+        checks = value.get('socket_checks', [])
+        if not isinstance(checks, list) or len(checks) > 2:
+            raise DiagnosticError('socket_table_invalid')
+        out['socket_checks'] = [project_socket_check(item) for item in checks]
+    except BaseException as error:
+        remember_projected_error(out, error, 'runtime_projection')
+    complete = (all(out[key] for key in flags) and 'build' in out
+        and all(out[key] is not None for key in ('tcp_attempts', 'udp_attempts', 'udp_exact_datagrams',
+            'protocol_retries', 'children_reaped', 'stderr_error_lines', 'leftover_processes_killed'))
+        and (out['tcp_attempts'], out['udp_attempts'], out['udp_exact_datagrams'],
+             out['protocol_retries'], out['leftover_processes_killed']) == (1, 1, 2, 0, 0)
+        and [item['phase'] for item in out['socket_checks']] == ['before_probe', 'after_probe']
+        and all(item['ok'] for item in out['socket_checks']))
+    out['ok'] = value.get('ok') is True and complete and 'first_error' not in out
+    if not out['ok'] and 'first_error' not in out:
+        remember_projected_error(out, {'reason': 'incomplete_runtime_evidence'}, 'runtime_projection')
+    if value.get('first_error_persisted') is True:
+        out['first_error_persisted'] = True
     return out
 
 
