@@ -69,6 +69,23 @@ class MachineFailoverTriggerPreviewTest extends MachineFailoverShadowTest
         $this->assertSame(2, Preview::query()->where('member_id', $old->member_id)->whereNotNull('episode_key')->count());
         $this->assertSame('cancelled', $old->fresh()->decision); Http::assertNothingSent(); Bus::assertNothingDispatched();
     }
+    public function test_cold_start_failure_episode_can_be_previewed_once_without_any_live_intent(): void
+    {
+        config(['machine_failover.observe_enabled' => true]); $this->enablePreview();
+        $this->sample(0, false); $this->collectPreview();
+        $this->assertNotContains('would_start', Preview::query()->pluck('decision')->all());
+        $this->tick(); $this->sample(0, false); $this->collectPreview();
+        $row = Preview::query()->where('decision', 'would_start')->firstOrFail();
+        $plan = \App\Models\MachineFailoverPlan::query()->where('policy_id', $row->policy_id)->firstOrFail();
+        $this->assertNull($plan->evidence['baseline_at']); $this->assertSame($plan->evidence['episode_key'], $row->episode_key);
+        $before = $this->businessState(); $this->collectPreview();
+        $this->assertSame($before, $this->businessState());
+        $this->assertSame(1, Preview::query()->where('decision', 'would_start')->count());
+        $this->tick(); $this->sample(0, false); $this->collectPreview();
+        $this->assertSame($row->id, Preview::query()->where('decision', 'would_start')->firstOrFail()->id);
+        $this->assertSame(0, DB::table('v2_machine_failover_execution')->count());
+        Http::assertNothingSent(); Bus::assertNothingDispatched();
+    }
     public function test_missing_or_insufficient_cost_evidence_does_not_block_or_reserve_money(): void
     {
         $this->trigger(); $this->enablePreview(); $this->finance->value['available_cents'] = 3999;

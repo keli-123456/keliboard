@@ -107,7 +107,8 @@ class MachineFailoverTriggerPreview
             ->where('status', 'blocked')->latest('id')->first();
         $row = MachineFailoverObservation::query()->where('policy_id', $member['policy_id'])->where('policy_revision', $member['policy_revision'])->latest('id')->first();
         if (!$row || !$plan || $row->installation_id !== $source['installation_id'] || $row->checked_at !== $source['checked_at']
-            || !$row->threshold_reached || !$row->first_failure_at || $row->baseline_at === null) return null;
+            || $row->state !== 'failed' || !$row->threshold_reached || $row->consecutive_failures < $source['required_failures']
+            || !$row->first_failure_at || $row->first_failure_at > $row->checked_at) return null;
         $expected = hash('sha256', json_encode([$member['policy_id'], $member['policy_revision'], $row->context_key, $row->baseline_at, $row->first_failure_at], JSON_THROW_ON_ERROR));
         return is_string($plan->evidence['episode_key'] ?? null) && hash_equals($expected, $plan->evidence['episode_key']) ? $plan : null;
     }

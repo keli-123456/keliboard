@@ -148,7 +148,7 @@ class MachineFailoverServicesTest extends TestCase
     public static function outcomes(): array
     {
         return [['healthy', 'completed', 'healthy', 0], ['replace', 'completed', 'completed', 1], ['one_target_reachable', 'completed', 'healthy', 0],
-            ['no_baseline', 'failed', 'blocked', 0], ['unknown_probe', 'failed', 'blocked', 0], ['stale_probe', 'failed', 'blocked', 0],
+            ['no_baseline', 'completed', 'completed', 1], ['unknown_probe', 'failed', 'blocked', 0], ['stale_probe', 'failed', 'blocked', 0],
             ['recover_before_create', 'completed', 'recovered', 0], ['recover_after_create', 'completed', 'retained', 1],
             ['create_rejected', 'failed', 'failed', 1], ['create_unknown_found', 'completed', 'completed', 1], ['create_ambiguous', 'needs_review', 'needs_review', 1],
             ['initialization_timeout', 'failed', 'failed', 1], ['reports_mismatch', 'failed', 'failed', 1], ['ipv4_unreachable', 'failed', 'failed', 1],
@@ -166,7 +166,7 @@ class MachineFailoverServicesTest extends TestCase
         $this->assertSame(0, Action::query()->where('member_id', 2)->count());
         $this->assertSame($result['id'], $this->start($scenario)['id']);
         $this->assertSame($result, $this->simulation->advance($result['id'], $this->admin->id));
-        if ($scenario === 'replace') $this->assertSame(['create', 'initialize', 'reports', 'ipv4', 'forwarding', 'prepare_dns', 'switch_dns', 'verify_dns'], array_column($result['actions'], 'kind'));
+        if (in_array($scenario, ['replace', 'no_baseline'], true)) $this->assertSame(['create', 'initialize', 'reports', 'ipv4', 'forwarding', 'prepare_dns', 'switch_dns', 'verify_dns'], array_column($result['actions'], 'kind'));
         foreach (['synthetic-cloud-secret', 'synthetic-dns-secret', 'synthetic-machine-secret', 'receipt', 'context_hash', 'root_pass'] as $secret) $this->assertStringNotContainsString($secret, json_encode($result));
         $this->untouched();
     }

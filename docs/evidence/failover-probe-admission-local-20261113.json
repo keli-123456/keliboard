@@ -1,0 +1,93 @@
+{
+  "schema": 1,
+  "date": "2026-11-13",
+  "verdict": "passed_local_regression_only",
+  "base_commits": {
+    "keliboard": "7994cdb05b0e3320fad1bf6babfeecbbd14d3d14",
+    "keli_admin": "6b2b2c12ddf332592924c443a166c697b2e57544"
+  },
+  "scope": {
+    "source_previous_healthy_required": false,
+    "controller_mainland_echo_required": false,
+    "consecutive_failure_threshold_preserved": true,
+    "sample_identity_freshness_completeness_preserved": true,
+    "candidate_reachability_and_forwarding_required": true,
+    "execution_gates_and_stop_controls_preserved": true,
+    "nullable_baseline_kept_for_audit": true,
+    "episode_hash_format_unchanged": true,
+    "kelinode_rs_modified": false
+  },
+  "tests": {
+    "php": {
+      "filter": "Machine(Failover|Replacement|Acceptance|EntryProbe)",
+      "database": "isolated_in_memory_sqlite",
+      "cloud_dns_verifier": "mocked_transports",
+      "queue": "in_process_bus_fake",
+      "tests": 631,
+      "assertions": 9473,
+      "failures": 0,
+      "errors": 0,
+      "temporary_cli_memory_limit_mib": 768
+    },
+    "python": {
+      "suite": "existing_windows_acceptance_tools_list_with_controller_readiness",
+      "tests": 355,
+      "passed": 329,
+      "skipped": 26,
+      "failures": 0,
+      "errors": 0,
+      "skip_limit": "platform_and_runtime_prerequisites_not_satisfied_on_windows"
+    },
+    "admin": {
+      "files": 5,
+      "tests": 56,
+      "failures": 0,
+      "build": "passed",
+      "single_bundle_gate": "passed",
+      "javascript_bytes": 4674428,
+      "css_bytes": 570854,
+      "bundle_limits_modified": false
+    }
+  },
+  "verified_scenarios": [
+    "initially_unreachable_source_waits_for_distinct_consecutive_samples",
+    "null_baseline_episode_qualifies_shadow_and_trigger_preview_without_dispatch",
+    "native_mocked_chain_requires_candidate_health_forwarding_and_owned_dns",
+    "unreachable_candidate_cannot_reach_forwarding_or_dns",
+    "invalid_forwarding_receipt_cannot_authorize_dns",
+    "duplicates_gaps_unknown_errors_partial_foreign_and_expired_reports_do_not_accumulate",
+    "old_healthy_metadata_is_not_a_current_failure_admission_requirement",
+    "source_recovery_and_episode_deduplication_remain_effective",
+    "controller_zero_echoes_does_not_block_mocked_source_installation",
+    "missing_control_pipeline_or_security_checks_still_blocks",
+    "changed_readiness_helper_cannot_reuse_frozen_input_pins"
+  ],
+  "closed_r13": {
+    "run_id": "keli-accept-20261113-r13-7994cdb0",
+    "frozen_files_checked": 94,
+    "digest_mismatches": 0,
+    "outcome": "unchanged_blocked_not_passed",
+    "outcome_sha256": "727c5d1290007d4e40fe3044a4b81bcb87faf5929fff3e1132190009bc714c78",
+    "imported_or_executed": false
+  },
+  "operational_boundary": {
+    "live_cloud_requests": 0,
+    "live_dns_requests": 0,
+    "ssh_connections": 0,
+    "production_database_connections": 0,
+    "production_deployments": 0,
+    "new_cloud_instances": 0,
+    "production_queues_modified": false,
+    "automatic_switches_modified": false,
+    "tanzhen_modified_or_executed": false,
+    "github_used": false,
+    "committed_or_pushed": false
+  },
+  "limitations": [
+    "This is Windows-local regression, not new Linux or live-cloud acceptance.",
+    "Real HY2 forwarding, public ICMP and DNS propagation were not retested.",
+    "The canonical installation driver uses shared control-plane readiness predicates; a future full-round driver must be generated and frozen under a new approved scope.",
+    "A controlled fault-injection scenario still needs a healthy source before injection; operational source admission does not.",
+    "Historical approved scopes, closed outcomes and previous automatic-switch settings are not changed."
+  ]
+}

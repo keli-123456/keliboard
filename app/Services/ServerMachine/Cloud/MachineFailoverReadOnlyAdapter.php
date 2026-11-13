@@ -33,15 +33,16 @@ class MachineFailoverReadOnlyAdapter
         $same = $current['evidence_current'] && $row && ($probe['context_key'] ?? null) === $row->context_key
             && $row->installation_id === $source['installation_id'] && $row->checked_at === $source['checked_at']
             && $row->state === $signal && $row->valid_until >= $now && $row->observed_at <= $now
-            && $row->baseline_at !== null && $row->baseline_at <= $row->checked_at
-            && ($signal === 'healthy' || ($row->first_failure_at !== null && $row->first_failure_at >= $row->baseline_at
-                && $row->first_failure_at <= $row->checked_at && $row->first_failure_at - $row->baseline_at <= $policy->stale_after_seconds));
+            && ($row->baseline_at === null || ($row->baseline_at > 0 && $row->baseline_at <= $row->checked_at))
+            && ($signal === 'healthy' || ($signal === 'failed' && $row->consecutive_failures > 0
+                && $row->first_failure_at > 0 && $row->first_failure_at <= $row->checked_at
+                && ($row->baseline_at === null || $row->first_failure_at >= $row->baseline_at)));
         if ($same) {
             $source['evidence_current'] = true; $source['failures'] = $row->consecutive_failures;
             $source['evidence_reason'] = 'collected';
             $source['baseline_at'] = $row->baseline_at;
             $source['threshold_reached'] = $signal === 'failed' && $row->threshold_reached && $row->consecutive_failures >= $policy->failure_threshold;
-        } elseif ($current['evidence_current'] && $row?->baseline_at !== null) $source['evidence_reason'] = 'source_unverified';
+        } elseif ($current['evidence_current'] && $row) $source['evidence_reason'] = 'source_unverified';
         $blockers = [];
         $author = \App\Models\User::query()->find($policy->getRawOriginal('updated_by'), ['id', 'is_admin', 'banned']);
         if (!$author || !$author->is_admin || $author->banned) $blockers[] = 'permission_revoked';

@@ -8,9 +8,8 @@ import time
 import uuid
 from driver_journal import DriverJournal, Rejected, safe_error
 from application_bundle import inspect_archive
+from controller_readiness import BOOT_CHECKS as READY, boot_ready, pipeline_ready
 
-READY = ('owner_matches', 'bootstrap_ready', 'cloud_init_done', 'php_ready', 'docker_ready',
-         'firewall_ready', 'ssh_key_only', 'public_http_80_closed')
 GATES = ('creation', 'runner', 'replacement', 'rotation', 'dns', 'verification')
 TERMINAL = {'failed', 'needs_review', 'cancelled', 'stopped', 'rejected', 'retained', 'retry_ready'}
 REQUIRED = {'authorization.json', 'campaign.py', 'read_only.py', 'discover.php', 'preflight.php', 'install_runner.py',
@@ -19,7 +18,7 @@ REQUIRED = {'authorization.json', 'campaign.py', 'read_only.py', 'discover.php',
             'node.py', 'controller.py', 'live_operator.py', 'staging_control.py', 'certificate.py', 'certificate_dns.php',
             'control_setup.py', 'control_transfer.py', 'control_run.py', 'production_guard.py', 'finalize_local.py',
             'http_smoke.php', 'test_router.php', 'staging.py', 'worker.py', 'install_only_runner.py', 'driver_journal.py',
-            'application_bundle.py'}
+            'application_bundle.py', 'controller_readiness.py'}
 CLOSED_ROUNDS = {'keli-accept-20261112-r7-8c3a3d2c', 'keli-accept-20261112-r6-f7e61713'}
 FORBIDDEN_FLAGS = ('production_deployment', 'production_database_writes', 'production_queue_changes',
                    'production_automatic_creation', 'production_automatic_rotation', 'production_dns_switch',
@@ -182,7 +181,7 @@ class InstallRunner:
             path = self.campaign.BASE / name
             require(path.is_file() and not path.is_symlink() and path.name == name
                     and hashlib.sha256(path.read_bytes()).hexdigest() == pin, 'frozen_file_changed')
-        for name in ('driver_journal.py', 'install_only_runner.py', 'application_bundle.py'):
+        for name in ('driver_journal.py', 'install_only_runner.py', 'application_bundle.py', 'controller_readiness.py'):
             require(hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
                     == offline['file_digests'][name], 'loaded_local_io_tool_changed')
         inspect_archive(self.campaign.BASE / 'application.tar.gz')
@@ -213,13 +212,13 @@ class InstallRunner:
         while self.wall() < deadline:
             self.progress('control_boot')
             state = self.campaign.status()
-            if state.get('ok') is True and all(state.get(key) is True for key in READY):
+            if boot_ready(state):
                 break
             self.pause()
         else:
             raise Refused('control_boot_timeout')
         prepared = self.call('control_pipeline', self.mod('controller').control_ready)
-        require(prepared.get('control_ready') is True, 'control_pipeline_incomplete')
+        require(pipeline_ready(prepared), 'control_pipeline_incomplete')
         self.outcome['control_installation_passed'] = True
 
     def source_task(self, value):

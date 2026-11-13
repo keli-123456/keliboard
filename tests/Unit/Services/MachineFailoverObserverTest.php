@@ -144,12 +144,24 @@ class MachineFailoverObserverTest extends TestCase
         Http::assertNothingSent(); Bus::assertNothingDispatched();
     }
 
-    public function test_first_reports_without_a_healthy_baseline_cannot_create_a_plan(): void
+    public function test_initially_unreachable_source_reaches_threshold_without_a_healthy_baseline(): void
     {
         $this->assertSame('initialization_required', $this->observe()['reason']);
-        for ($i = 0; $i < 4; $i++) { $this->report(); $last = $this->observe(); $this->tick(); }
+        $this->report(); $first = $this->observe();
+        $this->assertSame(1, $first['consecutive_failures']); $this->assertFalse($first['threshold_reached']);
+        for ($i = 0; $i < 3; $i++) $this->assertSame($first['id'], $this->observe()['id']);
+        $this->assertSame(0, Plan::query()->count());
+        for ($i = 0; $i < 3; $i++) { $this->tick(); $this->report(); $last = $this->observe(); }
         $this->assertSame(4, $last['consecutive_failures']); $this->assertNull($last['baseline_at']);
-        $this->assertFalse($last['threshold_reached']); $this->assertSame(0, Plan::query()->count());
+        $this->assertTrue($last['threshold_reached']); $this->assertSame(1, Plan::query()->count());
+        $view = $this->observer->summary($this->policy, $this->clock);
+        $this->assertSame('ipv4_all_failed', $view['reason']); $this->assertTrue($view['evidence_current']);
+        $this->assertTrue($view['threshold_reached']);
+        $this->assertSame('blocked', $view['plan']['status']);
+        $this->assertContains('execution_disabled', $view['plan']['blockers']);
+        $this->tick(); $this->report(true); $this->observe();
+        $this->assertSame('recovered', Plan::query()->firstOrFail()->closed_reason);
+        $this->assertSame(0, MachineProvisionTask::query()->count()); Http::assertNothingSent(); Bus::assertNothingDispatched();
     }
 
     public function test_distinct_failed_rounds_make_one_blocked_plan_and_recovery_closes_it(): void
@@ -188,12 +200,12 @@ class MachineFailoverObserverTest extends TestCase
         $this->assertSame(0, Plan::query()->count());
     }
 
-    public static function uncertainSources(): array { return [['legacy'], ['foreign'], ['ipv6'], ['multiple'], ['future'], ['disabled']]; }
+    public static function uncertainSources(): array { return [['legacy'], ['foreign'], ['ipv6'], ['multiple'], ['future'], ['disabled'], ['error'], ['unknown'], ['partial']]; }
 
     #[DataProvider('uncertainSources')]
     public function test_uncertain_identity_or_probe_sources_cannot_establish_failures(string $case): void
     {
-        $this->baseline();
+        $this->report(); $this->observe(); $this->tick();
         $config = app(MachineEntryProbe::class)->configuration();
         $targets = array_map(fn ($target) => ['id' => $target['id'], 'status' => 'unreachable'], $config['targets']);
         if ($case === 'foreign') $targets = array_map(fn ($row) => $row + ['source_ip' => '8.8.4.4'], $targets);
@@ -205,6 +217,12 @@ class MachineFailoverObserverTest extends TestCase
             $this->inventory->record($this->machine, $this->installation, ['public_ipv6' => '2606:4700:4700::1111'], $this->clock);
         }
         if ($case === 'disabled') $this->settings->values['server_entry_probe_enable'] = false;
+        if (in_array($case, ['error', 'unknown', 'partial'], true)) {
+            $targets = array_map(fn ($row) => $row + ['source_ip' => '8.8.8.8'], $targets);
+            if ($case === 'partial') array_pop($targets);
+            else $targets[0]['status'] = $case;
+            $this->report(false, ['targets' => $targets]);
+        }
         $row = $this->observe(); $this->assertSame('unknown', $row['state']);
         $this->assertSame(0, $row['consecutive_failures']); $this->assertFalse($row['threshold_reached']);
         $this->assertSame(0, Plan::query()->count()); Http::assertNothingSent(); Bus::assertNothingDispatched();

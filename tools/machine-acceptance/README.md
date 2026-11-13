@@ -3,9 +3,26 @@
 This is a disabled-by-default worker, not the IP-blocking detector. Independent
 failover primarily consumes the existing source-attributed mainland IPv4 ICMP
 reports: any configured target reachable is healthy; complete consecutive failed
-rounds with a same-context healthy baseline can reach the policy threshold.
+rounds from the same verified source can reach the policy threshold, including
+a source that has never reported healthy. A previous healthy report is optional
+audit metadata, not an admission gate.
 Unknown, expired, foreign-source and IPv6 reports do not establish that verdict.
 The worker below checks a **new candidate's forwarding before DNS cutover** only.
+
+Fresh acceptance drivers must use `controller_readiness.boot_ready` and
+`controller_readiness.pipeline_ready` for the controller's system/security and
+control-pipeline checks. Mainland ICMP success is not a controller prerequisite;
+optional Ping diagnostics are evidence only. The canonical installation runner
+uses these predicates and pins this helper in its frozen inputs. Per-round
+three-role drivers must be regenerated and frozen under a new approved scope;
+closed drivers and their prior outcomes must never be patched or replayed.
+
+An already-unreachable source may qualify from fresh, complete, consecutive
+all-target failures. A *controlled fault-injection test* still needs a healthy
+source before injection so that it measures an actual transition; this is a
+scenario condition, not the operational failover rule. Candidate reachability,
+identity-bound TCP/UDP receipts, DNS ownership and execution gates are unchanged.
+See [probe admission rules](../../docs/machine-failover-probe-admission.md).
 
 ## Runtime Boundary
 

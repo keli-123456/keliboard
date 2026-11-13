@@ -142,17 +142,47 @@ class MachineFailoverShadowTest extends TestCase
         for ($i = 0; $i < 3; $i++) $this->assertSame(2, $this->view()['members'][0]['source']['failures']);
         $this->assertSame($before, $this->database());
     }
-    public function test_no_baseline_or_an_uncollected_new_report_cannot_reuse_a_trigger(): void
+    public function test_initially_unreachable_source_qualifies_but_an_uncollected_new_report_does_not(): void
     {
         config(['machine_failover.observe_enabled' => true]);
-        foreach ([0, 1] as $i) $this->sample($i, false); $this->tick();
         foreach ([0, 1] as $i) $this->sample($i, false);
-        $view = $this->view(); $this->assertSame('insufficient_evidence', $view['members'][0]['decision']);
-        $this->assertSame('healthy_baseline_required', $view['members'][0]['source']['evidence_reason']);
-        $this->assertSame(0, $view['planned_attempts']);
-        $this->tick(); $this->trigger(); $this->tick(); $this->sample(0, false, false);
+        $this->assertSame('awaiting_samples', $this->view()['members'][0]['decision']); $this->tick();
+        foreach ([0, 1] as $i) $this->sample($i, false);
+        $view = $this->view(); $this->assertSame('would_replace', $view['members'][0]['decision']);
+        $this->assertSame('collected', $view['members'][0]['source']['evidence_reason']);
+        $this->assertNull($view['members'][0]['source']['baseline_at']);
+        $this->assertSame(1, $view['planned_attempts']);
+        $this->assertFalse($view['dispatch_allowed']);
+        $this->tick(); $this->sample(0, false, false);
         $view = $this->view(); $this->assertSame('insufficient_evidence', $view['members'][0]['decision']);
         $this->assertNull($view['members'][0]['source']['failures']);
+        Http::assertNothingSent(); Bus::assertNothingDispatched();
+    }
+    public function test_an_old_healthy_observation_is_not_a_freshness_requirement_for_a_new_failure_streak(): void
+    {
+        config(['machine_failover.observe_enabled' => true]); $this->sample(0, true); $this->tick(301);
+        $this->sample(0, false); $this->tick(); $this->sample(0, false);
+        $source = $this->view()['members'][0]['source'];
+        $this->assertTrue($source['evidence_current']); $this->assertTrue($source['threshold_reached']);
+        $this->assertSame('would_replace', $this->view()['members'][0]['decision']);
+        Http::assertNothingSent(); Bus::assertNothingDispatched();
+    }
+    public function test_no_healthy_baseline_does_not_relax_failure_timestamp_or_source_ownership_checks(): void
+    {
+        config(['machine_failover.observe_enabled' => true]);
+        $this->sample(0, false); $this->tick(); $this->sample(0, false);
+        $row = Observation::query()->where('policy_id', $this->policies[0]->id)->latest('id')->firstOrFail();
+        $first = $row->first_failure_at;
+        foreach ([null, 0, $row->checked_at + 1] as $invalid) {
+            $row->fill(['first_failure_at' => $invalid])->save();
+            $source = $this->view()['members'][0]['source'];
+            $this->assertFalse($source['evidence_current']); $this->assertFalse($source['threshold_reached']);
+            $this->assertSame('source_unverified', $source['evidence_reason']);
+        }
+        $row->fill(['first_failure_at' => $first])->save();
+        MachineOwnedInstance::query()->where('policy_id', $this->policies[0]->id)->update(['active_policy_id' => null]);
+        $this->assertContains('source_ownership_unverified', $this->view()['members'][0]['blockers']);
+        Http::assertNothingSent(); Bus::assertNothingDispatched();
     }
     public function test_service_attempt_parallelism_and_price_caps_apply_to_the_whole_shadow_batch(): void
     {

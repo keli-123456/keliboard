@@ -101,7 +101,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
 
     protected function tearDown(): void { Carbon::setTestNow(); parent::tearDown(); }
 
-    private function fixture(int $n, string $provider = 'linode'): array
+    private function fixture(int $n, string $provider = 'linode', bool $initiallyUnreachable = false): array
     {
         [$region, $size, $image] = match ($provider) {
             'digitalocean' => ['sgp1', 's-1vcpu-1gb', 'debian-12-x64'], 'vultr' => ['40', 'vc2-1c-1gb', '2136'],
@@ -148,7 +148,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
             'proxied' => false, 'ttl' => 60, 'comment' => $dns->marker, 'locked' => false];
         $fixture = compact('machine', 'policy', 'accounts', 'source', 'sourceIp', 'dns');
         config(['machine_failover.observe_enabled' => true]);
-        foreach ([-12 => true, -7 => false, -2 => false] as $delta => $healthy) $this->sourceReport($fixture, $healthy, time() + $delta);
+        foreach ([-12 => !$initiallyUnreachable, -7 => false, -2 => false] as $delta => $healthy) $this->sourceReport($fixture, $healthy, time() + $delta);
         Carbon::setTestNow();
         return $fixture;
     }
@@ -772,6 +772,42 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $again = $this->advance($run); $this->assertSame($run, $again); $this->assertSame(1, $this->dnsWrites);
         $payload = Attempt::query()->first()->payload; $this->assertArrayHasKey('forwarding_receipt', $payload); $this->assertArrayHasKey('dns_receipt', $payload);
         $json = json_encode($run); foreach (['synthetic-token', 'synthetic-machine', 'root_pass', 'callback_hash', 'coordinated_attempt'] as $secret) $this->assertStringNotContainsString($secret, $json);
+    }
+    public function test_initially_unreachable_source_completes_only_after_candidate_forwarding_and_owned_dns(): void
+    {
+        $this->fixtures = [$this->fixture(2, 'linode', true)];
+        $plan = MachineFailoverPlan::query()->where('policy_id', $this->fixtures[0]['policy']->id)->latest('id')->firstOrFail();
+        $this->assertNull($plan->evidence['baseline_at']);
+        $run = $this->advance($this->start()); $this->assertCount(1, $this->posts);
+        $this->assertSame(0, $this->verifications); $this->assertSame(0, $this->dnsWrites);
+        $run = $this->ready($run); $this->assertSame('awaiting_dns', $run['members'][0]['phase']);
+        $this->assertSame(1, $this->verifications); $this->assertSame(0, $this->dnsWrites);
+        $run = $this->advance($run); $this->assertSame('completed', $run['status']);
+        $this->assertSame(1, $this->dnsWrites); $this->assertCount(1, $this->posts);
+        $this->assertSame($run, $this->advance($run));
+        Bus::assertDispatched(\App\Jobs\MachineProvisionJob::class, fn ($job) => $job->taskId === $this->task()->id);
+    }
+    public function test_initially_unreachable_source_does_not_allow_an_unreachable_candidate_to_switch_dns(): void
+    {
+        $this->fixtures = [$this->fixture(2, 'linode', true)];
+        $run = $this->advance($this->start()); $task = $this->task();
+        $this->assertTrue(app(MachineProvisionService::class)->callback($task->id, $task->installation_id, $this->callbackSecret($task), 'succeeded'));
+        $task->refresh()->fill(['dispatched_at' => time() - 2, 'next_check_at' => 0])->save();
+        $this->report($this->fixtures[0], $task, $task->public_ips[0], false, time());
+        $run = $this->advance($run);
+        $this->assertNotSame('completed', $run['status']); $this->assertSame(0, $this->dnsWrites);
+        $this->assertSame(0, $this->verifications); $this->assertSame(0, MachineDnsTransition::count());
+        $this->assertSame('waiting_ipv4_probe', $task->fresh()->status); $this->assertCount(1, $this->posts);
+        Bus::assertDispatched(\App\Jobs\MachineProvisionJob::class, fn ($job) => $job->taskId === $task->id);
+    }
+    public function test_initially_unreachable_source_still_requires_a_valid_forwarding_receipt(): void
+    {
+        $this->fixtures = [$this->fixture(2, 'linode', true)];
+        $run = $this->advance($this->start()); $this->mode = 'bad_receipt'; $run = $this->ready($run);
+        $this->assertSame('needs_review', $run['status']); $this->assertSame(0, $this->dnsWrites);
+        $this->assertSame(0, MachineDnsTransition::count()); $this->assertSame(1, $this->verifications);
+        $this->advance($run); $this->assertCount(1, $this->posts); $this->assertSame(1, $this->verifications);
+        Bus::assertDispatched(\App\Jobs\MachineProvisionJob::class, fn ($job) => $job->taskId === $this->task()->id);
     }
 
     public function test_definite_create_rejection_reserves_a_distinct_child_without_rebinding_the_first_task(): void

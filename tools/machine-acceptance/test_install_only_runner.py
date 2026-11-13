@@ -43,7 +43,7 @@ class SyntheticDriverCase(unittest.TestCase):
                      **dict.fromkeys(driver.FORBIDDEN_FLAGS, False)}
         for name in driver.REQUIRED:
             source = Path(driver.__file__).with_name(name)
-            value = source.read_bytes() if name in {'driver_journal.py', 'install_only_runner.py', 'application_bundle.py'} else b'# inert fixture\n'
+            value = source.read_bytes() if name in {'driver_journal.py', 'install_only_runner.py', 'application_bundle.py', 'controller_readiness.py'} else b'# inert fixture\n'
             (self.base / name).write_bytes(value)
         self.write_bundle()
         self.write('authorization.json', self.auth)
@@ -186,6 +186,26 @@ class SyntheticDriverCase(unittest.TestCase):
 
 
 class DriverTests(SyntheticDriverCase):
+    def test_controller_without_mainland_echoes_still_installs_the_source_and_cleans_up(self):
+        self.campaign.status.return_value.update(root_echoes=0, domestic_ping_status='failed')
+        result = self.runner.run()
+        self.assertTrue(result['ok'], result)
+        self.modules['controller'].control_ready.assert_called_once()
+        self.assertEqual(self.events.count('create:control'), 1)
+        self.assertEqual(self.events.count('create:source'), 1)
+        self.assertNotIn('phase_probe', self.runner.modules)
+        self.node.execute.assert_called_once()
+        self.cleanup.main.assert_called_once()
+
+    def test_controller_pipeline_failure_cannot_dispatch_the_source(self):
+        self.modules['controller'].control_ready.side_effect = None
+        self.modules['controller'].control_ready.return_value = {'ok': True, 'control_ready': False, 'root_echoes': 4}
+        result = self.runner.run()
+        self.assertFalse(result['ok'])
+        self.assertNotIn('create:source', self.events)
+        self.node.execute.assert_not_called()
+        self.cleanup.main.assert_called_once()
+
     def test_full_synthetic_installation_uses_new_io_and_exactly_once_stages(self):
         inputs = {name: (self.base / name).read_bytes() for name in ['authorization.json', 'offline-result.json']}
         result = self.runner.run()
@@ -414,6 +434,15 @@ class DriverTests(SyntheticDriverCase):
             with self.assertRaisesRegex(driver.Refused, 'fresh_run_identity_required'):
                 driver.InstallRunner(run_id=run_id, application_commit=COMMIT, binary_sha256=BINARY,
                                      loader=Mock(side_effect=AssertionError('imports forbidden')))
+
+    def test_repinning_a_different_readiness_helper_does_not_change_the_loaded_policy(self):
+        (self.base / 'controller_readiness.py').write_text('# different fixture policy\n')
+        self.repin()
+        self.assertFalse(self.runner.run()['ok'])
+        self.assertFalse((self.base / 'round-intent.json').exists())
+        self.campaign.create_control.assert_not_called()
+        self.operator.command.assert_not_called()
+        self.cleanup.main.assert_not_called()
 
     def test_matching_hashes_do_not_authorize_crlf_or_invalid_archive(self):
         self.write_bundle(crlf=True)

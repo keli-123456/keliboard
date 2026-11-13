@@ -78,7 +78,7 @@ class MachineFailoverObserver
                     $count = $continuous ? min(1000000, $previous->consecutive_failures + 1) : 1;
                     $firstFailure = $continuous ? $previous->first_failure_at : $sample['checked_at'];
                 }
-                $reached = $baseline !== null && $count >= $policy->failure_threshold;
+                $reached = $count >= $policy->failure_threshold;
                 $row = Observation::query()->create(array_intersect_key($sample, array_flip(['context_key', 'installation_id', 'state', 'reason', 'checked_at', 'valid_until']))
                     + ['policy_id' => $id, 'policy_revision' => $policy->revision, 'sample_key' => $key, 'observed_at' => $now,
                         'baseline_at' => $baseline, 'first_failure_at' => $firstFailure, 'consecutive_failures' => $count, 'threshold_reached' => $reached]);
@@ -120,7 +120,6 @@ class MachineFailoverObserver
         $result['evidence_current'] = true;
         $result['observed_failures'] = $row->consecutive_failures;
         $result['threshold_reached'] = $row->threshold_reached;
-        if ($row->state === 'failed' && $row->baseline_at === null) $result['reason'] = 'healthy_baseline_required';
         if ($row->threshold_reached) {
             $plan = Plan::query()->where('policy_id', $policy->id)->where('policy_revision', $policy->revision)->where('status', 'blocked')->latest('id')->first();
             if ($plan) $result['plan'] = $this->presentPlan($plan);

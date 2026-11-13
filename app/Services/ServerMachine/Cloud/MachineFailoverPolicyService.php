@@ -161,7 +161,7 @@ class MachineFailoverPolicyService
                 $observed = $history['observed_failures'];
                 if ($history['threshold_reached']) $trigger = 'threshold_reached';
                 $codes = $history['plan']['blockers'] ?? [];
-                if (!$history['collecting'] || !$history['evidence_current'] || $history['reason'] === 'healthy_baseline_required') $codes[] = $history['reason'];
+                if (!$history['collecting'] || !$history['evidence_current']) $codes[] = $history['reason'];
                 foreach (array_diff(array_unique($codes), array_column($checks, 'code')) as $code) $checks[] = ['code' => $code, 'status' => 'blocked'];
             }
             return ['policy_id' => $policy->id, 'revision' => $policy->revision, 'checked_at' => $now,

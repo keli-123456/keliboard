@@ -26,7 +26,31 @@ class MachineFailoverStateMachineTest extends TestCase
         $next = $machine->source($state, $driver->source($context, $state, 'replace', 2, 110), $context, 110);
         $this->assertSame('queued', $next['phase']); $this->assertFalse($next['create_dispatched']);
         $expired = $machine->source($state, $driver->source($context, $state, 'replace', 2, 200), $context, 200);
-        $this->assertSame('blocked', $expired['phase']); $this->assertSame('healthy_baseline_required', $expired['reason']);
+        $this->assertSame('observing', $expired['phase']); $this->assertSame(1, $expired['failures']);
+        $this->assertNull($expired['reason']);
+    }
+    public function test_initially_failed_source_needs_distinct_consecutive_failures_but_no_healthy_baseline(): void
+    {
+        $machine = new Machine(); $driver = new Driver(); $context = $this->context();
+        $first = $driver->source($context, $machine->initial(), 'no_baseline', 0, 100);
+        $state = $machine->source($machine->initial(), $first, $context, 100);
+        $this->assertSame('observing', $state['phase']); $this->assertSame(1, $state['failures']);
+        $this->assertNull($state['baseline_at']);
+        $this->assertSame($state, $machine->source($state, $first, $context, 101));
+        $next = $machine->source($state, $driver->source($context, $state, 'no_baseline', 1, 105), $context, 105);
+        $this->assertSame('queued', $next['phase']); $this->assertFalse($next['create_dispatched']);
+        $this->assertSame('blocked', $machine->reserve($next, false, 'execution_disabled')['phase']);
+    }
+    public function test_unknown_probe_breaks_an_initial_failure_streak_and_any_success_recovers(): void
+    {
+        $machine = new Machine(); $driver = new Driver(); $context = $this->context(); $state = $machine->initial();
+        foreach ([['no_baseline', 100, 1], ['unknown_probe', 105, 0], ['no_baseline', 110, 1], ['no_baseline', 115, 2]] as [$scenario, $at, $count]) {
+            $fact = $driver->source($context, $state, $scenario, 1, $at);
+            $state = $machine->source($state, $fact, $context, $at); $this->assertSame($count, $state['failures']);
+        }
+        $this->assertSame('queued', $state['phase']);
+        $state = $machine->source($state, $driver->source($context, $state, 'one_target_reachable', 2, 120), $context, 120);
+        $this->assertSame('recovered', $state['phase']); $this->assertSame(0, $state['failures']);
     }
     public static function badSource(): array { return [['origin', 'real'], ['at', 999], ['installation_id', 'wrong'], ['ip', '192.0.2.2'], ['context_hash', 'wrong'], ['targets', [['unreachable']]]]; }
     #[DataProvider('badSource')]
