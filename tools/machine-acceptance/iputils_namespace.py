@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 
 HERE = Path(__file__).resolve().parent
 TABLE = 'keli_iputils_regression'
@@ -39,7 +40,8 @@ def topology(parent):
     require({p.name for p in Path('/sys/class/net').iterdir()} == {'lo'}, 'loopback_only_required')
     require(json.loads(command(['/usr/sbin/ip', '-j', 'route', 'show', 'table', 'all'])) == [], 'fresh_empty_routes_required')
     ruleset = json.loads(command(['/usr/sbin/nft', '-j', 'list', 'ruleset']))
-    require(not any('table' in row for row in ruleset['nftables']), 'fresh_empty_firewall_required')
+    require(isinstance(ruleset, dict) and set(ruleset) <= {'nftables'} and isinstance(ruleset.get('nftables', []), list)
+            and all(set(row) == {'metainfo'} for row in ruleset.get('nftables', [])), 'fresh_empty_firewall_required')
     return own
 
 
@@ -144,12 +146,13 @@ def run(options):
     finally:
         if sys.exc_info()[0] is not None:
             value['error_class'] = sys.exc_info()[0].__name__
+            value['error_frames'] = [{'file': Path(f.filename).name, 'line': f.lineno} for f in traceback.extract_tb(sys.exc_info()[2])][-6:]
         value['cleanup'] = {'temporary_directory_removed': False, 'owned_firewall_removed': False,
                             'no_remaining_children': not no_remaining_children()}
         if table_created:
             command(['/usr/sbin/nft', 'delete', 'table', 'inet', TABLE])
             check = json.loads(command(['/usr/sbin/nft', '-j', 'list', 'ruleset']))
-            value['cleanup']['owned_firewall_removed'] = not any(r.get('table', {}).get('name') == TABLE for r in check['nftables'])
+            value['cleanup']['owned_firewall_removed'] = not any(r.get('table', {}).get('name') == TABLE for r in check.get('nftables', []))
         shutil.rmtree(root)
         value['cleanup']['temporary_directory_removed'] = not root.exists()
         value['ok'] = value['ok'] and all(value['cleanup'].values())
@@ -174,7 +177,15 @@ def main():
         print(json.dumps({'ok': result['ok'], 'cases': len(result['cases']), 'cleanup': result['cleanup']}))
         return 0 if result['ok'] else 1
     except Exception as error:
-        print(json.dumps({'ok': False, 'error_class': type(error).__name__, 'raw_output_omitted': True}))
+        failure = {'ok': False, 'error_class': type(error).__name__, 'raw_output_omitted': True,
+                   'error_frames': [{'file': Path(f.filename).name, 'line': f.lineno} for f in traceback.extract_tb(error.__traceback__)][-6:]}
+        if isinstance(error, RuntimeError) and re.fullmatch('[a-z_]{1,80}', str(error)):
+            failure['reason'] = str(error)
+        output = Path(options.output).resolve()
+        if os.getpid() == 1 and os.environ.get('KELI_IPUTILS_NAMESPACE') == '1' and not output.exists():
+            with output.open('x', encoding='utf-8') as stream:
+                json.dump(failure, stream, indent=2)
+        print(json.dumps(failure))
         return 1
 
 
