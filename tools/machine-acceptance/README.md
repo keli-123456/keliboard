@@ -24,6 +24,73 @@ scenario condition, not the operational failover rule. Candidate reachability,
 identity-bound TCP/UDP receipts, DNS ownership and execution gates are unchanged.
 See [probe admission rules](../../docs/machine-failover-probe-admission.md).
 
+## Timing-Safe Sampling and Cleanup Reads
+
+R14 stopped with `baseline_report_gap`: two accepted probe times were followed
+by a 22-second gap, while an intermediate real Observer sample existed. Its
+closed bundle and first error remain unchanged. The reusable fix is
+`probe_sampling.py`, not a longer permitted gap or an edited historical driver.
+
+Fresh three-role bundles using `diagnostic_round_runner.py` now pin and use this
+sampler for `RoundRunner.baseline`. Other fresh entries must explicitly delegate
+that method to `probe_sampling.baseline` and pin the same helper before freezing.
+There is no new live scope, default run ID, credential, scheduler or automatic
+dispatch. Old bundles missing the new pins are refused, not silently upgraded.
+
+The single control SSH call runs only the existing isolated CLI `observe` and
+`status` commands. It does not Ping, create a VM, advance an execution or write
+DNS. Observer writes remain confined to the separately authorized isolated
+database. Sampling runs locally on that controller for at most 60 seconds, with
+a 70-second outer SSH timeout; slow reads do not get another unconditional
+five-second sleep. Stop/deadline checks bound the loop and each CLI child.
+The original campaign, fault fuse and lease durations are not extended.
+
+Each accepted round binds the same installation, public IPv4, binary, configured
+node, probe revision and observation session. Source status and the actual native
+Observer receipt must refer to the same probe time, policy and context; racing
+reads are not counted and start a new qualification sequence without erasing
+earlier evidence. Three distinct consecutive samples, at least five seconds
+apart and no more than twenty seconds apart, are still required. The newest must
+be no older than thirty seconds. Failed-source qualification additionally needs
+the real native failure counter/threshold. Unknown, stale, duplicate, foreign or
+incomplete rounds cannot manufacture that threshold. A candidate still needs
+reachable evidence; no previous healthy source or controller Ping is introduced.
+
+Full existing node safety inspection runs before and after the window. A changed
+PID/start time, binary, configuration or runtime session fails the stage. Original
+auxiliary diagnostics remain once per role with their existing packet budget;
+they cannot replace sampling evidence or overwrite its first error, even if
+diagnostics or evidence persistence also fail. Final native candidate admission,
+forwarding, DNS ownership and dispatch-time guards remain unchanged.
+
+`aliyun_cleanup.php` is a describe-only reader factory embedded by
+`aliyun_cleanup.py`. Both files must be frozen; the launcher also checks the hash
+of the PHP bytes already loaded by the embedding module. The PHP file requires
+LF in Git. No helper file is installed on or written into the production host.
+Only an explicit boolean opt-in on `DescribeDomainRecordInfo` for an exact
+positive record ID accepts `InvalidRecordId.NotFound` or `InvalidRR.NoExist` with
+HTTP 200/400/404 and no returned record. The latter is documented by
+[Aliyun](https://help.aliyun.com/zh/dns/api-alidns-2015-01-09-errorcodes) and was
+the actual post-delete response in R14. Authentication failures, domain errors,
+throttling, redirects, 5xx, malformed/oversized responses and timeouts remain
+unconfirmed. Missing by ID does not mean an empty name inventory: the original
+ownership, full-list agreement, deletion journals and two independent absence
+reads are still mandatory. This reader cannot dispatch a delete or extend the
+cleanup deadline, and input parameters cannot override the selected describe
+action or signing metadata.
+
+Local synthetic regression (no SSH, cloud/DNS requests or production database):
+
+```sh
+python -B -m unittest -q test_probe_sampling test_diagnostic_capture
+```
+
+The existing PHP Unit suite includes `MachineAcceptanceAliyunCleanupTest`, with
+all provider HTTP faked and stray requests forbidden. The normal Python CI test
+lists include the sampling regressions; editing those lists does not run CI.
+Windows results do not substitute for a Linux runtime or a newly approved live
+acceptance. R14 must never be replayed or relabeled as passed by this fix.
+
 ## Runtime Boundary
 
 Python 3.11+ uses only the standard library. The real protocol engine is an

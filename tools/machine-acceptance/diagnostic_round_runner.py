@@ -11,6 +11,8 @@ import sys
 import bootstrap_diagnostics
 import diagnostic_capture
 import entry_probe_capture
+import aliyun_cleanup
+import probe_sampling
 
 
 STOP_FILES = ("closed.json", "stop-request.json", "cleanup-intent.json", "round-intent.json", "control-intent.json",
@@ -18,7 +20,7 @@ STOP_FILES = ("closed.json", "stop-request.json", "cleanup-intent.json", "round-
 FLAGS = ("production_automatic_creation", "production_automatic_rotation", "production_dns_switch", "production_deployment",
          "production_queue_changes", "production_database_writes", "tanzhen_access", "business_machine_5_access")
 TOOLS = ("bootstrap_diagnostics.py", "diagnostic_capture.py", "diagnostic_round_runner.py",
-         "entry_probe_diagnostics.py", "entry_probe_capture.py")
+         "entry_probe_diagnostics.py", "entry_probe_capture.py", "aliyun_cleanup.py", "aliyun_cleanup.php", "probe_sampling.py")
 REQUIRED = {*TOOLS, "campaign.py", "node.py", "cleanup.py", "round_runner.py", "authorization.json"}
 
 
@@ -69,6 +71,7 @@ def prepare(work):
     for name in TOOLS:
         with Path(__file__).with_name(name).open("rb") as stream:
             require(hashlib.file_digest(stream, "sha256").hexdigest() == pins[name], "launcher_tool_changed")
+    require(aliyun_cleanup.SOURCE_SHA256 == pins['aliyun_cleanup.php'], "loaded_cleanup_reader_changed")
     return base, auth["run_id"], pins
 
 
@@ -81,6 +84,9 @@ def run(work):
         require(prior is None or Path(prior.__file__).resolve() == base / (name + ".py"), "foreign_driver_module")
         module = importlib.import_module(name)
         require(Path(module.__file__).resolve() == base / (name + ".py"), "foreign_driver_module")
+        if name == "cleanup":
+            require(isinstance(getattr(module, "CLEANUP_DNS_PHP", None), str), "cleanup_readback_adapter_required")
+            module.CLEANUP_DNS_PHP = aliyun_cleanup.CLEANUP_DNS_PHP
         return module
 
     sys.path.insert(0, str(base))
@@ -89,7 +95,15 @@ def run(work):
         campaign.assert_scope()
         require(campaign.RUN == run_id, "driver_identity_changed")
         driver = load("round_runner")
-        return driver.RoundRunner(loader=diagnostic_capture.loader_with_diagnostics(load)).run()
+        require(isinstance(getattr(driver, 'RoundStopped', None), type)
+                and issubclass(driver.RoundStopped, RuntimeError), 'sampling_driver_contract_required')
+        class SamplingRunner(driver.RoundRunner):
+            def baseline(self, role):
+                try:
+                    return probe_sampling.baseline(self, role)
+                except probe_sampling.Refused as error:
+                    raise driver.RoundStopped(str(error)) from None
+        return SamplingRunner(loader=diagnostic_capture.loader_with_diagnostics(load)).run()
     finally:
         sys.path.remove(str(base))
 

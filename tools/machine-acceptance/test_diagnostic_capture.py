@@ -248,7 +248,7 @@ class EntryTests(unittest.TestCase):
     def test_network_diagnostic_tools_require_their_own_frozen_pins(self):
         path = self.base / "offline-result.json"
         original = json.loads(path.read_text())
-        for name in ["entry_probe_diagnostics.py", "entry_probe_capture.py"]:
+        for name in ["entry_probe_diagnostics.py", "entry_probe_capture.py", "probe_sampling.py", "aliyun_cleanup.py", "aliyun_cleanup.php"]:
             data = json.loads(json.dumps(original))
             del data["file_digests"][name]
             path.write_text(json.dumps(data))
@@ -278,6 +278,12 @@ class EntryTests(unittest.TestCase):
         self.assertEqual(json.loads(out.getvalue()), {"ok": False, "reason": "scoped_runner_unavailable"})
 
     def test_fresh_entry_runs_synthetic_driver_with_pre_delete_capture(self):
+        self.fresh_entry()
+
+    def test_sampler_failure_retains_original_stop_type_reason_and_cleanup(self):
+        self.fresh_entry('baseline_report_gap')
+
+    def fresh_entry(self, baseline_error=None):
         campaign = '''from pathlib import Path
 import json
 BASE=Path(BASE_VALUE)
@@ -297,17 +303,24 @@ def execute(role,code,timeout):
  return RESPONSE_VALUE
 '''.replace('ROW_VALUE', repr(CaptureTests.task(self, 'source'))).replace('RESPONSE_VALUE', repr(response()))
         cleanup = '''import campaign
+CLEANUP_DNS_PHP='legacy synthetic read adapter'
 def main():
+ assert 'InvalidRR.NoExist' in CLEANUP_DNS_PHP
  assert (campaign.BASE/'synthetic-probe-ordered.json').is_file()
  assert (campaign.BASE/'bootstrap-diagnostics.json').is_file()
  campaign.save('synthetic-delete-ordered.json',{'ok':True})
  return {'ok':True}
 '''
-        driver = '''class RoundRunner:
+        driver = '''class RoundStopped(RuntimeError): pass
+class RoundRunner:
  def __init__(self,loader): self.loader=loader
+ def baseline(self,role): raise AssertionError('legacy sampling must not run')
  def run(self):
+  reason=None
+  try: self.baseline('source')
+  except RoundStopped as error: reason=str(error)
   result=self.loader('cleanup').main()
-  return {'ok':False,'cleanup_complete':result['ok']}
+  return {'ok':False,'cleanup_complete':result['ok'],'reason':reason}
 '''
         for name, text in [('campaign.py', campaign), ('node.py', node), ('cleanup.py', cleanup), ('round_runner.py', driver)]:
             (self.base / name).write_text(text)
@@ -317,7 +330,15 @@ def main():
         for name in ['campaign','node','cleanup','round_runner']:
             modules.pop(name, None)
         try:
-            result = entry.run(self.base)
+            sampled = []
+            def bounded_baseline(driver, role):
+                sampled.append(role)
+                if baseline_error:
+                    raise entry.probe_sampling.Refused(baseline_error)
+            with patch.object(entry.probe_sampling, 'baseline', bounded_baseline):
+                result = entry.run(self.base)
+            self.assertEqual(sampled, ['source'])
+            self.assertEqual(result['reason'], baseline_error)
             self.assertFalse(result['ok'])
             self.assertTrue(result['cleanup_complete'])
             self.assertTrue((self.base/'synthetic-delete-ordered.json').is_file())
