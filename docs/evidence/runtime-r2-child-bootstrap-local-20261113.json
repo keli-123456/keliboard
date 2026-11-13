@@ -1,0 +1,73 @@
+{
+  "boundaries": {
+    "automatic_switch_changes": false,
+    "new_cloud_instances": 0,
+    "production_or_tanzhen_access": false,
+    "provider_ssh_dns_github_access": false,
+    "publication_or_deployment": false,
+    "queue_or_node_core_changes": false
+  },
+  "checked_utc": "2026-11-13T08:18:48.224578+00:00",
+  "confirmed_local_defect": {
+    "historical_r2_cause_proven": false,
+    "kind": "filefinder_directory_listing_denied_before_sibling_import",
+    "proof": "CPython FileFinder with modeled EACCES; explicit fixed-file loading succeeds for both dependencies.",
+    "real_posix_permissions_revalidated": false
+  },
+  "coverage": [
+    "Keep 0711 staging; load both fixed dependency files without listing, path searching or shadow-module fallback.",
+    "Restore temporary module registrations on success and failure; retain dataclass and nested-import compatibility.",
+    "Emit structured import/access/syntax/test-entry failures with fixed stage/reason, allowlisted class, errno and known basename/line only.",
+    "Separate stdout/stderr; unknown or mixed output fails, never salvage a passing JSON substring.",
+    "Discard Python-level output without retaining contents; bounded capture accounting cannot convert noise into success.",
+    "Preserve first error through namespace and outer projection, even with later decode, pipe-close, cleanup or report failures.",
+    "Maintain setpriv isolation, isolated Python mode, six case requirements, exact packet counters, timeout/kill/wait and both-pipe cleanup.",
+    "Malformed diagnostics fail closed; no raw exception messages, paths, argv, environment or tracebacks are exported."
+  ],
+  "execution_authorized": false,
+  "limitations": [
+    "Windows mocked tests do not establish actual Linux permissions, namespaces, iputils packet counters or signal lifecycle.",
+    "R2 retained only child exit 1 and JSON decode failure; its original import exception cannot be reconstructed from those aggregates.",
+    "Future Linux verification requires a fresh approved run identity and new source/package pins; no R2 authority is reused."
+  ],
+  "offline_export_sha256": "870f01b5e498b97274bf09242102c991d731fa9a8dac10ad4027617c97a2f4ec",
+  "offline_result_sha256": "fbc926895c62c6448013c9f4dc5dd29288cd5ac3d150e5c2bf8015bce4c318e8",
+  "offline_snapshot": ".codex-audit/runtime-r2-child-output-local-20261113",
+  "platform": "win32",
+  "preservation": {
+    "closed_r2_regular_file_hashes_unchanged": true,
+    "frozen_archive_sha256": "09460fc411af270384c066767b7940540ab26e633e48c5d0148df24d00412ab2",
+    "r2_remains_failed_closed_cleanup_confirmed": true,
+    "r2_replayed_or_retrospectively_passed": false,
+    "verified_file_count": 52
+  },
+  "schema": 1,
+  "source_sha256": {
+    "tools/machine-acceptance/iputils_namespace.py": "f8ada9360bacc83b60dafa7c0f87c110b092fdabb9da86e2ec5806a89c6dc715",
+    "tools/machine-acceptance/runtime_diagnostics.py": "e6a83f5856e43dc3f5b98c87e95d7f684ec40964379283b5544f16792d76534b",
+    "tools/machine-acceptance/test_entry_probe_iputils.py": "524985376e498fe6a516c472f72b7a7bf0ede8005b16be918ba90a9e644021d9",
+    "tools/machine-acceptance/test_iputils_namespace.py": "b4da78720007c42da21709565fa5da75bcf6594447b7f511d3c84d74c1aa5d7c",
+    "tools/machine-acceptance/test_runtime_diagnostics.py": "dd9f7cd4ef9ba1f9cdf5f4a742f5d94de99c94c26863ff6192ab869895a4bb56"
+  },
+  "status": "local_regression_passed_linux_revalidation_pending",
+  "tests": {
+    "focused_canonical": {
+      "exit_code": 0,
+      "skipped": 0,
+      "tests": 87
+    },
+    "focused_harness_control_projection": {
+      "exit_code": 0,
+      "skipped": 0,
+      "tests": 179
+    },
+    "related_acceptance_tools": {
+      "exit_code": 0,
+      "skipped": 26,
+      "tests": 316
+    },
+    "skip_limit": "Linux/platform/isolation prerequisites absent; not a kernel/runtime pass.",
+    "suite_counts_overlap": true
+  },
+  "uncommitted_local_source": true
+}

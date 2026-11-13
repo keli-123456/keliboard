@@ -1,15 +1,80 @@
 """Real iputils only inside the dedicated loopback-only Linux test namespace."""
+from contextlib import redirect_stderr, redirect_stdout
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import time
 import traceback
+import types
 import unittest
 from unittest.mock import patch
 
-import entry_probe_diagnostics as probe
+probe = None
+CASES = {'echo', 'no_reply', 'four_no_reply_targets', 'legacy_deadline_reference',
+         'forced_timeout_reaps_real_ping', 'permission_denied_is_not_packet_loss'}
+FILES = {'test_entry_probe_iputils.py', 'entry_probe_diagnostics.py', 'bootstrap_diagnostics.py'}
+ERROR_CLASSES = {'AssertionError', 'AttributeError', 'FileNotFoundError', 'ImportError', 'ModuleNotFoundError',
+                 'OSError', 'PermissionError', 'RuntimeError', 'SyntaxError', 'TypeError', 'ValueError',
+                 'KeyboardInterrupt', 'SystemExit', 'TimeoutExpired'}
+MAX_OUTPUT = 262144
+
+
+class DiscardOutput:
+    def __init__(self):
+        self.count = 0
+
+    def write(self, value):
+        self.count = min(MAX_OUTPUT + 1, self.count + len(value))
+        return len(value)
+
+    def flush(self):
+        pass
+
+
+def load_probe():
+    # Explicit reads work in a traversable 0711 stage without directory listing.
+    root = Path(__file__).resolve().parent
+    previous = {name: sys.modules.get(name) for name in ('bootstrap_diagnostics', 'entry_probe_diagnostics')}
+    loaded = {}
+    try:
+        for name in previous:
+            path = root / (name + '.py')
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode) or (os.name == 'posix' and info.st_mode & 0o022) or not 0 < info.st_size <= 1048576:
+                raise PermissionError(13, 'unsafe_helper')
+            module = types.ModuleType(name)
+            module.__file__ = str(path)
+            module.__package__ = ''
+            sys.modules[name] = module
+            exec(compile(path.read_bytes(), str(path), 'exec'), module.__dict__)
+            loaded[name] = module
+        return loaded['entry_probe_diagnostics']
+    finally:
+        for name, original in previous.items():
+            if original is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = original
+
+
+def failure_detail(error):
+    root = Path(__file__).resolve().parent
+    frames = [{'file': Path(frame.filename).name, 'line': frame.lineno}
+              for frame in traceback.extract_tb(error[2])
+              if Path(frame.filename).resolve() in {root / name for name in FILES}][-6:]
+    exception = error[1]
+    if isinstance(exception, SyntaxError) and exception.filename and Path(exception.filename).resolve() in {
+            root / name for name in FILES} and type(exception.lineno) is int and 1 <= exception.lineno <= 100000:
+        frames = (frames + [{'file': Path(exception.filename).name, 'line': exception.lineno}])[-6:]
+    detail = {'error_class': error[0].__name__ if error[0].__name__ in ERROR_CLASSES else 'Exception',
+              'frames': [frame for frame in frames if 1 <= frame['line'] <= 100000]}
+    number = getattr(exception, 'errno', None)
+    if type(number) is int and 0 <= number <= 65535:
+        detail['errno'] = number
+    return detail
 
 
 @unittest.skipUnless(sys.platform == 'linux' and os.environ.get('KELI_IPUTILS_ISOLATED') == '1',
@@ -112,9 +177,7 @@ class RealIputilsTests(unittest.TestCase):
 
 class SafeResult(unittest.TestResult):
     def detail(self, error):
-        return {'error_class': error[0].__name__,
-                'frames': [{'file': Path(frame.filename).name, 'line': frame.lineno}
-                           for frame in traceback.extract_tb(error[2])][-6:]}
+        return failure_detail(error)
 
     def addFailure(self, test, error):
         self.failures.append((test, self.detail(error)))
@@ -123,21 +186,47 @@ class SafeResult(unittest.TestResult):
         self.errors.append((test, self.detail(error)))
 
 
-def main():
-    case = sys.argv[1] if len(sys.argv) == 2 else ''
-    allowed = {'echo', 'no_reply', 'four_no_reply_targets', 'legacy_deadline_reference',
-               'forced_timeout_reaps_real_ping', 'permission_denied_is_not_packet_loss'}
-    if case not in allowed:
-        raise ValueError('fixed_case_required')
-    test = RealIputilsTests('test_' + case)
-    result = SafeResult()
-    unittest.TestSuite([test]).run(result)
-    value = {'ok': result.wasSuccessful() and not result.skipped, 'case': case, 'tests': result.testsRun,
-             'failures': len(result.failures), 'errors': len(result.errors), 'skipped': len(result.skipped),
-             **getattr(test, 'summary', {})}
-    if result.failures or result.errors:
-        value['failed_tests'] = [str(t) for t, _ in result.failures + result.errors]
-        value['failure_details'] = [detail for _, detail in result.failures + result.errors]
+def main(argv=None):
+    global probe
+    arguments = sys.argv[1:] if argv is None else argv
+    case = arguments[0] if len(arguments) == 1 and arguments[0] in CASES else None
+    value = {'ok': False, 'case': case, 'tests': 0, 'failures': 0, 'errors': 0, 'skipped': 0,
+             'expected_packets': 0, 'measurements': []}
+    stdout, stderr = DiscardOutput(), DiscardOutput()
+    previous = probe
+    phase = 'child_arguments'
+    try:
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            if case is None:
+                raise ValueError('fixed_case_required')
+            phase = 'child_import'
+            probe = load_probe()
+            phase = 'child_test'
+            test = RealIputilsTests('test_' + case)
+            result = SafeResult()
+            unittest.TestSuite([test]).run(result)
+            value.update(ok=result.wasSuccessful() and not result.skipped, tests=result.testsRun,
+                failures=len(result.failures), errors=len(result.errors), skipped=len(result.skipped),
+                **getattr(test, 'summary', {}))
+            details = [detail for _, detail in result.failures + result.errors]
+            if details:
+                value['failure_details'] = details
+                value['first_error'] = dict(stage=phase, reason='child_case_failed', **details[0])
+    except (Exception, KeyboardInterrupt, SystemExit):
+        detail = failure_detail(sys.exc_info())
+        reason = {'child_arguments': 'child_arguments_invalid', 'child_import': 'child_import_failed',
+                  'child_test': 'child_case_failed'}[phase]
+        value.update(ok=False, errors=max(1, value['errors']),
+                     first_error=dict(stage=phase, reason=reason, **detail))
+    finally:
+        probe = previous
+    if stdout.count or stderr.count:
+        detail = {'stage': 'child_output', 'reason': 'child_output_contaminated', 'error_class': 'RuntimeError', 'frames': []}
+        if 'first_error' in value:
+            value['secondary_errors'] = [detail]
+        else:
+            value['first_error'] = detail
+        value['ok'] = False
     print(json.dumps(value, allow_nan=False))
     return 0 if value['ok'] else 1
 

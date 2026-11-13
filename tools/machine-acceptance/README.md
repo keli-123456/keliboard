@@ -677,6 +677,95 @@ The synthetic timeout is shortened to two seconds; this is not a full-duration
 or WAN/DNS failover acceptance. It does not identify R6's original cause. New
 live work still requires its own approved scope and fresh frozen bundle.
 
+## Runtime Diagnostics Repair (2026-11-13)
+
+`runtime_diagnostics.py` is a pure parser/projector for a separately prepared
+loopback harness. It has no cloud, SSH, DNS, service or execution entry. The
+closed `keli-runtime-20261113-3c707fc-f39a` result remains a failed acceptance;
+its original iputils cause was not retained and cannot be reconstructed here.
+The repair and synthetic harness copy do not authorize another live attempt.
+
+Fixed TCP/UDP listeners must still bind loopback. Do not simply skip UDP when
+checking `/proc/net`: a wildcard UDP socket can be either an unexpected listener
+or a normal ephemeral relay. The narrow exception requires an after-probe
+snapshot, a fresh private PID/network namespace with only loopback and no
+external route, a non-root/no-capability/no-new-privileges worker, an OS ephemeral
+port outside every fixed listener, and an inode belonging to the exact live
+node/client PID and start time. Recheck process identity around FD enumeration.
+Before-probe wildcards, TCP wildcards, unknown/shared owners and public peers
+still fail. Preserve the family/state/port/inode/role classification, not raw
+socket tables. After stopping, require both fixed listeners and tracked socket
+inodes to disappear. These rules establish no public-network or WAN result.
+
+The iputils runner retains partial cases and the earliest allowlisted
+`first_error` (stage, reason, class, optional exit/timeout and bounded basename/
+line frames). Later decode, summary, signal or cleanup errors remain in the
+bounded `secondary_errors` list. A first-error sidecar, derived from the explicit
+output basename, is exclusively created as 0600 and fsynced before further
+cases or cleanup; an existing different record is never overwritten. Failure
+to save it is secondary evidence, not permission to discard the original error.
+No raw stderr/stdout, exception messages, command arguments, environment or
+configuration bodies are retained. The outer harness also checkpoints its
+first error before removing private work, and projects valid child diagnostics
+even when the final child file is truncated. Missing reports remain a failure.
+
+All six iputils cases, exact kernel packet counters, zero skipped cases,
+capability isolation and cleanup proof are still necessary for success.
+Incomplete/malformed evidence is not zero loss or a passing test. New bundles
+must pin the repaired runner and projector together; never substitute them into
+a dispatched or closed bundle. This change does not modify node/core source,
+queue configuration, production or automation switches, and installs nothing.
+
+Local mocked regression from this directory:
+
+```sh
+python -B -m unittest -q test_iputils_namespace test_runtime_diagnostics
+```
+
+The local repair snapshot additionally tests the complete harness, timeout/
+signal error ordering, immutable first-error writes and cleanup failures. These
+Windows mock tests are not Linux namespace, actual iputils, signal lifecycle or
+real protocol reruns; those still require separately authorized Linux execution.
+
+## Iputils Child Bootstrap Repair (2026-11-13)
+
+Runtime-R2 remains closed, failed and cleanup-confirmed. Its HY2 loopback TCP/UDP
+and socket checks passed, but the first iputils child exited 1 before providing
+valid JSON. The retained `JSONDecodeError` does not establish its original import
+exception; this local repair does not retroactively classify that round as passed.
+
+A CPython FileFinder regression reproduces a separate source defect: the intended
+root-owned `0711` staging directory permits known-path reads but denies listing
+to the unprivileged worker. Ordinary sibling imports can consequently fail before
+the old child enters its reporting code. Both `bootstrap_diagnostics` and
+`entry_probe_diagnostics` now load from fixed sibling files inside the guarded
+child entry. Temporary module registration supports dataclasses and nested imports
+and is restored even on failure. Source links/unsafe POSIX modes are refused;
+no path discovery, cached shadow-module fallback or directory permission widening
+is introduced. The child uses isolated Python mode, remains non-root with zero
+capabilities, and retains all six existing cases and packet counters.
+
+Import, access, syntax and test-entry failures emit one structured failure JSON
+document with fixed stage/reason, allowlisted class, optional errno, and bounded
+known basenames/lines. Messages, source lines, paths, argv, environment and raw
+tracebacks are not exported. Unexpected Python-level output is discarded with a
+bounded counter and makes the case fail. The namespace parent keeps stdout and
+stderr separate; fixed interpreter/setpriv/traceback classifications survive
+instead of being replaced by JSON decoding. Unknown or mixed output still fails;
+it is never searched for a convenient passing JSON fragment. Both pipes are
+closed independently, and later signal, decode, report or cleanup failures do not
+replace the first diagnostic in the child, namespace or outer projection.
+
+Local evidence is recorded in
+[runtime-r2-child-bootstrap-local-20261113.json](../../docs/evidence/runtime-r2-child-bootstrap-local-20261113.json).
+The 179-test focused integration includes a fresh authority-free public harness
+copy, the control fixtures and report projection. The related tool suite has 316
+tests with 26 platform/isolation skips; the counts overlap. These Windows mocked
+checks do not prove POSIX file enforcement, actual iputils, namespaces or signal
+behavior on Linux. R2's frozen source, reports and archive are unchanged. Any
+future Linux rerun requires a new approved identity and a newly pinned bundle;
+no closed round or live preparation is modified or reopened here.
+
 ## Protocol Interoperability
 
 The real HY2 tests bind temporary endpoints only to 127.0.0.1/127.0.0.2, generate
