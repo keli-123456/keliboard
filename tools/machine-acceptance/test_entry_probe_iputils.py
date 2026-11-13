@@ -17,7 +17,8 @@ import entry_probe_diagnostics as probe
 class RealIputilsTests(unittest.TestCase):
     def setUp(self):
         self.assertNotEqual(os.geteuid(), 0)
-        self.assertEqual({p.name for p in Path('/sys/class/net').iterdir()}, {'lo'})
+        interfaces = {line.split(':', 1)[0].strip() for line in Path('/proc/self/net/dev').read_text().splitlines()[2:] if ':' in line}
+        self.assertEqual(interfaces, {'lo'})
         status = dict(line.split(':', 1) for line in Path('/proc/self/status').read_text().splitlines() if ':' in line)
         self.assertEqual(status['NoNewPrivs'].strip(), '1')
         for key in ['CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb']:

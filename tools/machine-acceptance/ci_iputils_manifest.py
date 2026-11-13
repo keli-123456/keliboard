@@ -36,7 +36,7 @@ def main():
     with Path(os.environ['GITHUB_ENV']).open('a') as stream:
         stream.write('NATIVE_TEST_BINARY=' + str(binary) + '\n')
     files = ['entry_probe_diagnostics.py', 'entry_probe_capture.py', 'test_entry_probe_diagnostics.py',
-             'test_entry_probe_capture.py', 'test_entry_probe_iputils.py', 'iputils_namespace.py', 'ci_iputils_manifest.py',
+             'test_entry_probe_capture.py', 'test_entry_probe_iputils.py', 'iputils_namespace.py', 'test_iputils_namespace.py', 'ci_iputils_manifest.py',
              'ci-iputils-native/Cargo.toml', 'ci-iputils-native/Cargo.lock', 'ci-iputils-native/src/lib.rs',
              'ci-iputils-native/src/entry_probe.rs']
     paths = [HERE / name for name in files] + [ROOT / '.github/workflows/iputils-single-packet-acceptance.yml']

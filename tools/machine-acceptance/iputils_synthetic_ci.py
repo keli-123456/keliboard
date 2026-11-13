@@ -16,7 +16,7 @@ import unittest
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 BASE = "4eefa62b05db9ce6e6b66b1b9d9f9b44ab0aebd1"
-MODULES = ["test_staging", "test_bootstrap_diagnostics", "test_diagnostic_capture", "test_entry_probe_diagnostics",
+MODULES = ["test_iputils_namespace", "test_staging", "test_bootstrap_diagnostics", "test_diagnostic_capture", "test_entry_probe_diagnostics",
            "test_entry_probe_capture", "test_driver_journal", "test_install_only_runner", "test_worker.WorkerTests",
            "test_driver_linux", "test_application_bundle", "test_entry_probe_linux"]
 WINDOWS_ONLY = {
@@ -25,7 +25,7 @@ WINDOWS_ONLY = {
     "test_driver_journal.WindowsSharingTests.test_real_observer_closes_promptly_without_corrupting_snapshots",
     "test_install_only_runner.DriverTests.test_real_progress_handle_lock_does_not_prevent_capture_and_cleanup",
 }
-FILES = ["staging.py", "worker.py", "bootstrap_diagnostics.py", "diagnostic_capture.py", "diagnostic_round_runner.py",
+FILES = ["iputils_namespace.py", "test_iputils_namespace.py", "test_entry_probe_iputils.py", "staging.py", "worker.py", "bootstrap_diagnostics.py", "diagnostic_capture.py", "diagnostic_round_runner.py",
          "entry_probe_diagnostics.py", "entry_probe_capture.py", "driver_journal.py", "install_only_runner.py",
          "application_bundle.py", "linux_bootstrap_lifecycle.py", "test_staging.py", "test_worker.py",
          "test_bootstrap_diagnostics.py", "test_diagnostic_capture.py", "test_entry_probe_diagnostics.py",
@@ -132,7 +132,7 @@ def main():
             value.update(tests_run=result.testsRun, failures=result.failures, errors=result.errors, skipped=result.skipped,
                          windows_native_excluded=excluded, source_unchanged=hashes() == before,
                          captured_output_characters=len(output.getvalue()), kernel_icmp_out_echoes=counters["values"]["OutEchos"] if counters["state"] == "observed" else None)
-            value["ok"] = (result.wasSuccessful() and not result.skipped and len(excluded) == 4 and result.testsRun == 219
+            value["ok"] = (result.wasSuccessful() and not result.skipped and len(excluded) == 4 and result.testsRun == 224
                            and value["source_unchanged"] and not value["forbidden_attempts"] and value["kernel_icmp_out_echoes"] == 0)
         except BaseException as error:
             value.update(reason="isolated_ci_unavailable", error_class=type(error).__name__)
