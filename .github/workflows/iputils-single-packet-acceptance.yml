@@ -1,0 +1,98 @@
+name: Iputils Single Packet Isolated Acceptance
+
+on:
+  push:
+    branches: [audit/iputils-single-packet-20261113-4eefa62b]
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify diagnostic and lifecycle tests without network access
+        shell: bash
+        run: |
+          set -euo pipefail
+          ulimit -c 0
+          private_home="$(mktemp -d "$RUNNER_TEMP/keli-iputils-core.XXXXXX")"
+          chmod 700 "$private_home"
+          trap 'rmdir -- "$private_home" 2>/dev/null || true' EXIT
+          timeout --signal=TERM --kill-after=5s 300s \
+            sudo /usr/bin/unshare --net --pid --fork --mount-proc --kill-child=SIGKILL \
+            /usr/bin/setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups \
+            --inh-caps=-all --ambient-caps=-all --bounding-set=-all --no-new-privs \
+            /usr/bin/env -i PATH=/usr/bin:/bin HOME="$private_home" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            PYTHONDONTWRITEBYTECODE=1 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_LFS_SKIP_SMUDGE=1 \
+            CI_COMMIT="$GITHUB_SHA" CI_PARENT_NETNS="$(readlink /proc/self/ns/net)" \
+            /usr/bin/python3 -B tools/machine-acceptance/iputils_synthetic_ci.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iputils-synthetic-aggregate
+          path: artifacts/iputils-synthetic.json
+          if-no-files-found: error
+          retention-days: 7
+
+  kernel-iputils:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install public kernel test tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends iputils-ping iproute2 nftables
+      - name: Build the exact modified native module with its minimal test harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.96.0 --profile minimal
+          cargo +1.96.0 test --locked --manifest-path tools/machine-acceptance/ci-iputils-native/Cargo.toml \
+            --no-run --message-format=json > "$RUNNER_TEMP/native-build.jsonl"
+          python3 tools/machine-acceptance/ci_iputils_manifest.py "$RUNNER_TEMP/native-build.jsonl"
+      - name: Run native unit tests without external networking
+        shell: bash
+        run: |
+          set -euo pipefail
+          private_home="$(mktemp -d "$RUNNER_TEMP/keli-iputils-native.XXXXXX")"
+          chmod 700 "$private_home"
+          trap 'rmdir -- "$private_home" 2>/dev/null || true' EXIT
+          timeout --signal=TERM --kill-after=5s 60s \
+            sudo /usr/bin/unshare --net --pid --fork --mount-proc --kill-child=SIGKILL \
+            /usr/bin/setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups \
+            --inh-caps=-all --ambient-caps=-all --bounding-set=-all --no-new-privs \
+            /usr/bin/env -i PATH=/usr/bin:/bin HOME="$private_home" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            "$NATIVE_TEST_BINARY" --test-threads=1 > "$RUNNER_TEMP/native-unit.txt"
+          python3 tools/machine-acceptance/ci_iputils_manifest.py --unit "$RUNNER_TEMP/native-unit.txt"
+      - name: Check real Python and Rust iputils packet counts, no-reply, errors and cleanup
+        working-directory: tools/machine-acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          ulimit -c 0
+          timeout --signal=TERM --kill-after=5s 120s \
+            sudo /usr/bin/unshare --net --pid --fork --mount-proc --kill-child=SIGKILL \
+            /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/nonexistent LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            PYTHONDONTWRITEBYTECODE=1 KELI_IPUTILS_NAMESPACE=1 \
+            /usr/bin/python3 -B iputils_namespace.py --uid "$(id -u)" --gid "$(id -g)" \
+            --parent-netns "$(readlink /proc/self/ns/net)" --output "$GITHUB_WORKSPACE/artifacts/iputils-kernel.json" \
+            --rust-test "$NATIVE_TEST_BINARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iputils-kernel-aggregate
+          path: |
+            artifacts/iputils-kernel.json
+            artifacts/iputils-sources.json
+            artifacts/iputils-native-unit.json
+          if-no-files-found: error
+          retention-days: 7

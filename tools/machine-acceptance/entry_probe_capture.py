@@ -16,7 +16,7 @@ INTENT = "entry-probe-diagnostics-intent.json"
 MAX_SECONDS = 44
 MAX_ROLE_SECONDS = 22
 RESERVE_SECONDS = 60
-SKIP_REASONS = {None, "stop_requested", "tool_unavailable", "source_mismatch", "route_unavailable", "network_namespace_unverified"}
+SKIP_REASONS = {None, "stop_requested", "tool_unavailable", "source_mismatch", "route_unavailable", "network_namespace_unverified", "packet_budget_exceeded"}
 
 
 def configuration(auth, run_id):
@@ -111,10 +111,15 @@ def validate_record(value, run_id, task_id, role, scope, source, active):
             if (not keys(ping, "state exit_code classification sent received reported_errors error_categories")
                     or ping["state"] not in probe.STATES or ping["classification"] not in probe.CLASSIFICATIONS
                     or ping["exit_code"] is not None and not number(ping["exit_code"], -255, 256)
-                    or any(ping[k] is not None and not number(ping[k], high=2) for k in ["sent", "received"])
-                    or ping["reported_errors"] is not None and not number(ping["reported_errors"], high=1025)
+                    or any(ping[k] is not None and not number(ping[k], high=probe.MAX_PACKET_COUNT + 1) for k in ["sent", "received", "reported_errors"])
                     or not isinstance(ping["error_categories"], list) or len(ping["error_categories"]) > len(probe.ERROR_PATTERNS)
                     or any(not isinstance(k, str) or k not in probe.ERROR_PATTERNS for k in ping["error_categories"])):
+                return None
+            exceeded = ping['state'] == 'observed' and any(ping[k] is not None and ping[k] > 1 for k in ['sent', 'received'])
+            if (ping['classification'] == 'packet_budget_exceeded') != exceeded:
+                return None
+            if ping['state'] != 'observed' and (ping['classification'] != 'unavailable' or ping['exit_code'] is not None
+                    or any(ping[k] is not None for k in ['sent', 'received', 'reported_errors']) or ping['error_categories']):
                 return None
             if row["skip_reason"] is not None and ping != probe.classify_ping(probe.CommandResult("unavailable"), target):
                 return None
@@ -122,7 +127,10 @@ def validate_record(value, run_id, task_id, role, scope, source, active):
                 return None
             if ping["classification"] == "echo_reply" and (row["skip_reason"] is not None or not route["source_matches_receipt"]
                     or namespace["matches_agent"] is not True or ping["state"] != "observed" or ping["exit_code"] != 0
-                    or ping["received"] != 1 or not value["iputils_verified"]):
+                    or ping["sent"] != 1 or ping["received"] != 1 or ping['reported_errors'] != 0 or not value["iputils_verified"]):
+                return None
+            if ping['classification'] == 'no_echo_by_deadline' and (ping['state'] != 'observed' or ping['exit_code'] != 1
+                    or ping['sent'] != 1 or ping['received'] != 0 or ping['reported_errors'] != 0 or ping['error_categories']):
                 return None
         if not all(valid_firewall(value[key], len(scope["targets"])) for key in ["firewall_before", "firewall_after"]):
             return None

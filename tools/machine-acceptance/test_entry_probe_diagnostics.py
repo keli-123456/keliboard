@@ -93,6 +93,31 @@ class PingClassificationTests(unittest.TestCase):
         self.assertEqual(result["classification"], "no_echo_by_deadline")
         self.assertEqual(result["reported_errors"], 0)
 
+    def test_multiple_packets_preserve_counts_and_are_never_echo_or_single_packet_loss(self):
+        for sent, received, code in [(3, 0, 1), (3, 1, 0), (1, 2, 0), (4294967295, 0, 1)]:
+            raw = ("64 bytes from " + TARGETS[0] + ": icmp_seq=1 ttl=51 time=1 ms\n"
+                   + str(sent) + " packets transmitted, " + str(received) + " received, 100% packet loss\n").encode()
+            row = probe.classify_ping(observed(raw, code), TARGETS[0])
+            self.assertEqual(row['classification'], 'packet_budget_exceeded')
+            self.assertEqual((row['sent'], row['received'], row['reported_errors']), (sent, received, 0))
+
+    def test_whitespace_singular_and_optional_packets_are_parsed(self):
+        for raw in [b'  1 packet transmitted,\t0 packets received, 100% packet loss\n',
+                    b'1 packets transmitted, 0 received, +1 errors, 100% packet loss\n']:
+            row = probe.classify_ping(observed(raw, 1), TARGETS[0])
+            self.assertEqual((row['sent'], row['received']), (1, 0))
+            self.assertIn(row['classification'], {'no_echo_by_deadline', 'icmp_error'})
+
+    def test_missing_ambiguous_overflow_or_zero_transmitted_never_become_no_reply(self):
+        for raw in [b'', b'0 packets transmitted, 0 received', b'4294967296 packets transmitted, 0 received',
+                    b'99999999999 packets transmitted, 0 received', b'-1 packets transmitted, 0 received',
+                    b'1 packets transmitted, 0 received\n1 packets transmitted, 0 received\n',
+                    b'1 packets transmitted, 0 received, +99999999999 errors']:
+            row = probe.classify_ping(observed(raw, 1), TARGETS[0])
+            self.assertEqual(row['classification'], 'execution_error')
+            if not raw.startswith(b'0 '):
+                self.assertIsNone(row['sent'])
+
     def test_returned_icmp_errors_on_stdout_do_not_disappear_into_timeout(self):
         for message, category in [
             ("Destination Host Unreachable", "icmp_host_unreachable"),
@@ -236,12 +261,22 @@ class CollectorTests(unittest.TestCase):
         row = make_record(commands=runner)
         self.assertTrue(row["ok"])
         pings = [args for args, _, _ in runner.calls if "--" in args]
-        self.assertEqual(pings, [["/usr/bin/ping", "-I", SOURCE, "-4", "-n", "-c", "1", "-W", "2", "-w", "3", "--", ip] for ip in TARGETS])
+        self.assertEqual(pings, [["/usr/bin/ping", "-I", SOURCE, "-4", "-n", "-c", "1", "-W", "2", "--", ip] for ip in TARGETS])
+        self.assertTrue(all('-w' not in args and '-i' not in args for args in pings))
         nft = [args for args, _, _ in runner.calls if args[0].endswith("nft")]
         self.assertEqual(nft, [["/usr/sbin/nft", "-j", "list", "ruleset"]] * 2)
         self.assertFalse(row["root_cause_confirmed"])
         self.assertFalse(row["censorship_confirmed"])
         self.assertNotIn(SECRET, json.dumps(row))
+
+    def test_unexpected_multi_packet_result_stops_remaining_active_probes(self):
+        runner = FakeCommands()
+        runner.ping_output, runner.ping_exit = b'3 packets transmitted, 0 received, 100% packet loss', 1
+        value = make_record(commands=runner)
+        self.assertEqual(value['rows'][0]['ping']['classification'], 'packet_budget_exceeded')
+        self.assertEqual(value['rows'][0]['ping']['sent'], 3)
+        self.assertEqual([r['skip_reason'] for r in value['rows'][1:]], ['packet_budget_exceeded'] * 3)
+        self.assertEqual(len([args for args, _, _ in runner.calls if '--' in args]), 1)
 
     def test_owner_or_identity_rejection_runs_no_subprocess(self):
         runner = Mock(side_effect=AssertionError("no commands"))

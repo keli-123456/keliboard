@@ -1,0 +1,12 @@
+[package]
+name = "keli-entry-probe-isolated-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+futures-util = "=0.3.32"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+sha2 = "=0.10.9"
+tokio = { version = "=1.54.1", features = ["macros", "net", "process", "rt-multi-thread", "sync", "time"] }
