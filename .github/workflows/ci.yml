@@ -29,7 +29,7 @@ jobs:
       - name: Check staging, driver journal, diagnostics and synthetic verifier guards (Windows)
         if: runner.os == 'Windows'
         working-directory: tools/machine-acceptance
-        run: python -m unittest -v test_staging test_bootstrap_diagnostics test_diagnostic_capture test_probe_sampling test_entry_probe_diagnostics test_entry_probe_capture test_driver_journal test_controller_readiness test_install_only_runner test_worker.WorkerTests test_driver_linux test_application_bundle test_entry_probe_linux test_entry_probe_iputils test_iputils_namespace test_runtime_diagnostics test_runtime_projection_chain
+        run: python -m unittest -v test_staging test_bootstrap_diagnostics test_diagnostic_capture test_runtime_payload test_cli_error_capture test_probe_sampling test_entry_probe_diagnostics test_entry_probe_capture test_driver_journal test_controller_readiness test_install_only_runner test_worker.WorkerTests test_driver_linux test_application_bundle test_entry_probe_linux test_entry_probe_iputils test_iputils_namespace test_runtime_diagnostics test_runtime_projection_chain
       - name: Check staging, driver journal, diagnostics and synthetic verifier guards (isolated Linux)
         if: runner.os == 'Linux'
         working-directory: tools/machine-acceptance
@@ -52,6 +52,7 @@ jobs:
             LD_LIBRARY_PATH="$libdir" LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
             GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_LFS_SKIP_SMUDGE=1 \
             "$py" -B -m unittest -v test_staging test_bootstrap_diagnostics test_diagnostic_capture \
+            test_runtime_payload test_cli_error_capture \
             test_probe_sampling test_entry_probe_diagnostics test_entry_probe_capture test_driver_journal test_controller_readiness test_install_only_runner \
             test_worker.WorkerTests test_driver_linux test_application_bundle test_entry_probe_linux test_entry_probe_iputils test_iputils_namespace test_runtime_diagnostics test_runtime_projection_chain
 
@@ -152,6 +153,10 @@ jobs:
 
       - name: Install dependencies
         run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Check runtime payload and safe PHP exception projection (offline)
+        working-directory: tools/machine-acceptance
+        run: python3 -B -m unittest -v test_runtime_payload test_cli_error_capture
 
       - name: Verify installed platform requirements
         run: composer check-platform-reqs --no-interaction

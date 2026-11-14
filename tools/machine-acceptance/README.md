@@ -38,8 +38,9 @@ production route, command, scheduler or source of authorization. A separately
 reviewed fresh CLI must provide its existing `KeliLiveScope` and bind
 `adopt-source` to `keli_acceptance_adopt_source`, and the fixture-only initial DNS
 path to `keli_acceptance_source_current`. Both this file and
-`source_fixture_evidence.php` must be staged and frozen. The canonical launcher
-now requires both pins and rejects unreviewed replacements even when a bundle
+`source_fixture_evidence.php` must be staged, installed into the active runtime
+and frozen, together with `cli_diagnostics.php`. The canonical launcher
+requires these pins and rejects unreviewed replacements even when a bundle
 manifest is recomputed. This change does not adapt or resume any old driver.
 
 The pure evidence checker reports each rejected field, retaining installation,
@@ -71,6 +72,53 @@ provider/DNS request, SSH, real database, host change or live replay is involved
 php vendor/phpunit/phpunit/phpunit tests/Unit/Services/MachineAcceptanceSourceEvidenceTest.php
 python -B -m unittest -q test_probe_sampling test_diagnostic_capture
 ```
+
+## Active Runtime And Safe CLI Locations (R16 Offline Repair)
+
+R16 uploaded the evidence helper, but its installer copied only ten runtime
+files and omitted `source_fixture_evidence.php`. Executing that exact public
+copy loop in a temporary directory reproduces a Laravel `ErrorException` at
+the old `source_fixture.php:16`. The retained R16 exception contains no original
+message/location, so this confirms the packaging defect, not a recovered private
+stack or proof that no other failure could have occurred.
+
+`runtime_payload.py` is now the sole reviewed active-file list. A fresh
+`runtime_install.py` must `import runtime_payload` and call
+`runtime_payload.publish(BUNDLE, BASE)` unconditionally inside `install()`,
+replacing its old manual copy loop before starting any service. The publisher
+validates every required file against the existing staging manifest before the
+first write, uses exclusive regular-file creation and independently reads all
+active hashes back. Missing, changed, linked or existing runtime files refuse
+startup; this is not an in-place upgrade/retry mechanism. Both `RUNTIME` and
+`STAGING` must contain its complete payload and the publisher module.
+
+The fresh CLI must load `cli_diagnostics.php` before its guarded dispatch and use
+`keli_acceptance_cli_failure($command, $error)` for adoption failures. The source
+adapter records the original exception through an exclusive first-error journal
+attempt without replacing it. Only fixed public relative filenames, bounded
+line numbers, known exception categories and warning severity are projected.
+Unknown locations become null. No absolute path, message, trace, arguments,
+config value or raw log is exported, and the projector needs no Laravel service
+container. Existing field-level rejection details remain intact.
+
+The local `live_operator.command` must import `cli_error_capture` and execute
+`result = cli_error_capture.capture_result(campaign, result)` before its
+`campaign.save('latest-' + name + '.json', result)` statement. Capture uses an
+exclusive local first-error file and an independent readback. Write denial,
+readback mismatch or missing diagnostics remain explicitly unconfirmed, do not
+replace the original error and do not block original resource cleanup. A later
+error cannot overwrite the first. The canonical fresh launcher checks these
+installation and capture bindings before importing any dispatch driver.
+
+```powershell
+python -B -m unittest -q test_runtime_payload test_cli_error_capture test_diagnostic_capture
+php vendor/phpunit/phpunit/phpunit tests/Unit/Services/MachineAcceptanceSourceEvidenceTest.php tests/Unit/Services/MachineAcceptanceCliDiagnosticsTest.php
+```
+
+No R16 driver/input/result was patched or replayed. No new live scope, VM,
+deployment, provider/DNS/SSH operation, automatic switch or queue change is
+authorized by this repair. POSIX ownership/link checks still require separate
+Linux runtime validation. See the [R16 offline finding](../../docs/machine-source-fixture-diagnostics.md#r16-runtime-publication-defect).
 
 ## Timing-Safe Sampling and Cleanup Reads
 

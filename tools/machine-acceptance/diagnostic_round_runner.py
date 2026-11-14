@@ -13,6 +13,7 @@ import diagnostic_capture
 import entry_probe_capture
 import aliyun_cleanup
 import probe_sampling
+import runtime_payload
 
 
 STOP_FILES = ("closed.json", "stop-request.json", "cleanup-intent.json", "round-intent.json", "control-intent.json",
@@ -21,8 +22,9 @@ FLAGS = ("production_automatic_creation", "production_automatic_rotation", "prod
          "production_queue_changes", "production_database_writes", "tanzhen_access", "business_machine_5_access")
 TOOLS = ("bootstrap_diagnostics.py", "diagnostic_capture.py", "diagnostic_round_runner.py",
          "entry_probe_diagnostics.py", "entry_probe_capture.py", "aliyun_cleanup.py", "aliyun_cleanup.php", "probe_sampling.py",
-         "source_fixture.php", "source_fixture_evidence.php")
-REQUIRED = {*TOOLS, "campaign.py", "node.py", "cleanup.py", "round_runner.py", "authorization.json"}
+         "source_fixture.php", "source_fixture_evidence.php", "cli_diagnostics.php", "runtime_payload.py", "cli_error_capture.py")
+REQUIRED = {*TOOLS, "campaign.py", "node.py", "cleanup.py", "round_runner.py", "authorization.json",
+            "runtime_install.py", "live_cli.php", "live_operator.py", "staging_control.py"}
 
 
 class Refused(Exception):
@@ -73,6 +75,10 @@ def prepare(work):
         with Path(__file__).with_name(name).open("rb") as stream:
             require(hashlib.file_digest(stream, "sha256").hexdigest() == pins[name], "launcher_tool_changed")
     require(aliyun_cleanup.SOURCE_SHA256 == pins['aliyun_cleanup.php'], "loaded_cleanup_reader_changed")
+    try:
+        runtime_payload.validate_bindings(base)
+    except (runtime_payload.Refused, OSError, ValueError, SyntaxError):
+        raise Refused("runtime_publication_contract_required") from None
     return base, auth["run_id"], pins
 
 

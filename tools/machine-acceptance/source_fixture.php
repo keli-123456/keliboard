@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/cli_diagnostics.php';
+
 final class KeliSourceFixtureEvidenceRejected extends RuntimeException
 {
     public bool $diagnosticRecorded = false;
@@ -52,6 +54,17 @@ function keli_acceptance_source_current(array $ids): App\Models\MachineOwnedInst
 }
 
 function keli_acceptance_adopt_source(array $ids, array $scope): array
+{
+    return keli_acceptance_cli_guard(
+        static fn (): array => keli_acceptance_register_source($ids, $scope),
+        static function (array $diagnostic): void {
+            KeliLiveScope::assertSource('adopt-source', true);
+            KeliLiveScope::journal('cli-error-first-error.json', $diagnostic);
+        },
+    );
+}
+
+function keli_acceptance_register_source(array $ids, array $scope): array
 {
     KeliLiveScope::assertSource('adopt-source', true);
     if (($GLOBALS['argv'][2] ?? null) !== $ids['source_task_id']) throw new RuntimeException('exact_source_reference_required');

@@ -3,6 +3,7 @@
 tools/machine-acceptance/aliyun_cleanup.php text eol=lf
 tools/machine-acceptance/source_fixture.php text eol=lf
 tools/machine-acceptance/source_fixture_evidence.php text eol=lf
+tools/machine-acceptance/cli_diagnostics.php text eol=lf
 *.css linguist-vendored
 *.scss linguist-vendored
 *.js linguist-vendored

@@ -59,3 +59,48 @@ See [the aggregate evidence](evidence/source-fixture-diagnostics-20261114.json).
 These local tests do not replace Linux/runtime or live cloud acceptance. A
 future live check needs a new approved scope, the canonical helper bindings and
 a fresh freeze; this change does not prepare or authorize such a check.
+
+## R16 Runtime Publication Defect
+
+The closed R16 inputs show that `source_fixture_evidence.php` was staged but not
+included in `runtime_install.py`'s ten-file copy loop. Its source adapter loads
+the checker from the active runtime root, not the staging directory. A local
+test executes only that original copy-loop AST using a bounded temporary-file
+copy stub, then invokes the pure evidence function under the actual Laravel
+warning handler. It reproduces `ErrorException` at the frozen
+`source_fixture.php:16`, without importing or running the closed driver.
+
+The packaging omission is confirmed. R16's original private error message and
+location were not retained and are not recovered by this test; do not rewrite
+its historical `blocked_not_passed` result or claim exclusive attribution from
+the generic retained exception alone.
+
+The new canonical `runtime_payload.py` publishes twelve reviewed active files,
+including both the checker and `cli_diagnostics.php`, after validating the full
+required payload against staging hashes. It refuses missing/corrupt/linked
+inputs or pre-existing targets and independently reads all active hashes back.
+The fresh launcher now refuses old manual-copy adapters before dispatch, even
+if all staged-file hashes match. The future isolated installer must explicitly
+bind the publisher before starting services; no closed installer is edited.
+
+The source adapter's guard rethrows the original exception. Its separate safe
+diagnostic has only allowlisted public source aliases, line number, exception
+class/category and warning severity. Unknown paths are redacted. Neither raw
+messages/stack arguments nor a Laravel container are needed for projection.
+Field rejections retain their original codes and checks. Diagnostic storage
+failure never replaces the original cause; the first record cannot be replaced
+by a later error. Fresh CLI and local-capture bindings are mandatory before
+dispatch, with local exclusive save and independent readback before the latest
+result is persisted. None of this changes source eligibility, candidate
+forwarding, DNS or cleanup authorization.
+
+See [R16 offline aggregate evidence](evidence/r16-source-exception-offline-20261114.json).
+Verification: focused PHP 64 tests / 2,897 assertions; full PHP Unit 3,976 tests /
+31,731 assertions with three skips; Python acceptance tools 404 tests with 33
+environment skips. All completed without failures/errors. The final source-scope
+recheck before diagnostic journaling was reverified by the focused PHP suite.
+The corrected pure evidence path and in-memory SQLite registration are offline
+regressions, not a new live acceptance. Windows cannot validate Linux ownership,
+symlinks, service startup or a real Linode/DNS cycle. R16 and prior closed rounds
+remain unchanged; no VM, deployment, formal database/queue/automatic-switch
+change, tanzhen access or GitHub run is part of this work.

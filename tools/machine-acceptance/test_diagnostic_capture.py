@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 import bootstrap_diagnostics as probe
 import diagnostic_capture as capture
 import diagnostic_round_runner as entry
+import runtime_payload
 
 
 RUN = "keli-accept-synthetic-diagnostics-01234567"
@@ -195,6 +196,12 @@ class EntryTests(unittest.TestCase):
         for name in entry.REQUIRED - {"authorization.json"}:
             source = Path(entry.__file__).with_name(name)
             (self.base / name).write_bytes(source.read_bytes() if name in entry.TOOLS else b"# inert local fixture\n")
+        names = tuple(sorted(runtime_payload.STAGED))
+        (self.base / 'live_operator.py').write_text('import cli_error_capture\nRUNTIME = ' + repr(names) +
+            "\ndef command():\n    result = cli_error_capture.capture_result(campaign, result)\n    campaign.save('latest-' + name + '.json', result)\n")
+        (self.base / 'staging_control.py').write_text('STAGING = ' + repr(names))
+        (self.base / 'runtime_install.py').write_text('import runtime_payload\ndef install():\n    runtime_payload.publish(BUNDLE, BASE)\n')
+        (self.base / 'live_cli.php').write_text("<?php\nrequire_once __DIR__ . '/cli_diagnostics.php';\n$out = keli_acceptance_cli_failure($command, $error);\n")
         self.repin()
         blocked = patch.object(subprocess, "Popen", side_effect=AssertionError("real subprocess forbidden"))
         blocked.start()
@@ -249,7 +256,7 @@ class EntryTests(unittest.TestCase):
         path = self.base / "offline-result.json"
         original = json.loads(path.read_text())
         for name in ["entry_probe_diagnostics.py", "entry_probe_capture.py", "probe_sampling.py", "aliyun_cleanup.py", "aliyun_cleanup.php",
-                     "source_fixture.php", "source_fixture_evidence.php"]:
+                     "source_fixture.php", "source_fixture_evidence.php", "cli_diagnostics.php", "runtime_payload.py", "cli_error_capture.py"]:
             data = json.loads(json.dumps(original))
             del data["file_digests"][name]
             path.write_text(json.dumps(data))
@@ -257,7 +264,7 @@ class EntryTests(unittest.TestCase):
                 entry.prepare(self.base)
 
     def test_source_checker_cannot_be_replaced_even_with_a_recomputed_bundle_pin(self):
-        for name in ['source_fixture.php', 'source_fixture_evidence.php']:
+        for name in ['source_fixture.php', 'source_fixture_evidence.php', 'cli_diagnostics.php', 'runtime_payload.py', 'cli_error_capture.py']:
             with self.subTest(name=name):
                 path = self.base / name
                 original = path.read_bytes()
@@ -269,6 +276,15 @@ class EntryTests(unittest.TestCase):
                 load.assert_not_called()
                 path.write_bytes(original)
                 self.repin()
+
+    def test_legacy_runtime_install_or_dropped_diagnostic_refuses_before_driver_import(self):
+        path = self.base / 'runtime_install.py'
+        path.write_text("def install():\n    for name in ['source_fixture.php']:\n        run(['install', name])\n")
+        self.repin()
+        with patch.object(entry.importlib, 'import_module') as load:
+            with self.assertRaisesRegex(entry.Refused, 'runtime_publication_contract_required'):
+                entry.run(self.base)
+            load.assert_not_called()
 
     def test_invalid_network_probe_scope_refuses_before_import_or_dispatch(self):
         auth = dict(self.auth, entry_probe_diagnostics={"schema": 1, "enabled": True, "targets": ["127.0.0.1"], "timeout_seconds": 2})
