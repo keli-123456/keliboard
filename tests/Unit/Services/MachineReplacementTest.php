@@ -260,6 +260,21 @@ class MachineReplacementTest extends TestCase
         $this->assertSame('cancelled', $task->status); $this->assertSame(0, $this->posts);
     }
 
+    public function test_new_failed_report_during_preflight_waits_for_collection_and_resumes_one_original_task(): void
+    {
+        $task = $this->queue(); $original = $task->id;
+        $this->fake(preflight: fn () => $this->report(false));
+        $task = $this->poll($task);
+        $this->assertSame('queued', $task->status);
+        $this->assertSame('replacement_evidence_pending', $task->reason);
+        $this->assertNull($task->dispatched_at); $this->assertSame(0, $this->posts);
+        app(MachineFailoverObserver::class)->observe($this->policy->id);
+        $this->fake(); $task = $this->poll($task);
+        $this->assertSame($original, $task->id); $this->assertSame(1, $this->posts);
+        $this->assertSame('waiting_initialization', $task->status);
+        $this->assertSame(1, Replacement::query()->count());
+    }
+
     public function test_observer_guard_refresh_for_our_own_reservation_does_not_create_another_attempt(): void
     {
         $task = $this->queue(); $this->report(false);
@@ -376,6 +391,42 @@ class MachineReplacementTest extends TestCase
         $task = $this->poll($task);
         $this->assertSame('failed', $task->status); $this->assertSame('replacement_evidence_changed', $task->reason);
         $this->assertNull(Replacement::query()->firstOrFail()->source_recovered_at); Http::assertNothingSent();
+    }
+
+    public function test_pending_report_cannot_extend_the_original_task_deadline(): void
+    {
+        $task = $this->queue(); $this->report(false);
+        $task->fill(['deadline_at' => time() - 1])->save(); $task = $this->poll($task);
+        $this->assertSame('failed', $task->status); $this->assertSame('deadline', $task->reason);
+        $this->assertNull($task->dispatched_at); $this->assertSame(0, $this->posts); Http::assertNothingSent();
+    }
+
+    public function test_context_rejection_preserves_safe_first_error_without_raw_context_values(): void
+    {
+        $task = $this->queue(); $this->report(false, ip: '8.8.4.4'); $task = $this->poll($task);
+        $diagnostic = $task->evidence['replacement_diagnostic'];
+        $this->assertSame('replacement_context', $diagnostic['guard']);
+        $this->assertSame(['context_matches'], $diagnostic['failed_fields']);
+        $this->assertStringNotContainsString('8.8.4.4', json_encode($diagnostic));
+        $this->assertSame($diagnostic, $this->poll($task)->evidence['replacement_diagnostic']);
+        $this->assertSame(0, $this->posts);
+    }
+
+    public function test_diagnostic_storage_failure_does_not_replace_the_original_terminal_rejection(): void
+    {
+        $task = $this->queue(); $this->report(false, ip: '8.8.4.4');
+        $previous = Task::getEventDispatcher(); $events = new Dispatcher(app());
+        $events->listen('eloquent.saving: ' . Task::class, function (Task $row) {
+            if (isset($row->evidence['replacement_diagnostic'])) throw new \RuntimeException('synthetic diagnostic storage failure');
+        });
+        Task::setEventDispatcher($events);
+        try { $task = $this->poll($task); }
+        finally { $previous ? Task::setEventDispatcher($previous) : Task::unsetEventDispatcher(); }
+        $this->assertSame('failed', $task->status); $this->assertSame('replacement_evidence_changed', $task->reason);
+        $this->assertNull($task->dispatched_at); $this->assertSame(0, $this->posts);
+        $this->assertArrayNotHasKey('replacement_diagnostic', $task->evidence ?? []);
+        $this->assertTrue(DB::table('v2_machine_provision_step')->where('task_id', $task->id)->where('state', 'failed')
+            ->where('reason', 'replacement_evidence_changed')->exists());
     }
 
     public function test_after_post_source_recovery_retains_the_candidate_instead_of_cancelling_or_cutting_dns(): void

@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import stat
+import replacement_diagnostics
 REPORT = 'cli-error-first-error.json'
 REASONS = {'cli_exception', 'source_fixture_ownership_invalid', 'single_source_ipv4_required',
            'source_fixture_cloud_missing', 'source_fixture_not_failed', 'source_fixture_reports_missing',
@@ -115,6 +116,7 @@ def preserve(campaign, diagnostic, command='adopt-source', dns=None):
 
 
 def capture_result(campaign, result):
+    result = replacement_diagnostics.capture_result(campaign, result)
     if not isinstance(result, dict):
         return result
     command = result.get('command')

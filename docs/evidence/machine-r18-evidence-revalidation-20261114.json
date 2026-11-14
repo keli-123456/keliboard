@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "date": "2026-11-14",
+  "base_commit": "c27c5a81522e4efc7df89c1c57b96c67e1fd4743",
+  "mode": "offline_fix_and_mocked_regressions",
+  "action_scope": "validation_stage_before_user_authorized_source_sync",
+  "historical_failed_guard_uniquely_recovered": false,
+  "preflight_report_race_reproduced": true,
+  "pending_is_creation_authorization": false,
+  "cleanup_classifications": ["not_dispatched", "dispatched", "needs_review"],
+  "missing_id_alone_proves_no_dispatch": false,
+  "no_dispatch_proof_requires_complete_inventory": true,
+  "uncreated_task_private_cleanup_waived": false,
+  "field_diagnostics_allow_raw_values": false,
+  "first_error_retained_and_read_back": true,
+  "tests": {
+    "php_unit": {"tests": 4037, "assertions": 32082, "failures": 0, "errors": 0, "skipped": 3},
+    "python_acceptance": {"tests": 428, "failures": 0, "errors": 0, "skipped": 33},
+    "php_lint": {"files": 10, "failures": 0},
+    "git_diff_check": true,
+    "junit_sha256": "7e37dc59cdda9d044a443d1169c22827a92459934c4a7e08c85ba65ff69b2ac1",
+    "real_linux_runtime_executed": false,
+    "real_cloud_or_dns_executed": false
+  },
+  "r18_immutable_evidence": {
+    "run_id": "keli-accept-20261114-r18-c27c5a81",
+    "frozen_inputs": 120,
+    "changed_inputs": 0,
+    "closed_sha256": "9929f12424ef73f26ce5d6804b990fe0e1d7b95fe0aefa7d0cb7c4584f8afc71",
+    "final_sha256": "67f1a9ef19c63c48c10d57827202976c6f0b89a33259bead77fa6c3c58864f8b",
+    "cleanup_sha256": "92bb196a72c0e9ad588e0b33c3e0a6f25a8ed62945afadd90b6702256d15402a",
+    "original_verdict": "cleanup_incomplete_needs_review",
+    "original_verdict_changed": false,
+    "private_cleanup_retroactively_verified": false
+  },
+  "unrelated_plan_unchanged": true,
+  "external_actions": {
+    "production_access": false,
+    "deployment": false,
+    "cloud_creation": false,
+    "dns_write": false,
+    "r18_replayed": false,
+    "automatic_switches_changed": false,
+    "queue_configuration_changed": false,
+    "tanzhen_access": false,
+    "github_actions": false,
+    "git_commit_or_push": false
+  },
+  "new_live_authorization": false
+}

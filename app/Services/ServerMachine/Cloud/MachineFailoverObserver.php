@@ -107,7 +107,8 @@ class MachineFailoverObserver
     public function summary(Policy $policy, int $now): array
     {
         $result = ['available' => $this->available(), 'collecting' => config('machine_failover.observe_enabled') === true,
-            'evidence_current' => false, 'observed_failures' => null, 'threshold_reached' => false, 'reason' => 'sample_not_collected', 'plan' => null, 'probe' => null];
+            'evidence_current' => false, 'collection_pending' => false, 'pending_plan' => null,
+            'observed_failures' => null, 'threshold_reached' => false, 'reason' => 'sample_not_collected', 'plan' => null, 'probe' => null];
         if (!$result['available']) return $result;
         $sample = $this->capture($policy, $now);
         $result['probe'] = array_intersect_key($sample, array_flip(['context_key', 'state', 'reason', 'installation_id', 'checked_at', 'valid_until', 'ipv4', 'targets']));
@@ -116,7 +117,20 @@ class MachineFailoverObserver
             && hash_equals($row->context_key, $sample['context_key']) && $row->checked_at === $sample['checked_at'] && $row->state === $sample['state'];
         $result['reason'] = !$result['collecting'] ? 'observation_disabled' : ($matches ? $row->reason
             : (in_array($sample['state'], ['healthy', 'failed'], true) ? 'sample_not_collected' : $sample['reason']));
-        if (!$matches) return $result;
+        if (!$matches) {
+            // A newer report is not a new authorization. Wait for the collector without resetting the original intent.
+            $result['collection_pending'] = $result['collecting'] && $row && $row->state === 'failed' && $row->threshold_reached
+                && $sample['state'] === 'failed' && hash_equals($row->context_key, $sample['context_key'])
+                && $row->installation_id === $sample['installation_id'] && is_int($sample['checked_at'])
+                && $sample['checked_at'] > $row->checked_at
+                && $sample['checked_at'] - $row->checked_at <= $sample['interval'] * 2 + 10;
+            if ($result['collection_pending']) {
+                $plan = Plan::query()->where('policy_id', $policy->id)->where('policy_revision', $policy->revision)
+                    ->where('status', 'blocked')->latest('id')->first();
+                if ($plan) $result['pending_plan'] = $this->presentPlan($plan);
+            }
+            return $result;
+        }
         $result['evidence_current'] = true;
         $result['observed_failures'] = $row->consecutive_failures;
         $result['threshold_reached'] = $row->threshold_reached;

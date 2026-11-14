@@ -201,7 +201,9 @@ class EntryTests(unittest.TestCase):
             "\ndef command():\n    result = cli_error_capture.capture_result(campaign, result)\n    campaign.save('latest-' + name + '.json', result)\n")
         (self.base / 'staging_control.py').write_text('STAGING = ' + repr(names))
         (self.base / 'runtime_install.py').write_text('import runtime_payload\ndef install():\n    runtime_payload.publish(BUNDLE, BASE)\n')
-        (self.base / 'live_cli.php').write_text("<?php\nrequire_once __DIR__ . '/cli_diagnostics.php';\nif (in_array($command, ['adopt-source', 'initial-dns'], true)) {\n$out = keli_acceptance_cli_failure($command, $error);\n}\n")
+        (self.base / 'live_cli.php').write_text("<?php\nrequire_once __DIR__ . '/cli_diagnostics.php';\nif (in_array($command, ['adopt-source', 'initial-dns'], true)) {\n$out = keli_acceptance_cli_failure($command, $error);\n}\nfunction tasks() { return \\App\\Services\\ServerMachine\\Cloud\\MachineProvisionTaskEvidence::snapshot($task); }\n")
+        (self.base / 'teardown_control.py').write_text("COLLECT_PHP = DB_GUARD + r'\\App\\Services\\ServerMachine\\Cloud\\MachineProvisionTaskEvidence::snapshot($t)'\n")
+        (self.base / 'cleanup.py').write_text('class Cleanup:\n def tasks(self): pass\n def receipts_cloud(self,inventory=None): pass\n def collect(self): pass\ndef controller_evidence(value): return value\n')
         self.repin()
         blocked = patch.object(subprocess, "Popen", side_effect=AssertionError("real subprocess forbidden"))
         blocked.start()
@@ -256,7 +258,8 @@ class EntryTests(unittest.TestCase):
         path = self.base / "offline-result.json"
         original = json.loads(path.read_text())
         for name in ["entry_probe_diagnostics.py", "entry_probe_capture.py", "probe_sampling.py", "aliyun_cleanup.py", "aliyun_cleanup.php",
-                     "source_fixture.php", "source_fixture_evidence.php", "cli_diagnostics.php", "runtime_payload.py", "cli_error_capture.py"]:
+                     "source_fixture.php", "source_fixture_evidence.php", "cli_diagnostics.php", "runtime_payload.py", "cli_error_capture.py",
+                     "replacement_diagnostics.py", "cleanup_tasks.py"]:
             data = json.loads(json.dumps(original))
             del data["file_digests"][name]
             path.write_text(json.dumps(data))
@@ -264,7 +267,8 @@ class EntryTests(unittest.TestCase):
                 entry.prepare(self.base)
 
     def test_source_checker_cannot_be_replaced_even_with_a_recomputed_bundle_pin(self):
-        for name in ['source_fixture.php', 'source_fixture_evidence.php', 'cli_diagnostics.php', 'runtime_payload.py', 'cli_error_capture.py']:
+        for name in ['source_fixture.php', 'source_fixture_evidence.php', 'cli_diagnostics.php', 'runtime_payload.py', 'cli_error_capture.py',
+                     'replacement_diagnostics.py', 'cleanup_tasks.py']:
             with self.subTest(name=name):
                 path = self.base / name
                 original = path.read_bytes()
@@ -280,6 +284,14 @@ class EntryTests(unittest.TestCase):
     def test_legacy_runtime_install_or_dropped_diagnostic_refuses_before_driver_import(self):
         path = self.base / 'runtime_install.py'
         path.write_text("def install():\n    for name in ['source_fixture.php']:\n        run(['install', name])\n")
+        self.repin()
+        with patch.object(entry.importlib, 'import_module') as load:
+            with self.assertRaisesRegex(entry.Refused, 'runtime_publication_contract_required'):
+                entry.run(self.base)
+            load.assert_not_called()
+
+    def test_legacy_cleanup_collector_without_boundary_proof_refuses_before_import(self):
+        (self.base / 'teardown_control.py').write_text("COLLECT_PHP = DB_GUARD + r'legacy identity fields only'\n")
         self.repin()
         with patch.object(entry.importlib, 'import_module') as load:
             with self.assertRaisesRegex(entry.Refused, 'runtime_publication_contract_required'):
@@ -335,7 +347,13 @@ def execute(role,code,timeout):
 '''.replace('ROW_VALUE', repr(CaptureTests.task(self, 'source'))).replace('RESPONSE_VALUE', repr(response()))
         cleanup = '''import campaign
 CLEANUP_DNS_PHP='legacy synthetic read adapter'
+class Cleanup:
+ def tasks(self): return []
+ def receipts_cloud(self,inventory=None): return []
+ def collect(self): return {}
+def controller_evidence(value): return value
 def main():
+ assert getattr(Cleanup,'_task_classification_installed',False)
  assert 'InvalidRR.NoExist' in CLEANUP_DNS_PHP
  assert (campaign.BASE/'synthetic-probe-ordered.json').is_file()
  assert (campaign.BASE/'bootstrap-diagnostics.json').is_file()

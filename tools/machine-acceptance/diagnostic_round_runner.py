@@ -14,6 +14,7 @@ import entry_probe_capture
 import aliyun_cleanup
 import probe_sampling
 import runtime_payload
+import cleanup_tasks
 
 
 STOP_FILES = ("closed.json", "stop-request.json", "cleanup-intent.json", "round-intent.json", "control-intent.json",
@@ -22,9 +23,10 @@ FLAGS = ("production_automatic_creation", "production_automatic_rotation", "prod
          "production_queue_changes", "production_database_writes", "tanzhen_access", "business_machine_5_access")
 TOOLS = ("bootstrap_diagnostics.py", "diagnostic_capture.py", "diagnostic_round_runner.py",
          "entry_probe_diagnostics.py", "entry_probe_capture.py", "aliyun_cleanup.py", "aliyun_cleanup.php", "probe_sampling.py",
-         "source_fixture.php", "source_fixture_evidence.php", "cli_diagnostics.php", "runtime_payload.py", "cli_error_capture.py")
+         "source_fixture.php", "source_fixture_evidence.php", "cli_diagnostics.php", "runtime_payload.py", "cli_error_capture.py",
+         "replacement_diagnostics.py", "cleanup_tasks.py")
 REQUIRED = {*TOOLS, "campaign.py", "node.py", "cleanup.py", "round_runner.py", "authorization.json",
-            "runtime_install.py", "live_cli.php", "live_operator.py", "staging_control.py"}
+            "runtime_install.py", "live_cli.php", "live_operator.py", "staging_control.py", "teardown_control.py"}
 
 
 class Refused(Exception):
@@ -77,6 +79,7 @@ def prepare(work):
     require(aliyun_cleanup.SOURCE_SHA256 == pins['aliyun_cleanup.php'], "loaded_cleanup_reader_changed")
     try:
         runtime_payload.validate_bindings(base)
+        cleanup_tasks.validate_bindings(base)
     except (runtime_payload.Refused, OSError, ValueError, SyntaxError):
         raise Refused("runtime_publication_contract_required") from None
     return base, auth["run_id"], pins
@@ -94,6 +97,7 @@ def run(work):
         if name == "cleanup":
             require(isinstance(getattr(module, "CLEANUP_DNS_PHP", None), str), "cleanup_readback_adapter_required")
             module.CLEANUP_DNS_PHP = aliyun_cleanup.CLEANUP_DNS_PHP
+            cleanup_tasks.install(module)
         return module
 
     sys.path.insert(0, str(base))

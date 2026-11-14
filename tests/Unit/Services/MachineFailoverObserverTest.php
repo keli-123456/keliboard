@@ -144,6 +144,42 @@ class MachineFailoverObserverTest extends TestCase
         Http::assertNothingSent(); Bus::assertNothingDispatched();
     }
 
+    public function test_newer_failed_report_is_pending_not_a_current_or_collected_authorization(): void
+    {
+        $this->trigger(); $plan = Plan::query()->latest('id')->firstOrFail(); $count = Observation::query()->count();
+        $this->tick(); $this->report();
+        $view = $this->observer->summary($this->policy, $this->clock);
+        $this->assertTrue($view['collection_pending']); $this->assertFalse($view['evidence_current']);
+        $this->assertFalse($view['threshold_reached']); $this->assertNull($view['plan']);
+        $this->assertSame($plan->id, $view['pending_plan']['id']);
+        $this->assertSame($count, Observation::query()->count());
+        $this->observe(); $view = $this->observer->summary($this->policy, $this->clock);
+        $this->assertFalse($view['collection_pending']); $this->assertTrue($view['evidence_current']);
+        $this->assertSame($plan->evidence['episode_key'], $view['plan']['evidence']['episode_key']);
+        Http::assertNothingSent(); Bus::assertNothingDispatched();
+    }
+
+    public static function nonPendingReports(): array
+    {
+        return array_map(fn ($value) => [$value], ['recovered', 'gap', 'partial', 'context', 'installation', 'future', 'disabled', 'missing_plan']);
+    }
+
+    #[DataProvider('nonPendingReports')]
+    public function test_changed_or_incomplete_report_cannot_be_a_pending_original_failure(string $kind): void
+    {
+        $this->trigger(); $this->tick($kind === 'gap' ? 21 : 5);
+        if ($kind === 'missing_plan') Plan::query()->delete();
+        $this->report($kind === 'recovered', $kind === 'partial' ? ['targets' => []]
+            : ($kind === 'future' ? ['checked_at' => $this->clock + 1] : []),
+            $kind === 'installation' ? str_repeat('b', 32) : null, $kind === 'context' ? '8.8.4.4' : '8.8.8.8');
+        if ($kind === 'disabled') config(['machine_failover.observe_enabled' => false]);
+        $view = $this->observer->summary($this->policy, $this->clock);
+        $this->assertFalse($view['evidence_current']);
+        $this->assertNull($view['plan']); $this->assertNull($view['pending_plan']);
+        if ($kind !== 'missing_plan') $this->assertFalse($view['collection_pending']);
+        Http::assertNothingSent(); Bus::assertNothingDispatched();
+    }
+
     public function test_initially_unreachable_source_reaches_threshold_without_a_healthy_baseline(): void
     {
         $this->assertSame('initialization_required', $this->observe()['reason']);

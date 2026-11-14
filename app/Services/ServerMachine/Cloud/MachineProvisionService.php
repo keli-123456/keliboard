@@ -22,7 +22,7 @@ class MachineProvisionService
         'outcome_uncertain', 'reconcile_incomplete', 'duplicate_candidates', 'identity_changed', 'initialization_failed',
         'reports_timeout', 'create_not_resolved', 'deadline', 'queue_unavailable', 'cancelled_by_admin', 'internal_failure',
         'panel_origin_changed', 'resource_missing', 'replacement_disabled', 'replacement_not_allowed',
-        'replacement_evidence_changed', 'replacement_guard_failed', 'replacement_cooldown', 'source_recovered',
+        'replacement_evidence_changed', 'replacement_evidence_pending', 'replacement_guard_failed', 'replacement_cooldown', 'source_recovered',
         'replacement_episode_used', 'ownership_mismatch', 'config_changed', 'daily_budget', 'task_active',
         'release_changed', 'isolated_context_changed', 'isolated_scope_changed', 'isolation_confirmation_required', 'credential_group_changed',
         'credential_health_blocked', 'credential_health_unavailable', 'credential_identity_changed',
@@ -174,16 +174,16 @@ class MachineProvisionService
             if (!$task || in_array($task->status, Task::TERMINAL, true) || $task->next_check_at > time()) return;
             try {
                 $this->gate(); $this->actor($task->admin_id); $this->testMachine($task->machine_id);
+                if ($task->deadline_at <= time()) {
+                    $reason = !$task->dispatched_at ? 'deadline' : ($task->external_id ? 'reports_timeout' : 'create_not_resolved');
+                    $this->move($task, $task->dispatched_at ? 'needs_review' : 'failed', $reason); return;
+                }
                 if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertTask($task);
                 if ($task->replacement_id) app(MachineReplacementService::class)->assertDispatch($task);
                 $account = MachineCloudAccount::query()->find($task->account_id);
                 $machine = ServerMachine::query()->find($task->machine_id);
                 if (!$account || $account->revision !== $task->account_revision) throw new CloudException('account_changed');
                 if (!$machine || !$machine->is_active || !hash_equals($task->machine_authority, hash('sha256', (string) $machine->token))) throw new CloudException('source_changed');
-                if ($task->deadline_at <= time()) {
-                    $reason = !$task->dispatched_at ? 'deadline' : ($task->external_id ? 'reports_timeout' : 'create_not_resolved');
-                    $this->move($task, $task->dispatched_at ? 'needs_review' : 'failed', $reason); return;
-                }
                 $payload = $task->payload;
                 $provider = $this->provider->client($account, $payload['plan']);
                 $health = app(MachineCloudCredentialHealth::class);
@@ -259,9 +259,10 @@ class MachineProvisionService
                     'forwarding_verified' => false, 'dns_changed' => false, 'old_resources_changed' => false]);
             } catch (CloudException $error) {
                 if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
+                $this->captureReplacementFailure($task, $error);
                 if (isset($account) && $account) $this->captureFailure($task, $account, $error, $task->dispatched_at === null ? 'preflight' : ($task->external_id ? 'readback' : 'create'));
                 $reason = $this->reason($error->getMessage());
-                if (in_array($reason, ['provider_unavailable', 'provider_rate_limited', 'reconcile_incomplete'], true)) {
+                if (in_array($reason, ['provider_unavailable', 'provider_rate_limited', 'reconcile_incomplete', 'replacement_evidence_pending'], true)) {
                     $this->move($task, $task->dispatched_at && !$task->external_id ? 'outcome_unknown' : $task->status, $reason);
                     $this->wait($task, $error instanceof CloudRequestFailure ? time() + $error->decision['cooldown_seconds'] : null); return;
                 }
@@ -387,6 +388,19 @@ class MachineProvisionService
             }
         }
         $task->evidence = $evidence; $task->save();
+    }
+    private function captureReplacementFailure(Task $task, CloudException $error): void
+    {
+        if ($error->getMessage() !== 'replacement_evidence_changed' || $error->replacementDiagnostic() === null) return;
+        $previous = $task->evidence;
+        try {
+            $evidence = $previous ?? [];
+            $evidence['replacement_diagnostic'] ??= $error->replacementDiagnostic();
+            $task->evidence = $evidence; $task->save();
+        } catch (\Throwable) {
+            // A failed diagnostic save must not contaminate the subsequent terminal-state save.
+            $task->evidence = $previous;
+        }
     }
     private function dispatch(Task $task, int $delay = 0): void
     {

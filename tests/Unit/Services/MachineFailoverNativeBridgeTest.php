@@ -101,7 +101,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
 
     protected function tearDown(): void { Carbon::setTestNow(); parent::tearDown(); }
 
-    private function fixture(int $n, string $provider = 'linode', bool $initiallyUnreachable = false): array
+    private function fixture(int $n, string $provider = 'linode', bool $initiallyUnreachable = false, int $sampleAge = 2): array
     {
         [$region, $size, $image] = match ($provider) {
             'digitalocean' => ['sgp1', 's-1vcpu-1gb', 'debian-12-x64'], 'vultr' => ['40', 'vc2-1c-1gb', '2136'],
@@ -148,7 +148,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
             'proxied' => false, 'ttl' => 60, 'comment' => $dns->marker, 'locked' => false];
         $fixture = compact('machine', 'policy', 'accounts', 'source', 'sourceIp', 'dns');
         config(['machine_failover.observe_enabled' => true]);
-        foreach ([-12 => !$initiallyUnreachable, -7 => false, -2 => false] as $delta => $healthy) $this->sourceReport($fixture, $healthy, time() + $delta);
+        foreach ([-$sampleAge - 10 => !$initiallyUnreachable, -$sampleAge - 5 => false, -$sampleAge => false] as $delta => $healthy) $this->sourceReport($fixture, $healthy, time() + $delta);
         Carbon::setTestNow();
         return $fixture;
     }
@@ -1026,6 +1026,96 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $this->assertSame('failed', $this->task()->status);
     }
     public static function revocations(): array { return [['gate'], ['admin']]; }
+
+    public function test_native_preflight_report_race_waits_without_rotating_or_replacing_the_intent(): void
+    {
+        $this->fixtures = [$this->fixture(2, 'linode', true, 7)]; $run = $this->start();
+        $this->duringPreflight = function () {
+            $this->duringPreflight = null;
+            $f = $this->fixtures[0]; $this->report($f, $f['source'], $f['sourceIp'], false, time());
+        };
+        $run = $this->advance($run); $task = $this->task();
+        $this->assertSame('running', $run['status']); $this->assertSame('queued', $task->status);
+        $this->assertSame('replacement_evidence_pending', $task->reason); $this->assertNull($task->dispatched_at);
+        $this->assertCount(0, $this->posts); $this->assertSame(1, Attempt::count());
+        $id = $task->id; $attempt = Attempt::firstOrFail()->id;
+        app(MachineFailoverObserver::class)->observe($this->fixtures[0]['policy']->id);
+        $task->fill(['next_check_at' => 0])->save(); $this->advance($run);
+        $this->assertSame($id, $this->task()->id); $this->assertSame($attempt, Attempt::firstOrFail()->id);
+        $this->assertCount(1, $this->posts); $this->assertSame('waiting_initialization', $this->task()->status);
+    }
+
+    public function test_native_pending_before_reservation_does_not_create_an_attempt_or_task(): void
+    {
+        $this->fixtures = [$this->fixture(2, 'linode', true, 7)]; $run = $this->start(); $f = $this->fixtures[0];
+        $this->report($f, $f['source'], $f['sourceIp'], false, time());
+        $run = $this->advance($run);
+        $this->assertSame('running', $run['status']); $this->assertSame('ready', $run['members'][0]['phase']);
+        $this->assertSame(0, Attempt::count()); $this->assertCount(0, $this->posts);
+        app(MachineFailoverObserver::class)->observe($f['policy']->id); $this->advance($run);
+        $this->assertSame(1, Attempt::count()); $this->assertCount(1, $this->posts);
+    }
+
+    public function test_native_changed_context_before_task_keeps_field_diagnostics_in_public_report(): void
+    {
+        $run = $this->start(); $f = $this->fixtures[0];
+        $this->report($f, $f['source'], '8.8.4.1', false, time()); $run = $this->advance($run);
+        $this->assertSame('needs_review', $run['status']); $this->assertCount(0, $this->posts);
+        $diagnostic = $run['members'][0]['replacement_diagnostic'];
+        $this->assertSame('native_source', $diagnostic['guard']);
+        $this->assertContains('context_matches', $diagnostic['failed_fields']);
+        $this->assertSame(0, Attempt::count());
+        $this->assertSame($diagnostic, $this->advance($run)['members'][0]['replacement_diagnostic']);
+    }
+
+    private function undispatchedFailure(): Task
+    {
+        $run = $this->start();
+        $this->duringPreflight = function () {
+            $this->duringPreflight = null; $f = $this->fixtures[0];
+            $this->report($f, $f['source'], '8.8.4.1', false, time());
+        };
+        $this->advance($run); $task = $this->task();
+        $this->assertSame('failed', $task->status); $this->assertNull($task->dispatched_at); $this->assertCount(0, $this->posts);
+        return $task;
+    }
+
+    public function test_never_dispatched_candidate_exports_transactional_boundary_proof_and_safe_first_error(): void
+    {
+        $task = $this->undispatchedFailure();
+        $snapshot = \App\Services\ServerMachine\Cloud\MachineProvisionTaskEvidence::snapshot($task);
+        $this->assertNotContains(false, $snapshot['dispatch_evidence']['checks']);
+        $this->assertSame('native_source', $snapshot['replacement_diagnostic']['guard']);
+        $this->assertContains('context_matches', $snapshot['replacement_diagnostic']['failed_fields']);
+        app(MachineProvisionService::class)->process($task->id);
+        $this->assertSame($snapshot, \App\Services\ServerMachine\Cloud\MachineProvisionTaskEvidence::snapshot($task));
+        foreach (['api_token', 'callback_hash', 'payload', 'synthetic-token', 'Bearer', 'source_installation_id'] as $secret)
+            $this->assertStringNotContainsString($secret, json_encode($snapshot));
+    }
+
+    public static function dispatchProofChanges(): array
+    {
+        return array_map(fn ($value) => [$value], ['dispatch', 'external_id', 'created_at', 'bootstrap', 'step', 'missing_terminal', 'binding', 'active']);
+    }
+
+    #[DataProvider('dispatchProofChanges')]
+    public function test_unknown_or_changed_candidate_never_exports_a_no_dispatch_proof(string $kind): void
+    {
+        $task = $this->undispatchedFailure();
+        match ($kind) {
+            'dispatch' => $task->fill(['dispatched_at' => time()])->save(),
+            'external_id' => $task->fill(['external_id' => '123'])->save(),
+            'created_at' => $task->fill(['provider_created_at' => gmdate('c')])->save(),
+            'bootstrap' => $task->fill(['bootstrap_state' => 'succeeded'])->save(),
+            'active' => $task->fill(['status' => 'queued'])->save(),
+            'step' => DB::table('v2_machine_provision_step')->insert(['task_id' => $task->id, 'state' => 'dispatching', 'reason' => '', 'created_at' => time()]),
+            'missing_terminal' => DB::table('v2_machine_provision_step')->where('task_id', $task->id)->where('state', 'failed')->delete(),
+            'binding' => Attempt::query()->firstOrFail()->fill(['account_revision' => 99])->save(),
+        };
+        $snapshot = \App\Services\ServerMachine\Cloud\MachineProvisionTaskEvidence::snapshot($task);
+        $this->assertContains(false, $snapshot['dispatch_evidence']['checks']);
+        $this->assertCount(0, $this->posts);
+    }
 
     public function test_registry_keeps_native_run_context_and_history_from_being_deleted_or_reset(): void
     {

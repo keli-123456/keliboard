@@ -116,6 +116,14 @@ class MachineFailoverNativeBridge
                     $reason = $error->getMessage();
                     if (in_array($reason, ['native_lease_lost', 'native_stop_requested', 'runner_disabled'], true)) throw $error;
                     if (in_array($reason, ['parallel_budget', 'account_reserved', 'dns_set_busy'], true)) return;
+                    if ($reason === 'replacement_evidence_pending') return;
+                    if ($error instanceof CloudException && $error->replacementDiagnostic() !== null) {
+                        try {
+                            $current = $row->fresh(); $payload = $current->payload;
+                            $payload['replacement_diagnostic'] ??= $error->replacementDiagnostic();
+                            $current->fill(['payload' => $payload])->save();
+                        } catch (\Throwable) { /* Preserve the original failure even if diagnostics cannot be stored. */ }
+                    }
                     $attempt = $row->fresh()->attempt_id ? Attempt::query()->find($row->fresh()->attempt_id) : null;
                     $task = $attempt?->task_id ? Task::query()->find($attempt->task_id) : null;
                     $partial = $attempt && !empty($attempt->payload['dns_set_runs'])
@@ -457,10 +465,15 @@ class MachineFailoverNativeBridge
     private function source(Member $member, Policy $policy): void
     {
         $summary = app(MachineFailoverObserver::class)->summary($policy, time()); $probe = $summary['probe']; $source = $member->payload['source'];
-        if (($probe['installation_id'] ?? null) !== $source['source_installation_id'] || ($probe['context_key'] ?? null) !== $source['source_context_key']) throw new CloudException('replacement_evidence_changed');
+        $checks = ['installation_matches' => ($probe['installation_id'] ?? null) === $source['source_installation_id'],
+            'context_matches' => ($probe['context_key'] ?? null) === $source['source_context_key'],
+            'evidence_current' => $summary['evidence_current'], 'threshold_reached' => $summary['threshold_reached'],
+            'probe_failed' => ($probe['state'] ?? null) === 'failed',
+            'episode_matches' => (($summary['plan'] ?? $summary['pending_plan'] ?? null)['evidence']['episode_key'] ?? null) === $member->episode_key];
+        if (!$checks['installation_matches'] || !$checks['context_matches']) throw CloudException::replacementEvidence('native_source', $checks);
         if (($probe['state'] ?? null) === 'healthy') throw new CloudException('source_recovered');
-        if (!$summary['evidence_current'] || !$summary['threshold_reached'] || ($probe['state'] ?? null) !== 'failed'
-            || ($summary['plan']['evidence']['episode_key'] ?? null) !== $member->episode_key) throw new CloudException('replacement_evidence_changed');
+        if (in_array(false, $checks, true)) throw CloudException::replacementEvidence('native_source', $checks,
+            ($summary['collection_pending'] ?? false) === true && $checks['episode_matches']);
     }
 
     private function input(Policy $policy, array $credential): array
@@ -567,7 +580,8 @@ class MachineFailoverNativeBridge
         return ['id' => $run->id, 'status' => $run->status, 'execution_enabled' => false, 'automatic_rotation' => false, 'dns_cutover' => false,
             'attempts' => $attempts->count(), 'reserved_cents' => $attempts->sum('reserved_cents'), 'reservations_released' => false,
             'price_verified' => false, 'baseline_cost_included' => false,
-            'members' => $members->map(fn ($row) => $row->only(['id', 'member_id', 'policy_id', 'phase', 'reason']) + ['attempts' => $attempts
+            'members' => $members->map(fn ($row) => $row->only(['id', 'member_id', 'policy_id', 'phase', 'reason'])
+                + ['replacement_diagnostic' => CloudException::safeReplacementDiagnostic($row->payload['replacement_diagnostic'] ?? null)] + ['attempts' => $attempts
                 ->where('execution_member_id', $row->id)->map(fn ($attempt) => $attempt->only(['id', 'ordinal', 'task_id', 'status', 'reserved_cents']))->values()->all()])->all()];
     }
 }

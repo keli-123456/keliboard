@@ -90,14 +90,20 @@ class MachineReplacementService
         $this->ownership->assertExclusive($policy);
         $summary = $this->observer->summary($policy, now()->getTimestamp());
         $context = \App\Models\MachineFailoverObservation::query()->whereKey($plan->observation_id)->value('context_key');
-        if (!is_string($context) || ($summary['probe']['context_key'] ?? null) !== $context) throw new CloudException('replacement_evidence_changed');
+        $contextChecks = ['context_available' => is_string($context), 'context_matches' => ($summary['probe']['context_key'] ?? null) === $context,
+            'installation_matches' => ($summary['probe']['installation_id'] ?? null) === $source];
+        if (in_array(false, $contextChecks, true)) throw CloudException::replacementEvidence('replacement_context', $contextChecks);
         if (($summary['probe']['state'] ?? null) === 'healthy' && ($summary['probe']['installation_id'] ?? null) === $source) {
             throw new CloudException('source_recovered');
         }
-        $sameDecision = ($current || $attempt) ? ($summary['plan']['evidence']['episode_key'] ?? null) === ($plan->evidence['episode_key'] ?? null)
-            && in_array($plan->status, ['blocked', 'superseded'], true) : ($summary['plan']['id'] ?? null) === $plan->id && $plan->status === 'blocked';
-        if (!$summary['evidence_current'] || !$summary['threshold_reached'] || ($summary['probe']['state'] ?? null) !== 'failed' || !$sameDecision
-            || !is_string($plan->evidence['episode_key'] ?? null)) throw new CloudException('replacement_evidence_changed');
+        $decision = $summary['plan'] ?? $summary['pending_plan'] ?? null;
+        $sameDecision = ($current || $attempt) ? ($decision['evidence']['episode_key'] ?? null) === ($plan->evidence['episode_key'] ?? null)
+            && in_array($plan->status, ['blocked', 'superseded'], true) : ($decision['id'] ?? null) === $plan->id && $plan->status === 'blocked';
+        $decisionChecks = ['evidence_current' => $summary['evidence_current'], 'threshold_reached' => $summary['threshold_reached'],
+            'probe_failed' => ($summary['probe']['state'] ?? null) === 'failed', 'decision_matches' => $sameDecision,
+            'episode_present' => is_string($plan->evidence['episode_key'] ?? null)];
+        if (in_array(false, $decisionChecks, true)) throw CloudException::replacementEvidence('replacement_decision', $decisionChecks,
+            ($summary['collection_pending'] ?? false) === true && $sameDecision && $decisionChecks['episode_present']);
         $episode = $plan->evidence['episode_key'];
         if (app(MachineFailoverNativeBridge::class)->claimsEpisode($episode, $attempt)) throw new CloudException('replacement_episode_used');
         if ($attempt) {
@@ -141,7 +147,9 @@ class MachineReplacementService
         if (!$task->dispatched_at) {
             $validated = $this->validate($row->plan_id, $task->payload['plan'], $task);
             if ($row->policy_revision !== $validated['policy_revision'] || !hash_equals($row->episode_key, $validated['episode_key'])) {
-                throw new CloudException('replacement_evidence_changed');
+                throw CloudException::replacementEvidence('dispatch_reservation', [
+                    'revision_matches' => $row->policy_revision === $validated['policy_revision'],
+                    'episode_matches' => hash_equals($row->episode_key, $validated['episode_key'])]);
             }
         }
     }
