@@ -248,12 +248,27 @@ class EntryTests(unittest.TestCase):
     def test_network_diagnostic_tools_require_their_own_frozen_pins(self):
         path = self.base / "offline-result.json"
         original = json.loads(path.read_text())
-        for name in ["entry_probe_diagnostics.py", "entry_probe_capture.py", "probe_sampling.py", "aliyun_cleanup.py", "aliyun_cleanup.php"]:
+        for name in ["entry_probe_diagnostics.py", "entry_probe_capture.py", "probe_sampling.py", "aliyun_cleanup.py", "aliyun_cleanup.php",
+                     "source_fixture.php", "source_fixture_evidence.php"]:
             data = json.loads(json.dumps(original))
             del data["file_digests"][name]
             path.write_text(json.dumps(data))
             with self.assertRaisesRegex(entry.Refused, "pinned_diagnostics_required"):
                 entry.prepare(self.base)
+
+    def test_source_checker_cannot_be_replaced_even_with_a_recomputed_bundle_pin(self):
+        for name in ['source_fixture.php', 'source_fixture_evidence.php']:
+            with self.subTest(name=name):
+                path = self.base / name
+                original = path.read_bytes()
+                path.write_bytes(b'<?php // unreviewed synthetic checker\n')
+                self.repin()
+                with patch.object(entry.importlib, 'import_module') as load:
+                    with self.assertRaisesRegex(entry.Refused, 'launcher_tool_changed'):
+                        entry.prepare(self.base)
+                load.assert_not_called()
+                path.write_bytes(original)
+                self.repin()
 
     def test_invalid_network_probe_scope_refuses_before_import_or_dispatch(self):
         auth = dict(self.auth, entry_probe_diagnostics={"schema": 1, "enabled": True, "targets": ["127.0.0.1"], "timeout_seconds": 2})

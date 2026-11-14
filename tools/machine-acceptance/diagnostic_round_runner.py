@@ -20,7 +20,8 @@ STOP_FILES = ("closed.json", "stop-request.json", "cleanup-intent.json", "round-
 FLAGS = ("production_automatic_creation", "production_automatic_rotation", "production_dns_switch", "production_deployment",
          "production_queue_changes", "production_database_writes", "tanzhen_access", "business_machine_5_access")
 TOOLS = ("bootstrap_diagnostics.py", "diagnostic_capture.py", "diagnostic_round_runner.py",
-         "entry_probe_diagnostics.py", "entry_probe_capture.py", "aliyun_cleanup.py", "aliyun_cleanup.php", "probe_sampling.py")
+         "entry_probe_diagnostics.py", "entry_probe_capture.py", "aliyun_cleanup.py", "aliyun_cleanup.php", "probe_sampling.py",
+         "source_fixture.php", "source_fixture_evidence.php")
 REQUIRED = {*TOOLS, "campaign.py", "node.py", "cleanup.py", "round_runner.py", "authorization.json"}
 
 

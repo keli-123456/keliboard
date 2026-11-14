@@ -1,0 +1,66 @@
+{
+  "schema": 1,
+  "date_beijing": "2026-11-14",
+  "mode": "offline_only",
+  "historical_run_id": "keli-accept-20261113-r15-513c761b",
+  "historical_phase": "adopt-source",
+  "historical_reason": "source_fixture_evidence_invalid",
+  "historical_verdict": "blocked_not_passed",
+  "historical_unique_rejected_field_recoverable": false,
+  "historical_root_cause_confirmed": false,
+  "evidence_limit": "The rejected invocation retained no field-level checks or complete input witness. Earlier valid samples cannot establish which predicate failed at adoption time.",
+  "retained_evidence_rechecked": {
+    "r15_frozen_files_unchanged": 106,
+    "r14_pinned_inputs_and_results_unchanged": 104,
+    "original_r15_source_fixture_sha256": "f53c76d9039b2a45777e35bc6a97edc02ea4356f38abfcbf022ead3b2685c1bd",
+    "original_r15_final_result_sha256": "587ae30b60a87d3d7928d39c98b465c304fd376a98c9ce49cfecc0ede2ea6724",
+    "captured_agent_version_and_binary_match": true,
+    "captured_complete_failed_samples": 5,
+    "captured_native_failure_counts": [1, 2, 3, 4, 5],
+    "captured_sample_gaps_seconds": [11, 12, 11, 11],
+    "task_and_cleanup_receipt_identity_match": true,
+    "these_earlier_snapshots_are_not_the_failed_invocation_witness": true
+  },
+  "changes": {
+    "canonical_isolated_source_registration_adapter": true,
+    "field_level_checks": true,
+    "fixed_first_field_in_cli_safe_exception_reason": true,
+    "exclusive_diagnostic_attempt_before_adoption_intent": true,
+    "diagnostics_contain_only_fixed_codes_and_booleans": true,
+    "diagnostic_storage_failure_preserves_validation_error": true,
+    "earlier_first_error_not_overwritten": true,
+    "both_helper_files_must_be_frozen_and_match_launcher": true,
+    "admission_guard_bypass": false,
+    "historical_failed_verdict_rewritten": false
+  },
+  "synthetic_sqlite_cases": [
+    "Five real Observer failures from four synthetic target records can register the cold fixture without health or forwarding receipts.",
+    "A changed runtime node projection rejects runtime_nodes before registration.",
+    "Diagnostic storage failure preserves runtime_nodes and does not register the fixture.",
+    "A newer callback after collection but before summary rejects evidence_current with sample_not_collected. This is a possible failure mode, not proof of the unique R15 cause."
+  ],
+  "tests": {
+    "focused_php": {"tests": 54, "assertions": 2781, "failures": 0, "errors": 0},
+    "full_php_unit": {"tests": 3966, "assertions": 31615, "failures": 0, "errors": 0, "skipped": 3},
+    "full_python_acceptance_tools": {"tests": 379, "failures": 0, "errors": 0, "skipped": 26},
+    "new_php_files_syntax_checked": true,
+    "windows_skips_do_not_claim_linux_runtime_acceptance": true
+  },
+  "boundaries": {
+    "ssh_requests": 0,
+    "cloud_api_requests": 0,
+    "dns_api_requests": 0,
+    "probe_packets_sent": 0,
+    "cloud_instances_created": 0,
+    "production_database_connections": 0,
+    "production_deployed": false,
+    "production_settings_or_queue_configuration_changed": false,
+    "node_program_changed": false,
+    "automatic_switches_changed": false,
+    "tanzhen_accessed": false,
+    "r15_replayed_or_patched": false,
+    "github_ci_invoked": false,
+    "committed_or_pushed": false
+  },
+  "remaining": "Any later live verification needs a separately approved fresh identifier, newly bound CLI and frozen helpers. No live run is authorized by this offline change."
+}

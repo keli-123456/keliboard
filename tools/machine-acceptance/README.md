@@ -24,6 +24,54 @@ scenario condition, not the operational failover rule. Candidate reachability,
 identity-bound TCP/UDP receipts, DNS ownership and execution gates are unchanged.
 See [probe admission rules](../../docs/machine-failover-probe-admission.md).
 
+## Source Fixture Evidence Diagnostics (2026-11-14)
+
+R15 stopped at `adopt-source` with `source_fixture_evidence_invalid`. Its retained
+version/binary reports and five complete failed samples can be checked offline,
+but the failing invocation did not retain the individual validator inputs or
+checks. The exact historical rejected predicate is **not recoverable** from
+those aggregates. Do not relabel a synthetic reproduction as its confirmed cause
+or rewrite R15's closed result.
+
+`source_fixture.php` is the canonical isolated registration adapter; it is not a
+production route, command, scheduler or source of authorization. A separately
+reviewed fresh CLI must provide its existing `KeliLiveScope` and bind
+`adopt-source` to `keli_acceptance_adopt_source`, and the fixture-only initial DNS
+path to `keli_acceptance_source_current`. Both this file and
+`source_fixture_evidence.php` must be staged and frozen. The canonical launcher
+now requires both pins and rejects unreviewed replacements even when a bundle
+manifest is recomputed. This change does not adapt or resume any old driver.
+
+The pure evidence checker reports each rejected field, retaining installation,
+account/task/cloud identity, exact runtime node projection, thirty-second
+freshness, native failure threshold and failed-source checks. It does not loosen
+them, accept stale observations, create a health/forwarding receipt, or permit
+candidate creation/DNS cutover. Numeric strings are not proof of integer counts
+or timestamps. Unknown and recovered sources remain refused.
+
+Rejections retain all fixed field codes/boolean checks and attempt one exclusive
+`source-fixture-evidence-first-error.json` journal write before any adoption
+intent or registration. No values, IPs, session IDs, hashes, credentials or raw
+logs are exported in this diagnostic. The exception also carries a fixed first
+field in its reason, such as
+`source_fixture_evidence_invalid_evidence_current`, so the existing bounded CLI
+error projection keeps attribution even if diagnostic storage fails. A failed
+write never replaces the original rejection or overwrites earlier evidence.
+
+The PHP Unit suite covers individual negative guards, malformed values,
+diagnostic storage failures and first-error preservation. Its isolated SQLite
+child uses the real address inventory and Observer, four synthetic target
+records and R15-shaped sample gaps; provider reconciliation is mocked and stray
+HTTP is forbidden. A newer callback between collection and summary reproduces a
+rejection at `evidence_current` (`sample_not_collected`). This is a tested possible
+failure mode, **not proof that this was R15's unique cause**. No extra Ping,
+provider/DNS request, SSH, real database, host change or live replay is involved.
+
+```powershell
+php vendor/phpunit/phpunit/phpunit tests/Unit/Services/MachineAcceptanceSourceEvidenceTest.php
+python -B -m unittest -q test_probe_sampling test_diagnostic_capture
+```
+
 ## Timing-Safe Sampling and Cleanup Reads
 
 R14 stopped with `baseline_report_gap`: two accepted probe times were followed
