@@ -153,3 +153,21 @@ def validate_bindings(base):
             and 'keli_acceptance_cli_failure($command, $error)' in cli, 'cli_diagnostic_binding_required')
     require("if (in_array($command, ['adopt-source', 'initial-dns'], true)) {" in cli,
             'dns_cli_diagnostic_binding_required')
+    validate_source_reader(base)
+
+
+def validate_source_reader(base):
+    source = base / 'source_fixture.php'
+    if not source.is_file() or 'function keli_acceptance_source_observation_window(' not in source.read_text(encoding='utf-8'):
+        return
+    required = [('teardown_control.py', 'source_fixture_diagnostic', 'source_journal')]
+    if (base / 'source_diagnostics.py').exists():
+        required.append(('source_diagnostics.py', 'sd_project', 'fields'))
+    for name, function, method in required:
+        path = base / name
+        require(path.is_file(), 'source_reader_binding_required')
+        tree = ast.parse(path.read_text(encoding='utf-8'))
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == function]
+        require(len(functions) == 1 and any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name) and node.func.value.id == 'cli_error_capture'
+                and node.func.attr == method for node in ast.walk(functions[0])), 'source_reader_binding_required')

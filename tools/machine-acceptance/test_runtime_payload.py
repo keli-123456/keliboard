@@ -139,6 +139,24 @@ class RuntimePayloadTests(unittest.TestCase):
         with self.assertRaisesRegex(payload.Refused, 'runtime_publish_before_services_required'):
             payload.validate_bindings(self.root)
 
+    def test_new_count_diagnostics_refuse_a_legacy_or_missing_cleanup_reader_before_import(self):
+        self.bindings()
+        (self.root / 'source_fixture.php').write_bytes((HERE / 'source_fixture.php').read_bytes())
+        with self.assertRaisesRegex(payload.Refused, 'source_reader_binding_required'):
+            payload.validate_bindings(self.root)
+        reader = self.root / 'teardown_control.py'
+        reader.write_text('def source_fixture_diagnostic():\n    return old_schema_only(value)\n')
+        with self.assertRaisesRegex(payload.Refused, 'source_reader_binding_required'):
+            payload.validate_bindings(self.root)
+        reader.write_text('def source_fixture_diagnostic():\n    return cli_error_capture.source_journal(value, RUN, COMMIT)\n')
+        payload.validate_bindings(self.root)
+        projector = self.root / 'source_diagnostics.py'
+        projector.write_text('def sd_project(value):\n    return old_schema_only(value)\n')
+        with self.assertRaisesRegex(payload.Refused, 'source_reader_binding_required'):
+            payload.validate_bindings(self.root)
+        projector.write_text('def sd_project(value):\n    return cli_error_capture.fields(value)\n')
+        payload.validate_bindings(self.root)
+
     @unittest.skipUnless(PHP and (HERE.parents[1] / 'vendor/autoload.php').is_file(), 'PHP and locked Laravel vendor required')
     def test_real_laravel_warning_missing_active_helper_and_fixed_published_runtime(self):
         payload.publish(self.bundle, self.target)

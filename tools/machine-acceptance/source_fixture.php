@@ -13,10 +13,26 @@ final class KeliSourceFixtureEvidenceRejected extends RuntimeException
 }
 
 function keli_acceptance_source_facts(array $task, array $cloud, array $row, array $summary,
-    array $expected, int $now, ?callable $remember = null): void
+    array $expected, int $now, ?callable $remember = null, ?array $window = null, bool $sameContext = true): void
 {
     $checker = require __DIR__ . '/source_fixture_evidence.php';
     $diagnostic = $checker($task, $cloud, $row, $summary, $expected, $now);
+    if ($window !== null && $diagnostic['reason'] !== 'source_fixture_scope_invalid') {
+        $safe = keli_acceptance_source_window_diagnostic($window);
+        if ($safe === null) throw new RuntimeException('source_fixture_observation_invalid');
+        $diagnostic['schema'] = 2;
+        $diagnostic['observation_window'] = $safe;
+        $diagnostic['registration'] = [
+            'observed_failures' => is_int($summary['observed_failures'] ?? null) ? $summary['observed_failures'] : null,
+            'checked_at' => is_int($summary['probe']['checked_at'] ?? null) ? $summary['probe']['checked_at'] : null,
+            'evidence_current' => ($summary['evidence_current'] ?? null) === true,
+            'threshold_reached' => ($summary['threshold_reached'] ?? null) === true, 'same_context' => $sameContext,
+        ];
+        $diagnostic['checks']['observation_window_complete'] = keli_acceptance_source_window_matches($safe, $diagnostic['registration']);
+        $diagnostic['failed_fields'] = array_keys(array_filter($diagnostic['checks'], static fn (bool $passed): bool => !$passed));
+        $diagnostic['ok'] = $diagnostic['failed_fields'] === [];
+        $diagnostic['reason'] = $diagnostic['ok'] ? null : 'source_fixture_evidence_invalid';
+    }
     if ($diagnostic['ok']) return;
     $error = new KeliSourceFixtureEvidenceRejected($diagnostic);
     try {
@@ -28,6 +44,71 @@ function keli_acceptance_source_facts(array $task, array $cloud, array $row, arr
         // Preserve the validation failure even when its separate diagnostic cannot be saved.
     }
     throw $error;
+}
+
+function keli_acceptance_source_observation_window(
+    App\Services\ServerMachine\Cloud\MachineFailoverObserver $observer,
+    App\Models\MachineFailoverPolicy $policy, ?callable $clock = null, ?callable $pause = null,
+    ?callable $wall = null): array
+{
+    $clock ??= static fn (): float => hrtime(true) / 1e9;
+    $pause ??= static fn (float $seconds) => usleep((int) ceil($seconds * 1e6));
+    $wall ??= static fn (): int => time();
+    $started = $clock(); $startedWall = $wall(); $summary = [];
+    $window = ['schema' => 1, 'budget_seconds' => 60, 'poll_seconds' => 5,
+        'required_failures' => max(3, $policy->failure_threshold), 'elapsed_ms' => 0,
+        'stop_reason' => 'deadline', 'attempts' => []];
+    // Provider reconciliation can outlive the previous window. Recollect, never carry its count forward.
+    for ($attempt = 0; $attempt < 12; $attempt++) {
+        KeliLiveScope::assertSource('adopt-source', true);
+        $tick = $clock(); $wallNow = $wall();
+        if (!is_finite($tick) || $tick < $started || $wallNow < $startedWall - 3) {
+            $window['stop_reason'] = 'clock_invalid'; break;
+        }
+        if ($tick >= $started + 60 || $wallNow >= $startedWall + 60) break;
+        $collected = $observer->observe($policy->id);
+        $collectedRow = App\Models\MachineFailoverObservation::query()->find($collected['id'] ?? 0);
+        $summary = $observer->summary($policy, $wall());
+        KeliLiveScope::assertSource('adopt-source', true);
+        $finished = $clock();
+        $elapsed = is_finite($finished) ? max(0, $finished - $started) : 60;
+        $window['elapsed_ms'] = min(60000, (int) ceil($elapsed * 1000));
+        $probe = $summary['probe'] ?? [];
+        $window['attempts'][] = [
+            'elapsed_ms' => $window['elapsed_ms'], 'collected_failures' => $collected['consecutive_failures'] ?? null,
+            'observed_failures' => $summary['observed_failures'] ?? null,
+            'collected_checked_at' => $collected['checked_at'] ?? null, 'checked_at' => $probe['checked_at'] ?? null,
+            'evidence_current' => ($summary['evidence_current'] ?? null) === true,
+            'threshold_reached' => ($summary['threshold_reached'] ?? null) === true,
+            'collection_pending' => ($summary['collection_pending'] ?? null) === true,
+            'probe_state' => $probe['state'] ?? 'unknown',
+            // The public observation deliberately hides context_key; read only its exact immutable row.
+            'same_context' => $collectedRow !== null && $collectedRow->policy_id === $policy->id
+                && $collectedRow->policy_revision === $policy->revision && isset($probe['context_key'])
+                && hash_equals($collectedRow->context_key, $probe['context_key']),
+            'same_sample' => isset($collected['checked_at'], $probe['checked_at'])
+                && $collected['checked_at'] === $probe['checked_at'],
+        ];
+        if (!is_finite($finished) || $finished < $tick || $wall() < $startedWall - 3) {
+            $window['stop_reason'] = 'clock_invalid'; break;
+        }
+        if ($elapsed >= 60 || $wall() >= $startedWall + 60) break;
+        if (($probe['state'] ?? null) !== 'failed') {
+            $window['stop_reason'] = 'probe_not_failed'; break;
+        }
+        $last = $window['attempts'][array_key_last($window['attempts'])];
+        if ($last['evidence_current'] && $last['same_context'] && $last['same_sample'] && !$last['collection_pending']
+            && $last['threshold_reached'] && is_int($last['observed_failures'])
+            && $last['collected_failures'] === $last['observed_failures']
+            && $last['observed_failures'] >= $window['required_failures']) {
+            $window['stop_reason'] = 'threshold_reached'; break;
+        }
+        // Slow reads already consume this tick; do not add another five seconds after them.
+        $remaining = min($started + 60, $tick + 5) - $finished;
+        if ($remaining > 0) $pause($remaining);
+    }
+    $window['elapsed_ms'] = min(60000, max($window['elapsed_ms'], (int) max(0, ceil(($clock() - $started) * 1000))));
+    return ['summary' => $summary, 'diagnostic' => $window];
 }
 
 function keli_acceptance_source_current(array $ids): App\Models\MachineOwnedInstance
@@ -87,27 +168,24 @@ function keli_acceptance_register_source(array $ids, array $scope): array
         ->reconcile($account, $task->payload['request'], $task->dispatched_at);
     if (!$remote) throw new RuntimeException('source_fixture_cloud_missing');
     $observer = app(App\Services\ServerMachine\Cloud\MachineFailoverObserver::class);
-    $summary = [];
-    for ($attempt = 0; $attempt < 5; $attempt++) {
-        $observer->observe($policy->id);
-        $summary = $observer->summary($policy, time());
-        if (($summary['probe']['state'] ?? null) !== 'failed') throw new RuntimeException('source_fixture_not_failed');
-        if ($summary['evidence_current'] && $summary['threshold_reached'] && $summary['observed_failures'] >= 3) break;
-        if ($attempt < 4) sleep(5);
-    }
+    $observed = keli_acceptance_source_observation_window($observer, $policy);
     $row = app(App\Services\ServerMachine\MachineAddressInventory::class)->snapshots([$machine], true)[17][$task->installation_id] ?? [];
     $health = app(App\Services\ServerMachine\Cloud\MachineCloudHealth::class)->snapshot(new App\Models\MachineCloudResource([
         'machine_id' => 17, 'installation_id' => $task->installation_id, 'machine_authority' => $task->machine_authority,
         'public_ips' => $task->public_ips]), $task->dispatched_at);
     if (!$health['ready'] || $health['nodes'] !== 'fresh') throw new RuntimeException('source_fixture_reports_missing');
+    $summary = $observer->summary($policy, time());
+    $sameContext = isset($observed['summary']['probe']['context_key'], $summary['probe']['context_key'])
+        && hash_equals($observed['summary']['probe']['context_key'], $summary['probe']['context_key']);
     $expected = ['run_id' => KeliLiveScope::RUN, 'machine_id' => 17, 'account_id' => 1, 'ip' => $ips[0],
         'binary_sha256' => $release->binary_sha256, 'version' => $release->version,
         'node_id' => $ids['node_id'], 'health_or_forwarding_claimed' => false];
     keli_acceptance_source_facts($task->only(['installation_id', 'status', 'bootstrap_state', 'machine_id', 'account_id',
         'dispatched_at', 'external_id', 'provider_created_at', 'public_ips']) + ['label' => $task->payload['request']['label']],
         $remote, $row, $summary, $expected, time(), static function (array $diagnostic): void {
-            KeliLiveScope::journal('source-fixture-evidence-first-error.json', $diagnostic);
-        });
+            KeliLiveScope::journal('source-fixture-evidence-first-error.json', ['diagnostic' => $diagnostic]);
+        }, $observed['diagnostic'], $sameContext);
+    KeliLiveScope::assertSource('adopt-source', true);
     KeliLiveScope::journal('source-adoption-intent.json', ['task_id' => $task->id, 'external_id' => $task->external_id,
         'installation_id' => $task->installation_id, 'health_or_forwarding_claimed' => false]);
     Illuminate\Support\Facades\DB::transaction(function () use ($task, $policy, $release, $ips, $expected) {
@@ -131,5 +209,6 @@ function keli_acceptance_register_source(array $ids, array $scope): array
         $locked->fill(['status' => 'accepted', 'reason' => null, 'payload' => $payload])->save();
     });
     return ['source_fixture_registered' => true, 'health_or_forwarding_success_claimed' => false,
-        'registration_basis' => 'real_cloud_bootstrap_runtime_and_collected_failure', 'source_task_id' => $task->id];
+        'registration_basis' => 'real_cloud_bootstrap_runtime_and_collected_failure', 'source_task_id' => $task->id,
+        'source_observation_window' => $observed['diagnostic']];
 }

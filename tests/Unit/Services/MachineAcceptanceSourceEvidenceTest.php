@@ -142,7 +142,10 @@ class MachineAcceptanceSourceEvidenceTest extends TestCase
 
     public static function registrationModes(): array
     {
-        return [['valid'], ['runtime-mismatch'], ['storage-failure'], ['callback-race']];
+        return array_map(static fn ($mode) => [$mode], ['valid', 'runtime-mismatch', 'storage-failure', 'callback-race',
+            'window-legacy', 'window-recollected', 'window-timeout', 'window-recovered', 'window-unknown',
+            'window-stop', 'window-duplicate', 'window-higher-threshold', 'window-late-read',
+            'window-wall-expired', 'window-clock-backwards', 'window-register-race']);
     }
 
     public function test_existing_first_diagnostic_is_not_overwritten_by_a_later_failure(): void

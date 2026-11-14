@@ -1,9 +1,11 @@
 """Allowlisted source-CLI exception projection and exclusive local first-error readback."""
 import os
+import re
 from pathlib import Path
 import stat
 import replacement_diagnostics
 REPORT = 'cli-error-first-error.json'
+SOURCE_REPORT = 'source-fixture-first-error.json'
 REASONS = {'cli_exception', 'source_fixture_ownership_invalid', 'single_source_ipv4_required',
            'source_fixture_cloud_missing', 'source_fixture_not_failed', 'source_fixture_reports_missing',
            'source_fixture_original_identity_changed', 'exact_source_reference_required',
@@ -68,16 +70,89 @@ def project(value):
 
 
 def fields(value):
-    require(isinstance(value, dict) and set(value) == {'schema', 'ok', 'reason', 'failed_fields', 'checks'}
-            and type(value['schema']) is int and value['schema'] == 1 and value['ok'] is False
+    require(isinstance(value, dict))
+    extended = value.get('schema') == 2
+    require(set(value) == ({'schema', 'ok', 'reason', 'failed_fields', 'checks', 'observation_window', 'registration'} if extended
+                          else {'schema', 'ok', 'reason', 'failed_fields', 'checks'})
+            and type(value['schema']) is int and value['schema'] in (1, 2) and value['ok'] is False
             and value['reason'] in {'source_fixture_scope_invalid', 'source_fixture_evidence_invalid'})
     names = SCOPE_FIELDS if value['reason'] == 'source_fixture_scope_invalid' else EVIDENCE_FIELDS
+    if extended:
+        require(value['reason'] == 'source_fixture_evidence_invalid')
+        window = observation_window(value['observation_window'])
+        names = (*names, 'observation_window_complete')
     checks = value['checks']
     require(isinstance(checks, dict) and set(checks) == set(names) and all(type(item) is bool for item in checks.values()))
     failed = [name for name in names if not checks[name]]
     require(bool(failed) and value['failed_fields'] == failed)
-    return {'schema': 1, 'ok': False, 'reason': value['reason'], 'failed_fields': failed,
-            'checks': {name: checks[name] for name in names}}
+    result = {'schema': value['schema'], 'ok': False, 'reason': value['reason'], 'failed_fields': failed,
+              'checks': {name: checks[name] for name in names}}
+    if extended:
+        registration = value['registration']
+        require(isinstance(registration, dict) and set(registration) == {'observed_failures', 'checked_at',
+                'evidence_current', 'threshold_reached', 'same_context'}
+                and all(type(registration[key]) is bool for key in ('evidence_current', 'threshold_reached', 'same_context')))
+        for key in ('observed_failures', 'checked_at'):
+            require(registration[key] is None or type(registration[key]) is int
+                    and 0 <= registration[key] <= (1000000 if key == 'observed_failures' else 9007199254740991))
+        last = window['attempts'][-1] if window['attempts'] else {}
+        complete = window['stop_reason'] == 'threshold_reached' and all(registration[key] for key in
+                ('evidence_current', 'threshold_reached', 'same_context')) \
+            and registration['observed_failures'] == last.get('observed_failures') \
+            and registration['checked_at'] == last.get('checked_at')
+        require(checks['observation_window_complete'] == complete)
+        result['observation_window'] = window
+        result['registration'] = dict(registration)
+    return result
+
+
+def observation_window(value):
+    require(isinstance(value, dict) and set(value) == {'schema', 'budget_seconds', 'poll_seconds',
+            'required_failures', 'elapsed_ms', 'stop_reason', 'attempts'}
+            and type(value['schema']) is int and value['schema'] == 1
+            and type(value['budget_seconds']) is int and value['budget_seconds'] == 60
+            and type(value['poll_seconds']) is int and value['poll_seconds'] == 5
+            and type(value['required_failures']) is int and 3 <= value['required_failures'] <= 10
+            and type(value['elapsed_ms']) is int and 0 <= value['elapsed_ms'] <= 60000
+            and isinstance(value['stop_reason'], str)
+            and value['stop_reason'] in {'threshold_reached', 'deadline', 'probe_not_failed', 'clock_invalid'}
+            and isinstance(value['attempts'], list) and len(value['attempts']) <= 12)
+    previous = -1
+    for row in value['attempts']:
+        require(isinstance(row, dict) and set(row) == {'elapsed_ms', 'collected_failures', 'observed_failures',
+                'collected_checked_at', 'checked_at', 'evidence_current', 'threshold_reached', 'collection_pending',
+                'probe_state', 'same_context', 'same_sample'}
+                and type(row['elapsed_ms']) is int and 0 <= row['elapsed_ms'] <= value['elapsed_ms']
+                and row['elapsed_ms'] >= previous
+                and isinstance(row['probe_state'], str) and row['probe_state'] in {'healthy', 'failed', 'unknown'}
+                and all(type(row[key]) is bool for key in ('evidence_current', 'threshold_reached',
+                        'collection_pending', 'same_context', 'same_sample')))
+        for key in ('collected_failures', 'observed_failures', 'collected_checked_at', 'checked_at'):
+            require(row[key] is None or type(row[key]) is int
+                    and 0 <= row[key] <= (1000000 if key.endswith('_failures') else 9007199254740991))
+        previous = row['elapsed_ms']
+    if value['stop_reason'] == 'threshold_reached':
+        last = value['attempts'][-1] if value['attempts'] else None
+        require(last is not None and all(last[key] is True for key in
+                ('evidence_current', 'threshold_reached', 'same_context', 'same_sample'))
+                and last['collection_pending'] is False and last['probe_state'] == 'failed'
+                and last['checked_at'] is not None and last['checked_at'] == last['collected_checked_at']
+                and type(last['observed_failures']) is int and last['observed_failures'] >= value['required_failures']
+                and last['observed_failures'] == last['collected_failures'] and value['elapsed_ms'] < 60000)
+    return {**value, 'attempts': [dict(row) for row in value['attempts']]}
+
+
+def source_journal(value, run_id, application_commit):
+    require(isinstance(run_id, str) and re.fullmatch(r'keli-accept-[a-z0-9-]{8,100}', run_id)
+            and isinstance(application_commit, str) and re.fullmatch(r'[a-f0-9]{40}', application_commit)
+            and isinstance(value, dict) and value.get('run_id') == run_id
+            and value.get('application_commit') == application_commit
+            and type(value.get('schema')) is int and value['schema'] == 1)
+    owner = {'schema', 'run_id', 'application_commit'}
+    if set(value) == owner | {'diagnostic'}:
+        return fields(value['diagnostic'])
+    require(set(value) == owner | {'ok', 'reason', 'failed_fields', 'checks'})
+    return fields({key: value[key] for key in ('schema', 'ok', 'reason', 'failed_fields', 'checks')})
 
 
 def dns_diagnostic(value):
@@ -89,15 +164,27 @@ def dns_diagnostic(value):
     return dict(value)
 
 
-def preserve(campaign, diagnostic, command='adopt-source', dns=None):
+def preserve(campaign, diagnostic, command='adopt-source', dns=None, source=None):
     require(command in {'adopt-source', 'initial-dns'})
     value = {'schema': 1, 'run_id': campaign.RUN, 'phase': command, 'diagnostic': project(diagnostic)}
     if dns is not None:
         require(command == 'initial-dns')
         value['dns_provider_diagnostic'] = dns_diagnostic(dns)
+    source_value = None
+    if source is not None:
+        require(command == 'adopt-source')
+        source_value = {'schema': 1, 'run_id': campaign.RUN, 'phase': command, 'diagnostic': fields(source)}
+    preserve_first(campaign, REPORT, value)
+    if source_value is not None:
+        preserve_first(campaign, SOURCE_REPORT, source_value)
+    return {'ok': True, 'independent_local_readback_verified': True}
+
+
+def preserve_first(campaign, name, value):
+    require(name in (REPORT, SOURCE_REPORT))
     base = Path(campaign.BASE)
     require(not os.path.lexists(base / 'closed.json'))
-    path = base / REPORT
+    path = base / name
     def regular():
         info = path.lstat()
         require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 0 < info.st_size <= 16384)
@@ -106,13 +193,12 @@ def preserve(campaign, diagnostic, command='adopt-source', dns=None):
     if os.path.lexists(path):
         regular()
     try:
-        campaign.save(REPORT, value, exclusive=True)
+        campaign.save(name, value, exclusive=True)
     except FileExistsError:
         regular()
-        require(campaign.load(REPORT) == value)
+        require(campaign.load(name) == value)
     regular()
-    require(campaign.load(REPORT) == value)
-    return {'ok': True, 'independent_local_readback_verified': True}
+    require(campaign.load(name) == value)
 
 
 def capture_result(campaign, result):
@@ -140,6 +226,7 @@ def capture_result(campaign, result):
                     cli_diagnostic_recorded=result['cli_diagnostic_recorded'])
         if isinstance(result.get('reason'), str) and result['reason'] in REASONS:
             safe['reason'] = result['reason']
+        rejected = None
         if diagnostic['error_class'] == 'KeliSourceFixtureEvidenceRejected':
             rejected = fields(result.get('source_fixture_evidence'))
             reason = rejected['reason'] + '_' + rejected['failed_fields'][0]
@@ -151,7 +238,7 @@ def capture_result(campaign, result):
             require(command == 'initial-dns' and diagnostic['error_class'] in
                     {'App\\Services\\ServerMachine\\Dns\\DnsException', 'App\\Services\\ServerMachine\\Dns\\DnsRequestFailure'})
             safe['dns_provider_diagnostic'] = dns
-        safe['cli_diagnostic_preservation'] = preserve(campaign, diagnostic, command, dns)
+        safe['cli_diagnostic_preservation'] = preserve(campaign, diagnostic, command, dns, rejected)
     except Exception:
         safe['cli_diagnostic_preservation'] = {'ok': False, 'reason': 'cli_diagnostic_unconfirmed'}
     return safe

@@ -63,10 +63,57 @@ function keli_acceptance_cli_guard(callable $operation, callable $remember): mix
     }
 }
 
+function keli_acceptance_source_window_diagnostic(array $value): ?array
+{
+    $keys = array_keys($value); sort($keys);
+    if ($keys !== ['attempts', 'budget_seconds', 'elapsed_ms', 'poll_seconds', 'required_failures', 'schema', 'stop_reason']
+        || $value['schema'] !== 1 || $value['budget_seconds'] !== 60 || $value['poll_seconds'] !== 5
+        || !is_int($value['required_failures']) || $value['required_failures'] < 3 || $value['required_failures'] > 10
+        || !is_int($value['elapsed_ms']) || $value['elapsed_ms'] < 0 || $value['elapsed_ms'] > 60000
+        || !in_array($value['stop_reason'], ['threshold_reached', 'deadline', 'probe_not_failed', 'clock_invalid'], true)
+        || !is_array($value['attempts']) || !array_is_list($value['attempts']) || count($value['attempts']) > 12) return null;
+    $previous = -1;
+    foreach ($value['attempts'] as $row) {
+        if (!is_array($row)) return null;
+        $keys = array_keys($row); sort($keys);
+        if ($keys !== ['checked_at', 'collected_checked_at', 'collected_failures', 'collection_pending', 'elapsed_ms',
+            'evidence_current', 'observed_failures', 'probe_state', 'same_context', 'same_sample', 'threshold_reached']
+            || !is_int($row['elapsed_ms']) || $row['elapsed_ms'] < 0 || $row['elapsed_ms'] < $previous || $row['elapsed_ms'] > $value['elapsed_ms']
+            || !in_array($row['probe_state'], ['healthy', 'failed', 'unknown'], true)) return null;
+        foreach (['evidence_current', 'threshold_reached', 'collection_pending', 'same_context', 'same_sample'] as $key)
+            if (!is_bool($row[$key])) return null;
+        foreach (['collected_failures', 'observed_failures', 'collected_checked_at', 'checked_at'] as $key)
+            if ($row[$key] !== null && (!is_int($row[$key]) || $row[$key] < 0
+                || $row[$key] > (str_ends_with($key, '_failures') ? 1000000 : 9007199254740991))) return null;
+        $previous = $row['elapsed_ms'];
+    }
+    if ($value['stop_reason'] === 'threshold_reached') {
+        $last = $value['attempts'][array_key_last($value['attempts'])] ?? null;
+        if (!$last || !$last['evidence_current'] || !$last['threshold_reached'] || !$last['same_context']
+            || !$last['same_sample'] || $last['collection_pending'] || $last['probe_state'] !== 'failed'
+            || $last['checked_at'] === null || $last['checked_at'] !== $last['collected_checked_at']
+            || $last['observed_failures'] < $value['required_failures']
+            || $last['observed_failures'] !== $last['collected_failures'] || $value['elapsed_ms'] >= 60000) return null;
+    }
+    return $value;
+}
+
+function keli_acceptance_source_window_matches(array $window, array $registration): bool
+{
+    $last = $window['attempts'][array_key_last($window['attempts'])] ?? [];
+    return $window['stop_reason'] === 'threshold_reached' && $registration['same_context']
+        && $registration['evidence_current'] && $registration['threshold_reached']
+        && $registration['checked_at'] === ($last['checked_at'] ?? null)
+        && $registration['observed_failures'] === ($last['observed_failures'] ?? null);
+}
+
 function keli_acceptance_cli_fields(array $value): ?array
 {
     $keys = array_keys($value); sort($keys);
-    if ($keys !== ['checks', 'failed_fields', 'ok', 'reason', 'schema'] || $value['schema'] !== 1 || $value['ok'] !== false
+    $extended = ($value['schema'] ?? null) === 2;
+    if ($keys !== ($extended ? ['checks', 'failed_fields', 'observation_window', 'ok', 'reason', 'registration', 'schema']
+            : ['checks', 'failed_fields', 'ok', 'reason', 'schema'])
+        || !in_array($value['schema'], [1, 2], true) || $value['ok'] !== false
         || !in_array($value['reason'], ['source_fixture_scope_invalid', 'source_fixture_evidence_invalid'], true)) return null;
     $scope = ['expected_run_id', 'expected_machine_id', 'expected_account_id', 'expected_node_id',
         'expected_ipv4', 'expected_binary', 'expected_version', 'no_health_claim'];
@@ -76,6 +123,21 @@ function keli_acceptance_cli_fields(array $value): ?array
         'agent_at_fresh', 'agent_after_dispatch', 'evidence_current', 'threshold_reached', 'observed_failures',
         'probe_state', 'probe_installation', 'probe_ipv4', 'probe_at_type', 'probe_at_future', 'probe_at_fresh', 'probe_valid_until'];
     $names = $value['reason'] === 'source_fixture_scope_invalid' ? $scope : $evidence;
+    if ($extended) {
+        if ($value['reason'] !== 'source_fixture_evidence_invalid' || !is_array($value['observation_window'])
+            || keli_acceptance_source_window_diagnostic($value['observation_window']) === null) return null;
+        if (!is_array($value['registration'])) return null;
+        $keys = array_keys($value['registration']); sort($keys);
+        if ($keys !== ['checked_at', 'evidence_current', 'observed_failures', 'same_context', 'threshold_reached']) return null;
+        foreach (['same_context', 'evidence_current', 'threshold_reached'] as $key)
+            if (!is_bool($value['registration'][$key])) return null;
+        foreach (['observed_failures', 'checked_at'] as $key) {
+            $number = $value['registration'][$key];
+            if ($number !== null && (!is_int($number) || $number < 0
+                || $number > ($key === 'observed_failures' ? 1000000 : 9007199254740991))) return null;
+        }
+        $names[] = 'observation_window_complete';
+    }
     if (!is_array($value['checks']) || count($value['checks']) !== count($names)) return null;
     $failed = []; $checks = [];
     foreach ($names as $name) {
@@ -84,7 +146,13 @@ function keli_acceptance_cli_fields(array $value): ?array
         if (!$checks[$name]) $failed[] = $name;
     }
     if ($failed === [] || $value['failed_fields'] !== $failed) return null;
-    return ['schema' => 1, 'ok' => false, 'reason' => $value['reason'], 'failed_fields' => $failed, 'checks' => $checks];
+    $out = ['schema' => $value['schema'], 'ok' => false, 'reason' => $value['reason'], 'failed_fields' => $failed, 'checks' => $checks];
+    if ($extended) {
+        if ($checks['observation_window_complete'] !== keli_acceptance_source_window_matches($value['observation_window'], $value['registration'])) return null;
+        $out['observation_window'] = $value['observation_window'];
+        $out['registration'] = $value['registration'];
+    }
+    return $out;
 }
 
 function keli_acceptance_cli_failure(string $command, Throwable $error): array

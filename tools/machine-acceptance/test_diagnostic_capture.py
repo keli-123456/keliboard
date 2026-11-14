@@ -202,7 +202,8 @@ class EntryTests(unittest.TestCase):
         (self.base / 'staging_control.py').write_text('STAGING = ' + repr(names))
         (self.base / 'runtime_install.py').write_text('import runtime_payload\ndef install():\n    runtime_payload.publish(BUNDLE, BASE)\n')
         (self.base / 'live_cli.php').write_text("<?php\nrequire_once __DIR__ . '/cli_diagnostics.php';\nif (in_array($command, ['adopt-source', 'initial-dns'], true)) {\n$out = keli_acceptance_cli_failure($command, $error);\n}\nfunction tasks() { return \\App\\Services\\ServerMachine\\Cloud\\MachineProvisionTaskEvidence::snapshot($task); }\n")
-        (self.base / 'teardown_control.py').write_text("COLLECT_PHP = DB_GUARD + r'\\App\\Services\\ServerMachine\\Cloud\\MachineProvisionTaskEvidence::snapshot($t)'\n")
+        (self.base / 'teardown_control.py').write_text("COLLECT_PHP = DB_GUARD + r'\\App\\Services\\ServerMachine\\Cloud\\MachineProvisionTaskEvidence::snapshot($t)'\n"
+            "def source_fixture_diagnostic():\n    return cli_error_capture.source_journal(value, RUN, APPLICATION_COMMIT)\n")
         (self.base / 'cleanup.py').write_text('class Cleanup:\n def tasks(self): pass\n def receipts_cloud(self,inventory=None): pass\n def collect(self): pass\ndef controller_evidence(value): return value\n')
         self.repin()
         blocked = patch.object(subprocess, "Popen", side_effect=AssertionError("real subprocess forbidden"))
