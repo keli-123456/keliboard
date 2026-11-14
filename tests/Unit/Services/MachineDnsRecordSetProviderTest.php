@@ -69,7 +69,8 @@ class MachineDnsRecordSetProviderTest extends TestCase
             $create = $client->mutation($set, array_replace($action, ['kind' => 'create', 'before' => null]));
             $this->assertSame('AddDomainRecord', $create['action']); $this->assertArrayNotHasKey('Remark', $create['parameters']);
             $claim = $client->mutation($set, array_replace($action, ['kind' => 'claim']), $row['id']);
-            $this->assertSame('UpdateDomainRecordRemark', $claim['action']); $this->assertSame($row['marker'], $claim['parameters']['Remark']);
+            $this->assertSame('UpdateDomainRecordRemark', $claim['action']);
+            $this->assertSame($row['marker'], MachineDnsRecordSetProvider::canonicalAliyunMarker($claim['parameters']['Remark']));
         } else {
             $this->assertStringStartsWith('/zones/' . str_repeat('a', 32) . '/dns_records/', $wire['path']);
             $this->assertFalse($wire['parameters']['proxied']); $this->assertSame($row['marker'], $wire['parameters']['comment']);

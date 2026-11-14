@@ -90,6 +90,68 @@ class MachineAcceptanceAliyunCleanupTest extends TestCase
         $this->assertSame($record, ($this->reader())('DescribeDomainRecordInfo', ['RecordId' => '123'], true));
     }
 
+    public function test_omitted_empty_remark_normalizes_only_after_exact_id_confirmation(): void
+    {
+        $record = ['RecordId' => '123', 'DomainName' => 'isolated.invalid', 'RR' => 'test', 'Type' => 'A',
+            'Value' => '45.79.10.20', 'TTL' => 600, 'Line' => 'default'];
+        Http::fake(['alidns.aliyuncs.com/*' => Http::response($record)]);
+        $actual = ($this->reader())('DescribeDomainRecordInfo', ['RecordId' => '123'], true);
+        $this->assertSame($record + ['Remark' => ''], $actual);
+        $this->assertNotNull($actual);
+        // The existing outer guard still needs its explicit partial-create receipt opt-in.
+        $matches = fn ($allowBlank) => $actual['Remark'] === 'owned-synthetic'
+            || $allowBlank === true && $actual['Remark'] === '';
+        $this->assertTrue($matches(true));
+        foreach ([false, null, 'true', 1] as $flag) $this->assertFalse($matches($flag));
+        Http::assertSentCount(1);
+    }
+
+    public static function invalidRemarks(): array { return [[null], [false], [12], [[]], [str_repeat('x', 1001)]]; }
+
+    #[DataProvider('invalidRemarks')]
+    public function test_malformed_remark_is_not_silently_converted_to_empty(mixed $remark): void
+    {
+        Http::fake(['alidns.aliyuncs.com/*' => Http::response(['RecordId' => '123', 'Remark' => $remark])]);
+        $this->expectExceptionMessage('dns_read_rejected');
+        ($this->reader())('DescribeDomainRecordInfo', ['RecordId' => '123'], true);
+    }
+
+    public function test_compact_legacy_and_foreign_ownership_remain_distinct(): void
+    {
+        $marker = 'keli-set-' . str_repeat('a', 48);
+        $compact = \App\Services\ServerMachine\Dns\MachineDnsRecordSetProvider::aliyunMarker($marker);
+        foreach ([$compact => $marker, $marker => $marker, 'foreign-synthetic' => 'foreign-synthetic'] as $wire => $canonical) {
+            Http::swap(new \Illuminate\Http\Client\Factory()); Http::preventStrayRequests();
+            Http::fake(['alidns.aliyuncs.com/*' => Http::response(['RecordId' => '123', 'Remark' => $wire])]);
+            $this->assertSame($canonical, ($this->reader())('DescribeDomainRecordInfo', ['RecordId' => '123'], true)['Remark']);
+        }
+    }
+
+    public function test_list_and_exact_id_readback_use_the_same_marker_but_omitted_list_remark_still_needs_fallback(): void
+    {
+        $marker = 'keli-set-' . str_repeat('a', 48);
+        $body = ['TotalCount' => 3, 'PageNumber' => 1, 'PageSize' => 100, 'DomainRecords' => ['Record' => [
+            ['RecordId' => '123', 'Remark' => \App\Services\ServerMachine\Dns\MachineDnsRecordSetProvider::aliyunMarker($marker)],
+            ['RecordId' => '456'], ['RecordId' => '789', 'Remark' => 'foreign-synthetic']]]];
+        Http::fake(['alidns.aliyuncs.com/*' => Http::response($body)]);
+        $rows = ($this->reader())('DescribeSubDomainRecords', ['SubDomain' => 'test.isolated.invalid'])['DomainRecords']['Record'];
+        $this->assertSame($marker, $rows[0]['Remark']);
+        $this->assertArrayNotHasKey('Remark', $rows[1]);
+        $this->assertSame('foreign-synthetic', $rows[2]['Remark']);
+        Http::assertSentCount(1);
+    }
+
+    public function test_reader_does_not_require_a_new_application_class_on_the_existing_credential_bridge(): void
+    {
+        $process = new \Symfony\Component\Process\Process([PHP_BINARY,
+            base_path('tests/Fixtures/MachineAcceptance/cleanup_legacy_bridge_probe.php')]);
+        $process->setTimeout(15); $process->run();
+        $this->assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+        $value = json_decode($process->getOutput(), true, 32, JSON_THROW_ON_ERROR);
+        $this->assertSame(['ok' => true, 'remark' => 'keli-set-' . str_repeat('a', 48),
+            'new_application_class_loaded' => false, 'requests' => 1], $value);
+    }
+
     public function test_write_actions_and_invalid_ids_never_reach_http(): void
     {
         Http::fake();

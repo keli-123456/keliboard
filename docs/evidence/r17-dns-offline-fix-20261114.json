@@ -1,0 +1,73 @@
+{
+  "schema": 1,
+  "recorded_date": "2026-11-14",
+  "timezone": "Asia/Shanghai",
+  "base_commit": "d22e290698e337c6d4eb9f7a5008a0526fca4f10",
+  "mode": "local_offline_regression_only",
+  "closed_round": "keli-accept-20261114-r17-d22e2906",
+  "historical_initialization_root_cause_confirmed": false,
+  "historical_provider_action_status_code_available": false,
+  "confirmed_cleanup_issue": "omitted_empty_remark_was_treated_as_ownership_change",
+  "r17_reclassified_as_passed": false,
+  "changes": {
+    "internal_marker_bits": 192,
+    "internal_marker_characters": 57,
+    "aliyun_wire_marker_characters": 45,
+    "lossless_encoding": true,
+    "legacy_read_compatibility": true,
+    "stored_identity_migration": false,
+    "missing_list_remark_requires_exact_id_fallback": true,
+    "blank_remark_requires_original_explicit_partial_receipt_policy": true,
+    "malformed_or_foreign_remark_not_adopted": true,
+    "full_tuple_ownership_guards_preserved": true,
+    "cleanup_reader_requires_no_new_bridge_application_method": true,
+    "legacy_bridge_separate_process_fixture_passed": true,
+    "provider_diagnostic_fixed_allowlist": true,
+    "initial_dns_first_error_preserved_and_independently_read_back": true,
+    "fresh_adapter_requires_initial_dns_formatter_binding": true,
+    "automatic_mutation_retry_added": false
+  },
+  "tests": {
+    "runtime": "Windows / Python 3.12 / PHP 8.2.33",
+    "focused_php": {"tests": 114, "assertions": 449, "failures": 0, "errors": 0, "skipped": 0},
+    "full_php_unit": {"tests": 4012, "assertions": 31913, "failures": 0, "errors": 0, "skipped": 3},
+    "canonical_python": {"tests": 409, "failures": 0, "errors": 0, "skipped": 33},
+    "provider_http_faked": true,
+    "remark_limit_fixture_synthetic_not_historical_evidence": true,
+    "fresh_linux_runtime_acceptance": false,
+    "live_aliyun_initialization_retested": false
+  },
+  "preservation": {
+    "r17_frozen_inputs_checked": 117,
+    "r17_frozen_inputs_mismatched": 0,
+    "r17_offline_sha256": "18a1469e42c855a71550931fc968e3fc63b53d55730d81e6c87e3e24e8292f09",
+    "r17_original_final_sha256": "d55983cd0958dba8b710f0fc9b0a8dff39a9d2844f42dc841bec0357489a679d",
+    "r17_original_closed_sha256": "e7916dcc3706dcdfc3aec2326eb6ad541b4084b189c6df2915021a04d707db95",
+    "reconciliation_result_sha256": "d32a275a805cb1bce95f89bc7b0c3c1803f1e151b6e12083bdee74a0b4320746",
+    "reconciliation_safety_sha256": "a7eb4db70e1914b898dfa548bf6b96f3ee0fa6711de0169b077515b342e3efea",
+    "unrelated_acceptance_plan_change_unchanged": true
+  },
+  "working_tree_source_sha256": {
+    "app/Services/ServerMachine/Dns/DnsException.php": "a5812244973155b774f918478d69c5fb1711f8355cc9fade65276fefe4bd67d2",
+    "app/Services/ServerMachine/Dns/DnsProviderClient.php": "94e881eef8a7cd3425cd89753563e363bafd1e9abac787e363349d96fbf03350",
+    "app/Services/ServerMachine/Dns/MachineDnsRecordSetProvider.php": "6c12f33c4aed799601f9883362d35eee4aaa12876cfbf7e01f66cd8a96be53e2",
+    "tools/machine-acceptance/aliyun_cleanup.php": "33f1ed5163e615a167d78ea7e5a70295f2b525bf33fc98a438a79d64da906991",
+    "tools/machine-acceptance/cli_diagnostics.php": "e44dec7a4aac6b6e987adbc53a89aec95cd6b7f74a0a9511aabe127fa1148629",
+    "tools/machine-acceptance/cli_error_capture.py": "ed112f910b4773a774ac0b56f6e1d96be2b745678116be905391d8e661aa5932",
+    "tools/machine-acceptance/runtime_payload.py": "0d55f67f9c8c639e7a5b0734236c11bf21380a44df9323031304d99596793109"
+  },
+  "operations": {
+    "production_connections": 0,
+    "cloud_api_requests": 0,
+    "dns_api_requests": 0,
+    "dns_writes": 0,
+    "machine_creates": 0,
+    "deployments": 0,
+    "r17_reruns": 0,
+    "queue_or_service_changes": 0,
+    "automatic_switch_changes": 0,
+    "tanzhen_access": 0,
+    "github_builds_or_releases": 0,
+    "git_commits_or_pushes": 0
+  }
+}

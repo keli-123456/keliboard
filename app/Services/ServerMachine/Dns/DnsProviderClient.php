@@ -18,6 +18,22 @@ class DnsProviderClient
             $json = $credential->provider === 'cloudflare'
                 ? $this->cloudflareRequest($credential, 'GET', '/zones/' . $set['zone'] . '/dns_records', [], ['name.exact' => $set['hostname'], 'page' => $page, 'per_page' => 50])
                 : $this->aliyun($credential, 'DescribeSubDomainRecords', ['SubDomain' => $set['hostname'], 'DomainName' => $set['zone'], 'PageNumber' => $page, 'PageSize' => 50], true);
+            if ($credential->provider === 'aliyun') {
+                $rows = $json['DomainRecords']['Record'] ?? null;
+                if (!is_array($rows) || !array_is_list($rows) || count($rows) > 50) throw new DnsException('dns_inventory_incomplete');
+                foreach ($rows as $index => $row) {
+                    // A list response may omit remarks. Confirm the exact record before treating one as blank.
+                    $contract->record($set, $row);
+                    if (array_key_exists('Remark', $row)) continue;
+                    $info = $this->aliyun($credential, 'DescribeDomainRecordInfo', ['RecordId' => $row['RecordId']], true);
+                    foreach (['RecordId', 'DomainName', 'RR', 'Type', 'Value', 'TTL', 'Line', 'Status'] as $field) {
+                        if (!array_key_exists($field, $info) || $info[$field] !== $row[$field]) throw new DnsException('dns_ownership_changed');
+                    }
+                    $contract->record($set, $info);
+                    if (($info['Locked'] ?? false) !== ($row['Locked'] ?? false)) throw new DnsException('dns_ownership_changed');
+                    $json['DomainRecords']['Record'][$index]['Remark'] = array_key_exists('Remark', $info) ? $info['Remark'] : '';
+                }
+            }
             $pages[] = $json; $count = $credential->provider === 'cloudflare' ? ($json['result_info']['total_count'] ?? null) : ($json['TotalCount'] ?? null);
             if (!is_int($count) || $count < 0 || $count > 150) throw new DnsException('dns_inventory_incomplete');
             if ($page * 50 >= $count) return $contract->inventory($set, $pages);
@@ -228,15 +244,21 @@ class DnsProviderClient
         try {
             $response = Http::asForm()->acceptJson()->connectTimeout(5)->timeout(10)->withoutRedirecting()
                 ->post('https://alidns.aliyuncs.com/', $parameters);
-        } catch (\Throwable) { throw new DnsRequestFailure('provider_unavailable'); }
-        $json = $this->decode($response);
-        if ($recordSet && isset($json['Code'])) {
-            if (!is_string($json['Code'])) throw new DnsException('provider_rejected');
-            if (str_starts_with($json['Code'], 'Throttling')) throw new DnsRequestFailure('provider_rate_limited', 120);
-            if (in_array($json['Code'], ['InternalError', 'ServiceUnavailable'], true)) throw new DnsRequestFailure('provider_unavailable');
+        } catch (\Throwable) { throw (new DnsRequestFailure('provider_unavailable'))->withAliyunDiagnostic($action, null, null); }
+        try {
+            $json = $this->decode($response);
+        } catch (DnsException $error) {
+            $body = strlen($response->body()) <= 262144 ? $response->json() : null;
+            throw $error->withAliyunDiagnostic($action, $response->status(), is_array($body) ? ($body['Code'] ?? null) : null);
         }
-        if (str_starts_with((string) ($json['Code'] ?? ''), 'Forbidden') || ($json['Code'] ?? '') === 'InvalidAccessKeyId.NotFound') throw new DnsException('provider_forbidden');
-        if (isset($json['Code'])) throw new DnsException('provider_rejected');
+        if ($recordSet && isset($json['Code'])) {
+            if (!is_string($json['Code'])) throw (new DnsException('provider_rejected'))->withAliyunDiagnostic($action, $response->status(), $json['Code']);
+            if (str_starts_with($json['Code'], 'Throttling')) throw (new DnsRequestFailure('provider_rate_limited', 120))->withAliyunDiagnostic($action, $response->status(), $json['Code']);
+            if (in_array($json['Code'], ['InternalError', 'ServiceUnavailable'], true)) throw (new DnsRequestFailure('provider_unavailable'))->withAliyunDiagnostic($action, $response->status(), $json['Code']);
+        }
+        if (is_string($json['Code'] ?? null) && (str_starts_with($json['Code'], 'Forbidden') || $json['Code'] === 'InvalidAccessKeyId.NotFound'))
+            throw (new DnsException('provider_forbidden'))->withAliyunDiagnostic($action, $response->status(), $json['Code']);
+        if (array_key_exists('Code', $json)) throw (new DnsException('provider_rejected'))->withAliyunDiagnostic($action, $response->status(), $json['Code'] ?? 'other');
         return $json;
     }
 

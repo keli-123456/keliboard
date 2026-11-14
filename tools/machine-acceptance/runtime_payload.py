@@ -151,3 +151,5 @@ def validate_bindings(base):
     cli = (base / 'live_cli.php').read_text(encoding='utf-8')
     require("require_once __DIR__ . '/cli_diagnostics.php';" in cli
             and 'keli_acceptance_cli_failure($command, $error)' in cli, 'cli_diagnostic_binding_required')
+    require("if (in_array($command, ['adopt-source', 'initial-dns'], true)) {" in cli,
+            'dns_cli_diagnostic_binding_required')

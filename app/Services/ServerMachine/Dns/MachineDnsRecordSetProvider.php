@@ -50,7 +50,8 @@ class MachineDnsRecordSetProvider
         $type = $row[$cf ? 'type' : 'Type'] ?? null; $content = $row[$cf ? 'content' : 'Value'] ?? null;
         $name = $cf ? ($row['name'] ?? null) : (($row['RR'] ?? null) === '@' ? ($row['DomainName'] ?? null)
             : (is_string($row['RR'] ?? null) && is_string($row['DomainName'] ?? null) ? $row['RR'] . '.' . $row['DomainName'] : null));
-        $ttl = $row[$cf ? 'ttl' : 'TTL'] ?? null; $marker = $row[$cf ? 'comment' : 'Remark'] ?? '';
+        $ttl = $row[$cf ? 'ttl' : 'TTL'] ?? null;
+        $marker = $cf ? ($row['comment'] ?? '') : self::canonicalAliyunMarker(array_key_exists('Remark', $row) ? $row['Remark'] : '');
         $line = $cf ? 'default' : ($row['Line'] ?? null); $locked = $row[$cf ? 'locked' : 'Locked'] ?? false;
         if (!is_string($id) || !preg_match($cf ? '/^[a-f0-9]{32}$/D' : '/^[0-9]{1,40}$/D', $id)
             || !is_string($type) || !preg_match('/^[A-Z0-9]{1,16}$/D', $type) || !is_string($content) || strlen($content) > 1024
@@ -91,10 +92,27 @@ class MachineDnsRecordSetProvider
         return ['method' => 'POST', 'action' => match ($kind) { 'create' => 'AddDomainRecord', 'update' => 'UpdateDomainRecord',
                 'delete' => 'DeleteDomainRecord', 'claim' => 'UpdateDomainRecordRemark' },
             'parameters' => match ($kind) {
-                'delete' => ['RecordId' => $id], 'claim' => ['RecordId' => $id, 'Remark' => $record['marker']],
+                'delete' => ['RecordId' => $id], 'claim' => ['RecordId' => $id, 'Remark' => self::aliyunMarker($record['marker'])],
                 default => ($kind === 'create' ? ['DomainName' => $set['zone']] : ['RecordId' => $id])
                     + ['RR' => $rr, 'Type' => $record['type'], 'Value' => $record['content'], 'TTL' => $set['ttl'], 'Line' => $record['line']],
             }];
+    }
+
+    public static function aliyunMarker(string $marker): string
+    {
+        if (!preg_match('/^keli-set-[a-f0-9]{48}$/D', $marker)) throw new CloudException('invalid_dns_set');
+        // Preserve all 192 identity bits while keeping the wire remark below 50 characters.
+        return 'keli-set-b64-' . strtr(base64_encode(hex2bin(substr($marker, 9))), '+/', '-_');
+    }
+
+    public static function canonicalAliyunMarker(mixed $remark): string
+    {
+        if (!is_string($remark) || strlen($remark) > 1000) throw new CloudException('dns_inventory_invalid');
+        if (preg_match('/^keli-set-b64-([A-Za-z0-9_-]{32})$/D', $remark, $match)) {
+            $bytes = base64_decode(strtr($match[1], '-_', '+/'), true);
+            if ($bytes !== false && strlen($bytes) === 24) return 'keli-set-' . bin2hex($bytes);
+        }
+        return $remark;
     }
 
     private function scope(array $set): void

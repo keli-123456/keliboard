@@ -11,7 +11,8 @@ function keli_acceptance_cli_diagnostic(Throwable $error): array
 {
     $classes = ['ErrorException', 'RuntimeException', 'LogicException', 'TypeError', 'Error', 'JsonException',
         'KeliSourceFixtureEvidenceRejected', 'Illuminate\Database\Eloquent\ModelNotFoundException',
-        'App\Services\ServerMachine\Cloud\CloudException'];
+        'App\Services\ServerMachine\Cloud\CloudException',
+        'App\Services\ServerMachine\Dns\DnsException', 'App\Services\ServerMachine\Dns\DnsRequestFailure'];
     $class = in_array(get_class($error), $classes, true) ? get_class($error) : 'other';
     $file = null;
     $path = str_replace('\\', '/', $error->getFile());
@@ -25,6 +26,8 @@ function keli_acceptance_cli_diagnostic(Throwable $error): array
         'app/Services/ServerMachine/Cloud/MachineProvisionProviders.php',
         'app/Services/ServerMachine/Cloud/LinodeProvisionClient.php',
         'app/Services/ServerMachine/MachineAddressInventory.php',
+        'app/Services/ServerMachine/Dns/DnsProviderClient.php',
+        'app/Services/ServerMachine/Dns/MachineDnsRecordSetProvider.php',
     ]);
     foreach ($roots as $root => $files) foreach ($files as $name) {
         if ($path === rtrim($root, '/') . '/' . $name && realpath($error->getFile()) !== false
@@ -94,6 +97,11 @@ function keli_acceptance_cli_failure(string $command, Throwable $error): array
         'source_fixture_cloud_missing', 'source_fixture_not_failed', 'source_fixture_reports_missing',
         'source_fixture_original_identity_changed', 'exact_source_reference_required',
         'source_fixture_registration_changed', 'source_fixture_failure_not_current'], true)) $out['reason'] = $error->getMessage();
+    if ($command === 'initial-dns' && $error instanceof \App\Services\ServerMachine\Dns\DnsException) {
+        if (in_array($error->getMessage(), ['provider_rejected', 'provider_forbidden', 'provider_unavailable', 'provider_rate_limited',
+            'dns_outcome_unknown', 'dns_ownership_changed', 'dns_inventory_incomplete', 'dns_credential_changed'], true)) $out['reason'] = $error->getMessage();
+        if ($error->providerDiagnostic() !== null) $out['dns_provider_diagnostic'] = $error->providerDiagnostic();
+    }
     if ($error instanceof KeliSourceFixtureEvidenceRejected) {
         $fields = keli_acceptance_cli_fields($error->diagnostic);
         if ($fields !== null) {

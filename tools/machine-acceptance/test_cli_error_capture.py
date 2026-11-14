@@ -1,6 +1,8 @@
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -10,6 +12,8 @@ import cli_error_capture as cli
 
 
 SECRET = 'private-sentinel-never-export'
+PHP = os.environ.get('PHP_BINARY') or shutil.which('php')
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def diagnostic():
@@ -20,6 +24,16 @@ def diagnostic():
 def response():
     return {'ok': False, 'command': 'adopt-source', 'error_class': 'ErrorException', 'reason': 'cli_exception',
             'cli_diagnostic': diagnostic(), 'cli_diagnostic_recorded': True}
+
+
+def dns_response():
+    error_class = 'App\\Services\\ServerMachine\\Dns\\DnsException'
+    return {'ok': False, 'command': 'initial-dns', 'error_class': error_class, 'reason': 'provider_rejected',
+            'cli_diagnostic': dict(diagnostic(), category='domain_rejection', error_class=error_class,
+                file='app/Services/ServerMachine/Dns/DnsProviderClient.php', severity=None),
+            'cli_diagnostic_recorded': False,
+            'dns_provider_diagnostic': {'schema': 1, 'provider': 'aliyun', 'action': 'UpdateDomainRecordRemark',
+                                        'http_status': 400, 'code': 'InvalidRemark.TooLong'}}
 
 
 class CliCaptureTests(unittest.TestCase):
@@ -137,6 +151,67 @@ class CliCaptureTests(unittest.TestCase):
         self.assertEqual(result['cli_diagnostic_preservation'], {'ok': False, 'reason': 'cli_diagnostic_missing'})
         self.assertNotIn('cli_diagnostic', result)
         self.assertNotIn(SECRET, json.dumps(result))
+
+    def test_initial_dns_has_its_own_phase_and_independently_preserved_provider_context(self):
+        result = cli.capture_result(self.ctx, dict(dns_response(), raw_body=SECRET, trace=[SECRET]))
+        self.assertTrue(result['cli_diagnostic_preservation']['ok'])
+        stored = self.load(cli.REPORT)
+        self.assertEqual(stored['phase'], 'initial-dns')
+        self.assertEqual(stored['dns_provider_diagnostic'], dns_response()['dns_provider_diagnostic'])
+        self.assertEqual(result['reason'], 'provider_rejected')
+        self.assertNotIn(SECRET, json.dumps(result))
+        self.assertNotIn(SECRET, json.dumps(stored))
+
+    def test_dns_provider_projection_rejects_extra_fields_secrets_and_type_confusion(self):
+        for changes in [{'schema': True}, {'provider': SECRET}, {'action': SECRET}, {'http_status': True},
+                        {'http_status': 99}, {'http_status': 600}, {'code': [SECRET]}, {'code': SECRET},
+                        {'message': SECRET}, {'request_id': SECRET}, {'parameters': [SECRET]}]:
+            with self.subTest(changes=list(changes)):
+                value = dns_response()
+                value['dns_provider_diagnostic'].update(changes)
+                result = cli.capture_result(self.ctx, value)
+                self.assertFalse(result['cli_diagnostic_preservation']['ok'])
+                self.assertNotIn('dns_provider_diagnostic', result)
+                self.assertNotIn(SECRET, json.dumps(result))
+                self.ctx.save.assert_not_called()
+
+    def test_dns_context_cannot_be_attached_to_a_source_failure_or_unrelated_exception(self):
+        for value in [dict(dns_response(), command='adopt-source'),
+                      dict(response(), command='initial-dns', dns_provider_diagnostic=dns_response()['dns_provider_diagnostic'])]:
+            result = cli.capture_result(self.ctx, value)
+            self.assertFalse(result['cli_diagnostic_preservation']['ok'])
+            self.assertNotIn('dns_provider_diagnostic', result)
+        self.ctx.save.assert_not_called()
+
+    def test_missing_dns_context_is_not_invented_and_later_context_cannot_replace_first_error(self):
+        value = dns_response()
+        result = cli.capture_result(self.ctx, value)
+        self.assertTrue(result['cli_diagnostic_preservation']['ok'])
+        original = (self.base / cli.REPORT).read_bytes()
+        value['dns_provider_diagnostic']['action'] = 'DescribeDomainRecordInfo'
+        self.assertFalse(cli.capture_result(self.ctx, value)['cli_diagnostic_preservation']['ok'])
+        self.assertEqual(original, (self.base / cli.REPORT).read_bytes())
+        (self.base / cli.REPORT).unlink()
+        del value['dns_provider_diagnostic']
+        self.assertNotIn('dns_provider_diagnostic', cli.capture_result(self.ctx, value))
+        (self.base / cli.REPORT).unlink()
+        del value['cli_diagnostic']
+        result = cli.capture_result(self.ctx, value)
+        self.assertEqual(result['command'], 'initial-dns')
+        self.assertEqual(result['cli_diagnostic_preservation']['reason'], 'cli_diagnostic_missing')
+        self.assertFalse((self.base / cli.REPORT).exists())
+
+    @unittest.skipUnless(PHP and (ROOT / 'vendor/autoload.php').is_file(), 'local PHP and locked vendor required')
+    def test_actual_php_projection_and_python_allowlists_are_in_sync(self):
+        result = subprocess.run([PHP, str(ROOT / 'tests/Fixtures/MachineAcceptance/dns_diagnostic_probe.php')],
+                                capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr[:200])
+        value = json.loads(result.stdout)
+        self.assertEqual(set(value['actions']) | {'other'}, cli.DNS_ACTIONS)
+        self.assertEqual(set(value['codes']) | {'other'}, cli.DNS_CODES)
+        captured = cli.capture_result(self.ctx, value['response'])
+        self.assertTrue(captured['cli_diagnostic_preservation']['ok'])
+        self.assertEqual(captured['dns_provider_diagnostic']['action'], 'UpdateDomainRecordRemark')
 
     @unittest.skipUnless(os.name == 'posix', 'real link refusal requires Linux')
     def test_symlink_or_hardlink_first_error_refuses_without_reading_target(self):

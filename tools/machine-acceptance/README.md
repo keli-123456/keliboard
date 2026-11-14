@@ -175,10 +175,32 @@ reads are still mandatory. This reader cannot dispatch a delete or extend the
 cleanup deadline, and input parameters cannot override the selected describe
 action or signing metadata.
 
+For exact-ID success, an omitted `Remark` becomes an empty string, never a missing
+record. Explicit null/non-string remarks are rejected. The caller must still
+match the full journal tuple and explicitly allow a blank remark for a partial
+create with a direct receipt; a blank string does not authorize deletion of an
+activated or foreign record. List responses keep omitted remarks absent so the
+existing exact-ID fallback still runs. Both read paths normalize the lossless
+45-character Aliyun wire marker to the original 192-bit slot identity. Legacy
+57-character markers are read unchanged; no stored slot is renamed or migrated.
+The embedded reader's normalization is self-contained: the existing credential
+bridge needs only its pre-existing signing helper, not a newly deployed provider
+class or method. A separate-process fixture deliberately has no application
+autoloader or new record-set class and verifies this boundary.
+
+The provider adapter now preserves only a fixed action/code allowlist and HTTP
+status on DNS failures, not messages, request IDs, signing parameters, bodies or
+stack traces. `cli_diagnostics.php` and `cli_error_capture.py` project that context
+for `initial-dns` as well as source diagnostics, and preserve an independently
+read-back, exclusive first-error record with the correct phase. A future adapter
+must route **both** commands through `keli_acceptance_cli_failure`; the fresh
+runtime binding check rejects the old source-only branch. This does not reopen
+R17, change its result, retry its writes or reconstruct its missing provider code.
+
 Local synthetic regression (no SSH, cloud/DNS requests or production database):
 
 ```sh
-python -B -m unittest -q test_probe_sampling test_diagnostic_capture
+python -B -m unittest -q test_probe_sampling test_diagnostic_capture test_cli_error_capture test_runtime_payload
 ```
 
 The existing PHP Unit suite includes `MachineAcceptanceAliyunCleanupTest`, with

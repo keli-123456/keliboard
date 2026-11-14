@@ -201,7 +201,7 @@ class EntryTests(unittest.TestCase):
             "\ndef command():\n    result = cli_error_capture.capture_result(campaign, result)\n    campaign.save('latest-' + name + '.json', result)\n")
         (self.base / 'staging_control.py').write_text('STAGING = ' + repr(names))
         (self.base / 'runtime_install.py').write_text('import runtime_payload\ndef install():\n    runtime_payload.publish(BUNDLE, BASE)\n')
-        (self.base / 'live_cli.php').write_text("<?php\nrequire_once __DIR__ . '/cli_diagnostics.php';\n$out = keli_acceptance_cli_failure($command, $error);\n")
+        (self.base / 'live_cli.php').write_text("<?php\nrequire_once __DIR__ . '/cli_diagnostics.php';\nif (in_array($command, ['adopt-source', 'initial-dns'], true)) {\n$out = keli_acceptance_cli_failure($command, $error);\n}\n")
         self.repin()
         blocked = patch.object(subprocess, "Popen", side_effect=AssertionError("real subprocess forbidden"))
         blocked.start()

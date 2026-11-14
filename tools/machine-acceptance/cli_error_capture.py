@@ -6,16 +6,28 @@ REPORT = 'cli-error-first-error.json'
 REASONS = {'cli_exception', 'source_fixture_ownership_invalid', 'single_source_ipv4_required',
            'source_fixture_cloud_missing', 'source_fixture_not_failed', 'source_fixture_reports_missing',
            'source_fixture_original_identity_changed', 'exact_source_reference_required',
-           'source_fixture_registration_changed', 'source_fixture_failure_not_current'}
+           'source_fixture_registration_changed', 'source_fixture_failure_not_current', 'provider_rejected', 'provider_forbidden',
+           'provider_unavailable', 'provider_rate_limited', 'dns_outcome_unknown', 'dns_ownership_changed',
+           'dns_inventory_incomplete', 'dns_credential_changed'}
 FILES = {'cli_diagnostics.php', 'source_fixture.php', 'source_fixture_evidence.php', 'live_cli.php',
          'app/Services/ServerMachine/Cloud/MachineFailoverObserver.php',
          'app/Services/ServerMachine/Cloud/MachineCloudHealth.php',
          'app/Services/ServerMachine/Cloud/MachineProvisionProviders.php',
          'app/Services/ServerMachine/Cloud/LinodeProvisionClient.php',
-         'app/Services/ServerMachine/MachineAddressInventory.php'}
+         'app/Services/ServerMachine/MachineAddressInventory.php',
+         'app/Services/ServerMachine/Dns/DnsProviderClient.php',
+         'app/Services/ServerMachine/Dns/MachineDnsRecordSetProvider.php'}
 CLASSES = {'ErrorException', 'RuntimeException', 'LogicException', 'TypeError', 'Error', 'JsonException', 'other',
            'KeliSourceFixtureEvidenceRejected', 'Illuminate\\Database\\Eloquent\\ModelNotFoundException',
-           'App\\Services\\ServerMachine\\Cloud\\CloudException'}
+           'App\\Services\\ServerMachine\\Cloud\\CloudException',
+           'App\\Services\\ServerMachine\\Dns\\DnsException', 'App\\Services\\ServerMachine\\Dns\\DnsRequestFailure'}
+DNS_ACTIONS = {'DescribeDomains', 'DescribeDomainRecords', 'DescribeDomainRecordInfo', 'DescribeSubDomainRecords',
+               'AddDomainRecord', 'UpdateDomainRecord', 'UpdateDomainRecordRemark', 'DeleteDomainRecord', 'other'}
+DNS_CODES = {'InvalidRemark', 'InvalidRemark.TooLong', 'InvalidRemark.Length', 'InvalidParameter', 'InvalidParameter.Remark',
+             'InvalidParameterValue', 'InvalidParameter.Length', 'InvalidRecordId.NotFound', 'InvalidRR.NoExist',
+             'InvalidDomainName.NoExist', 'DomainRecordDuplicate', 'DomainRecordNotBelongToUser', 'Forbidden',
+             'Forbidden.RAM', 'Forbidden.RAMPolicy', 'InvalidAccessKeyId.NotFound', 'SignatureDoesNotMatch',
+             'SignatureNonceUsed', 'TimestampExpired', 'Throttling', 'Throttling.User', 'InternalError', 'ServiceUnavailable', 'other'}
 SCOPE_FIELDS = ('expected_run_id', 'expected_machine_id', 'expected_account_id', 'expected_node_id',
                 'expected_ipv4', 'expected_binary', 'expected_version', 'no_health_claim')
 EVIDENCE_FIELDS = ('installation_id', 'task_label', 'task_status', 'bootstrap_state', 'machine_id', 'account_id',
@@ -67,8 +79,21 @@ def fields(value):
             'checks': {name: checks[name] for name in names}}
 
 
-def preserve(campaign, diagnostic):
-    value = {'schema': 1, 'run_id': campaign.RUN, 'phase': 'adopt-source', 'diagnostic': project(diagnostic)}
+def dns_diagnostic(value):
+    require(isinstance(value, dict) and set(value) == {'schema', 'provider', 'action', 'http_status', 'code'}
+            and type(value['schema']) is int and value['schema'] == 1 and value['provider'] == 'aliyun'
+            and isinstance(value['action'], str) and value['action'] in DNS_ACTIONS
+            and (value['http_status'] is None or type(value['http_status']) is int and 100 <= value['http_status'] <= 599)
+            and (value['code'] is None or isinstance(value['code'], str) and value['code'] in DNS_CODES))
+    return dict(value)
+
+
+def preserve(campaign, diagnostic, command='adopt-source', dns=None):
+    require(command in {'adopt-source', 'initial-dns'})
+    value = {'schema': 1, 'run_id': campaign.RUN, 'phase': command, 'diagnostic': project(diagnostic)}
+    if dns is not None:
+        require(command == 'initial-dns')
+        value['dns_provider_diagnostic'] = dns_diagnostic(dns)
     base = Path(campaign.BASE)
     require(not os.path.lexists(base / 'closed.json'))
     path = base / REPORT
@@ -92,18 +117,20 @@ def preserve(campaign, diagnostic):
 def capture_result(campaign, result):
     if not isinstance(result, dict):
         return result
+    command = result.get('command')
     if 'cli_diagnostic' not in result:
-        if result.get('command') == 'adopt-source' and result.get('ok') is False:
-            return {'ok': False, 'command': 'adopt-source',
+        if command in ('adopt-source', 'initial-dns') and result.get('ok') is False:
+            return {'ok': False, 'command': command,
                     'error_class': result['error_class'] if isinstance(result.get('error_class'), str)
                         and result['error_class'] in CLASSES else 'other',
                     'reason': result['reason'] if isinstance(result.get('reason'), str)
                         and result['reason'] in REASONS else 'cli_exception',
                     'cli_diagnostic_preservation': {'ok': False, 'reason': 'cli_diagnostic_missing'}}
         return result
-    safe = {'ok': False, 'command': 'adopt-source', 'error_class': 'other', 'reason': 'cli_exception'}
+    safe = {'ok': False, 'command': command if command in ('adopt-source', 'initial-dns') else 'other',
+            'error_class': 'other', 'reason': 'cli_exception'}
     try:
-        require(result.get('ok') is False and result.get('command') == 'adopt-source'
+        require(result.get('ok') is False and command in ('adopt-source', 'initial-dns')
                 and type(result.get('cli_diagnostic_recorded')) is bool)
         diagnostic = project(result['cli_diagnostic'])
         require(result.get('error_class') == diagnostic['error_class'])
@@ -117,7 +144,12 @@ def capture_result(campaign, result):
             require(result.get('reason') == reason and type(result.get('source_fixture_controller_journal_recorded')) is bool)
             safe.update(reason=reason, source_fixture_evidence=rejected,
                         source_fixture_controller_journal_recorded=result['source_fixture_controller_journal_recorded'])
-        safe['cli_diagnostic_preservation'] = preserve(campaign, diagnostic)
+        dns = dns_diagnostic(result['dns_provider_diagnostic']) if 'dns_provider_diagnostic' in result else None
+        if dns is not None:
+            require(command == 'initial-dns' and diagnostic['error_class'] in
+                    {'App\\Services\\ServerMachine\\Dns\\DnsException', 'App\\Services\\ServerMachine\\Dns\\DnsRequestFailure'})
+            safe['dns_provider_diagnostic'] = dns
+        safe['cli_diagnostic_preservation'] = preserve(campaign, diagnostic, command, dns)
     except Exception:
         safe['cli_diagnostic_preservation'] = {'ok': False, 'reason': 'cli_diagnostic_unconfirmed'}
     return safe

@@ -115,4 +115,17 @@ class MachineAcceptanceCliDiagnosticsTest extends TestCase
         }
         $this->assertSame(38, $count);
     }
+
+    public function test_dns_diagnostic_is_bounded_and_omits_arbitrary_code_action_and_message(): void
+    {
+        $error = (new \App\Services\ServerMachine\Dns\DnsException('private-sentinel-never-export'))
+            ->withAliyunDiagnostic('private-sentinel-never-export', 700, ['private-sentinel-never-export']);
+        $out = \keli_acceptance_cli_failure('initial-dns', $error);
+        $this->assertSame(['schema' => 1, 'provider' => 'aliyun', 'action' => 'other', 'http_status' => null,
+            'code' => 'other'], $out['dns_provider_diagnostic']);
+        $this->assertSame('cli_exception', $out['reason']);
+        $this->assertStringNotContainsString('private-sentinel-never-export', json_encode($out));
+        $this->assertArrayNotHasKey('dns_provider_diagnostic', \keli_acceptance_cli_failure('adopt-source', $error));
+        $this->assertArrayNotHasKey('dns_provider_diagnostic', \keli_acceptance_cli_failure('initial-dns', new \RuntimeException('private-sentinel-never-export')));
+    }
 }

@@ -45,7 +45,9 @@ class MachineDnsRecordSetWireTest extends TestCase
         $client = new DnsProviderClient(); $action = $this->action(); $this->assertSame($id, $client->recordSetWrite($credential, $set, $action));
         $this->assertSame($id, $client->recordSetWrite($credential, $set, array_replace($action, ['kind' => 'claim']), $id));
         $this->assertArrayNotHasKey('Remark', $seen[0]); $this->assertSame('AAAA', $seen[0]['Type']); $this->assertSame('telecom', $seen[0]['Line']);
-        $this->assertSame('shared', $seen[0]['RR']); $this->assertSame($id, $seen[1]['RecordId']); $this->assertSame($action['after']['marker'], $seen[1]['Remark']);
+        $this->assertSame('shared', $seen[0]['RR']); $this->assertSame($id, $seen[1]['RecordId']);
+        $this->assertSame($action['after']['marker'], MachineDnsRecordSetProvider::canonicalAliyunMarker($seen[1]['Remark']));
+        $this->assertSame(45, strlen($seen[1]['Remark']));
         $this->assertNotSame($seen[0]['SignatureNonce'], $seen[1]['SignatureNonce']); Http::assertSentCount(2);
     }
     public function test_aliyun_inventory_pins_zone_and_exact_hostname_and_preserves_long_ids(): void

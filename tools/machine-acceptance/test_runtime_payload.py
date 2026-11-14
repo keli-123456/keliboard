@@ -117,7 +117,7 @@ class RuntimePayloadTests(unittest.TestCase):
             "\ndef command():\n    result = cli_error_capture.capture_result(campaign, result)\n    campaign.save('latest-' + name + '.json', result)\n")
         (self.root / 'staging_control.py').write_text('STAGING = ' + repr(names))
         (self.root / 'runtime_install.py').write_text('import runtime_payload\ndef install():\n    runtime_payload.publish(BUNDLE, BASE)\n')
-        (self.root / 'live_cli.php').write_text("<?php\nrequire_once __DIR__ . '/cli_diagnostics.php';\n$out = keli_acceptance_cli_failure($command, $error);\n")
+        (self.root / 'live_cli.php').write_text("<?php\nrequire_once __DIR__ . '/cli_diagnostics.php';\nif (in_array($command, ['adopt-source', 'initial-dns'], true)) {\n$out = keli_acceptance_cli_failure($command, $error);\n}\n")
 
     def test_fresh_binding_checks_active_installation_not_just_staging(self):
         self.bindings()
@@ -128,6 +128,11 @@ class RuntimePayloadTests(unittest.TestCase):
         self.bindings()
         (self.root / 'live_cli.php').write_text('<?php // diagnostic removed\n')
         with self.assertRaisesRegex(payload.Refused, 'cli_diagnostic_binding_required'):
+            payload.validate_bindings(self.root)
+        self.bindings()
+        path = self.root / 'live_cli.php'
+        path.write_text(path.read_text().replace("in_array($command, ['adopt-source', 'initial-dns'], true)", "$command === 'adopt-source'"))
+        with self.assertRaisesRegex(payload.Refused, 'dns_cli_diagnostic_binding_required'):
             payload.validate_bindings(self.root)
         self.bindings()
         (self.root / 'runtime_install.py').write_text("import runtime_payload\ndef install():\n    run(['systemctl', 'start', 'isolated'])\n    runtime_payload.publish(BUNDLE, BASE)\n")
