@@ -425,3 +425,73 @@ def collect(run_id, task_id, role, targets, expected_source, timeout=2, maximum_
         return {"ok": False, "read_only": True, "reason": str(error)}
     except Exception:
         return {"ok": False, "read_only": True, "reason": "diagnostic_unavailable"}
+
+
+LOOPBACK_TARGET = "127.0.0.1"
+LOOPBACK_MAX_SECONDS = 6
+
+
+def loopback_selfcheck(run_id, task_id, role, *, enabled=False, root=Path("/"),
+            run_command=command, clock=time.monotonic):
+    """Run a separate positive control, never part of the public target set."""
+    result = {"schema": 1, "kind": "isolated_loopback_selfcheck", "target": LOOPBACK_TARGET,
+              "ok": True, "status": "skipped", "passed": False, "reason": "not_enabled",
+              "owner_verified": False, "agent_context_stable": False, "iputils_verified": False,
+              "ping": classify_ping(CommandResult("unavailable"), LOOPBACK_TARGET),
+              "read_only": True, "counts_toward_domestic_health": False,
+              "public_reachability_proven": False, "raw_output_omitted": True}
+    if enabled is False:
+        return result
+    try:
+        bootstrap.require(enabled is True, "invalid_identity")
+        bootstrap.validate_identity(run_id, task_id, role)
+        bootstrap.require(role in {"source", "candidate"}, "invalid_identity")
+        root = Path(root)
+        metadata, raw = bootstrap.read_bounded(root / "var/lib/keli-test-owner/owner.json", 16384, private=True)
+        owner = bootstrap.unique_json(raw) if raw is not None else None
+        bootstrap.require(metadata["state"] == "observed"
+                          and owner == {"schema": 1, "run_id": run_id, "task_id": task_id}
+                          and type(owner["schema"]) is int, "owner_unverified")
+        result.update(run_id=run_id, task_id=task_id, role=role, owner_verified=True, status="failed")
+        deadline = clock() + LOOPBACK_MAX_SECONDS
+
+        def invoke(args, seconds=1):
+            if args[0] is None:
+                return CommandResult("missing")
+            remaining = deadline - clock()
+            if remaining <= 0:
+                return CommandResult("budget_exhausted")
+            value = run_command(args, min(seconds, remaining), 16384)
+            if (not isinstance(value, CommandResult) or value.state not in STATES
+                    or not isinstance(value.output, bytes) or len(value.output) > 16384
+                    or value.state == "observed" and (type(value.exit_code) is not int or not -255 <= value.exit_code <= 255)
+                    or clock() > deadline):
+                return CommandResult("invalid")
+            return value
+
+        systemctl, ping = program("systemctl"), program("ping")
+        namespace_args = [systemctl, "show", "kelinode", "--no-pager", "--property=MainPID", "--value"]
+        before = namespace_summary(root, invoke(namespace_args))
+        if before["matches_agent"] is not True:
+            result["reason"] = "loopback_namespace_unverified"
+            return result
+        version = invoke([ping, "-V"])
+        result["iputils_verified"] = (version.state == "observed" and version.exit_code == 0
+                                      and b"iputils" in version.output)
+        if not result["iputils_verified"]:
+            result["reason"] = "loopback_tool_unavailable"
+            return result
+        result["ping"] = classify_ping(invoke(ping_arguments(ping, LOOPBACK_TARGET, LOOPBACK_TARGET, 1), 3), LOOPBACK_TARGET)
+        after = namespace_summary(root, invoke(namespace_args))
+        result["agent_context_stable"] = before == after and after["matches_agent"] is True
+        result["passed"] = (result["agent_context_stable"]
+                            and result["ping"]["classification"] == "echo_reply")
+        result["status"] = "passed" if result["passed"] else "failed"
+        result["reason"] = (None if result["passed"] else "loopback_context_changed"
+                            if not result["agent_context_stable"] else "loopback_selfcheck_failed")
+        return result
+    except bootstrap.Refused as error:
+        result.update(ok=False, status="refused", reason=str(error))
+    except Exception:
+        result.update(ok=False, status="failed", passed=False, reason="loopback_diagnostic_unavailable")
+    return result

@@ -24,6 +24,32 @@ scenario condition, not the operational failover rule. Candidate reachability,
 identity-bound TCP/UDP receipts, DNS ownership and execution gates are unchanged.
 See [probe admission rules](../../docs/machine-failover-probe-admission.md).
 
+## Test-Only Loopback Selfcheck
+
+`entry_probe_diagnostics.loopback_selfcheck(run_id, task_id, role, enabled=True)` adds a separate
+single-packet `127.0.0.1` positive control for an explicitly owned source/candidate
+test node. It is disabled by default, verifies the private ownership marker and
+the agent network namespace, reuses the iputils parser and bounded command runner,
+and has a six-second total budget without retries. It never changes routes,
+firewall rules, service configuration or public probe targets.
+
+Keep this result separate from mainland probe rows and failure counts. Even a
+successful selfcheck has `counts_toward_domestic_health=false` and
+`public_reachability_proven=false`: it checks the diagnostic process's loopback
+path and permissions, not public routing or every service user's permissions.
+Use `passed is True` for the positive-control result; `ok` alone only describes
+collection. An unsuccessful selfcheck is a local diagnostic failure, not evidence of blocking.
+The existing public-target validator continues to reject loopback addresses.
+
+Future approved, newly frozen test drivers may invoke it once per owned role,
+save and independently read back a separate result, and account for its one
+additional **loopback** packet separately from the existing eight external
+diagnostic packets. Bind the role/task and stop/deadline checks before invocation;
+do not add this helper to the production agent loop or mainland target settings.
+R21 is closed: it has no historical loopback measurement and is not patched or
+replayed to obtain one. This helper does not change candidate admission or enable
+HY2, DNS switching, resource creation or production automation.
+
 ## Candidate Readback And Task First Errors (R20 Offline Repair)
 
 R20 created its native candidate, then sent it through the source-only `process`

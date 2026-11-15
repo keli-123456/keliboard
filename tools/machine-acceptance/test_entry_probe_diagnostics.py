@@ -432,6 +432,136 @@ class BoundedCommandTests(unittest.TestCase):
         process.kill.assert_called_once()
         process.wait.assert_called_once()
 
+LOOPBACK_RUN = "keli-accept-synthetic-loopback-01234567"
+LOOPBACK_TASK = "11111111-1111-4111-8111-111111111111"
+LOOPBACK_SECRET = "PRIVATE_SENTINEL_NOT_FOR_EXPORT"
+LOOPBACK_ECHO = b"64 bytes from 127.0.0.1: icmp_seq=1 ttl=64 time=0.1 ms\n1 packets transmitted, 1 received, 0% packet loss\n"
+
+
+class LoopbackCommands:
+    def __init__(self, ping=None):
+        self.calls = []
+        self.ping = ping or probe.CommandResult("observed", 0, LOOPBACK_ECHO)
+        self.version = probe.CommandResult("observed", 0, b"ping from iputils synthetic")
+        self.pid = b"123\n"
+
+    def __call__(self, args, timeout, limit):
+        self.calls.append((list(args), timeout, limit))
+        if args[-1] == "-V":
+            return self.version
+        if "--property=MainPID" in args:
+            return probe.CommandResult("observed", 0, self.pid)
+        return self.ping
+
+
+class LoopbackSelfcheckTests(unittest.TestCase):
+    def check(self, commands=None, owner=None, **kwargs):
+        with tempfile.TemporaryDirectory(prefix="keli-loopback-offline-") as directory:
+            root = Path(directory)
+            path = root / "var/lib/keli-test-owner/owner.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps(owner or {"schema": 1, "run_id": LOOPBACK_RUN, "task_id": LOOPBACK_TASK}))
+            path.chmod(0o600)
+            with patch.object(probe, "program", side_effect=lambda name: probe.PROGRAMS[name][0]), \
+                    patch.object(probe.os, "readlink", return_value="net:[123]"), \
+                    patch.object(subprocess, "Popen", side_effect=AssertionError("real process forbidden")):
+                return probe.loopback_selfcheck(LOOPBACK_RUN, LOOPBACK_TASK, "candidate", root=root, enabled=True,
+                                         run_command=commands or LoopbackCommands(), **kwargs)
+
+    def test_disabled_by_default_without_identity_files_or_commands(self):
+        run = Mock(side_effect=AssertionError("must not run"))
+        with patch.object(probe.bootstrap, "read_bounded", side_effect=AssertionError("must not read")):
+            value = probe.loopback_selfcheck(LOOPBACK_SECRET, LOOPBACK_SECRET, LOOPBACK_SECRET, run_command=run)
+        self.assertEqual(value["status"], "skipped")
+        self.assertFalse(value["passed"])
+        self.assertNotIn(LOOPBACK_SECRET, json.dumps(value))
+        run.assert_not_called()
+
+    def test_single_loopback_packet_uses_existing_parser_and_never_public_health(self):
+        commands = LoopbackCommands()
+        value = self.check(commands)
+        self.assertTrue(value["passed"])
+        self.assertTrue(value["agent_context_stable"])
+        self.assertEqual(value["ping"]["received"], 1)
+        self.assertFalse(value["counts_toward_domestic_health"])
+        self.assertFalse(value["public_reachability_proven"])
+        ping_calls = [args for args, _, _ in commands.calls if args[-1] == probe.LOOPBACK_TARGET]
+        self.assertEqual(ping_calls, [["/usr/bin/ping", "-I", "127.0.0.1", "-4", "-n", "-c", "1", "-W", "1", "--", "127.0.0.1"]])
+        self.assertTrue(all(0 < seconds <= 3 and limit == 16384 for _, seconds, limit in commands.calls))
+
+    def test_loopback_still_refused_by_domestic_target_validator(self):
+        for targets in [[probe.LOOPBACK_TARGET], ["39.156.70.37", probe.LOOPBACK_TARGET]]:
+            with self.assertRaises(probe.bootstrap.Refused):
+                probe.validate_targets(targets, 1)
+
+    def test_foreign_owner_refuses_before_any_probe(self):
+        commands = LoopbackCommands()
+        value = self.check(commands, owner={"schema": 1, "run_id": "foreign", "task_id": LOOPBACK_TASK})
+        self.assertFalse(value["ok"])
+        self.assertEqual(value["reason"], "owner_unverified")
+        self.assertEqual(commands.calls, [])
+
+    def test_non_boolean_enable_and_bad_identity_are_not_executed(self):
+        for run_id, task, role, enabled in [(LOOPBACK_RUN, LOOPBACK_TASK, "source", 1), (LOOPBACK_SECRET, LOOPBACK_TASK, "source", True),
+                                           (LOOPBACK_RUN, LOOPBACK_SECRET, "candidate", True), (LOOPBACK_RUN, LOOPBACK_TASK, "control", True)]:
+            run = Mock()
+            value = probe.loopback_selfcheck(run_id, task, role, enabled=enabled, run_command=run)
+            self.assertFalse(value["ok"])
+            self.assertNotIn(LOOPBACK_SECRET, json.dumps(value))
+            run.assert_not_called()
+
+    def test_unknown_namespace_or_missing_iputils_does_not_send_ping(self):
+        commands = LoopbackCommands(); commands.pid = b"0\n"
+        value = self.check(commands)
+        self.assertEqual(value["reason"], "loopback_namespace_unverified")
+        self.assertEqual(len(commands.calls), 1)
+        commands = LoopbackCommands(); commands.version = probe.CommandResult("observed", 0, LOOPBACK_SECRET.encode())
+        value = self.check(commands)
+        self.assertEqual(value["reason"], "loopback_tool_unavailable")
+        self.assertEqual(len(commands.calls), 2)
+        self.assertNotIn(LOOPBACK_SECRET, json.dumps(value))
+
+    def test_failed_loopback_is_diagnostic_failure_not_domestic_failure_or_echo(self):
+        cases = [probe.CommandResult("observed", 1, b"1 packets transmitted, 0 received, 100% packet loss\n"),
+                 probe.CommandResult("observed", 2, (LOOPBACK_SECRET+" operation not permitted").encode()),
+                 probe.CommandResult("timeout"), probe.CommandResult("missing"),
+                 probe.CommandResult("observed", 0, LOOPBACK_ECHO.replace(b"127.0.0.1", b"127.0.0.2")),
+                 probe.CommandResult("observed", 0, LOOPBACK_ECHO.replace(b"1 packets transmitted", b"2 packets transmitted"))]
+        for case in cases:
+            with self.subTest(case=case.state):
+                value = self.check(LoopbackCommands(case))
+                self.assertFalse(value["passed"])
+                self.assertFalse(value["counts_toward_domestic_health"])
+                self.assertNotIn(LOOPBACK_SECRET, json.dumps(value))
+
+    def test_namespace_change_after_echo_invalidates_positive_control(self):
+        original = probe.namespace_summary
+        count = [0]
+        def namespace(root, result):
+            value = original(root, result)
+            count[0] += 1
+            return dict(value, agent_pid=124) if count[0] == 2 else value
+        with patch.object(probe, "namespace_summary", side_effect=namespace):
+            value = self.check()
+        self.assertFalse(value["passed"])
+        self.assertEqual(value["reason"], "loopback_context_changed")
+
+    def test_malformed_oversized_or_late_output_cannot_pass(self):
+        for value in [object(), probe.CommandResult("observed", 0, LOOPBACK_ECHO+LOOPBACK_SECRET.encode()*2000),
+                      probe.CommandResult("observed", False, LOOPBACK_ECHO)]:
+            self.assertFalse(self.check(LoopbackCommands(value))["passed"])
+        clock = iter([0, 0, 0, 0, 0, 0, 7, 7])
+        value = self.check(clock=lambda: next(clock))
+        self.assertFalse(value["passed"])
+        self.assertFalse(value["public_reachability_proven"])
+
+    def test_command_failure_does_not_export_private_exception(self):
+        run = Mock(side_effect=PermissionError(LOOPBACK_SECRET))
+        value = self.check(run)
+        self.assertFalse(value["ok"])
+        self.assertNotIn(LOOPBACK_SECRET, json.dumps(value))
+
+
 
 if __name__ == "__main__":
     unittest.main()
