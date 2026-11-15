@@ -35,6 +35,7 @@ class MachineFailoverAdmissionTest extends MachineFailoverShadowTest
     protected function setUp(): void
     {
         parent::setUp();
+        config(['machine_failover.workflow' => 'protocol_verification_v1']);
         foreach (['2026_11_07_180000_create_machine_failover_native_journal.php', '2026_11_07_190000_create_machine_failover_finance.php',
             '2026_11_07_220000_create_machine_failover_runtime.php', '2026_11_08_000000_create_machine_failover_trigger_previews.php',
             '2026_06_12_000002_create_v2_server_machine_release_table.php', '2026_07_14_000001_add_binary_sha256_to_server_machine_release.php'] as $file)
@@ -61,7 +62,9 @@ class MachineFailoverAdmissionTest extends MachineFailoverShadowTest
                 $run = Execution::query()->create(['id' => (string) Str::uuid(), 'service_id' => $id, 'service_revision' => $revision, 'admin_id' => $admin,
                     'request_key' => hash('sha256', json_encode([$admin, $request])), 'intent_hash' => str_repeat('f', 64),
                     'context_hash' => app(MachineFailoverServiceRegistry::class)->fingerprint($snapshot),
-                    'payload' => ['snapshot' => $snapshot, 'release' => $admission['authorization']['release'], 'admission' => $admission], 'deadline_at' => $this->clock + 1200]);
+                    'payload' => ['snapshot' => $snapshot, 'release' => $admission['authorization']['release'], 'admission' => $admission]
+                        + (isset($admission['authorization']['workflow']) ? ['workflow' => $admission['authorization']['workflow']] : []),
+                    'deadline_at' => $this->clock + 1200]);
                 foreach (Plan::query()->whereIn('id', $plans)->get() as $plan) {
                     $member = \App\Models\MachineFailoverMember::query()->where('service_id', $id)->where('policy_id', $plan->policy_id)->firstOrFail();
                     ExecutionMember::query()->create(['execution_id' => $run->id, 'member_id' => $member->id, 'policy_id' => $plan->policy_id,
@@ -109,6 +112,39 @@ class MachineFailoverAdmissionTest extends MachineFailoverShadowTest
         app()->instance(MachineFailoverExecutionGate::class, new MachineFailoverExecutionGate());
         $this->blocked('orchestration_disabled'); $this->assertSame([], $this->starts); $this->assertSame(0, Execution::query()->count());
     }
+    public function test_readiness_admission_is_explicitly_pinned_and_independent_of_protocol_verification_permission(): void
+    {
+        $pin = $this->prepareAdmission(); $pin['workflow'] = 'agent_readiness_v1';
+        config(['machine_failover.workflow' => 'agent_readiness_v1', 'machine_failover.admission_authorizations' => [$pin],
+            'machine_acceptance.allow_readiness' => true, 'machine_acceptance.allow_verification' => false]);
+        $first = $this->advanceAdmission(); $again = $this->advanceAdmission();
+        $this->assertSame(1, $first['started'], json_encode($first)); $this->assertSame(1, $again['resumed'], json_encode($again));
+        $this->assertSame('agent_readiness_v1', Execution::query()->firstOrFail()->payload['workflow']);
+        $this->assertCount(1, $this->starts); Http::assertNothingSent();
+    }
+
+    public function test_readiness_admission_cannot_reinterpret_an_old_authorization_without_its_workflow(): void
+    {
+        $this->prepareAdmission();
+        config(['machine_failover.workflow' => 'agent_readiness_v1', 'machine_acceptance.allow_readiness' => true]);
+        $this->blocked('admission_scope_invalid'); $this->assertSame(0, Execution::query()->count());
+    }
+
+    public function test_readiness_admission_missing_its_separate_permission_never_starts(): void
+    {
+        $pin = $this->prepareAdmission(); $pin['workflow'] = 'agent_readiness_v1';
+        config(['machine_failover.workflow' => 'agent_readiness_v1', 'machine_failover.admission_authorizations' => [$pin],
+            'machine_acceptance.allow_readiness' => false]);
+        $this->blocked('admission_disabled'); $this->assertCount(0, $this->starts);
+    }
+
+    public function test_historical_admission_recovers_its_original_workflow_after_the_new_default_changes(): void
+    {
+        $this->prepareAdmission(); $this->advanceAdmission();
+        config(['machine_failover.workflow' => 'agent_readiness_v1']);
+        $this->assertSame(1, $this->advanceAdmission()['resumed']); $this->assertCount(1, $this->starts);
+    }
+
     public function test_current_collected_proposal_starts_once_and_recovers_the_same_execution(): void
     {
         $this->prepareAdmission(); $first = $this->advanceAdmission(); $again = $this->advanceAdmission();

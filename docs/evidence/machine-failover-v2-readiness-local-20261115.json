@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "date": "2026-11-15",
+  "timezone": "Asia/Shanghai",
+  "status": "local_regressions_passed_not_live_acceptance",
+  "base_revision": "2d3120f0efb241ea5e23eb0fda53fc11c44dfd04",
+  "scope": {
+    "local_only": true,
+    "repositories": ["keliboard", "keli-admin"],
+    "cloud_api_requests": 0,
+    "created_vms": 0,
+    "dns_api_requests": 0,
+    "production_access": false,
+    "production_deployment": false,
+    "queue_configuration_changed": false,
+    "automatic_switches_enabled": false,
+    "r29_replayed": false,
+    "tanzhen_modified": false,
+    "committed_or_pushed": false
+  },
+  "contracts": {
+    "new_native_workflow": "agent_readiness_v1",
+    "historical_missing_workflow": "protocol_verification_v1",
+    "readiness_scope": "agent_config_ipv4",
+    "readiness_claims_protocol_forwarding": false,
+    "protocol_diagnostic_grants_dns_authority": false,
+    "production_hard_gate_unchanged": true,
+    "readiness_permission_default": false,
+    "protocol_verification_permission_default": false
+  },
+  "verification": {
+    "backend_related_suite": {
+      "selected": 927,
+      "passed": 924,
+      "skipped": 3,
+      "failures": 0,
+      "errors": 0,
+      "assertions": 12039,
+      "junit_sha256": "320b5d80cf5cf14383863a3f097a1d27c8bac659abc6b3625ddaa1e69ef2a96a",
+      "note": "Completed before the final diagnostic-only provider-record identity guard. The full native bridge suite below reran against that final guard. Counts overlap, not additive."
+    },
+    "final_native_bridge_suite": {
+      "selected": 246,
+      "passed": 246,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0,
+      "assertions": 4587,
+      "junit_sha256": "6630575d5bbe08c9013fbaa397fcf16b95f4158f22293f188bbc84e6c0d752f6",
+      "includes_final_dns_identity_guard": true
+    },
+    "frontend": { "files": 4, "passed": 95, "failed": 0, "scoped_eslint_passed": true },
+    "build": {
+      "passed": true,
+      "js_bytes": 4676432,
+      "css_bytes": 570854,
+      "js_limit_bytes": 4678000,
+      "css_limit_bytes": 573000,
+      "limits_changed": false,
+      "new_dependencies": false,
+      "js_sha256": "48351b4b39574fabd73a0975e76e4e58bd62208096de034bbdb9c2fcb5db655a",
+      "css_sha256": "308a59cc3794d41603cb817c003f444f275eacf37f42f4264705d89aa2591da0"
+    },
+    "browser": {
+      "viewports": [1440, 390, 320],
+      "passed": 3,
+      "page_errors": 0,
+      "external_requests": 0,
+      "mock_mutations": 0,
+      "readiness_and_protocol_history_distinct": true
+    },
+    "git_diff_check_passed": true,
+    "preexisting_user_files_hashes_unchanged": true,
+    "r29_result_sha256_unchanged": "9fa4852e9ccde5946dddcd60606cc5fd23226bedfab457b25cc269d80045138c"
+  },
+  "not_verified": [
+    "Three Linux-only timeout and SIGTERM cases skipped on this Windows host",
+    "Real cloud creation or candidate domestic connectivity under the new workflow",
+    "Real protocol-worker forwarding, DNS writes, public resolution or TTL propagation",
+    "Linux Redis/MySQL multi-worker or Horizon runtime for this change"
+  ]
+}

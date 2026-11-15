@@ -65,6 +65,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
     private $duringInstanceRead = null;
     private $duringVerification = null;
     private bool $dualStack = false;
+    private bool $nodeReadiness = false;
     private string $addressFailure = '';
     private array $challenges = [];
 
@@ -177,7 +178,10 @@ class MachineFailoverNativeBridgeTest extends TestCase
     private function enable(): void
     {
         app()->instance(MachineFailoverExecutionGate::class, new class extends MachineFailoverExecutionGate { public function assertAllowed(string $operation): void {} });
-        config(['machine_provision.allow_live' => true, 'machine_provision.allowed_test_machine_ids' => array_map(fn ($f) => $f['machine']->id, $this->fixtures),
+        config(['app.key' => str_repeat('n', 32),
+            'machine_failover.workflow' => $this->nodeReadiness ? 'agent_readiness_v1' : 'protocol_verification_v1',
+            'machine_acceptance.allow_readiness' => $this->nodeReadiness,
+            'machine_provision.allow_live' => true, 'machine_provision.allowed_test_machine_ids' => array_map(fn ($f) => $f['machine']->id, $this->fixtures),
             'machine_failover.allow_replacement' => true, 'machine_failover.allowed_replacement_policy_ids' => array_map(fn ($f) => $f['policy']->id, $this->fixtures),
             'machine_failover.allow_rotation' => true, 'machine_failover.allowed_rotation_policy_ids' => array_map(fn ($f) => $f['policy']->id, $this->fixtures),
             'machine_acceptance.allow_verification' => true, 'machine_acceptance.allow_dns' => true,
@@ -198,6 +202,248 @@ class MachineFailoverNativeBridgeTest extends TestCase
 
     private function advance(array $run): array { return app(MachineFailoverNativeBridge::class)->advance($run['id'], $this->admin->id); }
     private function task(int $member = 0): Task { return Task::query()->findOrFail(Attempt::query()->where('execution_member_id', Member::query()->orderBy('id')->skip($member)->value('id'))->latest('ordinal')->value('task_id')); }
+    public function test_readiness_workflow_completes_without_a_protocol_verifier_and_never_claims_forwarding(): void
+    {
+        $this->nodeReadiness = true; $run = $this->start();
+        config(['machine_acceptance.allow_verification' => false, 'machine_acceptance.verifier_url' => '',
+            'machine_acceptance.verifier_key' => '', 'machine_acceptance.verifier_profiles' => []]);
+        $run = $this->advance($run);
+        $this->assertSame('waiting_initialization', $run['members'][0]['phase']);
+        $run = $this->ready($run);
+        $this->assertSame('awaiting_dns', $run['members'][0]['phase'], json_encode($run));
+        $this->assertFalse($run['protocol_verification_required']);
+        $instance = MachineOwnedInstance::query()->where('task_id', $this->task()->id)->firstOrFail();
+        $this->assertSame('ready', $instance->status); $this->assertNull($instance->verification); $this->assertNull($instance->verified_until);
+        $run = $this->advance($run);
+        $this->assertSame('completed', $run['status'], json_encode($run));
+        $this->assertSame('accepted', $this->task()->status);
+        $this->assertTrue($this->task()->evidence['readiness_verified']);
+        $this->assertFalse($this->task()->evidence['forwarding_verified']);
+        $this->assertSame(0, $this->verifications); $this->assertSame(0, MachineAcceptanceCheck::query()->count());
+        $this->assertCount(1, $this->posts); $this->assertSame(1, $this->dnsWrites);
+        $payload = Attempt::query()->firstOrFail()->payload;
+        $this->assertArrayHasKey('readiness_receipt', $payload); $this->assertArrayHasKey('dns_receipt', $payload);
+        $this->assertArrayNotHasKey('forwarding_receipt', $payload);
+    }
+
+    public function test_readiness_workflow_waits_through_install_reports_and_ipv4_without_recreating(): void
+    {
+        $this->nodeReadiness = true; $run = $this->advance($this->start());
+        $this->assertSame('waiting_initialization', $run['members'][0]['phase']);
+        $task = $this->task();
+        $this->assertTrue(app(MachineProvisionService::class)->callback($task->id, $task->installation_id, $this->callbackSecret($task), 'succeeded'));
+        $task->refresh()->fill(['dispatched_at' => time() - 2, 'next_check_at' => 0])->save();
+        $run = $this->advance($run); $this->assertSame('waiting_reports', $run['members'][0]['phase']);
+        $this->report($this->fixtures[0], $task, $task->public_ips[0], false, time() - 1);
+        $task->refresh()->fill(['next_check_at' => 0])->save();
+        $run = $this->advance($run); $this->assertSame('checking_ipv4', $run['members'][0]['phase']);
+        $this->report($this->fixtures[0], $task, $task->public_ips[0], true, time());
+        $task->refresh()->fill(['next_check_at' => 0])->save();
+        $run = $this->advance($run); $this->assertSame('awaiting_dns', $run['members'][0]['phase'], json_encode($run));
+        $run = $this->advance($run); $this->assertSame('completed', $run['status'], json_encode($run));
+        $this->assertCount(1, $this->posts); $this->assertSame(0, $this->verifications);
+    }
+
+    public static function protocolDiagnosticOutcomes(): array { return [[false, false], [true, false], [false, true], [true, true]]; }
+    #[DataProvider('protocolDiagnosticOutcomes')]
+    public function test_readiness_workflow_protocol_diagnostic_does_not_replace_or_erase_readiness(bool $passed, bool $completed): void
+    {
+        $this->nodeReadiness = true; $run = $this->ready($this->advance($this->start()));
+        if ($completed) { $run = $this->advance($run); $this->assertSame('completed', $run['status']); }
+        $task = $this->task(); $before = $task->payload['node_readiness'];
+        $instance = MachineOwnedInstance::query()->where('task_id', $task->id)->firstOrFail();
+        $this->mode = $passed ? '' : 'bad_receipt';
+        $result = app(\App\Services\ServerMachine\Cloud\MachineInstanceAcceptance::class)->verify($instance->id, 1, $instance->revision, $this->admin->id);
+        $this->assertSame($passed ? 'passed' : 'failed', $result['protocol_diagnostic']['state']);
+        $this->assertSame($passed ? null : 'verification_invalid', $result['protocol_diagnostic']['reason']);
+        $this->assertNull($instance->fresh()->reason); $this->assertSame($instance->revision, $instance->fresh()->revision);
+        $this->assertSame($before, $task->fresh()->payload['node_readiness']);
+        $this->assertSame(1, MachineAcceptanceCheck::query()->where('state', $passed ? 'passed' : 'failed')->count());
+        $this->assertNull($instance->fresh()->verification); $this->assertNull($instance->fresh()->verified_until);
+        if (!$completed) $run = $this->advance($run);
+        $this->assertSame('completed', $run['status'], json_encode($run));
+        $this->assertSame(1, $this->verifications); $this->assertFalse($this->task()->evidence['forwarding_verified']);
+        if ($completed) $this->code('native_intent_expired', fn () => app(\App\Services\ServerMachine\Cloud\MachineInstanceReadiness::class)
+            ->requireReady($instance->fresh(), $this->fixtures[0]['policy']->fresh(), $this->admin->id));
+    }
+
+    public static function completedDiagnosticConflicts(): array
+    {
+        return array_map(fn ($kind) => [$kind], ['candidate', 'task', 'dns_marker', 'dns_ip', 'dns_owner', 'dns_record_id',
+            'dns_zone', 'dns_hostname', 'dns_credential', 'dns_credential_revision', 'readiness_seal']);
+    }
+    #[DataProvider('completedDiagnosticConflicts')]
+    public function test_readiness_workflow_completed_diagnostic_cannot_target_a_changed_instance_or_dns(string $kind): void
+    {
+        $this->nodeReadiness = true; $run = $this->advance($this->ready($this->advance($this->start())));
+        $this->assertSame('completed', $run['status']); $task = $this->task();
+        $instance = MachineOwnedInstance::query()->where('task_id', $task->id)->firstOrFail();
+        if ($kind === 'candidate') $instance->fill(['active_policy_id' => null, 'status' => 'retained'])->save();
+        elseif ($kind === 'task') $task->fill(['marker' => 'changed-marker'])->save();
+        elseif ($kind === 'readiness_seal') { $payload = $task->payload; $payload['node_readiness']['seal'] = str_repeat('0', 64); $task->payload = $payload; $task->save(); }
+        else {
+            $field = match ($kind) { 'dns_marker' => 'marker', 'dns_ip' => 'ip', 'dns_record_id' => 'record_id', 'dns_zone' => 'zone',
+                'dns_hostname' => 'hostname', 'dns_credential' => 'credential_id', 'dns_credential_revision' => 'credential_revision', default => 'active_instance_id' };
+            $value = match ($kind) { 'dns_owner' => null, 'dns_credential', 'dns_credential_revision' => 999, default => 'changed' };
+            $this->fixtures[0]['dns']->fresh()->fill([$field => $value])->save();
+        }
+        try {
+            app(\App\Services\ServerMachine\Cloud\MachineInstanceAcceptance::class)->verify($instance->id, 1, $instance->revision, $this->admin->id);
+            $this->fail('Changed diagnostic scope was accepted');
+        } catch (CloudException) {}
+        $this->assertSame(0, $this->verifications); $this->assertSame(0, MachineAcceptanceCheck::query()->count());
+        $this->assertSame(1, $this->dnsWrites); $this->assertCount(1, $this->posts);
+    }
+
+    public static function readinessConflicts(): array
+    {
+        return array_map(fn ($kind) => [$kind], ['seal', 'proof_binding', 'installation', 'provider_identity', 'release',
+            'resource_owner', 'dns_marker', 'readiness_permission', 'readiness_expired', 'source_recovered']);
+    }
+
+    #[DataProvider('readinessConflicts')]
+    public function test_readiness_workflow_preserves_identity_recovery_and_dns_guards(string $kind): void
+    {
+        $this->nodeReadiness = true; $run = $this->ready($this->advance($this->start()));
+        $this->assertSame('awaiting_dns', $run['members'][0]['phase'], json_encode($run));
+        $task = $this->task(); $instance = MachineOwnedInstance::query()->where('task_id', $task->id)->firstOrFail();
+        if (in_array($kind, ['seal', 'proof_binding', 'readiness_expired'], true)) {
+            $payload = $task->payload;
+            if ($kind === 'seal') $payload['node_readiness']['seal'] = str_repeat('0', 64);
+            elseif ($kind === 'proof_binding') $payload['node_readiness']['binding']['task']['external_id'] = 'foreign';
+            else $payload['node_readiness']['expires_at'] = time() - 1;
+            $task->payload = $payload; $task->save();
+        } elseif ($kind === 'installation') { $task->installation_id = str_repeat('1', 32); $task->save(); }
+        elseif ($kind === 'provider_identity') $this->remote[(int) $task->external_id]['created'] = '2020-01-01T00:00:00';
+        elseif ($kind === 'release') { $this->release->binary_sha256 = str_repeat('d', 64); $this->release->save(); }
+        elseif ($kind === 'resource_owner') \App\Models\MachineCloudResource::query()->whereKey($instance->resource_id)->update(['installation_id' => str_repeat('f', 32)]);
+        elseif ($kind === 'dns_marker') $this->records[$this->fixtures[0]['dns']->record_id]['comment'] = 'foreign-owner';
+        elseif ($kind === 'readiness_permission') config(['machine_acceptance.allow_readiness' => false]);
+        elseif ($kind === 'source_recovered') $this->sourceReport($this->fixtures[0], true);
+        $run = $this->advance($run);
+        $this->assertNotSame('completed', $run['status'], json_encode($run));
+        $this->assertSame($kind === 'source_recovered' ? 'retained' : 'needs_review', $run['members'][0]['phase'], json_encode($run));
+        $this->assertSame(0, $this->dnsWrites); $this->assertCount(1, $this->posts); $this->assertSame(0, $this->verifications);
+        $this->assertSame($this->fixtures[0]['sourceIp'], $this->records[$this->fixtures[0]['dns']->record_id]['content']);
+    }
+
+    public function test_readiness_workflow_does_not_lower_a_historical_protocol_run_when_configuration_changes(): void
+    {
+        $run = $this->start();
+        $this->assertArrayNotHasKey('workflow', Execution::query()->firstOrFail()->payload);
+        config(['machine_failover.workflow' => 'agent_readiness_v1', 'machine_acceptance.allow_readiness' => true]);
+        $this->mode = 'bad_receipt'; $run = $this->ready($this->advance($run));
+        $this->assertSame('needs_review', $run['members'][0]['phase']);
+        $this->assertSame('protocol_verification_v1', $run['workflow']);
+        $this->assertSame(1, $this->verifications); $this->assertSame(0, $this->dnsWrites);
+        $this->assertArrayNotHasKey('node_readiness', $this->task()->payload);
+    }
+
+    public function test_readiness_workflow_configuration_changes_do_not_reinterpret_a_new_run(): void
+    {
+        $this->nodeReadiness = true; $run = $this->start();
+        config(['machine_failover.workflow' => 'protocol_verification_v1', 'machine_acceptance.allow_verification' => false]);
+        $run = $this->ready($this->advance($run)); $run = $this->advance($run);
+        $this->assertSame('completed', $run['status'], json_encode($run)); $this->assertSame(0, $this->verifications);
+    }
+
+    public function test_readiness_workflow_flags_still_cannot_bypass_the_production_execution_gate(): void
+    {
+        $this->nodeReadiness = true; $run = $this->start();
+        app()->instance(MachineFailoverExecutionGate::class, new MachineFailoverExecutionGate());
+        $this->expectExceptionMessage('orchestration_disabled');
+        try { $this->advance($run); }
+        finally { $this->assertCount(0, $this->posts); $this->assertSame(0, $this->dnsWrites); $this->assertSame(0, $this->verifications); }
+    }
+
+    public function test_readiness_workflow_start_replay_uses_the_pinned_contract_after_a_configuration_change(): void
+    {
+        $this->nodeReadiness = true; $run = $this->start(); $stored = Execution::query()->firstOrFail();
+        config(['machine_failover.workflow' => 'protocol_verification_v1']);
+        $again = app(MachineFailoverNativeBridge::class)->start($stored->service_id, $stored->service_revision,
+            Member::query()->where('execution_id', $stored->id)->pluck('plan_id')->all(), $this->release->id, str_repeat('d', 32), $this->admin->id);
+        $this->assertSame($run['id'], $again['id']); $this->assertSame('agent_readiness_v1', $again['workflow']);
+        $this->assertSame(1, Execution::query()->count()); $this->assertCount(0, $this->posts);
+    }
+
+    public function test_readiness_workflow_permission_is_checked_before_creating_or_reserving_a_candidate(): void
+    {
+        $this->nodeReadiness = true; $run = $this->start(); config(['machine_acceptance.allow_readiness' => false]);
+        $run = $this->advance($run);
+        $this->assertSame('needs_review', $run['status']); $this->assertSame('acceptance_disabled', $run['members'][0]['reason']);
+        $this->assertSame(0, Attempt::query()->count()); $this->assertCount(0, $this->posts); $this->assertSame(0, $this->dnsWrites);
+    }
+
+    public function test_readiness_workflow_unknown_create_is_only_reconciled_and_not_created_twice(): void
+    {
+        $this->nodeReadiness = true; $this->mode = 'unknown_present'; $run = $this->advance($this->start());
+        $this->assertSame('reconciling_create', $run['members'][0]['phase']);
+        $task = $this->task(); $id = $task->id; $task->fill(['next_check_at' => 0])->save();
+        $run = $this->advance($run); $run = $this->ready($run); $run = $this->advance($run);
+        $this->assertSame('completed', $run['status'], json_encode($run));
+        $this->assertSame($id, $this->task()->id); $this->assertCount(1, $this->posts); $this->assertSame(0, $this->verifications);
+    }
+
+    public function test_readiness_workflow_committed_dns_is_acknowledged_without_readmitting_stale_health(): void
+    {
+        $this->nodeReadiness = true; $run = $this->ready($this->advance($this->start())); $attempt = Attempt::query()->firstOrFail();
+        app(MachineOwnedDnsService::class)->execute($attempt->payload['transition_id'], $this->admin->id);
+        $this->assertSame('accepted', $this->task()->status); $this->assertSame(1, $this->dnsWrites);
+        DB::table('v2_server')->where('id', 1)->update(['server_port' => 9443]);
+        $this->duringInstanceRead = fn () => throw new \RuntimeException('No new provider read allowed after committed DNS');
+        $run = $this->advance($run);
+        $this->assertSame('completed', $run['status'], json_encode($run));
+        $this->assertSame(1, $this->dnsWrites); $this->assertSame(0, $this->verifications); $this->assertCount(1, $this->posts);
+    }
+
+    public static function readinessDnsScopes(): array
+    {
+        return [[['A'], 'cloudflare', 1], [['A', 'AAAA'], 'cloudflare', 2], [['A', 'AAAA'], 'aliyun', 6]];
+    }
+
+    #[DataProvider('readinessDnsScopes')]
+    public function test_readiness_workflow_native_record_sets_keep_address_identity_without_protocol_receipts(array $types, string $provider, int $writes): void
+    {
+        $this->nodeReadiness = true; $run = $this->startSets($types, $provider);
+        config(['machine_acceptance.allow_verification' => false, 'machine_acceptance.verifier_url' => '',
+            'machine_acceptance.verifier_key' => '', 'machine_acceptance.verifier_profiles' => []]);
+        $run = $this->ready($this->advance($run));
+        $this->assertSame('awaiting_dns', $run['members'][0]['phase'], json_encode($run));
+        $proofs = \App\Models\MachineNativeAddressProof::query()->orderBy('family')->get();
+        $this->assertSame($types, $proofs->pluck('family')->all());
+        foreach ($proofs as $proof) {
+            $this->assertSame('ready', $proof->state); $this->assertSame('native_node_readiness_v1', $proof->payload['origin']);
+            $this->assertFalse($proof->payload['protocol_verified']); $this->assertNull($proof->receipt_sha256);
+            $this->assertArrayNotHasKey('receipt', $proof->payload);
+        }
+        $run = $this->finishSets($run);
+        $this->assertSame('completed', $run['status'], json_encode($run)); $this->assertSame($writes, $this->dnsWrites);
+        $this->assertSame(0, $this->verifications); $this->assertSame(0, MachineAcceptanceCheck::query()->count()); $this->assertCount(1, $this->posts);
+        $this->assertFalse($this->task()->evidence['forwarding_verified']); $this->assertTrue($this->task()->evidence['readiness_verified']);
+        $this->assertTrue(app(\App\Services\ServerMachine\Cloud\MachineNativeDnsAdmission::class)->completionCurrent(Attempt::query()->firstOrFail(), $this->task()));
+        $this->enable(); $instance = MachineOwnedInstance::query()->where('task_id', $this->task()->id)->firstOrFail();
+        $revision = $instance->revision; $proofs = $proofs->map(fn ($proof) => $proof->fresh()->toArray())->all();
+        $diagnostic = app(\App\Services\ServerMachine\Cloud\MachineInstanceAcceptance::class)->verify($instance->id, 1, $revision, $this->admin->id);
+        $this->assertSame('passed', $diagnostic['protocol_diagnostic']['state']);
+        $this->assertSame($revision, $instance->fresh()->revision); $this->assertSame($writes, $this->dnsWrites);
+        $this->assertSame($proofs, \App\Models\MachineNativeAddressProof::query()->orderBy('family')->get()->toArray());
+        $this->assertTrue(app(\App\Services\ServerMachine\Cloud\MachineNativeDnsAdmission::class)->completionCurrent(Attempt::query()->firstOrFail(), $this->task()));
+    }
+
+    public static function readinessPublicationConflicts(): array
+    {
+        return array_map(fn ($kind) => [$kind], ['expired', 'seal', 'origin', 'proof_links', 'source', 'task_ip', 'task_identity',
+            'resource', 'authority', 'session', 'configuration', 'release', 'dns_binding', 'publication', 'initial_inventory',
+            'dns_permission', 'readiness_permission', 'candidate_retained', 'candidate_accepted', 'resource_stopped', 'manual_hold', 'dns_hold']);
+    }
+
+    #[DataProvider('readinessPublicationConflicts')]
+    public function test_readiness_workflow_native_publication_conflicts_still_cannot_write_dns(string $kind): void
+    {
+        $this->nodeReadiness = true;
+        $this->test_native_context_or_publication_changes_after_proof_cannot_write_dns($kind);
+    }
+
     private function ready(array $run, int $member = 0): array
     {
         $task = $this->task($member); $this->assertSame('waiting_initialization', $task->status);
@@ -499,6 +745,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
         elseif ($kind === 'release') $this->release->fill(['binary_sha256' => str_repeat('c', 64)])->save();
         elseif ($kind === 'dns_permission') config(['machine_acceptance.allow_dns' => false]);
         elseif ($kind === 'verification_permission') config(['machine_acceptance.allow_verification' => false]);
+        elseif ($kind === 'readiness_permission') config(['machine_acceptance.allow_readiness' => false]);
         elseif ($kind === 'candidate_retained') MachineOwnedInstance::query()->where('task_id', $task->id)->update(['status' => 'retained']);
         elseif ($kind === 'candidate_accepted') $task->fill(['status' => 'accepted'])->save();
         elseif ($kind === 'resource_stopped') \App\Models\MachineCloudResource::query()->where('external_id', $task->external_id)->update(['status' => 'offline']);
@@ -511,7 +758,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
             $dns->payload = $p; $dns->save();
         }
         $run = $this->finishSets($run); $this->assertSame('needs_review', $run['status'], json_encode($run));
-        $this->assertSame(0, $this->dnsWrites); $this->assertCount(1, $this->posts); $this->assertSame(3, $this->verifications);
+        $this->assertSame(0, $this->dnsWrites); $this->assertCount(1, $this->posts); $this->assertSame($this->nodeReadiness ? 0 : 3, $this->verifications);
     }
     public function test_ipv6_must_be_fresh_and_reported_by_the_candidate_installation(): void
     {
@@ -1378,7 +1625,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $this->runtimeReady($run); $run = $this->tick($run); $this->assertSame('awaiting_dns', $run['members'][0]['phase']);
         $run = $this->tick($run); $this->assertSame('completed', $run['status'], json_encode($run));
         $this->assertSame('finished', $this->runner()->view(Execution::query()->find($run['id']))['state']);
-        $this->assertCount(1, $this->posts); $this->assertSame(1, $this->dnsWrites); $this->assertSame(1, $this->verifications);
+        $this->assertCount(1, $this->posts); $this->assertSame(1, $this->dnsWrites); $this->assertSame($this->nodeReadiness ? 0 : 1, $this->verifications);
         $this->assertFalse(app()->bound(\App\Services\ServerMachine\Cloud\MachineFailoverLease::class));
     }
     public function test_runner_round_robins_members_under_the_shared_parallel_budget(): void
@@ -1389,6 +1636,33 @@ class MachineFailoverNativeBridgeTest extends TestCase
         for ($i = 0; $i < 4; $i++) $run = $this->tick($run);
         $this->assertSame('completed', $run['status'], json_encode($run)); $this->assertSame(2, $this->dnsWrites);
         $this->assertSame(2, Attempt::count());
+    }
+    public static function readinessRunnerPaths(): array
+    {
+        return array_map(fn ($name) => [$name], [
+            'test_runner_completes_native_queue_callback_forwarding_and_dns_with_duplicate_jobs_ignored',
+            'test_runner_round_robins_members_under_the_shared_parallel_budget',
+            'test_runner_stop_before_create_is_local_and_stale_jobs_cannot_restart_it',
+            'test_runner_stop_during_preflight_prevents_the_create_post',
+            'test_runner_stop_after_post_preserves_the_paid_candidate_without_dns_or_more_mutations',
+            'test_runner_unknown_create_stopped_during_post_stays_for_review_and_never_rotates',
+            'test_runner_recovers_lost_queue_receipts_and_rejects_the_superseded_ticket',
+            'test_runner_expired_worker_is_fenced_and_recovers_only_the_original_create_intent',
+            'test_runner_stopping_a_prepared_dns_transition_cancels_only_local_unsubmitted_work',
+            'test_runner_stop_is_available_with_hard_gates_closed_and_direct_child_jobs_are_fenced',
+            'test_runner_stop_during_dns_preflight_prevents_the_patch',
+            'test_runner_stop_during_an_inflight_dns_patch_preserves_uncertainty_without_reversal',
+            'test_runner_expired_worker_recovers_an_unknown_post_without_creating_or_rotating_again',
+            'test_runner_waits_for_an_old_member_lock_without_stopping_or_allocating_again',
+            'test_runner_stop_request_survives_worker_death_with_execution_disabled',
+        ]);
+    }
+    #[DataProvider('readinessRunnerPaths')]
+    public function test_readiness_workflow_keeps_runner_fencing_and_stop_controls(string $path): void
+    {
+        $this->nodeReadiness = true;
+        $this->{$path}();
+        $this->assertSame(0, $this->verifications);
     }
     public function test_runner_stop_before_create_is_local_and_stale_jobs_cannot_restart_it(): void
     {

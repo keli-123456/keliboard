@@ -186,6 +186,10 @@ class MachineReplacementService
     {
         if ($task->status === 'awaiting_acceptance') {
             $instance = MachineOwnedInstance::query()->where('task_id', $task->id)->first();
+            if ($instance && MachineFailoverWorkflow::forTask($task) === MachineFailoverWorkflow::READINESS) {
+                try { app(MachineInstanceReadiness::class)->record($instance, Policy::query()->findOrFail($row->policy_id), $task); return 'awaiting_dns'; }
+                catch (CloudException) { return 'awaiting_acceptance'; }
+            }
             if ($instance && $instance->verified_until > time() && $instance->policy_revision === $row->policy_revision
                 && ($instance->verification['cleanup_complete'] ?? false) === true && !empty($instance->verification['receipt_sha256'])) return 'awaiting_dns';
         }
@@ -205,7 +209,9 @@ class MachineReplacementService
                 && app(MachineNativeDnsAdmission::class)->completionCurrent($attempt, $task);
         }
         $instance = MachineOwnedInstance::query()->where('task_id', $task->id)->where('active_policy_id', $row->policy_id)->first();
-        return $instance && ($task->evidence['forwarding_verified'] ?? false) === true && ($task->evidence['dns_changed'] ?? false) === true
+        $ready = MachineFailoverWorkflow::forTask($task) === MachineFailoverWorkflow::READINESS
+            ? ($task->evidence['readiness_verified'] ?? false) === true : ($task->evidence['forwarding_verified'] ?? false) === true;
+        return $instance && $ready && ($task->evidence['dns_changed'] ?? false) === true
             && MachineDnsTransition::query()->whereKey($task->evidence['dns_transition_id'] ?? '')->where('state', 'verified')
                 ->where('to_instance_id', $instance->id)->exists();
     }

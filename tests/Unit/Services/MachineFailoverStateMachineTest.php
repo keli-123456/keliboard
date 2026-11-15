@@ -101,4 +101,16 @@ class MachineFailoverStateMachineTest extends TestCase
         $this->expectException(CloudException::class);
         $machine->dispatched($machine->initial(), 'switch_dns');
     }
+
+    public function test_readiness_flow_checks_real_candidate_stages_without_a_forwarding_action(): void
+    {
+        $machine = new Machine(); $driver = new Driver(); $context = $this->context() + ['workflow' => 'agent_readiness_v1'];
+        $state = $machine->reserve(array_replace($machine->initial(), ['phase' => 'queued']), true); $actions = [];
+        for ($i = 0; $i < 15 && !$machine->terminal($state); $i++) {
+            $kind = Machine::ACTIONS[$state['phase']]; $actions[] = $kind; $state = $machine->dispatched($state, $kind);
+            $state = $machine->receipt($state, $kind, $driver->execute($kind, $context, $state, 'replace', 'operation-' . $i, 100 + $i), $context, 'operation-' . $i, 100 + $i);
+        }
+        $this->assertSame('completed', $state['phase']);
+        $this->assertSame(['create', 'initialize', 'reports', 'ipv4', 'prepare_dns', 'switch_dns', 'verify_dns'], $actions);
+    }
 }

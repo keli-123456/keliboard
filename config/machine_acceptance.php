@@ -1,6 +1,7 @@
 <?php
 
 return [
+    'allow_readiness' => false,
     'allow_verification' => false,
     'allow_dns' => false,
     'allowed_policy_ids' => [],

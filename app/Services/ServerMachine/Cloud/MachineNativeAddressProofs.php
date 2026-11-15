@@ -16,6 +16,7 @@ class MachineNativeAddressProofs
         $this->gate->assertAllowed('native_address_verify');
         if (!$this->available()) throw new CloudException('migration_required');
         $admission = app(MachineNativeDnsAdmission::class); $context = $admission->candidateContext($attempt, $instance, true);
+        if (($context['workflow'] ?? null) === MachineFailoverWorkflow::READINESS) return $this->ensureReadiness($attempt, $instance, $context);
         $hash = $this->hash($context); $configuration = $this->verifier->configuration($instance->policy_id); $links = [];
         foreach ($context['families'] as $family) {
             $row = Proof::query()->where('attempt_id', $attempt->id)->where('family', $family)->first();
@@ -78,6 +79,17 @@ class MachineNativeAddressProofs
     }
     private function proof(Proof $row, array $context, Attempt $attempt, Instance $instance): void
     {
+        if (($context['workflow'] ?? null) === MachineFailoverWorkflow::READINESS) {
+            if ($row->state !== 'ready' || $row->attempt_id !== $attempt->id || $row->instance_id !== $instance->id
+                || $row->valid_until <= time() || $row->issued_at > time() || $row->valid_until > $row->issued_at + 1200
+                || $row->valid_until !== $context['deadline_at'] || $row->ip !== ($context['addresses'][$row->family] ?? null)
+                || !hash_equals($row->context_hash, $this->hash($context))
+                || ($row->payload['origin'] ?? null) !== 'native_node_readiness_v1'
+                || ($row->payload['protocol_verified'] ?? null) !== false || isset($row->payload['receipt']) || $row->receipt_sha256 !== null
+                || !MachineIntentJson::same($row->payload['context'] ?? null, $context)
+                || !is_string($row->seal) || !hash_equals($row->seal, $this->seal($row))) throw new CloudException('native_address_not_verified');
+            return;
+        }
         $receipt = $row->payload['receipt'] ?? [];
         if ($row->state !== 'passed' || $row->attempt_id !== $attempt->id || $row->instance_id !== $instance->id
             || $row->valid_until <= time() || $row->issued_at > time() || $row->valid_until > $row->issued_at + 165
@@ -93,6 +105,34 @@ class MachineNativeAddressProofs
             || ($receipt['configuration_fingerprint'] ?? null) !== $context['runtime']['configuration_fingerprint']
             || ($receipt['verifier_fingerprint'] ?? null) !== $context['verifier_fingerprint'])
             throw new CloudException('native_address_not_verified');
+    }
+    private function ensureReadiness(Attempt $attempt, Instance $instance, array $context): array
+    {
+        $links = [];
+        foreach ($context['families'] as $family) {
+            $row = Proof::query()->where('attempt_id', $attempt->id)->where('family', $family)->first();
+            if (!$row) $row = DB::transaction(function () use ($attempt, $instance, $context, $family) {
+                app(MachineFailoverNativeBridge::class)->assertAttempt($attempt->fresh());
+                if (!MachineIntentJson::same(app(MachineNativeDnsAdmission::class)->candidateContext($attempt->fresh(), $instance->fresh()), $context))
+                    throw new CloudException('native_address_context_changed');
+                if ($existing = Proof::query()->where('attempt_id', $attempt->id)->where('family', $family)->first()) return $existing;
+                $row = new Proof(['id' => bin2hex(random_bytes(16)), 'attempt_id' => $attempt->id, 'instance_id' => $instance->id,
+                    'family' => $family, 'ip' => $context['addresses'][$family], 'state' => 'ready',
+                    'context_hash' => $this->hash($context), 'request_sha256' => $this->hash(['node_readiness', $family, $context]),
+                    'issued_at' => time(), 'deadline_at' => $context['deadline_at'], 'valid_until' => $context['deadline_at'],
+                    'payload' => ['context' => $context, 'origin' => 'native_node_readiness_v1', 'protocol_verified' => false]]);
+                $row->seal = $this->seal($row); $row->save();
+                return $row;
+            });
+            $this->proof($row, $context, $attempt, $instance); $links[$family] = $row->id;
+        }
+        DB::transaction(function () use ($attempt, $links) {
+            app(MachineFailoverNativeBridge::class)->assertAttempt($attempt->fresh());
+            $row = Attempt::query()->whereKey($attempt->id)->lockForUpdate()->firstOrFail(); $payload = $row->payload;
+            if (isset($payload['address_proofs']) && !MachineIntentJson::same($payload['address_proofs'], $links)) throw new CloudException('native_address_replay');
+            $payload['address_proofs'] = $links; $row->payload = $payload; $row->save();
+        });
+        return $links;
     }
     private function seal(Proof $row): string
     {

@@ -1,6 +1,8 @@
 <?php
 
 return [
+    // Pinned to new executions only; historical executions retain their protocol contract.
+    'workflow' => 'agent_readiness_v1',
     // Background cache-only forecasts write audit records, never native execution intents.
     'preview_enabled' => filter_var(env('MACHINE_FAILOVER_PREVIEW_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
     // Observation writes local evidence only; it cannot enable provisioning or DNS.

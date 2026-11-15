@@ -15,6 +15,22 @@ use Illuminate\Support\Facades\Schema;
 
 class MachineInstanceOwnership
 {
+    public function register(Policy $policy, Instance $instance, MachineProvisionTask $task): MachineCloudResource
+    {
+        $provider = $task->payload['plan']['provider'] ?? 'linode';
+        $resource = MachineCloudResource::query()->where('provider', $provider)->where('external_id', $task->external_id)->first();
+        if ($resource && ($resource->account_id !== $task->account_id || $resource->provider_created_at !== $task->provider_created_at
+            || ($resource->machine_id && ($resource->machine_id !== $policy->machine_id || $resource->installation_id !== $instance->installation_id))
+            || $resource->auto_boot || $resource->armed || $resource->active_task_id)) throw new CloudException('resource_already_owned');
+        $resource ??= new MachineCloudResource();
+        $resource->fill(['account_id' => $task->account_id, 'provider' => $provider, 'external_id' => $task->external_id,
+            'provider_created_at' => $task->provider_created_at, 'label' => MachineProvisionProviders::requestIdentity($provider, $task->payload['request'])['label'],
+            'region' => $policy->region, 'size' => $policy->size, 'status' => 'running', 'public_ips' => $task->public_ips,
+            'machine_id' => $policy->machine_id, 'installation_id' => $instance->installation_id, 'machine_authority' => $task->machine_authority,
+            'observed_at' => time(), 'auto_boot' => false, 'armed' => false, 'manual_hold' => true, 'dns_hold' => true])->save();
+        return $resource;
+    }
+
     public function canUse(Policy $policy): bool
     {
         if (!Schema::hasTable('v2_machine_owned_instance') || !Instance::query()->where('policy_id', $policy->id)->exists()) return false;

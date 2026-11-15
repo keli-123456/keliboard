@@ -170,7 +170,8 @@ class MachineFailoverPolicyService
                 'current' => ['agent' => $agent, 'node_count' => $nodes->count(), 'ipv4_probe' => $probe, 'active_instances' => count($fresh)],
                 'trigger' => ['state' => $trigger, 'required_failures' => $policy->failure_threshold, 'observed_failures' => $observed],
                 'checks' => $checks, 'steps' => array_map(fn ($action) => ['action' => $action, 'status' => 'planned'], [
-                    'create_new_vm', 'install_kelinode_rs', 'wait_exact_instance_reports', 'verify_ipv4_targets', 'verify_tcp_udp',
+                    'create_new_vm', 'install_kelinode_rs', 'wait_exact_instance_reports', 'verify_ipv4_targets',
+                    MachineFailoverWorkflow::configured() === MachineFailoverWorkflow::READINESS ? 'verify_node_readiness' : 'verify_tcp_udp',
                     'bind_new_instance', 'switch_dedicated_dns', 'keep_previous_vm'])];
         });
     }

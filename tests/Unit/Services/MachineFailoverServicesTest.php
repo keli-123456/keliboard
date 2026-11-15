@@ -84,6 +84,20 @@ class MachineFailoverServicesTest extends TestCase
         $this->assertSame(48.0, $row['monthly_cap_usd']); $this->assertFalse($row['execution_enabled']); $this->untouched();
     }
 
+    public function test_simulation_pins_readiness_and_protocol_diagnostics_as_separate_contracts(): void
+    {
+        $start = $this->start(); $this->assertSame('agent_readiness_v1', $start['workflow']);
+        config(['machine_failover.workflow' => 'protocol_verification_v1']);
+        $this->assertSame($start['id'], $this->start()['id']);
+        $result = $this->simulation->advance($start['id'], $this->admin->id);
+        $this->assertSame('completed', $result['status']);
+        $this->assertNotContains('forwarding', array_column($result['actions'], 'kind'));
+        $specialist = $this->simulation->advance($this->start('forwarding_failed', 1, str_repeat('b', 32))['id'], $this->admin->id);
+        $this->assertSame('protocol_verification_v1', $specialist['workflow']);
+        $this->assertSame('failed', $specialist['status']);
+        $this->assertContains('forwarding', array_column($specialist['actions'], 'kind')); $this->untouched();
+    }
+
     private function start(string $scenario = 'replace', ?int $target = 1, string $key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'): array
     {
         return $this->simulation->start($this->service['id'], $this->service['revision'], $scenario, $target, $key, $this->admin->id);
@@ -166,7 +180,7 @@ class MachineFailoverServicesTest extends TestCase
         $this->assertSame(0, Action::query()->where('member_id', 2)->count());
         $this->assertSame($result['id'], $this->start($scenario)['id']);
         $this->assertSame($result, $this->simulation->advance($result['id'], $this->admin->id));
-        if (in_array($scenario, ['replace', 'no_baseline'], true)) $this->assertSame(['create', 'initialize', 'reports', 'ipv4', 'forwarding', 'prepare_dns', 'switch_dns', 'verify_dns'], array_column($result['actions'], 'kind'));
+        if (in_array($scenario, ['replace', 'no_baseline'], true)) $this->assertSame(['create', 'initialize', 'reports', 'ipv4', 'prepare_dns', 'switch_dns', 'verify_dns'], array_column($result['actions'], 'kind'));
         foreach (['synthetic-cloud-secret', 'synthetic-dns-secret', 'synthetic-machine-secret', 'receipt', 'context_hash', 'root_pass'] as $secret) $this->assertStringNotContainsString($secret, json_encode($result));
         $this->untouched();
     }
@@ -225,10 +239,16 @@ class MachineFailoverServicesTest extends TestCase
         $this->assertSame(1, Action::query()->where('kind', 'reconcile_create')->count()); $this->untouched();
     }
 
-    public function test_lost_dns_dispatch_receipt_cannot_repeat_dns_write(): void
+    public static function workflowContracts(): array { return [['agent_readiness_v1'], ['protocol_verification_v1']]; }
+    #[DataProvider('workflowContracts')]
+    public function test_lost_dns_dispatch_receipt_cannot_repeat_dns_write(string $workflow): void
     {
-        $start = $this->start(); $this->simulation->advance($start['id'], $this->admin->id, 10);
-        $row = RunMember::query()->where('run_id', $start['id'])->where('member_id', 1)->firstOrFail();
+        config(['machine_failover.workflow' => $workflow]); $start = $this->start();
+        for ($tick = 0; $tick < 12; $tick++) {
+            $this->simulation->advance($start['id'], $this->admin->id, 1);
+            $row = RunMember::query()->where('run_id', $start['id'])->where('member_id', 1)->firstOrFail();
+            if ($row->phase === 'checking_dns') break;
+        }
         $this->assertSame('checking_dns', $row->phase);
         $payload = $row->payload; $payload['state']['phase'] = 'switching_dns'; $payload['state']['dns_dispatched'] = false;
         $row->fill(['phase' => 'switching_dns', 'payload' => $payload])->save();
@@ -330,6 +350,7 @@ class MachineFailoverServicesTest extends TestCase
 
     public function test_receipt_identity_cleanup_and_timing_are_not_bypassed_by_a_success_label(): void
     {
+        config(['machine_failover.workflow' => 'protocol_verification_v1']);
         $driver = new class extends MachineFailoverSimulationDriver {
             public function execute(string $kind, array $context, array $state, string $scenario, string $operation, int $now): array {
                 $fact = parent::execute($kind, $context, $state, $scenario, $operation, $now);

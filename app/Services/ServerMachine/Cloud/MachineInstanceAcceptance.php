@@ -72,6 +72,8 @@ class MachineInstanceAcceptance
     {
         if (!$this->available()) throw new CloudException('migration_required');
         $initial = Instance::query()->findOrFail($id);
+        if (MachineFailoverWorkflow::forTask(Task::query()->findOrFail($initial->task_id)) === MachineFailoverWorkflow::READINESS)
+            return $this->diagnose($initial, $policyRevision, $revision, $admin);
         return $this->locked($initial->policy_id, function ($policy) use ($id, $policyRevision, $revision, $admin) {
             $this->gate($policy->id, 'allow_verification'); $instance = Instance::query()->findOrFail($id);
             if ($instance->revision !== $revision) throw new CloudException('config_changed');
@@ -80,12 +82,7 @@ class MachineInstanceAcceptance
             $configuration = $this->verifier->configuration($policy->id);
             $this->remote($instance, $task, $account);
             $before = $this->evidence->capture($instance, $policy);
-            $id = bin2hex(random_bytes(16)); $frames = [random_bytes(32), random_bytes(32), random_bytes(32)];
-            $challenge = ['schema' => 1, 'challenge_id' => $id, 'issued_at' => time(), 'deadline_at' => time() + 45,
-                'profile' => $configuration['profile'], 'task_id' => $task->id, 'installation_id' => $instance->installation_id,
-                'target_ip' => $instance->ip, 'configuration_fingerprint' => $before['configuration_fingerprint'], 'session' => $before['session'],
-                'binary_sha256' => $instance->binary_sha256, 'nodes' => $before['nodes'], 'echo_frames' => array_map('base64_encode', $frames),
-                'echo_sha256' => hash('sha256', implode('', $frames))];
+            $challenge = $this->challenge($instance, $task, $configuration, $before); $id = $challenge['challenge_id'];
             Check::query()->create(['id' => $id, 'instance_id' => $instance->id, 'policy_revision' => $policy->revision,
                 'request_sha256' => hash('sha256', json_encode($challenge, JSON_THROW_ON_ERROR)), 'state' => 'running',
                 'issued_at' => $challenge['issued_at'], 'deadline_at' => $challenge['deadline_at']]);
@@ -107,17 +104,7 @@ class MachineInstanceAcceptance
                     $this->gate($policy->id, 'allow_verification');
                     if (time() > $instance->challenge_deadline || $this->evidence->capture($instance, $policy) !== $before
                         || $this->verifier->configuration($policy->id)['fingerprint'] !== $configuration['fingerprint']) throw new CloudException('acceptance_evidence_changed');
-                    $provider = $task->payload['plan']['provider'] ?? 'linode';
-                    $resource = MachineCloudResource::query()->where('provider', $provider)->where('external_id', $task->external_id)->first();
-                    if ($resource && ($resource->account_id !== $task->account_id || $resource->provider_created_at !== $task->provider_created_at
-                        || ($resource->machine_id && ($resource->machine_id !== $policy->machine_id || $resource->installation_id !== $instance->installation_id))
-                        || $resource->auto_boot || $resource->armed || $resource->active_task_id)) throw new CloudException('resource_already_owned');
-                    $resource ??= new MachineCloudResource();
-                    $resource->fill(['account_id' => $task->account_id, 'provider' => $provider, 'external_id' => $task->external_id,
-                        'provider_created_at' => $task->provider_created_at, 'label' => MachineProvisionProviders::requestIdentity($provider, $task->payload['request'])['label'],
-                        'region' => $policy->region, 'size' => $policy->size, 'status' => 'running', 'public_ips' => $task->public_ips,
-                        'machine_id' => $policy->machine_id, 'installation_id' => $instance->installation_id, 'machine_authority' => $task->machine_authority,
-                        'observed_at' => time(), 'auto_boot' => false, 'armed' => false, 'manual_hold' => true, 'dns_hold' => true])->save();
+                    $resource = app(MachineInstanceOwnership::class)->register($policy, $instance, $task);
                     $instance->fill(['resource_id' => $resource->id, 'verification' => $receipt + ['context' => $before],
                         'verified_until' => time() + 120, 'reason' => null, 'challenge_id' => null, 'challenge_deadline' => null,
                         'status' => in_array($instance->status, ['active', 'retained'], true) ? $instance->status : 'verified'])->save();
@@ -129,14 +116,76 @@ class MachineInstanceAcceptance
                     ->update(['reason' => $reason, 'challenge_id' => null, 'challenge_deadline' => null, 'verification' => null, 'verified_until' => null]);
                 Check::query()->whereKey($id)->update(['state' => 'failed', 'finished_at' => time(), 'reason' => $reason]);
             }
-            $old = Check::query()->where('instance_id', $instance->id)->where('id', '!=', $id)->latest('issued_at')->orderByDesc('id')->skip(99)->take(100)->pluck('id');
-            Check::query()->whereIn('id', $old)->delete();
+            $this->pruneChecks($instance->id, $id);
             if ($task->replacement_id) app(MachineReplacementService::class)->sync($task->fresh());
             return $instance->fresh()->toArray();
         });
     }
 
+    private function diagnose(Instance $initial, int $policyRevision, int $revision, int $admin): array
+    {
+        return $this->locked($initial->policy_id, function ($policy) use ($initial, $policyRevision, $revision, $admin) {
+            $this->gate($policy->id, 'allow_verification'); $instance = $initial->fresh();
+            if ($instance->revision !== $revision) throw new CloudException('config_changed');
+            [$task, $account] = $this->diagnosticScope($instance, $policy, $policyRevision, $admin);
+            if (Check::query()->where('instance_id', $instance->id)->where('state', 'running')->where('deadline_at', '>', time())->exists())
+                throw new CloudException('acceptance_pending');
+            $configuration = $this->verifier->configuration($policy->id);
+            $this->remote($instance, $task, $account); $before = $this->evidence->capture($instance, $policy);
+            $challenge = $this->challenge($instance, $task, $configuration, $before);
+            $check = Check::query()->create(['id' => $challenge['challenge_id'], 'instance_id' => $instance->id,
+                'policy_revision' => $policy->revision, 'request_sha256' => hash('sha256', json_encode($challenge, JSON_THROW_ON_ERROR)),
+                'state' => 'running', 'issued_at' => $challenge['issued_at'], 'deadline_at' => $challenge['deadline_at']]);
+            try {
+                $receipt = $this->verifier->verify($challenge, $configuration);
+                $this->gate($policy->id, 'allow_verification'); $this->diagnosticScope($instance, $policy->fresh(), $policyRevision, $admin);
+                $this->remote($instance, $task, $account);
+                if (time() > $challenge['deadline_at'] || $this->verifier->configuration($policy->id)['fingerprint'] !== $configuration['fingerprint']
+                    || !MachineIntentJson::same($before, $this->evidence->capture($instance, $policy))) throw new CloudException('acceptance_evidence_changed');
+                DB::transaction(function () use ($check, $instance, $policy, $policyRevision, $admin, $before, $receipt, $configuration) {
+                    $current = Check::query()->whereKey($check->id)->lockForUpdate()->firstOrFail();
+                    $this->gate($policy->id, 'allow_verification'); $this->diagnosticScope($instance, $policy->fresh(), $policyRevision, $admin);
+                    if ($current->state !== 'running' || time() > $current->deadline_at
+                        || $this->verifier->configuration($policy->id)['fingerprint'] !== $configuration['fingerprint']
+                        || !MachineIntentJson::same($before, $this->evidence->capture($instance, $policy))) throw new CloudException('acceptance_evidence_changed');
+                    $current->fill(['state' => 'passed', 'finished_at' => time(), 'receipt_sha256' => $receipt['receipt_sha256']])->save();
+                });
+            } catch (\Throwable $error) {
+                $reason = $error instanceof CloudException && preg_match('/^[a-z_]{1,60}$/D', $error->getMessage()) ? $error->getMessage() : 'acceptance_failed';
+                Check::query()->whereKey($check->id)->where('state', 'running')->update(['state' => 'failed', 'finished_at' => time(), 'reason' => $reason]);
+            }
+            $this->pruneChecks($instance->id, $check->id);
+            return $instance->fresh()->toArray() + ['protocol_diagnostic' => $check->fresh()->only(['id', 'state', 'issued_at', 'finished_at', 'reason'])];
+        });
+    }
+
+    private function pruneChecks(int $instance, string $current): void
+    {
+        $old = Check::query()->where('instance_id', $instance)->where('id', '!=', $current)->latest('issued_at')->orderByDesc('id')->skip(99)->take(100)->pluck('id');
+        Check::query()->whereIn('id', $old)->delete();
+    }
+
+    private function challenge(Instance $instance, Task $task, array $configuration, array $before): array
+    {
+        $frames = [random_bytes(32), random_bytes(32), random_bytes(32)];
+        return ['schema' => 1, 'challenge_id' => bin2hex(random_bytes(16)), 'issued_at' => time(), 'deadline_at' => time() + 45,
+            'profile' => $configuration['profile'], 'task_id' => $task->id, 'installation_id' => $instance->installation_id,
+            'target_ip' => $instance->ip, 'configuration_fingerprint' => $before['configuration_fingerprint'], 'session' => $before['session'],
+            'binary_sha256' => $instance->binary_sha256, 'nodes' => $before['nodes'], 'echo_frames' => array_map('base64_encode', $frames),
+            'echo_sha256' => hash('sha256', implode('', $frames))];
+    }
+
     public function scope(Instance $instance, Policy $policy, int $revision, int $admin): array
+    {
+        return $this->checkedScope($instance, $policy, $revision, $admin, false);
+    }
+
+    private function diagnosticScope(Instance $instance, Policy $policy, int $revision, int $admin): array
+    {
+        return $this->checkedScope($instance, $policy, $revision, $admin, true);
+    }
+
+    private function checkedScope(Instance $instance, Policy $policy, int $revision, int $admin, bool $diagnostic): array
     {
         $this->actor($admin); $this->revision($policy, $revision);
         $fields = ['revision', 'policy_id', 'policy_revision', 'task_id', 'installation_id', 'release_id', 'binary_sha256', 'version',
@@ -144,7 +193,10 @@ class MachineInstanceAcceptance
         $stored = $instance->fresh();
         if (!$stored || !MachineIntentJson::same($stored->only($fields), $instance->only($fields))) throw new CloudException('acceptance_evidence_changed');
         if ($instance->policy_id !== $policy->id) throw new CloudException('ownership_mismatch');
-        $task = Task::query()->findOrFail($instance->task_id); $account = $this->task($policy, $task);
+        $task = Task::query()->findOrFail($instance->task_id);
+        $completedDiagnostic = $diagnostic && $task->status === 'accepted';
+        if ($completedDiagnostic) $this->completedDiagnostic($instance, $policy, $task, $admin);
+        $account = $this->task($policy, $task, !$completedDiagnostic);
         if (isset($task->payload['isolated_acceptance'])) {
             app(MachineIsolatedAcceptance::class)->assertTask($task);
             if ($task->payload['isolated_acceptance']['release_id'] !== $instance->release_id) throw new CloudException('isolated_release_mismatch');
@@ -153,6 +205,41 @@ class MachineInstanceAcceptance
         if (strtolower($release->binary_sha256) !== $instance->binary_sha256 || $release->version !== $instance->version) throw new CloudException('release_changed');
         $this->exclusive($policy, $instance->installation_id);
         return [$task, $account];
+    }
+
+    private function completedDiagnostic(Instance $instance, Policy $policy, Task $task, int $admin): void
+    {
+        if (MachineFailoverWorkflow::forTask($task) !== MachineFailoverWorkflow::READINESS) throw new CloudException('native_lineage_changed');
+        $attempt = \App\Models\MachineFailoverAttempt::query()->findOrFail($task->payload['coordinated_attempt']);
+        $member = \App\Models\MachineFailoverExecutionMember::query()->findOrFail($attempt->execution_member_id);
+        $run = \App\Models\MachineFailoverExecution::query()->findOrFail($member->execution_id);
+        $bridge = app(MachineFailoverNativeBridge::class);
+        if ($run->admin_id !== $admin || $member->phase !== 'completed' || $attempt->status !== 'completed'
+            || !$bridge->bindingCurrent($attempt, $task) || $instance->active_policy_id !== $policy->id || $instance->status !== 'active'
+            || ($task->evidence['dns_changed'] ?? null) !== true || ($task->evidence['acceptance_instance_id'] ?? null) !== $instance->id)
+            throw new CloudException('native_lineage_changed');
+        app(MachineInstanceReadiness::class)->record($instance, $policy, $task, true);
+        if (isset($member->payload['dns_source'])) {
+            if (!app(MachineNativeDnsAdmission::class)->completionCurrent($attempt, $task)) throw new CloudException('native_receipt_mismatch');
+            return;
+        }
+        $transition = \App\Models\MachineDnsTransition::query()->find($task->evidence['dns_transition_id'] ?? '');
+        $record = $transition ? \App\Models\MachineOwnedDns::query()->find($transition->dns_id) : null;
+        if (!$transition || $transition->state !== 'verified' || !$bridge->transitionCurrent($attempt, $task, $transition)
+            || !$record || $record->active_instance_id !== $instance->id || $record->ip !== $instance->ip || $record->status !== 'live'
+            || $record->revision !== $transition->dns_revision + 1 || $record->marker !== ($member->payload['dns']['marker'] ?? null)
+            || $record->record_id !== ($member->payload['dns']['record_id'] ?? null) || $record->zone !== ($member->payload['dns']['zone'] ?? null)
+            || $record->hostname !== $policy->dns_hostname || $record->credential_id !== $policy->dns_credential_id
+            || $record->credential_revision !== $policy->dns_credential_revision)
+            throw new CloudException('native_receipt_mismatch');
+    }
+
+    public function requireDnsReady(Instance $instance, Policy $policy, int $admin): void
+    {
+        $task = Task::query()->findOrFail($instance->task_id);
+        if (MachineFailoverWorkflow::forTask($task) === MachineFailoverWorkflow::READINESS) {
+            app(MachineInstanceReadiness::class)->requireReady($instance, $policy, $admin);
+        } else $this->requireVerified($instance, $policy, $admin);
     }
 
     public function requireVerified(Instance $instance, Policy $policy, int $admin): void
@@ -186,9 +273,9 @@ class MachineInstanceAcceptance
         });
     }
 
-    private function task(Policy $policy, Task $task): MachineCloudAccount
+    private function task(Policy $policy, Task $task, bool $assertNative = true): MachineCloudAccount
     {
-        if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertTask($task);
+        if ($assertNative && isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertTask($task);
         $credentials = app(MachineFailoverCredentials::class);
         $machine = ServerMachine::query()->find($policy->machine_id); $account = MachineCloudAccount::query()->find($task->account_id);
         $plan = $task->payload['plan'];

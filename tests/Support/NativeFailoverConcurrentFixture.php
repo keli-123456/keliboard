@@ -146,6 +146,7 @@ final class NativeFailoverConcurrentFixture
             'machine_failover.allow_rotation' => true, 'machine_failover.allowed_rotation_policy_ids' => \App\Models\MachineFailoverPolicy::query()->pluck('id')->all(),
             'machine_failover.allowed_replacement_policy_ids' => $policies, 'machine_provision.allow_live' => true,
             'machine_provision.allowed_test_machine_ids' => \App\Models\ServerMachine::query()->pluck('id')->all(),
+            'machine_failover.workflow' => 'protocol_verification_v1',
             'machine_acceptance.allow_verification' => true, 'machine_acceptance.allow_dns' => true, 'machine_acceptance.allowed_policy_ids' => $policies,
             'machine_acceptance.verifier_url' => 'https://verifier.example.test/v1/verify', 'machine_acceptance.verifier_key' => str_repeat('k', 32),
             'machine_acceptance.verifier_profiles' => array_fill_keys($policies, 'fixture-profile')]);

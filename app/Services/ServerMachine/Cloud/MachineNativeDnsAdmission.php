@@ -68,16 +68,21 @@ class MachineNativeDnsAdmission
         $member = Member::query()->findOrFail($attempt->execution_member_id); $run = Execution::query()->findOrFail($member->execution_id);
         $policy = Policy::query()->findOrFail($member->policy_id); $task = Task::query()->findOrFail($attempt->task_id);
         $source = $this->sourceForMember($member); $acceptance = app(MachineInstanceAcceptance::class);
-        $acceptance->gate($policy->id, 'allow_verification');
-        if ($remote) $acceptance->requireVerified($instance, $policy, $run->admin_id);
-        else $acceptance->scope($instance, $policy, $policy->revision, $run->admin_id);
+        $basic = MachineFailoverWorkflow::forRun($run) === MachineFailoverWorkflow::READINESS;
+        $ready = null;
+        if ($basic) $ready = app(MachineInstanceReadiness::class)->requireReady($instance, $policy, $run->admin_id, $remote);
+        else {
+            $acceptance->gate($policy->id, 'allow_verification');
+            if ($remote) $acceptance->requireVerified($instance, $policy, $run->admin_id);
+            else $acceptance->scope($instance, $policy, $policy->revision, $run->admin_id);
+        }
         $release = $run->payload['release']; $resource = MachineCloudResource::query()->find($instance->resource_id);
         $families = $this->families($run->payload['snapshot'], $member->member_id);
         if ($instance->task_id !== $task->id || $instance->policy_id !== $member->policy_id || $instance->policy_revision !== $member->policy_revision
-            || $instance->status !== 'verified' || $instance->active_policy_id !== null || $task->status !== 'awaiting_acceptance'
+            || !in_array($instance->status, $basic ? ['ready', 'verified'] : ['verified'], true) || $instance->active_policy_id !== null || $task->status !== 'awaiting_acceptance'
             || $instance->installation_id !== $task->installation_id || $instance->release_id !== $release['id']
             || $instance->binary_sha256 !== $release['binary_sha256'] || $instance->version !== $release['version']
-            || $instance->verified_until <= time() || !$instance->verification || ($instance->verification['cleanup_complete'] ?? null) !== true
+            || (!$basic && ($instance->verified_until <= time() || !$instance->verification || ($instance->verification['cleanup_complete'] ?? null) !== true))
             || !$resource || $resource->account_id !== $task->account_id || $resource->provider !== ($task->payload['plan']['provider'] ?? 'linode')
             || $resource->external_id !== $task->external_id || $resource->id === $source['instance']['resource_id']
             || $resource->provider_created_at !== $task->provider_created_at || $resource->installation_id !== $instance->installation_id
@@ -87,7 +92,7 @@ class MachineNativeDnsAdmission
             || $instance->id === $source['instance']['id'] || $instance->installation_id === $source['instance']['installation_id']
             || $task->external_id === $source['task']['external_id'] && $task->provider_created_at === $source['task']['provider_created_at']) throw new CloudException('native_candidate_identity_changed');
         $runtime = app(MachineAcceptanceEvidence::class)->capture($instance, $policy);
-        if (!MachineIntentJson::same($runtime, $instance->verification['context'] ?? null)) throw new CloudException('native_address_context_changed');
+        if (!MachineIntentJson::same($runtime, $basic ? $ready['context'] : ($instance->verification['context'] ?? null))) throw new CloudException('native_address_context_changed');
         $machine = ServerMachine::query()->findOrFail($task->machine_id);
         $row = app(MachineAddressInventory::class)->snapshots([$machine], true)[$machine->id][$instance->installation_id] ?? [];
         if (($row['at'] ?? 0) < time() - 90 || ($row['at'] ?? PHP_INT_MAX) > time() + 3 || ($row['at'] ?? 0) <= $task->dispatched_at) throw new CloudException('native_address_report_stale');
@@ -102,7 +107,7 @@ class MachineNativeDnsAdmission
                 || $remoteIdentity['provider_created_at'] !== $task->provider_created_at || $remoteIdentity['status'] !== 'running'
                 || !in_array($addresses[$family], $remoteIdentity['public_ips'], true)) throw new CloudException('native_candidate_identity_changed');
         }
-        $config = app(MachineForwardingVerifier::class)->configuration($policy->id);
+        $config = $basic ? null : app(MachineForwardingVerifier::class)->configuration($policy->id);
         return ['execution_id' => $run->id, 'admin_id' => $run->admin_id, 'service_id' => $run->service_id, 'service_revision' => $run->service_revision,
             'member_id' => $member->member_id, 'execution_member_id' => $member->id, 'attempt_id' => $attempt->id,
             'ordinal' => $attempt->ordinal, 'policy_id' => $policy->id, 'policy_revision' => $policy->revision,
@@ -114,7 +119,9 @@ class MachineNativeDnsAdmission
                 'installation_id', 'machine_authority', 'public_ips', 'manual_hold', 'dns_hold', 'status']),
             'source' => $source, 'addresses' => array_intersect_key($addresses, array_flip($families)), 'families' => $families,
             'runtime' => $runtime, 'release' => $release, 'sets_hash' => $this->hash($run->payload['snapshot']['dns_sets']),
-            'verifier_fingerprint' => $config['fingerprint'], 'deadline_at' => min($run->deadline_at, $instance->verified_until)];
+            'verifier_fingerprint' => $config['fingerprint'] ?? null,
+            'deadline_at' => min($run->deadline_at, $basic ? $ready['expires_at'] : $instance->verified_until)]
+            + ($basic ? ['workflow' => MachineFailoverWorkflow::READINESS, 'readiness_seal' => $ready['seal']] : []);
     }
     public function families(array $snapshot, int $member): array
     {
@@ -283,7 +290,8 @@ class MachineNativeDnsAdmission
                 'published_pin' => $this->sourcePin($policy, $candidate), 'runs' => $receipts, 'completed_at' => time()];
             $receipt['seal'] = $this->seal($receipt); $p = $current->payload; $p['native_completion'] = $receipt;
             $current->fill(['payload' => $p, 'status' => 'completed'])->save();
-            $task->fill(['evidence' => array_replace($task->evidence ?? [], ['forwarding_verified' => true, 'dns_changed' => true,
+            $basic = MachineFailoverWorkflow::forTask($task) === MachineFailoverWorkflow::READINESS;
+            $task->fill(['evidence' => array_replace($task->evidence ?? [], ['forwarding_verified' => !$basic, 'readiness_verified' => $basic, 'dns_changed' => true,
                 'acceptance_instance_id' => $candidate->id, 'native_dns_completion' => $receipt['seal']])])->save();
             $member->fill(['phase' => 'completed', 'reason' => null])->save();
         });

@@ -55,7 +55,7 @@ class MachineOwnedDnsService
             }
             if ($instance->revision !== $instanceRevision) throw new CloudException('config_changed');
             return $this->dnsLock($policy->dns_hostname, $policy->dns_credential_id, function () use ($policy, $instance, $zone, $key, $recovery, $admin) {
-                $this->acceptance->requireVerified($instance, $policy, $admin);
+                $this->acceptance->requireDnsReady($instance, $policy, $admin);
                 $credential = $this->credential($policy->dns_credential_id, $policy->dns_credential_revision);
                 if (MachineDnsBinding::query()->where('hostname', $policy->dns_hostname)->exists()) throw new CloudException('dns_record_conflict');
                 $record = OwnedDns::query()->where('policy_id', $policy->id)->first();
@@ -106,7 +106,7 @@ class MachineOwnedDnsService
                 if ($transition->next_check_at > time()) return $transition->toArray();
                 if ($transition->dispatched_at !== null) return $this->reconcile($transition, $record, $instance, $policy, $admin);
                 try {
-                    $this->acceptance->requireVerified($instance, $policy, $admin);
+                    $this->acceptance->requireDnsReady($instance, $policy, $admin);
                     $credential = $this->credential($record->credential_id, $record->credential_revision);
                     $records = $this->provider->ownedRecords($credential, $record->zone, $record->hostname);
                     if ($record->record_id === null) {
@@ -118,7 +118,7 @@ class MachineOwnedDnsService
                         $kind = $current['content'] === $transition->to_ip ? 'none' : 'patch';
                     }
                     $this->acceptance->gate($policy->id, 'allow_dns');
-                    $this->acceptance->requireVerified($instance, $policy->fresh(), $admin);
+                    $this->acceptance->requireDnsReady($instance, $policy->fresh(), $admin);
                     if ($transition->deadline_at <= time()) throw new CloudException('dns_intent_expired');
                     $this->credential($record->credential_id, $record->credential_revision);
                     $this->acceptance->scope($instance, $policy->fresh(), $transition->policy_revision, $admin);
@@ -197,7 +197,7 @@ class MachineOwnedDnsService
             $remote = $this->oneOwned($record, $credential);
             if ($remote['content'] !== $transition->to_ip) throw new CloudException('dns_outcome_unknown');
             $this->acceptance->gate($policy->id, 'allow_dns');
-            $this->acceptance->requireVerified($instance->fresh(), $policy->fresh(), $admin);
+            $this->acceptance->requireDnsReady($instance->fresh(), $policy->fresh(), $admin);
             $this->acceptance->gate($policy->id, 'allow_dns');
             if ($record->revision !== $transition->dns_revision) throw new CloudException('dns_ownership_changed');
             DB::transaction(function () use ($transition, $record, $instance, $policy, $remote, $admin) {
@@ -207,7 +207,9 @@ class MachineOwnedDnsService
                 $instance = $currentInstance;
                 $this->acceptance->gate($policy->id, 'allow_dns');
                 $this->credential($record->credential_id, $record->credential_revision);
-                if ($instance->verified_until <= time() || empty($instance->verification['cleanup_complete'])) throw new CloudException('acceptance_expired');
+                $basic = MachineFailoverWorkflow::forTask(MachineProvisionTask::query()->findOrFail($instance->task_id)) === MachineFailoverWorkflow::READINESS;
+                if ($basic) app(MachineInstanceReadiness::class)->requireReady($instance, $policy, $admin, false);
+                elseif ($instance->verified_until <= time() || empty($instance->verification['cleanup_complete'])) throw new CloudException('acceptance_expired');
                 Instance::query()->where('active_policy_id', $policy->id)->where('id', '!=', $instance->id)->update(['active_policy_id' => null, 'status' => 'retained']);
                 if ($transition->from_instance_id && $transition->from_instance_id !== $instance->id) Instance::query()->where('policy_id', $policy->id)
                     ->whereKey($transition->from_instance_id)->update(['active_policy_id' => null, 'status' => 'retained']);
@@ -217,7 +219,8 @@ class MachineOwnedDnsService
                     'ip' => $transition->to_ip, 'revision' => $record->revision + 1])->save();
                 MachineCloudResource::query()->whereKey($instance->resource_id)->update(['dns_hold' => false]);
                 $task = MachineProvisionTask::query()->findOrFail($instance->task_id);
-                $task->fill(['status' => 'accepted', 'evidence' => array_replace($task->evidence ?? [], ['forwarding_verified' => true,
+                $task->fill(['status' => 'accepted', 'evidence' => array_replace($task->evidence ?? [], ['forwarding_verified' => !$basic,
+                    'readiness_verified' => $basic,
                     'dns_changed' => true, 'acceptance_instance_id' => $instance->id, 'dns_transition_id' => $transition->id])])->save();
                 $transition->fill(['state' => 'verified', 'reason' => null, 'next_check_at' => null, 'confirmed_at' => time()])->save();
                 if ($transition->recovery_of) Transition::query()->whereKey($transition->recovery_of)->update(['state' => 'recovered']);

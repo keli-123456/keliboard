@@ -97,6 +97,8 @@ class MachineFailoverAdmission
     public function assertStart(array $admission, array $snapshot, array $release, array $episodes): void
     {
         $pin = $this->authorization($admission);
+        if (($pin['workflow'] ?? MachineFailoverWorkflow::PROTOCOL) !== MachineFailoverWorkflow::configured())
+            throw new CloudException('admission_scope_invalid');
         if (!MachineIntentJson::same($snapshot, $this->scope($pin)) || !MachineIntentJson::same($release, $pin['release']))
             throw new CloudException('config_changed');
         $report = $this->shadow->report($pin['service_id'], $pin['service_revision'], $pin['admin_id']); $this->fresh($report);
@@ -120,7 +122,8 @@ class MachineFailoverAdmission
         $admission = $run->payload['admission'] ?? null;
         if (!is_array($admission)) throw new CloudException('admission_revoked');
         $pin = $this->authorization($admission); $snapshot = $this->scope($pin);
-        if ($run->service_id !== $pin['service_id'] || $run->service_revision !== $pin['service_revision'] || $run->admin_id !== $pin['admin_id']
+        if (MachineFailoverWorkflow::forRun($run) !== ($pin['workflow'] ?? MachineFailoverWorkflow::PROTOCOL)
+            || $run->service_id !== $pin['service_id'] || $run->service_revision !== $pin['service_revision'] || $run->admin_id !== $pin['admin_id']
             || !hash_equals($run->context_hash, $this->registry->fingerprint($snapshot)) || !MachineIntentJson::same($run->payload['release'], $pin['release']))
             throw new CloudException('config_changed');
         $episodes = ExecutionMember::query()->where('execution_id', $run->id)->pluck('episode_key', 'plan_id')->all();
@@ -151,6 +154,8 @@ class MachineFailoverAdmission
         $this->gates(); $pins = $this->pins();
         $stored = collect($pins)->firstWhere('service_id', $pin['service_id'] ?? null);
         if (!$stored || !MachineIntentJson::same($stored, $pin)) throw new CloudException('admission_revoked');
+        $gate = ($pin['workflow'] ?? MachineFailoverWorkflow::PROTOCOL) === MachineFailoverWorkflow::READINESS ? 'allow_readiness' : 'allow_verification';
+        if (config('machine_acceptance.' . $gate) !== true) throw new CloudException('admission_disabled');
         $now = now()->getTimestamp();
         if ($pin['issued_at'] > $now || $pin['expires_at'] <= $now) throw new CloudException('admission_expired');
         $this->registry->actor($pin['admin_id']); $snapshot = $this->registry->snapshot($pin['service_id'], $pin['service_revision']);
@@ -194,7 +199,7 @@ class MachineFailoverAdmission
         if (config('machine_failover.admission_enabled') !== true) throw new CloudException('admission_disabled');
         app(MachineFailoverExecutionGate::class)->assertAllowed('admission');
         foreach (['machine_failover.observe_enabled', 'machine_failover.preview_enabled', 'machine_failover.runner_enabled',
-            'machine_failover.allow_replacement', 'machine_provision.allow_live', 'machine_acceptance.allow_verification', 'machine_acceptance.allow_dns'] as $key)
+            'machine_failover.allow_replacement', 'machine_provision.allow_live', 'machine_acceptance.allow_dns'] as $key)
             if (config($key) !== true) throw new CloudException('admission_disabled');
         if (!is_string(config('app.key')) || config('app.key') === '') throw new CloudException('admission_scope_invalid');
     }
@@ -203,7 +208,10 @@ class MachineFailoverAdmission
         $pins = config('machine_failover.admission_authorizations', []); $seen = [];
         if (!is_array($pins) || !array_is_list($pins) || count($pins) > 50) throw new CloudException('admission_scope_invalid');
         foreach ($pins as $pin) {
-            if (!is_array($pin) || count($pin) !== 7) throw new CloudException('admission_scope_invalid');
+            if (!is_array($pin) || count($pin) !== (array_key_exists('workflow', $pin) ? 8 : 7)
+                || array_diff(array_keys($pin), ['service_id', 'service_revision', 'admin_id', 'issued_at', 'expires_at', 'context_hash', 'release', 'workflow'])
+                || !in_array($pin['workflow'] ?? MachineFailoverWorkflow::PROTOCOL, [MachineFailoverWorkflow::READINESS, MachineFailoverWorkflow::PROTOCOL], true))
+                throw new CloudException('admission_scope_invalid');
             foreach (['service_id', 'service_revision', 'admin_id', 'issued_at', 'expires_at'] as $key)
                 if (!is_int($pin[$key] ?? null) || $pin[$key] < 1) throw new CloudException('admission_scope_invalid');
             if (isset($seen[$pin['service_id']]) || $pin['expires_at'] <= $pin['issued_at'] || $pin['expires_at'] - $pin['issued_at'] > 86400

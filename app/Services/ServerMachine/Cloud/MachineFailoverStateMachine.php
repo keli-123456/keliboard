@@ -91,7 +91,9 @@ class MachineFailoverStateMachine
             'reports' => $this->move($state, ($fact['agent'] ?? false) === true && ($fact['nodes'] ?? false) === true
                 && ($fact['configuration_sha256'] ?? null) === $context['configuration_sha256'] ? 'checking_ipv4' : 'failed',
                 ($fact['agent'] ?? false) === true && ($fact['nodes'] ?? false) === true && ($fact['configuration_sha256'] ?? null) === $context['configuration_sha256'] ? null : 'reports_not_ready'),
-            'ipv4' => $this->move($state, $this->probe($fact['targets'] ?? null) === 'reachable' ? 'verifying' : 'failed', $this->probe($fact['targets'] ?? null) === 'reachable' ? null : 'candidate_ipv4_unreachable'),
+            'ipv4' => $this->move($state, $this->probe($fact['targets'] ?? null) === 'reachable'
+                ? (($context['workflow'] ?? MachineFailoverWorkflow::PROTOCOL) === MachineFailoverWorkflow::READINESS ? 'preparing_dns' : 'verifying')
+                : 'failed', $this->probe($fact['targets'] ?? null) === 'reachable' ? null : 'candidate_ipv4_unreachable'),
             'forwarding' => $this->move($state, $this->forwarding($fact, $context) ? 'preparing_dns' : 'failed', $this->forwarding($fact, $context) ? null : 'forwarding_failed'),
             'prepare_dns' => $this->move($state, $this->dnsMatches($fact, $context, false) ? 'switching_dns' : 'needs_review', $this->dnsMatches($fact, $context, false) ? null : 'dns_ownership_changed'),
             'switch_dns' => $this->move($state, 'checking_dns'),

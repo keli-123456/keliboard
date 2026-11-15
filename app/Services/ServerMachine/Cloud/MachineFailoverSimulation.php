@@ -21,8 +21,13 @@ class MachineFailoverSimulation
         if (!in_array($scenario, MachineFailoverSimulationDriver::SCENARIOS, true) || !preg_match('/^[a-f0-9]{32}$/D', $request)) throw new CloudException('invalid_simulation');
         return $this->registry->locked(fn () => DB::transaction(function () use ($service, $revision, $scenario, $target, $request, $admin) {
             $this->registry->actor($admin); $key = hash('sha256', $admin . ':' . $request);
-            $intent = hash('sha256', json_encode([$service, $revision, $scenario, $target], JSON_THROW_ON_ERROR));
-            if ($prior = Run::query()->where('request_key', $key)->first()) {
+            $prior = Run::query()->where('request_key', $key)->first();
+            $workflow = $prior ? ($prior->payload['workflow'] ?? MachineFailoverWorkflow::PROTOCOL)
+                : ($scenario === 'forwarding_failed' ? MachineFailoverWorkflow::PROTOCOL : MachineFailoverWorkflow::configured());
+            $intentData = [$service, $revision, $scenario, $target];
+            if ($workflow === MachineFailoverWorkflow::READINESS) $intentData[] = ['workflow' => $workflow];
+            $intent = hash('sha256', json_encode($intentData, JSON_THROW_ON_ERROR));
+            if ($prior) {
                 if (!hash_equals($prior->intent_hash, $intent)) throw new CloudException('request_conflict');
                 return $this->report($prior->id, $admin);
             }
@@ -34,14 +39,15 @@ class MachineFailoverSimulation
             $id = (string) Str::uuid(); $hash = $this->registry->fingerprint($snapshot);
             $run = Run::query()->create(['id' => $id, 'service_id' => $service, 'service_revision' => $revision, 'admin_id' => $admin,
                 'request_key' => $key, 'intent_hash' => $intent, 'context_hash' => $hash, 'mode' => 'simulation', 'status' => 'running',
-                'payload' => ['snapshot' => $snapshot, 'scenario' => $scenario, 'target' => $target]]);
+                'payload' => ['snapshot' => $snapshot, 'scenario' => $scenario, 'target' => $target]
+                    + ($workflow === MachineFailoverWorkflow::READINESS ? ['workflow' => $workflow] : [])]);
             foreach ($snapshot['members'] as $index => $member) {
                 $seed = hash('sha256', $id . ':' . $member['id']);
                 $context = $member['policy'] + ['member_id' => $member['id'], 'provider' => $member['provider'], 'context_hash' => hash('sha256', $hash . ':' . $member['id']),
                     'source_installation_id' => substr(hash('sha256', 'source:' . $seed), 0, 32), 'source_ip' => '192.0.2.' . ($index + 1),
                     'candidate_id' => 'sim-' . substr($seed, 0, 24), 'candidate_installation_id' => substr($seed, 0, 32), 'candidate_ip' => '198.51.100.' . ($index + 1),
                     'binary_sha256' => hash('sha256', 'synthetic-binary:' . $seed), 'configuration_sha256' => hash('sha256', json_encode($member['policy'], JSON_THROW_ON_ERROR)),
-                    'echo_sha256' => hash('sha256', 'synthetic-echo:' . $seed), 'dns_exists' => $member['dns_exists']];
+                    'echo_sha256' => hash('sha256', 'synthetic-echo:' . $seed), 'dns_exists' => $member['dns_exists'], 'workflow' => $workflow];
                 RunMember::query()->create(['run_id' => $run->id, 'member_id' => $member['id'], 'phase' => 'observing',
                     'payload' => ['context' => $context, 'name' => $member['name'], 'policy_id' => $member['policy_id'],
                         'state' => $this->machine->initial(), 'events' => [], 'round' => 0]]);
@@ -196,6 +202,7 @@ class MachineFailoverSimulation
                     array_slice($attempts->get($row->member_id)?->receipt['credential_attempts'] ?? [], 0, 3))];
         })->all();
         return $run->toArray() + ['simulation_only' => true, 'evidence_origin' => 'synthetic', 'execution_enabled' => false, 'dns_cutover' => false,
+            'workflow' => $run->payload['workflow'] ?? MachineFailoverWorkflow::PROTOCOL,
             'business_verified' => false, 'scenario' => $run->payload['scenario'], 'members' => $members,
             'actions' => Action::query()->where('run_id', $id)->orderBy('virtual_at')->orderBy('id')->limit(200)->get(['id', 'member_id', 'kind', 'status', 'virtual_at'])->toArray()];
     }

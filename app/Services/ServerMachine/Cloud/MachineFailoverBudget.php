@@ -79,6 +79,8 @@ class MachineFailoverBudget
         $members = ExecutionMember::query()->where('execution_id', $id)->get();
         $review = app(MachineFailoverReview::class);
         return ['id' => $id, 'service_id' => $run->service_id, 'service_revision' => $run->service_revision, 'status' => $run->status,
+            'workflow' => MachineFailoverWorkflow::forRun($run),
+            'protocol_verification_required' => MachineFailoverWorkflow::forRun($run) === MachineFailoverWorkflow::PROTOCOL,
             'execution_enabled' => false, 'automatic_rotation' => false, 'dns_cutover' => false, 'cloud_writes' => 0,
             'runtime' => app(MachineFailoverRunner::class)->view($run),
             'members' => $members->map(function ($member) use ($review) {
@@ -88,14 +90,17 @@ class MachineFailoverBudget
                     'attempts' => Attempt::query()->where('execution_member_id', $member->id)->orderBy('ordinal')->get()->map(function ($attempt) use ($review) {
                         $task = $attempt->task_id ? Task::query()->find($attempt->task_id) : null;
                         $release = Release::query()->where('attempt_id', $attempt->id)->first();
+                        $proofs = app(MachineFailoverProofView::class)->forAttempt($attempt);
                         return $attempt->only(['id', 'ordinal', 'task_id', 'status', 'reserved_cents', 'created_at']) + [
                             'account_name' => Account::query()->whereKey($attempt->account_id)->value('name'), 'task_status' => $task?->status,
                             'task_reason' => $task?->reason, 'installation_prefix' => $task ? substr($task->installation_id, 0, 8) : null,
                             'external_id' => $task?->external_id, 'initialization' => $task?->bootstrap_state,
-                            'forwarding_verified' => isset($attempt->payload['forwarding_receipt']), 'dns_verified' => isset($attempt->payload['dns_receipt']),
+                            'readiness_verified' => isset($attempt->payload['readiness_receipt']),
+                            'forwarding_verified' => isset($attempt->payload['forwarding_receipt']),
+                            'dns_verified' => isset($attempt->payload['dns_receipt']) || $proofs['dns_proof']['state'] === 'historical',
                             'released_cents' => $release?->amount_cents ?? 0, 'release_kind' => $release?->proof_kind,
                             'review' => $review->summary($attempt->execution_member_id, $attempt->id)]
-                            + app(MachineFailoverProofView::class)->forAttempt($attempt);
+                            + $proofs;
                     })->all()];
             })->all()];
     }
