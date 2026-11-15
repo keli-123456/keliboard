@@ -10,7 +10,7 @@ import stat
 
 FILES = ('live_support.php', 'fixture_payload.php', 'test_router.php', 'seed_live.php',
          'echo_fixture.py', 'live_cli.php', 'initial_dns.php', 'source_fixture.php',
-         'source_fixture_evidence.php', 'cli_diagnostics.php', 'http_smoke.php', 'bounded_worker.py')
+         'source_fixture_evidence.php', 'cli_diagnostics.php', 'http_smoke.php', 'bounded_worker.py', 'candidate_readback.php')
 STAGED = {*FILES, 'runtime_payload.py'}
 MAX_FILE_BYTES = 262144
 
@@ -154,6 +154,54 @@ def validate_bindings(base):
     require("if (in_array($command, ['adopt-source', 'initial-dns'], true)) {" in cli,
             'dns_cli_diagnostic_binding_required')
     validate_source_reader(base)
+    validate_candidate_readback(base)
+
+
+def validate_candidate_readback(base):
+    cli = (base / 'live_cli.php').read_text(encoding='utf-8')
+    require("require_once __DIR__ . '/candidate_readback.php';" in cli, 'candidate_readback_binding_required')
+    branch = re.search(r"if\s*\(\$command\s*===\s*'native-advance'\s*&&\s*isset\(\$argv\[2\]\)\)\s*\{\s*"
+        r"\$out\s*\+=\s*keli_acceptance_candidate_readback\(\$ids,\s*\$argv\[2\]\);\s*"
+        r"\$out\['tasks'\]\s*=\s*tasks\(\);\s*\}", cli)
+    require(branch is not None and cli.count('keli_acceptance_candidate_readback(') == 1,
+            'candidate_readback_binding_required')
+    fallback = cli.find("$command === 'native-advance'", branch.end())
+    require(fallback > branch.end(), 'candidate_readback_before_native_advance_required')
+    path = base / 'round_runner.py'
+    if not path.is_file():
+        return
+    tree = ast.parse(path.read_text(encoding='utf-8'))
+    classes = [node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'RoundRunner']
+    require(len(classes) == 1, 'candidate_readback_driver_required')
+    methods = {node.name: node for node in classes[0].body if isinstance(node, ast.FunctionDef)}
+    require('native' in methods and 'finish' in methods, 'candidate_readback_driver_required')
+    wanted = ast.dump(ast.parse("self.module('candidate_readback').process(self, candidate['id'])").body[0].value,
+                      include_attributes=False)
+    calls = [node for node in ast.walk(methods['native']) if isinstance(node, ast.Call)]
+    require(sum(ast.dump(node, include_attributes=False) == wanted for node in calls) == 1
+        and not any(isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == 'self' and node.func.attr == 'command' and node.args
+            and isinstance(node.args[0], ast.Constant) and node.args[0].value == 'process' for node in calls),
+        'candidate_readback_driver_required')
+    readiness = ast.dump(ast.parse("self.module('candidate_readback').ready_for_sampling(self.tasks['candidate'])").body[0].value,
+                         include_attributes=False)
+    require(sum(ast.dump(node, include_attributes=False) == readiness for node in calls) == 1,
+            'candidate_sampling_boundary_required')
+    require(any(isinstance(node, ast.Import) and any(alias.name == 'task_diagnostics' and alias.asname is None
+            for alias in node.names) for node in tree.body), 'task_diagnostic_audit_required')
+    audits = [node for node in ast.walk(methods['finish']) if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == 'task_diagnostics' and node.func.attr == 'audit_preservation']
+    require(len(audits) == 1, 'task_diagnostic_audit_required')
+    attempts = [node for node in ast.walk(methods['finish']) if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name) and node.func.id == 'attempt' and len(node.args) >= 2
+        and isinstance(node.args[0], ast.Constant)]
+    task_audits = [node for node in attempts if node.args[0].value == 'task_evidence'
+        and isinstance(node.args[1], ast.Lambda) and node.args[1].body is audits[0]]
+    before = [node for node in attempts if node.args[0].value == 'cleanup']
+    after = [node for node in attempts if node.args[0].value == 'finalize']
+    require(len(task_audits) == len(before) == len(after) == 1
+        and before[0].lineno < task_audits[0].lineno < after[0].lineno, 'task_diagnostic_audit_required')
 
 
 def validate_source_reader(base):

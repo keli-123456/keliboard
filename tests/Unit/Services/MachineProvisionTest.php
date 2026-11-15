@@ -713,4 +713,97 @@ class MachineProvisionTest extends TestCase
         $this->code('daily_budget', fn () => $this->service->queue($this->plan(['account_id' => $alias->id, 'slot' => 'isolated:second']), str_repeat('b', 32), $this->admin->id));
         $this->assertSame(1, Task::query()->count()); Http::assertNothingSent();
     }
+
+    public function test_unexpected_task_exception_is_preserved_before_terminal_state_without_message_or_retry(): void
+    {
+        $task = $this->task();
+        $health = \Mockery::mock(\App\Services\ServerMachine\Cloud\MachineCloudCredentialHealth::class);
+        $health->shouldReceive('available')->andReturn(true);
+        $error = new \ErrorException('synthetic-provider-secret private-sentinel-never-export', 0, E_WARNING,
+            base_path('app/Services/ServerMachine/Cloud/MachineProvisionService.php'), 23);
+        $health->shouldReceive('status')->once()->andThrow($error);
+        app()->instance(\App\Services\ServerMachine\Cloud\MachineCloudCredentialHealth::class, $health);
+        $this->poll($task);
+        $this->assertSame('failed', $task->status); $this->assertSame('internal_failure', $task->reason);
+        $safe = $task->evidence['task_diagnostic'];
+        $this->assertSame('credentials', $safe['phase']); $this->assertSame('ErrorException', $safe['error_class']);
+        $this->assertSame(23, $safe['line']);
+        $snapshot = \App\Services\ServerMachine\Cloud\MachineProvisionTaskEvidence::snapshot($task);
+        $this->assertSame('verified', $snapshot['task_diagnostic_state']); $this->assertSame($safe, $snapshot['task_diagnostic']);
+        foreach (['synthetic-provider-secret', 'private-sentinel-never-export', base_path()] as $secret)
+            $this->assertStringNotContainsString($secret, json_encode($snapshot));
+        $this->service->process($task->id); Http::assertNothingSent();
+    }
+
+    public function test_first_task_error_is_read_back_and_survives_later_error_and_report_evidence(): void
+    {
+        $task = $this->task(); $recorder = app(\App\Services\ServerMachine\Cloud\MachineProvisionDiagnostic::class);
+        DB::enableQueryLog(); DB::flushQueryLog();
+        $this->assertTrue($recorder->remember($task, new CloudException('isolated_manual_cli_required'), 'admission'));
+        $first = $task->fresh()->evidence['task_diagnostic'];
+        $this->assertGreaterThanOrEqual(2, count(array_filter(DB::getQueryLog(), fn ($query) => str_starts_with(strtolower($query['query']), 'select'))));
+        $this->assertTrue($recorder->remember($task, new \TypeError('private-sentinel-never-export'), 'readback'));
+        $this->assertSame($first, $task->fresh()->evidence['task_diagnostic']);
+        $method = new \ReflectionMethod(MachineProvisionService::class, 'move');
+        $method->invoke($this->service, $task, 'waiting_agent', null, ['reports' => ['ready' => false]]);
+        $this->assertSame($first, $task->fresh()->evidence['task_diagnostic']);
+        $this->assertSame(['ready' => false], $task->fresh()->evidence['reports']);
+        Http::assertNothingSent();
+    }
+
+    public function test_diagnostic_storage_denial_does_not_dirty_or_prevent_original_terminal_state(): void
+    {
+        $task = $this->task();
+        $health = \Mockery::mock(\App\Services\ServerMachine\Cloud\MachineCloudCredentialHealth::class);
+        $health->shouldReceive('available')->andReturn(true);
+        $health->shouldReceive('status')->andThrow(new \TypeError('private-original-sentinel'));
+        app()->instance(\App\Services\ServerMachine\Cloud\MachineCloudCredentialHealth::class, $health);
+        Task::setEventDispatcher(new \Illuminate\Events\Dispatcher(app()));
+        Task::saving(function ($row) {
+            if (array_key_exists('task_diagnostic', $row->evidence ?? [])) throw new \RuntimeException('private-storage-sentinel');
+        });
+        try {
+            $this->poll($task);
+            $this->assertSame('failed', $task->status); $this->assertSame('internal_failure', $task->reason);
+            $this->assertNull($task->evidence);
+            Http::assertNothingSent();
+        } finally { Task::flushEventListeners(); Task::unsetEventDispatcher(); }
+    }
+
+    public function test_malformed_existing_first_error_is_not_replaced_or_exported_as_safe(): void
+    {
+        $task = $this->task(); $bad = ['message' => 'private-sentinel-never-export'];
+        foreach ([$bad, null] as $value) {
+            $task->evidence = ['task_diagnostic' => $value]; $task->save();
+            $this->assertFalse(app(\App\Services\ServerMachine\Cloud\MachineProvisionDiagnostic::class)
+                ->remember($task, new \TypeError('private-later-sentinel'), 'readback'));
+            $this->assertSame($value, $task->fresh()->evidence['task_diagnostic']);
+            $snapshot = \App\Services\ServerMachine\Cloud\MachineProvisionTaskEvidence::snapshot($task);
+            $this->assertSame('invalid', $snapshot['task_diagnostic_state']); $this->assertNull($snapshot['task_diagnostic']);
+            $this->assertStringNotContainsString('private-sentinel-never-export', json_encode($snapshot));
+            $this->assertStringNotContainsString('private-sentinel-never-export', json_encode($this->service->overview()));
+        }
+        Http::assertNothingSent();
+    }
+
+    public function test_readback_cannot_dispatch_or_reconcile_a_missing_original_identity(): void
+    {
+        foreach ([false, true] as $dispatched) {
+            $task = $this->task($dispatched ? str_repeat('b', 32) : str_repeat('a', 32));
+            if ($dispatched) $task->fill(['dispatched_at' => time() - 1])->save();
+            $this->service->readback($task->id); $task->refresh();
+            $this->assertSame($dispatched ? 'needs_review' : 'failed', $task->status);
+            $this->assertSame('readback_identity_required', $task->reason);
+            $this->assertNull($task->external_id); Http::assertNothingSent();
+            $task->fill(['status' => 'failed'])->save();
+        }
+    }
+
+    public function test_readback_with_receipted_identity_performs_no_second_post(): void
+    {
+        $task = $this->task(); $this->poll($task); $this->assertSame(1, $this->postCalls);
+        $task->fill(['next_check_at' => 0])->save(); $this->service->readback($task->id);
+        $this->assertSame(1, $this->postCalls); $this->assertSame('987', $task->fresh()->external_id);
+        $this->assertSame('waiting_initialization', $task->fresh()->status);
+    }
 }

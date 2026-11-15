@@ -163,6 +163,58 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(stored['diagnostic'], diagnostic)
         self.assertEqual(self.reconciled, [])
 
+    def test_cleanup_preserves_task_first_error_before_private_erasure_when_cli_result_was_lost(self):
+        instance = self.module.Cleanup()
+        diagnostic = {'schema': 1, 'phase': 'admission', 'category': 'domain_rejection',
+            'error_class': 'App\\Services\\ServerMachine\\Cloud\\CloudException', 'cause': 'isolated_manual_cli_required',
+            'source_known': True, 'file': 'live_support.php', 'line': 115, 'severity': None}
+        instance.controller['tasks'][0].update(reason='internal_failure', task_diagnostic=diagnostic, task_diagnostic_state='verified')
+        result = instance.collect()
+        self.assertTrue(result['ok'])
+        preserved = result['task_diagnostic_preservation']
+        self.assertTrue(preserved['ok'])
+        self.assertTrue(preserved['records'][0]['independent_local_readback_verified'])
+        self.assertEqual(instance.store.load('task-first-error-'+TASK+'.json')['diagnostic'], diagnostic)
+        self.assertEqual(instance.store.load('task-error-export-readback.json'), preserved)
+        self.assertEqual(self.reconciled, [])
+
+    def test_invalid_task_diagnostic_does_not_prevent_original_cleanup_collection(self):
+        instance = self.module.Cleanup()
+        instance.controller['tasks'][0].update(reason='internal_failure', task_diagnostic_state='invalid')
+        with patch.object(instance.store, 'save', wraps=instance.store.save) as save:
+            result = instance.collect()
+        self.assertTrue(result['ok'])
+        self.assertFalse(result['task_diagnostic_preservation']['ok'])
+        self.assertEqual(self.reconciled, [])
+        self.assertTrue(save.called)
+
+    def test_projection_does_not_lose_an_internal_failure_when_no_task_diagnostic_was_saved(self):
+        raw = copy.deepcopy(self.rows)
+        raw[0].update(reason='internal_failure', task_diagnostic=None, task_diagnostic_state='absent')
+        safe = self.module.controller_evidence({'tasks': raw})
+        self.assertEqual(safe['tasks'][0]['reason'], 'internal_failure')
+        instance = self.module.Cleanup(); instance.controller = safe
+        result = instance.collect()
+        self.assertTrue(result['ok'])
+        self.assertFalse(result['task_diagnostic_preservation']['ok'])
+
+    def test_task_first_error_write_denial_does_not_postpone_original_resource_cleanup(self):
+        instance = self.module.Cleanup()
+        instance.controller['tasks'][0].update(reason='internal_failure', task_diagnostic_state='verified',
+            task_diagnostic={'schema': 1, 'phase': 'admission', 'category': 'domain_rejection',
+                'error_class': 'App\\Services\\ServerMachine\\Cloud\\CloudException', 'cause': 'isolated_manual_cli_required',
+                'source_known': False, 'file': None, 'line': None, 'severity': None})
+        original = instance.store.save
+        def denied(name, value, exclusive=False):
+            if name.startswith('task-first-error-'): raise PermissionError(SECRET)
+            return original(name, value, exclusive)
+        with patch.object(instance.store, 'save', side_effect=denied):
+            result = instance.collect()
+        self.assertTrue(result['ok'])
+        self.assertFalse(result['task_diagnostic_preservation']['ok'])
+        self.assertNotIn(SECRET, json.dumps(result))
+        self.assertFalse(list(self.base.glob('task-first-error-*.json')))
+
 
 if __name__ == '__main__':
     unittest.main()

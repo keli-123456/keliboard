@@ -24,7 +24,7 @@ FLAGS = ("production_automatic_creation", "production_automatic_rotation", "prod
 TOOLS = ("bootstrap_diagnostics.py", "diagnostic_capture.py", "diagnostic_round_runner.py",
          "entry_probe_diagnostics.py", "entry_probe_capture.py", "aliyun_cleanup.py", "aliyun_cleanup.php", "probe_sampling.py",
          "source_fixture.php", "source_fixture_evidence.php", "cli_diagnostics.php", "runtime_payload.py", "cli_error_capture.py",
-         "replacement_diagnostics.py", "cleanup_tasks.py")
+         "replacement_diagnostics.py", "cleanup_tasks.py", "task_diagnostics.py", "candidate_readback.py", "candidate_readback.php")
 REQUIRED = {*TOOLS, "campaign.py", "node.py", "cleanup.py", "round_runner.py", "authorization.json",
             "runtime_install.py", "live_cli.php", "live_operator.py", "staging_control.py", "teardown_control.py"}
 

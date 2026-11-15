@@ -40,6 +40,10 @@ class MachineProvisionTaskEvidence
                     'no_dispatch_steps' => $steps->every(fn ($step) => in_array($step->state, ['queued', 'failed', 'cancelled'], true)),
                     'native_binding' => $binding]];
             $row['replacement_diagnostic'] = CloudException::safeReplacementDiagnostic($task->evidence['replacement_diagnostic'] ?? null);
+            $hasDiagnostic = array_key_exists(MachineProvisionDiagnostic::KEY, $task->evidence ?? []);
+            $value = $task->evidence[MachineProvisionDiagnostic::KEY] ?? null;
+            $row['task_diagnostic'] = MachineProvisionDiagnostic::safe($value);
+            $row['task_diagnostic_state'] = !$hasDiagnostic ? 'absent' : ($row['task_diagnostic'] === null ? 'invalid' : 'verified');
             return $row;
         });
     }

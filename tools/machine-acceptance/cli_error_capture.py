@@ -202,6 +202,8 @@ def preserve_first(campaign, name, value):
 
 
 def capture_result(campaign, result):
+    import task_diagnostics
+    result = task_diagnostics.capture_result(campaign, result)
     result = replacement_diagnostics.capture_result(campaign, result)
     if not isinstance(result, dict):
         return result

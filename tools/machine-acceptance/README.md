@@ -24,6 +24,78 @@ scenario condition, not the operational failover rule. Candidate reachability,
 identity-bound TCP/UDP receipts, DNS ownership and execution gates are unchanged.
 See [probe admission rules](../../docs/machine-failover-probe-admission.md).
 
+## Candidate Readback And Task First Errors (R20 Offline Repair)
+
+R20 created its native candidate, then sent it through the source-only `process`
+command. That command's mode and the isolated native gate's command whitelist
+conflict. The local SQLite/HTTP-fake reproduction deterministically produces
+`needs_review / internal_failure`, retaining the original cause
+`isolated_manual_cli_required`. The historical exception was not retained;
+this is not a recovered production stack or a new passing real-machine result.
+
+Fresh three-role adapters must stage and publish `candidate_readback.php` as the
+thirteenth active runtime file. In `live_cli.php`, load it and put this narrow
+branch **before** the ordinary full native-advance branch:
+
+```php
+require_once __DIR__ . '/candidate_readback.php';
+// After the existing manual CLI scope/configuration checks:
+if ($command === 'native-advance' && isset($argv[2])) {
+    $out += keli_acceptance_candidate_readback($ids, $argv[2]);
+    $out['tasks'] = tasks();
+} elseif ($command === 'native-advance') {
+    // Existing full native advancement, unchanged.
+}
+```
+
+This explicit-reference branch rechecks the execution, member, attempt, task,
+actor, policy, candidate label and original provider receipt. It consumes the
+existing authenticated callback and calls `MachineProvisionService::readback`,
+not the bridge's full `advance`. Provider access is readback-only; local callback
+and task state may progress. Missing dispatch/resource identity refuses before
+provider access, never falling back to create or ambiguous-create reconciliation.
+No source-mode or execution-gate whitelist is broadened.
+
+The fresh `RoundRunner.native` candidate polling loop must call
+`self.module('candidate_readback').process(self, candidate['id'])` and use
+`ready_for_sampling(self.tasks['candidate'])` from that module. After successful
+installation, either reachable or waiting-IPv4 state enters the existing bounded
+candidate sampling window; the candidate still must be healthy before forwarding
+or DNS. This readback branch proves `candidate_process_only=true`,
+`native_phase_advanced=false` and `dns_cutover_dispatched=false`. It cannot silently
+fall through to the full native action when a reference is supplied.
+
+`MachineProvisionDiagnostic` retains the first fixed-field task diagnostic in
+the existing evidence column under a row lock, then independently reads it back.
+It exports only bounded phase/category/cause/class enums, approved relative
+filenames, line numbers and warning severity. Unknown locations/classes are
+redacted. Error text, trace, SQL, paths, credentials and request bodies are not
+recorded. Later failures, report snapshots and cleanup cannot replace the first.
+Storage failure must not replace the original task failure or suppress cleanup.
+
+`MachineProvisionTaskEvidence::snapshot` exports this projection with an explicit
+verified/absent/invalid state. `cli_error_capture.capture_result` also handles task
+errors nested in an otherwise successful CLI response. `task_diagnostics.py`
+performs exclusive per-task preservation and independent readback; the cleanup
+adapter exports it again even if the original response was lost. Missing evidence
+for an internal failure is unconfirmed, not a successful diagnostic collection.
+The fresh runner must invoke
+`attempt('task_evidence', lambda: task_diagnostics.audit_preservation(self.campaign))`
+after its cleanup attempt and before finalization. The read-only audit checks the
+task snapshots against the retained first file and refuses conflicting, missing
+or summary-only evidence. `runtime_payload.validate_bindings` and the pinned
+launcher enforce these new bindings before importing a dispatch driver.
+
+Only a newly reviewed, approved, frozen scope may integrate these helpers. Do not
+edit or resume R20, reuse its authorization or import its closed live adapters.
+The existing 128-input cap, resource/attempt limits, source threshold, candidate
+reachability, forwarding receipts, DNS ownership, stop and lease controls remain.
+No real creation, credential rotation, DNS switch or automatic gate is enabled.
+The existing CI test commands include `test_candidate_readback` and
+`test_task_diagnostics`; PHP-backed fixtures run after composer installation,
+and explicitly skip when PHP or vendor is absent in the bare tools jobs.
+See [R20 offline repair](../../docs/machine-r20-candidate-offline-fix-20261115.md).
+
 ## Source Fixture Evidence Diagnostics (2026-11-14)
 
 R15 stopped at `adopt-source` with `source_fixture_evidence_invalid`. Its retained

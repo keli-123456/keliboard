@@ -201,10 +201,15 @@ class EntryTests(unittest.TestCase):
             "\ndef command():\n    result = cli_error_capture.capture_result(campaign, result)\n    campaign.save('latest-' + name + '.json', result)\n")
         (self.base / 'staging_control.py').write_text('STAGING = ' + repr(names))
         (self.base / 'runtime_install.py').write_text('import runtime_payload\ndef install():\n    runtime_payload.publish(BUNDLE, BASE)\n')
-        (self.base / 'live_cli.php').write_text("<?php\nrequire_once __DIR__ . '/cli_diagnostics.php';\nif (in_array($command, ['adopt-source', 'initial-dns'], true)) {\n$out = keli_acceptance_cli_failure($command, $error);\n}\nfunction tasks() { return \\App\\Services\\ServerMachine\\Cloud\\MachineProvisionTaskEvidence::snapshot($task); }\n")
+        (self.base / 'live_cli.php').write_text("<?php\nrequire_once __DIR__ . '/cli_diagnostics.php';\nrequire_once __DIR__ . '/candidate_readback.php';\n"
+            "if (in_array($command, ['adopt-source', 'initial-dns'], true)) {\n$out = keli_acceptance_cli_failure($command, $error);\n}\n"
+            "if ($command === 'native-advance' && isset($argv[2])) {\n$out += keli_acceptance_candidate_readback($ids, $argv[2]);\n$out['tasks'] = tasks();\n}"
+            " elseif ($command === 'native-advance') { advance_native(); }\n"
+            "function tasks() { return \\App\\Services\\ServerMachine\\Cloud\\MachineProvisionTaskEvidence::snapshot($task); }\n")
         (self.base / 'teardown_control.py').write_text("COLLECT_PHP = DB_GUARD + r'\\App\\Services\\ServerMachine\\Cloud\\MachineProvisionTaskEvidence::snapshot($t)'\n"
             "def source_fixture_diagnostic():\n    return cli_error_capture.source_journal(value, RUN, APPLICATION_COMMIT)\n")
         (self.base / 'cleanup.py').write_text('class Cleanup:\n def tasks(self): pass\n def receipts_cloud(self,inventory=None): pass\n def collect(self): pass\ndef controller_evidence(value): return value\n')
+        (self.base / 'round_runner.py').write_text("import task_diagnostics\nclass RoundRunner:\n def native(self):\n  while not self.module('candidate_readback').ready_for_sampling(self.tasks['candidate']):\n   self.module('candidate_readback').process(self, candidate['id'])\n def finish(self):\n  attempt('cleanup', cleanup)\n  attempt('task_evidence', lambda: task_diagnostics.audit_preservation(self.campaign))\n  attempt('finalize', finalize)\n")
         self.repin()
         blocked = patch.object(subprocess, "Popen", side_effect=AssertionError("real subprocess forbidden"))
         blocked.start()
@@ -260,7 +265,7 @@ class EntryTests(unittest.TestCase):
         original = json.loads(path.read_text())
         for name in ["entry_probe_diagnostics.py", "entry_probe_capture.py", "probe_sampling.py", "aliyun_cleanup.py", "aliyun_cleanup.php",
                      "source_fixture.php", "source_fixture_evidence.php", "cli_diagnostics.php", "runtime_payload.py", "cli_error_capture.py",
-                     "replacement_diagnostics.py", "cleanup_tasks.py"]:
+                     "replacement_diagnostics.py", "cleanup_tasks.py", "task_diagnostics.py", "candidate_readback.py", "candidate_readback.php"]:
             data = json.loads(json.dumps(original))
             del data["file_digests"][name]
             path.write_text(json.dumps(data))
@@ -269,7 +274,7 @@ class EntryTests(unittest.TestCase):
 
     def test_source_checker_cannot_be_replaced_even_with_a_recomputed_bundle_pin(self):
         for name in ['source_fixture.php', 'source_fixture_evidence.php', 'cli_diagnostics.php', 'runtime_payload.py', 'cli_error_capture.py',
-                     'replacement_diagnostics.py', 'cleanup_tasks.py']:
+                     'replacement_diagnostics.py', 'cleanup_tasks.py', 'task_diagnostics.py', 'candidate_readback.py', 'candidate_readback.php']:
             with self.subTest(name=name):
                 path = self.base / name
                 original = path.read_bytes()
@@ -361,10 +366,18 @@ def main():
  campaign.save('synthetic-delete-ordered.json',{'ok':True})
  return {'ok':True}
 '''
-        driver = '''class RoundStopped(RuntimeError): pass
+        driver = '''import task_diagnostics
+class RoundStopped(RuntimeError): pass
 class RoundRunner:
  def __init__(self,loader): self.loader=loader
  def baseline(self,role): raise AssertionError('legacy sampling must not run')
+ def native(self):
+  while not self.module('candidate_readback').ready_for_sampling(self.tasks['candidate']):
+   self.module('candidate_readback').process(self, candidate['id'])
+ def finish(self):
+  attempt('cleanup', cleanup)
+  attempt('task_evidence', lambda: task_diagnostics.audit_preservation(self.campaign))
+  attempt('finalize', finalize)
  def run(self):
   reason=None
   try: self.baseline('source')

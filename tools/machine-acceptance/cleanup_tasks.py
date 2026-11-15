@@ -4,6 +4,7 @@ import json
 import re
 from types import SimpleNamespace
 import replacement_diagnostics
+import task_diagnostics
 
 
 FIELDS = ('id', 'label', 'marker', 'status', 'external_id', 'provider_created_at', 'dispatched_at')
@@ -78,6 +79,14 @@ def install(module):
     def controller_evidence(value):
         result = original_projection(value)
         for raw, safe in zip(value['tasks'], result['tasks'], strict=True):
+            if raw.get('reason') == 'internal_failure':
+                safe['reason'] = 'internal_failure'
+            if raw.get('task_diagnostic') is not None or raw.get('task_diagnostic_state', 'absent') != 'absent':
+                try:
+                    safe['task_diagnostic'] = task_diagnostics.project(raw.get('task_diagnostic'))
+                    safe['task_diagnostic_state'] = 'verified' if raw.get('task_diagnostic_state') == 'verified' else 'invalid'
+                except ValueError:
+                    safe['task_diagnostic_state'] = 'invalid'
             proof = proof_projection(raw.get('dispatch_evidence'))
             if proof is not None:
                 safe['dispatch_evidence'] = proof
@@ -97,6 +106,14 @@ def install(module):
                                       save=self.store.save, load=self.store.load)
             captured = replacement_diagnostics.capture_result(context, {'command': 'native-status', 'ok': True,
                 'tasks': self.controller.get('tasks', [])})
+            tasks = task_diagnostics.capture_result(context, {'ok': True, 'tasks': self.controller.get('tasks', [])})
+            if 'task_diagnostic_preservation' in tasks:
+                task_preservation = tasks['task_diagnostic_preservation']
+                try:
+                    self.store.save('task-error-export-readback.json', task_preservation)
+                except Exception:
+                    task_preservation = {'ok': False, 'reason': 'task_diagnostic_unconfirmed'}
+                result = dict(result, task_diagnostic_preservation=task_preservation)
             if 'replacement_diagnostic_preservation' in captured:
                 preservation = captured['replacement_diagnostic_preservation']
                 try:

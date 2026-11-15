@@ -43,7 +43,7 @@ class RuntimePayloadTests(unittest.TestCase):
             self.assertEqual((self.bundle / name).read_bytes(), (self.target / name).read_bytes())
 
     def test_missing_manifest_or_staged_helper_refuses_before_any_write(self):
-        for name in ['source_fixture_evidence.php', 'cli_diagnostics.php']:
+        for name in ['source_fixture_evidence.php', 'cli_diagnostics.php', 'candidate_readback.php']:
             with self.subTest(name=name):
                 original = self.manifest['files'].pop(name)
                 self.save_manifest()
@@ -60,7 +60,7 @@ class RuntimePayloadTests(unittest.TestCase):
                 (self.bundle / name).write_bytes(content)
 
     def test_hash_drift_duplicate_manifest_and_invalid_size_refuse(self):
-        for name in ['source_fixture_evidence.php', 'cli_diagnostics.php']:
+        for name in ['source_fixture_evidence.php', 'cli_diagnostics.php', 'candidate_readback.php']:
             content = (self.bundle / name).read_bytes()
             (self.bundle / name).write_bytes(content + b'// changed\n')
             with self.assertRaisesRegex(payload.Refused, 'runtime_hash_mismatch'):
@@ -117,7 +117,35 @@ class RuntimePayloadTests(unittest.TestCase):
             "\ndef command():\n    result = cli_error_capture.capture_result(campaign, result)\n    campaign.save('latest-' + name + '.json', result)\n")
         (self.root / 'staging_control.py').write_text('STAGING = ' + repr(names))
         (self.root / 'runtime_install.py').write_text('import runtime_payload\ndef install():\n    runtime_payload.publish(BUNDLE, BASE)\n')
-        (self.root / 'live_cli.php').write_text("<?php\nrequire_once __DIR__ . '/cli_diagnostics.php';\nif (in_array($command, ['adopt-source', 'initial-dns'], true)) {\n$out = keli_acceptance_cli_failure($command, $error);\n}\n")
+        (self.root / 'live_cli.php').write_text("<?php\nrequire_once __DIR__ . '/cli_diagnostics.php';\nrequire_once __DIR__ . '/candidate_readback.php';\n"
+            "if (in_array($command, ['adopt-source', 'initial-dns'], true)) {\n$out = keli_acceptance_cli_failure($command, $error);\n}\n"
+            "if ($command === 'native-advance' && isset($argv[2])) {\n$out += keli_acceptance_candidate_readback($ids, $argv[2]);\n$out['tasks'] = tasks();\n}"
+            " elseif ($command === 'native-advance') { advance_native(); }\n")
+
+    def test_candidate_readback_and_task_audit_bindings_cannot_fall_back_to_the_old_source_mode(self):
+        self.bindings()
+        cli = self.root / 'live_cli.php'
+        original = cli.read_text()
+        cli.write_text(original.replace("require_once __DIR__ . '/candidate_readback.php';", ''))
+        with self.assertRaisesRegex(payload.Refused, 'candidate_readback_binding_required'):
+            payload.validate_bindings(self.root)
+        cli.write_text(original)
+        runner = self.root / 'round_runner.py'
+        good = "import task_diagnostics\nclass RoundRunner:\n    def native(self):\n        while not self.module('candidate_readback').ready_for_sampling(self.tasks['candidate']):\n            self.module('candidate_readback').process(self, candidate['id'])\n    def finish(self):\n        attempt('cleanup', cleanup)\n        attempt('task_evidence', lambda: task_diagnostics.audit_preservation(self.campaign))\n        attempt('finalize', finalize)\n"
+        runner.write_text(good)
+        payload.validate_bindings(self.root)
+        runner.write_text(good.replace("self.module('candidate_readback').process(self, candidate['id'])", "self.command('process', candidate['id'])"))
+        with self.assertRaisesRegex(payload.Refused, 'candidate_readback_driver_required'):
+            payload.validate_bindings(self.root)
+        runner.write_text(good.replace("self.module('candidate_readback').ready_for_sampling(self.tasks['candidate'])", "old_ready_flag()"))
+        with self.assertRaisesRegex(payload.Refused, 'candidate_sampling_boundary_required'):
+            payload.validate_bindings(self.root)
+        runner.write_text(good.replace('task_diagnostics.audit_preservation(self.campaign)', 'old_audit()'))
+        with self.assertRaisesRegex(payload.Refused, 'task_diagnostic_audit_required'):
+            payload.validate_bindings(self.root)
+        runner.write_text(good.replace("attempt('task_evidence', lambda: task_diagnostics.audit_preservation(self.campaign))", 'task_diagnostics.audit_preservation(self.campaign)'))
+        with self.assertRaisesRegex(payload.Refused, 'task_diagnostic_audit_required'):
+            payload.validate_bindings(self.root)
 
     def test_fresh_binding_checks_active_installation_not_just_staging(self):
         self.bindings()
