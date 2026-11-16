@@ -187,5 +187,38 @@ trait TestsMemberTransport
         $this->assertSame($b, $this->fixtures[1]['source']->fresh()->toArray());
         $this->assertSame($bDns, $this->records['5002']);
         $this->assertCount(2, $this->posts); $this->assertSame(1, $this->candidateDeletes);
+
+        // Finish the same registered-source run, including DNS, using application services.
+        $task = $this->task();
+        app(\App\Services\ServerMachine\Cloud\MachineProvisionService::class)->callback(
+            $task->id, $task->installation_id, $this->callbackSecret($task), 'succeeded');
+        $task->refresh()->fill(['dispatched_at' => time() - 2, 'next_check_at' => 0])->save();
+        $this->report($this->fixtures[0], $task, $task->public_ips[0], true, time());
+        for ($i = 0; $i < 45 && $driver->state()['phase'] !== 'cleanup'; $i++) $driver->step();
+        $this->assertSame('cleanup', $driver->state()['phase'], json_encode($driver->state()));
+        $this->assertNull($driver->state()['first_error']);
+        $this->assertSame(1, $this->dnsWrites);
+        $this->assertSame($bDns, $this->records['5002']);
+        $this->assertSame($b, $this->fixtures[1]['source']->fresh()->toArray());
+
+        $scope = $this->memberTransportScope;
+        foreach ($driver->state()['roles'] as $role => $pin) {
+            if ($role === 'control') continue;
+            $task = \App\Models\MachineProvisionTask::query()->findOrFail($pin['task_id']);
+            $scope['tasks'][$role] = $task->only(['external_id', 'installation_id', 'account_revision',
+                'provider_created_at', 'marker', 'machine_id']) + ['task_id' => $task->id];
+        }
+        $guard = $this->memberDriverGuard;
+        $load = fn ($key) => $this->memberTransportJournal[$key] ?? null;
+        $save = function ($key, $value): void { $this->memberTransportJournal[$key] = $value; };
+        $registry = new MemberSourceRegistry($scope, $guard, $load, $save, fn () => time());
+        $bridge = new MemberControllerBridge($scope, $registry, $guard, $load, $save);
+        foreach (['candidate-a2', 'candidate-a1', 'source-a', 'source-b'] as $role) {
+            $bridge->dispatch($this->memberTransportRequest('task-delete', $role));
+            $this->assertTrue($bridge->dispatch($this->memberTransportRequest('task-inspect', $role))['result']['absent']);
+        }
+        $this->assertSame(4, $this->candidateDeletes); // A1 native + A2 + both source tasks.
+        $this->assertArrayHasKey(700, $this->remote);
+        $this->assertSame(0, $this->verifications); // HY2 specialist acceptance is not inferred.
     }
 }

@@ -192,8 +192,16 @@ class MemberCleanup:
                     self.state['phase'] = 'auxiliary'
             if self.state['phase'] == 'auxiliary':
                 result = self.auxiliary('dns-and-private-cleanup')
+                if result.get('pending') is True:
+                    self.save(self.state)
+                    return self.state
                 require(all(result.get(k) is True for k in ('dns_absent_twice', 'private_materials_removed',
-                            'intents_reconciled', 'evidence_saved_and_read_back')), 'cleanup_auxiliary_unconfirmed')
+                            'intents_reconciled')), 'cleanup_auxiliary_unconfirmed')
+                # Failure to export evidence must fail acceptance, not keep cloud resources billed.
+                self.state['evidence_saved_and_read_back'] = result.get('evidence_saved_and_read_back') is True
+                if not self.state['evidence_saved_and_read_back']:
+                    self.state['first_error'] = self.state['first_error'] or {
+                        'class': 'TransportError', 'reason': 'cleanup_evidence_unconfirmed'}
                 self.state['phase'] = 'control'
                 self.save(self.state)
             if self.state['phase'] == 'control':
