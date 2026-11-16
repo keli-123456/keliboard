@@ -141,8 +141,9 @@ class MachineFailoverRunner
                             $transition = isset($attempt?->payload['transition_id']) ? MachineDnsTransition::query()->find($attempt->payload['transition_id']) : null;
                             return !$transition || $transition->next_check_at <= time();
                         });
+                    $sampling = !$waiting && Member::query()->where('execution_id', $id)->get()->contains(fn ($member) => $this->candidateSampling($member));
                     $row->fill(['state' => $state, 'ticket_hash' => null, 'lease_until' => null, 'revision' => $row->revision + 1,
-                        'next_check_at' => time() + ($urgent && !$waiting ? 1 : 20), 'next_dispatch_at' => 0, 'reason' => $waiting])->save();
+                        'next_check_at' => time() + ($urgent && !$waiting ? 1 : ($sampling ? 10 : 20)), 'next_dispatch_at' => 0, 'reason' => $waiting])->save();
                     $this->event($row, $state === 'finished' ? 'finished' : 'yielded', $waiting);
                 });
                 if ($state === 'idle') $this->dispatch($id, true);
@@ -166,7 +167,14 @@ class MachineFailoverRunner
         $ordered = $members->sortBy(fn ($m) => [$m->payload['priority'], $m->id])->values();
         $index = $ordered->search(fn ($m) => $m->id === (int) $last);
         $rotated = $index === false ? $ordered : $ordered->slice($index + 1)->concat($ordered->take($index + 1));
-        return $rotated->sortBy(fn ($m) => in_array($m->phase, ['awaiting_dns', 'reconciling_dns'], true) ? 0 : 1);
+        return $rotated->sortBy(fn ($m) => in_array($m->phase, ['awaiting_dns', 'reconciling_dns'], true) || $this->candidateSampling($m) ? 0 : 1);
+    }
+    private function candidateSampling(Member $member): bool
+    {
+        // Keep the at-most-two active candidates observable without weakening sample freshness.
+        return $member->phase === 'checking_ipv4' && isset($member->payload['candidate_retry'])
+            && config('machine_failover.allow_candidate_retry') === true
+            && in_array($member->policy_id, config('machine_failover.allowed_candidate_retry_policy_ids', []), true);
     }
     public function advance(bool $stopsOnly = false): array
     {
@@ -250,11 +258,16 @@ class MachineFailoverRunner
                     $task = $attempt->task_id ? Task::query()->find($attempt->task_id) : null;
                     if ($task && !app(MachineFailoverNativeBridge::class)->bindingCurrent($attempt, $task)) { $phase = 'needs_review'; continue; }
                     if ($task && $attempt->status === 'rejected' && app(MachineFailoverNativeBridge::class)->definitelyRejected($task)) continue;
+                    if ($task && $attempt->status === 'cleaned') {
+                        try { app(MachineCandidateRetry::class)->confirmed($attempt, $task); continue; }
+                        catch (\Throwable) { $phase = 'needs_review'; continue; }
+                    }
                     $dns = isset($attempt->payload['transition_id']) ? MachineDnsTransition::query()->find($attempt->payload['transition_id']) : null;
                     if ($dns && (!$task || !app(MachineFailoverNativeBridge::class)->transitionCurrent($attempt, $task, $dns))) { $phase = 'needs_review'; continue; }
                     if ($dns && !$dns->dispatched_at && $dns->state === 'prepared') $dns->fill(['state' => 'cancelled', 'reason' => 'native_stop_requested'])->save();
                     $setUncertain = app(MachineNativeDnsAdmission::class)->stopForAttempt($attempt);
-                    $uncertain = $setUncertain || $dns?->dispatched_at || $task?->dispatched_at && !$task->external_id;
+                    $uncertain = $setUncertain || app(MachineCandidateRetry::class)->pending($attempt)
+                        || $dns?->dispatched_at || $task?->dispatched_at && !$task->external_id;
                     $held = $task !== null && $task->external_id !== null;
                     $next = $uncertain ? 'needs_review' : ($held ? 'retained' : 'cancelled');
                     if ($next === 'needs_review' || $phase !== 'needs_review' && $next === 'retained') $phase = $next;

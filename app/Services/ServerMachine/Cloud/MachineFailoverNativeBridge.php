@@ -87,7 +87,8 @@ class MachineFailoverNativeBridge
                 if (Member::query()->where('episode_key', $source['episode_key'])->exists()) throw new CloudException('replacement_episode_used');
                 $rows[] = ['member_id' => $match[0]['id'], 'policy_id' => $policy->id, 'policy_revision' => $policy->revision, 'plan_id' => $id,
                     'episode_key' => $source['episode_key'], 'payload' => ['source' => $source, 'priority' => $match[0]['priority'],
-                        'source_instance_id' => $active->id] + $dnsPayload];
+                        'source_instance_id' => $active->id] + $dnsPayload
+                        + (($retry = app(MachineCandidateRetry::class)->pin($policy, $workflow)) === null ? [] : ['candidate_retry' => $retry])];
             }
             if ($admission !== null) app(MachineFailoverAdmission::class)->assertStart($admission, $snapshot, $release, array_column($rows, 'episode_key', 'plan_id'));
             $run = Execution::query()->create(['id' => (string) Str::uuid(), 'service_id' => $service, 'service_revision' => $revision,
@@ -118,6 +119,7 @@ class MachineFailoverNativeBridge
                 $current = $row->fresh();
                 if (in_array($current->phase, self::FINISHED, true)) return;
                 try { $this->step($current, $run->fresh()); }
+                catch (\Illuminate\Contracts\Cache\LockTimeoutException) { return; }
                 catch (CloudException|DnsException $error) {
                     $reason = $error->getMessage();
                     if (in_array($reason, ['native_lease_lost', 'native_stop_requested', 'runner_disabled'], true)) throw $error;
@@ -139,6 +141,10 @@ class MachineFailoverNativeBridge
                     $partial = $attempt && !empty($attempt->payload['dns_set_runs'])
                         ? DB::transaction(fn () => app(MachineNativeDnsAdmission::class)->stopForAttempt($attempt)) : false;
                     if ($reason === 'source_recovered') {
+                        if ($attempt?->status === 'cleaned' && $task) {
+                            app(MachineCandidateRetry::class)->confirmed($attempt, $task);
+                            $this->phase($row, 'cancelled', $reason); return;
+                        }
                         if ($task && !$task->dispatched_at) { app(MachineProvisionService::class)->cancel($task->id, $run->admin_id); $task->refresh(); }
                         if ($attempt) $this->attemptStatus($attempt, $task?->dispatched_at ? 'retained' : 'cancelled');
                         $this->phase($row, $partial ? 'needs_review' : ($task?->dispatched_at ? 'retained' : 'cancelled'), $reason);
@@ -164,17 +170,33 @@ class MachineFailoverNativeBridge
         if ($attempt->status === 'rejected') {
             $attempt = $this->reserve($member->fresh(), $run, $policy, $attempt);
         }
+        if ($attempt->status === 'cleaned') {
+            $retry = app(MachineCandidateRetry::class); $retry->assertEnabled($member);
+            if (!$retry->ready($attempt, Task::query()->findOrFail($attempt->task_id))) {
+                $this->phase($member, 'candidate_retry_cooldown', 'candidate_ipv4_unreachable'); return;
+            }
+            $attempt = $this->reserve($member->fresh(), $run, $policy, $attempt);
+        }
         $this->assertAttempt($attempt);
         $provision = app(MachineProvisionService::class);
         if (!$attempt->task_id) $provision->queueCoordinated($attempt->payload['plan'], $attempt->request_id, $run->admin_id, $attempt->id);
         $attempt->refresh(); $task = Task::query()->findOrFail($attempt->task_id);
         $this->assertTask($task);
+        $retry = app(MachineCandidateRetry::class);
+        if ($retry->pending($attempt)) {
+            $phase = $retry->advance($attempt, $task, $member, $run, $policy);
+            $this->phase($member, $phase, 'candidate_ipv4_unreachable'); return;
+        }
         if (!in_array($task->status, Task::TERMINAL, true)) {
             if ($task->dispatched_at && $task->external_id && $task->provider_created_at) $provision->readback($task->id);
             else $provision->process($task->id);
         }
         $task->refresh();
         app(MachineFailoverRunner::class)->guard($run->id);
+        if (!in_array($task->status, Task::TERMINAL, true)
+            && ($phase = $retry->advance($attempt->fresh(), $task, $member, $run, $policy)) !== null) {
+            $this->phase($member, $phase, 'candidate_ipv4_unreachable'); return;
+        }
         if ($task->status === 'failed' && $this->definitelyRejected($task)) {
             $this->attemptStatus($attempt, 'rejected'); $this->phase($member, 'retry_ready', $task->reason); return;
         }
@@ -290,8 +312,16 @@ class MachineFailoverNativeBridge
             }
             $this->source($member, $policy);
             $credentials = app(MachineFailoverCredentials::class);
-            $rotation = null;
-            if ($previous) {
+            $rotation = null; $replacement = null;
+            if ($previous?->status === 'cleaned') {
+                $retry = app(MachineCandidateRetry::class); $retry->assertEnabled($member);
+                $task = Task::query()->findOrFail($previous->task_id);
+                if (!$retry->ready($previous, $task)) throw new CloudException('replacement_cooldown');
+                $proof = $retry->confirmed($previous, $task);
+                $this->assertDns($task, false);
+                $choice = $credentials->context($policy, $task);
+                $replacement = ['from_attempt_id' => $previous->id, 'cleanup_seal' => $proof['seal']];
+            } elseif ($previous) {
                 $this->gate->assertAllowed('rotate'); $task = Task::query()->findOrFail($previous->task_id);
                 $this->rotationGate($policy->id);
                 if (!$this->definitelyRejected($task)) throw new CloudException('original_intent_only');
@@ -310,14 +340,15 @@ class MachineFailoverNativeBridge
             $members = Member::query()->whereIn('execution_id', Execution::query()->where('service_id', $run->service_id)->select('id'))->pluck('id');
             $currentMembers = Member::query()->where('execution_id', $run->id)->pluck('id');
             if (Attempt::query()->whereIn('execution_member_id', $currentMembers)->count() >= $service['attempt_limit']) throw new CloudException('attempt_budget');
-            $active = Attempt::query()->whereNotIn('status', ['rejected', 'failed', 'cancelled', 'completed', 'retained', 'released'])->get();
+            $active = Attempt::query()->whereNotIn('status', ['rejected', 'failed', 'cancelled', 'completed', 'retained', 'released', 'cleaned'])->get();
             if ($active->whereIn('execution_member_id', $members->all())->count() >= $service['max_parallel']) throw new CloudException('parallel_budget');
             $ids = app(MachineCloudCredentialHealth::class)->sameAccountIds($account);
             if ($active->whereIn('account_id', $ids)->isNotEmpty()) throw new CloudException('account_reserved');
             $attempt = Attempt::query()->create(['id' => (string) Str::uuid(), 'execution_member_id' => $member->id,
                 'ordinal' => Attempt::query()->where('execution_member_id', $member->id)->count() + 1, 'request_id' => bin2hex(random_bytes(16)),
                 'account_id' => $account->id, 'account_revision' => $account->revision, 'reserved_cents' => 0,
-                'payload' => ['plan' => $plan, 'previous_attempt_id' => $previous?->id] + ($rotation === null ? [] : ['rotation' => $rotation])]);
+                'payload' => ['plan' => $plan, 'previous_attempt_id' => $previous?->id] + ($rotation === null ? [] : ['rotation' => $rotation])
+                    + ($replacement === null ? [] : ['candidate_replacement' => $replacement])]);
             $member->fill(['attempt_id' => $attempt->id, 'phase' => 'creating', 'reason' => null])->save();
             return $attempt;
         }));
@@ -338,8 +369,13 @@ class MachineFailoverNativeBridge
         if ($member->attempt_id !== $attempt->id || in_array($member->phase, self::FINISHED, true)) throw new CloudException('native_lineage_changed');
         $policy = Policy::query()->findOrFail($member->policy_id); $plan = ProvisionPlan::normalize($attempt->payload['plan']);
         if ($attempt->ordinal > 1) {
-            $this->rotationProof($attempt);
-            if (!$task?->dispatched_at) $this->rotationGate($policy->id);
+            if (isset($attempt->payload['candidate_replacement'])) {
+                app(MachineCandidateRetry::class)->proof($attempt);
+                if (!$task?->dispatched_at) app(MachineCandidateRetry::class)->assertEnabled($member);
+            } else {
+                $this->rotationProof($attempt);
+                if (!$task?->dispatched_at) $this->rotationGate($policy->id);
+            }
         }
         $credential = app(MachineFailoverCredentials::class); $account = $credential->assertPlan($plan);
         if ($account->id !== $attempt->account_id || $account->revision !== $attempt->account_revision || $account->provider !== ($plan['provider'] ?? 'linode')
@@ -389,6 +425,7 @@ class MachineFailoverNativeBridge
         if (!is_string($id)) throw new CloudException('native_lineage_changed');
         $attempt = Attempt::query()->findOrFail($id); $this->assertAttempt($attempt, $task, $requireLease);
         if (!$task->dispatched_at) {
+            if (isset($attempt->payload['candidate_replacement'])) $this->assertDns($task, false);
             $member = Member::query()->findOrFail($attempt->execution_member_id);
             app(MachineReplacementService::class)->validate($member->plan_id, $task->payload['plan'], $task, $attempt);
         }
@@ -625,6 +662,7 @@ class MachineFailoverNativeBridge
             'price_verified' => false, 'baseline_cost_included' => false,
             'members' => $members->map(fn ($row) => $row->only(['id', 'member_id', 'policy_id', 'phase', 'reason'])
                 + ['replacement_diagnostic' => CloudException::safeReplacementDiagnostic($row->payload['replacement_diagnostic'] ?? null)] + ['attempts' => $attempts
-                ->where('execution_member_id', $row->id)->map(fn ($attempt) => $attempt->only(['id', 'ordinal', 'task_id', 'status', 'reserved_cents']))->values()->all()])->all()];
+                ->where('execution_member_id', $row->id)->map(fn ($attempt) => $attempt->only(['id', 'ordinal', 'task_id', 'status', 'reserved_cents'])
+                    + ['candidate_retry' => app(MachineCandidateRetry::class)->summary($attempt)])->values()->all()])->all()];
     }
 }

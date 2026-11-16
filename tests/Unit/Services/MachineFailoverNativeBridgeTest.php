@@ -49,6 +49,7 @@ use Tests\TestCase;
 class MachineFailoverNativeBridgeTest extends TestCase
 {
     use InteractsWithInMemoryDatabase;
+    use \Tests\Support\TestsCandidateRetry;
     private User $admin;
     private ServerMachineRelease $release;
     private array $fixtures = [];
@@ -492,7 +493,11 @@ class MachineFailoverNativeBridgeTest extends TestCase
                 if (str_contains($url, '/linode/types/')) return Http::response(['id' => 'g6-standard-4', 'class' => 'standard', 'price' => ['monthly' => 48], 'region_prices' => []]);
                 if (str_contains($url, '/account/settings')) { if ($this->duringPreflight) ($this->duringPreflight)(); return Http::response(['backups_enabled' => false]); }
                 if (preg_match('~/linode/instances/(\d+)$~', $url, $m)) {
+                    if ($request->method() === 'DELETE') {
+                        $this->candidateDeletes++; unset($this->remote[(int) $m[1]]); return Http::response('', 204);
+                    }
                     if ($this->duringInstanceRead) ($this->duringInstanceRead)();
+                    if (!isset($this->remote[(int) $m[1]])) return Http::response(['errors' => [['reason' => 'Not found']]], 404);
                     return Http::response($this->remote[(int) $m[1]]);
                 }
                 if (str_contains($url, '/linode/instances?')) {

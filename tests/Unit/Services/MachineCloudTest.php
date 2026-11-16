@@ -8,14 +8,19 @@ use App\Jobs\MachineCloudPowerJob;
 use App\Models\MachineCloudAccount as Account;
 use App\Models\MachineCloudResource as Resource;
 use App\Models\MachineCloudTask as Task;
+use App\Models\MachineFailoverAttempt as Attempt;
+use App\Models\MachineProvisionTask as ProvisionTask;
 use App\Models\ServerMachine;
 use App\Models\User;
 use App\Services\Node\NodeInstanceRegistry;
 use App\Services\ServerMachine\Cloud\CloudException;
 use App\Services\ServerMachine\Cloud\LinodeClient;
+use App\Services\ServerMachine\Cloud\LinodeProvisionClient;
+use App\Services\ServerMachine\Cloud\MachineCandidateCleanupClient;
 use App\Services\ServerMachine\Cloud\MachineCloudHealth;
 use App\Services\ServerMachine\Cloud\MachineCloudService;
 use App\Services\ServerMachine\MachineAddressInventory;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Http\Request;
@@ -210,6 +215,199 @@ class MachineCloudTest extends TestCase
         $this->assertCode('resource_in_use', fn () => $this->service->refreshAccount($other->id, 1));
         $this->assertSame(1, Resource::query()->count());
     }
+    public function test_alias_account_import_cannot_persist_during_cleanup_guard_or_delete(): void
+    {
+        $alias = $this->service->saveAccount(['name' => 'Alias', 'api_token' => 'synthetic-alias-token']);
+        $this->resource->delete();
+        $id = '10000000-0000-4000-8000-000000000001'; $marker = 'keli-create-' . str_repeat('a', 24);
+        $plan = ['provider' => 'linode', 'account_id' => $this->account->id, 'region' => 'jp-osa',
+            'size' => 'g6-standard-1', 'image' => 'linode/debian12', 'authorized_keys' => []];
+        $request = (new LinodeProvisionClient())->buildRequest($plan, $id, $marker, "#cloud-config\nruncmd:\n  - [true]\n");
+        $at = time() - 60; $created = gmdate('Y-m-d\TH:i:s\Z', $at);
+        $task = new ProvisionTask(['id' => $id, 'account_id' => $this->account->id, 'account_revision' => 1,
+            'external_id' => '123', 'provider_created_at' => $created, 'dispatched_at' => $at, 'marker' => $marker,
+            'public_ips' => ['8.8.8.8', '2606:4700:4700::1111'], 'payload' => ['plan' => $plan, 'request' => $request]]);
+        $row = array_replace($this->remote(), ['label' => $request['label'], 'tags' => [$marker], 'image' => $plan['image'], 'created' => $created]);
+        $deletes = 0;
+        Http::swap(new \Illuminate\Http\Client\Factory()); Http::preventStrayRequests();
+        Http::fake(function ($request) use ($row, &$deletes) {
+            $this->assertSame(0, DB::transactionLevel());
+            if ($request->method() === 'DELETE') {
+                $this->assertSame('https://api.linode.com/v4/linode/instances/123', $request->url());
+                $deletes++; return Http::response('{}');
+            }
+            $this->assertSame('GET', $request->method());
+            return Http::response(str_contains($request->url(), '/instances/123') ? $row : ['data' => [$row], 'pages' => 1]);
+        });
+        app(MachineCandidateCleanupClient::class)->delete($task, function () use ($alias) {
+            try { $this->service->refreshAccount($alias->id, 1); $this->fail('Alias import bypassed cleanup identity lock'); }
+            catch (LockTimeoutException) { $this->assertSame(0, DB::transactionLevel()); }
+            $this->assertSame(0, Resource::query()->count());
+        });
+        $this->assertSame(1, $deletes); $this->assertSame(0, Resource::query()->count());
+        $this->service->refreshAccount($alias->id, 1);
+        $this->assertSame($alias->id, Resource::query()->sole()->account_id);
+        $this->assertNull(Resource::query()->sole()->machine_id);
+        $this->assertCode('candidate_cleanup_scope_changed', fn () => app(MachineCandidateCleanupClient::class)->delete($task, function () use ($task) {
+            if (Resource::query()->where('provider', 'linode')->where('external_id', $task->external_id)->exists())
+                throw new CloudException('candidate_cleanup_scope_changed');
+        }));
+        $this->assertSame(1, $deletes);
+    }
+
+    public function test_binding_waits_for_shared_identity_lock_before_http_or_local_changes(): void
+    {
+        $lock = Cache::lock(MachineCandidateCleanupClient::lockKey('linode', $this->resource->external_id), 120);
+        $this->assertTrue($lock->get());
+        try {
+            try { $this->bind(); $this->fail('Binding bypassed cleanup identity lock'); }
+            catch (LockTimeoutException) {
+                $this->assertNull($this->resource->fresh()->machine_id);
+                $this->assertSame(0, DB::transactionLevel()); Http::assertNothingSent();
+            }
+        } finally { $lock->release(); }
+        $this->bind();
+        $this->assertSame($this->machine->id, $this->resource->machine_id);
+    }
+
+    public function test_inventory_keeps_all_identity_locks_through_page_persistence_without_http_in_sql(): void
+    {
+        $this->account->fill(['last_sync_at' => 0])->save();
+        $keys = array_map(fn ($id) => MachineCandidateCleanupClient::lockKey('linode', $id), ['123', '456']);
+        $writes = 0;
+        DB::connection()->beforeExecuting(function ($query) use ($keys, &$writes) {
+            if (!str_starts_with($query, 'insert into "v2_machine_cloud_resource"')
+                && !str_starts_with($query, 'update "v2_machine_cloud_resource"')
+                && !str_starts_with($query, 'update "v2_machine_cloud_account"')) return;
+            $writes++; $this->assertSame(1, DB::transactionLevel());
+            foreach ($keys as $key) {
+                $contender = Cache::lock($key, 120); $acquired = $contender->get();
+                if ($acquired) $contender->release();
+                $this->assertFalse($acquired);
+            }
+        });
+        Http::swap(new \Illuminate\Http\Client\Factory()); Http::preventStrayRequests();
+        Http::fake(function () {
+            $this->assertSame(0, DB::transactionLevel());
+            return Http::response(['data' => [array_replace($this->remote(), ['id' => 456]),
+                array_replace($this->remote(), ['label' => 'Updated inventory label'])], 'pages' => 1]);
+        });
+        $this->service->refreshAccount($this->account->id, 1);
+        $this->assertSame(3, $writes); $this->assertSame(2, Resource::query()->count());
+        foreach ($keys as $key) {
+            $contender = Cache::lock($key, 120);
+            try { $this->assertTrue($contender->get()); } finally { $contender->release(); }
+        }
+    }
+
+    public function test_inventory_rollback_preserves_page_atomicity_and_releases_identity_locks(): void
+    {
+        $this->resource->fill(['provider_created_at' => '2025-01-01T00:00:00Z'])->save();
+        Http::swap(new \Illuminate\Http\Client\Factory()); Http::preventStrayRequests();
+        Http::fake(fn () => Http::response(['data' => [array_replace($this->remote(), ['id' => 456]), $this->remote()], 'pages' => 1]));
+        $this->assertCode('identity_changed', fn () => $this->service->refreshAccount($this->account->id, 1));
+        $this->assertFalse(Resource::query()->where('external_id', '456')->exists());
+        $this->assertSame(0, DB::transactionLevel());
+        foreach (['123', '456'] as $id) {
+            $contender = Cache::lock(MachineCandidateCleanupClient::lockKey('linode', $id), 120);
+            try { $this->assertTrue($contender->get()); } finally { $contender->release(); }
+        }
+    }
+
+    private function cleanupImportIntent(string $provider = 'linode', string $externalId = '123'): array
+    {
+        (require base_path('database/migrations/2026_11_05_220000_create_machine_provision_tasks.php'))->up();
+        (require base_path('database/migrations/2026_11_07_180000_create_machine_failover_native_journal.php'))->up();
+        $this->resource->delete();
+        $account = $provider === 'linode' ? $this->account : $this->service->saveAccount([
+            'name' => 'Other provider', 'provider' => $provider, 'api_token' => 'synthetic-other-provider']);
+        $task = ProvisionTask::query()->create(['id' => '10000000-0000-4000-8000-000000000001',
+            'request_key' => str_repeat('a', 64), 'admin_id' => $this->admin->id, 'account_id' => $account->id,
+            'account_revision' => 1, 'machine_id' => $this->machine->id, 'machine_authority' => str_repeat('b', 64),
+            'plan_hash' => str_repeat('c', 64), 'slot' => 'cleanup:test', 'installation_id' => str_repeat('d', 32),
+            'callback_hash' => str_repeat('e', 64), 'marker' => 'keli-create-' . str_repeat('f', 24),
+            'payload' => ['plan' => ['provider' => $provider]], 'status' => 'waiting_ipv4_probe',
+            'external_id' => $externalId, 'provider_created_at' => '2026-01-01T00:00:00Z', 'dispatched_at' => time() - 60,
+            'deadline_at' => time() + 600, 'public_ips' => ['8.8.8.8']]);
+        $attempt = Attempt::query()->create(['id' => '20000000-0000-4000-8000-000000000001', 'execution_member_id' => 1,
+            'ordinal' => 1, 'request_id' => str_repeat('a', 32), 'task_id' => $task->id, 'account_id' => $account->id,
+            'account_revision' => 1, 'reserved_cents' => 0, 'status' => 'dispatched',
+            'payload' => ['candidate_retry' => ['state' => 'observing', 'failures' => 0]]]);
+        return [$task, $attempt];
+    }
+
+    public static function reservedCleanupImports(): array
+    {
+        return [
+            'pending' => ['waiting_ipv4_probe', 'dispatched', 'confirming', true],
+            'review' => ['needs_review', 'retained', 'confirming', true],
+            'cancelled' => ['cancelled', 'cancelled', 'confirming', true],
+            'accepted' => ['accepted', 'completed', 'confirming', true],
+            'historical cleaned' => ['failed', 'cleaned', 'confirmed', true],
+            'cleaned without dispatch field' => ['failed', 'cleaned', 'confirmed', false],
+        ];
+    }
+
+    #[DataProvider('reservedCleanupImports')]
+    public function test_cleanup_intent_written_during_inventory_blocks_stale_alias_import(
+        string $taskStatus, string $attemptStatus, string $journalState, bool $dispatched): void
+    {
+        [$task, $attempt] = $this->cleanupImportIntent();
+        $alias = $this->service->saveAccount(['name' => 'Alias inventory', 'api_token' => 'synthetic-alias']);
+        $checks = 0; $key = MachineCandidateCleanupClient::lockKey('linode', '123');
+        DB::connection()->beforeExecuting(function ($query) use ($key, &$checks) {
+            if (!str_contains($query, 'from "v2_machine_provision_task"') || !str_contains($query, '"external_id" = ?')) return;
+            $checks++; $this->assertSame(0, DB::transactionLevel());
+            $contender = Cache::lock($key, 120); $acquired = $contender->get();
+            if ($acquired) $contender->release();
+            $this->assertFalse($acquired);
+        });
+        Http::swap(new \Illuminate\Http\Client\Factory()); Http::preventStrayRequests();
+        Http::fake(function ($request) use ($task, $attempt, $taskStatus, $attemptStatus, $journalState, $dispatched) {
+            $this->assertSame('GET', $request->method()); $this->assertSame(0, DB::transactionLevel());
+            $this->assertSame(0, Resource::query()->count());
+            $task->fill(['status' => $taskStatus])->save();
+            $attempt->fill(['status' => $attemptStatus, 'payload' => ['candidate_retry' => ['state' => $journalState]
+                + ($dispatched ? ['delete_dispatched_at' => time()] : [])]])->save();
+            return Http::response(['data' => [array_replace($this->remote(), ['id' => 456]), $this->remote()], 'pages' => 1]);
+        });
+        $this->assertCode('candidate_cleanup_reserved', fn () => $this->service->refreshAccount($alias->id, 1));
+        $this->assertSame(2, $checks); $this->assertSame(0, Resource::query()->count());
+        $this->assertSame('candidate_cleanup_reserved', $alias->fresh()->last_error);
+        $this->assertSame($attemptStatus, $attempt->fresh()->status); $this->assertSame($taskStatus, $task->fresh()->status);
+        $this->assertNull($alias->fresh()->last_sync_at); Http::assertSentCount(1);
+        $contender = Cache::lock($key, 120);
+        try { $this->assertTrue($contender->get()); } finally { $contender->release(); }
+    }
+
+    public static function nonReservedCleanupImports(): array
+    {
+        return [['observing'], ['failed_without_intent'], ['no_attempt'], ['other_provider'], ['other_external_id']];
+    }
+
+    #[DataProvider('nonReservedCleanupImports')]
+    public function test_import_is_not_blocked_by_task_status_or_unrelated_cleanup_identity(string $case): void
+    {
+        [$task, $attempt] = $this->cleanupImportIntent($case === 'other_provider' ? 'digitalocean' : 'linode',
+            $case === 'other_external_id' ? '999' : '123');
+        if ($case === 'failed_without_intent') $task->fill(['status' => 'failed'])->save();
+        if ($case === 'no_attempt') $attempt->delete();
+        if (in_array($case, ['other_provider', 'other_external_id'], true)) $attempt->fill([
+            'payload' => ['candidate_retry' => ['state' => 'confirming', 'delete_dispatched_at' => time()]]])->save();
+        $this->service->refreshAccount($this->account->id, 1);
+        $this->assertSame('123', Resource::query()->sole()->external_id); Http::assertSentCount(1);
+    }
+
+    public function test_import_remains_compatible_before_provision_or_native_journal_migrations(): void
+    {
+        $this->assertFalse(Schema::hasTable('v2_machine_provision_task'));
+        $this->service->refreshAccount($this->account->id, 1);
+        (require base_path('database/migrations/2026_11_05_220000_create_machine_provision_tasks.php'))->up();
+        $this->assertFalse(Schema::hasTable('v2_machine_failover_attempt'));
+        $this->service->refreshAccount($this->account->id, 1);
+        $this->assertSame(1, Resource::query()->count()); Http::assertSentCount(2);
+    }
+
     public function test_binding_requires_full_fresh_instance_and_matching_explicit_public_ip(): void
     {
         $this->assertCode('invalid_binding', fn () => $this->service->binding($this->resource->id, 1, $this->machine->id, 'aaaaaaaa'));

@@ -6,6 +6,8 @@ use App\Jobs\MachineCloudPowerJob;
 use App\Models\MachineCloudAccount as Account;
 use App\Models\MachineCloudResource as Resource;
 use App\Models\MachineCloudTask as Task;
+use App\Models\MachineFailoverAttempt;
+use App\Models\MachineProvisionTask;
 use App\Models\User;
 use App\Services\Node\NodeReportSource;
 use Illuminate\Support\Facades\Cache;
@@ -30,12 +32,16 @@ class MachineCloudService
     private function withResource(int $id, callable $work): mixed
     {
         $initial = Resource::query()->findOrFail($id);
-        return $this->lock('account:' . $initial->account_id, fn () => $this->lock('resource:' . $id, function () use ($id, $work) {
+        return $this->lock('account:' . $initial->account_id, fn () => Cache::lock(
+            MachineCandidateCleanupClient::lockKey($initial->provider, $initial->external_id), 120)->block(2,
+            fn () => $this->lock('resource:' . $id, function () use ($id, $initial, $work) {
             $resource = Resource::query()->findOrFail($id);
+            if ($resource->account_id !== $initial->account_id || $resource->provider !== $initial->provider
+                || $resource->external_id !== $initial->external_id) throw new CloudException('identity_changed');
             $account = Account::query()->findOrFail($resource->account_id);
             if ($resource->provider !== $account->provider) throw new CloudException('identity_changed');
             return $work($resource, $account);
-        }));
+        })));
     }
 
     public function overview(): array
@@ -127,22 +133,46 @@ class MachineCloudService
             $account = Account::query()->findOrFail($id);
             try {
                 $data = $this->provider($account)->inventory($account, $page);
-                DB::transaction(function () use ($account, $data, $page) {
-                    foreach ($data['resources'] as $snapshot) {
-                        $row = Resource::query()->where('provider', $account->provider)->where('external_id', $snapshot['external_id'])->first();
-                        if ($row && (int) $row->account_id !== $account->id) throw new CloudException('resource_in_use');
-                        if (!$row && Resource::query()->count() >= 500) throw new CloudException('limit_reached');
-                        $row ??= new Resource(['account_id' => $account->id, 'provider' => $account->provider]);
-                        $this->applySnapshot($row, $snapshot); $row->save();
+                $keys = array_unique(array_map(fn ($snapshot) => MachineCandidateCleanupClient::lockKey(
+                    $account->provider, $snapshot['external_id']), $data['resources']));
+                sort($keys, SORT_STRING); $locks = [];
+                // Acquire before SQL, release after commit: cleanup must not miss an uncommitted import.
+                try {
+                    foreach ($keys as $key) {
+                        $lock = Cache::lock($key, 120); $lock->block(2); $locks[] = $lock;
                     }
-                    $account->fill(['last_sync_at' => time(), 'last_page' => $page, 'pages' => $data['pages'], 'last_error' => null])->save();
-                });
+                    foreach ($data['resources'] as $snapshot) $this->assertImportable($account->provider, $snapshot['external_id']);
+                    DB::transaction(function () use ($account, $data, $page) {
+                        foreach ($data['resources'] as $snapshot) {
+                            $row = Resource::query()->where('provider', $account->provider)->where('external_id', $snapshot['external_id'])->first();
+                            if ($row && (int) $row->account_id !== $account->id) throw new CloudException('resource_in_use');
+                            if (!$row && Resource::query()->count() >= 500) throw new CloudException('limit_reached');
+                            $row ??= new Resource(['account_id' => $account->id, 'provider' => $account->provider]);
+                            $this->applySnapshot($row, $snapshot); $row->save();
+                        }
+                        $account->fill(['last_sync_at' => time(), 'last_page' => $page, 'pages' => $data['pages'], 'last_error' => null])->save();
+                    });
+                } finally {
+                    foreach (array_reverse($locks) as $lock) $lock->release();
+                }
                 app(MachineCloudCredentialHealth::class)->authenticatedRead($account, 'inventory');
             } catch (CloudException $error) {
                 if ($error instanceof CloudRequestFailure) app(MachineCloudCredentialHealth::class)->record($account, $error, 'inventory', $account->id . ':' . $page . ':' . intdiv(time(), 60));
                 $account->last_error = $error->getMessage(); $account->save(); throw $error;
             }
         });
+    }
+
+    private function assertImportable(string $provider, string $externalId): void
+    {
+        if (!Schema::hasTable('v2_machine_provision_task') || !Schema::hasTable('v2_machine_failover_attempt')) return;
+        // Inventory may predate DELETE. Retained intent/history reserves the identity across account aliases.
+        foreach (MachineProvisionTask::query()->where('external_id', $externalId)->get(['id', 'payload']) as $task) {
+            if (($task->payload['plan']['provider'] ?? 'linode') !== $provider) continue;
+            $attempt = MachineFailoverAttempt::query()->where('task_id', $task->id)->first(['status', 'payload']);
+            if ($attempt && ($attempt->status === 'cleaned' || app(MachineCandidateRetry::class)->pending($attempt)))
+                throw new CloudException('candidate_cleanup_reserved');
+        }
     }
 
     private function applySnapshot(Resource $resource, array $snapshot): void

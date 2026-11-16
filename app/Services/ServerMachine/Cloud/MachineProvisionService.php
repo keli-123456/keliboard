@@ -185,6 +185,8 @@ class MachineProvisionService
                     $this->move($task, $task->dispatched_at ? 'needs_review' : 'failed', $reason); return;
                 }
                 if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertTask($task);
+                if (isset($task->payload['coordinated_attempt']) && app(MachineCandidateRetry::class)->pending(
+                    \App\Models\MachineFailoverAttempt::query()->findOrFail($task->payload['coordinated_attempt']))) return;
                 if ($task->replacement_id) app(MachineReplacementService::class)->assertDispatch($task);
                 if ($readbackOnly && (!$task->dispatched_at || !$task->external_id || !$task->provider_created_at)) throw new CloudException('readback_identity_required');
                 $account = MachineCloudAccount::query()->find($task->account_id);

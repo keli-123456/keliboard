@@ -18,6 +18,9 @@ return [
     // A first create authorization never implicitly permits another credential attempt.
     'allow_rotation' => false,
     'allowed_rotation_policy_ids' => [],
+    // Candidate cleanup/retry is distinct from credential rotation; existing runs gain no permission.
+    'allow_candidate_retry' => false,
+    'allowed_candidate_retry_policy_ids' => [],
     'sample_history_limit' => 500,
     'plan_history_limit' => 100,
     'history_days' => 7,
