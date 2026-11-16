@@ -1,0 +1,86 @@
+{
+  "schema": 1,
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "status": "adapter_tests_passed_unarmed_source_package_frozen",
+  "base_commit": "d5f99c68b4c80031c05c0b65bd65dd61645dbfae",
+  "execution_authorized": false,
+  "live_ready": false,
+  "full_round_adapter_complete": false,
+  "checks": {
+    "strict_ssh_options_and_request_binding": true,
+    "exclusive_upload_and_hash_readback": true,
+    "dual_source_registration_three_fresh_reports": true,
+    "canonical_labels_and_native_cleanup_validation_preserved": true,
+    "source_registration_native_A1_cleanup_cooldown_A2_composition": true,
+    "sibling_B_identity_and_dns_unchanged": true,
+    "unknown_read_not_absence": true,
+    "ambiguous_delete_not_replayed": true,
+    "cleanup_reads_separated_after_response_completion": true,
+    "controller_last_and_two_absence_reads": true,
+    "first_error_redacted_and_preserved": true,
+    "unarmed_cli_refuses_local_execution": true,
+    "positive_linux_runtime_execution": false
+  },
+  "verification": {
+    "php": {
+      "runtime": "8.2.33",
+      "phpunit": "11.5.55",
+      "suite": ["MachineFailoverNativeBridgeTest", "MachineCandidateCleanupClientTest"],
+      "tests": 495,
+      "assertions": 14948,
+      "failures": 0,
+      "elapsed_seconds": 350.523,
+      "junit_sha256": "9e11c2818865de4094131dca59ba4697b7c022b6d15a9b8f2aaa7687b3b6ccb2",
+      "database": "sqlite_memory",
+      "providers": "mocked_deny_stray_http",
+      "network_functions_disabled": ["curl_exec", "fsockopen", "pfsockopen", "stream_socket_client"]
+    },
+    "python": {
+      "modules": ["test_member_transport", "test_member_bundle", "test_application_bundle", "test_driver_journal"],
+      "tests": 56,
+      "passed": 55,
+      "skipped": 1,
+      "skip_reason": "actual Linux Bash line parsing unavailable on Windows",
+      "failures": 0,
+      "elapsed_seconds": 14.238,
+      "ssh_cloud_dns": "mocked",
+      "local_child_process_timeout_exit_output_limit": true
+    }
+  },
+  "frozen_artifact": {
+    "kind": "unarmed_r35_adapter_application",
+    "workspace_relative_path": ".codex-audit/r35-transport-freeze-20261116-d5f99c68/r35-adapter-application.tar.gz",
+    "bytes": 11575558,
+    "sha256": "7f4e015c96fd65c4126a0363374112fe2caf13a67021eb2dee23c4fb1a1895e3",
+    "manifest": "r35-adapter-manifest.json",
+    "overlay_files": 10,
+    "verified_lf_shells": 13,
+    "node_binary_included": false,
+    "vendor_included": false,
+    "credentials_included": false,
+    "authority_included": false,
+    "other_worktree_changes_included": false
+  },
+  "remaining_live_gates": [
+    "full_round_bootstrap_and_auxiliary_adapter_composition",
+    "native_coordinator_isolated_live_authority_adapter",
+    "node_binary_and_vendor_provenance",
+    "service_user_environment_and_all_role_linux_composition",
+    "minimal_readonly_preflight",
+    "new_execution_authorization"
+  ],
+  "external_actions": {
+    "ssh_connections": 0,
+    "production_database_connections": 0,
+    "cloud_api_calls": 0,
+    "dns_api_calls": 0,
+    "cloud_creates": 0,
+    "deployments": 0,
+    "automatic_switch_changes": 0,
+    "queue_changes": 0,
+    "commits_or_pushes": 0,
+    "R34_executions": 0,
+    "closed_rounds_reexecuted": false,
+    "tanzhen_touched": false
+  }
+}

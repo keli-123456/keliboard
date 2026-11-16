@@ -1,0 +1,110 @@
+"""Freeze an unarmed R35 adapter package from a Git baseline and explicit local files.
+
+This is a preparation artifact, NOT a live round authorization, node release,
+controller image or a replacement for future bootstrap/credential preflight.
+"""
+import argparse
+import gzip
+import hashlib
+import io
+import json
+from pathlib import Path
+import tarfile
+import tempfile
+
+import application_bundle
+import staging
+
+RUNTIME = ('member_retry_driver.php', 'member_source_registry.php', 'member_controller_bridge.php',
+           'member_transport_entry.php', 'member_transport.py', 'driver_journal.py', 'member_bundle.py')
+TESTS = ('tools/machine-acceptance/test_member_transport.py', 'tools/machine-acceptance/test_member_bundle.py',
+         'tests/Support/TestsMemberTransport.php')
+FILES = tuple('tools/machine-acceptance/' + name for name in RUNTIME) + TESTS
+
+
+def require(value, reason):
+    if not value:
+        raise ValueError(reason)
+
+
+def freeze(repo, commit, destination, run_id):
+    import re
+    require(re.fullmatch(r'keli-accept-[a-z0-9-]{8,80}', run_id), 'bundle_run_invalid')
+    repo, destination = Path(repo).resolve(strict=True), Path(destination).absolute()
+    directory, identity = application_bundle.output_directory(destination.parent)
+    require(not destination.exists(), 'bundle_output_exists')
+    overlay, evidence = {}, {}
+    for name in FILES:
+        path = repo / name
+        require(path.resolve(strict=True) == path.absolute(), 'bundle_overlay_link_refused')
+        _, raw, _ = staging.read_file(path, 262144, collect=True)
+        require(b'\0' not in raw and not raw.startswith(b'\xef\xbb\xbf'), 'bundle_overlay_encoding')
+        raw.decode('utf-8')
+        raw = raw.replace(b'\r\n', b'\n')
+        require(b'\r' not in raw, 'bundle_overlay_cr_refused')
+        overlay[name] = raw
+        evidence[name] = {'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw), 'lf_only': True}
+    manifest = {'schema': 1, 'run_id': run_id, 'base_commit': commit, 'artifact_kind': 'unarmed_r35_adapter_application',
+                'execution_authorized': False, 'live_ready': False, 'node_release_included': False,
+                'credentials_included': False, 'automatic_switches_changed': False, 'files': evidence,
+                'remaining_live_gates': ['round_bootstrap_and_auxiliary_adapter_composition',
+                    'node_binary_and_vendor_provenance', 'isolated_runtime_authority_and_environment',
+                    'minimal_readonly_preflight', 'new_execution_authorization']}
+    # Include the new trait in the committed test entry without mixing other worktree edits.
+    entry = 'tests/Unit/Services/MachineFailoverNativeBridgeTest.php'
+    original = application_bundle.git_read(repo, ['cat-file', 'blob', commit + ':' + entry])
+    needle = b'    use \\Tests\\Support\\TestsMemberRetryDriver;\n'
+    require(original.count(needle) == 1, 'bundle_test_entry_changed')
+    overlay[entry] = original.replace(needle, needle + b'    use \\Tests\\Support\\TestsMemberTransport;\n')
+    manifest['test_entry_sha256'] = hashlib.sha256(overlay[entry]).hexdigest()
+    manifest_raw = (json.dumps(manifest, indent=2, sort_keys=True) + '\n').encode()
+    with tempfile.TemporaryDirectory(prefix='member-freeze-', dir=directory) as temporary:
+        temporary = Path(temporary)
+        base = temporary / 'application.tar.gz'
+        application_bundle.build_archive(repo, commit, base)
+        output = temporary / 'r35.tar.gz'
+        with output.open('wb') as stream, gzip.GzipFile(filename='', fileobj=stream, mode='wb', mtime=0) as gz:
+            with tarfile.open(fileobj=gz, mode='w') as archive, tarfile.open(base, 'r:gz') as source:
+                for item in source:
+                    if item.name in overlay:
+                        continue
+                    archive.addfile(item, source.extractfile(item) if item.isfile() else None)
+                for name, raw in sorted(overlay.items()):
+                    info = tarfile.TarInfo(name); info.mode = 0o644; info.size = len(raw)
+                    archive.addfile(info, io.BytesIO(raw))
+                info = tarfile.TarInfo('r35-adapter-manifest.json'); info.mode = 0o644; info.size = len(manifest_raw)
+                archive.addfile(info, io.BytesIO(manifest_raw))
+        report = application_bundle.inspect_archive(output)
+        staging.unchanged_directory(directory, identity)
+        require(not destination.exists(), 'bundle_output_exists')
+        # Exclusive creation prevents a preparation rerun overwriting a frozen artifact.
+        import os
+        os.link(output, destination)
+    return dict(manifest, archive=report['archive'], shell_count=report['shell_count'])
+
+
+def verify(path):
+    application_bundle.inspect_archive(path)
+    with tarfile.open(path, 'r:gz') as archive:
+        manifest = json.load(archive.extractfile('r35-adapter-manifest.json'))
+        require(manifest['execution_authorized'] is False and manifest['live_ready'] is False, 'bundle_armed')
+        require(set(manifest['files']) == set(FILES), 'bundle_manifest_incomplete')
+        for name, evidence in manifest['files'].items():
+            raw = archive.extractfile(name).read()
+            require(hashlib.sha256(raw).hexdigest() == evidence['sha256'] and len(raw) == evidence['bytes']
+                    and b'\r' not in raw, 'bundle_file_changed')
+        entry = archive.extractfile('tests/Unit/Services/MachineFailoverNativeBridgeTest.php').read()
+        require(hashlib.sha256(entry).hexdigest() == manifest['test_entry_sha256'], 'bundle_test_entry_changed')
+        require(not any(Path(name).name in ('authorization.json', 'member-runtime-scope.json') for name in archive.getnames()),
+                'bundle_authority_refused')
+    return manifest
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--repo', required=True); parser.add_argument('--commit', required=True)
+    parser.add_argument('--output', required=True); parser.add_argument('--run-id', required=True)
+    args = parser.parse_args()
+    result = freeze(args.repo, args.commit, args.output, args.run_id)
+    verify(args.output)
+    print(json.dumps(result, sort_keys=True))

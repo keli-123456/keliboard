@@ -1172,6 +1172,21 @@ the latest local-only instruction. See
 Run the existing PHP native suite with `--filter test_member_driver` for the
 composed entry regression; no new workflow or dependency is required.
 
+## R35 Transport Preparation
+
+`member_transport.py` provides the strict SSH RPC/upload adapter and role-pinned
+final teardown coordinator. `member_transport_entry.php` is an isolated CLI only;
+the new source registry checks separate identities and three fresh reports for
+A/B without manufacturing a health or forwarding result. No HTTP route or
+automatic switch is added. The native A1 cleanup proof remains independent.
+
+Run `python -m unittest test_member_transport test_member_bundle` and the PHP
+native suite with `--filter test_member_transport` for the offline adapters.
+`member_bundle.py` freezes an allowlisted, LF-only overlay on a full Git baseline
+without authorization, credentials or a node release. It does not yet constitute
+a complete live round. See [R35 transport preparation](../../docs/machine-r35-transport-offline-20261116.md)
+for the remaining bootstrap, auxiliary teardown and Linux preflight gates.
+
 ## Protocol Interoperability
 
 The real HY2 tests bind temporary endpoints only to 127.0.0.1/127.0.0.2, generate
