@@ -20,13 +20,16 @@ RUNTIME = ('member_retry_driver.php', 'member_source_registry.php', 'member_cont
            'member_cli_authority.php', 'member_round_bridge.php', 'member_cli.py',
            'member_auxiliary.py', 'member_round.py', 'member_runtime_bundle.py', 'application_bundle.py', 'staging.py',
            'member_initialization.py', 'member_auxiliary_bindings.py', 'member_source_initialization.php',
-           'member_provider_bindings.php', 'aliyun_cleanup.php')
+           'member_provider_bindings.php', 'aliyun_cleanup.php', 'member_control_creation.php',
+           'member_setup_bindings.py', 'member_assembly.py')
 TESTS = ('tools/machine-acceptance/test_member_transport.py', 'tools/machine-acceptance/test_member_bundle.py',
          'tests/Support/TestsMemberTransport.php', 'tools/machine-acceptance/test_member_round.py',
          'tools/machine-acceptance/test_member_runtime_bundle.py', 'tools/machine-acceptance/test_member_linux.py',
          'tests/Support/TestsMemberCli.php', 'tools/machine-acceptance/test_member_cli.py',
          'tests/Support/TestsMemberInitialization.php', 'tools/machine-acceptance/test_member_initialization.py',
-         'tests/Unit/Services/MachineMemberProviderBindingsTest.php')
+         'tests/Unit/Services/MachineMemberProviderBindingsTest.php',
+         'tests/Unit/Services/MachineMemberControlCreationTest.php',
+         'tools/machine-acceptance/test_member_assembly.py')
 FILES = tuple('tools/machine-acceptance/' + name for name in RUNTIME) + TESTS
 
 
@@ -55,7 +58,7 @@ def freeze(repo, commit, destination, run_id):
     manifest = {'schema': 1, 'run_id': run_id, 'base_commit': commit, 'artifact_kind': 'unarmed_r35_adapter_application',
                 'execution_authorized': False, 'live_ready': False, 'node_release_included': False,
                 'credentials_included': False, 'automatic_switches_changed': False, 'files': evidence,
-                'remaining_live_gates': ['round_bootstrap_and_auxiliary_adapter_composition',
+                'remaining_live_gates': ['isolated_bootstrap_transport_integration',
                     'node_binary_and_vendor_provenance', 'isolated_runtime_authority_and_environment',
                     'minimal_readonly_preflight', 'new_execution_authorization']}
     # Include the new trait in the committed test entry without mixing other worktree edits.

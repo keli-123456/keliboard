@@ -18,7 +18,7 @@ STAGES = ('control-create', 'control-install', 'runtime-install', 'private-impor
           'native-grant', 'native-ready')
 # Source initialization is a durable, idempotent service state machine, not a
 # repeated raw create call. Each role owns its own persisted native queue intent.
-POLLING = {'sources-initialize', 'native-ready'}
+POLLING = {'control-create', 'sources-initialize', 'native-ready'}
 
 
 class MemberInitialization:
@@ -72,9 +72,11 @@ class MemberInitialization:
             # Stable per-stage identity survives a host crash, unlike an ephemeral RPC UUID.
             request['request_id'] = digest([self.scope, stage])[:32]
             self.state['pending'] = request
-            if stage not in POLLING:
-                require(stage not in self.state['intents'], 'transport_initialization_replay_refused')
+            if stage not in self.state['intents']:
                 self.state['intents'][stage] = copy.deepcopy(request)
+            else:
+                require(stage in POLLING and self.state['intents'][stage] == request,
+                        'transport_initialization_replay_refused')
             self.persist()
             result = getattr(self.interfaces, stage.replace('-', '_'))(
                 copy.deepcopy(request), copy.deepcopy(self.state['receipts']))
@@ -154,10 +156,12 @@ class InitializedMemberPort:
         require(operation == 'reconcile', 'transport_operation_invalid')
         # A grant may have been written even when its reply was lost. The setup
         # readback must revoke/stop it before declaring resources resolved.
-        partial = self.initialization.reconcile()
         if self.initialization.state['index'] == len(STAGES):
             native = self.native_port()(operation, request)
+            # Freeze native mutations before collecting final DNS/resource receipts.
+            partial = self.initialization.reconcile()
             return dict(native, cleanup_scope={'run_id': RUN, 'initialization': partial,
                                                'native': native['cleanup_scope']})
+        partial = self.initialization.reconcile()
         return {'run_id': RUN, 'resolved': True,
                 'cleanup_scope': {'run_id': RUN, 'initialization': partial, 'native': None}}

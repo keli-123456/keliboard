@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "recorded_date": "2026-11-17",
+  "timezone": "Asia/Shanghai",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "base_commit": "0e63c7b28b9c19300015073653b947a96a6ec5ae",
+  "status": "local_composition_and_simulated_regressions_passed",
+  "execution_authorized": false,
+  "live_ready": false,
+  "changes": [
+    "MemberRoundAssembly composes staged initialization, bound native SSH/RPC, partial resource reconciliation and exact auxiliary teardown.",
+    "run_assembled_round holds the existing exclusive Linux journal lock through the signal-aware round runner and final cleanup; it has no default credentials or live interfaces.",
+    "MemberSetupBindings connects control-create polling to MemberControlCreation. Each poll retains the original stage request and durable intent.",
+    "MemberControlCreation reuses MachineProvisionProviders and LinodeProvisionClient for preflight, request construction, single dispatch and identity-filtered readback. No duplicate cloud-create HTTP implementation was added.",
+    "The original create request is encrypted before dispatch. Unknown responses stop creation and retain reconciliation obligations; a missing list entry is not proof of no creation.",
+    "Definite provider rejection reuses CloudFailurePolicy classification and retains only safe kind/status/code fields; no raw response message, root password or credential is exported.",
+    "Control cleanup accepts the exact native request label/marker as well as the prior pinned control label. Baseline exclusions and full provider identity checks remain enforced.",
+    "Native work is stopped before final initialization/DNS receipts are collected. Source identities must agree in both ledgers, task/external IDs must be distinct, and only the approved source/candidate roles are admitted.",
+    "Restart during cleanup restores the native transport and the independently persisted delete journal. Partial initialization without a native grant uses the separately pinned setup task channel.",
+    "New modules and tests are included in the unarmed adapter/runtime package inventory; package verification retains LF normalization, hash verification and disabled execution flags."
+  ],
+  "simulation_coverage": [
+    "Normal full initialization and bound native RPC followed by exact final cleanup with controller last",
+    "Failure before and after every initialization stage, including source A created while source B has not been dispatched",
+    "Control startup waiting, original request retention, delayed readiness and stale serialized caller readback",
+    "Lost control/native responses, unresolved creation, definite rejection and no mutation replay",
+    "Stop during each initialization stage and restart during native reconciliation or final cleanup",
+    "Source/candidate/control identity collision, changed cleanup ledger, wrong grant bundle, mismatched response digest and private-field rejection",
+    "DNS cleanup failure, retained controller, no repeated delete dispatch and evidence export failure without retaining otherwise cleanable resources",
+    "Existing native A1 cleanup confirmation, cooldown, A2 retry, credential limits and unchanged B member protections"
+  ],
+  "verification": {
+    "php": {
+      "runtime": "PHP 8.2.33 / PHPUnit 11.5.55",
+      "command": "php -d memory_limit=512M vendor/phpunit/phpunit/phpunit tests/Unit/Services/MachineMemberControlCreationTest.php tests/Unit/Services/MachineMemberProviderBindingsTest.php tests/Unit/Services/MachineFailoverNativeBridgeTest.php --filter 'test_member_|MachineMemberControlCreationTest|MachineMemberProviderBindingsTest'",
+      "tests": 68,
+      "assertions": 10619,
+      "failures": 0,
+      "seconds": 57.775,
+      "isolation": "Laravel HTTP fakes with stray requests refused; in-memory test database and existing isolated/null queue fixtures"
+    },
+    "python": {
+      "working_directory": "tools/machine-acceptance",
+      "command": "python -B -m unittest test_member_assembly test_member_initialization test_member_cli test_member_round test_member_transport test_member_bundle test_member_runtime_bundle test_member_linux",
+      "tests": 88,
+      "passed": 84,
+      "skipped": 4,
+      "failures": 0,
+      "seconds": 15.755,
+      "skip_reason": "Linux-only process/permission/locking tests are unavailable on this Windows host",
+      "isolation": "Synthetic setup/provider/DNS receipts and injected SSH byte boundary; real sockets and subprocess SSH are forbidden in assembly tests; package tests use local synthetic Git fixtures"
+    }
+  },
+  "interface_contract": {
+    "setup": "Pinned control-install, runtime-install, private-import, serial sources-initialize, dns-initialize, native-grant and native-ready interfaces. Reconcile must stop or revoke incomplete setup authority and resolve original intents before declaring success.",
+    "control": "MemberControlCreation.dispatch accepts only the frozen control-create request and its control-readback recovery operation. The caller must hold the round journal lock and supply explicit process-local authorization; the class does not enable persistent or automatic execution settings.",
+    "initial_cleanup_scope": "Exactly run_id, roles and auxiliary. roles contains only actually resolved source-a/source-b task pins. auxiliary contains exact owned control/DNS/fault/private-file pins and original request IDs, including partial work.",
+    "dns_receipts": "Final DNS pins must come from the stopped controller's durable verified write receipts, not an arbitrary observed current value. Provider readback still verifies every identity field before deletion.",
+    "native_transport": "BoundControllerTransport created from the verified native grant with matching run, bundle, start and deadline. No native capability is fabricated for partial initialization.",
+    "recovery": "Unknown intent resolution is not zero resources. Resource cleanup can complete after evidence export failure, but the acceptance result remains failed."
+  },
+  "remaining_before_live": [
+    "Bind and validate the host installation, private import, DNS initialization and recovery infrastructure interfaces against the new isolated Linux layout. These boundaries were simulated here, not exercised on a host.",
+    "Run isolated Linux tests for real permissions, exclusive journal locking, signals and cross-process interface contracts.",
+    "Freeze and verify a new complete LF application/node/vendor bundle, then perform separately authorized minimal read-only preflight.",
+    "Obtain new explicit execution scope before any live run. This record is not authority to execute R35 or any older round."
+  ],
+  "safety": {
+    "production_connections": 0,
+    "external_cloud_requests": 0,
+    "external_dns_requests": 0,
+    "cloud_instances_created": 0,
+    "deployed": false,
+    "r34_executed": false,
+    "r35_executed": false,
+    "persistent_switches_changed": false,
+    "queue_configuration_changed": false,
+    "tanzhen_accessed_or_modified": false,
+    "dependencies_added": false,
+    "github_actions_triggered": false,
+    "committed_or_pushed": false
+  }
+}

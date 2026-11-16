@@ -50,10 +50,14 @@ final class MemberProviderBindings
         self::need(($pin['run_id'] ?? null) === self::RUN
             && in_array(self::digest($pin), $this->scope['pins'], true), 'pin_changed');
         if ($kind === 'control') {
+            $native = isset($pin['task_id']) && is_string($pin['task_id'])
+                && preg_match('/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/D', $pin['task_id']) === 1;
+            $suffix = $native ? str_replace('-', '', $pin['task_id']) : '';
             self::need(preg_match('/^[1-9][0-9]{0,15}$/D', $pin['external_id'] ?? '') === 1
                 && !in_array($pin['external_id'], $this->scope['baseline_ids'], true)
-                && ($pin['label'] ?? null) === self::RUN . '-control'
-                && ($pin['marker'] ?? null) === self::RUN . '-owned-control'
+                && (!array_key_exists('task_id', $pin) || $native)
+                && ($pin['label'] ?? null) === ($native ? 'keli-' . $suffix : self::RUN . '-control')
+                && ($pin['marker'] ?? null) === ($native ? 'keli-create-' . $suffix : self::RUN . '-owned-control')
                 && ($pin['size'] ?? null) === 'g6-standard-2' && ($pin['region'] ?? null) === 'sg-sin-2'
                 && ($pin['image'] ?? null) === 'linode/debian12'
                 && preg_match('/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ?$/D', $pin['provider_created_at'] ?? '') === 1,
