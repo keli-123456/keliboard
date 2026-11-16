@@ -26,11 +26,13 @@ final class MemberRetryDriver
     // Port implements role-local setup/observation and scoped final cleanup. The guard must
     // authorize every operation; this module never opens the application's execution gate.
     public function __construct(private array $scope, private \Closure $port, private \Closure $save,
-        private \Closure $guard, private \Closure $clock, ?array $restored = null)
+        private \Closure $guard, private \Closure $clock, ?array $restored = null,
+        private ?MemberCliAuthority $authority = null)
     {
-        // This version deliberately has no live authority adapter. A prepared transport
-        // cannot turn local rehearsal into a real cloud run just by supplying a callback.
-        self::need(app()->runningUnitTests() && app('db')->connection()->getDriverName() === 'sqlite'
+        // A closure alone still cannot grant live authority. The optional capability is
+        // issued only by the fixed isolated CLI loader, never by application settings.
+        if ($authority) $authority->assertDriver($scope);
+        else self::need(app()->runningUnitTests() && app('db')->connection()->getDriverName() === 'sqlite'
             && app('db')->connection()->getDatabaseName() === ':memory:', 'member_offline_environment_required');
         self::need(($scope['workflow'] ?? null) === 'agent_readiness_v1'
             && preg_match('/^keli-accept-[a-z0-9-]{8,80}$/D', $scope['run_id'] ?? '') === 1,
@@ -95,6 +97,7 @@ final class MemberRetryDriver
         $role = $this->state['phase'];
         $result = $this->action('prepare_role', ['role' => $role,
             'request_id' => substr($this->hash([$this->scope['run_id'], $role]), 0, 32)]);
+        if (($result['waiting'] ?? false) === true) return;
         if ($role === 'control') {
             self::need(is_string($result['external_id'] ?? null) && ctype_digit($result['external_id'])
                 && !in_array($result['external_id'], $this->scope['baseline_ids'], true)

@@ -1182,6 +1182,20 @@ automatic switch is added. The native A1 cleanup proof remains independent.
 
 Run `python -m unittest test_member_transport test_member_bundle` and the PHP
 native suite with `--filter test_member_transport` for the offline adapters.
+
+### R35 isolated CLI binding
+
+`member_cli_authority.php` and `member_round_bridge.php` provide a bounded,
+process-local CLI capability for an already-prepared isolated controller.
+`member_cli.py` connects the host round to the fixed SSH endpoint with schema-2
+grant/bundle/request binding. No grant is issued by these modules. Production
+gates remain closed; fallback queue jobs are suppressed only within the CLI
+scope, without changing queue configuration. Stops and lost replies use original
+intent readback rather than another create dispatch.
+
+Run `python -m unittest test_member_cli` and the PHP native suite with
+`--filter test_member_cli`. The local verification and remaining Linux/bootstrap
+requirements are recorded in `docs/machine-r35-cli-binding-20261116.md`.
 `member_bundle.py` freezes an allowlisted, LF-only overlay on a full Git baseline
 without authorization, credentials or a node release. It does not yet constitute
 a complete live round. See [R35 transport preparation](../../docs/machine-r35-transport-offline-20261116.md)

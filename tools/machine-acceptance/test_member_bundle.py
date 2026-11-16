@@ -33,6 +33,7 @@ class MemberBundleTests(BundleCase):
             self.assertNotIn('.env', archive.getnames())
             entry = archive.extractfile('tests/Unit/Services/MachineFailoverNativeBridgeTest.php').read()
             self.assertIn(b'TestsMemberTransport', entry); self.assertNotIn(b'unrelated', entry)
+            self.assertEqual(entry.count(b'TestsMemberCli'), 1)
             for name in member_bundle.FILES:
                 self.assertEqual(archive.extractfile(name).read(), b'fixture\n')
         with self.assertRaisesRegex(ValueError, 'output_exists'):

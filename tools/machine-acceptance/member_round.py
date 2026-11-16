@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from member_auxiliary import digest
-from member_transport import TransportError, require
+from member_transport import TransportError, require, reason
 from driver_journal import DriverJournal
 
 
@@ -131,10 +131,7 @@ class MemberRound:
                         and all(self.state['branches'].get(k) is True for k in keys))
                     self.state['phase'] = 'closed'
         except Exception as error:
-            code = str(error) if isinstance(error, TransportError) else 'round_operation_failed'
-            # Provider messages, credentials and arbitrary paths never enter the round journal.
-            if not code.startswith(('transport_', 'cleanup_')):
-                code = 'round_operation_failed'
+            code = reason(error, 'round_operation_failed')
             self.state['first_error'] = self.state['first_error'] or code
             if self.state['phase'] not in ('cleanup', 'reconcile'):
                 self.state['phase'] = 'reconcile'
