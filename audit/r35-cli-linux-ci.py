@@ -57,7 +57,7 @@ SUMMARY['composer_lock_sha256'] = hashlib.sha256((REPO / 'composer.lock').read_b
 try:
     os.umask(0o077)
     ROOT.mkdir(mode=0o700)
-    app = ROOT / 'app'; app.mkdir()
+    app = ROOT / 'app'; app.mkdir(mode=0o700); app.chmod(0o700)
     tracked = cmd(['git', '-c', 'safe.directory=' + str(REPO), 'ls-files', '-z'],
                   cwd=REPO, capture_output=True).stdout.decode().split('\0')
     for name in filter(None, tracked):
@@ -67,7 +67,8 @@ try:
         dest = app / name; dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, dest); dest.chmod(0o644)
     shutil.copytree(REPO / 'vendor', app / 'vendor', symlinks=False)
-    runtime = ROOT / 'runtime'; runtime.mkdir()
+    (app / 'vendor/autoload.php').chmod(0o644)
+    runtime = ROOT / 'runtime'; runtime.mkdir(mode=0o700); runtime.chmod(0o700)
     sys.path.insert(0, str(TOOLS))
     from member_bundle import RUNTIME
     for name in RUNTIME:
@@ -78,7 +79,10 @@ try:
     for name in ('bootstrap/cache', 'storage/logs', 'storage/framework/cache/data', 'storage/framework/views', 'storage/framework/sessions'):
         (app / name).mkdir(parents=True, exist_ok=True)
     for directory in (ROOT, app, runtime):
-        assert directory.stat().st_uid == 0 and directory.stat().st_mode & 0o022 == 0
+        facts = {'directory': directory.name, 'uid': directory.stat().st_uid,
+                 'mode': oct(directory.stat().st_mode & 0o777)}
+        print(json.dumps(facts), flush=True)
+        assert directory.stat().st_uid == 0 and directory.stat().st_mode & 0o022 == 0, facts
     SUMMARY['fixed_entry'] = python_suite(['test_member_cli_entry_linux'], 'fixed-entry.json', root=True)
     assert SUMMARY['fixed_entry']['tests'] == 8 and SUMMARY['fixed_entry']['skipped'] == 0
     modules = ['test_member_cli', 'test_member_bound_linux', 'test_member_transport', 'test_member_round',
