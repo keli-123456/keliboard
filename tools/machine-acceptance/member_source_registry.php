@@ -22,7 +22,7 @@ use Illuminate\Support\Facades\DB;
 final class MemberSourceRegistry
 {
     public function __construct(private array $scope, private \Closure $guard, private \Closure $load,
-        private \Closure $save, private \Closure $clock) {}
+        private \Closure $save, private \Closure $clock, private bool $pendingPeer = false) {}
 
     private static function need(bool $value, string $field): void
     {
@@ -36,7 +36,15 @@ final class MemberSourceRegistry
         self::need(preg_match('/^keli-accept-[a-z0-9-]{8,80}$/D', $this->scope['run_id'] ?? '') === 1, 'scope_invalid');
         $pin = $this->scope['sources'][$role] ?? [];
         $other = $this->scope['sources'][$role === 'source-a' ? 'source-b' : 'source-a'] ?? [];
-        foreach (['task_id', 'machine_id', 'installation_id', 'external_id', 'policy_id'] as $key)
+        $keys = ['task_id', 'machine_id', 'installation_id', 'external_id', 'policy_id'];
+        if ($this->pendingPeer && !isset($other['task_id'])) {
+            self::need(array_keys($other) === ['machine_id', 'policy_id', 'policy_revision', 'configured_nodes'], 'pending_peer_invalid');
+            $peerPolicy = Policy::query()->findOrFail($other['policy_id']);
+            self::need($peerPolicy->machine_id === $other['machine_id'] && $peerPolicy->revision === $other['policy_revision']
+                && $peerPolicy->isolation_confirmed, 'pending_peer_invalid');
+            $keys = ['machine_id', 'policy_id'];
+        }
+        foreach ($keys as $key)
             self::need(isset($pin[$key], $other[$key]) && $pin[$key] !== $other[$key], 'roles_collide');
         $task = Task::query()->findOrFail($pin['task_id']);
         $policy = Policy::query()->findOrFail($pin['policy_id']);

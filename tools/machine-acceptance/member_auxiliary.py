@@ -25,7 +25,7 @@ class MemberAuxiliary:
         require(set(scope) == {'run_id', 'control', 'records', 'faults', 'private_files', 'requests'},
                 'cleanup_scope_invalid')
         require(len(scope['records']) <= 4 and len(scope['faults']) <= 2, 'cleanup_scope_invalid')
-        for pin in [scope['control'], *scope['records'], *scope['faults'], *scope['private_files']]:
+        for pin in ([scope['control']] if scope['control'] is not None else []) + scope['records'] + scope['faults'] + scope['private_files']:
             require(isinstance(pin, dict) and pin.get('run_id') == scope['run_id'], 'cleanup_pin_invalid')
         require(len({r['record_id'] for r in scope['records']}) == len(scope['records']), 'cleanup_record_reused')
         for pin in scope['records']:
@@ -134,6 +134,11 @@ class MemberAuxiliary:
                         'pending': self.state['first_error'] is None and (not all(absent) or not removed),
                         'evidence_saved_and_read_back': self.state['evidence_saved_and_read_back']}
             if operation == 'control-delete-or-inspect':
+                if self.scope['control'] is None:
+                    require(self.request('intents-inspect', {'run_id': self.scope['run_id'],
+                            'requests': self.scope['requests']}).get('resolved') is True,
+                            'cleanup_control_create_unresolved')
+                    return {'exact_identity': True, 'absent': True}
                 self.absent('control', self.scope['control'])
                 receipt = self.request('control-inspect', self.scope['control'])
                 require(receipt.get('status') in ('owned', 'absent'), 'cleanup_control_identity_unknown')

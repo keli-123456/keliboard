@@ -95,8 +95,10 @@ class MemberRound:
                 self.fail('round_uncertain_dispatch')
             if self.state['phase'] == 'bootstrap':
                 result = self.dispatch('bootstrap')
-                require(result.get('ready') is True, 'transport_round_bootstrap_failed')
-                self.state['phase'] = 'native'
+                require(result.get('ready') is True or (result.get('ready') is False
+                        and result.get('waiting') is True), 'transport_round_bootstrap_failed')
+                if result['ready']:
+                    self.state['phase'] = 'native'
             elif self.state['phase'] == 'native':
                 result = self.dispatch('native-step')
                 require(result.get('phase') in ('running', 'finished', 'failed'), 'transport_round_native_invalid')

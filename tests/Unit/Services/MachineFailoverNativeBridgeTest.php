@@ -55,6 +55,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
     use \Tests\Support\TestsMemberRetryDriver;
     use \Tests\Support\TestsMemberTransport;
     use \Tests\Support\TestsMemberCli;
+    use \Tests\Support\TestsMemberInitialization;
     private ?int $memberAttemptLimit = null;
     private User $admin;
     private ServerMachineRelease $release;

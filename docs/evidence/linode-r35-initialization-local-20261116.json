@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "status": "local_component_bindings_partial",
+  "execution_authorized": false,
+  "live_ready": false,
+  "external_cloud_calls": 0,
+  "external_ssh_calls": 0,
+  "external_dns_calls": 0,
+  "production_database_connections": 0,
+  "production_settings_changed": false,
+  "persistent_automatic_switches_changed": false,
+  "github_actions_started": false,
+  "committed_or_pushed_during_verification": false,
+  "implemented": [
+    "Incremental bootstrap receipts, durable pending intents, stop/deadline checks and readback-only uncertain outcomes",
+    "Host round waits for bootstrap completion instead of treating the first ready check as installation",
+    "Native source queueIsolated/process/readback binding with stable per-role request keys and original UUID labels",
+    "Serial A identity registration, original account cooldown, then B initialization under the one-active-task limit",
+    "Pending-peer registration is opt-in only for setup; ordinary controller/native registration still requires both full source pins",
+    "Process-local NullQueue during source setup with exception-safe bus restoration; queue settings are unchanged",
+    "Exact Linode control-instance and Aliyun DNS inspect/delete HTTP bindings, including identity recheck after durable delete intent",
+    "Partial setup cleanup, absent-control distinction, provider/controller response binding and local evidence receipt readback",
+    "Unarmed bundle overlay includes the new helpers, tests and Aliyun exact-ID reader"
+  ],
+  "simulation_boundaries": [
+    "Host initialization stage implementations in Python tests are synthetic interfaces",
+    "PHP source initialization uses real application services with SQLite :memory:, synthetic reports and deny-stray HTTP fakes",
+    "PHP provider bindings build real request paths and signatures but all responses are Http::fake",
+    "Controller fault restore and private-file removal endpoints are injected simulations in this verification",
+    "No Windows result is counted as Linux root, SSH, MySQL, Redis or cloud integration evidence"
+  ],
+  "remaining_real_binding_work": [
+    "Fresh R35 control-create/control-install/runtime-install adapters matching the current app/runtime directory layout",
+    "Reviewed private credential import, isolated seed data and short-lived bootstrap/native grant issuance",
+    "Concrete pinned SSH fault restoration, private-file removal and evidence export composition",
+    "DNS initialization receipt collection, partial AddDomainRecord-before-Remark ownership proof, and final DNS switch receipt reconciliation",
+    "A complete bootstrap/auxiliary factory composed with the existing BoundControllerTransport; the stage contract alone is not that factory",
+    "Latest full runtime freeze, isolated Linux integration and future authorized minimal read-only preflight"
+  ],
+  "verification": {
+    "python_suite": {"run": 139, "passed": 124, "skipped": 15, "failed": 0},
+    "focused_php": {"run": 18, "assertions": 160, "failed": 0},
+    "full_php": {"status": "passed", "run": 409, "assertions": 15865, "failed": 0,
+      "elapsed_seconds": 356.625, "peak_memory_mib": 164, "process_memory_limit": "512M",
+      "prior_128M_attempt": "memory_exhausted_not_a_pass"},
+    "final_focused_rechecks": {"python_initialization": 16, "python_packaging_and_initialization": 29,
+      "php_provider_bindings": 11, "all_passed": true},
+    "host_failure_matrix": "Before and after every setup stage; partial A-only setup; every stop boundary; lost reply; unknown reconciliation; expiry; evidence-export failure",
+    "cleanup_order": "Restore faults; exact task cleanup; DNS and private materials; control last",
+    "absence_rule": "Only explicit identity-bound absence; two completed reads at least 10 seconds apart; unknown is never zero"
+  }
+}
