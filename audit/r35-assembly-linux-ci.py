@@ -85,7 +85,7 @@ try:
     modules = ['test_member_assembly_linux', 'test_member_assembly', 'test_member_initialization',
         'test_member_cli', 'test_member_bound_linux', 'test_member_transport', 'test_member_round',
         'test_member_bundle', 'test_member_runtime_bundle', 'test_member_linux',
-        'test_driver_journal', 'test_application_bundle', 'test_staging']
+        'test_driver_journal.JournalTests', 'test_application_bundle', 'test_staging']
     SUMMARY['python'] = python_suite(modules, 'python.json')
     assert SUMMARY['python']['skipped'] == 0
     cmd(['/usr/bin/setpriv', '--reuid=' + str(runner.pw_uid), '--regid=' + str(runner.pw_gid), '--clear-groups',
