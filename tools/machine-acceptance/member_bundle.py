@@ -16,9 +16,11 @@ import application_bundle
 import staging
 
 RUNTIME = ('member_retry_driver.php', 'member_source_registry.php', 'member_controller_bridge.php',
-           'member_transport_entry.php', 'member_transport.py', 'driver_journal.py', 'member_bundle.py')
+           'member_transport_entry.php', 'member_transport.py', 'driver_journal.py', 'member_bundle.py',
+           'member_auxiliary.py', 'member_round.py', 'member_runtime_bundle.py', 'application_bundle.py', 'staging.py')
 TESTS = ('tools/machine-acceptance/test_member_transport.py', 'tools/machine-acceptance/test_member_bundle.py',
-         'tests/Support/TestsMemberTransport.php')
+         'tests/Support/TestsMemberTransport.php', 'tools/machine-acceptance/test_member_round.py',
+         'tools/machine-acceptance/test_member_runtime_bundle.py', 'tools/machine-acceptance/test_member_linux.py')
 FILES = tuple('tools/machine-acceptance/' + name for name in RUNTIME) + TESTS
 
 
@@ -55,7 +57,9 @@ def freeze(repo, commit, destination, run_id):
     original = application_bundle.git_read(repo, ['cat-file', 'blob', commit + ':' + entry])
     needle = b'    use \\Tests\\Support\\TestsMemberRetryDriver;\n'
     require(original.count(needle) == 1, 'bundle_test_entry_changed')
-    overlay[entry] = original.replace(needle, needle + b'    use \\Tests\\Support\\TestsMemberTransport;\n')
+    transport_trait = b'    use \\Tests\\Support\\TestsMemberTransport;\n'
+    require(original.count(transport_trait) <= 1, 'bundle_test_entry_changed')
+    overlay[entry] = original if transport_trait in original else original.replace(needle, needle + transport_trait)
     manifest['test_entry_sha256'] = hashlib.sha256(overlay[entry]).hexdigest()
     manifest_raw = (json.dumps(manifest, indent=2, sort_keys=True) + '\n').encode()
     with tempfile.TemporaryDirectory(prefix='member-freeze-', dir=directory) as temporary:

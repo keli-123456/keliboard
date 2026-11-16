@@ -1,4 +1,4 @@
-name: Native Failover Isolated Acceptance
+name: R35 Temporary Linux Assembly Acceptance
 
 on:
   workflow_dispatch:
@@ -7,75 +7,35 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-failover-isolated-${{ github.ref }}
+  group: r35-linux-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  concurrency:
-    name: Native failover (${{ matrix.isolation }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        isolation: ["REPEATABLE READ", "READ COMMITTED"]
-    services:
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_DATABASE: keli_acceptance_native_failover
-          MYSQL_USER: keli_native_fixture
-          MYSQL_PASSWORD: ephemeral-native-ci-only
-          MYSQL_ROOT_PASSWORD: ephemeral-native-root-only
-        ports:
-          - 127.0.0.1::3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=24
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 127.0.0.1::6379
-        options: >-
-          --health-cmd="redis-cli ping"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=12
-    env:
-      KELI_NATIVE_ACCEPTANCE: "1"
-      KELI_NATIVE_HOST: "127.0.0.1"
-      KELI_NATIVE_DATABASE: keli_acceptance_native_failover
-      KELI_NATIVE_USER: keli_native_fixture
-      KELI_NATIVE_PASSWORD: ephemeral-native-ci-only
-      KELI_NATIVE_ISOLATION: ${{ matrix.isolation }}
+  offline-linux:
+    if: github.ref == 'refs/heads/acceptance/r35-round-linux-20261116'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          lfs: false
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: "8.2"
-          extensions: pdo_mysql, pdo_sqlite, redis, pcntl, posix, mbstring, openssl
-          tools: composer:v2
+          php-version: '8.2'
+          extensions: pdo_sqlite, mbstring, pcntl, posix, bcmath, sockets, zip, redis
           coverage: none
-      - name: Install test dependencies without application startup
-        run: composer install --no-interaction --no-progress --prefer-dist --no-scripts
-      - name: Run synthetic cloud and DNS with real queue, locks and InnoDB
-        env:
-          KELI_NATIVE_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
-          KELI_NATIVE_REDIS_PORT: ${{ job.services.redis.ports[6379] }}
+      - name: Exact frozen package in a no-route namespace, as unprivileged user
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p artifacts
-          vendor/bin/phpunit -c phpunit-native-failover.xml --stop-on-error --stop-on-failure --log-junit artifacts/native-failover.xml
-      - name: Preserve aggregate acceptance evidence
+          sudo unshare --net bash -c 'set -euo pipefail; ip link set lo up; exec runuser -u runner -- env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/home/runner TMPDIR=/tmp python3 "$1/audit/r35-linux-ci.py"' bash "$GITHUB_WORKSPACE" > artifacts/isolated-linux.log 2>&1
+      - name: Preserve synthetic-only test evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-failover-${{ strategy.job-index }}
-          path: |
-            artifacts/native-failover.xml
-            artifacts/native-failover-summary.jsonl
-          if-no-files-found: ignore
+          name: r35-isolated-linux-evidence
+          path: artifacts/
           retention-days: 7
+          if-no-files-found: error
