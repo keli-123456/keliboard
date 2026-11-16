@@ -1151,6 +1151,27 @@ acceptance. Build flags are not ECH/Brutal activation evidence; sampled RSS is
 not peak performance or a high-user-count memory test. Further end-to-end
 failover testing still needs a fresh scope and authorization.
 
+## R35 Multi-source Offline Driver
+
+`member_retry_driver.php` coordinates separate source A/B and candidate A1/A2
+identities without changing provider labels or marker tags. Its composed tests
+call `MemberRetryDriver::step()` against the actual native bridge, cleanup client,
+sealed retry proof and Aliyun DNS services with fake HTTP. Cleanup must be
+confirmed before the 300-second cooldown and same-member A2 retry; B is unselected
+and checked throughout. The application execution gate is retained, not replaced
+by a permissive test adapter inside the driver.
+
+This version deliberately requires an in-memory test application and contains
+no live launcher, credentials or SSH transport. Source installation and final
+teardown are injected fixtures, distinct from the actual native A1 cleanup path.
+The old single-source `diagnostic_round_runner.py` is not an R35 entry. Fresh
+live projection, freeze and preflight remain pending and are not authorized by
+the latest local-only instruction. See
+[R35 driver rehearsal](../../docs/machine-r35-driver-offline-20261116.md).
+
+Run the existing PHP native suite with `--filter test_member_driver` for the
+composed entry regression; no new workflow or dependency is required.
+
 ## Protocol Interoperability
 
 The real HY2 tests bind temporary endpoints only to 127.0.0.1/127.0.0.2, generate

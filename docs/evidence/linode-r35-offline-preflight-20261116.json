@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "status": "blocked_offline_adapter_compatibility",
+  "scope_approved": true,
+  "live_round_started": false,
+  "execution_armed": false,
+  "approved_start_before_utc": "2026-11-17T05:38:08+00:00",
+  "focused_regression": {
+    "tests": 5,
+    "assertions": 116,
+    "passed": true,
+    "scope": "application_core_with_fake_HTTP_and_in_memory_SQLite_cache",
+    "DNS_modes": ["legacy", "aliyun_separate_member_default_A_records"],
+    "real_clock_cooldown_verified": false,
+    "complete_live_entry_verified": false
+  },
+  "combined_regression": {
+    "status": "passed",
+    "tests": 469,
+    "assertions": 7232,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "elapsed_seconds": 302.905,
+    "includes_focused_cases": true,
+    "uses_preserved_working_tree_tests_not_frozen_artifact": true,
+    "junit_local_path": ".codex-audit/r35-offline-native-20261116.xml",
+    "junit_sha256": "261341fb84a079564b083d74a9a2d0b3537e5846efc2f3943f4e03952955585f"
+  },
+  "review_completed_utc": "2026-11-16T05:56:03+00:00",
+  "confirmed_legacy_adapter_conflicts": [
+    "provider_label_rewritten_instead_of_canonical_task_label",
+    "extra_tag_instead_of_exact_task_marker_only",
+    "single_source_machine_and_two_task_inventory",
+    "single_source_registration_and_cleanup_classification",
+    "process_local_fixed_two_task_fuse",
+    "candidate_cleanup_operation_not_scoped"
+  ],
+  "core_guard_behavior": {
+    "legacy_identity_error": "ownership_mismatch",
+    "legacy_identity_rejected_before_cloud_read": true,
+    "recent_setup_account_cooldown_preserved": true,
+    "source_and_failed_candidate_history_retained": true,
+    "unselected_B_unchanged_in_simulation": true,
+    "production_ownership_guard_weakened": false
+  },
+  "pending_gates": [
+    "fresh_canonical_request_to_five_role_binding_adapter",
+    "two_source_registration_and_all_role_cleanup_integration",
+    "full_actual_new_entry_mocked_regression",
+    "fresh_LF_artifact_freeze_and_manifests",
+    "minimum_readonly_live_preflight"
+  ],
+  "input_sha256": {
+    "tests/Support/TestsMemberRetryAcceptance.php": "1474e946eec33daa338b3ca1418cd8456cb264f1bf8680ce0075ee734ee22157",
+    "tests/Unit/Services/MachineFailoverNativeBridgeTest.php": "92186afaf652945755f4b1bd5089bc2dfd9be90ca7e523da61020e74b408675c",
+    "tests/Support/TestsProvisionLimits.php": "53cd3c3fff1ab2ae69aeb2d5d6353e764065f46908a5800df62effb6982e6fa0",
+    "tests/Support/TestsCandidateRetry.php": "071ea2abc4416b7e2e6c20188d1318e1889968ccf9a08551697f897e5e0ec955",
+    "app/Services/ServerMachine/Cloud/MachineCandidateRetry.php": "a0bd440154957e3a6cf6ce20b9b00bc5bf35d4e2dfe787667418dda9dc992985",
+    "app/Services/ServerMachine/Cloud/MachineCandidateCleanupClient.php": "f1a775bcf7dae184eb753b34cef0904c2a442473134b26984c2c4d7b44a6f0ea",
+    "app/Services/ServerMachine/Cloud/MachineProvisionLimits.php": "77225f858a03196bc6e75bbe86191e071fbee4f565ab2577bb3da25e9b0c2e79"
+  },
+  "legacy_reference_sha256": {
+    "live_support.php": "5fa7641eda31960db398820b6f5c0727fb260be1e84ce7d01b7dde18eca0df5a",
+    "source_fixture.php": "07fc194ecdb04149e541672d206c1acb8556cee0d145e5b5c9a52ca9a6f59714",
+    "round_runner.py": "aadd0986a00371fcb67a4b485f71f3169e87d36747957fa390c006bc971717c5"
+  },
+  "live_actions": {
+    "production_connections": 0,
+    "cloud_requests": 0,
+    "create_dispatches": 0,
+    "DNS_writes": 0,
+    "credential_copies": 0,
+    "cleanup": "not_applicable_no_new_resources",
+    "absence_checks_claimed": false
+  },
+  "production_code_modified": false,
+  "old_round_files_modified": false,
+  "committed_or_pushed": false,
+  "deployed": false,
+  "automatic_switches_changed": false,
+  "tanzhen_accessed": false
+}
