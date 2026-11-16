@@ -16,6 +16,7 @@ use Illuminate\Support\Str;
 
 class MachineProvisionService
 {
+    private const INITIAL_VISIBILITY_SECONDS = 300;
     private const REASONS = ['provisioning_disabled', 'test_machine_not_allowed', 'budget_required', 'permission_revoked',
         'source_changed', 'account_changed', 'provider_mismatch', 'provider_forbidden', 'provider_rate_limited', 'provider_rejected',
         'provider_unavailable', 'provider_invalid', 'bootstrap_unsupported', 'account_backups_enabled', 'budget_exceeded', 'cost_price_unverified',
@@ -275,6 +276,9 @@ class MachineProvisionService
             } catch (CloudException $error) {
                 if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
                 app(MachineProvisionDiagnostic::class)->remember($task, $error, $phase);
+                if ($this->awaitingProviderVisibility($task, $error, $phase)) {
+                    $this->move($task, 'waiting_provider', 'resource_missing'); $this->wait($task); return;
+                }
                 $this->captureReplacementFailure($task, $error);
                 if (isset($account) && $account) $this->captureFailure($task, $account, $error, $task->dispatched_at === null ? 'preflight' : ($task->external_id ? 'readback' : 'create'));
                 $reason = $this->reason($error->getMessage());
@@ -345,6 +349,18 @@ class MachineProvisionService
             $row->fill(['external_id' => $snapshot['external_id'], 'provider_created_at' => $snapshot['provider_created_at'], 'public_ips' => $snapshot['public_ips']])->save();
         });
         $task->refresh();
+    }
+    private function awaitingProviderVisibility(Task $task, CloudException $error, string $phase): bool
+    {
+        // A receipt pins the instance before this short read-only startup grace; never repeat POST.
+        $now = time();
+        return $phase === 'readback' && $error instanceof CloudRequestFailure
+            && ($error->decision['kind'] ?? null) === 'resource_missing' && ($error->decision['http_status'] ?? null) === 404
+            && ($error->decision['provider'] ?? null) === ($task->payload['plan']['provider'] ?? 'linode')
+            && $task->external_id && $task->provider_created_at && $task->dispatched_at > 0
+            && $task->dispatched_at <= $now && $now < $task->dispatched_at + self::INITIAL_VISIBILITY_SECONDS
+            && $now < $task->deadline_at && $task->bootstrap_state !== 'failed'
+            && in_array($task->status, ['dispatching', 'outcome_unknown', 'waiting_provider'], true);
     }
     private function gate(): void { if (config('machine_provision.allow_live') !== true) throw new CloudException('provisioning_disabled'); }
     private function origin(array $plan): void

@@ -56,6 +56,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
     use \Tests\Support\TestsMemberTransport;
     use \Tests\Support\TestsMemberCli;
     use \Tests\Support\TestsMemberInitialization;
+    use \Tests\Support\TestsProviderVisibility;
     private ?int $memberAttemptLimit = null;
     private User $admin;
     private ServerMachineRelease $release;
@@ -505,7 +506,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
                     if ($request->method() === 'DELETE') {
                         $this->candidateDeletes++; unset($this->remote[(int) $m[1]]); return Http::response('', 204);
                     }
-                    if ($this->duringInstanceRead) ($this->duringInstanceRead)();
+                    if ($this->duringInstanceRead && ($response = ($this->duringInstanceRead)()) !== null) return $response;
                     if (!isset($this->remote[(int) $m[1]])) return Http::response(['errors' => [['reason' => 'Not found']]], 404);
                     return Http::response($this->remote[(int) $m[1]]);
                 }
@@ -608,7 +609,10 @@ class MachineFailoverNativeBridgeTest extends TestCase
             'os' => [['id' => 2136, 'name' => 'Debian', 'arch' => 'x64', 'family' => 'debian']]];
         if (isset($catalog[$key])) return Http::response([$key => $catalog[$key], 'meta' => ['total' => count($catalog[$key])]]);
         if (str_ends_with($path, '/availability')) return Http::response(['available_plans' => ['vc2-1c-1gb']]);
-        if (preg_match('~^/(?:droplets|instances)/([^/]+)$~', $path, $m)) return Http::response([$provider === 'digitalocean' ? 'droplet' : 'instance' => $this->remote[$m[1]]]);
+        if (preg_match('~^/(?:droplets|instances)/([^/]+)$~', $path, $m)) {
+            if ($this->duringInstanceRead && ($response = ($this->duringInstanceRead)()) !== null) return $response;
+            return Http::response([$provider === 'digitalocean' ? 'droplet' : 'instance' => $this->remote[$m[1]]]);
+        }
         if (in_array($path, ['/droplets', '/instances'], true)) {
             $rows = array_values(array_filter($this->remote, fn ($row) => $provider === 'digitalocean' ? isset($row['size_slug']) : isset($row['os_id'])));
             return Http::response([$provider === 'digitalocean' ? 'droplets' : 'instances' => $rows, 'meta' => ['total' => count($rows)]]);

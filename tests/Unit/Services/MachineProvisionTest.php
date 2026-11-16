@@ -157,6 +157,28 @@ class MachineProvisionTest extends TestCase
         Cache::put('node_instances:91', [$node], 300);
     }
 
+    public function test_create_receipt_waits_for_linode_startup_and_public_ip_without_reposting(): void
+    {
+        $pending = true;
+        $this->fake(fn ($request) => Http::response($this->remote($request->data(), ['status' => 'provisioning', 'ipv4' => [], 'ipv6' => ''])),
+            function ($request) use (&$pending) {
+                if (!$pending || !str_ends_with($request->url(), '/instances/987')) return null;
+                $task = Task::query()->firstOrFail();
+                return Http::response($this->remote($task->payload['request'], ['created' => $task->provider_created_at,
+                    'status' => 'booting', 'ipv4' => [], 'ipv6' => '']));
+            });
+        $task = $this->task(); $this->poll($task);
+        $this->assertSame('waiting_provider', $task->status);
+        $this->assertSame('987', $task->external_id);
+        $this->assertSame([], $task->public_ips);
+        $createdAt = $task->provider_created_at;
+        $pending = false; $this->poll($task);
+        $this->assertSame('waiting_initialization', $task->status);
+        $this->assertSame($createdAt, $task->provider_created_at);
+        $this->assertContains('8.8.8.8', $task->public_ips);
+        $this->assertSame(1, $this->postCalls);
+    }
+
     public function test_default_phase_is_off_and_has_no_scheduled_or_provider_work(): void
     {
         $this->assertFalse(config('machine_provision.allow_live'));

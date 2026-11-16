@@ -1,0 +1,92 @@
+{
+  "schema": 1,
+  "status": "local_simulation_passed",
+  "base_commit": "23b21b28698c8a8261f8bf01d109fcb8aef8a199",
+  "reference": {
+    "project": "tanzhen",
+    "commit": "f976f1b",
+    "files": [
+      "utils/failoverv2/provision_linode.go",
+      "utils/failoverv2/provision_digitalocean.go",
+      "utils/failoverv2/provision_vultr.go",
+      "utils/failoverv2/provider_runtime.go"
+    ],
+    "approach": "Adapt provider-specific creation, reconcile uncertain outcomes, then wait for the original instance; do not introduce another cloud creation implementation"
+  },
+  "existing_adapters_reused": {
+    "linode": "LinodeProvisionClient: type/image/region and base64 metadata.user_data",
+    "digitalocean": "DigitalOceanProvisionClient: size/image/region and plain cloud-init user_data",
+    "vultr": "VultrProvisionClient: plan/integer os_id/region and base64 user_data"
+  },
+  "change": {
+    "component": "MachineProvisionService",
+    "new_instance_detail_404_grace_seconds": 300,
+    "window_anchor": "Original persisted dispatched_at; neither retries nor worker resumes reset it",
+    "scope": "Only readback of an identity-pinned newly created or reconciled instance in dispatching, outcome_unknown or waiting_provider",
+    "behavior": "Retain the first diagnostic, wait using the existing poll interval, and query the same instance ID",
+    "guards": [
+      "The task deadline and every admission, permission, account revision and execution-ownership check remain active",
+      "No second create POST, token rotation, cleanup confirmation or DNS change is authorized by a 404",
+      "After startup, expired grace, failed bootstrap, identity mismatch, forbidden access or invalid response, existing stop/review behavior remains",
+      "A create receipt without running state or public addresses is not readiness"
+    ],
+    "not_ported": [
+      "Blanket tolerance of all provider errors",
+      "Guest firewall disabling",
+      "Persistent root-password storage",
+      "Duplicate creation or deletion based on uncertain lookup results"
+    ]
+  },
+  "verification": {
+    "environment": "Windows PHP 8.2.33, in-memory SQLite, fake queue and deny-stray HTTP fakes",
+    "pre_fix_regression": {"tests": 3, "expected_failures": 3},
+    "new_focused_regression": {"tests": 36, "assertions": 515, "passed": 36, "failed": 0},
+    "related_regression": {
+      "tests": 641,
+      "passed": 638,
+      "skipped": 3,
+      "failed": 0,
+      "assertions": 18171,
+      "elapsed_seconds": 418.546,
+      "peak_memory_mib": 188,
+      "skip_reason": "Existing Linux process-group timeout and signal tests require Linux"
+    },
+    "suites": [
+      "MachineFailoverNativeBridgeTest",
+      "MachineProvisionTest",
+      "MachineJsonProvisionTest",
+      "MachineProvisionDiagnosticTest",
+      "MachineProvisionCompressionTest",
+      "MachineProvisionBootstrapTest",
+      "CloudFailurePolicyTest",
+      "MachineCloudProvidersTest"
+    ],
+    "coverage": [
+      "Linode, DigitalOcean and Vultr creation followed by temporary 404, original-ID resume, readiness and simulated DNS completion",
+      "Uncertain create reconciles before detail polling and never repeats POST",
+      "Original-dispatch grace expiry and post-startup disappearance",
+      "Stop, disabled execution, deadline, bootstrap failure, permission denial, malformed response and identity change",
+      "Pending/booting responses with empty public addresses become running on readback without another create"
+    ]
+  },
+  "boundaries": {
+    "real_cloud_calls": 0,
+    "real_ssh_calls": 0,
+    "real_dns_calls": 0,
+    "production_database_connections": 0,
+    "production_settings_changed": false,
+    "persistent_automatic_switches_changed": false,
+    "tanzhen_modified": false,
+    "github_actions_started": false,
+    "deployed": false,
+    "committed_or_pushed": false,
+    "new_vm_created": false,
+    "r34_or_r35_executed": false,
+    "r35_live_ready": false
+  },
+  "remaining_r35_work": [
+    "Compose real isolated control creation/install/runtime, private import and grant issuance with the existing adapters",
+    "Complete pinned SSH cleanup, partial DNS initialization receipts and final switch reconciliation in the whole-round factory",
+    "Freeze the updated complete runtime and perform separately authorized isolated Linux and live preflight/acceptance"
+  ]
+}

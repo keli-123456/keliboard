@@ -133,6 +133,28 @@ class MachineJsonProvisionTest extends TestCase
         $this->assertSame(1, $this->posts);
     }
 
+    #[DataProvider('providers')]
+    public function test_create_receipt_can_precede_startup_and_public_ip_allocation(string $provider): void
+    {
+        [$account, , $client, $request] = $this->fixture($provider);
+        config(['machine_provision.allow_live' => true]);
+        $ready = $this->rows[0];
+        $this->rows[0] = array_replace($ready, $provider === 'digitalocean'
+            ? ['status' => 'new', 'locked' => true, 'networks' => ['v4' => [], 'v6' => []]]
+            : ['status' => 'pending', 'power_status' => 'stopped', 'server_status' => 'installingbooting', 'main_ip' => '0.0.0.0']);
+        $created = $client->create($account, $request, time());
+        $this->assertSame((string) $ready['id'], $created['external_id']);
+        $this->assertNotSame('running', $created['status']);
+        $this->assertSame([], $created['public_ips']);
+        $this->rows[0] = $ready;
+        $readback = $client->instance($account, $created['external_id']);
+        $this->assertSame($created['external_id'], $readback['external_id']);
+        $this->assertSame($created['provider_created_at'], $readback['provider_created_at']);
+        $this->assertSame('running', $readback['status']);
+        $this->assertSame(['8.8.4.4'], $readback['public_ips']);
+        $this->assertSame(1, $this->posts);
+    }
+
     public static function incompatible(): array
     {
         $cases = [];
