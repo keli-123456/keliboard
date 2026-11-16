@@ -161,7 +161,7 @@ class MachineFailoverPolicyTest extends TestCase
             'script' => [['script' => 'echo unsafe'], 'invalid_policy'], 'private credentials' => [['api_token' => 'secret'], 'invalid_policy'],
             'bad name' => [['name' => "bad\nname"], 'invalid_name'], 'empty name' => [['name' => ' '], 'invalid_name'],
             'coerced id' => [['machine_id' => '1'], 'invalid_policy'], 'one failure' => [['failure_threshold' => 1], 'invalid_policy'],
-            'zero cooldown' => [['cooldown_seconds' => 0], 'invalid_policy'], 'too many attempts' => [['daily_limit' => 3], 'invalid_policy'],
+            'zero cooldown' => [['cooldown_seconds' => 0], 'invalid_policy'], 'too many attempts' => [['daily_limit' => 1001], 'invalid_policy'],
             'NaN' => [['monthly_limit_usd' => NAN], 'invalid_budget'], 'budget scale' => [['monthly_limit_usd' => 1.001], 'invalid_budget'],
             'negative budget' => [['monthly_limit_usd' => -1], 'invalid_budget'], 'huge budget' => [['monthly_limit_usd' => 1001], 'invalid_budget'],
             'host URL' => [['dns_hostname' => 'https://example.test/path'], 'invalid_dns'],

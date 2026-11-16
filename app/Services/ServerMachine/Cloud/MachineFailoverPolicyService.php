@@ -176,7 +176,7 @@ class MachineFailoverPolicyService
         });
     }
 
-    public function localChecks(Policy $policy, ?\App\Models\MachineProvisionTask $task = null): array
+    public function localChecks(Policy $policy, ?\App\Models\MachineProvisionTask $task = null, ?\App\Models\MachineFailoverAttempt $attempt = null): array
     {
         $credentials = app(MachineFailoverCredentials::class); $grouped = $credentials->grouped($policy);
         $account = Account::query()->find($policy->account_id, ['id', 'provider', 'revision']);
@@ -191,7 +191,12 @@ class MachineFailoverPolicyService
         if (!$machine || $this->machineNodes($machine->id)->isEmpty()) $add('node_group_empty', 'blocked');
         if ($grouped) {
             try {
-                $choice = $credentials->context($policy, $task); $account = Account::query()->find($choice['account_id']);
+                if ($attempt && $task === null) {
+                    app(MachineFailoverNativeBridge::class)->assertAttempt($attempt);
+                    $account = $credentials->assertPlan($attempt->payload['plan']);
+                } else {
+                    $choice = $credentials->context($policy, $task); $account = Account::query()->find($choice['account_id']);
+                }
                 $add('credential_group_ready', 'passed');
             } catch (CloudException $error) { $add($error->getMessage(), 'blocked'); }
         }
@@ -239,7 +244,7 @@ class MachineFailoverPolicyService
         if ($grouped && (!is_string($input['catalog_fingerprint'] ?? null) || !preg_match('/^[a-f0-9]{64}$/D', $input['catalog_fingerprint']))) throw new CloudException('catalog_expired');
         if (!$grouped && (isset($input['provider']) || isset($input['catalog_fingerprint']))) throw new CloudException('invalid_policy');
         $numeric = ['machine_id' => [1, PHP_INT_MAX], 'failure_threshold' => [2, 10],
-            'stale_after_seconds' => [30, 1800], 'cooldown_seconds' => [300, 86400], 'daily_limit' => [1, 2]];
+            'stale_after_seconds' => [30, 1800], 'cooldown_seconds' => [300, 86400], 'daily_limit' => [0, 1000]];
         if (!$grouped) $numeric['account_id'] = [1, PHP_INT_MAX];
         foreach ($numeric as $key => [$min, $max]) {
             if (!is_int($input[$key] ?? null) || $input[$key] < $min || $input[$key] > $max) throw new CloudException('invalid_policy');

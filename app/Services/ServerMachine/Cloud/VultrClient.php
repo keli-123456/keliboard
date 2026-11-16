@@ -25,7 +25,7 @@ class VultrClient extends JsonCloudClient
                 $cursor = $next;
             }
         }
-        return ['resources' => array_map(fn ($row) => $this->normalize($row), $data['instances']), 'pages' => (int) ceil($data['meta']['total'] / 100)];
+        return ['resources' => array_map(fn ($row) => $this->normalize($row), $data['instances']), 'pages' => (int) ceil($data['meta']['total'] / 100), 'total' => $data['meta']['total']];
     }
 
     public function instance(MachineCloudAccount $account, string $id): array

@@ -14,5 +14,6 @@ return [
     ],
     'timeout_seconds' => 1200,
     'poll_seconds' => 20,
-    'daily_limit_per_account' => 2,
+    // Zero disables only the rolling 24-hour fuse, never concurrency or ownership checks.
+    'daily_limit_per_account' => env('MACHINE_PROVISION_DAILY_LIMIT_PER_ACCOUNT', 0),
 ];

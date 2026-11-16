@@ -32,9 +32,9 @@ class MachineFailoverShadow
             if ($decision === 'would_replace') {
                 $reason = $attempts >= $snapshot['service']['attempt_limit'] ? 'service_attempt_limit'
                     : ($attempts >= $snapshot['service']['max_parallel'] ? 'service_parallel_limit'
-                        : (array_intersect($quota, $fact['quota_ids']) ? 'shared_account_wait' : null));
+                        : (max([0, ...array_map(fn ($id) => $quota[$id] ?? 0, $fact['quota_ids'])]) >= ($fact['quota_slots'] ?? 1) ? 'shared_account_wait' : null));
                 if ($reason) { $decision = 'waiting'; $blockers[] = $reason; }
-                else { $attempts++; $quota = array_values(array_unique([...$quota, ...$fact['quota_ids']])); }
+                else { $attempts++; foreach ($fact['quota_ids'] as $quotaId) $quota[$quotaId] = ($quota[$quotaId] ?? 0) + 1; }
             }
             $members[] = ['member_id' => $member['id'], 'policy_id' => $policy->id, 'policy_revision' => $policy->revision,
                 'name' => $member['name'], 'machine_id' => $member['machine_id'], 'decision' => $decision,

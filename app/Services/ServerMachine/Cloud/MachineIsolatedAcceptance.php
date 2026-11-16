@@ -2,8 +2,6 @@
 namespace App\Services\ServerMachine\Cloud;
 
 use App\Models\MachineCloudAccount;
-use App\Models\MachineCloudResource;
-use App\Models\MachineCloudTask;
 use App\Models\MachineFailoverPolicy as Policy;
 use App\Models\MachineOwnedInstance as Instance;
 use App\Models\MachineProvisionTask as Task;
@@ -39,12 +37,12 @@ class MachineIsolatedAcceptance
         $add('verifier_configured', $verifier !== null);
         $add('slot_empty', !Task::query()->where('machine_id', $policy->machine_id)->where('slot', $policy->slot)->exists()
             && !Instance::query()->where('policy_id', $id)->exists());
-        $add('account_idle', !Task::query()->where('account_id', $accountId)->whereNotIn('status', ['accepted', 'failed', 'cancelled'])->exists()
-            && !MachineCloudTask::query()->whereIn('resource_id', MachineCloudResource::query()->where('account_id', $accountId)->select('id'))
-                ->whereNotIn('status', MachineCloudTask::TERMINAL)->exists());
-        $attempts = Task::query()->where('account_id', $accountId)->where('created_at', '>=', time() - 86400)->count();
-        $limit = min($policy->daily_limit, max(1, min(2, (int) config('machine_provision.daily_limit_per_account', 2))));
-        $add('daily_allowance', $attempts < $limit);
+        $account = MachineCloudAccount::query()->findOrFail($accountId); $limits = app(MachineProvisionLimits::class);
+        $usage = $limits->usage($account); $settings = $limits->settings($account);
+        $add('account_idle', !$usage['power_active'] && $usage['active'] < $settings['max_parallel']);
+        $add('credential_capacity_full', !MachineProvisionLimits::reached($usage['used'], $settings['max_instances']));
+        $attempts = $usage['attempts_24h']; $limit = $settings['daily_limit'];
+        $add('daily_allowance', !MachineProvisionLimits::reached($attempts, $limit) && !$limits->policyReached($policy));
         $pin = $this->pin($policy, $release);
         $fingerprint = hash('sha256', json_encode([$plan, $pin, $checks, $verifier], JSON_THROW_ON_ERROR));
         $expires = time() + 120;

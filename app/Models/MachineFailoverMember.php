@@ -8,5 +8,5 @@ class MachineFailoverMember extends Model
     protected $guarded = ['id'];
     protected $dateFormat = 'U';
     protected $casts = ['service_id' => 'integer', 'policy_id' => 'integer', 'machine_id' => 'integer', 'policy_revision' => 'integer',
-        'priority' => 'integer', 'enabled' => 'boolean', 'created_at' => 'timestamp', 'updated_at' => 'timestamp'];
+        'priority' => 'integer', 'attempt_limit' => 'integer', 'enabled' => 'boolean', 'created_at' => 'timestamp', 'updated_at' => 'timestamp'];
 }

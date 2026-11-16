@@ -3,8 +3,6 @@ namespace App\Services\ServerMachine\Cloud;
 
 use App\Models\MachineCloudAccount as Account;
 use App\Models\MachineCloudGroup;
-use App\Models\MachineCloudResource;
-use App\Models\MachineCloudTask;
 use App\Models\MachineFailoverPolicy as Policy;
 use App\Models\MachineProvisionTask as Task;
 use Illuminate\Support\Facades\Schema;
@@ -44,9 +42,9 @@ class MachineFailoverCredentials
     {
         if (!$this->grouped($policy)) return ['account_id' => $policy->account_id];
         if (!Schema::hasTable('v2_machine_provision_task') || !Schema::hasTable('v2_machine_cloud_task')) throw new CloudException('budget_history_unavailable');
-        if (Task::query()->where('machine_id', $policy->machine_id)->where('slot', $policy->slot)->where('created_at', '>=', time() - 86400)->count() >= $policy->daily_limit) throw new CloudException('credential_group_daily_budget');
+        $limits = app(MachineProvisionLimits::class);
+        if ($limits->policyReached($policy)) throw new CloudException('credential_group_daily_budget');
         $pool = $this->pool($policy->credential_group_id, $policy->provider);
-        $limit = min($policy->daily_limit, max(1, min(2, (int) config('machine_provision.daily_limit_per_account', 2))));
         $candidates = [];
         $health = app(MachineCloudCredentialHealth::class);
         foreach ($pool['accounts'] as $account) {
@@ -56,10 +54,11 @@ class MachineFailoverCredentials
             $history = Task::query()->whereIn('account_id', $ids);
             $attempts = (clone $history)->where('created_at', '>=', time() - 86400)->count();
             $last = (clone $history)->max('created_at');
-            if ($attempts >= $limit || ($last !== null && $last + $policy->cooldown_seconds > time())
-                || (clone $history)->whereNotIn('status', ['accepted', 'failed', 'cancelled'])->exists()
-                || MachineCloudTask::query()->whereIn('resource_id', MachineCloudResource::query()->whereIn('account_id', $ids)->select('id'))
-                    ->whereNotIn('status', MachineCloudTask::TERMINAL)->exists()) continue;
+            if ($last !== null && $last + $policy->cooldown_seconds > time()) continue;
+            try { $limits->assertAvailable($full); } catch (CloudException $error) {
+                if (!in_array($error->getMessage(), ['daily_budget', 'task_active', 'credential_capacity_full'], true)) throw $error;
+                continue;
+            }
             $candidates[] = ['account' => $account, 'attempts' => $attempts, 'last' => $last ?? 0];
         }
         usort($candidates, fn ($a, $b) => [$a['attempts'], $a['last'], $a['account']->id] <=> [$b['attempts'], $b['last'], $b['account']->id]);
@@ -105,20 +104,24 @@ class MachineFailoverCredentials
             'reason' => 'single_credential', 'next_account_id' => null, 'next_account_revision' => null];
         $health = app(MachineCloudCredentialHealth::class); $pool = $this->pool($policy->credential_group_id, $policy->provider);
         $current = Account::query()->findOrFail($task->account_id); $plan = $task->payload['plan']; $candidates = [];
-        $limit = min($policy->daily_limit, max(1, min(2, (int) config('machine_provision.daily_limit_per_account', 2))));
+        $limits = app(MachineProvisionLimits::class);
         foreach ($pool['accounts'] as $row) {
             $account = Account::query()->findOrFail($row->id); $ids = $health->sameAccountIds($account);
             $history = Task::query()->whereIn('account_id', $ids); $last = (clone $history)->max('created_at');
+            $available = true;
+            try { $limits->assertAvailable($account); } catch (CloudException $error) {
+                if (!in_array($error->getMessage(), ['daily_budget', 'task_active', 'credential_capacity_full'], true)) throw $error;
+                $available = false;
+            }
             $candidates[] = ['id' => $account->id, 'revision' => $account->revision, 'provider' => $account->provider, 'group_id' => $account->group_id,
                 'credential_key' => $health->credentialKey($account), 'identity_key' => $health->identityKey($account),
                 'attempts' => (clone $history)->where('created_at', '>=', time() - 86400)->count(), 'last_attempt_at' => $last ?? 0,
-                'eligible' => $health->status($account, $plan)['eligible'] && !(clone $history)->whereNotIn('status', ['accepted', 'failed', 'cancelled'])->exists()
-                    && !MachineCloudTask::query()->whereIn('resource_id', MachineCloudResource::query()->whereIn('account_id', $ids)->select('id'))->whereNotIn('status', MachineCloudTask::TERMINAL)->exists(),
-                'budget_available' => (clone $history)->where('created_at', '>=', time() - 86400)->count() < $limit
+                'eligible' => $health->status($account, $plan)['eligible'] && $available,
+                'budget_available' => !$limits->policyReached($policy)
                     && ($last === null || $last + $policy->cooldown_seconds <= time())];
         }
         usort($candidates, fn ($a, $b) => [$a['attempts'], $a['last_attempt_at'], $a['id']] <=> [$b['attempts'], $b['last_attempt_at'], $b['id']]);
-        $remaining = max(0, $policy->daily_limit - Task::query()->where('machine_id', $policy->machine_id)->where('slot', $policy->slot)->where('created_at', '>=', time() - 86400)->count());
+        $remaining = $policy->daily_limit === 0 ? 1000 : max(0, $policy->daily_limit - Task::query()->where('machine_id', $policy->machine_id)->where('slot', $policy->slot)->where('created_at', '>=', time() - 86400)->count());
         return app(MachineCredentialRotationPlanner::class)->decide($failure, ['id' => $current->id, 'provider' => $current->provider,
             'group_id' => $policy->credential_group_id, 'credential_key' => $health->credentialKey($current), 'identity_key' => $health->identityKey($current)], $candidates, $remaining,
             array_values(array_unique(array_merge($attempted, [$task->account_id]))));

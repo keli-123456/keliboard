@@ -50,6 +50,7 @@ trait TestsCandidateRetry
         app()->instance(MachineCandidateCleanupClient::class, $client);
         $run = $this->advance($this->start(parallel: $parallel, attempts: $attempts));
         config(['machine_failover.allow_rotation' => false]);
+        $this->assertSame('waiting_initialization', $run['members'][0]['phase'], json_encode($run));
         $task = $this->task();
         app(MachineProvisionService::class)->callback($task->id, $task->installation_id, $this->callbackSecret($task), 'succeeded');
         $task->refresh()->fill(['dispatched_at' => time() - 30, 'status' => 'waiting_ipv4_probe', 'next_check_at' => time() + 60])->save();
@@ -146,6 +147,61 @@ trait TestsCandidateRetry
         for ($n = 0; $n < 4; $n++) $run = $this->advance($run);
         $this->assertSame(1, Attempt::first()->payload['candidate_retry']['failures']);
         $this->assertSame(0, $this->candidateDeletes); $this->assertCount(1, $this->posts);
+    }
+
+    public function test_candidate_retry_same_day_source_consumes_daily_limit_after_cleanup(): void
+    {
+        config(['machine_provision.daily_limit_per_account' => 2]);
+        // This synthetic source is recent, unlike the older source in the positive fixture.
+        $source = $this->fixtures[0]['source'];
+        $source->fill(['created_at' => time() - 600])->save();
+        $sourceCreatedAt = (int) $source->getRawOriginal('created_at');
+        $run = $this->cleanupStarted(attempts: 2);
+        $run = $this->cleanupConfirmed($run);
+        $first = $this->task();
+        $this->assertSame('cleaned', Attempt::query()->firstOrFail()->status);
+        $this->finishCandidateCooldown();
+        $run = $this->advance($run);
+        $this->assertSame('needs_review', $run['members'][0]['phase']);
+        $this->assertSame('credential_group_daily_budget', $run['members'][0]['reason']);
+        $checks = app(\App\Services\ServerMachine\Cloud\MachineFailoverPolicyService::class)->localChecks($this->fixtures[0]['policy']);
+        $this->assertContains(['code' => 'credential_group_daily_budget', 'status' => 'blocked'], $checks);
+        $this->assertCount(1, $this->posts);
+        $this->assertSame(1, $this->candidateDeletes);
+        $this->assertSame(0, $this->dnsWrites);
+        $this->assertSame(2, Task::query()->count());
+        $this->assertSame($sourceCreatedAt, (int) $source->fresh()->getRawOriginal('created_at'));
+        $this->assertSame('failed', $first->fresh()->status);
+        $this->assertSame(2, $this->fixtures[0]['policy']->fresh()->daily_limit);
+        $this->assertSame(2, (int) config('machine_provision.daily_limit_per_account'));
+    }
+
+    public function test_candidate_retry_two_recent_sources_on_one_account_leave_no_create_slot(): void
+    {
+        config(['machine_provision.daily_limit_per_account' => 2]);
+        $first = $this->fixtures[0];
+        $second = $this->fixture(2);
+        $at = time() - 600;
+        $first['source']->fill(['created_at' => $at])->save();
+        $second['source']->fill(['created_at' => $at, 'account_id' => $first['accounts'][0]->id])->save();
+        // Restrict the synthetic pool to one real account, as required by this scope.
+        $first['accounts'][1]->fill(['group_id' => null, 'group_revision' => 2])->save();
+        $health = app(\App\Services\ServerMachine\Cloud\MachineCloudCredentialHealth::class);
+        $ids = $health->sameAccountIds($first['accounts'][0]);
+        $this->assertSame(2, Task::query()->whereIn('account_id', $ids)->where('created_at', '>=', time() - 86400)->count());
+        try {
+            app(\App\Services\ServerMachine\Cloud\MachineFailoverCredentials::class)->selection($first['policy']);
+            $this->fail('Recent source tasks must consume the shared account creation quota.');
+        } catch (CloudException $error) {
+            $this->assertSame('credential_group_exhausted', $error->getMessage());
+        }
+        $this->assertCount(0, $this->posts);
+        $this->assertSame(0, $this->candidateDeletes);
+        $this->assertSame(0, $this->dnsWrites);
+        $this->assertSame(2, Task::query()->count());
+        $this->assertSame(0, Attempt::query()->count());
+        $this->assertSame($at, (int) $first['source']->fresh()->getRawOriginal('created_at'));
+        $this->assertSame($at, (int) $second['source']->fresh()->getRawOriginal('created_at'));
     }
 
     public function test_candidate_retry_node_report_gap_resets_previous_probe_failures(): void

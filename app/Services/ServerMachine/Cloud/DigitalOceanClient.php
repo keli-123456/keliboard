@@ -9,12 +9,19 @@ class DigitalOceanClient extends JsonCloudClient
     protected function origin(): string { return 'https://api.digitalocean.com/v2'; }
     private function id(string $id): void { if (!preg_match('/^[1-9][0-9]{0,15}$/D', $id)) throw new CloudException('invalid_resource'); }
 
+    public function instanceLimit(MachineCloudAccount $account): int
+    {
+        $limit = $this->request($account, 'GET', '/account')['account']['droplet_limit'] ?? null;
+        if (!is_int($limit) || $limit < 1) throw new CloudException('capacity_unknown');
+        return $limit;
+    }
+
     public function inventory(MachineCloudAccount $account, int $page): array
     {
         $data = $this->request($account, 'GET', '/droplets', ['page' => $page, 'per_page' => 100]);
         if (!is_array($data['droplets'] ?? null) || count($data['droplets']) > 100 || !is_int($data['meta']['total'] ?? null)
             || $data['meta']['total'] < 0) throw new CloudException('provider_invalid');
-        return ['resources' => array_map(fn ($row) => $this->normalize($row), $data['droplets']), 'pages' => (int) ceil($data['meta']['total'] / 100)];
+        return ['resources' => array_map(fn ($row) => $this->normalize($row), $data['droplets']), 'pages' => (int) ceil($data['meta']['total'] / 100), 'total' => $data['meta']['total']];
     }
 
     public function instance(MachineCloudAccount $account, string $id): array

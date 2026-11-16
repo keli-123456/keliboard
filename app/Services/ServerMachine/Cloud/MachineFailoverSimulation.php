@@ -125,6 +125,8 @@ class MachineFailoverSimulation
                 if (!$fact) {
                     $limits = $run->payload['snapshot']['service'];
                     $remaining = 1 + $limits['attempt_limit'] - $run->attempts;
+                    $memberConfig = collect($run->payload['snapshot']['members'])->firstWhere('id', $row->member_id);
+                    $remaining = min($remaining, $memberConfig['attempt_limit'] ?? $limits['attempt_limit']);
                     try { $fact = $this->driver->execute($kind, $context + ['credential_attempt_limit' => max(1, min(3, $remaining))], $state, $scenario, $action->id, $now); }
                     catch (\Throwable) { $fact = $this->unknown($context, $action->id, $now); }
                     $extra = $kind === 'create' ? max(0, count(is_array($fact['credential_attempts'] ?? null) ? $fact['credential_attempts'] : []) - 1) : 0;

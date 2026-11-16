@@ -12,7 +12,7 @@ class LinodeClient implements CloudClient
     {
         $data = $this->request($account, 'GET', '/linode/instances', ['page' => $page, 'page_size' => 100]);
         if (!is_array($data['data'] ?? null) || !is_int($data['pages'] ?? null) || $data['pages'] < 0 || count($data['data']) > 100) throw new CloudException('provider_invalid');
-        return ['resources' => array_map(fn ($row) => $this->normalize($row), $data['data']), 'pages' => $data['pages']];
+        return ['resources' => array_map(fn ($row) => $this->normalize($row), $data['data']), 'pages' => $data['pages'], 'total' => $data['results'] ?? null];
     }
 
     public function instance(MachineCloudAccount $account, string $id): array

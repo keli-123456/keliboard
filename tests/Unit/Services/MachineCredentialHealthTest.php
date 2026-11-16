@@ -223,6 +223,7 @@ class MachineCredentialHealthTest extends TestCase
     }
     public function test_group_selection_skips_bad_credentials_and_shares_budget_by_verified_account_identity(): void
     {
+        config(['machine_provision.daily_limit_per_account' => 2]);
         $this->bind($this->a, 'account-shared-0001'); $this->bind($this->b, 'account-shared-0001');
         $this->health->record($this->a, $this->error(401), 'preflight', 'auth');
         $credentials = new MachineFailoverCredentials();

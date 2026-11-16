@@ -23,7 +23,11 @@ class MachineCloudController extends Controller
     {
         $input = $request->validate(['id' => 'sometimes|integer|min:1', 'expected_revision' => 'required_with:id|integer|min:1',
             'provider' => 'sometimes|in:linode,digitalocean,vultr', 'group_id' => 'sometimes|nullable|integer|min:1',
-            'name' => 'required|string|max:80', 'api_token' => 'nullable|string|max:4096']);
+            'name' => 'required|string|max:80', 'api_token' => 'nullable|string|max:4096',
+            'provision_limits' => 'sometimes|array:max_instances,max_parallel,daily_limit',
+            'provision_limits.max_instances' => 'required_with:provision_limits|integer|min:0|max:10000',
+            'provision_limits.max_parallel' => 'required_with:provision_limits|integer|min:1|max:5',
+            'provision_limits.daily_limit' => 'required_with:provision_limits|integer|min:0|max:1000']);
         return $this->run($request, $service, fn () => $service->saveAccount($input));
     }
     public function dropAccount(Request $request, MachineCloudService $service)

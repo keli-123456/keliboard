@@ -72,7 +72,7 @@ class MachineReplacementService
         if ($plan->policy_revision !== $policy->revision) throw new CloudException('config_changed');
         if ($attempt) app(MachineFailoverNativeBridge::class)->assertAttempt($attempt, $current);
         if (!MachineIntentJson::same(ProvisionPlan::normalize($attempt ? $attempt->payload['plan'] : $this->input($policy, $current)), $input)) throw new CloudException('source_changed');
-        $checks = app(MachineFailoverPolicyService::class)->localChecks($policy, $current);
+        $checks = app(MachineFailoverPolicyService::class)->localChecks($policy, $current, $attempt);
         if ($attempt) {
             $member = \App\Models\MachineFailoverExecutionMember::query()->findOrFail($attempt->execution_member_id);
             if (isset($member->payload['dns_source'])) $dnsScope = \App\Models\MachineFailoverExecution::query()->findOrFail($member->execution_id)->payload['snapshot'];
@@ -110,23 +110,15 @@ class MachineReplacementService
             $member = \App\Models\MachineFailoverExecutionMember::query()->findOrFail($attempt->execution_member_id);
             if ($member->plan_id !== $plan->id || $member->policy_id !== $policy->id || $member->episode_key !== $episode) throw new CloudException('native_lineage_changed');
         }
-        if ($policy->credential_group_id && Task::query()->where('machine_id', $policy->machine_id)->where('slot', $policy->slot)
-            ->when($current, fn ($query) => $query->where('id', '!=', $current->id))->where('created_at', '>=', time() - 86400)->count() >= $policy->daily_limit) throw new CloudException('credential_group_daily_budget');
         if (Replacement::query()->where('episode_key', $episode)->when($current, fn ($query) => $query->where('task_id', '!=', $current->id))->exists()) {
             throw new CloudException('replacement_episode_used');
         }
+        if (app(MachineProvisionLimits::class)->policyReached($policy, $current?->id))
+            throw new CloudException($policy->credential_group_id ? 'credential_group_daily_budget' : 'daily_budget');
         $accountId = $input['account_id'];
         $quotaIds = app(MachineCloudCredentialHealth::class)->sameAccountIds(\App\Models\MachineCloudAccount::query()->findOrFail($accountId));
         $history = Task::query()->whereIn('account_id', $quotaIds);
-        $limit = min($policy->daily_limit, max(1, min(2, (int) config('machine_provision.daily_limit_per_account', 2))));
-        $attempts = (clone $history)->where('created_at', '>=', time() - 86400)->count();
-        if ($attempts >= $limit + ($current ? 1 : 0)) throw new CloudException('daily_budget');
-        if ((clone $history)->when($current, fn ($query) => $query->where('id', '!=', $current->id))
-            ->whereNotIn('status', ['accepted', 'failed', 'cancelled'])->exists()
-            || \App\Models\MachineCloudTask::query()->whereIn('resource_id', \App\Models\MachineCloudResource::query()
-                ->whereIn('account_id', $quotaIds)->select('id'))->whereNotIn('status', \App\Models\MachineCloudTask::TERMINAL)->exists()) {
-            throw new CloudException('task_active');
-        }
+        app(MachineProvisionLimits::class)->assertAvailable(\App\Models\MachineCloudAccount::query()->findOrFail($accountId), $current?->id, $attempt?->id);
         $previous = (clone $history)->when($current, fn ($query) => $query->where('id', '!=', $current->id))->max('created_at');
         if ($previous !== null && $previous + $policy->cooldown_seconds > time()) throw new CloudException('replacement_cooldown');
         return ['policy_id' => $policy->id, 'policy_revision' => $policy->revision, 'plan_id' => $plan->id,

@@ -50,6 +50,8 @@ class MachineFailoverNativeBridgeTest extends TestCase
 {
     use InteractsWithInMemoryDatabase;
     use \Tests\Support\TestsCandidateRetry;
+    use \Tests\Support\TestsProvisionLimits;
+    private ?int $memberAttemptLimit = null;
     private User $admin;
     private ServerMachineRelease $release;
     private array $fixtures = [];
@@ -86,7 +88,8 @@ class MachineFailoverNativeBridgeTest extends TestCase
             '2026_11_06_050000_create_machine_acceptance_tables.php', '2026_11_09_140000_add_machine_dns_readback_state.php', '2026_11_07_090000_create_machine_replacement_tasks.php',
             '2026_11_07_120000_add_provider_groups_to_machine_failover.php', '2026_11_07_140000_create_machine_failover_services.php',
             '2026_11_07_160000_create_machine_credential_health.php', '2026_11_07_180000_create_machine_failover_native_journal.php',
-            '2026_06_12_000002_create_v2_server_machine_release_table.php', '2026_07_14_000001_add_binary_sha256_to_server_machine_release.php'] as $file) {
+            '2026_06_12_000002_create_v2_server_machine_release_table.php', '2026_07_14_000001_add_binary_sha256_to_server_machine_release.php',
+            '2026_11_16_120000_add_machine_provision_limits.php'] as $file) {
             (require base_path('database/migrations/' . $file))->up();
         }
         Schema::create('v2_user', function (Blueprint $t) { $t->id(); $t->boolean('is_admin'); $t->boolean('banned')->default(false); $t->timestamps(); });
@@ -196,7 +199,8 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $this->enable();
         $service = app(MachineFailoverServiceRegistry::class)->save(['name' => 'Native fixture', 'max_parallel' => $parallel,
             'attempt_limit' => $attempts, 'monthly_cap_usd' => $cap, 'members' => array_map(fn ($f) => ['policy_id' => $f['policy']->id,
-                'policy_revision' => $f['policy']->revision, 'name' => $f['machine']->name, 'priority' => $f['machine']->id, 'enabled' => true], $this->fixtures)], $this->admin->id);
+                'policy_revision' => $f['policy']->revision, 'name' => $f['machine']->name, 'priority' => $f['machine']->id, 'enabled' => true]
+                + ($this->memberAttemptLimit === null ? [] : ['attempt_limit' => $this->memberAttemptLimit]), $this->fixtures)], $this->admin->id);
         return app(MachineFailoverNativeBridge::class)->start($service['id'], 1, array_map(fn ($f) => MachineFailoverPlan::query()
             ->where('policy_id', $f['policy']->id)->latest('id')->value('id'), $this->fixtures), $this->release->id, str_repeat('d', 32), $this->admin->id);
     }
@@ -563,7 +567,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $provider = str_contains($request->url(), 'api.digitalocean.com') ? 'digitalocean' : 'vultr';
         $path = substr(parse_url($request->url(), PHP_URL_PATH), 3);
         if ($path === '/account') return Http::response(['account' => $provider === 'digitalocean'
-            ? ['status' => 'active', 'uuid' => 'fixture-account-' . substr(hash('sha256', $request->header('Authorization')[0]), 0, 16)] : ['balance' => 20]]);
+            ? ['status' => 'active', 'droplet_limit' => 100, 'uuid' => 'fixture-account-' . substr(hash('sha256', $request->header('Authorization')[0]), 0, 16)] : ['balance' => 20]]);
         if ($request->method() === 'POST') {
             $this->assertSame($provider === 'digitalocean' ? '/droplets' : '/instances', $path);
             $label = $request[$provider === 'digitalocean' ? 'name' : 'label'];

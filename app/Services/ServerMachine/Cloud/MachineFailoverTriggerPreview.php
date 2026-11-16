@@ -18,7 +18,8 @@ class MachineFailoverTriggerPreview
     private const EVENTS = 'v2_machine_failover_trigger_event';
     private const REASONS = ['permission_revoked', 'config_changed', 'member_policy_changed', 'source_changed', 'account_changed',
         'dns_credential_changed', 'credential_group_changed', 'credential_health_blocked', 'source_ownership_unverified', 'task_active',
-        'replacement_cooldown', 'daily_budget', 'decision_snapshot_missing', 'replacement_episode_used', 'native_episode_used',
+        'replacement_cooldown', 'daily_budget', 'credential_capacity_full', 'capacity_unknown', 'invalid_capacity', 'candidate_cleanup_unconfirmed',
+        'decision_snapshot_missing', 'replacement_episode_used', 'native_episode_used',
         'native_run_active', 'cost_baseline_required', 'shared_monthly_budget', 'service_attempt_limit', 'service_reservation_limit',
         'service_parallel_limit', 'shared_account_wait', 'observation_disabled', 'sample_not_collected', 'healthy_baseline_required',
         'source_unverified', 'agent_stale', 'probe_stale', 'probe_unknown', 'probe_disabled', 'ipv4_missing', 'source_recovered',

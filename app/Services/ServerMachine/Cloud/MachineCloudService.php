@@ -54,6 +54,7 @@ class MachineCloudService
         return ['available' => true, 'providers' => self::PROVIDERS, 'accounts' => Account::query()->orderBy('id')->get()->map(fn ($account) => $account->toArray()
                 + ($credentialHealth->available() ? ['credential_health' => $credentialHealth->status($account)] : [])),
             'credential_health_available' => $credentialHealth->available(),
+            'provision_limits_available' => Schema::hasColumn('v2_machine_cloud_account', 'provision_limits'),
             'groups_available' => $groups->available(), 'groups' => $groups->overview(),
             'failover_available' => app(MachineFailoverPolicyService::class)->available(),
             'orchestration_available' => app(MachineFailoverServiceRegistry::class)->available(),
@@ -91,6 +92,10 @@ class MachineCloudService
 
     public function saveAccount(array $input): Account
     {
+        if (array_key_exists('provision_limits', $input)) {
+            if (!Schema::hasColumn('v2_machine_cloud_account', 'provision_limits')) throw new CloudException('migration_required');
+            $input['provision_limits'] = MachineProvisionLimits::normalize($input['provision_limits']);
+        }
         if (isset($input['id']) && array_key_exists('group_id', $input)) throw new CloudException('group_assignment_required');
         $work = fn () => $this->lock('account:' . ($input['id'] ?? 'new'), function () use ($input) {
             $row = isset($input['id']) ? Account::query()->findOrFail($input['id']) : new Account();
@@ -100,6 +105,10 @@ class MachineCloudService
             if ($row->exists && $row->revision !== $input['expected_revision']) throw new CloudException('config_changed');
             if ($row->exists && (Resource::query()->where('account_id', $row->id)->whereNotNull('active_task_id')->exists()
                 || $this->provisioningUsesAccount($row->id))) throw new CloudException('task_active');
+            if ($row->exists && array_key_exists('provision_limits', $input)) {
+                $usage = app(MachineProvisionLimits::class)->usage($row);
+                if ($usage['active'] || $usage['power_active']) throw new CloudException('task_active');
+            }
             if (!$row->exists && Account::query()->count() >= 50) throw new CloudException('limit_reached');
             $keys = $row->exists ? $row->credentials : [];
             if (trim((string) ($input['api_token'] ?? '')) !== '') $keys['api_token'] = trim($input['api_token']);
@@ -108,11 +117,15 @@ class MachineCloudService
                 if ($row->exists) Resource::query()->where('account_id', $row->id)->update(['auto_boot' => false, 'armed' => false,
                     'manual_hold' => true, 'recovery_status' => 'account_changed', 'revision' => DB::raw('revision + 1')]);
                 $row->fill(['name' => $input['name'], 'provider' => $provider, 'credentials' => $keys, 'revision' => ($row->revision ?? 0) + 1]
-                    + (array_key_exists('group_id', $input) ? ['group_id' => $input['group_id']] : []))->save();
+                    + (array_key_exists('group_id', $input) ? ['group_id' => $input['group_id']] : [])
+                    + (array_key_exists('provision_limits', $input) ? ['provision_limits' => $input['provision_limits']] : []))->save();
             });
             return $row;
         });
-        return array_key_exists('group_id', $input) ? app(MachineCloudGroupService::class)->withGroup($input['group_id'], $work) : $work();
+        $provider = isset($input['id']) ? Account::query()->findOrFail($input['id'])->provider : ($input['provider'] ?? 'linode');
+        if (!in_array($provider, self::PROVIDERS, true)) throw new CloudException('unsupported_provider');
+        $serialized = fn () => Cache::lock('machine-cloud:quota:' . $provider, 120)->block(2, $work);
+        return array_key_exists('group_id', $input) ? app(MachineCloudGroupService::class)->withGroup($input['group_id'], $serialized) : $serialized();
     }
 
     public function deleteAccount(int $id, int $revision): void

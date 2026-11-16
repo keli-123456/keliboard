@@ -2,8 +2,6 @@
 namespace App\Services\ServerMachine\Cloud;
 
 use App\Models\MachineCloudAccount as Account;
-use App\Models\MachineCloudResource;
-use App\Models\MachineCloudTask;
 use App\Models\MachineFailoverObservation as Observation;
 use App\Models\MachineFailoverPolicy as Policy;
 use App\Models\MachineOwnedInstance;
@@ -66,7 +64,7 @@ class MachineFailoverReadOnlyAdapter
         }
         if (!$source['ownership_verified']) $blockers[] = 'source_ownership_unverified';
 
-        $account = null; $ids = []; $attempts = null; $cooldown = null; $health = null;
+        $account = null; $ids = []; $attempts = null; $cooldown = null; $health = null; $slots = 0;
         try {
             $choice = $this->credentials->selection($policy); $account = Account::query()->find($choice['account_id']);
             if (!$account || $account->provider !== $this->credentials->provider($policy)
@@ -75,14 +73,17 @@ class MachineFailoverReadOnlyAdapter
             if (!$health['available'] || !$health['eligible']) $blockers[] = 'credential_health_blocked';
             $ids = $this->health->sameAccountIds($account); $history = Task::query()->whereIn('account_id', $ids);
             $attempts = (clone $history)->where('created_at', '>=', $now - 86400)->count();
-            $limit = min($policy->daily_limit, max(1, min(2, (int) config('machine_provision.daily_limit_per_account', 2))));
-            if ($attempts >= $limit) $blockers[] = 'daily_budget';
+            $limits = app(MachineProvisionLimits::class);
+            if ($limits->policyReached($policy)) $blockers[] = 'daily_budget';
+            try {
+                $capacity = $limits->assertAvailable($account);
+                $slots = min($capacity['max_parallel'] - $capacity['active'],
+                    $capacity['max_instances'] ? $capacity['max_instances'] - $capacity['used'] : PHP_INT_MAX,
+                    $capacity['daily_limit'] ? $capacity['daily_limit'] - $capacity['attempts_24h'] : PHP_INT_MAX);
+            } catch (CloudException $error) { $blockers[] = $error->getMessage(); }
             $last = (clone $history)->max('created_at');
             $cooldown = $last === null ? null : (int) $last + $policy->cooldown_seconds;
             if ($cooldown !== null && $cooldown > $now) $blockers[] = 'replacement_cooldown';
-            if ((clone $history)->whereNotIn('status', ['accepted', 'failed', 'cancelled'])->exists()
-                || MachineCloudTask::query()->whereIn('resource_id', MachineCloudResource::query()->whereIn('account_id', $ids)->select('id'))
-                    ->whereNotIn('status', MachineCloudTask::TERMINAL)->exists()) $blockers[] = 'task_active';
         } catch (CloudException $error) { $blockers[] = $error->getMessage(); }
         $plan = $current['plan'] ?? null;
         if ($source['threshold_reached'] && (!is_array($plan) || ($plan['status'] ?? null) !== 'blocked'
@@ -97,6 +98,6 @@ class MachineFailoverReadOnlyAdapter
             'account_name' => $account->name, 'provider' => $account->provider, 'health' => $health['state'] ?? 'unknown',
             'identity' => $health['identity'] ?? 'unknown', 'region' => $policy->region, 'size' => $policy->size, 'image' => $policy->image] : null,
             'budget' => ['account_attempts_24h' => $attempts, 'cooldown_until' => $cooldown, 'monthly_reservation_usd' => 0],
-            'blockers' => array_values(array_unique($blockers)), 'quota_ids' => $ids];
+            'blockers' => array_values(array_unique($blockers)), 'quota_ids' => $ids, 'quota_slots' => $slots];
     }
 }

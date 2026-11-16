@@ -196,6 +196,7 @@ class MachineProvisionTest extends TestCase
 
     public function test_accepted_tasks_allow_replacement_but_still_count_against_daily_budget(): void
     {
+        config(['machine_provision.daily_limit_per_account' => 2]);
         $first = $this->task();
         $this->code('task_active', fn () => $this->service->queue($this->plan(), str_repeat('b', 32), $this->admin->id));
         $first->fill(['status' => 'accepted'])->save();
@@ -486,6 +487,7 @@ class MachineProvisionTest extends TestCase
 
     public function test_daily_attempt_limit_counts_definite_failures_and_cancellations(): void
     {
+        config(['machine_provision.daily_limit_per_account' => 2]);
         for ($i = 0; $i < 2; $i++) { $task = $this->task(str_repeat((string) ($i + 1), 32)); $this->service->cancel($task->id, $this->admin->id); }
         $this->code('daily_budget', fn () => $this->service->queue($this->plan(), str_repeat('c', 32), $this->admin->id));
         $this->assertSame(2, Task::query()->count()); Http::assertNothingSent();

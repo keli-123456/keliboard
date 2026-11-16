@@ -302,7 +302,9 @@ class MachineFailoverNativeBridge
 
     private function reserve(Member $member, Execution $run, Policy $policy, ?Attempt $previous = null): Attempt
     {
-        return $this->registry->locked(fn () => DB::transaction(function () use ($member, $run, $policy, $previous) {
+        $provider = app(MachineFailoverCredentials::class)->provider($policy);
+        return Cache::lock('machine-cloud:quota:' . $provider, 120)->block(2,
+            fn () => $this->registry->locked(fn () => DB::transaction(function () use ($member, $run, $policy, $previous) {
             $this->context($run->fresh()); $member = $member->fresh();
             if (MachineFailoverWorkflow::forRun($run) === MachineFailoverWorkflow::READINESS)
                 app(MachineInstanceAcceptance::class)->gate($policy->id, 'allow_readiness');
@@ -340,10 +342,15 @@ class MachineFailoverNativeBridge
             $members = Member::query()->whereIn('execution_id', Execution::query()->where('service_id', $run->service_id)->select('id'))->pluck('id');
             $currentMembers = Member::query()->where('execution_id', $run->id)->pluck('id');
             if (Attempt::query()->whereIn('execution_member_id', $currentMembers)->count() >= $service['attempt_limit']) throw new CloudException('attempt_budget');
+            $memberConfig = collect($run->payload['snapshot']['members'])->firstWhere('policy_id', $member->policy_id);
+            if (Attempt::query()->where('execution_member_id', $member->id)->count() >= ($memberConfig['attempt_limit'] ?? $service['attempt_limit']))
+                throw new CloudException('member_attempt_limit');
             $active = Attempt::query()->whereNotIn('status', ['rejected', 'failed', 'cancelled', 'completed', 'retained', 'released', 'cleaned'])->get();
             if ($active->whereIn('execution_member_id', $members->all())->count() >= $service['max_parallel']) throw new CloudException('parallel_budget');
             $ids = app(MachineCloudCredentialHealth::class)->sameAccountIds($account);
-            if ($active->whereIn('account_id', $ids)->isNotEmpty()) throw new CloudException('account_reserved');
+            $capacity = app(MachineProvisionLimits::class);
+            if ($active->whereIn('account_id', $ids)->count() >= $capacity->settings($account)['max_parallel']) throw new CloudException('account_reserved');
+            $capacity->assertAvailable($account);
             $attempt = Attempt::query()->create(['id' => (string) Str::uuid(), 'execution_member_id' => $member->id,
                 'ordinal' => Attempt::query()->where('execution_member_id', $member->id)->count() + 1, 'request_id' => bin2hex(random_bytes(16)),
                 'account_id' => $account->id, 'account_revision' => $account->revision, 'reserved_cents' => 0,
@@ -351,7 +358,7 @@ class MachineFailoverNativeBridge
                     + ($replacement === null ? [] : ['candidate_replacement' => $replacement])]);
             $member->fill(['attempt_id' => $attempt->id, 'phase' => 'creating', 'reason' => null])->save();
             return $attempt;
-        }));
+        })));
     }
 
     public function assertAttempt(Attempt $attempt, ?Task $task = null, bool $requireLease = true): void

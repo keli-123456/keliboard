@@ -211,11 +211,16 @@ class MachineFailoverObserver
         $accountId = $selection['account_id'] ?? null;
         if (!Schema::hasTable('v2_machine_provision_task')) $blockers[] = 'budget_history_unavailable';
         elseif ($accountId !== null) {
-            $tasks = MachineProvisionTask::query()->where('account_id', $accountId);
+            $account = \App\Models\MachineCloudAccount::query()->findOrFail($accountId);
+            $tasks = MachineProvisionTask::query()->whereIn('account_id', app(MachineCloudCredentialHealth::class)->sameAccountIds($account));
             $attempts = (clone $tasks)->where('created_at', '>=', $now - 86400)->count();
-            $limit = min($policy->daily_limit, max(1, min(2, (int) config('machine_provision.daily_limit_per_account', 2))));
-            if ($attempts >= $limit) $blockers[] = 'daily_budget_reached';
-            if ((clone $tasks)->whereNotIn('status', ['accepted', 'failed', 'cancelled'])->exists()) $blockers[] = 'active_creation_task';
+            $limits = app(MachineProvisionLimits::class);
+            try {
+                $settings = $limits->settings($account); $usage = $limits->usage($account);
+                if ($limits->policyReached($policy) || MachineProvisionLimits::reached($usage['attempts_24h'], $settings['daily_limit'])) $blockers[] = 'daily_budget_reached';
+                if ($usage['active'] >= $settings['max_parallel']) $blockers[] = 'active_creation_task';
+                if (MachineProvisionLimits::reached($usage['used'], $settings['max_instances'])) $blockers[] = 'credential_capacity_full';
+            } catch (CloudException $error) { $blockers[] = $error->getMessage(); }
             $lastDispatch = (clone $tasks)->max('dispatched_at');
             if ($lastDispatch !== null && $lastDispatch + $policy->cooldown_seconds > $now) $blockers[] = 'cooldown_active';
         }

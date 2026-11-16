@@ -302,6 +302,7 @@ class MachineFailoverObserverTest extends TestCase
 
     public function test_daily_limit_and_cooldown_include_other_policies_on_the_same_account(): void
     {
+        config(['machine_provision.daily_limit_per_account' => 1]);
         $this->attempt('needs_review'); $this->trigger(); $plan = Plan::query()->firstOrFail();
         foreach (['daily_budget_reached', 'active_creation_task', 'cooldown_active'] as $code) $this->assertContains($code, $plan->blockers);
         $this->assertSame(1, $plan->evidence['account_attempts_24h']);

@@ -24,6 +24,7 @@ class MachineProvisionService
         'panel_origin_changed', 'resource_missing', 'replacement_disabled', 'replacement_not_allowed',
         'replacement_evidence_changed', 'replacement_evidence_pending', 'replacement_guard_failed', 'replacement_cooldown', 'source_recovered',
         'replacement_episode_used', 'ownership_mismatch', 'config_changed', 'daily_budget', 'task_active',
+        'credential_capacity_full', 'capacity_unknown', 'invalid_capacity', 'candidate_cleanup_unconfirmed', 'credential_group_daily_budget',
         'release_changed', 'isolated_context_changed', 'isolated_scope_changed', 'isolation_confirmation_required', 'credential_group_changed',
         'credential_health_blocked', 'credential_health_unavailable', 'credential_identity_changed',
         'orchestration_disabled', 'rotation_disabled', 'native_lineage_changed', 'native_context_changed', 'native_intent_expired', 'budget_released', 'review_hold',
@@ -117,7 +118,6 @@ class MachineProvisionService
             }
             $account = MachineCloudAccount::query()->findOrFail($plan['account_id']);
             $health = app(MachineCloudCredentialHealth::class); $health->assertEligible($account, $plan);
-            $accountIds = $health->sameAccountIds($account);
             $machine = ServerMachine::query()->findOrFail($plan['machine_id']);
             if ($account->provider !== ($plan['provider'] ?? 'linode') || !$machine->is_active) throw new CloudException('invalid_plan');
             $provider = $this->provider->client($account, $plan);
@@ -131,11 +131,7 @@ class MachineProvisionService
             }
             if (Task::query()->where('machine_id', $machine->id)->where('slot', $plan['slot'])
                 ->whereNotIn('status', ['accepted', 'failed', 'cancelled'])->exists()) throw new CloudException('task_active');
-            if (Task::query()->whereIn('account_id', $accountIds)->whereNotIn('status', ['accepted', 'failed', 'cancelled'])->exists()
-                || \App\Models\MachineCloudTask::query()->whereIn('resource_id', MachineCloudResource::query()->whereIn('account_id', $accountIds)->select('id'))
-                    ->whereNotIn('status', \App\Models\MachineCloudTask::TERMINAL)->exists()) throw new CloudException('task_active');
-            if (Task::query()->whereIn('account_id', $accountIds)->where('created_at', '>=', time() - 86400)->count()
-                >= max(1, min(2, (int) config('machine_provision.daily_limit_per_account', 2)))) throw new CloudException('daily_budget');
+            app(MachineProvisionLimits::class)->assertAvailable($account, null, $attempt?->id);
             $id = (string) Str::uuid(); $installation = bin2hex(random_bytes(16)); $secret = bin2hex(random_bytes(32));
             $marker = 'keli-create-' . bin2hex(random_bytes(12));
             $data = $this->bootstrap->build($machine, $plan['panel_origin'], $id, $installation, $secret);
@@ -209,6 +205,7 @@ class MachineProvisionService
                     if ($account->provider === 'linode') LinodeProvisionClient::assertMetadataSize($payload['request']['metadata']['user_data'] ?? null);
                     if (isset($payload['plan']['credential_pool'])) app(MachineFailoverCredentials::class)->assertPlan($payload['plan']);
                     $provider->preflight($account, $payload['plan']);
+                    app(MachineProvisionLimits::class)->assertDispatch($account, $task);
                     $health->authenticatedRead($account, 'preflight');
                     $this->gate(); $this->actor($task->admin_id); $this->testMachine($task->machine_id);
                     if ($account->fresh()?->revision !== $task->account_revision) throw new CloudException('account_changed');
@@ -366,7 +363,7 @@ class MachineProvisionService
     private function locked(int $account, callable $work): mixed { return Cache::lock('machine-cloud:account:' . $account, 120)->block(2, $work); }
     private function quotaLocked(string $provider, callable $work): mixed
     {
-        return app(MachineCloudCredentialHealth::class)->available() ? Cache::lock('machine-cloud:quota:' . $provider, 120)->block(2, $work) : $work();
+        return Cache::lock('machine-cloud:quota:' . $provider, 120)->block(2, $work);
     }
     private function reason(string $reason): string { return in_array($reason, self::REASONS, true) ? $reason : 'internal_failure'; }
     private function move(Task $task, string $state, ?string $reason = null, ?array $evidence = null): void
