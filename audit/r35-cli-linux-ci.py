@@ -107,3 +107,7 @@ finally:
     SUMMARY['fixed_fixture_removed'] = not ROOT.exists()
     SUMMARY['external_routes_after'] = bool(cmd(['ip', 'route'], capture_output=True).stdout.strip())
     (ART / 'cli-linux-summary.json').write_text(json.dumps(SUMMARY, indent=2))
+    # Only aggregate synthetic evidence is published; private fixture files are gone.
+    for name in ('cli-linux-summary.json', 'fixed-entry.json', 'python.json'):
+        report = ART / name
+        if report.is_file(): report.chmod(0o644)
