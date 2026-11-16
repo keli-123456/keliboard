@@ -55,6 +55,7 @@ SUMMARY['tested_commit'] = cmd(['git', '-c', 'safe.directory=' + str(REPO), 'rev
                              cwd=REPO, capture_output=True, text=True).stdout.strip()
 SUMMARY['composer_lock_sha256'] = hashlib.sha256((REPO / 'composer.lock').read_bytes()).hexdigest()
 try:
+    os.umask(0o077)
     ROOT.mkdir(mode=0o700)
     app = ROOT / 'app'; app.mkdir()
     tracked = cmd(['git', '-c', 'safe.directory=' + str(REPO), 'ls-files', '-z'],
@@ -76,6 +77,8 @@ try:
         (runtime / name).chmod(0o644)
     for name in ('bootstrap/cache', 'storage/logs', 'storage/framework/cache/data', 'storage/framework/views', 'storage/framework/sessions'):
         (app / name).mkdir(parents=True, exist_ok=True)
+    for directory in (ROOT, app, runtime):
+        assert directory.stat().st_uid == 0 and directory.stat().st_mode & 0o022 == 0
     SUMMARY['fixed_entry'] = python_suite(['test_member_cli_entry_linux'], 'fixed-entry.json', root=True)
     assert SUMMARY['fixed_entry']['tests'] == 8 and SUMMARY['fixed_entry']['skipped'] == 0
     modules = ['test_member_cli', 'test_member_bound_linux', 'test_member_transport', 'test_member_round',

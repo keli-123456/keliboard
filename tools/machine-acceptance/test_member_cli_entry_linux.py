@@ -41,6 +41,10 @@ class MemberCliEntryLinuxTests(unittest.TestCase):
         self.assertEqual(subprocess.check_output(['ip', '-6', 'route']).strip(), b'')
         self.private = ROOT / 'private'; self.private.mkdir(mode=0o700, exist_ok=True)
         self.journal = self.private / 'member-journal'; self.journal.mkdir(mode=0o700, exist_ok=True)
+        for directory in (ROOT, ROOT / 'app', ROOT / 'runtime', self.private, self.journal):
+            self.assertEqual(directory.resolve(), directory)
+            self.assertEqual(directory.stat().st_uid, 0)
+            self.assertEqual(directory.stat().st_mode & 0o022, 0, str(directory))
         for p in self.journal.iterdir():
             self.assertTrue(p.is_file()); p.unlink()
         self.grant = self.private / 'member-runtime-scope.json'
