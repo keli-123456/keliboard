@@ -1,4 +1,4 @@
-name: Native Failover Isolated Acceptance
+name: R35 Temporary Assembly Linux Acceptance
 
 on:
   workflow_dispatch:
@@ -7,75 +7,44 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-failover-isolated-${{ github.ref }}
+  group: r35-assembly-linux-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  concurrency:
-    name: Native failover (${{ matrix.isolation }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        isolation: ["REPEATABLE READ", "READ COMMITTED"]
-    services:
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_DATABASE: keli_acceptance_native_failover
-          MYSQL_USER: keli_native_fixture
-          MYSQL_PASSWORD: ephemeral-native-ci-only
-          MYSQL_ROOT_PASSWORD: ephemeral-native-root-only
-        ports:
-          - 127.0.0.1::3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=24
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 127.0.0.1::6379
-        options: >-
-          --health-cmd="redis-cli ping"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=12
-    env:
-      KELI_NATIVE_ACCEPTANCE: "1"
-      KELI_NATIVE_HOST: "127.0.0.1"
-      KELI_NATIVE_DATABASE: keli_acceptance_native_failover
-      KELI_NATIVE_USER: keli_native_fixture
-      KELI_NATIVE_PASSWORD: ephemeral-native-ci-only
-      KELI_NATIVE_ISOLATION: ${{ matrix.isolation }}
+  isolated-assembly:
+    if: github.ref == 'refs/heads/acceptance/r35-assembly-linux-20261117'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          lfs: false
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: "8.2"
-          extensions: pdo_mysql, pdo_sqlite, redis, pcntl, posix, mbstring, openssl
-          tools: composer:v2
+          php-version: '8.2'
+          extensions: pdo_sqlite, pdo_mysql, redis, pcntl, posix, mbstring, bcmath, sockets, zip
           coverage: none
-      - name: Install test dependencies without application startup
-        run: composer install --no-interaction --no-progress --prefer-dist --no-scripts
-      - name: Run synthetic cloud and DNS with real queue, locks and InnoDB
-        env:
-          KELI_NATIVE_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
-          KELI_NATIVE_REDIS_PORT: ${{ job.services.redis.ports[6379] }}
+          tools: composer:v2
+      - name: Install locked dependencies without starting the application
+        run: composer install --no-interaction --no-progress --prefer-dist --no-scripts --no-plugins
+      - name: Mocked interfaces with real Linux processes and no external routes
+        shell: bash
         run: |
+          set -euo pipefail
+          ulimit -c 0
           mkdir -p artifacts
-          vendor/bin/phpunit -c phpunit-native-failover.xml --stop-on-error --stop-on-failure --log-junit artifacts/native-failover.xml
-      - name: Preserve aggregate acceptance evidence
+          sudo timeout --signal=TERM --kill-after=15s 1200s \
+            unshare --net --pid --fork --mount-proc --mount --kill-child=SIGKILL \
+            /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root \
+            LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONDONTWRITEBYTECODE=1 \
+            python3 "$GITHUB_WORKSPACE/audit/r35-assembly-linux-ci.py" \
+            > artifacts/isolated-assembly.log 2>&1
+      - name: Preserve synthetic evidence only
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-failover-${{ strategy.job-index }}
-          path: |
-            artifacts/native-failover.xml
-            artifacts/native-failover-summary.jsonl
-          if-no-files-found: ignore
+          name: r35-assembly-isolated-linux-evidence
+          path: artifacts/
           retention-days: 7
+          if-no-files-found: error

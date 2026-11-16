@@ -107,13 +107,13 @@ class AssemblyTests(unittest.TestCase):
             dispatched=self.f.created_control, ready=operation == 'control-create',
             pin=copy.deepcopy(self.f.original_scope['control']) if self.f.created_control else None)
 
-    def assembly(self):
+    def bindings(self):
         def provider(operation, pin):
             reply = self.f.io(operation, pin)
             if operation.endswith('-delete'):
                 reply.update(status='owned', dispatched=True)
             return reply
-        return MemberRoundAssembly(scope=self.f.setup_scope, setup=self.setup,
+        return dict(scope=self.f.setup_scope, setup=self.setup,
             control=SimpleNamespace(dispatch=self.control), native_transport=self.transport,
             provider=SimpleNamespace(dispatch=provider),
             controller=SimpleNamespace(restore_fault=lambda p: self.f.io('fault-restore', p),
@@ -123,6 +123,9 @@ class AssemblyTests(unittest.TestCase):
             task_call=self.partial_task, reconcile=lambda requests: dict(requests_sha256=digest(requests), resolved=self.f.resolved),
             export=lambda: dict(run_id=RUN, sha256='e' * 64, verified=self.f.export_ok),
             load=self.f.journal.get, save=self.f.save, guard=lambda _: None, clock=lambda: self.f.now)
+
+    def assembly(self):
+        return MemberRoundAssembly(**self.bindings())
 
     def finish(self, driver):
         for _ in range(80):
