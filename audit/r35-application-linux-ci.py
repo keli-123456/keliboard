@@ -221,7 +221,15 @@ try:
                 argv = ['php', str(REPO / 'audit/r35-setup-rpc-fixture.php'),
                         'bootstrap' if bootstrap else 'setup', str(creation_directory)]
                 p = subprocess.run(argv, input=payload, cwd=ROOT, env=ENV, capture_output=True, timeout=timeout)
-                assert p.returncode == 0, json.loads(p.stdout)
+                if p.returncode != 0:
+                    value = json.loads(p.stdout)
+                    diagnostic = value.get('diagnostic', {})
+                    allowed = {key: text for key, text in diagnostic.items() if key in ('class', 'file', 'reason')
+                        and isinstance(text, str) and __import__('re').fullmatch(r'[A-Za-z0-9_.-]{1,120}', text)}
+                    if type(diagnostic.get('line')) is int and 0 < diagnostic['line'] < 100000:
+                        allowed['line'] = diagnostic['line']
+                    SUMMARY.setdefault('setup_rpc_first_error', dict(operation=request['operation'], diagnostic=allowed))
+                    raise RuntimeError('fixture_setup_rpc_unconfirmed')
                 return p.stdout
         if argv == ['python3', '-B', '/opt/keli-isolated/runtime/member_http_service.py']:
             request = json.loads(payload)
