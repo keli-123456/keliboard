@@ -160,7 +160,8 @@ def run_execution_round(directory, *, setup_ports, **bindings):
         return run(assembly.round())
 
 
-def run_connected_round(directory, *, control_inputs, setup_inputs, evidence_directory=None, **bindings):
+def run_connected_round(directory, *, control_inputs, setup_inputs, evidence_directory=None,
+                        cleanup_inputs=None, **bindings):
     """Bind the concrete deferred setup under the existing whole-round lock.
 
     No host placeholder, permit or default provider is supplied. The caller's
@@ -188,5 +189,13 @@ def run_connected_round(directory, *, control_inputs, setup_inputs, evidence_dir
             runtime = MemberConnectedRuntime(setup, evidence_directory)
             bindings.update(native_transport=runtime.native_transport, controller=runtime,
                 task_call=runtime.task_call, reconcile=runtime.reconcile, export=runtime.export)
+            if cleanup_inputs is not None:
+                from member_prepared_provider import MemberPreparedProvider
+                require(isinstance(cleanup_inputs, dict) and {'directory_path', 'php', 'guard'} <= set(cleanup_inputs)
+                        <= {'directory_path', 'php', 'guard', 'machine_file', 'execute'} and 'provider' not in bindings,
+                        'transport_connected_cleanup_override')
+                bindings['provider'] = MemberPreparedProvider(runtime=runtime, **cleanup_inputs)
+        else:
+            require(cleanup_inputs is None, 'transport_connected_cleanup_requires_runtime')
         assembly = MemberRoundAssembly(setup=setup, control=control, load=load, save=save, **bindings)
         return run(assembly.round())

@@ -19,7 +19,7 @@ import threading
 import time
 from unittest.mock import patch
 
-if '--outer-whole' in sys.argv:
+if '--outer-whole' in sys.argv or '--outer-partial' in sys.argv:
     sys.argv.append('--whole-entry')
 if any(mode in sys.argv for mode in ('--whole-entry', '--setup-evidence', '--outer-crash', '--outer-stop')):
     sys.argv.append('--host-port-only')
@@ -120,7 +120,7 @@ try:
         'test_member_installation_linux.InstallationServiceUserTests', 'test_member_execution.ExecutionTests',
         'test_member_assembly', 'test_member_initialization', 'test_member_cli', 'test_member_evidence', 'test_member_round',
         'test_member_transport', 'test_member_remote_setup', 'test_member_private_cleanup', 'test_member_bundle', 'test_member_runtime_bundle',
-        'test_member_host_installation', 'test_member_host_setup', 'test_member_connected_setup', 'test_member_connected_runtime', 'test_member_operator_transport', 'test_member_control_transport', 'test_member_http_service'],
+        'test_member_host_installation', 'test_member_host_setup', 'test_member_connected_setup', 'test_member_connected_runtime', 'test_member_prepared_provider', 'test_member_operator_transport', 'test_member_control_transport', 'test_member_http_service'],
         cwd=TOOLS, capture_output=True, text=True, timeout=240)
     (ART / 'python.log').write_text(tests.stdout + tests.stderr)
     assert tests.returncode == 0, 'python_regression_failed'
@@ -144,7 +144,7 @@ try:
     assert php_tests.returncode == 0, 'dns_phpunit_regression_failed'
     SUMMARY['dns_phpunit_passed'] = True
     source_tests = subprocess.run(['php', 'vendor/phpunit/phpunit/phpunit',
-        'tests/Unit/Services/MachineFailoverNativeBridgeTest.php', '--filter', 'test_member_(initialization_|setup_evidence_)'],
+        'tests/Unit/Services/MachineFailoverNativeBridgeTest.php', '--filter', 'test_member_(initialization_|setup_evidence_|partial_source_)'],
         cwd=REPO, capture_output=True, text=True, timeout=120)
     (ART / 'source-phpunit.log').write_text(source_tests.stdout + source_tests.stderr)
     assert source_tests.returncode == 0, 'source_phpunit_regression_failed'
@@ -205,7 +205,8 @@ try:
     install_scope = dict(run_id=RUN, bundle_sha256=frozen['archive_sha256'], started_at=int(time.time()))
     install_scope['deadline_at'] = install_scope['started_at'] + 7199
     outer_crash = '--outer-crash' in sys.argv
-    outer_stop = '--outer-stop' in sys.argv
+    outer_partial = '--outer-partial' in sys.argv
+    outer_stop = '--outer-stop' in sys.argv or outer_partial
     outer_whole = '--outer-whole' in sys.argv
     outer_mode = outer_crash or outer_whole or outer_stop
     interrupted_prefix = outer_crash or outer_stop
@@ -315,6 +316,16 @@ try:
         from member_connected_runtime import MemberConnectedRuntime
         connected_evidence = work / 'connected-evidence'; connected_evidence.mkdir(mode=0o700)
         connected_runtime = MemberConnectedRuntime(execution, connected_evidence)
+        from member_prepared_provider import MemberPreparedProvider
+        approval_directory = work / 'cleanup-approval'; approval_directory.mkdir(mode=0o700)
+        approval = dict(schema=1, operation='prepare-provider-cleanup', authorized=True, scope=install_scope,
+            credentials_sha256=hashlib.sha256(credentials).hexdigest(), baseline_ids=[],
+            operator_machine_sha256=hashlib.sha256(Path('/etc/machine-id').read_bytes()).hexdigest())
+        for name, raw in [('cleanup-parent.json', json.dumps(approval).encode()), ('provider-credentials.json', credentials)]:
+            (approval_directory / name).write_bytes(raw); (approval_directory / name).chmod(0o600)
+        prepared_provider = MemberPreparedProvider(runtime=connected_runtime, directory_path=approval_directory,
+            php=Path(shutil.which('php')).resolve(), guard=lambda *_: None)
+        assert not prepared_provider.prepared.exists()
         assert execution.rpc is None
         (creation_directory / 'fixture-dns.json').write_text(json.dumps(dict(rows=[], create=0, claim=0, delete=0)))
         (creation_directory / 'fixture-dns.json').chmod(0o600)
@@ -437,9 +448,9 @@ try:
                 php=php, artifacts=ART, summary=SUMMARY,
                 bind_execute=lambda callback: setattr(execution, 'execute', callback),
                 native_transport=connected_runtime.native_transport if outer_mode else None,
-                advance_initialization=advance_initialization if outer_whole else None,
-                advance_native=advance_native if outer_whole else None)
-            if not outer_whole:
+                advance_initialization=advance_initialization if outer_whole or outer_partial else None,
+                advance_native=advance_native if outer_whole else None, stop_after_source_a=outer_partial)
+            if not outer_whole and not outer_partial:
                 native_cleanup_scope = MemberControllerPort(bound)('reconcile', dict(run_id=RUN))['cleanup_scope']
         stop_request = dict(scope=install_scope, stopped=True)
         if outer_mode:
@@ -459,14 +470,16 @@ try:
                     assert outer_state['pending'] is None
                     SUMMARY['outer_round_stop'] = dict(actual_stop_control=True, no_native_grant_or_source_task=True,
                         actual_disk_journal=True, actual_outer_driver=True, after_callback_before_sources=True)
+                    if outer_partial:
+                        SUMMARY['outer_round_stop'].update(no_native_grant_or_source_task=False,
+                            after_callback_before_sources=False, after_source_a_before_source_b=True)
             else:
                 assert outer_state['pending'] is None and len(native_cleanup_scope['roles']) == 4
         else:
-            assert setup_bindings.reconcile(stop_request)['resolved'] is True
-            scope_pins = setup_bindings.cleanup_scope(None)
+            scope_pins = initialization.reconcile()
         private_pins = scope_pins['auxiliary']['private_files']
         dns_pins = scope_pins['auxiliary']['records']
-        assert len(private_pins) == (6 if bound else 5) and len(scope_pins['roles']) == (2 if bound else 0)
+        assert len(private_pins) == (6 if bound else 5) and len(scope_pins['roles']) == (2 if bound else (1 if outer_partial else 0))
         assert len(dns_pins) == (3 if bound else 1)
         control_dns = next(pin for pin in dns_pins if pin['record_id'] == '6001')
         assert control_dns['name'] == domain
@@ -477,18 +490,13 @@ try:
         assert http_service.cgroup_empty(install_scope)
         from member_operator_transport import MemberOperatorProviderTransport
         from member_assembly import MemberRoundAssembly
-        operator = work / 'operator'; operator.mkdir(mode=0o700)
-        provider_scope = dict(run_id=RUN, bundle_sha256=install_scope['bundle_sha256'], baseline_ids=[],
-            pins=[control, *dns_pins], dns_receipts=[])
-        provider_permit = dict(schema=1, run_id=RUN, operation='provider-cleanup', authorized=True,
-            scope_sha256=digest(provider_scope), credentials_sha256=hashlib.sha256(credentials).hexdigest(),
-            operator_machine_sha256=hashlib.sha256(Path('/etc/machine-id').read_bytes()).hexdigest())
-        for name, raw in [('provider-scope.json', json.dumps(provider_scope).encode()),
-            ('provider-permit.json', json.dumps(provider_permit).encode()), ('provider-credentials.json', credentials),
-            ('fixture-cloud.json', json.dumps(dict(present=cloud['present'], row=cloud['row'], methods=[])).encode()),
+        actual_prepared = prepared_provider.prepare()
+        operator = prepared_provider.prepared
+        assert actual_prepared.scope['pins'] == [control, *dns_pins]
+        for name, raw in [('fixture-cloud.json', json.dumps(dict(present=cloud['present'], row=cloud['row'], methods=[])).encode()),
             ('fixture-dns.json', (creation_directory / 'fixture-dns.json').read_bytes())]:
             (operator / name).write_bytes(raw); (operator / name).chmod(0o600)
-        provider_journal = DiskJournal(work / 'provider-journal', RUN) if outer_mode else {}
+        provider_journal = install_journal
         def provider_execute(args, payload):
             assert args[-2] == str(TOOLS / 'member_operator_entry.php') and args[-1] == str(operator)
             if json.loads(payload)['operation'].startswith('control-'):
@@ -504,6 +512,9 @@ try:
                 else:
                     dns = json.loads((operator / 'fixture-dns.json').read_bytes())
                     assert dns['rows'] == [] and dns['delete'] == 1, 'controller_delete_before_dns_cleanup'
+                    if outer_partial and ROOT.exists():
+                        assert not json.loads((ROOT / 'private/setup-fixture/provider-rows.json').read_bytes())
+                        SUMMARY['partial_source_stop']['source_removed_before_control'] = True
             actual = [*args[:-2], str(REPO / 'audit/r35-operator-provider-fixture.php'), args[-1]]
             result = subprocess.run(actual, input=payload, capture_output=True, timeout=90, env=ENV, cwd=REPO)
             state = json.loads((operator / 'fixture-cloud.json').read_bytes())
@@ -514,9 +525,8 @@ try:
                 SUMMARY['operator_controller_fixture_removed_after_delete'] = True
             if result.returncode != 0: raise TransportError('cleanup_operator_unconfirmed')
             return result.stdout
-        provider = MemberOperatorProviderTransport(directory=operator, scope=provider_scope,
-            php=Path(shutil.which('php')).resolve(), guard=lambda *_: None, load=provider_journal.get,
-            save=lambda k, v: provider_journal.__setitem__(k, v), execute=provider_execute)
+        prepared_provider.execute = provider_execute
+        provider = prepared_provider
         auxiliary = json.loads(json.dumps(scope_pins))
         auxiliary['auxiliary']['control'] = control
         combined = dict(run_id=RUN, initialization=auxiliary, native=native_cleanup_scope)
@@ -560,7 +570,11 @@ try:
                     assert body['first_diagnostic']['file'] == 'member_source_initialization.php'
                     assert body['first_diagnostic']['line'] > 0 and body['uncertain_request'] is not None
                 assert body['uncertain_cleanup'] is None and body['dns']['retained_record_count'] == 1
-                assert all(r['classification'] == 'no_queue_intent' for r in body['sources']['roles'].values())
+                if outer_partial:
+                    assert body['sources']['roles']['source-b']['classification'] == 'no_queue_intent'
+                    assert body['sources']['roles']['source-a']['classification'] != 'no_queue_intent'
+                else:
+                    assert all(r['classification'] == 'no_queue_intent' for r in body['sources']['roles'].values())
                 assert not (ROOT / 'private/member-runtime-scope.json').exists()
                 if not interrupted_prefix:
                     assert (ROOT / 'private/member-setup-journal/first-error.json').read_bytes() == first_setup_error
@@ -632,7 +646,7 @@ try:
             assert outer_state['first_error'] == expected_error
             sequence = outer_state['sequence']
             assert outer_step(install_scope, setup_bindings, install_journal, assembly.cleanup) == outer_state
-            assert outer_state['sequence'] == sequence == 7
+            assert outer_state['sequence'] == sequence and (sequence > 7 if outer_partial else sequence == 7)
             assert json.loads((creation_directory / 'fixture-cloud.json').read_bytes())['methods'].count('POST') == 1
             assert all(p.stat().st_mode & 0o077 == 0 for p in install_journal.directory.iterdir())
             SUMMARY['outer_round_crash' if outer_crash else 'outer_round_stop'].update(first_error_preserved=True, no_second_creation=True,
@@ -659,7 +673,8 @@ try:
         if outer_mode:
             SUMMARY['connected_runtime_binding'] = dict(actual_native_factory=True,
                 actual_stopped_reconcile_and_evidence=True, actual_private_cleanup_binding=True,
-                partial_source_rpc_covered_by_component_tests_only=True, operator_cleanup_permit_fixture_prepared=True)
+                partial_source_rpc_covered_by_component_tests_only=not outer_partial,
+                operator_cleanup_permit_fixture_prepared=False, actual_cleanup_approval_narrowing=True)
         assert state['methods'].count('DELETE') == 1 and not state['present']
         if not bound:
             dns_state = json.loads((operator / 'fixture-dns.json').read_bytes())

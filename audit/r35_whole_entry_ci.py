@@ -10,7 +10,8 @@ import time
 
 def continue_entry(*, initialization, transport, remote, scope, creation_directory, root,
                    repo, env, certificate, domain, node_sha, journal, php, artifacts, summary,
-                   advance_initialization=None, advance_native=None, bind_execute=None, native_transport=None):
+                   advance_initialization=None, advance_native=None, bind_execute=None, native_transport=None,
+                   stop_after_source_a=False):
     from member_cli import BoundControllerTransport
     from member_initialization import STAGES
     from member_transport import TransportError
@@ -112,6 +113,13 @@ def continue_entry(*, initialization, transport, remote, scope, creation_directo
         if current != last:
             transitions.append(dict(at=int(time.time()), stage=STAGES[before], source_state=current[1]))
             last = current
+        if stop_after_source_a and status['sources']['source-a']['registered']:
+            assert set(pins) == {'source-a'} and not status['sources']['source-b']['registered']
+            assert initialization.state['index'] == 6 and not remote.grant_file.exists()
+            summary['partial_source_stop'] = dict(actual_source_task=True, actual_tls_callback=True,
+                actual_fresh_reports=status['sources']['source-a']['fresh_reports'],
+                b_not_created=True, native_grant_absent=True)
+            return None
         if initialization.state['index'] == before:
             time.sleep(5.1)
     assert set(pins) == {'source-a', 'source-b'}
