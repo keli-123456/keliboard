@@ -32,6 +32,10 @@ return static function (string $mode): array {
     if ($mode === 'setup-service-denied') {
         $need(posix_geteuid() === 65534);
         $authority = MemberSetupAuthority::open();
+        $scope = json_decode(file_get_contents('/opt/keli-isolated/member-setup-grant.json'), true, 32, JSON_THROW_ON_ERROR)['binding']['scope'];
+        $unexpected = static fn () => throw new LogicException('fixture_setup_service_guard_bypassed');
+        $configuration = new MemberSourceConfiguration($scope, $unexpected, $unexpected, $unexpected);
+        $denied(fn () => MemberSetupAuthority::issue($configuration, time(), time() + 7200), 'member_application_installer_root_required');
         $denied(fn () => $authority->within('source-prepare', 'source-a', fn () => []), 'member_setup_root_cli_required');
         $denied(fn () => MemberSetupAuthority::revoke(), 'member_setup_root_cli_required');
         $need(!is_writable('/opt/keli-isolated/member-setup-grant.json'));
@@ -40,6 +44,16 @@ return static function (string $mode): array {
     }
     $need(posix_geteuid() === 0, 'root_required');
     MemberApplicationBootstrap::initialized();
+    if ($mode === 'setup-queues') {
+        $redis = Illuminate\Support\Facades\Redis::connection('default');
+        foreach (['r35_callbacks', 'default', 'risk_ai', App\Services\ServerMachine\Cloud\MachineFailoverQueue::NAME] as $name) {
+            $need((int) $redis->llen('queues:' . $name) === 0, 'queue_job_escaped');
+            foreach (['delayed', 'reserved'] as $suffix)
+                $need((int) $redis->zcard('queues:' . $name . ':' . $suffix) === 0, 'queue_job_escaped');
+        }
+        $need(DB::table('failed_jobs')->count() === 0, 'failed_job_escaped'); $closed();
+        return ['no_redis_queued_delayed_or_reserved_jobs' => true, 'no_failed_jobs' => true];
+    }
     if ($mode === 'setup-stop' || $mode === 'setup-stop-busy') {
         // Revocation must still work when MySQL is unavailable or configuration drifted.
         DB::purge(); config(['database.connections.mysql.port' => 1]);

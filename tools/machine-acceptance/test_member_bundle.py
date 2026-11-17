@@ -45,6 +45,21 @@ class MemberBundleTests(BundleCase):
             member_bundle.freeze(self.repo, self.commit, path, 'keli-accept-offline-r35-fixture')
         self.assertFalse(path.exists())
 
+    def test_setup_capabilities_cannot_be_carried_in_unarmed_archive(self):
+        path = self.prepare()
+        member_bundle.freeze(self.repo, self.commit, path, 'keli-accept-offline-r35-fixture')
+        for name in ('member-setup-grant.json', 'member-setup-stop.json', 'member-setup-issuance.json'):
+            with self.subTest(name=name):
+                changed = self.output / (name + '.tar.gz')
+                with tarfile.open(path) as source, tarfile.open(changed, 'w:gz') as output:
+                    for item in source:
+                        output.addfile(item, source.extractfile(item) if item.isfile() else None)
+                    raw = b'{}\n'
+                    item = tarfile.TarInfo('runtime/' + name); item.size = len(raw); item.mode = 0o644
+                    output.addfile(item, io.BytesIO(raw))
+                with self.assertRaisesRegex(ValueError, 'bundle_authority_refused'):
+                    member_bundle.verify(changed)
+
     def test_tamper_is_not_a_valid_freeze(self):
         path = self.prepare()
         member_bundle.freeze(self.repo, self.commit, path, 'keli-accept-offline-r35-fixture')

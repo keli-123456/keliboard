@@ -277,6 +277,7 @@ try:
     assert php('setup-stop')['database_not_required']
     assert php('setup-stop')['stopped']
     assert php('setup-stopped-readback')['readback_allowed']
+    assert php('setup-queues')['no_redis_queued_delayed_or_reserved_jobs']
     assert callback() == 403
     SUMMARY['setup_authority'] = dict(actual_capability=True, real_mysql_redis_and_service_uid=True,
         native_source_queue_and_dispatch=True, provider_creates_simulated=1, duplicate_create_prevented=True,
@@ -285,6 +286,7 @@ try:
         exception_restores_capability_and_bus=True, callback_uses_actual_front_controller=True,
         stop_blocks_new_callbacks_before_inflight_drained=True, sigterm_releases_inflight_lock=True,
         revoke_without_database=True, stopped_readback_allowed=True,
+        redis_queues_delayed_reserved_and_failed_jobs_empty=True,
         expiry_boundary_unit_tested=True, real_elapsed_expiry_tested=False,
         b_bootstrap_tested=False, b_not_queued=True, no_health_verdict_fabricated=True)
     prepared = php('dns-prepare')
