@@ -515,9 +515,10 @@ try:
     assert native_scope['started_at'] == json.loads((ROOT / 'member-setup-grant.json').read_bytes())['started_at']
     assert native_path.stat().st_mode & 0o777 == 0o600
     assert cap_path.stat().st_mode & 0o777 == 0o644
+    confirmed_readback = dict(grant, uncertain_request=None, uncertain_cleanup=None)
     for _ in range(2):
-        assert setup_rpc('native-read') == grant
-        assert php('setup-native-read') == grant
+        assert setup_rpc('native-read') == confirmed_readback
+        assert php('setup-native-read') == confirmed_readback
         assert native_path.read_bytes() == native_bytes and cap_path.read_bytes() == cap_bytes
     request = dict(schema=2, **grant['identity'], request_id=os.urandom(16).hex(), sequence=1,
         role='control', operation='round-ready')
@@ -536,7 +537,7 @@ try:
             cwd=ROOT / 'app', env=ENV)
         assert json.loads(recovery.stdout)['result']['resolved']
         # Readback completes only the identical derivative, never resets the native grant.
-        assert setup_rpc('native-read') == grant
+        assert setup_rpc('native-read') == confirmed_readback
         assert cap_path.read_bytes() == cap_backup.read_bytes() and native_path.read_bytes() == native_bytes
     finally:
         if not cap_path.exists(): cap_backup.rename(cap_path)
