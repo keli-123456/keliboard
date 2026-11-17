@@ -1,0 +1,77 @@
+"""Real Linux installation permissions; synthetic archives, no network or services."""
+import hashlib
+import os
+import stat
+import subprocess
+import unittest
+
+from member_installation import MemberInstallation
+import member_runtime_bundle as runtime
+from member_transport import TransportError
+from test_member_runtime_bundle import RuntimeBundleTests
+
+
+@unittest.skipUnless(os.name == 'posix', 'Linux installation permissions required')
+class InstallationTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = RuntimeBundleTests()
+        self.fixture.setUp(); self.addCleanup(self.fixture.doCleanups)
+        args = self.fixture.runtime_fixture()
+        self.archive = args[-1]; self.result = runtime.assemble(*args)
+        self.root = self.fixture.root / 'controller'; self.root.mkdir(mode=0o711)
+        self.installer = MemberInstallation(self.root)
+
+    def test_actual_extract_hash_permissions_and_private_import(self):
+        result = self.installer.runtime(self.archive, self.result['archive_sha256'])
+        self.assertTrue(result['verified'])
+        self.assertTrue((self.root / 'payload/app/vendor/autoload.php').is_file())
+        raw = b'{"synthetic":true}'; digest = hashlib.sha256(raw).hexdigest()
+        self.installer.private('credentials', raw, digest)
+        self.assertEqual(0o600, stat.S_IMODE((self.root / 'private/credentials').stat().st_mode))
+        self.assertEqual(0o700, stat.S_IMODE((self.root / 'private').stat().st_mode))
+        with self.assertRaises(FileExistsError): self.installer.private('credentials', raw, digest)
+        with self.assertRaisesRegex(ValueError, 'destination_not_fresh'):
+            self.installer.runtime(self.archive, self.result['archive_sha256'])
+
+    def test_writable_root_hash_drift_and_linked_private_directory_refused(self):
+        self.root.chmod(0o777)
+        with self.assertRaisesRegex(TransportError, 'permissions'): MemberInstallation(self.root)
+        self.root.chmod(0o711)
+        with self.assertRaisesRegex(ValueError, 'archive_changed'): self.installer.runtime(self.archive, '0' * 64)
+        self.assertFalse((self.root / 'payload').exists())
+        outside = self.fixture.root / 'outside'; outside.mkdir(mode=0o700)
+        (self.root / 'private').symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(TransportError, 'permissions'):
+            self.installer.private('credentials', b'x', hashlib.sha256(b'x').hexdigest())
+        self.assertEqual([], list(outside.iterdir()))
+
+    def test_installed_content_or_permissions_drift_fails_readback(self):
+        self.installer.runtime(self.archive, self.result['archive_sha256'])
+        manifest = runtime.verify(self.archive)
+        path = self.root / 'payload/app/vendor/autoload.php'
+        path.chmod(0o666)
+        with self.assertRaisesRegex(TransportError, 'permissions'): self.installer.verify_runtime(manifest)
+        path.chmod(0o644); path.write_bytes(b'changed')
+        with self.assertRaisesRegex(TransportError, 'hash_changed'): self.installer.verify_runtime(manifest)
+
+
+@unittest.skipUnless(os.name == 'posix' and os.geteuid() == 0, 'root-owned installation fixture required')
+class InstallationServiceUserTests(InstallationTests):
+    def test_separate_service_user_loads_public_php_but_cannot_read_private_material(self):
+        self.fixture.root.chmod(0o711)
+        self.installer.runtime(self.archive, self.result['archive_sha256'])
+        raw = b'synthetic-private-material'
+        self.installer.private('credentials', raw, hashlib.sha256(raw).hexdigest())
+        path = self.root / 'payload/app/vendor/autoload.php'
+        command = ['setpriv', '--reuid', '65534', '--regid', '65534', '--clear-groups',
+                   '--no-new-privs', '--bounding-set=-all']
+        result = subprocess.run(command + ['php', '-r', 'require $argv[1]; echo "loaded";', str(path)],
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(0, result.returncode, result.stderr); self.assertEqual('loaded', result.stdout)
+        result = subprocess.run(command + ['php', '-r',
+            'exit(@file_get_contents($argv[1]) === false ? 0 : 1);', str(self.root / 'private/credentials')],
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(0, result.returncode, result.stderr)
+
+
+if __name__ == '__main__': unittest.main()

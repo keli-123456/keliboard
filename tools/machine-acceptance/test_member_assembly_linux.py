@@ -80,8 +80,14 @@ def tick(_):
 member_assembly.run = lambda driver: original_run(driver, sleep=tick, cleanup_seconds=20)
 bindings = t.bindings()
 del bindings['load']; del bindings['save']
+entry = member_assembly.run_assembled_round
+if len(sys.argv) > 3 and sys.argv[3] == 'execution':
+    from test_member_execution import ExecutionPort
+    del bindings['setup']
+    bindings['setup_ports'] = {name: ExecutionPort(t, name) for name in ('installation', 'sources', 'dns', 'authority')}
+    entry = member_assembly.run_execution_round
 try:
-    state = member_assembly.run_assembled_round(root, **bindings)
+    state = entry(root, **bindings)
     persist_remote()
     deletes = [r['role'] for r in t.requests if r['operation'] == 'task-delete']
     print(json.dumps(dict(closed=state['phase'] == 'closed', clean=state['resources_cleaned'],
