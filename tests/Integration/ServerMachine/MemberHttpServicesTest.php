@@ -133,11 +133,12 @@ final class MemberHttpServicesTest extends TestCase
 
     public function test_mysql_transaction_rolls_back_when_receipt_step_cannot_be_written(): void
     {
-        Schema::rename('v2_machine_provision_step', 'fixture_saved_steps');
+        DB::unprepared("CREATE TRIGGER fixture_reject_step BEFORE INSERT ON v2_machine_provision_step "
+            . "FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'synthetic_receipt_failure'");
         try {
             $this->assertSame(500, $this->request()[0]);
             $this->assertNull($this->a->fresh()->bootstrap_state);
-        } finally { Schema::rename('fixture_saved_steps', 'v2_machine_provision_step'); }
+        } finally { DB::unprepared('DROP TRIGGER fixture_reject_step'); }
         $this->assertSame(200, $this->request()[0]);
     }
 }

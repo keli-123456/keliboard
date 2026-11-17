@@ -34,6 +34,9 @@ class MemberInstallation:
         for path in target.rglob('*'):
             if path.is_dir(): path.chmod(0o755)
         self.verify_runtime(manifest)
+        # mkdir's requested mode is filtered by umask. Permit service-user path
+        # traversal only after verification; private/ remains separately 0700.
+        self.root.chmod(0o711)
         return {'bundle_sha256': expected_sha256, 'files': len(manifest['files']), 'verified': True}
 
     def verify_runtime(self, manifest):
