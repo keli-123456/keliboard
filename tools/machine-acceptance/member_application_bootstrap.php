@@ -108,4 +108,83 @@ final class MemberApplicationBootstrap
         self::assertConfiguration($pin);
         return $app;
     }
+
+    private static function installationIdentity(): array
+    {
+        self::need(PHP_SAPI === 'cli' && function_exists('posix_geteuid') && posix_geteuid() === 0,
+            'installer_root_required');
+        $pin = self::receipt();
+        self::assertConfiguration($pin);
+        $directory = self::ROOT . '/private'; $stat = @lstat($directory);
+        self::need($stat && realpath($directory) === $directory && is_dir($directory)
+            && $stat['uid'] === 0 && ($stat['mode'] & 0777) === 0700, 'private_directory_required');
+        return ['schema' => 1, 'run_id' => $pin['run_id'], 'bundle_sha256' => $pin['bundle_sha256'],
+            'environment_sha256' => $pin['environment_sha256'], 'machine_id_sha256' => $pin['machine_id_sha256']];
+    }
+
+    private static function installationFile(string $name, ?array $value = null): array
+    {
+        self::need(in_array($name, ['intent', 'result', 'first-error'], true), 'installation_file_invalid');
+        $path = self::ROOT . '/private/application-migration-' . $name . '.json';
+        if ($value !== null) {
+            // O_EXCL retains an uncertain first dispatch; it cannot be replayed.
+            self::need(!file_exists($path) && !is_link($path), 'initialization_intent_exists');
+            $mask = umask(0077);
+            try { $stream = fopen($path, 'x+b'); } finally { umask($mask); }
+            self::need(is_resource($stream), 'installation_write_failed');
+            try {
+                $raw = json_encode($value, JSON_THROW_ON_ERROR);
+                self::need(strlen($raw) <= 16384 && fwrite($stream, $raw) === strlen($raw)
+                    && fflush($stream) && fsync($stream), 'installation_write_failed');
+            } finally { fclose($stream); }
+        }
+        $stat = @lstat($path);
+        self::need($stat && realpath($path) === $path && is_file($path) && $stat['uid'] === 0
+            && $stat['nlink'] === 1 && ($stat['mode'] & 0777) === 0600 && $stat['size'] <= 16384,
+            'installation_readback_required');
+        $observed = json_decode(file_get_contents($path), true, 16, JSON_THROW_ON_ERROR);
+        self::need(is_array($observed) && ($value === null || $observed === $value), 'installation_readback_changed');
+        return $observed;
+    }
+
+    private static function migrationReceipt(array $identity): array
+    {
+        $migrations = \Illuminate\Support\Facades\DB::table('migrations')->orderBy('id')
+            ->get(['migration', 'batch'])->map(static fn ($row) => (array) $row)->all();
+        self::need(count($migrations) > 0, 'migrations_missing');
+        return $identity + ['migrated' => true, 'migration_count' => count($migrations),
+            'migrations_sha256' => hash('sha256', json_encode($migrations, JSON_THROW_ON_ERROR)),
+            'tables' => count(\Illuminate\Support\Facades\DB::select('SHOW TABLES'))];
+    }
+
+    public static function initialize(\Illuminate\Foundation\Application $app): array
+    {
+        $identity = self::installationIdentity();
+        self::installationFile('intent', $identity);
+        try {
+            self::need(\Illuminate\Support\Facades\DB::select('SHOW TABLES') === [], 'database_not_empty');
+            $output = new \Symfony\Component\Console\Output\BufferedOutput();
+            self::need($app->make(\Illuminate\Contracts\Console\Kernel::class)->call('migrate',
+                ['--force' => true, '--no-interaction' => true], $output) === 0, 'migration_failed');
+            $result = self::migrationReceipt($identity);
+            self::installationFile('result', $result);
+            return $result;
+        } catch (\Throwable $error) {
+            // Record only code locations, never SQL, connection strings or messages.
+            try {
+                self::installationFile('first-error', ['class' => (new \ReflectionClass($error))->getShortName(),
+                    'file' => basename($error->getFile()), 'line' => $error->getLine()]);
+            } catch (\Throwable) { /* Preserve the original failure even if recording fails. */ }
+            throw $error;
+        }
+    }
+
+    public static function initialized(): array
+    {
+        $identity = self::installationIdentity();
+        self::need(self::installationFile('intent') === $identity, 'installation_identity_changed');
+        $result = self::installationFile('result');
+        self::need($result === self::migrationReceipt($identity), 'installation_schema_changed');
+        return $result;
+    }
 }

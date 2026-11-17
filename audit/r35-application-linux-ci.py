@@ -112,6 +112,20 @@ try:
     SUMMARY['application_files'] = frozen['files']
     SUMMARY['composer_lock_sha256'] = frozen['composer_lock_sha256']
     SUMMARY['migration'] = php('migrate')
+    assert php('initialize-readback') == SUMMARY['migration']
+    rejected = php('migrate', ok=False)
+    assert rejected['reason'] == 'member_application_initialization_intent_exists'
+    denied = php('initialize-readback', uid=65534, ok=False)
+    assert denied['reason'] == 'member_application_installer_root_required'
+    receipt_path = ROOT / 'private/application-migration-result.json'
+    saved_receipt = ROOT / 'private/application-migration-saved.json'
+    receipt_path.rename(saved_receipt)
+    try:
+        assert php('initialize-readback', ok=False)['reason'] == 'member_application_installation_readback_required'
+        assert php('migrate', ok=False)['reason'] == 'member_application_initialization_intent_exists'
+    finally: saved_receipt.rename(receipt_path)
+    assert php('initialize-readback') == SUMMARY['migration']
+    SUMMARY['migration_replay_and_missing_completion_refused'] = True
     observed = php('inspect', uid=65534)
     assert observed['booted'] and observed['kernel'] == 'App\\Http\\Kernel'
     assert observed['uid'] == 65534 and observed['states'] == [None, None]

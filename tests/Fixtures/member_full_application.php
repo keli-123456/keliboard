@@ -13,11 +13,7 @@ try {
     $app = Keli\Acceptance\MemberApplicationBootstrap::boot();
     $mode = PHP_SAPI === 'cli-server' ? 'http' : ($argv[1] ?? 'inspect');
     if ($mode === 'migrate') {
-        if (posix_geteuid() !== 0) throw new RuntimeException('fixture_root_required');
-        if (Illuminate\Support\Facades\DB::select('SHOW TABLES') !== []) throw new RuntimeException('fixture_database_not_empty');
-        $output = new Symfony\Component\Console\Output\BufferedOutput();
-        if ($app->make(Illuminate\Contracts\Console\Kernel::class)->call('migrate', ['--force' => true, '--no-interaction' => true], $output) !== 0)
-            throw new RuntimeException('fixture_migration_failed');
+        $initialized = Keli\Acceptance\MemberApplicationBootstrap::initialize($app);
         foreach (['a', 'b'] as $letter) {
             App\Models\MachineProvisionTask::query()->create([
                 'id' => str_repeat($letter, 8) . '-' . str_repeat($letter, 4) . '-4' . str_repeat($letter, 3)
@@ -31,7 +27,9 @@ try {
                 'dispatched_at' => time(), 'deadline_at' => time() + 600,
             ]);
         }
-        echo json_encode(['migrated' => true, 'tables' => count(Illuminate\Support\Facades\DB::select('SHOW TABLES'))]);
+        echo json_encode($initialized);
+    } elseif ($mode === 'initialize-readback') {
+        echo json_encode(Keli\Acceptance\MemberApplicationBootstrap::initialized());
     } elseif ($mode === 'http') {
         if (posix_geteuid() === 0 || ($_SERVER['REMOTE_ADDR'] ?? '') !== '127.0.0.1'
             || ($_SERVER['REQUEST_URI'] ?? '') !== '/api/v2/server/machine/provision/result'
