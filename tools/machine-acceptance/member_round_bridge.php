@@ -103,7 +103,7 @@ final class MemberRoundBridge
         // Keep error recovery usable even if a native binding is no longer valid.
         // Unknown lineage is flagged, never adopted or treated as cleaned.
         $resolved = true; $diagnostic = null; $pins = $this->scope['sources'];
-        try { $this->authority->assertData(); $pins = $this->taskPins(); }
+        try { $this->authority->assertData(); $pins = $this->taskPins(diagnosticOnly: true); }
         catch (\Throwable $error) {
             $resolved = false;
             $diagnostic = self::safeDiagnostic(['class' => (new \ReflectionClass($error))->getShortName(),
@@ -114,9 +114,12 @@ final class MemberRoundBridge
             $task = Task::query()->find($pin['task_id']);
             $bound = $task !== null && $task->account_id === $this->scope['driver']['account_id'];
             foreach (['machine_id', 'installation_id', 'external_id', 'marker', 'account_revision', 'provider_created_at'] as $field)
-                $bound = $bound && isset($pin[$field]) && $task->{$field} === $pin[$field];
+                $bound = $bound && array_key_exists($field, $pin) && $task->{$field} === $pin[$field];
             $tasks[$role] = ['task_id' => $pin['task_id'], 'binding_current' => $bound];
             if (!$bound) { $resolved = false; continue; }
+            $external = is_string($task->external_id) && $task->external_id !== '' && $task->provider_created_at !== null;
+            $tasks[$role]['external_identity_available'] = $external;
+            if (!$external) $resolved = false;
             $value = $task->evidence[\App\Services\ServerMachine\Cloud\MachineProvisionDiagnostic::KEY] ?? null;
             $tasks[$role] += ['status' => in_array($task->status, [...Task::TERMINAL, 'queued', 'creating', 'polling', 'bootstrapping', 'waiting_reports'], true)
                     ? $task->status : 'other', 'first_error_present' => $value !== null,
@@ -217,7 +220,7 @@ final class MemberRoundBridge
             'first_error' => $state['first_error'], 'cleanup_owned_by_host' => true];
     }
 
-    private function taskPins(): array
+    private function taskPins(bool $diagnosticOnly = false): array
     {
         $d = $this->scope['driver']; $pins = $this->scope['sources'];
         $request = substr(hash('sha256', MachineIntentJson::encode([$d['run_id'], 'native-a'])), 0, 32);
@@ -237,8 +240,12 @@ final class MemberRoundBridge
             self::need(app(\App\Services\ServerMachine\Cloud\MachineFailoverNativeBridge::class)->bindingCurrent($attempt, $task), 'candidate_binding_changed');
             // A dispatched task without an exact external ID must be reconciled by the
             // original provisioning intent, never ignored as an empty role.
-            self::need((bool) $task->external_id || !$task->dispatched_at, 'candidate_readback_required');
-            if (!$task->external_id) continue;
+            // Export a lineage-checked first error without claiming cloud absence or
+            // authorizing cleanup. All execution/status callers still require the ID.
+            if (!$diagnosticOnly) {
+                self::need((bool) $task->external_id || !$task->dispatched_at, 'candidate_readback_required');
+                if (!$task->external_id) continue;
+            }
             $pins['candidate-a' . $attempt->ordinal] = $task->only(['installation_id', 'external_id', 'account_revision',
                 'provider_created_at', 'marker', 'machine_id']) + ['task_id' => $task->id];
         }

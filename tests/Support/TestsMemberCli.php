@@ -158,6 +158,48 @@ trait TestsMemberCli
         $this->cliAssertClosed();
     }
 
+    public function test_member_evidence_keeps_candidate_first_error_when_create_identity_is_unresolved(): void
+    {
+        $this->memberCallbackFixture(); [, $bridge] = $this->cliBindings();
+        $task = $this->task();
+        $safe = \App\Services\ServerMachine\Cloud\MachineProvisionDiagnostic::project(
+            new \RuntimeException('secret-create-response'), 'create');
+        $task->external_id = null; $task->provider_created_at = null;
+        $task->evidence = ['task_diagnostic' => $safe, 'raw' => 'secret-create-body']; $task->save();
+        $this->assertNotNull($task->dispatched_at);
+        $bridge->dispatch($this->cliRequest('round-stop'));
+        $before = $task->fresh()->getRawOriginal();
+        $reply = $bridge->dispatch($this->cliRequest('round-evidence'))['result'];
+        $body = json_decode($reply['content'], true, 32, JSON_THROW_ON_ERROR);
+        $this->assertArrayHasKey('candidate-a1', $body['tasks']);
+        $candidate = $body['tasks']['candidate-a1'];
+        $this->assertFalse($body['reconciled']);
+        $this->assertTrue($candidate['binding_current']);
+        $this->assertFalse($candidate['external_identity_available']);
+        $this->assertTrue($candidate['first_error_present']);
+        $this->assertEquals($safe, $candidate['first_diagnostic']);
+        $this->assertStringNotContainsString('secret-', $reply['content']);
+        foreach (['round-status' => 'control', 'task-delete' => 'candidate-a1'] as $operation => $role) {
+            try { $bridge->dispatch($this->cliRequest($operation, $role)); $this->fail(); }
+            catch (\RuntimeException $error) { $this->assertSame('member_round_candidate_readback_required', $error->getMessage()); }
+        }
+        $this->assertSame($before, $task->fresh()->getRawOriginal());
+        $this->assertCount(1, $this->posts); $this->assertSame(0, $this->dnsWrites); $this->cliAssertClosed();
+    }
+
+    public function test_member_evidence_does_not_adopt_candidate_with_changed_lineage(): void
+    {
+        $this->memberCallbackFixture(); [, $bridge] = $this->cliBindings();
+        $task = $this->task(); $task->installation_id = 'unrelated-installation';
+        $task->evidence = ['task_diagnostic' => ['message' => 'secret-other-task']]; $task->save();
+        $bridge->dispatch($this->cliRequest('round-stop'));
+        $reply = $bridge->dispatch($this->cliRequest('round-evidence'))['result'];
+        $body = json_decode($reply['content'], true, 32, JSON_THROW_ON_ERROR);
+        $this->assertFalse($body['reconciled']); $this->assertArrayNotHasKey('candidate-a1', $body['tasks']);
+        $this->assertStringNotContainsString('secret-', $reply['content']);
+        $this->assertCount(1, $this->posts); $this->assertSame(0, $this->dnsWrites); $this->cliAssertClosed();
+    }
+
     private function memberCallbackProjection(): array
     {
         require_once base_path('tools/machine-acceptance/member_candidate_callbacks.php');
