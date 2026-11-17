@@ -15,8 +15,8 @@ from member_transport import (StrictControllerTransport, MemberCleanup, Transpor
                               require, ROLES, OPERATIONS, REMOTE_ENTRY, LIMIT)
 
 RUN = 'keli-accept-20261116-r35-f4940b41'
-ROUND_OPS = ('round-ready', 'round-step', 'round-status', 'round-stop')
-RECOVERY = ('round-stop', 'round-status', 'task-inspect', 'task-delete')
+ROUND_OPS = ('round-ready', 'round-step', 'round-status', 'round-stop', 'round-dns-cleanup')
+RECOVERY = ('round-stop', 'round-status', 'round-dns-cleanup', 'task-inspect', 'task-delete')
 
 
 class BoundControllerTransport(StrictControllerTransport):
@@ -100,7 +100,7 @@ class BoundControllerTransport(StrictControllerTransport):
             require(self.load('bound-uncertain') is None, 'transport_mutation_reconcile_required')
             active = self.load('bound-active')
             require(active is None or active.get('completed') is True, 'transport_mutation_reconcile_required')
-        if operation == 'task-delete':
+        if operation in ('task-delete', 'round-dns-cleanup'):
             require(self.load('bound-stop') is not None, 'transport_cleanup_requires_stop')
         self.guard(operation, role)
         for path, key in [(self.identity, 'identity_sha256'), (self.known, 'known_hosts_sha256')]:
@@ -109,7 +109,7 @@ class BoundControllerTransport(StrictControllerTransport):
             require(hashlib.sha256(raw).hexdigest() == self.ssh_binding.get(key), 'transport_ssh_material_changed')
         if operation == 'round-stop':
             self.save('bound-stop', {'stopped': True})
-        mutation = operation in ('round-step', 'source-register', 'task-delete')
+        mutation = operation in ('round-step', 'source-register', 'task-delete', 'round-dns-cleanup')
         request_id = request_id or uuid.uuid4().hex
         import re
         require(re.fullmatch('[a-f0-9]{32}', request_id), 'transport_request_invalid')
@@ -124,7 +124,7 @@ class BoundControllerTransport(StrictControllerTransport):
         request = dict(self.identity_binding, schema=2, request_id=request_id, sequence=sequence,
                        operation=operation, role=role)
         self.save(key, {'request': request})
-        if mutation and operation != 'task-delete':
+        if mutation and operation not in ('task-delete', 'round-dns-cleanup'):
             self.save('bound-active', {'request_id': request_id, 'completed': False})
         try:
             raw = self.execute(self._command('php ' + REMOTE_ENTRY),
@@ -135,7 +135,7 @@ class BoundControllerTransport(StrictControllerTransport):
                     for k, v in request.items()), 'transport_response_binding_changed')
             require(reply.get('ok') is True and isinstance(reply.get('result'), dict), 'transport_remote_rejected')
             self.save(key, {'request': request, 'reply': reply})
-            if mutation and operation != 'task-delete':
+            if mutation and operation not in ('task-delete', 'round-dns-cleanup'):
                 self.save('bound-active', {'request_id': request_id, 'completed': True})
             return reply['result']
         except Exception as error:

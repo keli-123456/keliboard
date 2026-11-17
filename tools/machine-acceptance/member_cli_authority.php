@@ -12,9 +12,9 @@ final class MemberCliAuthority
 {
     public const ROOT = '/opt/keli-isolated';
     public const RUN = 'keli-accept-20261116-r35-f4940b41';
-    public const RPC = ['round-ready', 'round-step', 'round-status', 'round-stop',
+    public const RPC = ['round-ready', 'round-step', 'round-status', 'round-stop', 'round-dns-cleanup',
         'source-observe', 'source-register', 'task-inspect', 'task-delete'];
-    private const RECOVERY = ['round-status', 'round-stop', 'task-inspect', 'task-delete'];
+    private const RECOVERY = ['round-status', 'round-stop', 'round-dns-cleanup', 'task-inspect', 'task-delete'];
     private const NATIVE = ['start', 'advance', 'context', 'queue', 'native_task', 'candidate_cleanup', 'candidate_retry',
         'node_readiness', 'native_address_verify', 'native_address_read', 'native_dns_admission', 'native_dns_prepare',
         'native_dns_binding', 'native_dns_complete', 'dns_readback', 'dns_write', 'dns_set_read', 'dns_set_write',
@@ -196,7 +196,7 @@ final class MemberCliAuthority
             self::need($now < $this->scope['deadline_at'] - 1200 && !($this->stopped)()
                 && ($this->simulation || (!file_exists(self::ROOT . '/member-setup-stop.json')
                     && !is_link(self::ROOT . '/member-setup-stop.json'))), 'execution_expired_or_stopped');
-        if ($operation === 'task-delete') self::need(($this->stopped)(), 'final_cleanup_required');
+        if (in_array($operation, ['task-delete', 'round-dns-cleanup'], true)) self::need(($this->stopped)(), 'final_cleanup_required');
     }
 
     public function native(string $operation): void

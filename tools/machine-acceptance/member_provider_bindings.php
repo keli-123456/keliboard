@@ -111,6 +111,11 @@ final class MemberProviderBindings
     {
         $row = ($this->dnsRead)('DescribeDomainRecordInfo', ['RecordId' => $pin['record_id']], true);
         if ($row === null) return null;
+        return $this->assertDnsRow($pin, $row);
+    }
+
+    private function assertDnsRow(array $pin, array $row): array
+    {
         $expected = ['RecordId' => $pin['record_id'], 'DomainName' => 'dnscloudcloud.top',
             'RR' => substr($pin['name'], 0, -strlen('.dnscloudcloud.top')), 'Type' => $pin['type'],
             'Line' => 'default', 'Value' => $pin['value'], 'Remark' => $pin['marker'], 'TTL' => 600];
@@ -122,6 +127,22 @@ final class MemberProviderBindings
         foreach ($expected as $key => $value) self::need(($row[$key] ?? null) === $value, 'dns_identity_changed');
         self::need(($row['Locked'] ?? false) === false, 'dns_identity_changed');
         return $row;
+    }
+
+    public function resolveDnsPin(array $pins): array
+    {
+        self::need(array_is_list($pins) && count($pins) >= 1 && count($pins) <= 2, 'dns_pins_invalid');
+        foreach ($pins as $pin) {
+            $this->pin($pin, 'dns');
+            self::need(array_diff_key($pin, ['value' => true]) === array_diff_key($pins[0], ['value' => true]), 'dns_pins_invalid');
+        }
+        $row = ($this->dnsRead)('DescribeDomainRecordInfo', ['RecordId' => $pins[0]['record_id']], true);
+        if ($row === null) return $pins[0];
+        foreach ($pins as $pin) if (($row['Value'] ?? null) === $pin['value']) {
+            $this->assertDnsRow($pin, $row);
+            return $pin;
+        }
+        throw new \RuntimeException('member_provider_dns_identity_changed');
     }
 
     public function dispatch(string $operation, array $pin): array

@@ -75,7 +75,7 @@ class MachineDnsRecordSetExecution
     private function step(Run $run, array $p, string $token, int $generation, Runtime $runtime): void
     {
         $a = &$p['plan']['actions'][$run->cursor]; $set = $p['snapshot']['set']; $driver = $this->driver($runtime);
-        $this->journal($a, $set);
+        $this->assertActionJournal($a, $set);
         if (in_array($a['state'], ['dispatched', 'claim_dispatched', 'awaiting_readback'], true)) {
             $this->readback($run, $p, $token, $generation, false); return;
         }
@@ -109,7 +109,7 @@ class MachineDnsRecordSetExecution
     private function readback(Run $run, array $p, string $token, int $generation, bool $stopping): void
     {
         $a = &$p['plan']['actions'][$run->cursor]; $runtime = $this->runtime($run->id);
-        $this->journal($a, $p['snapshot']['set']);
+        $this->assertActionJournal($a, $p['snapshot']['set']);
         if ($a['readback_attempts'] >= self::READBACK_LIMIT) throw new CloudException('dns_original_intent_only');
         if ($a['kind'] === 'create' && $p['snapshot']['set']['provider'] === 'aliyun' && !$a['known_id']) throw new CloudException('dns_unclaimed_record');
         $a['readback_attempts']++; $p['reads']++;
@@ -241,7 +241,7 @@ class MachineDnsRecordSetExecution
         usort($a, fn ($a, $b) => strcmp($a['id'], $b['id'])); usort($b, fn ($a, $b) => strcmp($a['id'], $b['id'])); return $a === $b;
     }
     private function seal(array $a): string { return $this->hash(array_intersect_key($a, array_flip(['id', 'kind', 'slot_id', 'member_id', 'before', 'after']))); }
-    private function journal(array $a, array $set): void
+    public function assertActionJournal(array $a, array $set): void
     {
         if (!is_string($a['seal'] ?? null) || !hash_equals($a['seal'], $this->seal($a))) throw new CloudException('dns_journal_changed');
         if ($a['state'] === 'prepared') {

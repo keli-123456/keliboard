@@ -133,16 +133,58 @@ final class MemberSetupDns
     public function cleanup(): array
     {
         $this->authority->stop();
-        return $this->within('dns-cleanup', function (\Closure $guard): array {
+        return $this->within('dns-cleanup', fn (\Closure $guard) => $this->cleanupRecords($guard));
+    }
+
+    public function nativeCleanup(array $scope, MemberCliAuthority $native): array
+    {
+        $native->assertDriver($scope['driver']);
+        $window = $this->authority->windowBinding(); $s = $this->binding['scope']; $c = $this->binding['configuration'];
+        self::need($scope['run_id'] === MemberCliAuthority::RUN && $scope['started_at'] === $window['started_at']
+            && $scope['deadline_at'] === $window['deadline_at'] && $scope['control']['external_id'] === $this->authority->controlBinding()['pin']['external_id'],
+            'native_window_changed');
+        foreach (['account_id', 'release_id', 'admin_id', 'baseline_ids'] as $key)
+            self::need($scope['driver'][$key] === $s[$key], 'native_scope_changed');
+        foreach (['service_id', 'service_revision'] as $key)
+            self::need($scope['driver'][$key] === $c[$key], 'native_scope_changed');
+        foreach (['source-a', 'source-b'] as $role) foreach (['machine_id', 'policy_id'] as $key)
+            self::need($scope['sources'][$role][$key] === $c['sources'][$role][$key], 'native_source_changed');
+        $guard = function () use ($native): void {
+            $native->allow('round-dns-cleanup'); $native->assertData();
+            $this->authority->allow('dns-cleanup', 'control');
+        };
+        $guard();
+        return $this->cleanupRecords($guard, $scope);
+    }
+
+    private function cleanupRecords(\Closure $guard, ?array $native = null): array
+    {
             $result = ['complete' => true, 'records' => []];
             foreach (['edge-a', 'edge-b', 'control'] as $role) {
                 $scope = ($this->load)('dns-scope-' . ($role === 'control' ? 'control' : 'edges'));
-                if ($scope === null) continue;
+                if ($scope === null && $native === null) continue;
                 $key = null; $state = null;
                 try {
+                    $guard();
+                    self::need($scope !== null, 'original_scope_missing');
                     $dns = new MemberDnsInitialization($scope, $this->credential(), $guard, $this->load, $this->save);
                     $pin = $dns->cleanupReceipt($role);
-                    if ($pin === null) continue;
+                    if ($pin === null && $native === null) continue;
+                    self::need($pin !== null, 'original_receipt_missing');
+                    if ($native !== null) {
+                        $receipt = MemberNativeDnsReceipt::pins($native, $pin, $role);
+                        $selectionKey = 'dns-native-pin-' . MemberProviderBindings::digest($pin);
+                        $selected = ($this->load)($selectionKey);
+                        if ($selected === null) {
+                            $selected = ['receipt_sha256' => MemberProviderBindings::digest($receipt),
+                                'pin' => $this->providers($receipt['pins'], $guard)->resolveDnsPin($receipt['pins'])];
+                            ($this->save)($selectionKey, $selected);
+                        }
+                        self::need(($selected['receipt_sha256'] ?? null) === MemberProviderBindings::digest($receipt)
+                            && in_array($selected['pin'] ?? null, $receipt['pins'], true)
+                            && ($this->load)($selectionKey) === $selected, 'native_cleanup_pin_changed');
+                        $pin = $selected['pin'];
+                    }
                     $hash = MemberProviderBindings::digest($pin); $key = 'dns-cleanup-' . $hash;
                     $state = ($this->load)($key) ?? ['pin_sha256' => $hash, 'absence_at' => null, 'pending' => false];
                     self::need($state['pin_sha256'] === $hash, 'cleanup_scope_changed');
@@ -174,6 +216,5 @@ final class MemberSetupDns
                 $result['complete'] = $result['complete'] && $result['records'][$role]['complete'];
             }
             return $result;
-        });
     }
 }

@@ -170,6 +170,75 @@ trait TestsMemberRetryDriver
         $this->memberDriverFinishCooldown($driver);
     }
 
+    private function memberNativeDnsReceiptFixture(): array
+    {
+        require_once base_path('tools/machine-acceptance/member_cli_authority.php');
+        require_once base_path('tools/machine-acceptance/member_provider_bindings.php');
+        require_once base_path('tools/machine-acceptance/member_native_dns_receipt.php');
+        $driver = $this->memberDriverCandidate();
+        $row = $this->records['5001'];
+        $pin = ['run_id' => $this->memberDriverScope['run_id'], 'record_id' => $row['RecordId'],
+            'name' => $row['RR'] . '.' . $row['DomainName'], 'type' => $row['Type'], 'line' => $row['Line'],
+            'value' => $row['Value'], 'marker' => $row['Remark']];
+        $this->memberDriverFailCandidate($driver); $this->memberDriverConfirm($driver);
+        $this->memberDriverFinishCooldown($driver);
+        $task = $this->task();
+        app(MachineProvisionService::class)->callback($task->id, $task->installation_id, $this->callbackSecret($task), 'succeeded');
+        $task->refresh()->fill(['dispatched_at' => time() - 2, 'next_check_at' => 0])->save();
+        $this->report($this->fixtures[0], $task, $task->public_ips[0], true, time());
+        for ($i = 0; $i < 45 && $driver->state()['phase'] !== 'cleanup'; $i++) $driver->step();
+        $this->assertNull($driver->state()['first_error'], json_encode($driver->state()));
+        $this->assertTrue($driver->state()['branches']['dns_cutover']);
+        $scope = ['driver' => $this->memberDriverScope, 'sources' => [
+            'source-a' => ['task_id' => $this->fixtures[0]['source']->id]]];
+        return [$scope, $pin, \App\Models\MachineFailoverDnsRun::query()->sole()];
+    }
+
+    public function test_member_native_dns_receipt_recovers_only_own_a2_update_after_stopping_without_new_health_or_writes(): void
+    {
+        [$scope, $pin, $dns] = $this->memberNativeDnsReceiptFixture();
+        config(\Keli\Acceptance\MemberCliAuthority::closed());
+        $calls = \Illuminate\Support\Facades\Http::recorded()->count();
+        $result = \Keli\Acceptance\MemberNativeDnsReceipt::pins($scope, $pin, 'edge-a');
+        $this->assertSame([$pin, array_replace($pin, ['value' => $this->task()->public_ips[0]])], $result['pins']);
+        $this->assertSame($dns->id, $result['proofs'][0]['dns_run_id']);
+        foreach (['edge-b', 'control'] as $role)
+            $this->assertSame(['pins' => [$pin], 'proofs' => []], \Keli\Acceptance\MemberNativeDnsReceipt::pins($scope, $pin, $role));
+        $this->assertSame($calls, \Illuminate\Support\Facades\Http::recorded()->count());
+        $this->assertSame(1, $this->dnsWrites);
+    }
+
+    public function test_member_native_dns_receipt_accepts_uncertain_dispatched_wire_but_not_prepared_candidate_value(): void
+    {
+        [$scope, $pin, $dns] = $this->memberNativeDnsReceiptFixture();
+        $p = $dns->payload; $p['plan']['actions'][0]['state'] = 'awaiting_readback';
+        $dns->fill(['status' => 'needs_review', 'payload' => $p])->save();
+        $this->assertCount(2, \Keli\Acceptance\MemberNativeDnsReceipt::pins($scope, $pin, 'edge-a')['pins']);
+        $p['plan']['actions'][0]['state'] = 'prepared'; $p['plan']['actions'][0]['requests'] = [];
+        unset($p['plan']['actions'][0]['dispatch_hash']); $dns->fill(['payload' => $p])->save();
+        $this->assertSame([$pin], \Keli\Acceptance\MemberNativeDnsReceipt::pins($scope, $pin, 'edge-a')['pins']);
+    }
+
+    public function test_member_native_dns_receipt_rejects_foreign_or_tampered_publication_without_provider_io(): void
+    {
+        [$scope, $pin, $dns] = $this->memberNativeDnsReceiptFixture();
+        $payload = $dns->payload; $calls = \Illuminate\Support\Facades\Http::recorded()->count();
+        foreach (['native_binding.seal', 'native_binding.context.task.external_id', 'snapshot.set.credential_id',
+            'plan.actions.0.after.content', 'plan.actions.0.before.id', 'initial.0.marker',
+            'plan.actions.0.requests.0.parameters.RecordId', 'plan.actions.0.dispatch_hash', 'plan.actions.0.state'] as $field) {
+            $p = $payload; data_set($p, $field, 'foreign'); $dns->fill(['payload' => $p])->save();
+            try { \Keli\Acceptance\MemberNativeDnsReceipt::pins($scope, $pin, 'edge-a'); $this->fail($field); }
+            catch (\RuntimeException $error) { $this->assertMatchesRegularExpression('/^(member_native_dns_|native_dns_|dns_journal_)/', $error->getMessage()); }
+        }
+        $dns->fill(['payload' => $payload])->save();
+        foreach (['record_id', 'marker', 'value', 'name'] as $field) {
+            try { \Keli\Acceptance\MemberNativeDnsReceipt::pins($scope, array_replace($pin, [$field => 'foreign']), 'edge-a'); $this->fail($field); }
+            catch (\RuntimeException $error) { $this->assertStringStartsWith('member_native_dns_', $error->getMessage()); }
+        }
+        $this->assertSame($calls, \Illuminate\Support\Facades\Http::recorded()->count());
+        $this->assertSame(1, $this->dnsWrites);
+    }
+
     public function test_member_driver_rejects_noncanonical_tag_and_keeps_first_error_during_cleanup_failure(): void
     {
         $driver = $this->memberDriverCandidate();

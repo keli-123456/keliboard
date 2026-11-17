@@ -108,6 +108,24 @@ class MemberCliTests(unittest.TestCase):
         self.trans.call('task-delete', 'source-a')
         with self.assertRaisesRegex(TransportError, 'reconcile_required'): self.trans.call('task-delete', 'source-a')
 
+    def test_native_dns_cleanup_requires_stop_and_can_reconcile_after_lost_reply_and_expiry(self):
+        with self.assertRaisesRegex(TransportError, 'cleanup_requires_stop'):
+            self.trans.call('round-dns-cleanup')
+        self.assertEqual([], self.requests)
+        self.trans.call('round-stop')
+        self.fail_operation = 'round-dns-cleanup'
+        with self.assertRaises(TransportError): self.trans.call('round-dns-cleanup')
+        self.assertEqual('round-dns-cleanup', self.f.journal['bound-uncertain']['operation'])
+        self.fail_operation = None
+        self.f.now = self.g['deadline_at'] + 1
+        self.trans = self.make_transport()
+        self.trans.call('round-dns-cleanup')
+        self.assertEqual(2, [r['operation'] for r in self.requests].count('round-dns-cleanup'))
+        with self.assertRaisesRegex(TransportError, 'role_invalid'):
+            self.trans.call('round-dns-cleanup', 'source-a')
+        with self.assertRaisesRegex(TransportError, 'expired_or_stopped'):
+            self.trans.call('round-step')
+
     def test_changed_grant_host_material_and_response_fail_closed(self):
         self.known.write_bytes(b'different host key')
         with self.assertRaisesRegex(TransportError, 'ssh_material_changed'): self.trans.call('round-ready')

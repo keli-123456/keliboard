@@ -12,7 +12,9 @@ try {
     $root = '/opt/keli-isolated';
     if (file_exists($root . '/member-setup-grant.json') || is_link($root . '/member-setup-grant.json'))
         array_push($runtime, 'member_application_bootstrap.php', 'member_provider_bindings.php',
-            'member_setup_authority.php', 'member_candidate_callbacks.php');
+            'member_setup_authority.php', 'member_candidate_callbacks.php', 'member_source_configuration.php',
+            'member_source_initialization.php', 'member_dns_initialization.php', 'member_setup_dns.php',
+            'member_setup_controller.php', 'member_native_dns_receipt.php', 'aliyun_cleanup.php');
     foreach ([$root, $root . '/private', $root . '/runtime', $root . '/app'] as $directory)
         if (realpath($directory) !== $directory || !is_dir($directory) || (fileperms($directory) & 0022))
             throw new RuntimeException('isolated_directory_required');
@@ -41,7 +43,10 @@ try {
         'app/Services/ServerMachine/Cloud/MachineCandidateCleanupClient.php'];
     if (file_exists($root . '/member-setup-grant.json') || is_link($root . '/member-setup-grant.json'))
         array_push($protected, 'app/Services/ServerMachine/Cloud/MachineCloudCatalog.php',
-            'app/Services/ServerMachine/Cloud/MachineFailoverPolicyService.php');
+            'app/Services/ServerMachine/Cloud/MachineFailoverPolicyService.php',
+            'app/Services/ServerMachine/Cloud/MachineNativeDnsAdmission.php',
+            'app/Services/ServerMachine/Dns/MachineDnsRecordSetExecution.php',
+            'app/Services/ServerMachine/Dns/MachineDnsRecordSetProvider.php');
     foreach ($protected as $name)
         if (realpath($root . '/app/' . $name) !== $root . '/app/' . $name
             || fileowner($root . '/app/' . $name) !== 0 || (fileperms($root . '/app/' . $name) & 0022)
@@ -67,6 +72,12 @@ try {
     require __DIR__ . '/member_native_controller.php';
     $controller = new Keli\Acceptance\MemberNativeController($scope, $grantHash, $request);
     $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+    if ($request['operation'] === 'round-dns-cleanup') {
+        foreach (['member_application_bootstrap', 'member_provider_bindings', 'member_source_configuration',
+            'member_source_initialization', 'member_setup_authority', 'member_dns_initialization',
+            'member_setup_dns', 'member_setup_controller', 'member_native_dns_receipt'] as $file)
+            require_once __DIR__ . '/' . $file . '.php';
+    }
     echo json_encode($controller->dispatch($request), JSON_THROW_ON_ERROR), "\n";
 } catch (Throwable $error) {
     $file = basename($error->getFile());

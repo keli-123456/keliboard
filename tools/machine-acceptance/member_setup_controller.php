@@ -55,7 +55,7 @@ final class MemberSetupController
 
     private function path(string $key): string
     {
-        self::need(is_resource($this->lock) && preg_match('/^(binding|first-error|rpc-mutation|rpc-cleanup|rpc-[a-f0-9]{32}|source-[ab]|source-queue-source-[ab]|initialized-source-[ab]|cleanup-source-[ab]|dns-scope-(control|edges)|(dns-initialize|dns-cleanup|provider-delete)-[a-f0-9]{64})$/D', $key) === 1,
+        self::need(is_resource($this->lock) && preg_match('/^(binding|first-error|rpc-mutation|rpc-cleanup|rpc-[a-f0-9]{32}|source-[ab]|source-queue-source-[ab]|initialized-source-[ab]|cleanup-source-[ab]|dns-scope-(control|edges)|(dns-initialize|dns-cleanup|dns-native-pin|provider-delete)-[a-f0-9]{64})$/D', $key) === 1,
             'journal_key');
         return self::DIRECTORY . '/' . $key . '.json';
     }
@@ -76,7 +76,8 @@ final class MemberSetupController
     private function save(string $key, array $value): void
     {
         $path = $this->path($key); $old = $this->load($key);
-        if (($key === 'binding' || str_starts_with($key, 'source-queue-') || str_starts_with($key, 'initialized-') || str_starts_with($key, 'dns-scope-')) && $old !== null) {
+        if (($key === 'binding' || str_starts_with($key, 'source-queue-') || str_starts_with($key, 'initialized-')
+            || str_starts_with($key, 'dns-scope-') || str_starts_with($key, 'dns-native-pin-')) && $old !== null) {
             self::need(MemberProviderBindings::digest($old) === MemberProviderBindings::digest($value), 'intent_changed');
             return;
         }
@@ -169,6 +170,16 @@ final class MemberSetupController
             }
             throw $error;
         }
+    }
+
+    public function nativeDnsCleanup(array $scope, MemberCliAuthority $native): array
+    {
+        self::need(is_resource($this->lock), 'closed');
+        $result = $this->dns()->nativeCleanup($scope, $native);
+        foreach ($result['records'] as $item) if (isset($item['diagnostic'])) {
+            try { $this->save('first-error', $item['diagnostic']); } catch (\Throwable) { }
+        }
+        return $result;
     }
 
     public static function validateRequest(array $request): void

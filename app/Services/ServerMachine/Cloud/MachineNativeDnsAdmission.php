@@ -216,21 +216,29 @@ class MachineNativeDnsAdmission
     }
     public function guard(DnsRun $dns, bool $dispatch, bool $remote = false): void
     {
-        $this->gate->assertAllowed('native_dns_binding'); $b = $dns->payload['native_binding'] ?? null;
-        if (!is_array($b) || ($b['origin'] ?? null) !== 'native_dns_admission_v1' || ($b['dns_run_id'] ?? null) !== $dns->id
-            || !is_string($b['seal'] ?? null) || !hash_equals($b['seal'], $this->seal(array_diff_key($b, ['seal' => true])))) throw new CloudException('native_dns_binding_changed');
+        $this->gate->assertAllowed('native_dns_binding'); $b = $this->publicationBinding($dns);
         $attempt = Attempt::query()->findOrFail($b['attempt_id']); $instance = Instance::query()->findOrFail($b['instance_id']);
         $task = Task::query()->findOrFail($attempt->task_id); app(MachineFailoverNativeBridge::class)->assertDns($task, !$dispatch);
         $context = app(MachineNativeAddressProofs::class)->assertCurrent($attempt, $instance, $remote);
         app(MachineInstanceAcceptance::class)->gate($context['policy_id'], 'allow_dns');
         if (!MachineIntentJson::same($context, $b['context']) || !MachineIntentJson::same($attempt->payload['address_proofs'], $b['proofs'])
             || ($attempt->payload['dns_set_runs'][$dns->set_id] ?? null) !== $dns->id || $dns->service_id !== $context['service_id']
-            || $dns->service_revision !== $context['service_revision'] || $dns->payload['target'] !== $context['member_id']
-            || ($b['snapshot_sha256'] ?? null) !== $this->hash($dns->payload['snapshot'])
-            || ($b['plan_sha256'] ?? null) !== $this->publicationHash($dns->payload['plan'])
-            || ($b['initial_sha256'] ?? null) !== $this->hash($dns->payload['initial'])) throw new CloudException('native_dns_binding_changed');
+            || $dns->service_revision !== $context['service_revision'] || $dns->payload['target'] !== $context['member_id']) throw new CloudException('native_dns_binding_changed');
         $parent = Execution::query()->findOrFail($context['execution_id']);
         if ($dns->admin_id !== $parent->admin_id || !MachineIntentJson::same($this->workingSources($parent), $b['sources'])) throw new CloudException('native_source_identity_changed');
+    }
+
+    // Historical intent authentication only. This never grants mutation or fresh-health authority.
+    public function publicationBinding(DnsRun $dns): array
+    {
+        $p = $dns->payload; $b = $p['native_binding'] ?? null;
+        if (!is_array($b) || ($b['origin'] ?? null) !== 'native_dns_admission_v1' || ($b['dns_run_id'] ?? null) !== $dns->id
+            || !is_string($b['seal'] ?? null) || !hash_equals($b['seal'], $this->seal(array_diff_key($b, ['seal' => true])))
+            || !is_array($p['snapshot'] ?? null) || !is_array($p['plan']['actions'] ?? null) || !is_array($p['initial'] ?? null)
+            || ($b['snapshot_sha256'] ?? null) !== $this->hash($p['snapshot'])
+            || ($b['plan_sha256'] ?? null) !== $this->publicationHash($p['plan'])
+            || ($b['initial_sha256'] ?? null) !== $this->hash($p['initial'])) throw new CloudException('native_dns_binding_changed');
+        return $b;
     }
     public function lockParent(DnsRun $dns): void
     {

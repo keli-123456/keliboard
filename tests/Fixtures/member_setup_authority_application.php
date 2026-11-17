@@ -22,7 +22,7 @@ return static function (string $mode): array {
     foreach (['member_provider_bindings', 'member_source_configuration', 'member_source_registry', 'member_source_initialization',
         'member_setup_authority', 'member_dns_initialization', 'member_setup_dns', 'member_native_grant', 'member_setup_controller',
         'member_prerequisite_import', 'member_bootstrap_controller', 'member_native_controller',
-        'member_controller_bridge', 'member_retry_driver', 'member_round_bridge'] as $file)
+        'member_controller_bridge', 'member_retry_driver', 'member_round_bridge', 'member_native_dns_receipt'] as $file)
         require_once '/opt/keli-isolated/runtime/' . $file . '.php';
     $need = static function (bool $ok, string $code = 'invalid'): void {
         if (!$ok) throw new RuntimeException('fixture_setup_' . $code);
@@ -195,6 +195,11 @@ return static function (string $mode): array {
                 else throw new RuntimeException('fixture_setup_dns_operation');
             }
             $save('setup-dns-provider', $dns);
+            if ($mode === 'setup-native-rpc' && $action === 'DeleteDomainRecord' && $id === '6002'
+                && $load('native-dns-lost-ack') === null) {
+                $save('native-dns-lost-ack', ['injected' => true]);
+                throw new Illuminate\Http\Client\ConnectionException('synthetic lost DNS delete reply');
+            }
             if ($mode === 'setup-cleanup-crash' && $action === 'DeleteDomainRecord' && $id === '6001') {
                 // The simulated provider committed; the actual RPC has not received its reply.
                 $save('cleanup-crash-boundary', ['provider_delete_committed' => true, 'dns_delete_calls' => $dns['delete']]);
@@ -307,6 +312,11 @@ return static function (string $mode): array {
         if ($before === null) $save('native-cleanup-history', ['sha256' => $history]);
         else $need($before['sha256'] === $history, 'native_cleanup_changed_history');
         $need(Task::count() === 3 && App\Models\MachineFailoverAttempt::count() === 1, 'native_cleanup_task_scope');
+        if ($mode === 'setup-native-rpc-dns-summary') {
+            $dns = $load('setup-dns-provider'); $closed();
+            return ['task_history_unchanged' => true, 'records_remaining' => count($dns['rows']),
+                'delete_calls' => $dns['delete'], 'create_calls' => $dns['create'], 'claim_calls' => $dns['claim']];
+        }
         if ($mode === 'setup-native-rpc-summary') return ['task_history_unchanged' => true,
             'tasks' => Task::count(), 'attempts' => App\Models\MachineFailoverAttempt::count(),
             'provider_rows' => count($load('provider-rows') ?? []),

@@ -128,7 +128,7 @@ try:
     assert source_tests.returncode == 0, 'source_phpunit_regression_failed'
     SUMMARY['source_phpunit_passed'] = True
     cli_tests = subprocess.run(['php', 'vendor/phpunit/phpunit/phpunit',
-        'tests/Unit/Services/MachineFailoverNativeBridgeTest.php', '--filter', 'test_member_(cli|candidate)'],
+        'tests/Unit/Services/MachineFailoverNativeBridgeTest.php', '--filter', 'test_member_(cli|candidate|native_dns)'],
         cwd=REPO, capture_output=True, text=True, timeout=120)
     (ART / 'cli-phpunit.log').write_text(cli_tests.stdout + cli_tests.stderr)
     assert cli_tests.returncode == 0, 'cli_phpunit_regression_failed'
@@ -764,6 +764,36 @@ try:
         summary = php('setup-native-rpc-summary')
         assert summary == dict(task_history_unchanged=True, tasks=3, attempts=1,
             provider_rows=0, delete_calls=3, dns_unchanged=True), summary
+        dns_first = bound.call('round-dns-cleanup')
+        assert not dns_first['complete'] and set(dns_first['records']) == {'edge-a', 'edge-b', 'control'}, dns_first
+        assert all(v['complete'] is False for v in dns_first['records'].values()), dns_first
+        assert dns_first['records']['edge-a']['diagnostic']['class'] == 'ConnectionException', dns_first
+        assert dns_first['records']['edge-b'] == dns_first['records']['control'] == dict(complete=False)
+        dns_first_error_path = ROOT / 'private/member-setup-journal/first-error.json'
+        dns_first_error = dns_first_error_path.read_bytes()
+        dns_absent = bound.call('round-dns-cleanup')
+        assert not dns_absent['complete'], dns_absent
+        dns_absence_start = time.monotonic()
+        time.sleep(10.1)
+        bound = BoundControllerTransport(grant_file=native_path,
+            grant_sha256=hashlib.sha256(native_bytes).hexdigest(), **transport_args)
+        dns_final = bound.call('round-dns-cleanup')
+        assert time.monotonic() - dns_absence_start >= 10 and dns_final['complete'], dns_final
+        assert all(v == dict(complete=True) for v in dns_final['records'].values()), dns_final
+        assert bound.call('round-dns-cleanup') == dns_final
+        assert dns_first_error_path.read_bytes() == dns_first_error
+        dns_summary = php('setup-native-rpc-dns-summary')
+        assert dns_summary == dict(task_history_unchanged=True, records_remaining=0,
+            delete_calls=3, create_calls=3, claim_calls=3), dns_summary
+        SUMMARY['native_dns_cleanup_handoff'] = dict(actual_shared_root_rpc_and_setup_journal=True,
+            actual_host_bound_transport=True, ssh_byte_transport_simulated=True,
+            original_dns_create_receipts_preserved=True, no_native_dns_cutover_in_this_component=True,
+            exact_signed_provider_deletes_simulated=3, host_restart_retains_selected_pins=True,
+            lost_delete_ack_reconciled_and_peer_cleanup_continues=True, setup_first_error_retained=True,
+            two_absence_reads_at_least_ten_seconds_apart=True, duplicate_cleanup_no_repeat_delete=True,
+            task_history_retained=True, persistent_gates_changed=False,
+            native_a2_cutover_cleanup_unit_tested=True, native_a2_cutover_full_application_tested=False,
+            private_cleanup_pending=True, controller_delete_not_claimed=True)
         assert native_path.read_bytes() == native_bytes and cap_path.read_bytes() == cap_bytes
         assert callback(role='candidate-a1') == report('candidate-a1') == 403
         SUMMARY['native_task_cleanup_handoff'] = dict(actual_shared_root_rpc_controller=True,
@@ -774,7 +804,7 @@ try:
             source_delete_lost_ack_reconciled=True, exact_deletes_simulated=3,
             task_history_preserved=3, native_attempts_preserved=1, first_error_retained=True,
             real_separated_absence_reads_per_role=2, minimum_absence_spacing_seconds=10,
-            no_fault_injected=True, dns_and_private_cleanup_pending=True, controller_delete_not_claimed=True,
+            no_fault_injected=True, dns_cleanup_tested=True, private_cleanup_pending=True, controller_delete_not_claimed=True,
             a1_retry_cooldown_a2_not_tested=True)
         assert php('setup-queues')['no_redis_queued_delayed_or_reserved_jobs']
         SUMMARY['candidate_http_handoff'] = dict(actual_native_start_and_advance=True,
@@ -787,7 +817,7 @@ try:
             native_readiness_dns_advance_not_exercised=True, b_and_dns_unchanged=True,
             stop_denies_candidate_callback_report_and_advance=True, immutable_grants_retained=True,
             queue_jobs_did_not_escape=True, native_candidate_task_cleanup_tested=True,
-            native_dns_and_private_cleanup_handoff_pending=True)
+            native_dns_cleanup_handoff_tested=True, private_cleanup_handoff_pending=True)
         SUMMARY['native_grant_handoff']['candidate_http_handoff_tested'] = True
         SUMMARY['candidate_callback_http_full_application_tested'] = True
         SUMMARY['native_grant_handoff']['stop_revokes_both_native_and_callback_authorities'] = True

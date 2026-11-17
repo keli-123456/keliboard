@@ -104,7 +104,7 @@ final class MemberNativeController
     {
         self::need(is_resource($this->lock), 'isolated_rpc_closed');
         $root = MemberCliAuthority::ROOT;
-        if (!in_array($request['operation'] ?? null, ['round-status', 'round-stop', 'task-inspect', 'task-delete'], true)
+        if (!in_array($request['operation'] ?? null, ['round-status', 'round-stop', 'round-dns-cleanup', 'task-inspect', 'task-delete'], true)
             && (file_exists($root . '/member-setup-grant.json') || is_link($root . '/member-setup-grant.json'))) {
             $setup = self::read($root . '/member-setup-grant.json', 65536, true);
             $cap = self::read($root . '/member-candidate-callbacks.json', 65536, true);

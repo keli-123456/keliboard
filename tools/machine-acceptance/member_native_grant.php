@@ -17,7 +17,9 @@ final class MemberNativeGrant
     public const RUNTIME = ['member_transport_entry.php', 'member_cli_authority.php', 'member_round_bridge.php',
         'member_retry_driver.php', 'member_controller_bridge.php', 'member_source_registry.php', 'member_native_controller.php',
         'member_application_bootstrap.php', 'member_provider_bindings.php', 'member_setup_authority.php',
-        'member_candidate_callbacks.php'];
+        'member_candidate_callbacks.php', 'member_source_configuration.php', 'member_source_initialization.php',
+        'member_dns_initialization.php', 'member_setup_dns.php', 'member_setup_controller.php',
+        'member_native_dns_receipt.php', 'aliyun_cleanup.php'];
     public const APPLICATION = ['bootstrap/app.php', 'vendor/autoload.php', '.env', 'config/database.php',
         'config/cache.php', 'config/machine_failover.php', 'config/machine_acceptance.php', 'config/machine_provision.php',
         'app/Services/ServerMachine/Cloud/MachineFailoverExecutionGate.php',
@@ -25,7 +27,10 @@ final class MemberNativeGrant
         'app/Services/ServerMachine/Cloud/MachineCandidateRetry.php',
         'app/Services/ServerMachine/Cloud/MachineCandidateCleanupClient.php',
         'app/Services/ServerMachine/Cloud/MachineCloudCatalog.php',
-        'app/Services/ServerMachine/Cloud/MachineFailoverPolicyService.php'];
+        'app/Services/ServerMachine/Cloud/MachineFailoverPolicyService.php',
+        'app/Services/ServerMachine/Cloud/MachineNativeDnsAdmission.php',
+        'app/Services/ServerMachine/Dns/MachineDnsRecordSetExecution.php',
+        'app/Services/ServerMachine/Dns/MachineDnsRecordSetProvider.php'];
 
     public function __construct(private MemberSetupAuthority $authority, private \Closure $sources,
         private \Closure $dns) {}

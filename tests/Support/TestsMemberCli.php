@@ -60,6 +60,23 @@ trait TestsMemberCli
         foreach (Authority::closed() as $k => $v) $this->assertSame($v, config($k), $k);
     }
 
+    public function test_member_native_dns_cleanup_is_recovery_only_and_does_not_grant_dns_write_authority(): void
+    {
+        [$authority] = $this->cliFixture();
+        try { $authority->allow('round-dns-cleanup'); $this->fail(); }
+        catch (\RuntimeException $error) { $this->assertSame('member_cli_final_cleanup_required', $error->getMessage()); }
+        $this->memberTransportJournal['round-stop'] = ['stopped' => true];
+        $this->retryClock->at = $this->cliScope['deadline_at'] + 1;
+        $authority->within('round-dns-cleanup', 'control', function (): void {
+            $this->cliAssertClosed();
+            foreach (['dns_write', 'dns_set_write', 'queue', 'native_task'] as $operation) {
+                try { app(Gate::class)->assertAllowed($operation); $this->fail(); }
+                catch (\RuntimeException $error) { $this->assertSame('member_cli_native_operation_denied', $error->getMessage()); }
+            }
+        });
+        $this->cliAssertClosed();
+    }
+
     private function memberCallbackFixture(): array
     {
         require_once base_path('tools/machine-acceptance/member_candidate_callbacks.php');

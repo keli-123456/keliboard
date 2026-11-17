@@ -60,6 +60,11 @@ final class MemberRoundBridge
             if (!in_array($operation, ['round-status', 'task-inspect', 'task-delete'], true)) $this->authority->assertData();
             if ($operation === 'round-ready') return ['ready' => true, 'automatic_switches_changed' => false];
             if ($operation === 'round-status') return $this->status();
+            if ($operation === 'round-dns-cleanup') {
+                $controller = new MemberSetupController(MemberSetupAuthority::open(), true);
+                try { return $controller->nativeDnsCleanup($this->scope, $this->authority); }
+                finally { $controller->close(); }
+            }
             if ($operation === 'round-step') return $this->advance();
             $registry = $this->registry($operation);
             $scope = $this->transportScope();
