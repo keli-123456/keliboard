@@ -94,6 +94,50 @@ class StrictControllerTransport:
                    '-o', 'UserKnownHostsFile=' + str(self.known), '-i', str(self.identity),
                    'root@' + self.host, remote_command]
 
+    def setup_call(self, operation, identity):
+        """Fixed setup CLI, with a durable intent before each advancing RPC."""
+        require(operation in ('advance', 'status', 'stop'), 'transport_setup_operation_invalid')
+        require(isinstance(identity, dict) and set(identity) == {'grant_id', 'grant_sha256', 'deadline_at'}
+                and type(identity['deadline_at']) is int and identity['deadline_at'] > 0
+                and all(isinstance(identity[k], str) and re.fullmatch(r'[a-f0-9]{%d}' % n, identity[k])
+                        for k, n in [('grant_id', 32), ('grant_sha256', 64)]), 'transport_setup_identity_invalid')
+        self.guard('setup-' + operation, 'control')
+        for file in (self.identity, self.known):
+            require(file.is_file() and not file.is_symlink() and file.stat().st_nlink == 1, 'transport_key_or_hosts_missing')
+        pin = dict(run_id=self.run_id, host=self.host, **identity)
+        prior_pin = self.load('setup-binding')
+        require(prior_pin is None or prior_pin == pin, 'transport_setup_binding_changed')
+        if prior_pin is None:
+            self.save('setup-binding', copy.deepcopy(pin))
+            require(self.load('setup-binding') == pin, 'transport_setup_journal_unconfirmed')
+        previous = self.load('setup-mutation')
+        if operation == 'advance':
+            require(previous is None or previous.get('completed') is True, 'transport_setup_readback_required')
+        sequence = 0 if previous is None else previous['request']['sequence'] + 1
+        request = dict(schema=1, run_id=self.run_id, **identity, request_id=uuid.uuid4().hex,
+                       sequence=sequence, operation=operation)
+        if operation == 'advance':
+            intent = dict(request=request, completed=False)
+            self.save('setup-mutation', copy.deepcopy(intent))
+            require(self.load('setup-mutation') == intent, 'transport_setup_journal_unconfirmed')
+        try:
+            raw = self.execute(self._command('php /opt/keli-isolated/runtime/member_setup_entry.php'),
+                               json.dumps(request, separators=(',', ':')).encode(), 45)
+            require(isinstance(raw, bytes) and len(raw) <= LIMIT, 'transport_response_too_large')
+            result = unique_json(raw)
+            require(all(result.get(k) == v for k, v in request.items()), 'transport_response_binding_changed')
+            require(result.get('ok') is True and isinstance(result.get('result'), dict), 'transport_remote_rejected')
+            if operation == 'advance':
+                complete = dict(request=request, completed=True, reply=result)
+                self.save('setup-mutation', copy.deepcopy(complete))
+                require(self.load('setup-mutation') == complete, 'transport_setup_journal_unconfirmed')
+            return result['result']
+        except Exception as error:
+            self._first_error('setup-' + operation, 'control', error)
+            if isinstance(error, TransportError):
+                raise
+            raise TransportError('transport_setup_uncertain') from None
+
     def _first_error(self, operation, role, error):
         if self.load('transport-first-error') is None:
             self.save('transport-first-error', {'operation': operation, 'role': role,

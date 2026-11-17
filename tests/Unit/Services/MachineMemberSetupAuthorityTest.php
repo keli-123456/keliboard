@@ -9,6 +9,8 @@ class MachineMemberSetupAuthorityTest extends TestCase
     protected function setUp(): void
     {
         require_once dirname(__DIR__, 3) . '/tools/machine-acceptance/member_setup_authority.php';
+        require_once dirname(__DIR__, 3) . '/tools/machine-acceptance/member_cli_authority.php';
+        require_once dirname(__DIR__, 3) . '/tools/machine-acceptance/member_setup_controller.php';
     }
 
     public static function deniedWindows(): array
@@ -36,5 +38,26 @@ class MachineMemberSetupAuthorityTest extends TestCase
         MemberSetupAuthority::window(1000, 8200, 6999, true);
         MemberSetupAuthority::window(1000, 8200, 9000, false);
         $this->addToAssertionCount(2);
+    }
+
+    public function testSetupRequestsHaveAnExactTypedGrantAndRunBinding(): void
+    {
+        $request = ['schema' => 1, 'run_id' => \Keli\Acceptance\MemberCliAuthority::RUN,
+            'grant_id' => str_repeat('a', 32), 'grant_sha256' => str_repeat('b', 64),
+            'deadline_at' => 9000, 'request_id' => str_repeat('c', 32), 'sequence' => 0, 'operation' => 'advance'];
+        foreach (['advance', 'status', 'stop'] as $operation) {
+            \Keli\Acceptance\MemberSetupController::validateRequest(array_replace($request, ['operation' => $operation]));
+            $this->addToAssertionCount(1);
+        }
+        foreach ([['schema' => true], ['run_id' => 'another'], ['grant_id' => '../invalid'],
+            ['grant_sha256' => null], ['deadline_at' => '9000'], ['sequence' => -1], ['sequence' => false],
+            ['request_id' => str_repeat('d', 33)], ['operation' => 'create'], ['extra' => true]] as $change) {
+            try {
+                \Keli\Acceptance\MemberSetupController::validateRequest(array_replace($request, $change));
+                $this->fail('Malformed setup request accepted');
+            } catch (\RuntimeException $error) {
+                $this->assertSame('member_setup_controller_request_invalid', $error->getMessage());
+            }
+        }
     }
 }

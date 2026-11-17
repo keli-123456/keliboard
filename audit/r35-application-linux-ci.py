@@ -52,11 +52,17 @@ def php(mode, *, uid=0, extra=None, ok=True):
 
 
 def setup_rpc(operation, *, ok=True):
+    scope_path = ROOT / 'member-setup-grant.json'
+    scope = json.loads(scope_path.read_bytes())
+    request = dict(schema=1, run_id=scope['run_id'], grant_id=scope['grant_id'],
+        grant_sha256=hashlib.sha256(scope_path.read_bytes()).hexdigest(), deadline_at=scope['deadline_at'],
+        request_id=os.urandom(16).hex(), sequence=1000, operation=operation)
     p = subprocess.run(['php', '-d', 'display_errors=0', '-d', 'log_errors=0',
-        str(ROOT / 'runtime/member_setup_entry.php')], input=json.dumps(dict(operation=operation)).encode(),
+        str(ROOT / 'runtime/member_setup_entry.php')], input=json.dumps(request).encode(),
         cwd=ROOT / 'app', env=ENV, capture_output=True, timeout=30)
     value = json.loads(p.stdout)
     assert (p.returncode == 0) == ok and value['ok'] == ok, value
+    if ok: assert all(value.get(k) == v for k, v in request.items())
     return value.get('result', value)
 
 

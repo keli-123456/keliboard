@@ -105,6 +105,60 @@ class MemberTransportTests(unittest.TestCase):
             with self.assertRaisesRegex(TransportError, reason):
                 StrictControllerTransport._execute([sys.executable, '-c', code], b'', timeout)
 
+    def test_setup_fixed_cli_and_bound_identity_with_advancing_sequences(self):
+        pin = dict(grant_id='a' * 32, grant_sha256='b' * 64, deadline_at=9000)
+        for operation in ('advance', 'advance', 'status', 'stop'):
+            self.rpc.setup_call(operation, pin)
+        self.assertEqual([json.loads(c[1])['sequence'] for c in self.calls], [0, 1, 2, 2])
+        self.assertTrue(self.saved['setup-mutation']['completed'])
+        for command, payload, timeout in self.calls:
+            self.assertEqual(command[-1], 'php /opt/keli-isolated/runtime/member_setup_entry.php')
+            self.assertIn('StrictHostKeyChecking=yes', command)
+            self.assertEqual(timeout, 45)
+            self.assertEqual(json.loads(payload)['grant_sha256'], pin['grant_sha256'])
+        with self.assertRaisesRegex(TransportError, 'binding_changed'):
+            self.rpc.setup_call('stop', dict(pin, grant_sha256='c' * 64))
+        self.assertEqual(len(self.calls), 4)
+
+    def test_setup_uncertain_advance_never_replays_but_status_and_stop_remain_available(self):
+        pin = dict(grant_id='a' * 32, grant_sha256='b' * 64, deadline_at=9000)
+        def timeout(*args):
+            self.calls.append(args)
+            raise TimeoutError('private value')
+        self.rpc.execute = timeout
+        with self.assertRaisesRegex(TransportError, 'uncertain'):
+            self.rpc.setup_call('advance', pin)
+        first = copy.deepcopy(self.saved['transport-first-error'])
+        self.rpc.execute = self.execute
+        with self.assertRaisesRegex(TransportError, 'readback_required'):
+            self.rpc.setup_call('advance', pin)
+        for operation in ('status', 'stop'):
+            self.rpc.setup_call(operation, pin)
+        self.assertEqual(len(self.calls), 3)
+        self.assertFalse(self.saved['setup-mutation']['completed'])
+        self.assertEqual(first, self.saved['transport-first-error'])
+        self.assertNotIn('private value', json.dumps(self.saved))
+
+    def test_setup_changed_reply_and_unconfirmed_intent_never_allow_another_advance(self):
+        pin = dict(grant_id='a' * 32, grant_sha256='b' * 64, deadline_at=9000)
+        self.rpc.save = lambda *_: None
+        with self.assertRaisesRegex(TransportError, 'journal_unconfirmed'):
+            self.rpc.setup_call('advance', pin)
+        self.assertEqual(self.calls, [])
+        self.rpc.save = lambda k, v: self.saved.__setitem__(k, copy.deepcopy(v))
+        self.rpc.execute = lambda *_: b'{"ok":true,"result":{}}'
+        with self.assertRaisesRegex(TransportError, 'binding_changed'):
+            self.rpc.setup_call('advance', pin)
+        self.assertFalse(self.saved['setup-mutation']['completed'])
+
+    def test_setup_rejects_malformed_scope_and_denied_authority_without_ssh(self):
+        pin = dict(grant_id='a' * 32, grant_sha256='b' * 64, deadline_at=9000)
+        for bad in (dict(pin, deadline_at=True), dict(pin, extra=True), dict(pin, grant_id='../key')):
+            with self.assertRaises(TransportError): self.rpc.setup_call('advance', bad)
+        self.rpc.guard = lambda *_: (_ for _ in ()).throw(TransportError('not_authorized'))
+        with self.assertRaisesRegex(TransportError, 'not_authorized'): self.rpc.setup_call('advance', pin)
+        self.assertEqual(self.calls, [])
+
 
 class MemberCleanupTests(unittest.TestCase):
     def setUp(self):

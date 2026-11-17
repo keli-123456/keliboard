@@ -180,6 +180,13 @@ return static function (string $mode): array {
         return Http::response($response);
     });
     $controller = new MemberSetupController($authority);
+    $rpcRequest = static function (string $operation) use ($authority, $load, $save): array {
+        $sequence = ($load('rpc-sequence')['value'] ?? -1) + 1;
+        $save('rpc-sequence', ['value' => $sequence]);
+        return ['schema' => 1, 'run_id' => MemberCliAuthority::RUN] + $authority->identity()
+            + ['request_id' => bin2hex(random_bytes(16)), 'sequence' => $sequence, 'operation' => $operation];
+    };
+    $advance = static fn () => $controller->rpc($rpcRequest('advance'))['result'];
     if ($mode === 'setup-controller-hold') {
         $save('controller-holding', ['active' => true]); sleep(120);
         return ['unexpected_completion' => true];
@@ -199,22 +206,36 @@ return static function (string $mode): array {
     }
     if ($mode === 'setup-status') return $controller->dispatch(['operation' => 'status']);
     if ($mode === 'setup-advance') {
-        $result = $controller->dispatch(['operation' => 'advance']);
+        $result = $advance();
         $closed();
         return $result + ['provider_writes_simulated' => $writes];
     }
     if ($mode === 'setup-prepare') {
+        $controller->close();
+        $path = '/opt/keli-isolated/private/member-setup-journal/binding.json';
+        $need(chmod($path, 0644));
+        try { $denied(fn () => new MemberSetupController($authority), 'member_setup_controller_journal_file_mode'); }
+        finally { $need(chmod($path, 0600)); }
+        $controller = new MemberSetupController($authority);
         $bus = app(BusContract::class);
         $denied(fn () => $authority->within('source-prepare', 'source-a', static fn () => throw new RuntimeException('fixture_failure')),
             'fixture_failure');
         $need(app(BusContract::class) === $bus); $closed();
-        $receipt = $controller->dispatch(['operation' => 'advance']);
+        $request = $rpcRequest('advance');
+        $response = $controller->rpc($request);
+        $receipt = $response['result'];
+        $need($controller->rpc($request) === $response, 'rpc_replay_changed');
+        $denied(fn () => $controller->rpc(array_replace($request, ['request_id' => str_repeat('f', 32)])),
+            'member_setup_controller_request_sequence_reused');
+        $denied(fn () => $controller->rpc(array_replace($request, ['grant_sha256' => str_repeat('0', 64)])),
+            'member_setup_controller_request_binding_changed');
         $need(Task::query()->count() === 1 && $receipt['reason'] === 'prepare' && $receipt['role'] === 'source-a');
         $status = $controller->dispatch(['operation' => 'status']);
         $need($status['sources']['source-a']['status'] === 'queued' && !$status['sources']['source-b']['queued']);
         $closed();
         return ['native_task_queued' => true, 'b_not_queued' => true,
-            'exception_restores_capability_and_bus' => true, 'provider_writes' => $writes];
+            'exception_restores_capability_and_bus' => true, 'provider_writes' => $writes,
+            'rpc_replay_cached' => true, 'rpc_sequence_and_grant_checked' => true, 'existing_journal_permissions_not_repaired' => true];
     }
     if ($mode === 'setup-callback-pins') {
         foreach (Task::query()->get() as $task) {
@@ -239,7 +260,7 @@ return static function (string $mode): array {
         return ['private_fixture_material_written' => true, 'roles' => Task::query()->count()];
     }
     if ($mode === 'setup-process' || $mode === 'setup-process-repeat') {
-        $controller->dispatch(['operation' => 'advance']);
+        $advance();
         $task = Task::query()->firstOrFail();
         if ($task->reason !== null) throw new RuntimeException('fixture_setup_native_' . $task->reason);
         $need($task->external_id === '100001' && $task->status === 'waiting_initialization'

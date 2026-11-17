@@ -278,17 +278,19 @@ final class MemberSetupAuthority
 
     public function stop(): array
     {
-        $result = self::revoke();
+        $result = self::revoke($this->identity());
         self::need($result['grant_sha256'] === $this->hash, 'file_changed');
         return $result;
     }
 
-    public static function revoke(): array
+    public static function revoke(?array $expected = null): array
     {
         self::need(PHP_SAPI === 'cli' && posix_geteuid() === 0, 'root_cli_required');
         // Revocation does not need a working database or unexpired grant.
         $pin = MemberApplicationBootstrap::receipt();
         [$scope, $hash] = self::readFile(self::GRANT);
+        if ($expected !== null) self::need($expected === ['grant_id' => $scope['grant_id'],
+            'grant_sha256' => $hash, 'deadline_at' => $scope['deadline_at']], 'request_binding_changed');
         foreach (['bundle_sha256', 'environment_sha256', 'machine_id_sha256'] as $key)
             self::need(($scope[$key] ?? null) === $pin[$key], 'installation_changed');
         $stop = ['grant_sha256' => $hash, 'stopped' => true];

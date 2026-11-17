@@ -55,7 +55,7 @@ final class MemberSetupController
 
     private function path(string $key): string
     {
-        self::need(is_resource($this->lock) && preg_match('/^(binding|first-error|source-[ab]|source-queue-source-[ab]|initialized-source-[ab])$/D', $key) === 1,
+        self::need(is_resource($this->lock) && preg_match('/^(binding|first-error|rpc-mutation|rpc-[a-f0-9]{32}|source-[ab]|source-queue-source-[ab]|initialized-source-[ab])$/D', $key) === 1,
             'journal_key');
         return self::DIRECTORY . '/' . $key . '.json';
     }
@@ -86,6 +86,8 @@ final class MemberSetupController
         try { $stream = fopen($temp, 'x+b'); } finally { umask($mask); }
         self::need($stream !== false, 'journal_unavailable');
         try {
+            // Default ACLs can override the creation umask. Narrow only this new file.
+            self::need(chmod($temp, 0600) && (fstat($stream)['mode'] & 0777) === 0600, 'journal_file_mode');
             $raw = json_encode($value, JSON_THROW_ON_ERROR);
             self::need(strlen($raw) <= 65536 && fwrite($stream, $raw) === strlen($raw)
                 && fflush($stream) && fsync($stream), 'journal_unavailable');
@@ -121,6 +123,54 @@ final class MemberSetupController
             }
             throw $error;
         }
+    }
+
+    public static function validateRequest(array $request): void
+    {
+        $keys = ['schema', 'run_id', 'grant_id', 'grant_sha256', 'deadline_at', 'request_id', 'sequence', 'operation'];
+        self::need(count($request) === count($keys) && !array_diff(array_keys($request), $keys)
+            && ($request['schema'] ?? null) === 1 && ($request['run_id'] ?? null) === MemberCliAuthority::RUN
+            && is_int($request['deadline_at'] ?? null) && $request['deadline_at'] > 0
+            && is_int($request['sequence'] ?? null) && $request['sequence'] >= 0
+            && in_array($request['operation'] ?? null, ['advance', 'status', 'stop'], true), 'request_invalid');
+        foreach (['grant_id' => 32, 'grant_sha256' => 64, 'request_id' => 32] as $key => $length)
+            self::need(is_string($request[$key] ?? null)
+                && preg_match('/^[a-f0-9]{' . $length . '}$/D', $request[$key]) === 1, 'request_invalid');
+    }
+
+    public function rpc(array $request): array
+    {
+        self::validateRequest($request);
+        foreach ($this->authority->identity() as $key => $value)
+            self::need($request[$key] === $value, 'request_binding_changed');
+        self::need($request['operation'] !== 'stop', 'request_invalid');
+        $mutating = $request['operation'] === 'advance';
+        $this->authority->allow($mutating ? 'sources-advance' : 'source-readback', $mutating ? 'control' : 'source-a');
+        $key = 'rpc-' . $request['request_id'];
+        if ($mutating) {
+            $prior = $this->load($key);
+            if ($prior !== null) {
+                self::need($prior['request'] === $request, 'request_reused');
+                self::need(isset($prior['reply']), 'uncertain_request_readback_required');
+                return $prior['reply'];
+            }
+            $latest = $this->load('rpc-mutation');
+            self::need(!$latest || ($latest['completed'] ?? false), 'uncertain_request_readback_required');
+            self::need(!$latest || $request['sequence'] > $latest['sequence'], 'request_sequence_reused');
+            $this->save('rpc-mutation', ['sequence' => $request['sequence'], 'request_id' => $request['request_id'], 'completed' => false]);
+            $this->save($key, ['request' => $request]);
+        }
+        $result = $this->dispatch(['operation' => $request['operation']]);
+        if (!$mutating) {
+            $latest = $this->load('rpc-mutation');
+            $result['uncertain_request'] = $latest && !$latest['completed'] ? $latest : null;
+        }
+        $reply = $request + ['ok' => true, 'result' => $result];
+        if ($mutating) {
+            $this->save($key, ['request' => $request, 'reply' => $reply]);
+            $this->save('rpc-mutation', ['sequence' => $request['sequence'], 'request_id' => $request['request_id'], 'completed' => true]);
+        }
+        return $reply;
     }
 
     public function close(): void
