@@ -18,7 +18,9 @@ if (realpath($directory) !== $directory || !is_dir($directory) || (fileperms($di
 $path = $directory . '/fixture-cloud.json';
 if (!is_file($path) || is_link($path)) exit(2);
 Http::preventStrayRequests();
-Http::fake(function ($request) use ($path, $directory) {
+$dnsHttp = (require __DIR__ . '/r35-setup-provider-fixture.php')($directory);
+Http::fake(function ($request) use ($path, $directory, $dnsHttp) {
+    if ($request->url() === 'https://alidns.aliyuncs.com/') return $dnsHttp($request);
     $state = json_decode(file_get_contents($path), true, 32, JSON_THROW_ON_ERROR);
     $scope = json_decode(file_get_contents($directory . '/provider-scope.json'), true, 32, JSON_THROW_ON_ERROR);
     $pin = $scope['pins'][0];

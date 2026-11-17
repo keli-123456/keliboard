@@ -212,6 +212,17 @@ try:
         import shlex
         assert args[-2] == 'root@9.9.9.10' and 'StrictHostKeyChecking=yes' in args
         argv = shlex.split(args[-1])
+        if '--host-port-only' in sys.argv and argv in (
+                ['php', '/opt/keli-isolated/runtime/member_import_entry.php'],
+                ['php', '/opt/keli-isolated/runtime/member_setup_entry.php']):
+            request = json.loads(payload)
+            bootstrap = argv[-1].endswith('member_import_entry.php')
+            if not bootstrap or request['operation'] in ('configure', 'configuration-read', 'setup-issue', 'setup-read'):
+                argv = ['php', str(REPO / 'audit/r35-setup-rpc-fixture.php'),
+                        'bootstrap' if bootstrap else 'setup', str(creation_directory)]
+                p = subprocess.run(argv, input=payload, cwd=ROOT, env=ENV, capture_output=True, timeout=timeout)
+                assert p.returncode == 0, json.loads(p.stdout)
+                return p.stdout
         if argv == ['python3', '-B', '/opt/keli-isolated/runtime/member_http_service.py']:
             request = json.loads(payload)
             result = http_service.execute(request, invoke=http_invoke)
@@ -261,14 +272,18 @@ try:
             sources=remote_port.port('sources'), dns=remote_port.port('dns'), authority=remote_port.port('authority'),
             load=install_journal.get, save=lambda k, v: install_journal.__setitem__(k, v), guard=lambda *_: None)
         control_backend, creation_directory = control_port(work, REPO, install_scope, credentials, install_journal, ENV)
+        (creation_directory / 'fixture-dns.json').write_text(json.dumps(dict(rows=[], create=0, claim=0, delete=0)))
+        (creation_directory / 'fixture-dns.json').chmod(0o600)
         setup_bindings = MemberSetupBindings(setup=execution, control=control_backend,
             load=install_journal.get, save=lambda k, v: install_journal.__setitem__(k, v))
         initialization = MemberInitialization(scope=install_scope, interfaces=setup_bindings,
             load=install_journal.get, save=lambda k, v: install_journal.__setitem__(k, v), guard=lambda *_: None)
         assert initialization.step() == dict(ready=False, waiting=True, stage='control-create')
         assert initialization.state['index'] == 0 and not (ROOT / 'app').exists()
-        for _ in range(4): initialization.step()
-        assert initialization.state['index'] == 4, 'initialization_did_not_complete_installation'
+        for _ in range(6):
+            if initialization.state['index'] == STAGES.index('callback-ready'): http_scope = install_scope
+            initialization.step()
+        assert initialization.state['index'] == 6, 'initialization_did_not_complete_callback_ready'
         control = install_journal['setup-control-pin']
         cloud = json.loads((creation_directory / 'fixture-cloud.json').read_bytes())
         assert cloud['methods'].count('POST') == 1 and cloud['row']['id'] == int(control['external_id'])
@@ -276,16 +291,12 @@ try:
             provider_http_simulated=True, original_control_receipt_not_synthetic=True, create_calls=1,
             full_application_not_installed_at_create=True, once_only_post_then_poll=True)
         receipts = initialization.state['receipts']
-        for stage in ('callback-ready',):
-            # DNS remains outside this component fixture; earlier stages are real.
-            for predecessor in STAGES[:STAGES.index(stage)]:
-                receipts.setdefault(predecessor, dict(synthetic_external_predecessor=True))
-            request = dict(run_id=RUN, bundle_sha256=install_scope['bundle_sha256'], stage=stage,
-                predecessors_sha256=digest(receipts), request_id=digest([install_scope, stage])[:32])
-            if stage == 'callback-ready': http_scope = install_scope
-            receipt = execution.dispatch(stage, request, receipts)
-            assert receipt['completed'] is True
-            receipts[stage] = receipt['receipt']
+        assert list(receipts) == list(STAGES[:6]) and all('evidence_sha256' in r for r in receipts.values())
+        dns_state = json.loads((creation_directory / 'fixture-dns.json').read_bytes())
+        assert dns_state['create'] == dns_state['claim'] == len(dns_state['rows']) == 1
+        SUMMARY['concrete_control_dns'] = dict(actual_bootstrap_configuration=True, actual_setup_authority=True,
+            actual_dns_provider_adapter=True, outgoing_http_only_simulated=True, no_synthetic_stage_receipt=True,
+            create_calls=1, ownership_claim_calls=1, actual_mysql_redis=True)
         SUMMARY['migration'] = install_transport.application_call('readback', install_scope)
         assert SUMMARY['migration']['migrated'] and SUMMARY['migration']['tables'] > 100
         assert install_transport.application_call('service-smoke', install_scope, dict(uid=65534, gid=65534))['ready']
@@ -294,24 +305,30 @@ try:
         assert setup_bindings.reconcile(stop_request)['resolved'] is True
         scope_pins = setup_bindings.cleanup_scope(None)
         private_pins = scope_pins['auxiliary']['private_files']
-        assert len(private_pins) == 5 and scope_pins['roles'] == {} and scope_pins['auxiliary']['records'] == []
+        dns_pins = scope_pins['auxiliary']['records']
+        assert len(private_pins) == 5 and scope_pins['roles'] == {} and len(dns_pins) == 1
+        assert dns_pins[0]['record_id'] == '6001' and dns_pins[0]['name'] == domain
         assert http_service.cgroup_empty(install_scope)
         from member_operator_transport import MemberOperatorProviderTransport
         from member_assembly import MemberRoundAssembly
         operator = work / 'operator'; operator.mkdir(mode=0o700)
         provider_scope = dict(run_id=RUN, bundle_sha256=install_scope['bundle_sha256'], baseline_ids=[],
-            pins=[control], dns_receipts=[])
+            pins=[control, *dns_pins], dns_receipts=[])
         provider_permit = dict(schema=1, run_id=RUN, operation='provider-cleanup', authorized=True,
             scope_sha256=digest(provider_scope), credentials_sha256=hashlib.sha256(credentials).hexdigest(),
             operator_machine_sha256=hashlib.sha256(Path('/etc/machine-id').read_bytes()).hexdigest())
         for name, raw in [('provider-scope.json', json.dumps(provider_scope).encode()),
             ('provider-permit.json', json.dumps(provider_permit).encode()), ('provider-credentials.json', credentials),
-            ('fixture-cloud.json', json.dumps(dict(present=cloud['present'], row=cloud['row'], methods=[])).encode())]:
+            ('fixture-cloud.json', json.dumps(dict(present=cloud['present'], row=cloud['row'], methods=[])).encode()),
+            ('fixture-dns.json', (creation_directory / 'fixture-dns.json').read_bytes())]:
             (operator / name).write_bytes(raw); (operator / name).chmod(0o600)
         provider_journal = {}
         def provider_execute(args, payload):
             assert args[-2] == str(TOOLS / 'member_operator_entry.php') and args[-1] == str(operator)
-            assert all(not Path(pin['path']).exists() for pin in private_pins), 'controller_delete_before_private_cleanup'
+            if json.loads(payload)['operation'].startswith('control-'):
+                assert all(not Path(pin['path']).exists() for pin in private_pins), 'controller_delete_before_private_cleanup'
+                dns = json.loads((operator / 'fixture-dns.json').read_bytes())
+                assert dns['rows'] == [] and dns['delete'] == 1, 'controller_delete_before_dns_cleanup'
             actual = [*args[:-2], str(REPO / 'audit/r35-operator-provider-fixture.php'), args[-1]]
             result = subprocess.run(actual, input=payload, capture_output=True, timeout=90, env=ENV, cwd=REPO)
             state = json.loads((operator / 'fixture-cloud.json').read_bytes())
@@ -357,17 +374,22 @@ try:
         assert result['evidence_saved_and_read_back'] is False and result['first_error'] is not None
         state = json.loads((operator / 'fixture-cloud.json').read_bytes())
         assert state['methods'].count('DELETE') == 1 and not state['present']
+        dns_state = json.loads((operator / 'fixture-dns.json').read_bytes())
+        assert dns_state['rows'] == [] and dns_state['delete'] == 1
         assert 'operator-provider-first-error' in provider_journal
         SUMMARY['operator_cleanup'] = dict(real_standalone_php_and_provider_adapter=True,
             cloud_http_only_simulated=True, actual_assembly_cleanup=True, delete_ack_lost=True,
             delete_calls=1, independent_of_controller_files_and_ssh=True,
             real_absence_interval_seconds=result['control_reads'][1] - result['control_reads'][0],
             stopped_snapshot_resumed=True, evidence_failure_did_not_prevent_resource_cleanup=True,
+            actual_owned_dns_deleted_before_control=True, dns_delete_calls=1,
             acceptance_not_claimed=True)
         # Reconstruct the port after .env and TLS material have already gone.
         resumed = MemberHostSetup(**host_arguments)
         assert resumed.reconcile(stop_request)['resolved'] is True and resumed.snapshot() == host_port.snapshot()
         try:
+            request = dict(run_id=RUN, stage='callback-ready', bundle_sha256=install_scope['bundle_sha256'],
+                request_id=digest([install_scope, 'callback-ready'])[:32], predecessors_sha256=digest(receipts))
             execution.dispatch('callback-ready', request, receipts)
             raise AssertionError('stopped_execution_restarted')
         except TransportError as error: assert str(error) == 'transport_execution_stopped'
@@ -379,7 +401,7 @@ try:
             real_systemd_nginx_php_tls=True, application_smoke_not_mocked=True,
             stopped_via_execution_reconcile=True, exact_private_files_removed=5,
             reconstruction_after_private_cleanup=True, stopped_stage_replay_denied=True,
-            controller_creation_provider_http_simulated=True, dns_predecessor_receipt_simulated=True, certificate_self_signed_fixture=True,
+            controller_creation_provider_http_simulated=True, dns_predecessor_receipt_simulated=False, certificate_self_signed_fixture=True,
             whole_host_entry=False, source_candidate_retry_not_run=True, os_bootstrap_not_run=True)
         SUMMARY['application_files'] = frozen['files']
         SUMMARY['composer_lock_sha256'] = frozen['composer_lock_sha256']
