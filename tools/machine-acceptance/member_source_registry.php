@@ -14,6 +14,7 @@ use App\Services\ServerMachine\Cloud\MachineCandidateCleanupClient;
 use App\Services\ServerMachine\Cloud\MachineCloudHealth;
 use App\Services\ServerMachine\Cloud\MachineFailoverCredentials;
 use App\Services\ServerMachine\Cloud\MachineNativeDnsAdmission;
+use App\Services\ServerMachine\Cloud\MachineIntentJson;
 use App\Services\ServerMachine\Cloud\MachineProvisionProviders;
 use App\Services\ServerMachine\MachineAddressInventory;
 use Illuminate\Support\Facades\DB;
@@ -90,7 +91,7 @@ final class MemberSourceRegistry
             && ($runtime['binary_sha256'] ?? null) === $release->binary_sha256
             && ltrim((string) ($runtime['version'] ?? ''), 'v') === ltrim($release->version, 'v')
             && preg_match('/^[a-f0-9]{32}$/D', $runtime['observation_session'] ?? '') === 1
-            && ($runtime['configured_nodes'] ?? null) === ($pin['configured_nodes'] ?? null)
+            && MachineIntentJson::same($runtime['configured_nodes'] ?? null, $pin['configured_nodes'] ?? null)
             && !empty($pin['configured_nodes']);
         $old = ($this->load)($role);
         $identity = hash('sha256', json_encode([$this->scope['run_id'], $pin, $release->binary_sha256], JSON_THROW_ON_ERROR));
@@ -129,7 +130,7 @@ final class MemberSourceRegistry
             self::need($locked->getAttributes() === $task->getAttributes(), 'changed_during_registration');
             $existing = MachineOwnedInstance::query()->where('task_id', $task->id)->first();
             if ($existing) {
-                self::need(($locked->payload['member_source_registration'] ?? null) === $stamp, 'registration_conflict');
+                self::need(MachineIntentJson::same($locked->payload['member_source_registration'] ?? null, $stamp), 'registration_conflict');
                 app(MachineNativeDnsAdmission::class)->sourcePin($policy, $existing);
                 return;
             }

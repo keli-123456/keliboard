@@ -193,7 +193,8 @@ return static function (string $mode): array {
                 if ($action === 'UpdateDomainRecordRemark') { $dns['rows'][$id]['Remark'] = $request['Remark']; $dns['claim']++; }
                 elseif ($action === 'UpdateDomainRecord' && $mode === 'setup-flow-rpc') {
                     $need($id === '6002' && $request['Value'] === '9.9.9.12'
-                        && $request['Type'] === 'A' && $request['Line'] === 'default', 'flow_dns_scope');
+                        && $request['Type'] === 'A' && $request['Line'] === 'default'
+                        && $request['RR'] === $dns['rows'][$id]['RR'] && (int) $request['TTL'] === 600, 'flow_dns_scope');
                     $dns['rows'][$id]['Value'] = $request['Value'];
                     $dns['rows'][$id]['TTL'] = (int) $request['TTL'];
                     $dns['update'] = ($dns['update'] ?? 0) + 1;

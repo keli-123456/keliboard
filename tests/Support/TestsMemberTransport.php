@@ -79,6 +79,41 @@ trait TestsMemberTransport
         $this->assertSame(0, $this->dnsWrites); $this->assertSame([], $this->posts);
     }
 
+    public function test_member_transport_source_registration_accepts_reordered_object_keys_without_rewriting_receipts(): void
+    {
+        [$registry, $bridge] = $this->memberTransportFixture(); $this->memberTransportReports($bridge);
+        $registry->register('source-a');
+        $task = $this->fixtures[0]['source']->fresh(); $payload = $task->payload;
+        $payload['member_source_registration'] = array_reverse($payload['member_source_registration'], true);
+        $task->fill(['payload' => $payload])->save(); $before = $task->fresh()->getAttributes();
+        $owned = MachineOwnedInstance::where('task_id', $task->id)->sole()->getAttributes();
+        $this->assertTrue($registry->register('source-a')['registered']);
+        $this->assertSame($before, $task->fresh()->getAttributes());
+        $this->assertSame($owned, MachineOwnedInstance::where('task_id', $task->id)->sole()->getAttributes());
+        $payload['member_source_registration']['health_or_forwarding_claimed'] = 0;
+        $task->fill(['payload' => $payload])->save();
+        $this->expectExceptionMessage('member_source_registration_conflict'); $registry->register('source-a');
+    }
+
+    public function test_member_transport_reads_canonical_grant_node_objects_but_rejects_changed_values(): void
+    {
+        $this->memberTransportFixture();
+        $scope = json_decode(\App\Services\ServerMachine\Cloud\MachineIntentJson::encode($this->memberTransportScope), true);
+        $registry = new MemberSourceRegistry($scope, static fn () => null,
+            fn ($key) => $this->memberTransportJournal[$key] ?? null,
+            function ($key, $value): void { $this->memberTransportJournal[$key] = $value; }, fn () => time());
+        $f = $this->fixtures[0];
+        foreach ([-12, -7, -2] as $offset) {
+            $this->report($f, $f['source']->fresh(), $f['sourceIp'], false, time() + $offset);
+            $receipt = $registry->observe('source-a');
+        }
+        $this->assertTrue($receipt['ready']); $this->assertSame(3, $receipt['fresh_reports']);
+        $scope['sources']['source-a']['configured_nodes'][0]['port'] = '8443';
+        $changed = new MemberSourceRegistry($scope, static fn () => null, static fn () => null,
+            static fn () => null, fn () => time());
+        $this->assertFalse($changed->observe('source-a')['ready']);
+    }
+
     public function test_member_transport_duplicates_do_not_replace_three_fresh_reports(): void
     {
         [$registry] = $this->memberTransportFixture();
