@@ -34,7 +34,7 @@ class DiskJournal:
         return self.get(key) is not None
 
 
-def step(scope, bindings, journal, cleanup_factory, *, crash=False, native_factory=None, observe=None):
+def step(scope, bindings, journal, cleanup_factory, *, crash=False, stop=False, native_factory=None, observe=None):
     def unused(*_):
         raise AssertionError('native_dispatch_forbidden_in_prefix_case')
 
@@ -59,7 +59,7 @@ def step(scope, bindings, journal, cleanup_factory, *, crash=False, native_facto
             guard=lambda *_: None, restored=load('round'))
         if load('round') is None:
             driver.state['started_at'] = scope['started_at']
-        return driver.step()
+        return driver.step(stop=stop)
 
 
 def kill_after_callback(scope, bindings, journal, cleanup_factory):

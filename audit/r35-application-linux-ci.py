@@ -21,7 +21,7 @@ from unittest.mock import patch
 
 if '--outer-whole' in sys.argv:
     sys.argv.append('--whole-entry')
-if '--whole-entry' in sys.argv or '--setup-evidence' in sys.argv or '--outer-crash' in sys.argv:
+if any(mode in sys.argv for mode in ('--whole-entry', '--setup-evidence', '--outer-crash', '--outer-stop')):
     sys.argv.append('--host-port-only')
 
 REPO = Path(__file__).resolve().parents[1]
@@ -205,8 +205,10 @@ try:
     install_scope = dict(run_id=RUN, bundle_sha256=frozen['archive_sha256'], started_at=int(time.time()))
     install_scope['deadline_at'] = install_scope['started_at'] + 7199
     outer_crash = '--outer-crash' in sys.argv
+    outer_stop = '--outer-stop' in sys.argv
     outer_whole = '--outer-whole' in sys.argv
-    outer_mode = outer_crash or outer_whole
+    outer_mode = outer_crash or outer_whole or outer_stop
+    interrupted_prefix = outer_crash or outer_stop
     if outer_mode:
         from r35_outer_round_ci import DiskJournal, step as outer_step, kill_after_callback
         install_journal = DiskJournal(work / 'outer-journal', RUN)
@@ -231,7 +233,7 @@ try:
                 ['php', '/opt/keli-isolated/runtime/member_setup_entry.php']):
             request = json.loads(payload)
             bootstrap = argv[-1].endswith('member_import_entry.php')
-            if not bootstrap and request['operation'] in ('evidence-export', 'native-issue') and ('--setup-evidence' in sys.argv or outer_crash):
+            if not bootstrap and request['operation'] in ('evidence-export', 'native-issue') and ('--setup-evidence' in sys.argv or interrupted_prefix):
                 p = subprocess.run(argv, input=payload, cwd=ROOT, env=ENV, capture_output=True, timeout=timeout)
                 value = json.loads(p.stdout)
                 if value.get('ok') is not True:
@@ -380,7 +382,7 @@ try:
         assert http_service.status(install_scope, http_invoke) == 'running'
         bound = None
         native_cleanup_scope = None
-        setup_export = '--setup-evidence' in sys.argv or outer_crash
+        setup_export = '--setup-evidence' in sys.argv or interrupted_prefix
         if setup_export:
             # Actual fixed entry: no provider stub can fabricate this failure or export.
             setup_identity = remote_port.identity()
@@ -410,6 +412,7 @@ try:
 
             def advance_initialization(current):
                 state = outer_step(install_scope, setup_bindings, install_journal, cleanup_not_ready)
+                SUMMARY['outer_initialization_last'] = {k: state[k] for k in ('phase', 'first_error', 'sequence')}
                 assert state['phase'] in ('bootstrap', 'native') and state['first_error'] is None
                 current.state = install_journal['initialization']
                 return state
@@ -429,6 +432,7 @@ try:
                 scope=install_scope, creation_directory=creation_directory, root=ROOT, repo=REPO, env=ENV,
                 certificate=certificate, domain=domain, node_sha=frozen['node_sha256'], journal=install_journal,
                 php=php, artifacts=ART, summary=SUMMARY,
+                bind_execute=lambda callback: setattr(execution, 'execute', callback),
                 advance_initialization=advance_initialization if outer_whole else None,
                 advance_native=advance_native if outer_whole else None)
             if not outer_whole:
@@ -436,14 +440,21 @@ try:
         stop_request = dict(scope=install_scope, stopped=True)
         if outer_mode:
             outer_state = outer_step(install_scope, setup_bindings, install_journal, cleanup_not_ready,
-                native_factory=(lambda receipt: native_factory(receipt, bound)) if outer_whole else None)
+                native_factory=(lambda receipt: native_factory(receipt, bound)) if outer_whole else None, stop=outer_stop)
             assert outer_state['phase'] == 'cleanup'
-            assert outer_state['first_error'] == ('round_uncertain_dispatch' if outer_crash else None)
+            expected_error = 'round_uncertain_dispatch' if outer_crash else ('round_stop_requested' if outer_stop else None)
+            assert outer_state['first_error'] == expected_error
             scope_pins = outer_state['cleanup_scope']['initialization']
             native_cleanup_scope = outer_state['cleanup_scope']['native']
-            if outer_crash:
-                assert outer_state['pending']['operation'] == 'bootstrap' and native_cleanup_scope is None
-                SUMMARY['outer_round_crash']['restart_reconciled_without_replay'] = True
+            if interrupted_prefix:
+                assert native_cleanup_scope is None
+                if outer_crash:
+                    assert outer_state['pending']['operation'] == 'bootstrap'
+                    SUMMARY['outer_round_crash']['restart_reconciled_without_replay'] = True
+                else:
+                    assert outer_state['pending'] is None
+                    SUMMARY['outer_round_stop'] = dict(actual_stop_control=True, no_native_grant_or_source_task=True,
+                        actual_disk_journal=True, actual_outer_driver=True, after_callback_before_sources=True)
             else:
                 assert outer_state['pending'] is None and len(native_cleanup_scope['roles']) == 4
         else:
@@ -531,10 +542,11 @@ try:
             body = evidence_archive.verify(exported)
             if setup_export:
                 assert body['stopped'] and body['cleanup_complete_not_asserted'] and body['sources']['cloud_absence_not_asserted']
-                if outer_crash:
+                if interrupted_prefix:
                     assert not body['first_error_present'] and body['uncertain_request'] is None
-                    assert install_journal['round']['first_error'] == 'round_uncertain_dispatch'
-                    assert install_journal['round']['pending']['operation'] == 'bootstrap'
+                    assert install_journal['round']['first_error'] == expected_error
+                    if outer_crash: assert install_journal['round']['pending']['operation'] == 'bootstrap'
+                    else: assert install_journal['round']['pending'] is None
                 else:
                     assert body['first_error_present'] and body['first_diagnostic']['class'] == 'RuntimeException'
                     assert body['first_diagnostic']['file'] == 'member_source_initialization.php'
@@ -542,7 +554,7 @@ try:
                 assert body['uncertain_cleanup'] is None and body['dns']['retained_record_count'] == 1
                 assert all(r['classification'] == 'no_queue_intent' for r in body['sources']['roles'].values())
                 assert not (ROOT / 'private/member-runtime-scope.json').exists()
-                if not outer_crash:
+                if not interrupted_prefix:
                     assert (ROOT / 'private/member-setup-journal/first-error.json').read_bytes() == first_setup_error
                 assert provider_before_export == [(creation_directory / name).read_bytes() for name in ('fixture-cloud.json', 'fixture-dns.json')]
                 assert evidence_archive.capture() == exported
@@ -553,7 +565,8 @@ try:
                 path = ART / 'setup-stopped-evidence.json'; path.write_bytes(raw); path.chmod(0o644)
                 SUMMARY['setup_evidence_export'] = dict(sha256=exported['sha256'], verified=True, actual_fixed_entry=True,
                     actual_application=True, native_grant_absent=True, first_error_preserved=True,
-                    pending_mutation_retained=True, provider_state_unchanged=True, readonly_export_denied_before_stop=not outer_crash,
+                    pending_mutation_retained=not outer_stop, provider_state_unchanged=True,
+                    readonly_export_denied_before_stop=not interrupted_prefix,
                     repeated_export_same_digest=True, remote_file_mode='0600')
                 return exported
             assert body['stopped'] and body['reconciled'] and body['cleanup_complete_not_asserted']
@@ -602,17 +615,17 @@ try:
         assert result['evidence_saved_and_read_back'] is bool(bound or setup_export)
         assert (result['first_error'] is None) is outer_whole
         if setup_export:
-            assert evidence_archive.verify(evidence_archive.journal.load('setup-evidence-first.json'))['first_error_present'] is (not outer_crash)
+            assert evidence_archive.verify(evidence_archive.journal.load('setup-evidence-first.json'))['first_error_present'] is (not interrupted_prefix)
             SUMMARY['setup_evidence_export']['local_readback_after_controller_deleted'] = True
-        if outer_crash:
+        if interrupted_prefix:
             assert outer_state['phase'] == 'closed' and outer_state['resources_cleaned'] and not outer_state['acceptance_passed']
-            assert outer_state['first_error'] == 'round_uncertain_dispatch'
+            assert outer_state['first_error'] == expected_error
             sequence = outer_state['sequence']
             assert outer_step(install_scope, setup_bindings, install_journal, assembly.cleanup) == outer_state
             assert outer_state['sequence'] == sequence == 7
             assert json.loads((creation_directory / 'fixture-cloud.json').read_bytes())['methods'].count('POST') == 1
             assert all(p.stat().st_mode & 0o077 == 0 for p in install_journal.directory.iterdir())
-            SUMMARY['outer_round_crash'].update(first_error_preserved=True, no_second_creation=True,
+            SUMMARY['outer_round_crash' if outer_crash else 'outer_round_stop'].update(first_error_preserved=True, no_second_creation=True,
                 no_native_dispatch=True, closed_replay_noop=True, resources_cleaned=True,
                 acceptance_passed=False, journal_mode='0600', stopped_export_verified=True)
             (ART / 'outer-round-state.json').write_text(json.dumps(outer_state, indent=2) + '\n')

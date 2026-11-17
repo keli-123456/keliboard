@@ -10,7 +10,7 @@ import time
 
 def continue_entry(*, initialization, transport, remote, scope, creation_directory, root,
                    repo, env, certificate, domain, node_sha, journal, php, artifacts, summary,
-                   advance_initialization=None, advance_native=None):
+                   advance_initialization=None, advance_native=None, bind_execute=None):
     from member_cli import BoundControllerTransport
     from member_initialization import STAGES
     from member_transport import TransportError
@@ -44,6 +44,8 @@ def continue_entry(*, initialization, transport, remote, scope, creation_directo
         return process.stdout
 
     transport.execute = execute
+    if bind_execute is not None:
+        bind_execute(execute)
     tls = ssl.create_default_context(cafile=str(certificate))
 
     class Client(http.client.HTTPSConnection):

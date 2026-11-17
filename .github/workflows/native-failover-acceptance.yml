@@ -35,6 +35,10 @@ on:
         type: boolean
         default: false
         description: Run all actual stages and native retry under the durable outer loop with successful cleanup.
+      outer_stop:
+        type: boolean
+        default: false
+        description: Stop the connected outer driver after callback readiness, before source creation, and reconcile cleanup.
 
 permissions:
   contents: read
@@ -140,6 +144,7 @@ jobs:
           if [ '${{ inputs.setup_evidence }}' = true ]; then mode=--setup-evidence; fi
           if [ '${{ inputs.outer_crash }}' = true ]; then mode=--outer-crash; fi
           if [ '${{ inputs.outer_whole }}' = true ]; then mode=--outer-whole; fi
+          if [ '${{ inputs.outer_stop }}' = true ]; then mode=--outer-stop; fi
           timeout --signal=TERM --kill-after=15s 1800s sudo nsenter --net="/proc/$pid/ns/net" \
             env -i PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 HOME=/root \
             PYTHONDONTWRITEBYTECODE=1 KELI_HTTP_NETNS="/proc/$pid/ns/net" KELI_HTTP_FIXTURE_COMMIT="$GITHUB_SHA" python3 -B audit/r35-application-linux-ci.py "$mode" >artifacts/application-linux.log 2>&1

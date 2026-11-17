@@ -156,5 +156,28 @@ class ConnectedSetupTests(unittest.TestCase):
         self.assertEqual(1, self.f.calls.count('cold-publish'))
         self.assertEqual(['control-connection'], self.provider_calls)
 
+    def test_crash_after_connection_binding_before_dispatch_needs_no_remote_stop(self):
+        self.port.components()
+        self.assertIn('connected-setup-binding', self.saved)
+        self.assertNotIn('connected-setup-dispatched', self.saved)
+        self.port = MemberConnectedSetup(**self.args)
+        value = self.reconcile()
+        self.assertEqual([], value['auxiliary']['private_files'])
+        self.assertEqual([], self.f.calls)
+        self.assertEqual(['control-connection'], self.provider_calls)
+
+    def test_binding_save_failure_cannot_publish_or_install(self):
+        def fail(key, value):
+            if key == 'connected-setup-binding': raise OSError('journal unavailable')
+            self.f.save(key, value)
+        self.port = MemberConnectedSetup(**dict(self.args, save=fail))
+        with self.assertRaises(OSError): self.dispatch('control-install')
+        self.assertIn('operator-control-connection', self.saved)
+        self.assertNotIn('connected-setup-binding', self.saved)
+        self.port = MemberConnectedSetup(**self.args)
+        self.reconcile()
+        self.assertEqual([], self.f.calls)
+        self.assertEqual(['control-connection'], self.provider_calls)
+
 
 if __name__ == '__main__': unittest.main()
