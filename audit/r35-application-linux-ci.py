@@ -786,7 +786,7 @@ try:
         assert dns_summary == dict(task_history_unchanged=True, records_remaining=0,
             delete_calls=3, create_calls=3, claim_calls=3), dns_summary
         from member_evidence import MemberEvidenceArchive
-        evidence_directory = fixture_root / 'host-evidence'
+        evidence_directory = work / 'host-evidence'
         evidence_directory.mkdir(mode=0o700)
         def evidence_ssh(command, payload, timeout):
             assert command[-1] == 'php /opt/keli-isolated/runtime/member_transport_entry.php'
@@ -810,6 +810,9 @@ try:
         assert all(secret.encode() not in raw_evidence for secret in ('s' * 32, 'r' * 32))
         assert not any(key in raw_evidence for key in (b'api_token', b'access_key_secret', b'callback_hash', b'"payload"'))
         assert all(p.stat().st_mode & 0o777 == 0o600 for p in evidence_directory.iterdir())
+        evidence_artifact = ART / 'native-evidence.json'
+        evidence_artifact.write_bytes(raw_evidence); evidence_artifact.chmod(0o644)
+        assert evidence_artifact.read_bytes() == raw_evidence
         assert php('setup-native-rpc-dns-summary') == dns_summary
         assert php('setup-native-rpc-summary') == dict(summary, dns_unchanged=False)
         assert dns_first_error_path.read_bytes() == dns_first_error
@@ -1057,6 +1060,10 @@ finally:
         assert work.resolve() == work and work.parent == Path(tempfile.gettempdir()) and work.name.startswith('r35-app-fixture-')
         shutil.rmtree(work)
     SUMMARY['fixed_fixture_removed'] = not ROOT.exists()
+    if 'native_evidence_export' in SUMMARY:
+        retained = json.loads((ART / 'native-evidence.json').read_bytes())
+        assert hashlib.sha256(retained['content'].encode()).hexdigest() == retained['sha256'] == SUMMARY['native_evidence_export']['evidence_digest']
+        SUMMARY['native_evidence_export']['artifact_readback_after_controller_fixture_removed'] = not ROOT.exists()
     SUMMARY['external_routes_after'] = bool(command(['ip', 'route']).stdout.strip())
     SUMMARY['external_ipv6_routes_after'] = bool(command(['ip', '-6', 'route']).stdout.strip())
     path = ART / 'application-linux-summary.json'
