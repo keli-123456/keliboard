@@ -26,9 +26,10 @@ final class MemberNativeController
         try {
             self::need(is_resource($this->lock), 'isolated_rpc_lock_rejected');
             $opened = fstat($this->lock); clearstatcache(true, $path); $current = @lstat($path);
-            self::need($current && realpath($path) === $path && $opened['ino'] === $current['ino']
-                && $opened['dev'] === $current['dev'] && $opened['nlink'] === 1 && $opened['uid'] === 0
-                && ($opened['mode'] & 0077) === 0, 'isolated_rpc_lock_rejected');
+            self::need($current && realpath($path) === $path, 'isolated_rpc_lock_path_changed');
+            self::need($opened['ino'] === $current['ino'] && $opened['dev'] === $current['dev'], 'isolated_rpc_lock_identity_changed');
+            self::need($opened['nlink'] === 1 && $opened['uid'] === 0, 'isolated_rpc_lock_owner_changed');
+            self::need(($opened['mode'] & 0077) === 0, 'isolated_rpc_lock_mode_changed');
             self::need(flock($this->lock, LOCK_EX | LOCK_NB), 'isolated_rpc_busy');
             $this->authority = MemberCliAuthority::controller($scope, $hash, fn () => $this->load('round-stop') !== null);
         } catch (\Throwable $error) { $this->close(); throw $error; }
