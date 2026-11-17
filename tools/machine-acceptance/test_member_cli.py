@@ -149,5 +149,47 @@ class MemberCliTests(unittest.TestCase):
         self.assertEqual(state['first_error'], 'round_operation_failed')
         self.assertNotIn('private/token', str(self.f.journal))
 
+    def setup_issued_grant(self):
+        bootstrap = dict(run_id=RUN, host=self.g.pop('controller_ipv4'),
+            identity_sha256=self.g.pop('identity_sha256'), known_hosts_sha256=self.g.pop('known_hosts_sha256'))
+        self.grant.write_text(json.dumps(self.g), encoding='utf-8')
+        self.f.save('bootstrap-binding', bootstrap)
+        self.f.save('setup-binding', dict(run_id=RUN, host=bootstrap['host'], grant_id='d' * 32,
+            grant_sha256='e' * 64, deadline_at=self.g['deadline_at']))
+        identity = dict(run_id=RUN, grant_id=self.g['grant_id'], bundle_sha256=self.g['bundle_sha256'],
+            grant_sha256=hashlib.sha256(self.grant.read_bytes()).hexdigest())
+        self.f.save('setup-native-grant', dict(ready=True, identity=identity,
+            deadline_at=self.g['deadline_at'], cloud_or_dns_writes=False))
+
+    def test_setup_issued_grant_binds_original_remote_hash_without_rewriting_it(self):
+        self.setup_issued_grant(); before = self.grant.read_bytes()
+        transport = self.make_transport()
+        transport.call('round-ready')
+        self.assertEqual(before, self.grant.read_bytes())
+        self.assertEqual(hashlib.sha256(before).hexdigest(), self.requests[-1]['grant_sha256'])
+        self.assertNotIn('identity_sha256', self.g)
+        self.make_transport().call('round-status')
+
+    def test_setup_issued_grant_requires_complete_immutable_bootstrap_and_native_receipts(self):
+        self.setup_issued_grant(); valid = copy.deepcopy(self.f.journal)
+        for key in ('bootstrap-binding', 'setup-binding', 'setup-native-grant'):
+            self.f.journal = copy.deepcopy(valid); self.f.journal.pop(key)
+            with self.assertRaises(TransportError): self.make_transport()
+        for key, field, value in [('bootstrap-binding', 'host', '192.0.2.9'),
+                                 ('setup-binding', 'deadline_at', 8200),
+                                 ('setup-native-grant', 'identity', {})]:
+            self.f.journal = copy.deepcopy(valid); self.f.journal[key][field] = value
+            with self.assertRaises(TransportError): self.make_transport()
+        self.f.journal = copy.deepcopy(valid); transport = self.make_transport()
+        self.f.journal['setup-binding']['grant_id'] = 'f' * 32
+        with self.assertRaisesRegex(TransportError, 'setup_binding_changed'): transport.call('round-ready')
+        self.assertEqual([], self.requests)
+
+    def test_setup_issued_grant_rejects_changed_ssh_files_before_dispatch(self):
+        self.setup_issued_grant(); transport = self.make_transport()
+        self.key.write_bytes(b'changed')
+        with self.assertRaisesRegex(TransportError, 'ssh_material_changed'): transport.call('round-status')
+        self.assertEqual([], self.requests)
+
 
 if __name__ == '__main__': unittest.main()

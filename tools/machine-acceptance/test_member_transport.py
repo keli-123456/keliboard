@@ -313,6 +313,22 @@ class MemberTransportTests(unittest.TestCase):
         self.rpc.setup_call('cleanup', pin)
         with self.assertRaises(TransportError): self.rpc.setup_call('native-issue', pin)
 
+    def test_native_read_accepts_real_controller_metadata_only_when_fully_resolved(self):
+        pin = dict(grant_id='a' * 32, grant_sha256='b' * 64, deadline_at=9000)
+        core = dict(ready=True, identity=dict(run_id=self.rpc.run_id, grant_id='c' * 32,
+            grant_sha256='d' * 64, bundle_sha256='e' * 64), deadline_at=9000, cloud_or_dns_writes=False)
+        result = dict(core, uncertain_request=None, uncertain_cleanup=None)
+        self.rpc.execute = lambda cmd, raw, timeout: json.dumps(dict(json.loads(raw), ok=True, result=result)).encode()
+        self.assertEqual(self.rpc.setup_call('native-read', pin), result)
+        self.assertEqual(self.saved['setup-native-grant'], core)
+        for field in ('uncertain_request', 'uncertain_cleanup'):
+            result[field] = {'completed': False}
+            with self.assertRaisesRegex(TransportError, 'readback_uncertain'): self.rpc.setup_call('native-read', pin)
+            result[field] = None
+        result.pop('uncertain_cleanup')
+        with self.assertRaisesRegex(TransportError, 'readback_uncertain'): self.rpc.setup_call('native-read', pin)
+        self.assertEqual(self.saved['setup-native-grant'], core)
+
 
 class MemberCleanupTests(unittest.TestCase):
     def setUp(self):

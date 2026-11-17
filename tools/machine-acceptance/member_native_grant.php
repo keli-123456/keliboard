@@ -15,7 +15,7 @@ final class MemberNativeGrant
     private const GRANT = '/opt/keli-isolated/private/member-runtime-scope.json';
     private const INTENT = '/opt/keli-isolated/private/member-native-issuance.json';
     public const RUNTIME = ['member_transport_entry.php', 'member_cli_authority.php', 'member_round_bridge.php',
-        'member_retry_driver.php', 'member_controller_bridge.php', 'member_source_registry.php',
+        'member_retry_driver.php', 'member_controller_bridge.php', 'member_source_registry.php', 'member_native_controller.php',
         'member_application_bootstrap.php', 'member_provider_bindings.php', 'member_setup_authority.php',
         'member_candidate_callbacks.php'];
     public const APPLICATION = ['bootstrap/app.php', 'vendor/autoload.php', '.env', 'config/database.php',

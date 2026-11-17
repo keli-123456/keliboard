@@ -21,7 +21,8 @@ return static function (string $mode): array {
         || PHP_OS_FAMILY !== 'Linux' || PHP_SAPI !== 'cli') throw new RuntimeException('fixture_only');
     foreach (['member_provider_bindings', 'member_source_configuration', 'member_source_registry', 'member_source_initialization',
         'member_setup_authority', 'member_dns_initialization', 'member_setup_dns', 'member_native_grant', 'member_setup_controller',
-        'member_prerequisite_import', 'member_bootstrap_controller'] as $file)
+        'member_prerequisite_import', 'member_bootstrap_controller', 'member_native_controller',
+        'member_controller_bridge', 'member_retry_driver', 'member_round_bridge'] as $file)
         require_once '/opt/keli-isolated/runtime/' . $file . '.php';
     $need = static function (bool $ok, string $code = 'invalid'): void {
         if (!$ok) throw new RuntimeException('fixture_setup_' . $code);
@@ -229,19 +230,28 @@ return static function (string $mode): array {
             return Http::response($row);
         }
         if ($request->method() === 'DELETE') {
-            $need(str_starts_with($mode, 'setup-cleanup') && preg_match('~/linode/instances/(10000[12])$~D', $path, $match) === 1, 'delete_scope');
+            $nativeCleanup = str_starts_with($mode, 'setup-native-rpc');
+            $need((str_starts_with($mode, 'setup-cleanup') || $nativeCleanup)
+                && preg_match('~/linode/instances/(10000[123])$~D', $path, $match) === 1
+                && ($nativeCleanup || $match[1] !== '100003'), 'delete_scope');
             $id = (int) $match[1]; $need(isset($rows[$id]), 'duplicate_delete');
             $calls = $load('cleanup-delete-count') ?? ['value' => 0]; $calls['value']++;
             $save('cleanup-delete-count', $calls);
             unset($rows[$id]); $save('provider-rows', $rows);
+            if ($mode === 'setup-native-rpc-crash' && $id === 100003) {
+                $save('native-cleanup-crash-boundary', ['candidate_delete_committed' => true, 'calls' => $calls['value']]);
+                sleep(120);
+                throw new RuntimeException('fixture_native_crash_not_killed');
+            }
             if ($id === 100001) throw new Illuminate\Http\Client\ConnectionException('fixture reply lost after delete');
             return Http::response('', 204);
         }
         $need($request->method() === 'GET', 'mutation_outside_create'); $reads++;
         if ($path === '/v4/linode/instances/100000') return Http::response($load('control-row'));
-        if ($mode === 'setup-cleanup-read-error' && $path === '/v4/linode/instances/100002')
+        if (in_array($mode, ['setup-cleanup-read-error', 'setup-native-rpc-read-error'], true)
+            && $path === '/v4/linode/instances/100002')
             return Http::response(['errors' => [['reason' => 'fixture unavailable']]], 503);
-        if (preg_match('~/linode/instances/(10000[12])$~D', $path, $match) && !isset($rows[(int) $match[1]]))
+        if (preg_match('~/linode/instances/(10000[123])$~D', $path, $match) && !isset($rows[(int) $match[1]]))
             return Http::response(['errors' => [['reason' => 'Not found']]], 404);
         $filter = $request->header('X-Filter')[0] ?? null;
         $catalogRows = match ($path) {
@@ -291,6 +301,32 @@ return static function (string $mode): array {
             throw $error;
         }
     });
+    if (str_starts_with($mode, 'setup-native-rpc')) {
+        $history = MemberProviderBindings::digest(Task::orderBy('id')->get()->toArray());
+        $before = $load('native-cleanup-history');
+        if ($before === null) $save('native-cleanup-history', ['sha256' => $history]);
+        else $need($before['sha256'] === $history, 'native_cleanup_changed_history');
+        $need(Task::count() === 3 && App\Models\MachineFailoverAttempt::count() === 1, 'native_cleanup_task_scope');
+        if ($mode === 'setup-native-rpc-summary') return ['task_history_unchanged' => true,
+            'tasks' => Task::count(), 'attempts' => App\Models\MachineFailoverAttempt::count(),
+            'provider_rows' => count($load('provider-rows') ?? []),
+            'delete_calls' => $load('cleanup-delete-count')['value'] ?? 0,
+            'dns_unchanged' => MemberProviderBindings::digest($load('setup-dns-provider'))
+                === ($load('native-cleanup-dns')['sha256'] ?? null)];
+        if ($load('native-cleanup-dns') === null)
+            $save('native-cleanup-dns', ['sha256' => MemberProviderBindings::digest($load('setup-dns-provider'))]);
+        [$nativeScope, $nativeHash] = MemberCliAuthority::readGrant();
+        $native = new Keli\Acceptance\MemberNativeController($nativeScope, $nativeHash);
+        try {
+            $raw = stream_get_contents(STDIN, 8193); $need(strlen($raw) <= 8192, 'native_rpc_size');
+            $request = json_decode($raw, true, 16, JSON_THROW_ON_ERROR); $need(is_array($request), 'native_rpc_request');
+            $reply = $native->dispatch($request);
+            $need(MemberProviderBindings::digest(Task::orderBy('id')->get()->toArray()) === $history,
+                'native_cleanup_changed_history');
+            $closed();
+            return $reply;
+        } finally { $native->close(); }
+    }
     if (str_starts_with($mode, 'setup-candidate-') && $mode !== 'setup-candidate-pins') {
         [$nativeScope, $nativeHash] = MemberCliAuthority::readGrant();
         $nativeAuthority = MemberCliAuthority::controller($nativeScope, $nativeHash,

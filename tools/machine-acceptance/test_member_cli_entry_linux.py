@@ -19,7 +19,7 @@ if sys.platform == 'linux':
 ROOT = Path('/opt/keli-isolated')
 RUN = 'keli-accept-20261116-r35-f4940b41'
 RUNTIME = ('member_transport_entry.php', 'member_cli_authority.php', 'member_round_bridge.php',
-           'member_retry_driver.php', 'member_controller_bridge.php', 'member_source_registry.php')
+           'member_retry_driver.php', 'member_controller_bridge.php', 'member_source_registry.php', 'member_native_controller.php')
 PROTECTED = ('bootstrap/app.php', 'vendor/autoload.php', '.env', 'config/database.php', 'config/cache.php',
     'config/machine_failover.php', 'config/machine_acceptance.php', 'config/machine_provision.php',
     'app/Services/ServerMachine/Cloud/MachineFailoverExecutionGate.php',
@@ -158,6 +158,34 @@ class MemberCliEntryLinuxTests(unittest.TestCase):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.denied()
         self.assertEqual(self.invoke()[0], 0)
+
+    def test_unsafe_lock_is_not_repaired_or_opened(self):
+        path = self.journal / 'rpc.lock'; target = self.private / 'lock-target'
+        target.write_bytes(b'unchanged'); target.chmod(0o600)
+        try:
+            path.symlink_to(target); self.denied(); path.unlink()
+            os.link(target, path); self.denied(); path.unlink()
+            path.write_bytes(b'unchanged'); path.chmod(0o644); self.denied()
+            self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+            self.assertEqual(target.read_bytes(), b'unchanged')
+        finally:
+            if path.exists() or path.is_symlink(): path.unlink()
+            target.unlink()
+
+    def test_dangling_stop_journal_is_not_treated_as_missing(self):
+        stop = self.journal / 'round-stop.json'
+        stop.symlink_to(self.private / 'missing-stop-target')
+        try:
+            self.denied(); self.assertTrue(stop.is_symlink())
+        finally: stop.unlink()
+
+    def test_mutated_stop_journal_is_not_overwritten(self):
+        stop = self.journal / 'round-stop.json'
+        original = json.dumps({'grant_id': 'e' * 32, 'stopped': True}).encode()
+        stop.write_bytes(original); stop.chmod(0o600)
+        rc, reply = self.invoke()
+        self.assertEqual(rc, 1); self.assertFalse(reply['ok'])
+        self.assertEqual(stop.read_bytes(), original)
 
 
 if __name__ == '__main__': unittest.main()

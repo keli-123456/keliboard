@@ -36,9 +36,42 @@ class BoundControllerTransport(StrictControllerTransport):
         require(type(g.get('started_at')) is int and type(g.get('deadline_at')) is int
                 and g['started_at'] > 0 and 1200 < g['deadline_at'] - g['started_at'] <= 7200,
                 'transport_grant_window')
-        require(g.get('controller_ipv4') == self.host, 'transport_controller_changed')
         self.identity_binding = dict(run_id=RUN, grant_id=g['grant_id'], grant_sha256=grant_sha256,
                                      bundle_sha256=g['bundle_sha256'])
+        self.setup_binding = None
+        host_keys = {'controller_ipv4', 'identity_sha256', 'known_hosts_sha256'}
+        if host_keys & set(g):
+            require(host_keys <= set(g) and g['controller_ipv4'] == self.host, 'transport_controller_changed')
+            self.ssh_binding = {key: g[key] for key in host_keys}
+        else:
+            # Preserve the remote grant byte-for-byte. SSH pins belong to the
+            # host's prior bootstrap/setup receipts, not a rewritten authority.
+            self.setup_binding = self._setup_binding()
+            bootstrap = self.setup_binding['bootstrap-binding']
+            self.ssh_binding = dict(controller_ipv4=bootstrap['host'],
+                identity_sha256=bootstrap['identity_sha256'], known_hosts_sha256=bootstrap['known_hosts_sha256'])
+
+    def _setup_binding(self):
+        import re
+        receipts = {key: copy.deepcopy(self.load(key)) for key in
+                    ('bootstrap-binding', 'setup-binding', 'setup-native-grant')}
+        bootstrap, setup, native = (receipts[key] for key in receipts)
+        require(isinstance(bootstrap, dict) and set(bootstrap) ==
+                {'run_id', 'host', 'identity_sha256', 'known_hosts_sha256'}
+                and bootstrap['run_id'] == self.run_id and bootstrap['host'] == self.host
+                and all(isinstance(bootstrap[key], str) and re.fullmatch('[a-f0-9]{64}', bootstrap[key])
+                        for key in ('identity_sha256', 'known_hosts_sha256')), 'transport_setup_binding_required')
+        require(isinstance(setup, dict) and set(setup) ==
+                {'run_id', 'host', 'grant_id', 'grant_sha256', 'deadline_at'}
+                and setup['run_id'] == self.run_id and setup['host'] == self.host
+                and type(setup['deadline_at']) is int and setup['deadline_at'] == self.grant['deadline_at']
+                and all(isinstance(setup[key], str) and re.fullmatch('[a-f0-9]{%d}' % size, setup[key])
+                        for key, size in [('grant_id', 32), ('grant_sha256', 64)]), 'transport_setup_binding_required')
+        require(isinstance(native, dict) and set(native) == {'ready', 'identity', 'deadline_at', 'cloud_or_dns_writes'}
+                and native['ready'] is True and native['cloud_or_dns_writes'] is False
+                and type(native['deadline_at']) is int and native['deadline_at'] == self.grant['deadline_at']
+                and native['identity'] == self.identity_binding, 'transport_native_grant_changed')
+        return receipts
 
     def _read_grant(self):
         from staging import read_file
@@ -54,6 +87,8 @@ class BoundControllerTransport(StrictControllerTransport):
         require((role == 'control') == (operation in ROUND_OPS)
                 and (not operation.startswith('source-') or role.startswith('source-')), 'transport_role_invalid')
         require(self._read_grant() == self.grant, 'transport_grant_changed')
+        if self.setup_binding is not None:
+            require(self._setup_binding() == self.setup_binding, 'transport_setup_binding_changed')
         now = int(self.clock())
         previous = self.load('bound-clock')
         require(now >= self.grant['started_at'] and (previous is None or now >= previous['at']),
@@ -71,7 +106,7 @@ class BoundControllerTransport(StrictControllerTransport):
         for path, key in [(self.identity, 'identity_sha256'), (self.known, 'known_hosts_sha256')]:
             from staging import read_file
             _, raw, _ = read_file(path, 1048576, collect=True)
-            require(hashlib.sha256(raw).hexdigest() == self.grant.get(key), 'transport_ssh_material_changed')
+            require(hashlib.sha256(raw).hexdigest() == self.ssh_binding.get(key), 'transport_ssh_material_changed')
         if operation == 'round-stop':
             self.save('bound-stop', {'stopped': True})
         mutation = operation in ('round-step', 'source-register', 'task-delete')

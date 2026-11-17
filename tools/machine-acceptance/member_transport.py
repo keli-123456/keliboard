@@ -222,7 +222,12 @@ class StrictControllerTransport:
             require(all(result.get(k) == v for k, v in request.items()), 'transport_response_binding_changed')
             require(result.get('ok') is True and isinstance(result.get('result'), dict), 'transport_remote_rejected')
             if operation in ('native-issue', 'native-read'):
-                value = result['result']
+                value = copy.deepcopy(result['result'])
+                metadata = {'uncertain_request', 'uncertain_cleanup'}
+                if metadata & set(value):
+                    require(operation == 'native-read' and metadata <= set(value)
+                            and all(value[key] is None for key in metadata), 'transport_native_readback_uncertain')
+                    for key in metadata: value.pop(key)
                 if value.get('ready') is False:
                     require(operation == 'native-issue' and set(value) <= {'ready', 'phase', 'next_check_at', 'blockers'}
                             and value.get('phase') in ('setup_cooldown', 'source_failure_observation', 'source_plan_blocked')

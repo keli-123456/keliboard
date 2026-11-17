@@ -5,7 +5,8 @@ declare(strict_types=1);
 ini_set('display_errors', '0');
 ini_set('log_errors', '0');
 $runtime = ['member_transport_entry.php', 'member_cli_authority.php', 'member_round_bridge.php',
-    'member_retry_driver.php', 'member_controller_bridge.php', 'member_source_registry.php'];
+    'member_retry_driver.php', 'member_controller_bridge.php', 'member_source_registry.php', 'member_native_controller.php'];
+$controller = null;
 try {
     if (PHP_SAPI !== 'cli' || PHP_OS_FAMILY !== 'Linux') throw new RuntimeException('isolated_cli_required');
     $root = '/opt/keli-isolated';
@@ -48,40 +49,6 @@ try {
             || !hash_equals($scope['application_sha256'][$name], hash_file('sha256', $root . '/app/' . $name)))
             throw new RuntimeException('isolated_application_changed');
     if (file_exists($root . '/app/bootstrap/cache/config.php')) throw new RuntimeException('isolated_cached_config_refused');
-    $journal = $root . '/private/member-journal';
-    if (realpath($journal) !== $journal || !is_dir($journal) || (fileperms($journal) & 0077))
-        throw new RuntimeException('isolated_journal_required');
-    $load = static function (string $key) use ($journal, $read): ?array {
-        if (!preg_match('/^(source-[ab]|delete-(source-[ab]|candidate-a[12])|round-driver|round-stop|rpc-mutation|rpc-[a-f0-9]{32})$/D', $key))
-            throw new RuntimeException('isolated_journal_key');
-        return file_exists($journal . '/' . $key . '.json') ? $read($journal . '/' . $key . '.json', 262144) : null;
-    };
-    $save = static function (string $key, array $value) use ($journal, $load): void {
-        $previous = $load($key);
-        if ((str_starts_with($key, 'delete-') || $key === 'round-stop') && $previous !== null) {
-            if ($previous !== $value) throw new RuntimeException('isolated_intent_changed');
-            return;
-        }
-        $path = $journal . '/' . $key . '.json';
-        $temp = $journal . '/.' . bin2hex(random_bytes(12));
-        $stream = fopen($temp, 'x+b');
-        if (!$stream) throw new RuntimeException('isolated_journal_unavailable');
-        try {
-            chmod($temp, 0600);
-            $data = json_encode($value, JSON_THROW_ON_ERROR);
-            if (strlen($data) > 262144 || fwrite($stream, $data) !== strlen($data) || !fflush($stream) || !fsync($stream))
-                throw new RuntimeException('isolated_journal_unavailable');
-            fclose($stream); $stream = null;
-            if (!rename($temp, $path)) throw new RuntimeException('isolated_journal_unavailable');
-        } finally {
-            if (is_resource($stream)) fclose($stream);
-            if (file_exists($temp)) unlink($temp);
-        }
-    };
-    if (is_link($journal . '/rpc.lock')) throw new RuntimeException('isolated_rpc_lock_rejected');
-    $lock = fopen($journal . '/rpc.lock', 'c+b');
-    if (!$lock || fstat($lock)['nlink'] !== 1 || !flock($lock, LOCK_EX | LOCK_NB)) throw new RuntimeException('isolated_rpc_busy');
-    chmod($journal . '/rpc.lock', 0600);
     require __DIR__ . '/member_cli_authority.php';
     [$verifiedScope, $grantHash] = Keli\Acceptance\MemberCliAuthority::readGrant();
     if ($verifiedScope !== $scope) throw new RuntimeException('isolated_grant_changed');
@@ -91,29 +58,16 @@ try {
     foreach ([Illuminate\Foundation\Bootstrap\LoadEnvironmentVariables::class,
         Illuminate\Foundation\Bootstrap\LoadConfiguration::class] as $bootstrapper)
         $app->make($bootstrapper)->bootstrap($app);
-    $authority = Keli\Acceptance\MemberCliAuthority::controller($scope, $grantHash, static fn () => $load('round-stop') !== null);
+    require __DIR__ . '/member_native_controller.php';
+    $controller = new Keli\Acceptance\MemberNativeController($scope, $grantHash);
     $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
     $raw = stream_get_contents(STDIN, 8193);
     if (strlen($raw) > 8192) throw new RuntimeException('isolated_request_too_large');
     $request = json_decode($raw, true, 16, JSON_THROW_ON_ERROR);
     if (!is_array($request)) throw new RuntimeException('isolated_request_invalid');
-    if (!in_array($request['operation'] ?? null, ['round-status', 'round-stop', 'task-inspect', 'task-delete'], true)
-        && (file_exists($root . '/member-setup-grant.json') || is_link($root . '/member-setup-grant.json'))) {
-        $setup = $read($root . '/member-setup-grant.json', 65536, true);
-        $cap = $read($root . '/member-candidate-callbacks.json', 65536, true);
-        if (($cap['schema'] ?? null) !== 1 || ($cap['run_id'] ?? null) !== ($scope['run_id'] ?? null)
-            || ($cap['native_sha256'] ?? null) !== hash_file('sha256', $root . '/private/member-runtime-scope.json')
-            || ($cap['setup_sha256'] ?? null) !== hash_file('sha256', $root . '/member-setup-grant.json')
-            || ($cap['driver'] ?? null) !== ($scope['driver'] ?? null))
-            throw new RuntimeException('isolated_callback_grant_changed');
-        foreach (['started_at', 'deadline_at'] as $key)
-            if (!isset($scope[$key]) || ($setup[$key] ?? null) !== $scope[$key] || ($cap[$key] ?? null) !== $scope[$key])
-                throw new RuntimeException('isolated_callback_grant_changed');
-    }
     foreach (['member_source_registry.php', 'member_controller_bridge.php', 'member_retry_driver.php', 'member_round_bridge.php'] as $file)
         require __DIR__ . '/' . $file;
-    $bridge = new Keli\Acceptance\MemberRoundBridge($scope, $authority, $load, $save, static fn (): int => time());
-    echo json_encode($bridge->dispatch($request), JSON_THROW_ON_ERROR), "\n";
+    echo json_encode($controller->dispatch($request), JSON_THROW_ON_ERROR), "\n";
 } catch (Throwable $error) {
     $file = basename($error->getFile());
     $class = (new ReflectionClass($error))->getShortName();
@@ -121,5 +75,8 @@ try {
         'diagnostic' => ['class' => preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/D', $class) ? $class : 'Throwable',
             'file' => in_array($file, $runtime, true) ? $file : 'application',
             'line' => in_array($file, $runtime, true) ? $error->getLine() : null]]), "\n";
+    $controller?->close();
     exit(1);
+} finally {
+    $controller?->close();
 }

@@ -166,6 +166,19 @@ try:
         frozen = runtime.assemble(application, owned_repo / 'vendor', node, bundle)
         installed = MemberInstallation(ROOT).publish_runtime(bundle, frozen['archive_sha256'])
         assert installed['complete']
+    # Exercise the actual cold-boot CLI and journal permissions before the real
+    # isolated application configuration is published.
+    entry_tests = subprocess.run(['python3', '-B', '-m', 'unittest', '-v', 'test_member_cli_entry_linux'],
+        cwd=TOOLS, env=dict(ENV, KELI_MEMBER_CLI_ENTRY='1'), capture_output=True, text=True, timeout=120)
+    (ART / 'native-entry-linux.log').write_text(entry_tests.stdout + entry_tests.stderr)
+    assert entry_tests.returncode == 0, 'native_entry_linux_regression_failed'
+    native_journal = ROOT / 'private/member-journal'
+    assert native_journal.resolve() == native_journal
+    for path in native_journal.iterdir():
+        assert path.is_file() and not path.is_symlink() and path.stat().st_nlink == 1
+        path.unlink()
+    native_journal.rmdir()
+    SUMMARY['native_fixed_entry_permissions_passed'] = True
     settings = dict(app_key=base64.b64encode(b'x' * 32).decode(), database='keli_acceptance_application',
         username='keli_application', password='s' * 32, mysql_port=13306,
         redis_password='r' * 32, redis_port=16379)
@@ -555,6 +568,68 @@ try:
         incomplete_callback_publication_preserves_recovery_readback=True,
         candidate_http_handoff_tested=False)
     if '--candidate-callbacks' in sys.argv:
+        # Host bootstrap receipts bind the unmodified controller-issued grant.
+        # SSH is replaced at its byte boundary; the root PHP controllers are real.
+        from driver_journal import DriverJournal
+        from member_transport import StrictControllerTransport, TransportError
+        from member_cli import BoundControllerTransport, MemberControllerPort
+        host_root = work / 'native-host'; host_root.mkdir(mode=0o700)
+        key = host_root / 'key'; known = host_root / 'known_hosts'
+        key.write_bytes(b'synthetic-ssh-key'); known.write_bytes(b'synthetic-known-host')
+        key.chmod(0o600); known.chmod(0o600)
+        (host_root / 'journal').mkdir(mode=0o700)
+        host_journal = DriverJournal(host_root / 'journal', RUN)
+        def host_load(name):
+            try: return host_journal.load(name + '.json')
+            except FileNotFoundError: return None
+        def host_save(name, value): host_journal.save(name + '.json', value)
+        crash_pending = True
+        def local_ssh(command_args, payload, timeout):
+            global hold_process, crash_pending
+            for option in ('BatchMode=yes', 'IdentitiesOnly=yes', 'StrictHostKeyChecking=yes', 'UpdateHostKeys=no'):
+                assert option in command_args
+            assert command_args[-2] == 'root@9.9.9.10'
+            request_body = json.loads(payload)
+            remote = command_args[-1]
+            if remote == 'php /opt/keli-isolated/runtime/member_import_entry.php':
+                argv = [str(ROOT / 'runtime/member_import_entry.php')]
+            elif remote == 'php /opt/keli-isolated/runtime/member_setup_entry.php':
+                argv = [str(ROOT / 'runtime/member_setup_entry.php')]
+            else:
+                assert remote == 'php /opt/keli-isolated/runtime/member_transport_entry.php'
+                mode = 'setup-native-rpc'
+                if crash_pending and request_body['operation'] == 'task-delete' and request_body['role'] == 'candidate-a1':
+                    mode = 'setup-native-rpc-crash'; crash_pending = False
+                argv = [str(ROOT / 'app/tests/Fixtures/member_full_application.php'), mode]
+                if mode == 'setup-native-rpc-crash':
+                    hold_process = subprocess.Popen(['php', '-d', 'display_errors=0', '-d', 'log_errors=0', *argv],
+                        cwd=ROOT / 'app', env=ENV, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    hold_process.stdin.write(payload); hold_process.stdin.close()
+                    marker = ROOT / 'private/setup-fixture/native-cleanup-crash-boundary.json'
+                    for _ in range(200):
+                        if marker.exists(): break
+                        assert hold_process.poll() is None; time.sleep(.1)
+                    else: raise AssertionError('native_candidate_delete_boundary_not_reached')
+                    hold_process.kill(); hold_process.wait(timeout=5)
+                    assert hold_process.returncode == -9
+                    hold_process.stdout.close(); hold_process.stderr.close(); hold_process = None
+                    raise TransportError('transport_remote_failed')
+            p = subprocess.run(['php', '-d', 'display_errors=0', '-d', 'log_errors=0', *argv], input=payload,
+                cwd=ROOT / 'app', env=ENV, capture_output=True, timeout=timeout)
+            if p.returncode != 0:
+                value = json.loads(p.stdout)
+                SUMMARY['native_rpc_last_error'] = {k: value.get(k) for k in ('reason', 'class', 'file', 'line')}
+                raise TransportError('transport_remote_failed')
+            return p.stdout
+        transport_args = dict(run_id=RUN, host='9.9.9.10', identity_file=key, known_hosts=known,
+            guard=lambda *_: None, load=host_load, save=host_save, execute=local_ssh)
+        bootstrap_transport = StrictControllerTransport(**transport_args)
+        assert bootstrap_transport.bootstrap_call('import')['verified']
+        control_pin = json.loads(native_bytes)['control']
+        assert bootstrap_transport.bootstrap_call('setup-issue', control_pin)['setup'] == actual_setup
+        assert bootstrap_transport.setup_call('native-read', actual_setup) == confirmed_readback
+        bound = BoundControllerTransport(grant_file=native_path,
+            grant_sha256=hashlib.sha256(native_bytes).hexdigest(), **transport_args)
         started_native = php('setup-candidate-start')
         assert started_native['task_count'] == 2 and started_native['attempt_count'] == 0, started_native
         assert php('setup-candidate-start') == started_native
@@ -598,11 +673,56 @@ try:
             times.append(received['report_at'])
         assert times == sorted(set(times)) and len(times) == 3
         assert native_path.read_bytes() == native_bytes and cap_path.read_bytes() == cap_bytes
-        assert setup_rpc('stop')['stopped']
+        port = MemberControllerPort(bound)
+        scope = port('reconcile', dict(run_id=RUN))['cleanup_scope']
+        assert set(scope['roles']) == {'source-a', 'source-b', 'candidate-a1'}
+        assert scope['roles']['candidate-a1']['external_id'] == '100003'
         assert callback(role='candidate-a1') == report('candidate-a1') == report('candidate-a1', node=True) == 403
         assert php('setup-candidate-inspect') == received
         stopped_step = php('setup-candidate-step', ok=False)
         assert not stopped_step['ok']
+        # Auxiliary DNS/material teardown is deliberately left pending in this
+        # component; never manufacture a whole-round cleanup receipt.
+        def auxiliary(operation):
+            if operation == 'restore-faults': return dict(restored=True)  # No fault was injected.
+            assert operation == 'dns-and-private-cleanup'
+            return dict(pending=True)
+        cleanup = port.cleanup_factory(auxiliary, lambda value: host_save('cleanup', value))(scope, None)
+        first_cleanup = cleanup.step()
+        first_error = json.loads(json.dumps(first_cleanup['first_error']))
+        assert first_error and first_cleanup['phase'] == 'tasks' and not crash_pending
+        pending_native = json.loads((ROOT / 'private/member-journal/rpc-mutation.json').read_bytes())
+        assert pending_native['completed'] is False
+        # Restart both host adapter and cleanup from durable state; never repeat
+        # the candidate DELETE whose response was interrupted by actual SIGKILL.
+        bound = BoundControllerTransport(grant_file=native_path,
+            grant_sha256=hashlib.sha256(native_bytes).hexdigest(), **transport_args)
+        port = MemberControllerPort(bound)
+        cleanup = port.cleanup_factory(auxiliary, lambda value: host_save('cleanup', value))(scope, host_load('cleanup'))
+        cleanup_started = time.monotonic()
+        for _ in range(8):
+            current = cleanup.step()
+            assert current['first_error'] == first_error
+            if current['phase'] == 'auxiliary': break
+            time.sleep(10.1)
+        else: raise AssertionError('native_task_cleanup_not_confirmed')
+        assert time.monotonic() - cleanup_started >= 10
+        assert all(len(reads) == 2 and reads[1] - reads[0] >= 10 for reads in current['reads'].values())
+        summary = php('setup-native-rpc-summary')
+        assert summary == dict(task_history_unchanged=True, tasks=3, attempts=1,
+            provider_rows=0, delete_calls=3, dns_unchanged=True), summary
+        assert native_path.read_bytes() == native_bytes and cap_path.read_bytes() == cap_bytes
+        assert callback(role='candidate-a1') == report('candidate-a1') == 403
+        SUMMARY['native_task_cleanup_handoff'] = dict(actual_shared_root_rpc_controller=True,
+            actual_host_bound_transport_and_cleanup=True, ssh_byte_transport_simulated=True,
+            bootstrap_and_setup_receipts_from_actual_controllers=True, remote_grant_not_rewritten=True,
+            scope_from_actual_native_lineage=True, actual_sigkill_after_simulated_candidate_delete=True,
+            pending_native_rpc_and_exact_delete_intents_retained=True, host_resume_no_duplicate_delete=True,
+            source_delete_lost_ack_reconciled=True, exact_deletes_simulated=3,
+            task_history_preserved=3, native_attempts_preserved=1, first_error_retained=True,
+            real_separated_absence_reads_per_role=2, minimum_absence_spacing_seconds=10,
+            no_fault_injected=True, dns_and_private_cleanup_pending=True, controller_delete_not_claimed=True,
+            a1_retry_cooldown_a2_not_tested=True)
         assert php('setup-queues')['no_redis_queued_delayed_or_reserved_jobs']
         SUMMARY['candidate_http_handoff'] = dict(actual_native_start_and_advance=True,
             actual_mysql_task_count=3, actual_native_attempt_count=1, candidate_provider_create_simulated=1,
@@ -613,7 +733,8 @@ try:
             three_distinct_http_receive_times=True, report_payloads_synthetic=True,
             native_readiness_dns_advance_not_exercised=True, b_and_dns_unchanged=True,
             stop_denies_candidate_callback_report_and_advance=True, immutable_grants_retained=True,
-            queue_jobs_did_not_escape=True, native_candidate_cleanup_handoff_pending=True)
+            queue_jobs_did_not_escape=True, native_candidate_task_cleanup_tested=True,
+            native_dns_and_private_cleanup_handoff_pending=True)
         SUMMARY['native_grant_handoff']['candidate_http_handoff_tested'] = True
         SUMMARY['candidate_callback_http_full_application_tested'] = True
         SUMMARY['native_grant_handoff']['stop_revokes_both_native_and_callback_authorities'] = True
