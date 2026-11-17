@@ -1,0 +1,103 @@
+{
+  "schema": 1,
+  "recorded_date": "2026-11-17",
+  "timezone": "Asia/Shanghai",
+  "kind": "isolated_linux_mocked_r35_assembly_acceptance",
+  "status": "passed",
+  "base_commit": "1855514f7d33a2f312d368ce096277fc2f5b2c1c",
+  "tested_commit": "565bc52e670a37dd9f34084557d3457179d81fd7",
+  "temporary_branch": "acceptance/r35-assembly-linux-20261117",
+  "execution_authorized": false,
+  "live_ready": false,
+  "workflow": {
+    "name": "R35 Temporary Assembly Linux Acceptance",
+    "event": "workflow_dispatch",
+    "run_id": 43906806655,
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/43906806655",
+    "conclusion": "success",
+    "runner": "ubuntu-24.04",
+    "php_runtime": "8.2.35",
+    "phpunit": "11.5.55",
+    "composer_lock_sha256": "1a7bc62c308529c9edd7f495ca544e93c53933d39570f4eb43fe92c6365f64e1"
+  },
+  "results": {
+    "total_tests": 226,
+    "fixed_php_entry": {"tests": 8, "failures": 0, "errors": 0, "skipped": 0},
+    "python": {"tests": 150, "failures": 0, "errors": 0, "skipped": 0},
+    "php_services": {"tests": 68, "assertions": 10619, "failures": 0, "errors": 0, "skipped": 0}
+  },
+  "new_real_linux_checks": [
+    "An actual competing process cannot acquire the round journal lock while native work is in flight; SIGKILL releases the lock and a new process resumes from disk without another native dispatch.",
+    "SIGKILL after a simulated provider deletion but before its acknowledgement preserves the independent delete intent; restart performs exact readback without sending the same deletion again.",
+    "SIGTERM during the bound native wait stops work and completes the unified cleanup, with the controller deleted last and acceptance remaining failed after a stop request.",
+    "Partial initialization with only source A cleans exactly the resources that exist, without inventing source B or a native grant.",
+    "An unprivileged Linux process encountering a non-writable journal directory is refused before initialization interfaces execute. Durable journal files retain private permissions."
+  ],
+  "existing_regressions": [
+    "Staged initialization, original request binding, partial and unknown outcomes, restart, stop and exact resource reconciliation",
+    "Existing Linode adapter request construction, once-only creation, definite rejection versus unknown outcome, encrypted request retention and identity-checked cleanup",
+    "Source A/B registration, native A1 cleanup confirmation, cooldown, A2 retry and B isolation with simulated provider and DNS responses",
+    "Fixed PHP CLI grant validation, queue isolation, private runtime loading, exact task cleanup and permission restoration",
+    "Unarmed package hashes, LF normalization, local staging, durable journals and cleanup evidence readback"
+  ],
+  "first_run": {
+    "run_id": 43906356492,
+    "tested_commit": "33aa4359bfdf53112fa192d70090dc1e9d605540",
+    "conclusion": "failure",
+    "reason": "The temporary launcher required zero skipped tests but included three Windows-only sharing tests. Eight fixed-entry tests and 150 Python tests passed; there were no test failures or errors. The zero-skip summary assertion stopped the run before PHP service tests.",
+    "correction": "Select test_driver_journal.JournalTests for Linux rather than the entire module. The Windows-only class is excluded; Linux tests still must report zero skipped cases.",
+    "application_fix_required": false,
+    "fixed_fixture_removed": true
+  },
+  "artifact": {
+    "id": 14245468143,
+    "name": "r35-assembly-isolated-linux-evidence",
+    "zip_sha256": "fba98bf971335905519682d030d87c6ddc4bca97c4e2b3c0a06b74ea3608af05",
+    "summary_sha256": "9ce02757389d434aa80be29fcd4c395b53bf9410c712551ac57464a9a012c725",
+    "php_junit_sha256": "5840183aab2b41f12f95fc64ca0721dff78372e51a08f56f433383236d75c974",
+    "local_relative_directory": ".codex-audit/r35-assembly-linux-evidence-20261117/43906806655/unpacked"
+  },
+  "isolation": {
+    "cloud_ssh_dns": "simulated",
+    "network_namespace": "private namespace with loopback only, no external IPv4 or IPv6 routes before or after tests",
+    "test_environment": "cleared environment, synthetic grants and keys only; non-root main suites with capabilities removed and no-new-privileges",
+    "php_network": "HTTP fakes refuse stray requests; curl_exec, fsockopen, pfsockopen and stream_socket_client disabled for the service suite",
+    "database": "in-memory test fixtures, no production database or queue connection",
+    "dependency_setup": "locked Composer dependencies installed before namespace entry with scripts and plugins disabled",
+    "fixed_fixture_removed": true,
+    "external_routes_after": false,
+    "external_ipv6_routes_after": false
+  },
+  "merge_boundary": {
+    "not_merged_to_main": true,
+    "portable_files": [
+      "tools/machine-acceptance/test_member_assembly.py",
+      "tools/machine-acceptance/test_member_assembly_linux.py",
+      "docs/evidence/linode-r35-assembly-linux-20261117.json"
+    ],
+    "temporary_only_do_not_merge": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/native-failover-acceptance.yml",
+      "audit/r35-assembly-linux-ci.py"
+    ]
+  },
+  "safety": {
+    "production_connections": 0,
+    "cloud_instances_created": 0,
+    "real_dns_changes": 0,
+    "real_ssh_connections": 0,
+    "r34_executed": false,
+    "r35_live_executed": false,
+    "deployed": false,
+    "persistent_switches_changed": false,
+    "queue_configuration_changed": false,
+    "tanzhen_accessed_or_modified": false,
+    "image_publish_runs_for_test_commits": 0,
+    "ordinary_ci_runs_for_test_commits": 0,
+    "remote_main_verified_at_base_commit": true
+  },
+  "limitations": [
+    "These are real Linux process, permission and journal checks with mocked infrastructure, not a live cloud acceptance run.",
+    "Host installation, credential import, real provider readiness and DNS propagation remain subject to a separately authorized isolated live integration; this record does not authorize it."
+  ]
+}
