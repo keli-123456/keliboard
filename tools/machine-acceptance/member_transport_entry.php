@@ -9,6 +9,9 @@ $runtime = ['member_transport_entry.php', 'member_cli_authority.php', 'member_ro
 try {
     if (PHP_SAPI !== 'cli' || PHP_OS_FAMILY !== 'Linux') throw new RuntimeException('isolated_cli_required');
     $root = '/opt/keli-isolated';
+    if (file_exists($root . '/member-setup-grant.json') || is_link($root . '/member-setup-grant.json'))
+        array_push($runtime, 'member_application_bootstrap.php', 'member_provider_bindings.php',
+            'member_setup_authority.php', 'member_candidate_callbacks.php');
     foreach ([$root, $root . '/private', $root . '/runtime', $root . '/app'] as $directory)
         if (realpath($directory) !== $directory || !is_dir($directory) || (fileperms($directory) & 0022))
             throw new RuntimeException('isolated_directory_required');

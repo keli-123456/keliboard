@@ -166,6 +166,17 @@ final class MemberCliAuthority
             'grant_sha256' => $this->grantHash, 'bundle_sha256' => $this->scope['bundle_sha256']];
     }
 
+    public function stopCallbacks(): void
+    {
+        if ($this->simulation) return;
+        $path = self::ROOT . '/member-setup-grant.json';
+        if (file_exists($path) || is_link($path)) {
+            foreach (['member_application_bootstrap.php', 'member_provider_bindings.php', 'member_setup_authority.php'] as $file)
+                require_once __DIR__ . '/' . $file;
+            MemberSetupAuthority::revoke();
+        }
+    }
+
     public function assertDriver(array $driver): void
     {
         $this->assertEnvironment();
@@ -182,7 +193,9 @@ final class MemberCliAuthority
         $now = ($this->clock)();
         self::need(is_int($now) && $now >= $this->scope['started_at'], 'clock_invalid');
         if (!in_array($operation, self::RECOVERY, true))
-            self::need($now < $this->scope['deadline_at'] - 1200 && !($this->stopped)(), 'execution_expired_or_stopped');
+            self::need($now < $this->scope['deadline_at'] - 1200 && !($this->stopped)()
+                && ($this->simulation || (!file_exists(self::ROOT . '/member-setup-stop.json')
+                    && !is_link(self::ROOT . '/member-setup-stop.json'))), 'execution_expired_or_stopped');
         if ($operation === 'task-delete') self::need(($this->stopped)(), 'final_cleanup_required');
     }
 

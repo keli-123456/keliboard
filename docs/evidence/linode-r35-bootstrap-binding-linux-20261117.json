@@ -1,0 +1,85 @@
+{
+  "schema": 1,
+  "status": "component_passed_not_live_ready",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "ci_run": 44029615353,
+  "ci_url": "https://github.com/keli-123456/keliboard/actions/runs/44029615353",
+  "tested_commit": "9418f20ce38329d4b7f08aa9338917dca046479d",
+  "artifact_id": 14305021349,
+  "environment": {
+    "application_files": 14092,
+    "full_application_and_locked_vendor": true,
+    "composer_lock_sha256": "1a7bc62c308529c9edd7f495ca544e93c53933d39570f4eb43fe92c6365f64e1",
+    "mysql": "8.4",
+    "redis": "7",
+    "migrations": 160,
+    "tables": 157,
+    "http_tls_and_service_uid": true,
+    "cloud_ssh_dns": "simulated",
+    "credential_values_and_reports": "synthetic",
+    "node_binary_fixture": "synthetic_not_executed"
+  },
+  "verified": {
+    "actual_fixed_bootstrap_cli": true,
+    "source_configuration_uses_actual_import_scope": true,
+    "setup_authorization_uses_actual_configuration": true,
+    "original_started_and_deadline_inherited": true,
+    "caller_cannot_extend_window_or_override_scope": true,
+    "lost_result_reconciled_without_reissue": true,
+    "changed_control_refused": true,
+    "stop_marker_precedes_bootstrap_lock_drain": true,
+    "callback_admission_revoked_while_bootstrap_lock_still_held": true,
+    "stop_without_database_or_cache_boot": true,
+    "inflight_callback_drain_before_stop_ack": true,
+    "stopped_configuration_readbacks_allowed": true,
+    "dual_source_registration_real_http_and_service_uid": true,
+    "real_account_cooldown_seconds": 300,
+    "setup_dns_initialization_and_precise_cleanup": true,
+    "cleanup_sigkill_then_restart_without_repeating_delete": true,
+    "two_absence_checks_spacing_at_least_seconds": 10,
+    "persistent_gates_unchanged_and_queues_empty": true
+  },
+  "prior_runs": [
+    {
+      "id": 44028121227,
+      "commit": "1cc00ee7ee69d72163029b3f4bd7e6a74c777695",
+      "result": "failed_then_cleaned",
+      "finding": "Account revision drift was now rejected earlier by prerequisite validation. The test expectation was corrected to accept that exact safe error only for that drift, and stage diagnostics were retained. No runtime check was removed."
+    },
+    {
+      "id": 44028566956,
+      "commit": "290664b5fb5cf6d0473430f80fcda847e6a31ec4",
+      "result": "passed_then_cleaned",
+      "limitation": "Did not yet cover simultaneous held bootstrap lock and in-flight callback. The latest run adds that case and confirms immediate callback revocation."
+    }
+  ],
+  "limits": {
+    "subsequent_python_bootstrap_transport_tested_in_this_run": false,
+    "candidate_callback_handoff_tested_in_this_run": false,
+    "concrete_installation_and_tls_ports_complete": false,
+    "native_execution_grant_issuer_complete": false,
+    "assembled_a1_cleanup_real_cooldown_a2_retry_tested": false,
+    "creation_phase_crash_tested": false,
+    "final_real_binary_runtime_frozen": false,
+    "live_ready": false,
+    "real_cloud_acceptance": false
+  },
+  "cleanup": {
+    "service_containers_and_volumes_removed": true,
+    "fixed_fixture_and_temporary_material_removed": true,
+    "external_ipv4_and_ipv6_routes": false,
+    "cloud_instances_created": 0,
+    "production_changed": false,
+    "persistent_automatic_switches_changed": false,
+    "main_pushed": false
+  },
+  "artifact_sha256": {
+    "application-linux-summary.json": "4ff3402ffac1e12251a7e71856cd3be74d18016f3be58e7137c380e946b6a2ab",
+    "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cli-phpunit.log": "5999bf0570b7e180f60487e515960734aab9569117ddeb7db42f1f021821a119",
+    "dns-phpunit.log": "2ea2b7630eb4808b89c159e9578a9615a918dca2882e6302b2e3ad86adc6eddd",
+    "python.log": "3612de861303eee9bf98ff20666e7f07b7cdc84b5a65e4090f9c0622c18e4edc",
+    "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+    "source-phpunit.log": "d3945c101269bbef07d6f914a99ecb31cd8c2b6af8b638263234b75b401f2c2a"
+  }
+}

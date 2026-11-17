@@ -17,6 +17,7 @@ try {
     require_once __DIR__ . '/member_provider_bindings.php';
     require_once __DIR__ . '/member_source_configuration.php';
     require_once __DIR__ . '/member_setup_authority.php';
+    require_once __DIR__ . '/member_candidate_callbacks.php';
     $app = Keli\Acceptance\MemberApplicationBootstrap::boot();
     $request = Illuminate\Http\Request::capture();
     $origin = parse_url(config('app.url'), PHP_URL_HOST);

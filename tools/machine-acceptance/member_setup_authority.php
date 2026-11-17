@@ -15,11 +15,14 @@ use App\Services\ServerMachine\Cloud\ProvisionBootstrap;
 use App\Services\ServerMachine\Cloud\ProvisionPlan;
 use Illuminate\Contracts\Bus\Dispatcher as BusContract;
 
+require_once __DIR__ . '/member_candidate_callbacks.php';
+
 /** Isolated setup capability, published by root; no production route or persistent gate. */
 final class MemberSetupAuthority
 {
     private const GRANT = 'member-setup-grant.json';
     private const STOP = 'member-setup-stop.json';
+    private const CANDIDATES = 'member-candidate-callbacks.json';
     private const MUTATIONS = ['source-prepare', 'source-process', 'sources-advance', 'sources-pin'];
     private bool $active = false;
 
@@ -30,7 +33,7 @@ final class MemberSetupAuthority
 
     private static function readFile(string $name): array
     {
-        self::need(in_array($name, [self::GRANT, self::STOP], true), 'file_invalid');
+        self::need(in_array($name, [self::GRANT, self::STOP, self::CANDIDATES], true), 'file_invalid');
         $path = MemberApplicationBootstrap::ROOT . '/' . $name;
         clearstatcache(true, $path); $stat = @lstat($path);
         self::need($stat && realpath($path) === $path && is_file($path) && $stat['uid'] === 0
@@ -150,6 +153,39 @@ final class MemberSetupAuthority
         return ['pin' => $this->scope['control'], 'ipv4' => $this->scope['control_ipv4']];
     }
 
+    public function authorizeCandidates(): array
+    {
+        self::need(PHP_SAPI === 'cli' && PHP_OS_FAMILY === 'Linux' && posix_geteuid() === 0, 'root_cli_required');
+        $this->allow('source-readback', 'source-a');
+        self::window($this->scope['started_at'], $this->scope['deadline_at'], time(), true);
+        self::need(!$this->stopped(), 'stopped');
+        [$native, $hash] = MemberCliAuthority::readGrant();
+        $authority = MemberCliAuthority::controller($native, $hash, fn () => $this->stopped());
+        $authority->allow('round-ready'); $authority->assertData();
+        $value = MemberCandidateCallbacks::project($native, $hash, $this->scope, $this->hash);
+        $path = MemberApplicationBootstrap::ROOT . '/' . self::CANDIDATES;
+        if (!file_exists($path) && !is_link($path)) self::publish($path, $value, 0644);
+        [$stored] = self::readFile(self::CANDIDATES);
+        self::need($stored === $value, 'candidate_grant_changed');
+        self::need(!$this->stopped(), 'stopped');
+        return ['native_sha256' => $hash, 'deadline_at' => $value['deadline_at']];
+    }
+
+    private function candidates(): array
+    {
+        [$cap] = self::readFile(self::CANDIDATES);
+        self::need(($cap['setup_sha256'] ?? null) === $this->hash
+            && ($cap['started_at'] ?? null) === $this->scope['started_at']
+            && ($cap['deadline_at'] ?? null) === $this->scope['deadline_at'], 'candidate_grant_changed');
+        return $cap;
+    }
+
+    private function callbackRole(Task $task): string
+    {
+        if (!isset($task->payload['coordinated_attempt'])) return $this->taskRole($task);
+        return MemberCandidateCallbacks::role($this->candidates(), $task);
+    }
+
     private function stopped(): bool
     {
         $path = MemberApplicationBootstrap::ROOT . '/' . self::STOP;
@@ -249,8 +285,12 @@ final class MemberSetupAuthority
             && preg_match('/^[a-f0-9]{32}$/D', $installation) === 1, 'callback_invalid');
         $task = Task::query()->find($id);
         self::need($task !== null && hash_equals($task->installation_id, $installation), 'callback_invalid');
-        $role = $this->taskRole($task); $this->allow('callback', $role);
-        return $this->temporary(['machine_provision.allow_live' => true], $callback);
+        $role = $this->callbackRole($task); $this->allow('callback', $role);
+        return $this->temporary(['machine_provision.allow_live' => true], function () use ($task, $role, $callback) {
+            if (!isset($task->payload['coordinated_attempt'])) return $callback();
+            return MemberCandidateCallbacks::within($this->candidates(), $task,
+                fn () => $this->allow('callback', $role), $callback);
+        });
     }
 
     public function report(int $machine, string $installation, ?int $node, \Closure $callback): mixed
@@ -258,13 +298,16 @@ final class MemberSetupAuthority
         self::need($machine > 0 && preg_match('/^[a-f0-9]{32}$/D', $installation) === 1, 'report_invalid');
         $tasks = Task::query()->where('machine_id', $machine)->where('installation_id', $installation)->get();
         self::need($tasks->count() === 1, 'report_invalid');
-        $task = $tasks->first(); $role = $this->taskRole($task);
+        $task = $tasks->first(); $role = $this->callbackRole($task);
         self::need($task->dispatched_at > 0 && $task->external_id !== null
             && ($node === null || $node === $this->scope['binding']['configuration']['sources'][$role]['node_id']), 'report_invalid');
         $this->allow('report', $role);
         // Native machine/node token authentication still runs in the HTTP kernel.
         // Report reception needs no create, replacement or DNS permission.
-        return $this->temporary([], $callback);
+        return $this->temporary([], function () use ($task, $callback) {
+            $this->callbackRole($task->fresh());
+            return $callback();
+        });
     }
 
     private static function executionLock(bool $exclusive)

@@ -48,6 +48,7 @@ final class MemberRoundBridge
         $result = $this->authority->within($operation, $role, function () use ($operation, $role, $request) {
             if ($operation === 'round-stop') {
                 ($this->save)('round-stop', ['grant_id' => $this->scope['grant_id'], 'stopped' => true]);
+                $this->authority->stopCallbacks();
                 return ['stopped' => true];
             }
             if (!in_array($operation, ['round-status', 'task-inspect', 'task-delete'], true)) $this->authority->assertData();

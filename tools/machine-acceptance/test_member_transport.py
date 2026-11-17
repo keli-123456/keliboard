@@ -105,6 +105,78 @@ class MemberTransportTests(unittest.TestCase):
             with self.assertRaisesRegex(TransportError, reason):
                 StrictControllerTransport._execute([sys.executable, '-c', code], b'', timeout)
 
+    def bootstrap_execute(self, command, payload, timeout):
+        self.calls.append((command, payload, timeout)); operation = json.loads(payload)['operation']
+        fields = {'import': 'scope', 'readback': 'scope', 'configure': 'configuration',
+                  'configuration-read': 'configuration', 'setup-issue': 'setup', 'setup-read': 'setup', 'stop': 'stopped'}
+        values = {'scope': dict(run_id=self.rpc.run_id, unjournaled='synthetic-private-reply'),
+                  'configuration': dict(initialization_scope=dict(run_id=self.rpc.run_id),
+                      health_or_forwarding_claimed=False, cloud_or_dns_writes=False),
+                  'setup': dict(grant_id='a' * 32, grant_sha256='b' * 64, deadline_at=9000), 'stopped': True}
+        return json.dumps(dict(ok=True, operation=operation, **{fields[operation]: values[fields[operation]]})).encode()
+
+    def bootstrap_control(self):
+        task = '00000000-0000-4000-8000-000000000071'; suffix = task.replace('-', '')
+        return dict(run_id=self.rpc.run_id, external_id='100000', task_id=task, label='keli-' + suffix,
+            marker='keli-create-' + suffix, region='sg-sin-2', size='g6-standard-2', image='linode/debian12',
+            provider_created_at='2026-11-17T00:00:00Z')
+
+    def test_bootstrap_fixed_cli_strict_ssh_and_only_projected_receipts_are_retained(self):
+        self.rpc.execute = self.bootstrap_execute
+        for operation in ('import', 'configure', 'setup-issue'):
+            reply = self.rpc.bootstrap_call(operation, self.bootstrap_control() if operation == 'setup-issue' else None)
+            self.assertTrue(reply['verified']); self.assertEqual(len(reply['evidence_sha256']), 64)
+        for command, _, timeout in self.calls:
+            self.assertEqual(command[-1], 'php /opt/keli-isolated/runtime/member_import_entry.php')
+            self.assertIn('StrictHostKeyChecking=yes', command); self.assertIn('BatchMode=yes', command)
+            self.assertEqual(timeout, 90)
+        self.assertNotIn('synthetic-private-reply', json.dumps(self.saved))
+        self.assertEqual(self.rpc.bootstrap_call('setup-read')['setup']['deadline_at'], 9000)
+        with self.assertRaisesRegex(TransportError, 'readback_required'): self.rpc.bootstrap_call('import')
+
+    def test_bootstrap_lost_reply_reconciles_without_repeating_mutation_and_keeps_first_error(self):
+        self.rpc.execute = lambda *args: (_ for _ in ()).throw(TimeoutError('private failure'))
+        with self.assertRaisesRegex(TransportError, 'uncertain'): self.rpc.bootstrap_call('import')
+        first = copy.deepcopy(self.saved['transport-first-error'])
+        self.rpc.execute = self.bootstrap_execute
+        with self.assertRaisesRegex(TransportError, 'readback_required'): self.rpc.bootstrap_call('import')
+        self.assertTrue(self.rpc.bootstrap_call('readback')['verified'])
+        self.assertTrue(self.saved['bootstrap-import']['completed']); self.assertEqual(len(self.calls), 1)
+        self.assertEqual(first, self.saved['transport-first-error'])
+        self.assertNotIn('private failure', json.dumps(self.saved))
+        self.rpc.bootstrap_call('stop')
+        with self.assertRaisesRegex(TransportError, 'stopped'): self.rpc.bootstrap_call('configure')
+        self.assertTrue(self.rpc.bootstrap_call('readback')['verified'])
+
+    def test_bootstrap_missing_intent_bad_control_and_changed_host_identity_never_dispatch(self):
+        self.rpc.execute = self.bootstrap_execute
+        with self.assertRaisesRegex(TransportError, 'intent_missing'): self.rpc.bootstrap_call('setup-read')
+        for control in ({}, dict(self.bootstrap_control(), token='private'), dict(self.bootstrap_control(), size='g6-standard-4')):
+            with self.assertRaisesRegex(TransportError, 'control_invalid'): self.rpc.bootstrap_call('setup-issue', control)
+        self.assertEqual(self.calls, [])
+        self.rpc.bootstrap_call('import'); self.known.write_text('changed')
+        with self.assertRaisesRegex(TransportError, 'binding_changed'): self.rpc.bootstrap_call('readback')
+        self.assertEqual(len(self.calls), 1)
+
+    def test_bootstrap_changed_readback_and_stop_timeout_remain_closed(self):
+        self.rpc.execute = self.bootstrap_execute; self.rpc.bootstrap_call('import')
+        prior = copy.deepcopy(self.saved['bootstrap-import'])
+        self.rpc.execute = lambda *_: json.dumps(dict(ok=True, operation='readback', scope=dict(run_id=self.rpc.run_id))).encode()
+        with self.assertRaisesRegex(TransportError, 'readback_changed'): self.rpc.bootstrap_call('readback')
+        self.assertEqual(prior, self.saved['bootstrap-import'])
+        self.rpc.execute = lambda *_: (_ for _ in ()).throw(TimeoutError('stopped but no ack'))
+        with self.assertRaisesRegex(TransportError, 'uncertain'): self.rpc.bootstrap_call('stop')
+        with self.assertRaisesRegex(TransportError, 'stopped'): self.rpc.bootstrap_call('configure')
+        self.rpc.execute = self.bootstrap_execute
+        self.assertTrue(self.rpc.bootstrap_call('stop')['verified'])
+
+    def test_bootstrap_authority_and_durable_intent_are_required_before_dispatch(self):
+        self.rpc.guard = lambda *_: (_ for _ in ()).throw(TransportError('not_authorized'))
+        with self.assertRaisesRegex(TransportError, 'not_authorized'): self.rpc.bootstrap_call('import')
+        self.rpc.guard = lambda *_: None; self.rpc.save = lambda *_: None
+        with self.assertRaisesRegex(TransportError, 'journal_unconfirmed'): self.rpc.bootstrap_call('import')
+        self.assertEqual(self.calls, [])
+
     def test_setup_fixed_cli_and_bound_identity_with_advancing_sequences(self):
         pin = dict(grant_id='a' * 32, grant_sha256='b' * 64, deadline_at=9000)
         for operation in ('advance', 'advance', 'status', 'stop'):

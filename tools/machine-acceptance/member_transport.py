@@ -94,6 +94,90 @@ class StrictControllerTransport:
                    '-o', 'UserKnownHostsFile=' + str(self.known), '-i', str(self.identity),
                    'root@' + self.host, remote_command]
 
+    def bootstrap_call(self, operation, control=None):
+        """Fixed root bootstrap CLI. Uncertain mutations require explicit readback."""
+        readers = {'import': 'readback', 'configure': 'configuration-read', 'setup-issue': 'setup-read'}
+        require(operation in (*readers, *readers.values(), 'stop'), 'transport_bootstrap_operation_invalid')
+        require((control is not None) == (operation == 'setup-issue'), 'transport_bootstrap_control_invalid')
+        if control is not None:
+            keys = {'run_id', 'external_id', 'task_id', 'label', 'marker', 'region', 'size', 'image', 'provider_created_at'}
+            require(isinstance(control, dict) and set(control) == keys
+                    and all(isinstance(v, str) and len(v) <= 128 for v in control.values()), 'transport_bootstrap_control_invalid')
+            suffix = control['task_id'].replace('-', '')
+            require(control['run_id'] == self.run_id and re.fullmatch(r'[1-9][0-9]{0,15}', control['external_id'])
+                    and re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', control['task_id'])
+                    and control['label'] == 'keli-' + suffix and control['marker'] == 'keli-create-' + suffix
+                    and control['region'] == 'sg-sin-2' and control['size'] == 'g6-standard-2'
+                    and control['image'] == 'linode/debian12'
+                    and re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ?', control['provider_created_at']),
+                    'transport_bootstrap_control_invalid')
+        self.guard('bootstrap-' + operation, 'control')
+        for file in (self.identity, self.known):
+            require(file.is_file() and not file.is_symlink() and file.stat().st_nlink == 1, 'transport_key_or_hosts_missing')
+
+        def persist(key, value):
+            self.save(key, copy.deepcopy(value))
+            require(self.load(key) == value, 'transport_bootstrap_journal_unconfirmed')
+
+        def digest(value):
+            return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+        binding = dict(run_id=self.run_id, host=self.host,
+            identity_sha256=hashlib.sha256(self.identity.read_bytes()).hexdigest(),
+            known_hosts_sha256=hashlib.sha256(self.known.read_bytes()).hexdigest())
+        prior_binding = self.load('bootstrap-binding')
+        require(prior_binding is None or prior_binding == binding, 'transport_bootstrap_binding_changed')
+        if prior_binding is None: persist('bootstrap-binding', binding)
+        request = dict(operation=operation)
+        if control is not None: request['control'] = copy.deepcopy(control)
+        mutation = operation in readers
+        owner = operation if mutation else next((k for k, v in readers.items() if v == operation), None)
+        key = 'bootstrap-' + owner if owner else None
+        prior = self.load(key) if key else None
+        if mutation:
+            require(self.load('bootstrap-stopped') is None, 'transport_bootstrap_stopped')
+            require(prior is None, 'transport_bootstrap_readback_required')
+            persist(key, dict(request=request, completed=False))
+        elif operation == 'stop':
+            persist('bootstrap-stopped', dict(stopped=True))
+        else:
+            require(isinstance(prior, dict) and set(prior) in ({'request', 'completed'}, {'request', 'completed', 'evidence_sha256'})
+                    and prior['request'].get('operation') == owner, 'transport_bootstrap_intent_missing')
+        try:
+            raw = self.execute(self._command('php /opt/keli-isolated/runtime/member_import_entry.php'),
+                json.dumps(request, separators=(',', ':')).encode(), 90)
+            require(isinstance(raw, bytes) and len(raw) <= LIMIT, 'transport_response_too_large')
+            reply = unique_json(raw)
+            field = {'import': 'scope', 'readback': 'scope', 'configure': 'configuration',
+                'configuration-read': 'configuration', 'setup-issue': 'setup', 'setup-read': 'setup', 'stop': 'stopped'}[operation]
+            require(isinstance(reply, dict) and set(reply) == {'ok', 'operation', field}
+                    and reply['ok'] is True and reply['operation'] == operation, 'transport_bootstrap_reply_changed')
+            value = reply[field]
+            if field == 'stopped': require(value is True, 'transport_bootstrap_stop_unconfirmed')
+            else:
+                require(isinstance(value, dict) and bool(value), 'transport_bootstrap_reply_changed')
+                if field == 'scope': require(value.get('run_id') == self.run_id, 'transport_bootstrap_reply_changed')
+                if field == 'configuration':
+                    require(value.get('initialization_scope', {}).get('run_id') == self.run_id
+                            and value.get('health_or_forwarding_claimed') is False and value.get('cloud_or_dns_writes') is False,
+                            'transport_bootstrap_reply_changed')
+                if field == 'setup':
+                    require(set(value) == {'grant_id', 'grant_sha256', 'deadline_at'}
+                            and type(value['deadline_at']) is int and value['deadline_at'] > 0
+                            and all(isinstance(value[k], str) and re.fullmatch(r'[a-f0-9]{%d}' % n, value[k])
+                                    for k, n in [('grant_id', 32), ('grant_sha256', 64)]), 'transport_bootstrap_reply_changed')
+                evidence = digest(value)
+                if prior and prior.get('completed') is True:
+                    require(prior.get('evidence_sha256') == evidence, 'transport_bootstrap_readback_changed')
+                # Persist only a digest, never the full account/configuration reply.
+                persist(key, dict(request=request if mutation else prior['request'], completed=True, evidence_sha256=evidence))
+            return dict(operation=operation, verified=True, evidence_sha256=digest(value),
+                        **({'setup': copy.deepcopy(value)} if field == 'setup' else {}))
+        except Exception as error:
+            self._first_error('bootstrap-' + operation, 'control', error)
+            if isinstance(error, TransportError): raise
+            raise TransportError('transport_bootstrap_uncertain') from None
+
     def setup_call(self, operation, identity):
         """Fixed setup CLI, with a durable intent before each advancing RPC."""
         require(operation in ('advance', 'status', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback'), 'transport_setup_operation_invalid')
