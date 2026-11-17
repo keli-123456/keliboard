@@ -107,7 +107,7 @@ try:
         'test_member_installation_linux.InstallationServiceUserTests', 'test_member_execution.ExecutionTests',
         'test_member_assembly', 'test_member_initialization', 'test_member_cli', 'test_member_round',
         'test_member_transport', 'test_member_remote_setup', 'test_member_private_cleanup', 'test_member_bundle', 'test_member_runtime_bundle',
-        'test_member_host_installation', 'test_member_host_setup', 'test_member_http_service'],
+        'test_member_host_installation', 'test_member_host_setup', 'test_member_operator_transport', 'test_member_http_service'],
         cwd=TOOLS, capture_output=True, text=True, timeout=240)
     (ART / 'python.log').write_text(tests.stdout + tests.stderr)
     assert tests.returncode == 0, 'python_regression_failed'
@@ -122,6 +122,7 @@ try:
         'tests/Unit/Services/MachineMemberSetupAuthorityTest.php',
         'tests/Unit/Services/MachineProviderGroupsTest.php',
         'tests/Unit/Services/MachineMemberProviderBindingsTest.php',
+        'tests/Unit/Services/MachineMemberOperatorProviderTest.php',
         'tests/Unit/Services/MachineDnsAliyunCompatibilityTest.php'],
         cwd=REPO, capture_output=True, text=True, timeout=120)
     (ART / 'dns-phpunit.log').write_text(php_tests.stdout + php_tests.stderr)
@@ -275,9 +276,71 @@ try:
         private_pins = scope_pins['auxiliary']['private_files']
         assert len(private_pins) == 5 and scope_pins['roles'] == {} and scope_pins['auxiliary']['records'] == []
         assert http_service.cgroup_empty(install_scope)
-        for pin in private_pins:
-            assert install_transport.remove_private(pin)['status'] == 'absent'
-            assert install_transport.inspect_private(pin)['status'] == 'absent'
+        from member_operator_transport import MemberOperatorProviderTransport
+        from member_assembly import MemberRoundAssembly
+        operator = work / 'operator'; operator.mkdir(mode=0o700)
+        provider_scope = dict(run_id=RUN, bundle_sha256=install_scope['bundle_sha256'], baseline_ids=[],
+            pins=[control], dns_receipts=[])
+        provider_permit = dict(schema=1, run_id=RUN, operation='provider-cleanup', authorized=True,
+            scope_sha256=digest(provider_scope), credentials_sha256=hashlib.sha256(credentials).hexdigest(),
+            operator_machine_sha256=hashlib.sha256(Path('/etc/machine-id').read_bytes()).hexdigest())
+        for name, raw in [('provider-scope.json', json.dumps(provider_scope).encode()),
+            ('provider-permit.json', json.dumps(provider_permit).encode()), ('provider-credentials.json', credentials),
+            ('fixture-cloud.json', json.dumps(dict(present=True, methods=[])).encode())]:
+            (operator / name).write_bytes(raw); (operator / name).chmod(0o600)
+        provider_journal = {}
+        def provider_execute(args, payload):
+            assert args[-2] == str(TOOLS / 'member_operator_entry.php') and args[-1] == str(operator)
+            assert all(not Path(pin['path']).exists() for pin in private_pins), 'controller_delete_before_private_cleanup'
+            actual = [*args[:-2], str(REPO / 'audit/r35-operator-provider-fixture.php'), args[-1]]
+            result = subprocess.run(actual, input=payload, capture_output=True, timeout=90, env=ENV, cwd=REPO)
+            state = json.loads((operator / 'fixture-cloud.json').read_bytes())
+            if not state['present'] and ROOT.exists():
+                assert ROOT.resolve() == ROOT and (ROOT / '.r35-application-fixture').read_text() == sha
+                assert http_service.cgroup_empty(install_scope)
+                shutil.rmtree(ROOT)
+                SUMMARY['operator_controller_fixture_removed_after_delete'] = True
+            if result.returncode != 0: raise TransportError('cleanup_operator_unconfirmed')
+            return result.stdout
+        provider = MemberOperatorProviderTransport(directory=operator, scope=provider_scope,
+            php=Path(shutil.which('php')).resolve(), guard=lambda *_: None, load=provider_journal.get,
+            save=lambda k, v: provider_journal.__setitem__(k, v), execute=provider_execute)
+        auxiliary = json.loads(json.dumps(scope_pins))
+        auxiliary['auxiliary']['control'] = control
+        combined = dict(run_id=RUN, initialization=auxiliary, native=None)
+        def reconcile_local(requests):
+            assert requests == [] and install_journal['execution-stopped'] == dict(binding=digest(install_scope))
+            assert host_port.snapshot() == install_journal['host-setup-resources']
+            return dict(requests_sha256=digest(requests), resolved=True)
+        def export_missing():
+            raise RuntimeError('fixture-partial-evidence-export-failure')
+        def unused(*_): raise AssertionError('fixture-no-source-or-native-task')
+        assembly = MemberRoundAssembly(scope=install_scope, setup=execution, control=None, native_transport=unused,
+            provider=provider, controller=install_transport, task_call=unused, reconcile=reconcile_local, export=export_missing,
+            load=install_journal.get, save=lambda k, v: install_journal.__setitem__(k, v), guard=lambda *_: None)
+        cleanup = assembly.cleanup(combined, None)
+        end = time.monotonic() + 60
+        while time.monotonic() < end:
+            result = cleanup.step()
+            if not ROOT.exists():
+                http_scope = None
+                install_transport.execute = lambda *_: (_ for _ in ()).throw(AssertionError('deleted-controller-rpc'))
+            if result['phase'] == 'closed': break
+            time.sleep(1)
+            # Resume from persisted state after controller removal, with no SSH.
+            if not ROOT.exists(): cleanup = assembly.cleanup(combined, result)
+        assert result['phase'] == 'closed' and not ROOT.exists(), 'operator_cleanup_not_closed'
+        assert len(result['control_reads']) == 2 and result['control_reads'][1] - result['control_reads'][0] >= 10
+        assert result['evidence_saved_and_read_back'] is False and result['first_error'] is not None
+        state = json.loads((operator / 'fixture-cloud.json').read_bytes())
+        assert state['methods'].count('DELETE') == 1 and not state['present']
+        assert 'operator-provider-first-error' in provider_journal
+        SUMMARY['operator_cleanup'] = dict(real_standalone_php_and_provider_adapter=True,
+            cloud_http_only_simulated=True, actual_assembly_cleanup=True, delete_ack_lost=True,
+            delete_calls=1, independent_of_controller_files_and_ssh=True,
+            real_absence_interval_seconds=result['control_reads'][1] - result['control_reads'][0],
+            stopped_snapshot_resumed=True, evidence_failure_did_not_prevent_resource_cleanup=True,
+            acceptance_not_claimed=True)
         # Reconstruct the port after .env and TLS material have already gone.
         resumed = MemberHostSetup(**host_arguments)
         assert resumed.reconcile(stop_request)['resolved'] is True and resumed.snapshot() == host_port.snapshot()
