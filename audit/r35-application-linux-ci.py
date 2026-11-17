@@ -66,6 +66,18 @@ def setup_rpc(operation, *, ok=True):
     return value.get('result', value)
 
 
+def import_rpc(operation, *, uid=0, ok=True):
+    prefix = [] if uid == 0 else ['setpriv', '--reuid=65534', '--regid=65534', '--clear-groups', '--no-new-privs']
+    p = subprocess.run(prefix + ['php', '-d', 'display_errors=0', '-d', 'log_errors=0',
+        str(ROOT / 'runtime/member_import_entry.php')], input=json.dumps(dict(operation=operation)).encode(),
+        cwd=ROOT / 'app', env=ENV, capture_output=True, timeout=90)
+    value = json.loads(p.stdout)
+    assert (p.returncode == 0) == ok and value['ok'] == ok, value
+    for secret in (b'synthetic-no-live-token', b'synthetic-secret'):
+        assert secret not in p.stdout + p.stderr
+    return value
+
+
 assert sys.platform == 'linux' and os.geteuid() == 0
 assert not ROOT.exists() and not ROOT.is_symlink()
 ART.mkdir(exist_ok=True)
@@ -93,6 +105,7 @@ try:
     php_tests = subprocess.run(['php', 'vendor/phpunit/phpunit/phpunit',
         'tests/Unit/Services/MachineMemberDnsInitializationTest.php',
         'tests/Unit/Services/MachineMemberSourceConfigurationTest.php',
+        'tests/Unit/Services/MachineMemberPrerequisiteImportTest.php',
         'tests/Unit/Services/MachineMemberSetupAuthorityTest.php',
         'tests/Unit/Services/MachineMemberProviderBindingsTest.php',
         'tests/Unit/Services/MachineDnsAliyunCompatibilityTest.php'],
@@ -106,6 +119,12 @@ try:
     (ART / 'source-phpunit.log').write_text(source_tests.stdout + source_tests.stderr)
     assert source_tests.returncode == 0, 'source_phpunit_regression_failed'
     SUMMARY['source_phpunit_passed'] = True
+    cli_tests = subprocess.run(['php', 'vendor/phpunit/phpunit/phpunit',
+        'tests/Unit/Services/MachineFailoverNativeBridgeTest.php', '--filter', 'test_member_cli'],
+        cwd=REPO, capture_output=True, text=True, timeout=120)
+    (ART / 'cli-phpunit.log').write_text(cli_tests.stdout + cli_tests.stderr)
+    assert cli_tests.returncode == 0, 'cli_phpunit_regression_failed'
+    SUMMARY['native_cli_binding_lifetime_linux_tested'] = True
     os.umask(0o077)
     # Hosted runners make /opt writable by the runner user. Match a fresh
     # controller's root-owned parent only in this disposable CI VM, then restore.
@@ -180,6 +199,57 @@ try:
         for path in originals: path.with_suffix('.saved').rename(path)
     assert php('initialize-readback') == SUMMARY['migration']
     SUMMARY['existing_schema_rejected_first_error_retained'] = True
+    installer = MemberInstallation(ROOT)
+    credentials = json.dumps(dict(schema=1, run_id=RUN, linode=dict(api_token='synthetic-no-live-token'),
+        aliyun=dict(access_key_id='synthetic-id', access_key_secret='synthetic-secret'), baseline_ids=[])).encode()
+    installer.private('credentials', credentials, hashlib.sha256(credentials).hexdigest())
+    app_identity = json.loads((ROOT / 'application.json').read_bytes())
+    started = int(time.time())
+    authority = dict(schema=1, run_id=RUN, operation='private-import', authorized=True,
+        bundle_sha256=frozen['archive_sha256'], machine_id_sha256=app_identity['machine_id_sha256'],
+        started_at=started, deadline_at=started + 7199, credentials_sha256=hashlib.sha256(credentials).hexdigest())
+    raw_authority = json.dumps(authority).encode()
+    installer.private('bootstrap-authority', raw_authority, hashlib.sha256(raw_authority).hexdigest())
+    authority_path = ROOT / 'private/bootstrap-authority'
+    assert import_rpc('import', uid=65534, ok=False)['reason'] == 'member_import_root_cli_required'
+    credentials_path = ROOT / 'private/credentials'
+    credentials_path.chmod(0o644)
+    try: assert import_rpc('import', ok=False)['reason'] == 'member_import_file_invalid'
+    finally: credentials_path.chmod(0o600)
+    authority_path.write_bytes(json.dumps(dict(authority, bundle_sha256='0' * 64)).encode())
+    try: assert import_rpc('import', ok=False)['reason'] == 'member_import_authority_invalid'
+    finally: authority_path.write_bytes(raw_authority)
+    expiry_start = int(time.time())
+    authority_path.write_bytes(json.dumps(dict(authority, started_at=expiry_start, deadline_at=expiry_start + 1202)).encode())
+    elapsed_start = time.monotonic(); time.sleep(2.2)
+    try:
+        assert import_rpc('import', ok=False)['reason'] == 'member_import_expired_or_stopped'
+        assert time.monotonic() - elapsed_start >= 2.2
+    finally: authority_path.write_bytes(raw_authority)
+    assert not (ROOT / 'private/member-import/intent.json').exists()
+    failures = php('import-failures')
+    assert failures['rollback_phases'] == 5 and failures['rows'] == [0] * 5
+    imported = import_rpc('import')
+    assert import_rpc('import') == imported
+    assert import_rpc('readback')['scope'] == imported['scope']
+    assert php('import-inspect')['credential_storage_encrypted']
+    assert php('import-service-read', uid=65534)['published_files_readable_not_writable']
+    result_path = ROOT / 'private/member-import/result.json'
+    result_backup = result_path.with_suffix('.saved')
+    result_path.rename(result_backup)
+    try: assert import_rpc('import', ok=False)['reason'] == 'member_import_result_unconfirmed'
+    finally: result_backup.rename(result_path)
+    assert import_rpc('stop')['stopped']
+    assert import_rpc('import', ok=False)['reason'] == 'member_import_expired_or_stopped'
+    assert import_rpc('readback')['scope'] == imported['scope']
+    SUMMARY['prerequisite_import'] = dict(actual_fixed_cli=True, actual_credential_services=True,
+        actual_release_distribution_service=True, encrypted_mysql_credentials=True,
+        bundle_machine_and_private_material_bound=True, root_only=True,
+        real_elapsed_dispatch_expiry=True, service_user_reads_release_not_private_material=True,
+        rollback_phases=5, uncertain_replay_refused=True, first_error_retained=True,
+        stop_denies_import_allows_readback=True, default_release_unset=True,
+        credential_values_synthetic=True, node_bytes_synthetic_not_executed=True,
+        production_or_cloud_calls=False, whole_round_ports_composed=False)
     assert php('configuration-prepare')['configuration_rows'] == [0] * 7
     failures = php('configuration-failures')
     assert failures['rollback_phases'] == 7 and failures['configuration_rows'] == [0] * 7
@@ -194,7 +264,7 @@ try:
         assert result['closed_gates_unchanged']
     SUMMARY['source_configuration'] = dict(actual_application_services=True, real_mysql_transactions=True,
         real_redis_locks=True, provider_reads_simulated=True, provider_writes=0,
-        prerequisite_credentials_and_release_synthetic=True, concrete_import_authority_tested=False,
+        prerequisite_credentials_and_node_bytes_synthetic=True, concrete_import_authority_tested=True,
         machines=2, nodes=2, policies=2, services=1, members=2, dns_sets=2, dns_slots=2,
         failure_rollback_phases=7, uncertain_replay_refused=True, first_error_safe_and_retained=True,
         process_restart_readback=True, duplicate_creation_refused=True,
@@ -300,7 +370,7 @@ try:
             endpoint = '/api/v2/server/status'
         else:
             body['status'] = dict(stats, version='v0.1.387', ip=dict(public_ipv4=pin['ip']),
-                runtime=dict(binary_sha256=('e' if bad_hash else 'd') * 64,
+                runtime=dict(binary_sha256=('e' * 64 if bad_hash else frozen['node_sha256']),
                     observation=dict(schema=1, session=('a' if role == 'source-a' else 'b') * 32,
                         pid=42, started_at=pin['dispatched_at'], uptime_seconds=max(1, int(time.time()) - pin['dispatched_at'])),
                     node_statuses=[dict(node_id=pin['node_id'], protocol='hysteria2', server_port=24443, status='configured')]))

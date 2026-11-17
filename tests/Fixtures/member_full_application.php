@@ -34,6 +34,9 @@ try {
         echo json_encode(['prepared' => true]);
     } elseif ($mode === 'initialize-readback') {
         echo json_encode(Keli\Acceptance\MemberApplicationBootstrap::initialized());
+    } elseif (str_starts_with($mode, 'import-')) {
+        $importFixture = require __DIR__ . '/member_import_application.php';
+        echo json_encode($importFixture($mode));
     } elseif (str_starts_with($mode, 'configuration-')) {
         $configurationFixture = require __DIR__ . '/member_source_configuration_application.php';
         echo json_encode($configurationFixture($mode));
@@ -69,7 +72,7 @@ try {
     }
 } catch (Throwable $error) {
     http_response_code(500);
-    $reason = preg_match('/^(member_application|member_setup|member_initialization|fixture)_[a-z_]{1,70}$/D', $error->getMessage())
+    $reason = preg_match('/^(member_application|member_import|member_setup|member_initialization|fixture)_[a-z_]{1,70}$/D', $error->getMessage())
         ? $error->getMessage() : 'fixture_failed';
     echo json_encode(['ok' => false, 'reason' => $reason, 'class' => (new ReflectionClass($error))->getShortName(),
         'file' => basename($error->getFile()), 'line' => $error->getLine()]);

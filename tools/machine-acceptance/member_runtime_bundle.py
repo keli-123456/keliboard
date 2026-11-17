@@ -53,7 +53,8 @@ def assemble(application, vendor, node_archive, destination):
         'execution_authorized': False, 'live_ready': False, 'credentials_included': False,
         'artifact_kind': 'unarmed_r35_linux_runtime', 'node': {'version': 'v0.1.387',
             'source_commit': NODE_SOURCE, 'sha256': NODE_SHA, 'input_archive_sha256': NODE_ARCHIVE_SHA,
-            'new_compilation': False, 'path': 'node/kelinode'}, 'files': files}
+            'new_compilation': False, 'path': 'node/kelinode', 'archive_path': 'node/release.tar.gz',
+            'manifest_path': 'node/release.json'}, 'files': files}
     with tempfile.TemporaryDirectory(prefix='runtime-freeze-', dir=output) as directory:
         tmp = Path(directory) / 'runtime.tar.gz'
         with tmp.open('wb') as stream, gzip.GzipFile(filename='', fileobj=stream, mode='wb', mtime=0, compresslevel=6) as gz:
@@ -87,6 +88,10 @@ def assemble(application, vendor, node_archive, destination):
                     _, raw, _ = staging.read_file(file, 64 * 1024 * 1024, collect=True)
                     add('app/vendor/' + relative, raw, 0o755 if relative.startswith('bin/') else 0o644)
                 add('node/kelinode', binary, 0o755)
+                add('node/release.tar.gz', node_raw)
+                add('node/release.json', (json.dumps({'component': 'kelinode-rs', 'version': 'v0.1.387',
+                    'platform': 'linux-x86_64', 'sha256': NODE_ARCHIVE_SHA, 'binary_sha256': NODE_SHA},
+                    sort_keys=True) + '\n').encode())
                 require(sum(f['bytes'] for f in files.values()) <= MAX_BYTES, 'runtime_expanded_limit')
                 raw = (json.dumps(manifest, sort_keys=True, indent=2) + '\n').encode()
                 item = tarfile.TarInfo('runtime-manifest.json'); item.mode = 0o644; item.size = len(raw)
@@ -118,6 +123,8 @@ def verify(path, expected_sha256=None):
             seen[item.name] = {'sha256': sha(content), 'bytes': len(content), 'mode': item.mode}
             if item.name == 'runtime-manifest.json':
                 manifest = unique_json(content)
+            if item.name == 'node/release.json':
+                release = unique_json(content)
             if item.name.startswith('runtime/'):
                 require(b'\r' not in content, 'runtime_crlf_refused')
         require('runtime-manifest.json' in seen, 'runtime_manifest_missing')
@@ -127,6 +134,10 @@ def verify(path, expected_sha256=None):
                 'runtime_manifest_changed')
         require(seen['node/kelinode']['sha256'] == NODE_SHA and seen['node/kelinode']['mode'] == 0o755,
                 'runtime_node_changed')
+        require(seen.get('node/release.tar.gz', {}).get('sha256') == NODE_ARCHIVE_SHA
+                and 'node/release.json' in seen and release == {'component': 'kelinode-rs', 'version': 'v0.1.387',
+                    'platform': 'linux-x86_64', 'sha256': NODE_ARCHIVE_SHA, 'binary_sha256': NODE_SHA},
+                'runtime_release_changed')
         for name in RUNTIME:
             require(seen['runtime/' + name]['sha256'] == seen['app/tools/machine-acceptance/' + name]['sha256'],
                     'runtime_duplicate_source_changed')

@@ -4,12 +4,8 @@ declare(strict_types=1);
 use App\Models\MachineCloudAccount;
 use App\Models\MachineFailoverPolicy;
 use App\Models\Server;
-use App\Models\ServerMachineRelease;
 use App\Models\User;
-use App\Services\ServerMachine\Cloud\MachineCloudGroupService;
-use App\Services\ServerMachine\Cloud\MachineCloudService;
 use App\Services\ServerMachine\Cloud\MachineFailoverCredentials;
-use App\Services\ServerMachine\Dns\MachineDnsService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Keli\Acceptance\MemberApplicationBootstrap;
@@ -17,8 +13,7 @@ use Keli\Acceptance\MemberCliAuthority;
 use Keli\Acceptance\MemberProviderBindings;
 use Keli\Acceptance\MemberSourceConfiguration;
 
-// Prerequisite credentials/release are synthetic fixture input, not production imports.
-// Machines, nodes, policies, members and DNS sets are made by the actual setup class.
+// Only credential values/node bytes are synthetic; actual importer publishes prerequisites.
 return static function (string $mode): array {
     if (getenv('GITHUB_ACTIONS') !== 'true' || getenv('KELI_MEMBER_FULL_APPLICATION') !== '1'
         || PHP_OS_FAMILY !== 'Linux' || PHP_SAPI !== 'cli' || posix_geteuid() !== 0)
@@ -75,25 +70,10 @@ return static function (string $mode): array {
     });
     try {
         if ($mode === 'configuration-prepare') {
-            $need(!User::query()->exists() && !MachineCloudAccount::query()->exists());
-            $admin = User::query()->create(['email' => 'r35-fixture@example.invalid', 'password' => password_hash(bin2hex(random_bytes(24)), PASSWORD_BCRYPT),
-                'uuid' => (string) Illuminate\Support\Str::uuid(), 'token' => bin2hex(random_bytes(16)), 'is_admin' => true]);
-            $group = app(MachineCloudGroupService::class)->save(['name' => 'R35 fixture']);
-            $account = app(MachineCloudService::class)->saveAccount(['name' => 'R35 fixture', 'provider' => 'linode',
-                'api_token' => 'synthetic-no-live-token', 'group_id' => $group->id,
-                'provision_limits' => ['max_instances' => 4, 'max_parallel' => 1, 'daily_limit' => 5]]);
-            $dns = app(MachineDnsService::class)->saveCredential(['name' => 'R35 source fixture', 'provider' => 'aliyun',
-                'access_key_id' => 'synthetic-id', 'access_key_secret' => 'synthetic-secret'], $admin->id);
-            $release = ServerMachineRelease::query()->create(['component' => 'kelinode-rs', 'platform' => 'linux-x86_64',
-                'version' => 'v0.1.387', 'status' => 'active', 'sha256' => str_repeat('c', 64), 'binary_sha256' => str_repeat('d', 64),
-                'archive_path' => 'fixture-not-published.tar.gz', 'manifest_path' => 'fixture-not-published.json']);
-            $scope = ['run_id' => MemberProviderBindings::RUN, 'admin_id' => $admin->id,
-                'account_id' => $account->id, 'account_revision' => $account->revision, 'group_id' => $group->id,
-                'dns_credential_id' => $dns['id'], 'dns_credential_revision' => $dns['revision'],
-                'release_id' => $release->id, 'binary_sha256' => $release->binary_sha256,
-                'version' => $release->version, 'baseline_ids' => []];
+            $scope = json_decode(file_get_contents('/opt/keli-isolated/private/member-import/result.json'), true, 32, JSON_THROW_ON_ERROR)['scope'];
+            $need(User::query()->count() === 1 && MachineCloudAccount::query()->count() === 1);
             $save('scope', $scope);
-            return ['prepared' => true, 'prerequisites_synthetic' => true, 'configuration_rows' => $counts()];
+            return ['prepared' => true, 'prerequisite_rows_from_actual_importer' => true, 'configuration_rows' => $counts()];
         }
         $scope = $load('scope'); $need(is_array($scope));
         $guard = static function (string $operation) use ($load): void {
