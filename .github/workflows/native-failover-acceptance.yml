@@ -2,6 +2,11 @@ name: R35 Full Application Linux Acceptance
 
 on:
   workflow_dispatch:
+    inputs:
+      cleanup_regression:
+        type: boolean
+        default: false
+        description: Run bounded cleanup regressions only; no service containers.
 
 permissions:
   contents: read
@@ -11,7 +16,48 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  cleanup-regression:
+    if: ${{ inputs.cleanup_regression }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: pdo_sqlite, pcntl, posix, mbstring, openssl
+          tools: composer:v2
+          coverage: none
+      - name: Install locked dependencies without application startup
+        run: composer install --no-interaction --no-progress --prefer-dist --no-scripts --no-plugins
+      - name: Run cleanup regressions without an external network
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          timeout --signal=TERM --kill-after=15s 300s sudo unshare --net --pid --fork --mount-proc --kill-child=SIGKILL \
+            env -i PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 HOME=/root \
+            PYTHONDONTWRITEBYTECODE=1 bash -eu -c '
+              test -z "$(ip -4 route show)"
+              test -z "$(ip -6 route show)"
+              cd tools/machine-acceptance
+              python3 -B -m unittest -v test_member_assembly test_member_execution.ExecutionTests test_member_private_cleanup test_member_round test_member_transport >../../artifacts/cleanup-python.log 2>&1
+              cd ../..
+              php vendor/phpunit/phpunit/phpunit tests/Unit/Services/MachineMemberProviderBindingsTest.php >artifacts/cleanup-php.log 2>&1
+              test ! -e /opt/keli-isolated
+              printf "{\"status\":\"passed\",\"external_routes\":false,\"cloud_ssh_dns\":\"simulated\",\"full_round\":false,\"production_access\":false}\n" >artifacts/cleanup-summary.json
+            '
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r35-cleanup-linux-evidence
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 7
   isolated-services:
+    if: ${{ !inputs.cleanup_regression }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:

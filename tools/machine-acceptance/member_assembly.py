@@ -96,7 +96,9 @@ class MemberRoundAssembly:
         if self.native is not None:
             # Native DNS may now hold A2. Only the original signed publication
             # journal can resolve that pin; never reuse a mutable setup snapshot.
-            auxiliary_scope['records'] = []
+            # Certificate validation TXT records remain host-owned.
+            auxiliary_scope['records'] = [pin for pin in auxiliary_scope['records']
+                                          if pin['type'] == 'TXT']
         bindings = MemberAuxiliaryBindings(scope=auxiliary_scope, provider=self.provider,
             controller=self.controller, reconcile=self.reconcile, export=self.export,
             load=self.load, save=self.save)
