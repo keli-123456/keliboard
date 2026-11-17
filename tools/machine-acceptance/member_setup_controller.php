@@ -22,9 +22,11 @@ final class MemberSetupController
             $authority->allow('sources-advance', 'control');
             self::need(mkdir($directory, 0700), 'journal_unavailable');
         }
+        clearstatcache(true, $directory);
         $stat = lstat($directory);
-        self::need(realpath($directory) === $directory && is_dir($directory) && $stat['uid'] === 0
-            && ($stat['mode'] & 0777) === 0700, 'journal_invalid');
+        self::need(realpath($directory) === $directory && is_dir($directory), 'journal_directory_path');
+        self::need($stat['uid'] === 0, 'journal_directory_owner');
+        self::need(($stat['mode'] & 0777) === 0700, 'journal_directory_mode');
         self::need(!is_link($directory . '/lock'), 'lock_invalid');
         $lock = fopen($directory . '/lock', 'c+b');
         self::need($lock !== false, 'lock_invalid');
@@ -62,8 +64,10 @@ final class MemberSetupController
     {
         $path = $this->path($key); clearstatcache(true, $path); $stat = @lstat($path);
         if (!$stat) return null;
-        self::need(realpath($path) === $path && is_file($path) && $stat['uid'] === 0 && $stat['nlink'] === 1
-            && ($stat['mode'] & 0777) === 0600 && $stat['size'] <= 65536, 'journal_invalid');
+        self::need(realpath($path) === $path && is_file($path), 'journal_file_path');
+        self::need($stat['uid'] === 0 && $stat['nlink'] === 1, 'journal_file_owner');
+        self::need(($stat['mode'] & 0777) === 0600, 'journal_file_mode');
+        self::need($stat['size'] <= 65536, 'journal_file_size');
         $value = json_decode(file_get_contents($path), true, 32, JSON_THROW_ON_ERROR);
         self::need(is_array($value), 'journal_invalid');
         return $value;
