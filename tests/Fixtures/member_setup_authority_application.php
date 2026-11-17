@@ -19,7 +19,7 @@ return static function (string $mode): array {
     if (getenv('GITHUB_ACTIONS') !== 'true' || getenv('KELI_MEMBER_FULL_APPLICATION') !== '1'
         || PHP_OS_FAMILY !== 'Linux' || PHP_SAPI !== 'cli') throw new RuntimeException('fixture_only');
     foreach (['member_provider_bindings', 'member_source_configuration', 'member_source_registry', 'member_source_initialization',
-        'member_setup_authority', 'member_setup_controller'] as $file)
+        'member_setup_authority', 'member_dns_initialization', 'member_setup_dns', 'member_setup_controller'] as $file)
         require_once '/opt/keli-isolated/runtime/' . $file . '.php';
     $need = static function (bool $ok, string $code = 'invalid'): void {
         if (!$ok) throw new RuntimeException('fixture_setup_' . $code);
@@ -37,7 +37,7 @@ return static function (string $mode): array {
         $scope = json_decode(file_get_contents('/opt/keli-isolated/member-setup-grant.json'), true, 32, JSON_THROW_ON_ERROR)['binding']['scope'];
         $unexpected = static fn () => throw new LogicException('fixture_setup_service_guard_bypassed');
         $configuration = new MemberSourceConfiguration($scope, $unexpected, $unexpected, $unexpected);
-        $denied(fn () => MemberSetupAuthority::issue($configuration, time(), time() + 7200), 'member_application_installer_root_required');
+        $denied(fn () => MemberSetupAuthority::issue($configuration, time(), time() + 7200, []), 'member_application_installer_root_required');
         $denied(fn () => $authority->within('source-prepare', 'source-a', fn () => []), 'member_setup_root_cli_required');
         $denied(fn () => MemberSetupAuthority::revoke(), 'member_setup_root_cli_required');
         $need(!is_writable('/opt/keli-isolated/member-setup-grant.json'));
@@ -99,10 +99,23 @@ return static function (string $mode): array {
             };
             $configuration = new MemberSourceConfiguration($scope, $guard, fn ($key) => $read($configRoot, $key),
                 static fn () => throw new LogicException('fixture_setup_configuration_write'));
-            $authority = MemberSetupAuthority::issue($configuration, time(), time() + 7200);
+            $taskId = '00000000-0000-4000-8000-000000000071';
+            $control = ['run_id' => MemberCliAuthority::RUN, 'external_id' => '100000', 'task_id' => $taskId,
+                'label' => 'keli-' . str_replace('-', '', $taskId), 'marker' => 'keli-create-' . str_replace('-', '', $taskId),
+                'region' => 'sg-sin-2', 'size' => 'g6-standard-2', 'image' => 'linode/debian12', 'provider_created_at' => gmdate('Y-m-d\TH:i:s\Z')];
+            $row = ['id' => 100000, 'label' => $control['label'], 'tags' => [$control['marker']],
+                'region' => $control['region'], 'type' => $control['size'], 'image' => $control['image'],
+                'created' => rtrim($control['provider_created_at'], 'Z'), 'ipv4' => ['9.9.9.10']];
+            $save('control-row', $row);
+            Http::preventStrayRequests();
+            Http::fake(static function ($request) use ($row, $need) {
+                $need($request->method() === 'GET' && $request->url() === 'https://api.linode.com/v4/linode/instances/100000');
+                return Http::response($row);
+            });
+            $authority = MemberSetupAuthority::issue($configuration, time(), time() + 7200, $control);
             $save('initialization', $configuration->readback()['initialization_scope']);
             $save('identity', $authority->identity());
-            $denied(fn () => MemberSetupAuthority::issue($configuration, time(), time() + 7200), 'member_setup_issuance_exists');
+            $denied(fn () => MemberSetupAuthority::issue($configuration, time(), time() + 7200, $control), 'member_setup_issuance_exists');
             $closed();
             return ['issued' => true, 'reissue_refused' => true, 'persistent_gates_closed' => true];
         } finally { flock($lock, LOCK_UN); fclose($lock); }
@@ -118,6 +131,8 @@ return static function (string $mode): array {
     }
     if ($mode === 'setup-stopped-readback') {
         $denied(fn () => $authority->within('source-prepare', 'source-a', fn () => []), 'member_setup_stopped');
+        foreach (['dns-control', 'dns-edges'] as $operation)
+            $denied(fn () => $authority->within($operation, 'control', fn () => []), 'member_setup_stopped');
         $result = $authority->within('source-readback', 'source-a', fn () => ['count' => Task::query()->count()]);
         $need($result['count'] === 2); $closed();
         return ['mutation_denied' => true, 'readback_allowed' => true];
@@ -142,6 +157,29 @@ return static function (string $mode): array {
     Http::preventStrayRequests();
     $writes = 0; $reads = 0;
     Http::fake(static function ($request) use ($load, $save, &$writes, &$reads, $need, $mode) {
+        if ($request->url() === 'https://alidns.aliyuncs.com/') {
+            $need(is_string($request['Signature']), 'dns_signature');
+            $dns = $load('setup-dns-provider') ?? ['rows' => [], 'next_id' => 6001, 'create' => 0, 'claim' => 0, 'delete' => 0];
+            $action = $request['Action'];
+            if ($action === 'DescribeSubDomainRecords') {
+                $rows = array_values(array_filter($dns['rows'], fn ($r) => $r['RR'] . '.dnscloudcloud.top' === $request['SubDomain']));
+                return Http::response(['TotalCount' => count($rows), 'PageNumber' => 1, 'PageSize' => 50, 'DomainRecords' => ['Record' => $rows]]);
+            }
+            if ($action === 'DescribeDomainRecordInfo') return isset($dns['rows'][$request['RecordId']])
+                ? Http::response($dns['rows'][$request['RecordId']]) : Http::response(['Code' => 'InvalidRR.NoExist'], 400);
+            if ($action === 'AddDomainRecord') {
+                $id = (string) $dns['next_id']++; $dns['create']++;
+                $dns['rows'][$id] = ['RecordId' => $id, 'DomainName' => 'dnscloudcloud.top', 'RR' => $request['RR'],
+                    'Type' => $request['Type'], 'Value' => $request['Value'], 'Line' => 'default', 'TTL' => 600, 'Remark' => '', 'Status' => 'ENABLE'];
+            } else {
+                $id = $request['RecordId']; $need(isset($dns['rows'][$id]), 'dns_identity');
+                if ($action === 'UpdateDomainRecordRemark') { $dns['rows'][$id]['Remark'] = $request['Remark']; $dns['claim']++; }
+                elseif ($action === 'DeleteDomainRecord') { unset($dns['rows'][$id]); $dns['delete']++; }
+                else throw new RuntimeException('fixture_setup_dns_operation');
+            }
+            $save('setup-dns-provider', $dns);
+            return Http::response(['RecordId' => $id, 'RequestId' => 'fixture-request']);
+        }
         $need(parse_url($request->url(), PHP_URL_HOST) === 'api.linode.com', 'foreign_provider');
         $path = parse_url($request->url(), PHP_URL_PATH);
         $rows = $load('provider-rows') ?? [];
@@ -168,6 +206,7 @@ return static function (string $mode): array {
             return Http::response('', 204);
         }
         $need($request->method() === 'GET', 'mutation_outside_create'); $reads++;
+        if ($path === '/v4/linode/instances/100000') return Http::response($load('control-row'));
         if ($mode === 'setup-cleanup-read-error' && $path === '/v4/linode/instances/100002')
             return Http::response(['errors' => [['reason' => 'fixture unavailable']]], 503);
         if (preg_match('~/linode/instances/(10000[12])$~D', $path, $match) && !isset($rows[(int) $match[1]]))
@@ -200,6 +239,28 @@ return static function (string $mode): array {
             + ['request_id' => bin2hex(random_bytes(16)), 'sequence' => $sequence, 'operation' => $operation];
     };
     $advance = static fn () => $controller->rpc($rpcRequest('advance'))['result'];
+    if (in_array($mode, ['setup-dns-control', 'setup-dns-edges', 'setup-dns-readback'], true)) {
+        $operation = substr($mode, strlen('setup-'));
+        $before = app(App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate::class);
+        $request = $rpcRequest($operation); $reply = $controller->rpc($request);
+        $need($controller->rpc($request) === $reply, 'dns_rpc_replayed');
+        $need(app(App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate::class) === $before, 'dns_gate_not_restored');
+        if ($operation === 'dns-control') $need(Task::query()->count() === 0, 'control_dns_after_sources');
+        if ($operation === 'dns-edges') {
+            $need(Task::query()->where('status', 'accepted')->count() === 2, 'dns_before_registration');
+            $scope = $authority->sourceBinding();
+            $snapshot = app(App\Services\ServerMachine\Cloud\MachineFailoverServiceRegistry::class)
+                ->snapshot($scope['configuration']['service_id'], $scope['configuration']['service_revision']);
+            foreach ($reply['result']['records'] as $pin) {
+                $set = collect($snapshot['dns_sets'])->firstWhere('hostname', $pin['name']);
+                $need($pin['marker'] === $set['slots'][0]['marker'], 'dns_marker_not_native');
+            }
+        }
+        $provider = $load('setup-dns-provider'); $closed();
+        return ['ready' => $reply['result']['ready'], 'record_count' => count($reply['result']['records']),
+            'provider_create' => $provider['create'], 'provider_claim' => $provider['claim'],
+            'provider_delete' => $provider['delete'], 'gate_restored' => true];
+    }
     if (str_starts_with($mode, 'setup-cleanup')) {
         $before = Task::query()->orderBy('id')->get()->toArray();
         $firstError = $controller->dispatch(['operation' => 'status'])['first_error'];
@@ -212,6 +273,7 @@ return static function (string $mode): array {
         $denied(fn () => $controller->rpc($rpcRequest('advance')), 'member_setup_stopped');
         $need($writes === 0); $closed();
         return $reply['result'] + ['delete_calls' => $load('cleanup-delete-count')['value'] ?? 0,
+            'dns_delete_calls' => $load('setup-dns-provider')['delete'] ?? 0,
             'provider_rows_remaining' => count($load('provider-rows') ?? []), 'task_history_unchanged' => true,
             'first_error_retained' => true, 'duplicate_rpc_cached' => true, 'advance_stays_revoked' => true];
     }

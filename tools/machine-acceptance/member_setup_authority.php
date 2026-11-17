@@ -61,18 +61,26 @@ final class MemberSetupAuthority
         } finally { fclose($f); }
     }
 
-    public static function issue(MemberSourceConfiguration $configuration, int $started, int $deadline): self
+    public static function issue(MemberSourceConfiguration $configuration, int $started, int $deadline, array $control): self
     {
         $installed = MemberApplicationBootstrap::initialized();
         self::window($started, $deadline, time(), true);
         $binding = $configuration->authorizationBinding();
         self::need(Task::query()->count() === 0, 'tasks_already_exist');
+        $account = MachineCloudAccount::query()->findOrFail($binding['scope']['account_id']);
+        $dns = \App\Models\MachineDnsCredential::query()->findOrFail($binding['scope']['dns_credential_id']);
+        $provider = new MemberProviderBindings(['run_id' => MemberCliAuthority::RUN,
+            'baseline_ids' => $binding['scope']['baseline_ids'], 'pins' => [MemberProviderBindings::digest($control)]],
+            $account->credentials, $dns->credentials, static function ($operation): void {
+                self::need($operation === 'cloud-read', 'operation_denied');
+            }, static fn () => null, static fn () => throw new \RuntimeException('member_setup_read_only'));
+        $controlAddress = $provider->controlAddress($control);
         $root = MemberApplicationBootstrap::ROOT;
         self::need(!file_exists($root . '/' . self::STOP) && !is_link($root . '/' . self::STOP), 'already_stopped');
         $scope = ['schema' => 1, 'run_id' => MemberCliAuthority::RUN, 'grant_id' => bin2hex(random_bytes(16)),
             'started_at' => $started, 'deadline_at' => $deadline, 'bundle_sha256' => $installed['bundle_sha256'],
             'environment_sha256' => $installed['environment_sha256'], 'machine_id_sha256' => $installed['machine_id_sha256'],
-            'binding' => $binding];
+            'binding' => $binding, 'control' => $control, 'control_ipv4' => $controlAddress];
         self::publish($root . '/private/member-setup-issuance.json', ['scope_sha256' => MemberProviderBindings::digest($scope)], 0600);
         // Only the fresh isolated database receives its own public callback origin.
         foreach (['app_url', 'node_api_base_url'] as $key)
@@ -101,7 +109,7 @@ final class MemberSetupAuthority
     private function __construct(private array $scope, private string $hash)
     {
         $keys = ['schema', 'run_id', 'grant_id', 'started_at', 'deadline_at', 'bundle_sha256',
-            'environment_sha256', 'machine_id_sha256', 'binding'];
+            'environment_sha256', 'machine_id_sha256', 'binding', 'control', 'control_ipv4'];
         self::need(count($scope) === count($keys) && !array_diff(array_keys($scope), $keys)
             && $scope['schema'] === 1 && $scope['run_id'] === MemberCliAuthority::RUN
             && is_string($scope['grant_id']) && preg_match('/^[a-f0-9]{32}$/D', $scope['grant_id'])
@@ -130,6 +138,12 @@ final class MemberSetupAuthority
         return $this->scope['binding'];
     }
 
+    public function controlBinding(): array
+    {
+        $this->check();
+        return ['pin' => $this->scope['control'], 'ipv4' => $this->scope['control_ipv4']];
+    }
+
     private function stopped(): bool
     {
         $path = MemberApplicationBootstrap::ROOT . '/' . self::STOP;
@@ -152,6 +166,8 @@ final class MemberSetupAuthority
         $account = MachineCloudAccount::query()->findOrFail($s['account_id']);
         self::need($account->provider === 'linode' && $account->revision === $s['account_revision']
             && $account->group_id === $s['group_id'] && MachineCloudAccount::query()->count() === 1, 'account_changed');
+        $dns = \App\Models\MachineDnsCredential::query()->findOrFail($s['dns_credential_id']);
+        self::need($dns->provider === 'aliyun' && $dns->revision === $s['dns_credential_revision'], 'dns_credential_changed');
         self::need(app(MachineProvisionLimits::class)->settings($account) === [
             'max_instances' => count($s['baseline_ids']) + 4, 'max_parallel' => 1, 'daily_limit' => 5], 'limits_changed');
         $release = ServerMachineRelease::query()->findOrFail($s['release_id']);
@@ -171,14 +187,15 @@ final class MemberSetupAuthority
 
     public function allow(string $operation, string $role): void
     {
-        self::need(in_array($operation, array_merge(self::MUTATIONS, ['source-readback', 'source-cleanup', 'callback', 'report']), true), 'operation_denied');
-        self::need(str_starts_with($operation, 'sources-') ? $role === 'control'
+        self::need(in_array($operation, array_merge(self::MUTATIONS, ['source-readback', 'source-cleanup', 'callback', 'report',
+            'dns-control', 'dns-edges', 'dns-readback', 'dns-cleanup']), true), 'operation_denied');
+        self::need(str_starts_with($operation, 'sources-') || str_starts_with($operation, 'dns-') ? $role === 'control'
             : in_array($role, ['source-a', 'source-b'], true), 'role_denied');
         $this->check();
-        $mutating = !in_array($operation, ['source-readback', 'source-cleanup'], true);
+        $mutating = !in_array($operation, ['source-readback', 'source-cleanup', 'dns-readback', 'dns-cleanup'], true);
         self::window($this->scope['started_at'], $this->scope['deadline_at'], time(), $mutating);
         if ($mutating) self::need(!$this->stopped(), 'stopped');
-        if ($operation === 'source-cleanup') self::need($this->stopped(), 'stop_required');
+        if (in_array($operation, ['source-cleanup', 'dns-cleanup'], true)) self::need($this->stopped(), 'stop_required');
     }
 
     private function taskRole(Task $task): string
@@ -206,7 +223,7 @@ final class MemberSetupAuthority
         self::need(!in_array($operation, ['callback', 'report'], true), 'operation_denied');
         $sources = $this->scope['binding']['configuration']['sources'];
         $selected = $role === 'control' ? $sources : [$role => $sources[$role]];
-        $cleanup = $operation === 'source-cleanup';
+        $cleanup = $operation === 'source-cleanup' || str_starts_with($operation, 'dns-');
         return $this->temporary($cleanup ? [] : ['machine_provision.allow_live' => true,
             'machine_provision.allowed_test_machine_ids' => array_column($selected, 'machine_id'),
             'machine_acceptance.allow_verification' => true,
@@ -217,7 +234,7 @@ final class MemberSetupAuthority
                 self::need(Task::query()->count() <= 2, 'task_limit');
                 foreach (Task::query()->get() as $task) $this->taskRole($task);
                 return $result;
-            }, in_array($operation, ['source-readback', 'source-cleanup'], true));
+            }, in_array($operation, ['source-readback', 'source-cleanup', 'dns-readback', 'dns-cleanup'], true));
     }
 
     public function callback(string $id, string $installation, \Closure $callback): mixed

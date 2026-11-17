@@ -55,7 +55,7 @@ final class MemberSetupController
 
     private function path(string $key): string
     {
-        self::need(is_resource($this->lock) && preg_match('/^(binding|first-error|rpc-mutation|rpc-cleanup|rpc-[a-f0-9]{32}|source-[ab]|source-queue-source-[ab]|initialized-source-[ab]|cleanup-source-[ab])$/D', $key) === 1,
+        self::need(is_resource($this->lock) && preg_match('/^(binding|first-error|rpc-mutation|rpc-cleanup|rpc-[a-f0-9]{32}|source-[ab]|source-queue-source-[ab]|initialized-source-[ab]|cleanup-source-[ab]|dns-scope-(control|edges)|(dns-initialize|dns-cleanup|provider-delete)-[a-f0-9]{64})$/D', $key) === 1,
             'journal_key');
         return self::DIRECTORY . '/' . $key . '.json';
     }
@@ -76,7 +76,7 @@ final class MemberSetupController
     private function save(string $key, array $value): void
     {
         $path = $this->path($key); $old = $this->load($key);
-        if (($key === 'binding' || str_starts_with($key, 'source-queue-') || str_starts_with($key, 'initialized-')) && $old !== null) {
+        if (($key === 'binding' || str_starts_with($key, 'source-queue-') || str_starts_with($key, 'initialized-') || str_starts_with($key, 'dns-scope-')) && $old !== null) {
             self::need(MemberProviderBindings::digest($old) === MemberProviderBindings::digest($value), 'intent_changed');
             return;
         }
@@ -99,8 +99,13 @@ final class MemberSetupController
     public function dispatch(array $request): array
     {
         self::need(is_resource($this->lock) && array_keys($request) === ['operation']
-            && in_array($request['operation'], ['advance', 'status', 'cleanup'], true), 'request_invalid');
+            && in_array($request['operation'], ['advance', 'status', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback'], true), 'request_invalid');
         try {
+            if (str_starts_with($request['operation'], 'dns-')) {
+                if ($request['operation'] === 'dns-readback') return $this->dns()->readback();
+                self::need($this->load('first-error') === null, 'prior_failure');
+                return $this->dns()->advance($request['operation'] === 'dns-edges');
+            }
             if ($request['operation'] === 'cleanup') {
                 $this->authority->stop();
                 $result = ['complete' => true, 'sources' => []];
@@ -115,6 +120,17 @@ final class MemberSetupController
                     $result['sources'][$role] = $reply;
                     $result['complete'] = $result['complete'] && $reply['complete'];
                 }
+                try { $result['dns'] = $this->dns()->cleanup(); }
+                catch (\Throwable $error) {
+                    $result['dns'] = ['complete' => false, 'diagnostic' => ['class' => (new \ReflectionClass($error))->getShortName(),
+                        'file' => basename($error->getFile()), 'line' => $error->getLine()]];
+                }
+                foreach ([$result['dns'], ...array_values($result['dns']['records'] ?? [])] as $item) {
+                    if (isset($item['diagnostic'])) {
+                        try { $this->save('first-error', $item['diagnostic']); } catch (\Throwable) { }
+                    }
+                }
+                $result['complete'] = $result['complete'] && $result['dns']['complete'];
                 return $result;
             }
             if ($request['operation'] === 'advance') {
@@ -133,7 +149,7 @@ final class MemberSetupController
                 return ['sources' => $sources, 'first_error' => $this->load('first-error'), 'health_or_forwarding_claimed' => false];
             });
         } catch (\Throwable $error) {
-            if ($request['operation'] === 'advance') {
+            if (in_array($request['operation'], ['advance', 'dns-control', 'dns-edges'], true)) {
                 try { $this->save('first-error', ['class' => (new \ReflectionClass($error))->getShortName(),
                     'file' => basename($error->getFile()), 'line' => $error->getLine()]); }
                 catch (\Throwable) { /* Preserve the initiating error. */ }
@@ -149,7 +165,7 @@ final class MemberSetupController
             && ($request['schema'] ?? null) === 1 && ($request['run_id'] ?? null) === MemberCliAuthority::RUN
             && is_int($request['deadline_at'] ?? null) && $request['deadline_at'] > 0
             && is_int($request['sequence'] ?? null) && $request['sequence'] >= 0
-            && in_array($request['operation'] ?? null, ['advance', 'status', 'stop', 'cleanup'], true), 'request_invalid');
+            && in_array($request['operation'] ?? null, ['advance', 'status', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback'], true), 'request_invalid');
         foreach (['grant_id' => 32, 'grant_sha256' => 64, 'request_id' => 32] as $key => $length)
             self::need(is_string($request[$key] ?? null)
                 && preg_match('/^[a-f0-9]{' . $length . '}$/D', $request[$key]) === 1, 'request_invalid');
@@ -162,10 +178,11 @@ final class MemberSetupController
             self::need($request[$key] === $value, 'request_binding_changed');
         self::need($request['operation'] !== 'stop', 'request_invalid');
         $cleanup = $request['operation'] === 'cleanup';
-        $mutating = $request['operation'] === 'advance' || $cleanup;
+        $dns = str_starts_with($request['operation'], 'dns-');
+        $mutating = in_array($request['operation'], ['advance', 'cleanup', 'dns-control', 'dns-edges'], true);
         if ($cleanup) $this->authority->stop();
-        $this->authority->allow($cleanup ? 'source-cleanup' : ($mutating ? 'sources-advance' : 'source-readback'),
-            $mutating && !$cleanup ? 'control' : 'source-a');
+        $this->authority->allow($dns ? $request['operation'] : ($cleanup ? 'source-cleanup' : ($mutating ? 'sources-advance' : 'source-readback')),
+            $dns || $mutating && !$cleanup ? 'control' : 'source-a');
         $key = 'rpc-' . $request['request_id'];
         $mutationKey = $cleanup ? 'rpc-cleanup' : 'rpc-mutation';
         if ($mutating) {
@@ -205,6 +222,14 @@ final class MemberSetupController
     {
         if (is_resource($this->lock)) { flock($this->lock, LOCK_UN); fclose($this->lock); }
         $this->lock = null;
+    }
+
+    private function dns(): MemberSetupDns
+    {
+        return new MemberSetupDns($this->authority, function (): array {
+            foreach (['source-a', 'source-b'] as $role) self::need($this->load('initialized-' . $role) !== null, 'sources_not_registered');
+            return $this->sources->registeredScope($this->binding['scope'])['sources'];
+        }, $this->load(...), $this->save(...));
     }
 
     public function __destruct() { $this->close(); }

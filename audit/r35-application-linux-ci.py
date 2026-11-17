@@ -207,6 +207,9 @@ try:
     assert php('configuration-stop')['configuration_sha256'] == configured['configuration_sha256']
     assert php('setup-service-denied', uid=65534)['root_operations_denied']
     assert php('setup-drift')['policy_and_release_drift_refused']
+    control_dns = php('setup-dns-control')
+    assert control_dns['ready'] and control_dns['record_count'] == 1
+    assert control_dns['provider_create'] == control_dns['provider_claim'] == 1
     preparation = php('setup-prepare')
     assert preparation['native_task_queued'] and preparation['b_not_queued']
     assert preparation['exception_restores_capability_and_bus'] and preparation['provider_writes'] == 0
@@ -370,6 +373,10 @@ try:
     assert callback(role='source-b') == 200
     register('source-b')
     assert php('setup-advance')['ready']
+    edge_dns = php('setup-dns-edges')
+    assert edge_dns['ready'] and edge_dns['record_count'] == 2
+    assert edge_dns['provider_create'] == edge_dns['provider_claim'] == 3
+    assert php('setup-dns-readback')['record_count'] == 3
     registered = setup_rpc('status')
     assert all(row['registered'] and row['status'] == 'accepted' for row in registered['sources'].values())
     assert not registered['health_or_forwarding_claimed'] and registered['first_error'] is None
@@ -429,6 +436,18 @@ try:
     completed_cleanup = php('setup-cleanup')
     assert time.monotonic() - cleanup_absence_at >= 10 and completed_cleanup['complete']
     assert completed_cleanup['delete_calls'] == 2 and completed_cleanup['task_history_unchanged']
+    assert completed_cleanup['dns']['complete'] and completed_cleanup['dns_delete_calls'] == 3
+    stopped_dns = php('setup-dns-readback')
+    assert stopped_dns['record_count'] == 3 and not any(stopped_dns['ready'].values())
+    assert stopped_dns['provider_delete'] == 3
+    SUMMARY['setup_bound_dns'] = dict(actual_setup_authority_and_rpc=True,
+        control_identity_and_public_ipv4_read_from_mock_provider=True,
+        control_dns_before_source_tasks=True, edge_dns_after_both_registered=True,
+        edge_markers_from_native_record_sets=True, signed_aliyun_requests_simulated=True,
+        creates=3, claims=3, deletes=3, duplicate_rpc_does_not_repeat_writes=True,
+        stop_denies_dns_mutations=True, stopped_readback_and_cleanup_allowed=True,
+        real_absence_spacing_at_least_seconds=10, execution_gate_restored=True,
+        whole_round_ports_composed=False)
     SUMMARY['setup_source_cleanup'] = dict(actual_setup_rpc=True, native_cleanup_adapter=True,
         exact_provider_deletes_simulated=2, lost_delete_ack_reconciled_without_repeat=True,
         peer_cleanup_continues_after_first_role_error=True, real_absence_spacing_at_least_seconds=10,

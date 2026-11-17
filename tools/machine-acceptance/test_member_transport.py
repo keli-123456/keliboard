@@ -174,6 +174,19 @@ class MemberTransportTests(unittest.TestCase):
         with self.assertRaisesRegex(TransportError, 'cleanup_started'): self.rpc.setup_call('advance', pin)
         self.assertEqual(len(self.calls), 2)
 
+    def test_dns_mutations_share_uncertainty_and_cleanup_barriers(self):
+        pin = dict(grant_id='a' * 32, grant_sha256='b' * 64, deadline_at=9000)
+        self.rpc.setup_call('dns-control', pin)
+        self.rpc.execute = lambda *_: (_ for _ in ()).throw(TimeoutError('private'))
+        with self.assertRaises(TransportError): self.rpc.setup_call('dns-edges', pin)
+        pending = copy.deepcopy(self.saved['setup-mutation'])
+        self.rpc.execute = self.execute
+        for op in ('advance', 'dns-control', 'dns-edges'):
+            with self.assertRaisesRegex(TransportError, 'readback_required'): self.rpc.setup_call(op, pin)
+        self.rpc.setup_call('dns-readback', pin)
+        self.rpc.setup_call('cleanup', pin)
+        self.assertEqual(pending, self.saved['setup-mutation'])
+
     def test_setup_rejects_malformed_scope_and_denied_authority_without_ssh(self):
         pin = dict(grant_id='a' * 32, grant_sha256='b' * 64, deadline_at=9000)
         for bad in (dict(pin, deadline_at=True), dict(pin, extra=True), dict(pin, grant_id='../key')):

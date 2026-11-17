@@ -38,9 +38,11 @@ class SetupInterfaces:
                 raise TimeoutError('source-b-not-dispatched')
             f.created_roles.update(('source-a', 'source-b'))
             f.present.update(f.created_roles)
-        if stage == 'dns-initialize':
-            f.created_dns = True
-            for pin in f.original_scope['records']: f.pins[digest(pin)] = True
+        if stage in ('control-dns', 'dns-initialize'):
+            for pin in f.original_scope['records']:
+                if (stage == 'control-dns') == pin['name'].startswith('control-'):
+                    f.created_records.add(pin['record_id']); f.pins[digest(pin)] = True
+            f.created_dns = bool(f.created_records)
         if f.fail == (stage, 'after'):
             raise TimeoutError('private-error-token')
         if stage == 'sources-initialize' and f.polls > 0:
@@ -59,7 +61,7 @@ class SetupInterfaces:
         f = self.f
         scope = copy.deepcopy(f.original_scope)
         if not f.created_control: scope['control'] = None
-        if not f.created_dns: scope['records'] = []
+        scope['records'] = [p for p in scope['records'] if p['record_id'] in f.created_records]
         if not f.created_private: scope['private_files'] = []
         scope['faults'] = []
         f.scope = scope
@@ -78,6 +80,7 @@ class BootstrapFixture(RoundFixture):
         self.scope = copy.deepcopy(self.original_scope)
         self.pins, self.present, self.created_roles = {}, set(), set()
         self.created_control = self.created_dns = self.created_private = False
+        self.created_records = set()
         self.fail, self.polls, self.resolved = None, 0, True
         self.changed_reply = self.secret_reply = False
         self.interfaces = SetupInterfaces(self)
@@ -143,9 +146,18 @@ class InitializationTests(unittest.TestCase):
         ops = [e[0] for e in self.f.events]
         self.assertEqual(ops.count('sources-initialize'), 3)
         self.assertLess(ops.index('native-grant'), ops.index('native-step'))
+        self.assertLess(ops.index('control-dns'), ops.index('callback-ready'))
+        self.assertLess(ops.index('callback-ready'), ops.index('sources-initialize'))
+        self.assertLess(ops.index('sources-initialize'), ops.index('dns-initialize'))
         self.assertLess(ops.index('task-delete'), ops.index('control-delete'))
         self.assertLess(ops.index('private-remove'), ops.index('control-delete'))
         for stage in set(STAGES) - {'sources-initialize'}: self.assertEqual(ops.count(stage), 1)
+
+    def test_old_stage_topology_cannot_resume_at_a_different_phase(self):
+        initial = self.f.initialization(); initial.step()
+        self.f.journal['initialization'].pop('stages')
+        with self.assertRaisesRegex(TransportError, 'topology_changed'): self.f.initialization()
+        self.assertEqual(1, len(self.f.events))
 
     def test_every_stage_failure_before_and_after_effect_cleans_only_original_receipts(self):
         for stage in STAGES:

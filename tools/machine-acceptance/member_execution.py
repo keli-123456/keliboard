@@ -16,7 +16,7 @@ class MemberExecutionSetup:
     Native grants must be revoked before any final resource snapshot is collected.
     """
     OWNERS = {'control-install': 'installation', 'runtime-install': 'installation',
-              'private-import': 'installation', 'sources-initialize': 'sources',
+              'private-import': 'installation', 'control-dns': 'dns', 'callback-ready': 'installation', 'sources-initialize': 'sources',
               'dns-initialize': 'dns', 'native-grant': 'authority', 'native-ready': 'authority'}
 
     def __init__(self, *, scope, installation, sources, dns, authority, load, save, guard):

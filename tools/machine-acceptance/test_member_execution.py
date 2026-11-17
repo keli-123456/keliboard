@@ -35,7 +35,7 @@ class ExecutionPort:
         if self.owner == 'sources':
             return dict(roles={r: f.roles[r] for r in f.created_roles if r.startswith('source-')}, faults=[], requests=[])
         if self.owner == 'dns':
-            return dict(records=copy.deepcopy(f.original_scope['records']) if f.created_dns else [], requests=[])
+            return dict(records=copy.deepcopy([p for p in f.original_scope['records'] if p['record_id'] in f.created_records]), requests=[])
         return dict(private_files=[], requests=[])
 
 

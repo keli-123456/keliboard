@@ -168,6 +168,17 @@ final class MemberDnsInitialization
             'ready' => $row !== null && $state['claim_sent'] && $row['marker'] === $request['marker']];
     }
 
+    public function cleanupReceipt(string $role): ?array
+    {
+        $request = $this->request($role); $state = $this->state($request);
+        if ($state === null) return null;
+        if ($state['created_id'] === null) {
+            self::need(!$state['create_sent'] || $state['rejected'], 'create_unconfirmed');
+            return null;
+        }
+        return $this->pin($request, $state);
+    }
+
     /** Permit blank remarks only for the exact ID in our acknowledged create journal. */
     public static function hasCreateReceipt(array $pin, \Closure $load): bool
     {

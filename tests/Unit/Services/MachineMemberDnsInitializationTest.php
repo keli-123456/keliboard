@@ -99,6 +99,23 @@ class MachineMemberDnsInitializationTest extends TestCase
             && is_string($r['Signature']) && $r['Type'] === 'A' && $r['Line'] === 'default' && $r['TTL'] === 600);
     }
 
+    public function test_cleanup_receipt_uses_acknowledged_id_without_inventory_or_write(): void
+    {
+        $pin = $this->setupDns()->advance('edge-a')['pin'];
+        Http::swap(new \Illuminate\Http\Client\Factory()); Http::preventStrayRequests();
+        $this->assertSame($pin, $this->setupDns()->cleanupReceipt('edge-a'));
+        Http::assertNothingSent();
+    }
+
+    public function test_cleanup_receipt_does_not_invent_identity_after_lost_create_ack(): void
+    {
+        $this->mode = 'lost-create';
+        try { $this->setupDns()->advance('edge-a'); $this->fail(); } catch (DnsException) { }
+        Http::swap(new \Illuminate\Http\Client\Factory()); Http::preventStrayRequests();
+        $this->expectExceptionMessage('member_dns_initialization_create_unconfirmed');
+        $this->setupDns()->cleanupReceipt('edge-a');
+    }
+
     public function test_existing_name_is_not_adopted(): void
     {
         $this->setupDns()->advance('edge-a'); $this->journal = []; $this->writes = [];

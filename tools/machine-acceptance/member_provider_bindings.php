@@ -95,6 +95,18 @@ final class MemberProviderBindings
         return $row;
     }
 
+    public function controlAddress(array $pin): string
+    {
+        $this->pin($pin, 'control');
+        $row = $this->cloudRead($pin);
+        self::need($row !== null && is_array($row['ipv4'] ?? null), 'control_address_unconfirmed');
+        $ips = array_values(array_filter($row['ipv4'], static fn ($ip) => is_string($ip)
+            && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
+            && \App\Services\ServerMachine\MachineEntryProbe::publicIp($ip) === $ip));
+        self::need(count($ips) === 1, 'control_address_unconfirmed');
+        return $ips[0];
+    }
+
     private function dnsInspect(array $pin): ?array
     {
         $row = ($this->dnsRead)('DescribeDomainRecordInfo', ['RecordId' => $pin['record_id']], true);

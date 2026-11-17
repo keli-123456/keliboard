@@ -57,6 +57,16 @@ class MachineMemberProviderBindingsTest extends TestCase
         $this->assertCount(1, Http::recorded(fn ($r) => $r->method() === 'DELETE'));
     }
 
+    public function test_control_address_requires_exact_owned_single_public_ipv4(): void
+    {
+        $this->cloudRow['ipv4'] = ['10.0.0.1', '9.9.9.10'];
+        Http::fake(fn () => Http::response($this->cloudRow));
+        $this->assertSame('9.9.9.10', $this->bindings()->controlAddress($this->control));
+        $this->cloudRow['ipv4'][] = '8.8.8.8';
+        $this->expectExceptionMessage('member_provider_control_address_unconfirmed');
+        $this->bindings()->controlAddress($this->control);
+    }
+
     public function test_dns_uses_real_aliyun_signed_exact_id_and_compact_marker_reader(): void
     {
         $row = $this->dnsRow;

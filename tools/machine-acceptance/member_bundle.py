@@ -24,7 +24,7 @@ RUNTIME = ('member_retry_driver.php', 'member_source_registry.php', 'member_cont
            'member_setup_bindings.py', 'member_assembly.py', 'member_execution.py', 'member_installation.py',
            'member_environment.py', 'member_application.py', 'member_application_bootstrap.php',
            'member_dns_initialization.php', 'member_source_configuration.php',
-           'member_setup_authority.php', 'member_callback_entry.php', 'member_setup_controller.php', 'member_setup_entry.php')
+           'member_setup_authority.php', 'member_setup_dns.php', 'member_callback_entry.php', 'member_setup_controller.php', 'member_setup_entry.php')
 TESTS = ('tools/machine-acceptance/test_member_transport.py', 'tools/machine-acceptance/test_member_bundle.py',
          'tests/Support/TestsMemberTransport.php', 'tools/machine-acceptance/test_member_round.py',
          'tools/machine-acceptance/test_member_runtime_bundle.py', 'tools/machine-acceptance/test_member_linux.py',

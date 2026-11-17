@@ -96,7 +96,7 @@ class StrictControllerTransport:
 
     def setup_call(self, operation, identity):
         """Fixed setup CLI, with a durable intent before each advancing RPC."""
-        require(operation in ('advance', 'status', 'stop', 'cleanup'), 'transport_setup_operation_invalid')
+        require(operation in ('advance', 'status', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback'), 'transport_setup_operation_invalid')
         require(isinstance(identity, dict) and set(identity) == {'grant_id', 'grant_sha256', 'deadline_at'}
                 and type(identity['deadline_at']) is int and identity['deadline_at'] > 0
                 and all(isinstance(identity[k], str) and re.fullmatch(r'[a-f0-9]{%d}' % n, identity[k])
@@ -112,14 +112,15 @@ class StrictControllerTransport:
             require(self.load('setup-binding') == pin, 'transport_setup_journal_unconfirmed')
         previous = self.load('setup-mutation')
         prior_cleanup = self.load('setup-cleanup')
-        if operation == 'advance':
+        mutation = operation in ('advance', 'dns-control', 'dns-edges')
+        if mutation:
             require(previous is None or previous.get('completed') is True, 'transport_setup_readback_required')
             require(prior_cleanup is None, 'transport_setup_cleanup_started')
         sequence = max((item['request']['sequence'] for item in (previous, prior_cleanup) if item), default=-1) + 1
         request = dict(schema=1, run_id=self.run_id, **identity, request_id=uuid.uuid4().hex,
                        sequence=sequence, operation=operation)
         ledger = 'setup-cleanup' if operation == 'cleanup' else 'setup-mutation'
-        if operation in ('advance', 'cleanup'):
+        if mutation or operation == 'cleanup':
             intent = dict(request=request, completed=False)
             self.save(ledger, copy.deepcopy(intent))
             require(self.load(ledger) == intent, 'transport_setup_journal_unconfirmed')
@@ -130,7 +131,7 @@ class StrictControllerTransport:
             result = unique_json(raw)
             require(all(result.get(k) == v for k, v in request.items()), 'transport_response_binding_changed')
             require(result.get('ok') is True and isinstance(result.get('result'), dict), 'transport_remote_rejected')
-            if operation in ('advance', 'cleanup'):
+            if mutation or operation == 'cleanup':
                 complete = dict(request=request, completed=True, reply=result)
                 self.save(ledger, copy.deepcopy(complete))
                 require(self.load(ledger) == complete, 'transport_setup_journal_unconfirmed')
