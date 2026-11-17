@@ -170,6 +170,9 @@ final class MemberRoundBridge
         $port = function (string $operation, array $input) use ($registry, $b): array {
             $this->authority->allow('round-step');
             if ($operation === 'prepare_role') {
+                // Sources are already initialized in this grant. Re-registering
+                // their fresh samples must not leave the pinned failure episode uncollected.
+                app(MachineFailoverObserver::class)->observe($this->scope['driver']['policy_a']);
                 if ($input['role'] === 'control') return ['ready' => true, 'external_id' => $this->scope['control']['external_id']];
                 if (!$registry->observe($input['role'])['ready']) return ['waiting' => true];
                 return ['task_id' => $registry->register($input['role'])['task_id']];

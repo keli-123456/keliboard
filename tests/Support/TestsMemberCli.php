@@ -416,6 +416,18 @@ trait TestsMemberCli
         $this->assertSame([], $this->posts); $this->assertSame(0, $this->dnsWrites); $this->cliAssertClosed();
     }
 
+    public function test_member_cli_recollects_source_during_prepared_role_handoff_without_observing_b(): void
+    {
+        [, $bridge] = $this->cliFixture(); $calls = [];
+        $observer = \Mockery::mock(\App\Services\ServerMachine\Cloud\MachineFailoverObserver::class);
+        $observer->shouldReceive('observe')->andReturnUsing(function ($id) use (&$calls): array { $calls[] = $id; return []; });
+        app()->instance(\App\Services\ServerMachine\Cloud\MachineFailoverObserver::class, $observer);
+        $this->assertSame('source-a', $bridge->dispatch($this->cliRequest('round-step'))['result']['native_phase']);
+        $this->assertSame('source-a', $bridge->dispatch($this->cliRequest('round-step'))['result']['native_phase']);
+        $this->assertSame(array_fill(0, 2, $this->fixtures[0]['policy']->id), $calls);
+        $this->assertSame([], $this->posts); $this->cliAssertClosed();
+    }
+
     public function test_member_cli_collects_new_source_report_before_candidate_step_without_observing_b(): void
     {
         [$authority, $bridge] = $this->cliFixture();
