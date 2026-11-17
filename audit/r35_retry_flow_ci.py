@@ -154,3 +154,35 @@ def run_retry_teardown(*, bound, rebind, php, callback, report, save, load, work
         first_error_retained=True, stopped_evidence_sha256=exported['sha256'], immutable_host_readback=True,
         post_stop_source_b_explicitly_cleaned=True, private_cleanup_pending=True, controller_last_cleanup_pending=True,
         whole_round_cleanup_not_claimed=True, cloud_ssh_dns_simulated=True)
+
+
+def run_private_teardown(*, transport, root, summary):
+    from member_cli import RUN
+    from member_transport import TransportError
+    assert summary['native_retry_teardown']['immutable_host_readback']
+    assert transport.bootstrap_call('stop')['verified']
+    paths = ('private/credentials', 'private/bootstrap-authority', 'private/member-runtime-scope.json', 'app/.env')
+    pins = [dict(run_id=RUN, path='/opt/keli-isolated/' + name,
+                 sha256=hashlib.sha256((root / name).read_bytes()).hexdigest()) for name in paths]
+    for index, pin in enumerate(pins):
+        assert transport.inspect_private(pin)['status'] == 'owned'
+        try:
+            assert transport.remove_private(pin)['status'] == 'absent'
+            assert index != 0, 'delete_ack_loss_not_injected'
+        except TransportError:
+            assert index == 0 and summary['private_ack_lost']
+        assert transport.inspect_private(pin)['status'] == 'absent'
+        assert transport.remove_private(pin)['status'] == 'absent'
+    # Inspection must still work after .env and the native grant have been removed.
+    for pin in pins:
+        assert transport.inspect_private(pin)['status'] == 'absent'
+    assert all(not (root / name).exists() for name in paths)
+    summary['private_file_cleanup'] = dict(actual_fixed_python_endpoint=True,
+        actual_linux_root_files_and_locks=True, exact_files_removed=len(paths),
+        files=list(paths), bootstrap_and_native_stop_required=True,
+        native_dns_cleanup_and_evidence_readback_before_deletion=True,
+        lost_delete_reply_recovered_by_inspection=True, repeat_delete_idempotent=True,
+        no_application_database_needed_after_env_removal=True,
+        ssh_byte_transport_simulated=True, controller_last_cleanup_pending=True,
+        private_journals_database_and_fixture_materials_removed_by_ci_finalizer_not_this_component=True,
+        whole_round_cleanup_not_claimed=True)

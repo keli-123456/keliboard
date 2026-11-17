@@ -22,7 +22,7 @@ RUNTIME = ('member_retry_driver.php', 'member_source_registry.php', 'member_cont
            'member_initialization.py', 'member_auxiliary_bindings.py', 'member_source_initialization.php',
            'member_provider_bindings.php', 'aliyun_cleanup.php', 'member_control_creation.php',
            'member_setup_bindings.py', 'member_assembly.py', 'member_execution.py', 'member_installation.py',
-           'member_environment.py', 'member_application.py', 'member_application_bootstrap.php',
+           'member_environment.py', 'member_application.py', 'member_application_bootstrap.php', 'member_private_cleanup.py',
            'member_dns_initialization.php', 'member_native_dns_receipt.php', 'member_source_configuration.php',
            'member_prerequisite_import.php', 'member_import_entry.php', 'member_bootstrap_controller.php',
            'member_setup_authority.php', 'member_candidate_callbacks.php', 'member_native_grant.php', 'member_setup_dns.php', 'member_callback_entry.php', 'member_setup_controller.php', 'member_setup_entry.php')
@@ -36,6 +36,7 @@ TESTS = ('tools/machine-acceptance/test_member_transport.py', 'tools/machine-acc
          'tools/machine-acceptance/test_member_assembly.py', 'tools/machine-acceptance/test_member_assembly_linux.py',
          'tools/machine-acceptance/test_member_execution.py',
          'tools/machine-acceptance/test_member_installation_linux.py',
+         'tools/machine-acceptance/test_member_private_cleanup.py',
          'tools/machine-acceptance/test_member_environment.py',
          'tests/Unit/Services/MachineMemberDnsInitializationTest.php',
          'tests/Unit/Services/MachineMemberSourceConfigurationTest.php',

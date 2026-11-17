@@ -103,7 +103,7 @@ try:
     tests = subprocess.run(['python3', '-B', '-m', 'unittest', '-v', 'test_member_environment',
         'test_member_installation_linux.InstallationServiceUserTests', 'test_member_execution.ExecutionTests',
         'test_member_assembly', 'test_member_initialization', 'test_member_cli', 'test_member_round',
-        'test_member_transport', 'test_member_bundle', 'test_member_runtime_bundle'],
+        'test_member_transport', 'test_member_private_cleanup', 'test_member_bundle', 'test_member_runtime_bundle'],
         cwd=TOOLS, capture_output=True, text=True, timeout=240)
     (ART / 'python.log').write_text(tests.stdout + tests.stderr)
     assert tests.returncode == 0, 'python_regression_failed'
@@ -600,6 +600,14 @@ try:
             assert command_args[-2] == 'root@9.9.9.10'
             request_body = json.loads(payload)
             remote = command_args[-1]
+            if remote == 'python3 -B /opt/keli-isolated/runtime/member_private_cleanup.py':
+                p = subprocess.run(['python3', '-B', str(ROOT / 'runtime/member_private_cleanup.py')],
+                    input=payload, cwd=ROOT, env=ENV, capture_output=True, timeout=timeout)
+                assert p.returncode == 0, 'private_cleanup_entry_rejected'
+                if request_body['operation'] == 'remove' and not SUMMARY.get('private_ack_lost'):
+                    SUMMARY['private_ack_lost'] = True
+                    raise TransportError('transport_remote_failed')
+                return p.stdout
             if remote == 'php /opt/keli-isolated/runtime/member_import_entry.php':
                 argv = [str(ROOT / 'runtime/member_import_entry.php')]
             elif remote == 'php /opt/keli-isolated/runtime/member_setup_entry.php':
@@ -642,13 +650,14 @@ try:
         bound = BoundControllerTransport(grant_file=native_path,
             grant_sha256=hashlib.sha256(native_bytes).hexdigest(), **transport_args)
         if '--retry-flow' in sys.argv:
-            from r35_retry_flow_ci import run_retry_flow, run_retry_teardown
+            from r35_retry_flow_ci import run_retry_flow, run_retry_teardown, run_private_teardown
             run_retry_flow(bound=bound, php=php, report=report, callback=callback, pins=pins,
                            root=ROOT, artifacts=ART, summary=SUMMARY)
             run_retry_teardown(bound=bound, rebind=lambda: BoundControllerTransport(grant_file=native_path,
                 grant_sha256=hashlib.sha256(native_bytes).hexdigest(), **transport_args),
                 php=php, callback=callback, report=report, save=host_save, load=host_load,
                 work=work, artifacts=ART, summary=SUMMARY)
+            run_private_teardown(transport=bootstrap_transport, root=ROOT, summary=SUMMARY)
             SUMMARY['status'] = 'passed'
             raise SystemExit(0)
         started_native = php('setup-candidate-start')

@@ -39,10 +39,9 @@ class MemberAuxiliary:
                         'edge-b-' + scope['run_id'] + '.dnscloudcloud.top'}, 'cleanup_dns_name_invalid')
         require(all(p.get('role') in ('source-a', 'candidate-a1') for p in scope['faults']), 'cleanup_fault_role_invalid')
         for pin in scope['private_files']:
-            require(pin.get('path') in ('/opt/keli-isolated/private/cloud-credential.json',
-                    '/opt/keli-isolated/private/dns-credential.json',
-                    '/opt/keli-isolated/private/member-runtime-scope.json'), 'cleanup_private_path_invalid')
-            require(re.fullmatch(r'[a-f0-9]{64}', pin.get('sha256', '')), 'cleanup_private_pin_invalid')
+            from member_private_cleanup import PRIVATE_PATHS, validate_pin
+            require(pin.get('path') in PRIVATE_PATHS, 'cleanup_private_path_invalid')
+            validate_pin(pin)
         binding = digest(scope)
         state = load('auxiliary')
         self.state = copy.deepcopy(state) if state is not None else {

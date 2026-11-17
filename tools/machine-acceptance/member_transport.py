@@ -263,6 +263,45 @@ class StrictControllerTransport:
                 raise
             raise TransportError('transport_setup_uncertain') from None
 
+    def private_call(self, operation, pin):
+        """Fixed root-only file removal endpoint; no arbitrary path or shell input."""
+        from member_private_cleanup import validate_pin
+        from member_auxiliary import digest
+        validate_pin(pin)
+        require(operation in ('remove', 'inspect') and pin['run_id'] == self.run_id,
+                'cleanup_private_operation_invalid')
+        self.guard('private-' + operation, 'control')
+        binding = self.load('bootstrap-binding')
+        require(isinstance(binding, dict) and binding.get('run_id') == self.run_id
+                and binding.get('host') == self.host, 'transport_bootstrap_binding_changed')
+        for file, key in ((self.identity, 'identity_sha256'), (self.known, 'known_hosts_sha256')):
+            from staging import read_file
+            _, raw, _ = read_file(file, 1048576, collect=True)
+            require(hashlib.sha256(raw).hexdigest() == binding.get(key), 'transport_ssh_material_changed')
+        try:
+            raw = self.execute(self._command('python3 -B /opt/keli-isolated/runtime/member_private_cleanup.py'),
+                json.dumps(dict(operation=operation, pin=pin), separators=(',', ':')).encode(), 45)
+            require(isinstance(raw, bytes) and len(raw) <= LIMIT, 'transport_response_too_large')
+            reply = unique_json(raw)
+            require(isinstance(reply, dict) and set(reply) == {'ok', 'result'} and reply['ok'] is True,
+                    'cleanup_private_unconfirmed')
+            result = reply['result']
+            require(isinstance(result, dict) and set(result) == {'pin_sha256', 'status'}
+                    and result['pin_sha256'] == digest(pin)
+                    and result['status'] in (('absent',) if operation == 'remove' else ('owned', 'absent')),
+                    'cleanup_private_unconfirmed')
+            return result
+        except Exception as error:
+            self._first_error('private-' + operation, 'control', error)
+            if isinstance(error, TransportError): raise
+            raise TransportError('cleanup_private_unconfirmed') from None
+
+    def remove_private(self, pin):
+        return self.private_call('remove', pin)
+
+    def inspect_private(self, pin):
+        return self.private_call('inspect', pin)
+
     def _first_error(self, operation, role, error):
         if self.load('transport-first-error') is None:
             self.save('transport-first-error', {'operation': operation, 'role': role,
