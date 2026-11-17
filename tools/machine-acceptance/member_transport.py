@@ -424,6 +424,65 @@ class StrictControllerTransport:
             if isinstance(error, TransportError): raise
             raise TransportError('transport_host_install_uncertain') from None
 
+    def http_call(self, request):
+        """Only the published, scoped transient callback service; no shell input."""
+        from member_http_service import validate, unit, FILES, ROOT
+        from member_auxiliary import digest
+        from member_private_cleanup import validate_pin
+        from staging import read_file
+        operation, scope = validate(request)
+        require(scope['run_id'] == self.run_id, 'transport_http_scope')
+        self.guard('http-' + operation, 'control')
+        binding = dict(scope=copy.deepcopy(scope), host=self.host)
+        for path, key in ((self.identity, 'identity_sha256'), (self.known, 'known_hosts_sha256')):
+            binding[key] = read_file(path, 1048576)[0]['sha256']
+        require(self.load('host-installation-binding') == binding, 'transport_http_installation_required')
+        prior = self.load('http-binding')
+        require(prior is None or prior == binding, 'transport_http_binding_changed')
+        if prior is None:
+            self.save('http-binding', copy.deepcopy(binding))
+            require(self.load('http-binding') == binding, 'transport_http_journal')
+        if operation == 'start':
+            require(self.load('http-start') is None and self.load('http-stop') is None
+                    and self.load('host-installation-stopped') is None, 'transport_http_readback_required')
+            require((self.load('application-initialize') or {}).get('completed') is True,
+                    'transport_http_application_required')
+            intent = dict(request_sha256=digest(request), completed=False)
+            self.save('http-start', intent)
+            require(self.load('http-start') == intent, 'transport_http_journal')
+        if operation == 'stop':
+            self.save('http-stop', dict(binding=digest(binding)))
+            require(self.load('http-stop') == dict(binding=digest(binding)), 'transport_http_journal')
+        try:
+            raw = self.execute(self._command('python3 -B /opt/keli-isolated/runtime/member_http_service.py'),
+                json.dumps(request, separators=(',', ':')).encode(), 120)
+            require(isinstance(raw, bytes) and len(raw) <= 65536, 'transport_http_response')
+            reply = unique_json(raw)
+            require(set(reply) == {'ok', 'request_sha256', 'result'} and reply['ok'] is True
+                    and reply['request_sha256'] == digest(request), 'transport_http_response')
+            result = reply['result']
+            require(isinstance(result, dict) and set(result) == {'state', 'unit', 'private_files'}
+                    and result['unit'] == unit(scope) and result['state'] in ('running', 'absent', 'stopped')
+                    and isinstance(result['private_files'], list), 'transport_http_response')
+            paths = set()
+            for pin in result['private_files']:
+                validate_pin(pin)
+                require(pin['run_id'] == self.run_id and pin['path'] in [ROOT + '/' + p for p in FILES.values()]
+                        and pin['path'] not in paths, 'transport_http_response')
+                paths.add(pin['path'])
+            if operation == 'start':
+                require(result['state'] == 'running' and len(paths) == 2 and all(
+                    next(p['sha256'] for p in result['private_files'] if p['path'] == ROOT + '/' + FILES[name]) == pin['sha256']
+                    for name, pin in request['files'].items()), 'transport_http_unconfirmed')
+                self.save('http-start', dict(intent, completed=True, evidence_sha256=digest(result)))
+                require(self.load('http-start') == dict(intent, completed=True, evidence_sha256=digest(result)), 'transport_http_journal')
+            if operation == 'stop': require(result['state'] == 'stopped', 'transport_http_stop_unconfirmed')
+            return copy.deepcopy(result)
+        except Exception as error:
+            self._first_error('http-' + operation, 'control', error)
+            if isinstance(error, TransportError): raise
+            raise TransportError('transport_http_uncertain') from None
+
     def private_call(self, operation, pin):
         """Fixed root-only file removal endpoint; no arbitrary path or shell input."""
         from member_private_cleanup import validate_pin

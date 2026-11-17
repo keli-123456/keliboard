@@ -33,6 +33,8 @@ php_server = None
 hold_process = None
 work = None
 opt_stat = None
+http_scope = None
+http_invoke = None
 
 
 def command(args, *, timeout=90, **kwargs):
@@ -187,10 +189,21 @@ try:
     install_scope = dict(run_id=RUN, bundle_sha256=frozen['archive_sha256'], started_at=int(time.time()))
     install_scope['deadline_at'] = install_scope['started_at'] + 7199
     install_journal = {}
+    import member_http_service as http_service
+    def http_invoke(args, timeout=20):
+        if args[0] == 'systemd-run':
+            namespace = os.environ['KELI_HTTP_NETNS']
+            assert __import__('re').fullmatch(r'/proc/[1-9][0-9]*/ns/net', namespace)
+            args = [args[0], '--property=NetworkNamespacePath=' + namespace, *args[1:]]
+        return http_service.command(args, timeout)
     def installation_ssh(args, payload, timeout):
         import shlex
         assert args[-2] == 'root@9.9.9.10' and 'StrictHostKeyChecking=yes' in args
         argv = shlex.split(args[-1])
+        if argv == ['python3', '-B', '/opt/keli-isolated/runtime/member_http_service.py']:
+            request = json.loads(payload)
+            result = http_service.execute(request, invoke=http_invoke)
+            return json.dumps(dict(ok=True, request_sha256=digest(request), result=result)).encode()
         expected = ['php', '/opt/keli-isolated/runtime/member_application_entry.php']
         prefix = ['setpriv', '--reuid=65534', '--regid=65534', '--clear-groups', '--no-new-privs', '--bounding-set=-all']
         upload = (argv[:2] == ['python3', '-c'] and len(argv) == 4
@@ -488,43 +501,24 @@ try:
         assert rejected['reason'].startswith('member_application_')
     SUMMARY['foreign_configuration_rejected'] = 6
 
-    with socket.socket() as port_socket:
-        port_socket.bind(('127.0.0.1', 0)); http_port = port_socket.getsockname()[1]
-    php_server = subprocess.Popen(['setpriv', '--reuid=65534', '--regid=65534', '--clear-groups',
-        '--no-new-privs', '--bounding-set=-all', 'php', '-d', 'display_errors=0', '-d', 'log_errors=0',
-        '-S', '127.0.0.1:' + str(http_port), str(ROOT / 'runtime/member_callback_entry.php')],
-        cwd=ROOT / 'app', env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    for _ in range(100):
-        try:
-            with socket.create_connection(('127.0.0.1', http_port), .2): break
-        except OSError:
-            assert php_server.poll() is None; time.sleep(.1)
-    else: raise AssertionError('http_fixture_not_ready')
     domain = 'control-' + RUN + '.dnscloudcloud.top'
     certificate, tls_key = work / 'certificate.pem', work / 'key.pem'
     command(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
         '-subj', '/CN=' + domain, '-addext', 'subjectAltName=DNS:' + domain,
         '-keyout', str(tls_key), '-out', str(certificate)])
 
-    class Proxy(BaseHTTPRequestHandler):
-        def do_GET(self): self.do_POST()
-        def do_POST(self):
-            size = int(self.headers.get('Content-Length', '0'))
-            assert 0 <= size <= 4096
-            c = http.client.HTTPConnection('127.0.0.1', http_port, timeout=10)
-            c.request(self.command, self.path, body=self.rfile.read(size), headers={
-                'Content-Type': 'application/json', 'Authorization': self.headers.get('Authorization', ''),
-                'X-Keli-Instance-Id': self.headers.get('X-Keli-Instance-Id', ''),
-                'Host': domain, 'X-Forwarded-Proto': 'https'})
-            r = c.getresponse(); body = r.read(65536)
-            self.send_response(r.status); self.send_header('Content-Type', 'application/json')
-            self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body); c.close()
-        def log_message(self, *_): pass
-
-    server = ThreadingHTTPServer(('127.0.0.1', 0), Proxy)
-    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); tls.load_cert_chain(certificate, tls_key)
-    server.socket = tls.wrap_socket(server.socket, server_side=True)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    http_scope = install_scope
+    tls_files = {name: dict(sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        base64=base64.b64encode(path.read_bytes()).decode()) for name, path in [('certificate', certificate), ('key', tls_key)]}
+    started_http = install_transport.http_call(dict(operation='start', scope=http_scope, files=tls_files))
+    assert started_http['state'] == 'running' and len(started_http['private_files']) == 2
+    assert install_transport.http_call(dict(operation='read', scope=http_scope)) == started_http
+    class ServiceAddress:
+        server_port = 443
+    server = ServiceAddress()
+    SUMMARY['managed_http_service'] = dict(real_systemd=True, real_nginx=True, real_php=True,
+        transient_unit=started_http['unit'], nonroot_php=True, real_tls=True, externally_routed=False,
+        app_smoke_real_mysql_redis=True, namespace_property_test_only=True)
     client_tls = ssl.create_default_context(cafile=str(certificate))
     class Client(http.client.HTTPSConnection):
         def connect(self):
@@ -616,16 +610,30 @@ try:
         try: assert release_request(archive_path, release_query)[0] == 403
         finally: published[0].write_bytes(original)
         bootstrap_transport.bootstrap_call('stop')
-        assert agent('/api/v2/server/config')[0] == 403
-        assert agent('/api/v2/server/machine/nodes', 'POST')[0] == 403
-        assert callback() == 403
-        assert release_request(script_path)[0] == release_request(archive_path, release_query)[0] == 403
+        def denied_or_stopped(call):
+            try: assert call() == 403
+            except (ConnectionError, OSError, http.client.HTTPException): pass
+        denied_or_stopped(lambda: agent('/api/v2/server/config')[0])
+        denied_or_stopped(lambda: agent('/api/v2/server/machine/nodes', 'POST')[0])
+        denied_or_stopped(callback)
+        denied_or_stopped(lambda: release_request(script_path)[0])
+        denied_or_stopped(lambda: release_request(archive_path, release_query)[0])
         SUMMARY['agent_http_admission'] = dict(status='passed', real_kernel=True, real_tls=True,
             actual_service_uid=65534, allowed=checks, identity_conflicts_denied=True,
             original_token_authentication_retained=True, stopped_requests_denied=True,
             agent_process_executed=False, pinned_release_delivery_tested=True, full_round=False,
             installer_and_archive_exact_bytes=True, foreign_version_machine_and_token_denied=True,
             changed_published_package_denied=True, node_bytes_synthetic=True)
+        stopped_http = install_transport.http_call(dict(operation='stop', scope=http_scope))
+        assert stopped_http['state'] == 'stopped'
+        http_service.assert_stopped(ROOT, http_invoke)
+        assert http_service.cgroup_empty(http_scope)
+        for port in (443, 7001):
+            try:
+                with socket.create_connection(('127.0.0.1', port), .2): raise AssertionError('service_port_remained')
+            except ConnectionRefusedError: pass
+        SUMMARY['managed_http_service']['stopped_and_ports_closed'] = True
+        SUMMARY['managed_http_service']['cgroup_empty'] = True
         SUMMARY['status'] = 'passed'
         raise SystemExit(0)
 
@@ -1288,7 +1296,10 @@ finally:
         hold_process.terminate()
         try: hold_process.wait(timeout=5)
         except subprocess.TimeoutExpired: hold_process.kill(); hold_process.wait(timeout=5)
-    if server is not None: server.shutdown(); server.server_close()
+    if http_scope is not None:
+        stopped = http_service.execute(dict(operation='stop', scope=http_scope), invoke=http_invoke)
+        assert stopped['state'] == 'stopped'
+        http_service.assert_stopped(ROOT, http_invoke)
     if php_server is not None:
         php_server.terminate()
         try: php_server.wait(timeout=5)

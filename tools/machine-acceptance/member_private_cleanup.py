@@ -22,7 +22,7 @@ ROOT = '/opt/keli-isolated'
 PRIVATE_PATHS = tuple(ROOT + '/' + p for p in (
     'private/cloud-credential.json', 'private/dns-credential.json',
     'private/member-runtime-scope.json', 'private/environment', 'private/credentials',
-    'private/bootstrap-authority', 'app/.env'))
+    'private/bootstrap-authority', 'private/http-certificate.pem', 'private/http-key.pem', 'app/.env'))
 
 
 def validate_pin(pin):
@@ -91,6 +91,8 @@ class MemberPrivateCleanup:
         require(self.read(path) == raw, 'cleanup_private_receipt_unconfirmed')
 
     def barrier(self):
+        from member_http_service import assert_stopped
+        assert_stopped(self.root)
         application = unique_json(self.read(self.root / 'application.json', 0o644))
         require(application.get('run_id') == RUN and application.get('machine_id_sha256')
                 == hashlib.sha256(Path('/etc/machine-id').read_bytes()).hexdigest(),

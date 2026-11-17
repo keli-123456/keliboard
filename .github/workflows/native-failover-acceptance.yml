@@ -84,6 +84,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          sudo systemctl mask --runtime nginx.service
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends nginx-core
           docker pull mysql:8.4
           docker pull redis:7-alpine
           name="r35-application-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -113,7 +116,7 @@ jobs:
           timeout --signal=TERM --kill-after=15s 1800s sudo nsenter --net="/proc/$pid/ns/net" \
             unshare --pid --fork --mount-proc --kill-child=SIGKILL \
             env -i PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 HOME=/root \
-            PYTHONDONTWRITEBYTECODE=1 python3 -B audit/r35-application-linux-ci.py "$mode" >artifacts/application-linux.log 2>&1
+            PYTHONDONTWRITEBYTECODE=1 KELI_HTTP_NETNS="/proc/$pid/ns/net" python3 -B audit/r35-application-linux-ci.py "$mode" >artifacts/application-linux.log 2>&1
       - name: Retain bounded nonsecret status even if artifact upload fails
         if: always()
         shell: bash
