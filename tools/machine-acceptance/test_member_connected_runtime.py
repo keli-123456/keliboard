@@ -161,5 +161,13 @@ class ConnectedRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(TransportError, 'requests_changed'): self.runtime.reconcile(['unknown'])
         self.assertEqual(1, len(calls))
 
+    def test_unbound_fault_recovery_fails_closed_without_ssh_or_fake_restoration(self):
+        self.stop()
+        pin = dict(run_id=RUN, role='source-a', external_id=self.pin['external_id'])
+        self.cleanup['auxiliary']['faults'] = [pin]
+        for method in (self.runtime.restore_fault, self.runtime.inspect_fault):
+            with self.assertRaisesRegex(TransportError, 'operation_unavailable'): method(pin)
+        self.assertEqual([], self.calls)
+
 
 if __name__ == '__main__': unittest.main()

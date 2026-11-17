@@ -171,9 +171,16 @@ return static function (string $mode): array {
         $closed();
         return ['policy_and_release_drift_refused' => true];
     }
+    $hostRequest = null;
+    if ($mode === 'setup-host-rpc') {
+        $raw = stream_get_contents(STDIN, 1025);
+        $need(strlen($raw) <= 1024, 'host_request_too_large');
+        $hostRequest = json_decode($raw, true, 8, JSON_THROW_ON_ERROR);
+        MemberSetupController::validateRequest($hostRequest);
+    }
     Http::preventStrayRequests();
     $writes = 0; $reads = 0;
-    $provider = static function ($request) use ($load, $save, &$writes, &$reads, $need, $mode) {
+    $provider = static function ($request) use ($load, $save, &$writes, &$reads, $need, $mode, $hostRequest) {
         if ($request->url() === 'https://alidns.aliyuncs.com/') {
             $need(is_string($request['Signature']), 'dns_signature');
             $dns = $load('setup-dns-provider') ?? ['rows' => [], 'next_id' => 6001, 'create' => 0, 'claim' => 0, 'delete' => 0];
@@ -259,7 +266,9 @@ return static function (string $mode): array {
         if ($request->method() === 'DELETE') {
             $nativeCleanup = str_starts_with($mode, 'setup-native-rpc')
                 || $mode === 'setup-flow-rpc' || $mode === 'setup-retry-cleanup-rpc';
-            $need((str_starts_with($mode, 'setup-cleanup') || $nativeCleanup)
+            $sourceCleanup = $mode === 'setup-host-rpc' && in_array($hostRequest['operation'], ['source-delete-a', 'source-delete-b'], true)
+                && $path === '/v4/linode/instances/' . ($hostRequest['operation'] === 'source-delete-a' ? '100001' : '100002');
+            $need((str_starts_with($mode, 'setup-cleanup') || $nativeCleanup || $sourceCleanup)
                 && preg_match('~/linode/instances/(10000[1234])$~D', $path, $match) === 1
                 && ($nativeCleanup || $match[1] !== '100003'), 'delete_scope');
             $id = (int) $match[1]; $need(isset($rows[$id]), 'duplicate_delete');
@@ -271,7 +280,7 @@ return static function (string $mode): array {
                 sleep(120);
                 throw new RuntimeException('fixture_native_crash_not_killed');
             }
-            if ($id === 100001 && getenv('KELI_OUTER_SUCCESS_FIXTURE') !== '1')
+            if ($id === 100001 && !$sourceCleanup && getenv('KELI_OUTER_SUCCESS_FIXTURE') !== '1')
                 throw new Illuminate\Http\Client\ConnectionException('fixture reply lost after delete');
             return Http::response('', 204);
         }
@@ -486,10 +495,7 @@ return static function (string $mode): array {
     }
     $controller = new MemberSetupController($authority);
     if ($mode === 'setup-host-rpc') {
-        $raw = stream_get_contents(STDIN, 1025);
-        $need(strlen($raw) <= 1024, 'host_request_too_large');
-        $request = json_decode($raw, true, 8, JSON_THROW_ON_ERROR);
-        $reply = $controller->rpc($request);
+        $reply = $controller->rpc($hostRequest);
         $closed();
         return $reply;
     }

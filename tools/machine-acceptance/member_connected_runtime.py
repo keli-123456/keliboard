@@ -104,7 +104,9 @@ class MemberConnectedRuntime:
         group = 'faults' if method in ('restore_fault', 'inspect_fault') else 'private_files'
         require(method in ('restore_fault', 'inspect_fault', 'remove_private', 'inspect_private')
                 and pin in scope[group], 'cleanup_connected_controller_pin')
-        return getattr(self.setup.bound_transport(), method)(copy.deepcopy(pin))
+        operation = getattr(self.setup.bound_transport(), method, None)
+        require(callable(operation), 'cleanup_connected_controller_operation_unavailable')
+        return operation(copy.deepcopy(pin))
 
     def restore_fault(self, pin): return self.controller('restore_fault', pin)
     def inspect_fault(self, pin): return self.controller('inspect_fault', pin)

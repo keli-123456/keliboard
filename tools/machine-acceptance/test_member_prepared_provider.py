@@ -1,5 +1,6 @@
 """Local-only cleanup material preparation; no credentials or provider access."""
 import copy
+from contextlib import contextmanager
 import hashlib
 import json
 from pathlib import Path
@@ -138,6 +139,37 @@ class PreparedProviderTests(unittest.TestCase):
         self.assertEqual([], provider.prepare().scope['pins'])
         with self.assertRaisesRegex(TransportError, 'operator_pin'): provider.dispatch('control-delete', self.control)
         self.assertNotIn('synthetic-only', json.dumps(self.saved)); self.assertEqual([], self.calls)
+
+    def test_public_entry_binds_cleanup_approval_before_round_execution(self):
+        import test_member_connected_setup as fixture
+        from member_assembly import run_connected_round
+        from member_connected_runtime import MemberConnectedRuntime
+        f = fixture.ConnectedSetupTests('runTest'); f.setUp(); self.addCleanup(f.doCleanups)
+        self.approval['scope'] = f.scope
+        self.write('cleanup-parent.json', json.dumps(self.approval).encode())
+        setup_inputs = {k: v for k, v in f.args.items()
+            if k not in ('scope', 'control', 'load', 'save', 'guard', 'clock')}
+        setup_inputs.update(credentials=self.credentials, import_permit=dict(scope=f.scope,
+            credentials_sha256=hashlib.sha256(self.credentials).hexdigest(), authorized=True))
+        @contextmanager
+        def journal(*_): yield f.saved.get, f.f.save
+        assembled = []
+        def assembly(**options):
+            self.assertIsInstance(options['provider'], MemberPreparedProvider)
+            self.assertIsInstance(options['controller'], MemberConnectedRuntime)
+            self.assertIs(options['provider'].runtime, options['controller'])
+            self.assertIn('provider-preparation-inputs', f.saved)
+            self.assertFalse(options['provider'].prepared.exists())
+            assembled.append(options)
+            return SimpleNamespace(round=lambda: 'explicitly-unexecuted')
+        inputs = dict(directory_path=self.root, php=self.php, machine_file=self.machine, guard=lambda *_: None)
+        with patch('member_assembly.round_journal', journal), patch('member_assembly.MemberRoundAssembly', assembly), \
+                patch('member_assembly.run', lambda value: value):
+            result = run_connected_round(self.root, scope=f.scope, guard=lambda *_: None,
+                control_inputs=dict(directory=f.control.directory, php=f.control.php, guard=lambda *_: None),
+                setup_inputs=setup_inputs, evidence_directory=self.root, cleanup_inputs=inputs)
+        self.assertEqual('explicitly-unexecuted', result)
+        self.assertEqual(1, len(assembled)); self.assertEqual([], f.provider_calls + f.f.calls)
 
 
 if __name__ == '__main__': unittest.main()
