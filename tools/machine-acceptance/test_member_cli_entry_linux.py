@@ -105,6 +105,8 @@ class MemberCliEntryLinuxTests(unittest.TestCase):
             rc, reply = self.invoke(request)
             self.assertEqual(rc, 0, reply)
             self.assertEqual(reply, dict(request, ok=True, result={'stopped': True}))
+            self.assertEqual((self.journal / 'rpc.lock').stat().st_mode & 0o777, 0o600)
+            self.assertEqual((self.journal / 'round-stop.json').stat().st_mode & 0o777, 0o600)
         self.assertEqual(json.loads((self.journal / 'round-stop.json').read_text()), {'grant_id': 'a' * 32, 'stopped': True})
         rc, reply = self.invoke(self.request('round-step'))
         self.assertEqual(rc, 1); self.assertEqual(reply['diagnostic']['file'], 'member_cli_authority.php')

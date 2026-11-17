@@ -29,6 +29,10 @@ final class MemberNativeController
             self::need($current && realpath($path) === $path, 'isolated_rpc_lock_path_changed');
             self::need($opened['ino'] === $current['ino'] && $opened['dev'] === $current['dev'], 'isolated_rpc_lock_identity_changed');
             self::need($opened['nlink'] === 1 && $opened['uid'] === 0, 'isolated_rpc_lock_owner_changed');
+            // Only initialize this process's new, identity-checked file. Existing
+            // unsafe locks remain rejected above; umask alone is not a receipt.
+            if (!$stat) self::need(chmod($path, 0600), 'isolated_rpc_lock_mode_changed');
+            clearstatcache(true, $path); $opened = fstat($this->lock);
             self::need(($opened['mode'] & 0077) === 0, 'isolated_rpc_lock_mode_changed');
             self::need(flock($this->lock, LOCK_EX | LOCK_NB), 'isolated_rpc_busy');
             $this->authority = MemberCliAuthority::controller($scope, $hash, fn () => $this->load('round-stop') !== null);
@@ -78,6 +82,7 @@ final class MemberNativeController
         try { $stream = fopen($temp, 'x+b'); } finally { umask($mask); }
         self::need($stream !== false, 'isolated_journal_unavailable');
         try {
+            self::need(chmod($temp, 0600), 'isolated_journal_unavailable');
             $data = json_encode($value, JSON_THROW_ON_ERROR);
             self::need(strlen($data) <= 262144 && fwrite($stream, $data) === strlen($data)
                 && fflush($stream) && fsync($stream), 'isolated_journal_unavailable');
