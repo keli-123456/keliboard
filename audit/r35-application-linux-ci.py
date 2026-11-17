@@ -140,7 +140,7 @@ try:
     assert php_tests.returncode == 0, 'dns_phpunit_regression_failed'
     SUMMARY['dns_phpunit_passed'] = True
     source_tests = subprocess.run(['php', 'vendor/phpunit/phpunit/phpunit',
-        'tests/Unit/Services/MachineFailoverNativeBridgeTest.php', '--filter', 'test_member_initialization_'],
+        'tests/Unit/Services/MachineFailoverNativeBridgeTest.php', '--filter', 'test_member_(initialization_|setup_evidence_)'],
         cwd=REPO, capture_output=True, text=True, timeout=120)
     (ART / 'source-phpunit.log').write_text(source_tests.stdout + source_tests.stderr)
     assert source_tests.returncode == 0, 'source_phpunit_regression_failed'
@@ -222,6 +222,13 @@ try:
             bootstrap = argv[-1].endswith('member_import_entry.php')
             if not bootstrap and request['operation'] in ('evidence-export', 'native-issue') and '--setup-evidence' in sys.argv:
                 p = subprocess.run(argv, input=payload, cwd=ROOT, env=ENV, capture_output=True, timeout=timeout)
+                value = json.loads(p.stdout)
+                if value.get('ok') is not True:
+                    item = value.get('diagnostic', {})
+                    SUMMARY.setdefault('setup_fixed_entry_rejections', []).append(dict(operation=request['operation'],
+                        diagnostic={k: v for k, v in item.items() if (k in ('class', 'file') and isinstance(v, str)
+                            and __import__('re').fullmatch(r'[A-Za-z0-9_.]{1,100}', v))
+                            or (k == 'line' and type(v) is int and 0 < v < 1000000)}))
                 return p.stdout
             if not bootstrap or request['operation'] in ('configure', 'configuration-read', 'setup-issue', 'setup-read'):
                 argv = ['php', str(REPO / 'audit/r35-setup-rpc-fixture.php'),
@@ -425,7 +432,7 @@ try:
             evidence_directory = work / 'setup-evidence'; evidence_directory.mkdir(mode=0o700)
             evidence_archive = MemberSetupEvidenceArchive(install_transport, evidence_directory,
                 scope=install_scope, identity=setup_identity)
-        def export_missing():
+        def export_checked():
             if evidence_archive is None:
                 raise RuntimeError('fixture-partial-evidence-export-failure')
             exported = evidence_archive.capture()
@@ -456,6 +463,18 @@ try:
             path = ART / 'whole-stopped-evidence.json'; path.write_bytes(raw); path.chmod(0o644)
             SUMMARY['whole_evidence_export'] = dict(sha256=exported['sha256'], verified=True, actual_application=True)
             return dict(run_id=RUN, sha256=exported['sha256'], verified=True)
+        def export_missing():
+            try:
+                return export_checked()
+            except Exception as error:
+                import traceback
+                frames = traceback.extract_tb(error.__traceback__)
+                frame = frames[-1]
+                reason = str(error)
+                safe_reason = reason if __import__('re').fullmatch(r'(evidence|transport|journal)_[a-z_]{1,100}', reason) else 'unclassified'
+                SUMMARY.setdefault('export_first_error', dict(error_class=type(error).__name__, reason=safe_reason,
+                    file=Path(frame.filename).name, line=frame.lineno))
+                raise
         def unused(*_): raise AssertionError('fixture-no-source-or-native-task')
         assembly = MemberRoundAssembly(scope=install_scope, setup=execution, control=control_backend, native_transport=(lambda _: bound) if bound else unused,
             provider=provider, controller=install_transport, task_call=unused, reconcile=reconcile_local, export=export_missing,
