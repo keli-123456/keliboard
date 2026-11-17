@@ -32,9 +32,7 @@ Http::fake(function ($request) use ($path, $directory) {
         throw new Illuminate\Http\Client\ConnectionException('fixture-lost-delete-ack');
     }
     file_put_contents($path, json_encode($state)); chmod($path, 0600);
-    return $state['present'] ? Http::response(['id' => (int) $pin['external_id'], 'label' => $pin['label'],
-        'tags' => [$pin['marker']], 'region' => $pin['region'], 'type' => $pin['size'], 'image' => $pin['image'],
-        'created' => rtrim($pin['provider_created_at'], 'Z')]) : Http::response('', 404);
+    return $state['present'] ? Http::response($state['row']) : Http::response('', 404);
 });
 $controller = null;
 try {

@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-// No application bootstrap, .env, service container, production database or SSH.
+// No Laravel application bootstrap, .env, database or SSH.
 $controller = null;
 try {
     if (PHP_SAPI !== 'cli' || PHP_OS_FAMILY !== 'Linux' || count($argv) !== 2) throw new RuntimeException('operator_cli_required');

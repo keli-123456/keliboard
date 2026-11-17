@@ -104,15 +104,16 @@ from member_cli import RUN
 
 try:
     # Install the pinned cleanup entry with the same owner as this isolated executor.
-    operator_entry = TOOLS / 'member_operator_entry.php'
-    assert operator_entry.is_file() and not operator_entry.is_symlink()
-    os.chown(operator_entry, os.geteuid(), os.getegid())
-    operator_entry.chmod(0o644)
+    for entry_name in ('member_operator_entry.php', 'member_operator_creation_entry.php'):
+        operator_entry = TOOLS / entry_name
+        assert operator_entry.is_file() and not operator_entry.is_symlink()
+        os.chown(operator_entry, os.geteuid(), os.getegid())
+        operator_entry.chmod(0o644)
     tests = subprocess.run(['python3', '-B', '-m', 'unittest', '-v', 'test_member_environment',
         'test_member_installation_linux.InstallationServiceUserTests', 'test_member_execution.ExecutionTests',
         'test_member_assembly', 'test_member_initialization', 'test_member_cli', 'test_member_round',
         'test_member_transport', 'test_member_remote_setup', 'test_member_private_cleanup', 'test_member_bundle', 'test_member_runtime_bundle',
-        'test_member_host_installation', 'test_member_host_setup', 'test_member_operator_transport', 'test_member_http_service'],
+        'test_member_host_installation', 'test_member_host_setup', 'test_member_operator_transport', 'test_member_control_transport', 'test_member_http_service'],
         cwd=TOOLS, capture_output=True, text=True, timeout=240)
     (ART / 'python.log').write_text(tests.stdout + tests.stderr)
     assert tests.returncode == 0, 'python_regression_failed'
@@ -128,6 +129,8 @@ try:
         'tests/Unit/Services/MachineProviderGroupsTest.php',
         'tests/Unit/Services/MachineMemberProviderBindingsTest.php',
         'tests/Unit/Services/MachineMemberOperatorProviderTest.php',
+        'tests/Unit/Services/MachineMemberControlCreationTest.php',
+        'tests/Unit/Services/MachineMemberOperatorCreationTest.php',
         'tests/Unit/Services/MachineDnsAliyunCompatibilityTest.php'],
         cwd=REPO, capture_output=True, text=True, timeout=120)
     (ART / 'dns-phpunit.log').write_text(php_tests.stdout + php_tests.stderr)
@@ -232,12 +235,9 @@ try:
         from member_host_setup import MemberHostSetup
         from member_remote_setup import MemberRemoteSetup
         from member_execution import MemberExecutionSetup
-        from member_initialization import STAGES
-        task = '11111111-1111-4111-8111-111111111111'; suffix = task.replace('-', '')
-        control = dict(run_id=RUN, task_id=task, external_id='999', label='keli-' + suffix,
-            marker='keli-create-' + suffix, region='sg-sin-2', size='g6-standard-2', image='linode/debian12',
-            provider_created_at='2026-11-18T01:00:00Z')
-        install_journal['setup-control-pin'] = control
+        from member_initialization import STAGES, MemberInitialization
+        from member_setup_bindings import MemberSetupBindings
+        from r35_operator_creation_ci import control_port
         domain = 'control-' + RUN + '.dnscloudcloud.top'
         certificate, tls_key = work / 'certificate.pem', work / 'key.pem'
         command(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
@@ -260,9 +260,24 @@ try:
         execution = MemberExecutionSetup(scope=install_scope, installation=host_port,
             sources=remote_port.port('sources'), dns=remote_port.port('dns'), authority=remote_port.port('authority'),
             load=install_journal.get, save=lambda k, v: install_journal.__setitem__(k, v), guard=lambda *_: None)
-        receipts = {'control-create': dict(evidence_sha256=digest(control))}
-        for stage in host_port.STAGES:
-            # Creation and DNS are explicitly outside this component fixture.
+        control_backend, creation_directory = control_port(work, REPO, install_scope, credentials, install_journal, ENV)
+        setup_bindings = MemberSetupBindings(setup=execution, control=control_backend,
+            load=install_journal.get, save=lambda k, v: install_journal.__setitem__(k, v))
+        initialization = MemberInitialization(scope=install_scope, interfaces=setup_bindings,
+            load=install_journal.get, save=lambda k, v: install_journal.__setitem__(k, v), guard=lambda *_: None)
+        assert initialization.step() == dict(ready=False, waiting=True, stage='control-create')
+        assert initialization.state['index'] == 0 and not (ROOT / 'app').exists()
+        for _ in range(4): initialization.step()
+        assert initialization.state['index'] == 4, 'initialization_did_not_complete_installation'
+        control = install_journal['setup-control-pin']
+        cloud = json.loads((creation_directory / 'fixture-cloud.json').read_bytes())
+        assert cloud['methods'].count('POST') == 1 and cloud['row']['id'] == int(control['external_id'])
+        SUMMARY['concrete_control_creation'] = dict(actual_local_transport_and_provider=True, actual_initialization_driver=True,
+            provider_http_simulated=True, original_control_receipt_not_synthetic=True, create_calls=1,
+            full_application_not_installed_at_create=True, once_only_post_then_poll=True)
+        receipts = initialization.state['receipts']
+        for stage in ('callback-ready',):
+            # DNS remains outside this component fixture; earlier stages are real.
             for predecessor in STAGES[:STAGES.index(stage)]:
                 receipts.setdefault(predecessor, dict(synthetic_external_predecessor=True))
             request = dict(run_id=RUN, bundle_sha256=install_scope['bundle_sha256'], stage=stage,
@@ -276,8 +291,8 @@ try:
         assert install_transport.application_call('service-smoke', install_scope, dict(uid=65534, gid=65534))['ready']
         assert http_service.status(install_scope, http_invoke) == 'running'
         stop_request = dict(scope=install_scope, stopped=True)
-        assert execution.reconcile(stop_request)['resolved'] is True
-        scope_pins = execution.cleanup_scope(None)
+        assert setup_bindings.reconcile(stop_request)['resolved'] is True
+        scope_pins = setup_bindings.cleanup_scope(None)
         private_pins = scope_pins['auxiliary']['private_files']
         assert len(private_pins) == 5 and scope_pins['roles'] == {} and scope_pins['auxiliary']['records'] == []
         assert http_service.cgroup_empty(install_scope)
@@ -291,7 +306,7 @@ try:
             operator_machine_sha256=hashlib.sha256(Path('/etc/machine-id').read_bytes()).hexdigest())
         for name, raw in [('provider-scope.json', json.dumps(provider_scope).encode()),
             ('provider-permit.json', json.dumps(provider_permit).encode()), ('provider-credentials.json', credentials),
-            ('fixture-cloud.json', json.dumps(dict(present=True, methods=[])).encode())]:
+            ('fixture-cloud.json', json.dumps(dict(present=cloud['present'], row=cloud['row'], methods=[])).encode())]:
             (operator / name).write_bytes(raw); (operator / name).chmod(0o600)
         provider_journal = {}
         def provider_execute(args, payload):
@@ -314,8 +329,11 @@ try:
         auxiliary['auxiliary']['control'] = control
         combined = dict(run_id=RUN, initialization=auxiliary, native=None)
         def reconcile_local(requests):
-            assert requests == [] and install_journal['execution-stopped'] == dict(binding=digest(install_scope))
+            assert requests == [install_journal['setup-control-request']['request_id']]
+            assert install_journal['execution-stopped'] == dict(binding=digest(install_scope))
             assert host_port.snapshot() == install_journal['host-setup-resources']
+            observed = control_backend.dispatch('control-readback', install_journal['setup-control-request'])
+            assert observed['resolved'] and observed['pin'] == control and not observed['ready']
             return dict(requests_sha256=digest(requests), resolved=True)
         def export_missing():
             raise RuntimeError('fixture-partial-evidence-export-failure')
@@ -361,7 +379,7 @@ try:
             real_systemd_nginx_php_tls=True, application_smoke_not_mocked=True,
             stopped_via_execution_reconcile=True, exact_private_files_removed=5,
             reconstruction_after_private_cleanup=True, stopped_stage_replay_denied=True,
-            controller_creation_and_dns_predecessors_simulated=True, certificate_self_signed_fixture=True,
+            controller_creation_provider_http_simulated=True, dns_predecessor_receipt_simulated=True, certificate_self_signed_fixture=True,
             whole_host_entry=False, source_candidate_retry_not_run=True, os_bootstrap_not_run=True)
         SUMMARY['application_files'] = frozen['files']
         SUMMARY['composer_lock_sha256'] = frozen['composer_lock_sha256']
