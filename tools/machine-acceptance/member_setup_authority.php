@@ -295,6 +295,33 @@ final class MemberSetupAuthority
         });
     }
 
+    public function release(?int $machine, \Closure $callback): mixed
+    {
+        $this->check();
+        $sources = $this->scope['binding']['configuration']['sources'];
+        self::need($machine === null || in_array($machine, array_column($sources, 'machine_id'), true), 'release_machine_invalid');
+        $tasks = Task::query()->whereIn('machine_id', $machine === null ? array_column($sources, 'machine_id') : [$machine])
+            ->where('dispatched_at', '>', 0)->get()->filter(fn ($task) => !isset($task->payload['coordinated_attempt']));
+        self::need($tasks->isNotEmpty(), 'release_task_required');
+        foreach ($tasks as $task) $this->taskRole($task);
+        // The normal installer has no instance header yet. Restrict downloads
+        // to this run's original machine tasks; old candidate cleanup must not
+        // block the next candidate's identical pinned package. Kernel checks tokens.
+        return $this->temporary([], function () use ($callback) {
+            $scope = $this->scope['binding']['scope'];
+            $distribution = app(\App\Services\ServerMachine\MachineReleaseDistributionService::class);
+            self::need($scope['version'] === 'v0.1.387'
+                && $distribution->latestLocalVersion('kelinode-rs', 'linux-x86_64') === $scope['version'], 'release_changed');
+            $record = ServerMachineRelease::query()->findOrFail($scope['release_id']);
+            foreach (['archive_path' => 'node/release.tar.gz', 'manifest_path' => 'node/release.json'] as $field => $source) {
+                $path = \Illuminate\Support\Facades\Storage::disk('local')->path($record->{$field});
+                self::need(is_file($path) && realpath($path) === $path && !is_link($path)
+                    && hash_file('sha256', $path) === hash_file('sha256', MemberApplicationBootstrap::ROOT . '/' . $source), 'release_file_changed');
+            }
+            return $callback();
+        });
+    }
+
     public function report(int $machine, string $installation, ?int $node, \Closure $callback): mixed
     {
         self::need($machine > 0 && preg_match('/^[a-f0-9]{32}$/D', $installation) === 1, 'report_invalid');

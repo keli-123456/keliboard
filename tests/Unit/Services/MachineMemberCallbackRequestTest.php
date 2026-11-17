@@ -95,4 +95,24 @@ class MachineMemberCallbackRequestTest extends TestCase
             catch (\RuntimeException $error) { $this->assertSame('isolated_agent_request_denied', $error->getMessage()); }
         }
     }
+
+    public function testInstallerAndReleaseFormsOnlyAllowThePinnedLocalArtifact(): void
+    {
+        $root = '/api/v2/server/machine/';
+        $this->assertSame(['kind' => 'release', 'machine_id' => null],
+            MemberCallbackRequest::identify($this->request($root . 'kelinode-rs/install.sh', 'GET')));
+        foreach (['linux-x86_64/latest', 'v0.1.387/linux-x86_64/manifest.json', 'v0.1.387/linux-x86_64/archive.tar.gz'] as $file) {
+            $request = $this->request($root . 'releases/kelinode-rs/' . $file . '?machine_id=7&machine_token=fixture-only', 'GET');
+            $request->headers->remove('X-Keli-Instance-Id');
+            $this->assertSame(['kind' => 'release', 'machine_id' => 7], MemberCallbackRequest::identify($request));
+        }
+        foreach (['kelinode-rs/install.sh?machine_id=7',
+            'releases/kelinode-rs/linux-x86_64/latest',
+            'releases/kelinode-rs/linux-x86_64/latest?machine_id=7&machine_token=fixture-only&token=other',
+            'releases/kelinode-rs/v0.1.388/linux-x86_64/manifest.json?machine_id=7&machine_token=fixture-only',
+            'releases/keli-core-rs/v0.1.387/linux-x86_64/archive.tar.gz?machine_id=7&machine_token=fixture-only'] as $file) {
+            try { MemberCallbackRequest::identify($this->request($root . $file, 'GET')); $this->fail('Foreign release admitted'); }
+            catch (\RuntimeException $error) { $this->assertSame('isolated_agent_request_denied', $error->getMessage()); }
+        }
+    }
 }

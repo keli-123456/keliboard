@@ -28,15 +28,17 @@ try {
     $handle = static function () use ($app, $request) {
         $kernel = $app->make(Illuminate\Contracts\Http\Kernel::class);
         $response = $kernel->handle($request);
+        // Keep streamed archives inside the same revocable shared authority lock.
+        $response->send();
         $kernel->terminate($request, $response);
-        return $response;
     };
-    if ($identity['kind'] === 'callback') {
-        $response = $authority->callback($identity['task_id'], $identity['installation_id'], $handle);
+    if ($identity['kind'] === 'release') {
+        $authority->release($identity['machine_id'], $handle);
+    } elseif ($identity['kind'] === 'callback') {
+        $authority->callback($identity['task_id'], $identity['installation_id'], $handle);
     } else {
-        $response = $authority->report($identity['machine_id'], $identity['installation_id'], $identity['node_id'], $handle);
+        $authority->report($identity['machine_id'], $identity['installation_id'], $identity['node_id'], $handle);
     }
-    $response->send();
 } catch (Throwable) {
     http_response_code(403);
     header('Content-Type: application/json');

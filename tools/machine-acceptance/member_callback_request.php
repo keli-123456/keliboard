@@ -40,6 +40,22 @@ final class MemberCallbackRequest
     public static function identify(Request $request): array
     {
         $path = parse_url($request->getRequestUri(), PHP_URL_PATH);
+        $installer = '/api/v2/server/machine/kelinode-rs/install.sh';
+        $release = '/api/v2/server/machine/releases/kelinode-rs/';
+        if ($path === $installer || in_array($path, [$release . 'linux-x86_64/latest',
+            $release . 'v0.1.387/linux-x86_64/manifest.json', $release . 'v0.1.387/linux-x86_64/archive.tar.gz'], true)) {
+            self::need($request->isMethod('GET') && $request->getPathInfo() === $path
+                && $request->getContent() === '' && strlen($request->getRequestUri()) <= 2048);
+            $query = $request->query->all();
+            if ($path === $installer) {
+                self::need($query === []);
+                return ['kind' => 'release', 'machine_id' => null];
+            }
+            self::need(count($query) === 2 && array_key_exists('machine_id', $query)
+                && is_string($query['machine_token'] ?? null) && strlen($query['machine_token']) > 0
+                && strlen($query['machine_token']) <= 512);
+            return ['kind' => 'release', 'machine_id' => self::id($query['machine_id'])];
+        }
         $route = is_string($path) ? (self::ROUTES[$path] ?? null) : null;
         self::need($route !== null && $request->getPathInfo() === $path
             && in_array($request->getMethod(), explode('|', $route[0]), true)

@@ -557,14 +557,47 @@ try:
         assert agent('/api/v2/admin/config')[0] == 403
         assert agent('/api/v2/server/report', 'POST', dict(machine_id=pin['machine_id'] + 1))[0] == 403
         assert agent('/api/v2/server/%63onfig')[0] == 403
+        def release_request(suffix, query=None):
+            path = '/api/v2/server/machine/' + suffix
+            if query: path += '?' + urlencode(query)
+            c = Client(domain, server.server_port, timeout=15)
+            c.request('GET', path)
+            reply = c.getresponse(); raw = reply.read(65536); code = reply.status; c.close()
+            assert pin['token'].encode() not in raw
+            return code, raw
+        release_query = dict(machine_id=pin['machine_id'], machine_token=pin['token'])
+        script_path = 'kelinode-rs/install.sh'
+        latest_path = 'releases/kelinode-rs/linux-x86_64/latest'
+        manifest_path = 'releases/kelinode-rs/v0.1.387/linux-x86_64/manifest.json'
+        archive_path = 'releases/kelinode-rs/v0.1.387/linux-x86_64/archive.tar.gz'
+        code, script = release_request(script_path)
+        assert code == 200 and script == (ROOT / 'app/resources/server-machine/kelinode-rs-install.sh').read_bytes()
+        code, latest = release_request(latest_path, release_query)
+        assert code == 200 and json.loads(latest)['latest_version'] == 'v0.1.387'
+        code, manifest = release_request(manifest_path, release_query)
+        assert code == 200 and json.loads(manifest)['binary_sha256'] == frozen['node_sha256']
+        code, archive = release_request(archive_path, release_query)
+        assert code == 200 and hashlib.sha256(archive).hexdigest() == hashlib.sha256((ROOT / 'node/release.tar.gz').read_bytes()).hexdigest()
+        assert release_request(latest_path, dict(release_query, machine_token='wrong'))[0] == 403
+        assert release_request(latest_path, dict(release_query, machine_id=999999))[0] == 403
+        assert release_request(manifest_path.replace('v0.1.387', 'v0.1.388'), release_query)[0] == 403
+        published = list((ROOT / 'app/storage/app/kelinode-rs/releases').rglob('*.tar.gz'))
+        assert len(published) == 1
+        original = published[0].read_bytes()
+        published[0].write_bytes(b'changed-fixture-package')
+        try: assert release_request(archive_path, release_query)[0] == 403
+        finally: published[0].write_bytes(original)
         bootstrap_transport.bootstrap_call('stop')
         assert agent('/api/v2/server/config')[0] == 403
         assert agent('/api/v2/server/machine/nodes', 'POST')[0] == 403
         assert callback() == 403
+        assert release_request(script_path)[0] == release_request(archive_path, release_query)[0] == 403
         SUMMARY['agent_http_admission'] = dict(status='passed', real_kernel=True, real_tls=True,
             actual_service_uid=65534, allowed=checks, identity_conflicts_denied=True,
             original_token_authentication_retained=True, stopped_requests_denied=True,
-            agent_process_executed=False, pinned_release_delivery_tested=False, full_round=False)
+            agent_process_executed=False, pinned_release_delivery_tested=True, full_round=False,
+            installer_and_archive_exact_bytes=True, foreign_version_machine_and_token_denied=True,
+            changed_published_package_denied=True, node_bytes_synthetic=True)
         SUMMARY['status'] = 'passed'
         raise SystemExit(0)
 
