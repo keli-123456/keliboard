@@ -445,7 +445,8 @@ class StrictControllerTransport:
         if operation == 'start':
             require(self.load('http-start') is None and self.load('http-stop') is None
                     and self.load('host-installation-stopped') is None, 'transport_http_readback_required')
-            require((self.load('application-initialize') or {}).get('completed') is True,
+            require(self.load('application-binding') == binding
+                    and (self.load('application-initialize') or {}).get('completed') is True,
                     'transport_http_application_required')
             intent = dict(request_sha256=digest(request), completed=False)
             self.save('http-start', intent)

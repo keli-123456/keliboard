@@ -61,7 +61,7 @@ def command(args, timeout=20):
     return result.returncode, result.stdout
 
 
-def status(scope, invoke=command):
+def status(scope, invoke=command, *, allow_pending=False):
     code, raw = invoke(['systemctl', 'show', unit(scope), '--no-pager', '--property=' + ','.join(PROPERTIES)])
     lines = raw.decode('ascii').splitlines()
     pairs = [line.split('=', 1) for line in lines]
@@ -77,6 +77,8 @@ def status(scope, invoke=command):
             and value['ControlGroup'] in ('', '/system.slice/' + unit(scope)), 'transport_http_unit_owner')
     if value['ActiveState'] == 'active' and value['SubState'] == 'running' and re.fullmatch('[1-9][0-9]*', value['MainPID']):
         return 'running'
+    if allow_pending and value['ActiveState'] in ('activating', 'deactivating', 'reloading'):
+        return 'pending'
     require(value['ActiveState'] in ('inactive', 'failed') and value['MainPID'] == '0', 'transport_http_unit_pending')
     return 'stopped'
 
@@ -91,7 +93,7 @@ def cgroup_empty(scope):
 
 
 def stop_unit(scope, invoke=command):
-    before = status(scope, invoke)
+    before = status(scope, invoke, allow_pending=True)
     if before != 'absent':
         require(invoke(['systemctl', 'stop', unit(scope)], 30)[0] == 0, 'transport_http_stop_failed')
     require(status(scope, invoke) in ('absent', 'stopped') and cgroup_empty(scope), 'transport_http_stop_unconfirmed')
@@ -232,7 +234,8 @@ def execute(request, *, root=ROOT, invoke=command, clock=time.time, probe=tls_pr
             uid, gid = application['uid'], application['gid']
             require(type(uid) is int and type(gid) is int and uid > 0 and gid > 0, 'transport_http_service_identity')
             publication = unique_json(read_owned(private / 'runtime-publication.json', 0o600, 16 * 1024 * 1024))
-            require(publication['archive_sha256'] == scope['bundle_sha256'], 'transport_http_runtime_changed')
+            require(publication['archive_sha256'] == scope['bundle_sha256']
+                    and 'runtime/member_http_service.py' in publication['manifest']['files'], 'transport_http_runtime_changed')
             for name, pin in publication['manifest']['files'].items():
                 if name.startswith('runtime/'):
                     require(hashlib.sha256(read_owned(root / name, pin['mode'] & 0o755)).hexdigest() == pin['sha256'],
