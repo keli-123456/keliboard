@@ -57,6 +57,21 @@ jobs:
             unshare --pid --fork --mount-proc --kill-child=SIGKILL \
             env -i PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 HOME=/root \
             PYTHONDONTWRITEBYTECODE=1 python3 -B audit/r35-application-linux-ci.py --retry-flow >artifacts/application-linux.log 2>&1
+      - name: Retain bounded nonsecret status even if artifact upload fails
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('artifacts/application-linux-summary.json')
+          if p.is_file():
+              s = json.loads(p.read_bytes())
+              keys = ('status', 'failure_class', 'failure_check', 'native_rpc_last_error', 'native_retry_last_state')
+              print(json.dumps({k: s[k] for k in keys if k in s}, sort_keys=True))
+          else:
+              print('No completed application summary; absence is not success.')
+          PY
       - name: Delete only this run's service containers and anonymous volumes
         if: always()
         shell: bash

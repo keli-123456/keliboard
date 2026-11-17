@@ -68,7 +68,9 @@ def run_retry_flow(*, bound, php, report, callback, pins, root, artifacts, summa
         assert hashlib.sha256(evidence['content'].encode()).hexdigest() == evidence['sha256']
         body = json.loads(evidence['content'])
         assert body['reconciled'] and not body['driver']['first_error_present']
-        (artifacts / 'native-retry-evidence.json').write_text(json.dumps(evidence, sort_keys=True) + '\n')
+        evidence_path = artifacts / 'native-retry-evidence.json'
+        evidence_path.write_text(json.dumps(evidence, sort_keys=True) + '\n')
+        evidence_path.chmod(0o644)
         summary['native_retry_flow'] = dict(actual_root_rpc_and_native_state_machine=True,
             actual_mysql_redis_http_tls_and_service_uid=True, provider_and_ssh_side_effects_simulated=True,
             synthetic_telemetry_not_real_ping=True, task_count=4, candidate_attempts=2,
@@ -78,4 +80,6 @@ def run_retry_flow(*, bound, php, report, callback, pins, root, artifacts, summa
             stopped_evidence_sha256=evidence['sha256'], automatic_switches_changed=False,
             final_native_teardown_not_covered=True)
     finally:
-        (artifacts / 'native-retry-transitions.json').write_text(json.dumps(transitions, sort_keys=True) + '\n')
+        transition_path = artifacts / 'native-retry-transitions.json'
+        transition_path.write_text(json.dumps(transitions, sort_keys=True) + '\n')
+        transition_path.chmod(0o644)
