@@ -1,4 +1,4 @@
-name: Native Failover Isolated Acceptance
+name: R35 Full Application Linux Acceptance
 
 on:
   workflow_dispatch:
@@ -7,75 +7,82 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-failover-isolated-${{ github.ref }}
+  group: r35-application-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  concurrency:
-    name: Native failover (${{ matrix.isolation }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        isolation: ["REPEATABLE READ", "READ COMMITTED"]
-    services:
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_DATABASE: keli_acceptance_native_failover
-          MYSQL_USER: keli_native_fixture
-          MYSQL_PASSWORD: ephemeral-native-ci-only
-          MYSQL_ROOT_PASSWORD: ephemeral-native-root-only
-        ports:
-          - 127.0.0.1::3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=24
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 127.0.0.1::6379
-        options: >-
-          --health-cmd="redis-cli ping"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=12
-    env:
-      KELI_NATIVE_ACCEPTANCE: "1"
-      KELI_NATIVE_HOST: "127.0.0.1"
-      KELI_NATIVE_DATABASE: keli_acceptance_native_failover
-      KELI_NATIVE_USER: keli_native_fixture
-      KELI_NATIVE_PASSWORD: ephemeral-native-ci-only
-      KELI_NATIVE_ISOLATION: ${{ matrix.isolation }}
+  isolated-services:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: "8.2"
+          php-version: '8.2'
           extensions: pdo_mysql, pdo_sqlite, redis, pcntl, posix, mbstring, openssl
           tools: composer:v2
           coverage: none
-      - name: Install test dependencies without application startup
-        run: composer install --no-interaction --no-progress --prefer-dist --no-scripts
-      - name: Run synthetic cloud and DNS with real queue, locks and InnoDB
-        env:
-          KELI_NATIVE_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
-          KELI_NATIVE_REDIS_PORT: ${{ job.services.redis.ports[6379] }}
+      - name: Install locked dependencies without application startup
+        run: composer install --no-interaction --no-progress --prefer-dist --no-scripts --no-plugins
+      - name: Start disposable services with no external network or published ports
+        shell: bash
         run: |
+          set -euo pipefail
+          docker pull mysql:8.4
+          docker pull redis:7-alpine
+          name="r35-application-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker run -d --name "$name-mysql" --label "keli.fixture=$name" --network none \
+            -e MYSQL_DATABASE=keli_acceptance_application -e MYSQL_USER=keli_application \
+            -e MYSQL_PASSWORD=ssssssssssssssssssssssssssssssss -e MYSQL_ROOT_PASSWORD=ephemeral-native-root-only \
+            mysql:8.4 --port=13306 --bind-address=127.0.0.1
+          docker run -d --name "$name-redis" --label "keli.fixture=$name" --network "container:$name-mysql" \
+            redis:7-alpine redis-server --bind 127.0.0.1 --port 16379 --requirepass rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr --save '' --appendonly no
+          for i in $(seq 1 90); do
+            if docker exec "$name-mysql" mysqladmin ping --silent && \
+              docker exec "$name-redis" redis-cli -p 16379 -a rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr --no-auth-warning ping | grep -qx PONG; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+      - name: Check execution bindings, real HTTP and isolated databases
+        shell: bash
+        run: |
+          set -euo pipefail
           mkdir -p artifacts
-          vendor/bin/phpunit -c phpunit-native-failover.xml --stop-on-error --stop-on-failure --log-junit artifacts/native-failover.xml
-      - name: Preserve aggregate acceptance evidence
+          name="r35-application-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          pid="$(docker inspect -f '{{.State.Pid}}' "$name-mysql")"
+          test "$pid" -gt 1
+          timeout --signal=TERM --kill-after=15s 780s sudo nsenter --net="/proc/$pid/ns/net" \
+            unshare --pid --fork --mount-proc --kill-child=SIGKILL \
+            env -i PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 HOME=/root \
+            PYTHONDONTWRITEBYTECODE=1 python3 -B audit/r35-application-linux-ci.py >artifacts/application-linux.log 2>&1
+      - name: Delete only this run's service containers and anonymous volumes
         if: always()
-        uses: actions/upload-artifact@v4
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="r35-application-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          for suffix in redis mysql; do
+            container="$name-$suffix"
+            if docker inspect "$container" >/dev/null 2>&1; then
+              test "$(docker inspect -f '{{index .Config.Labels "keli.fixture"}}' "$container")" = "$name"
+              docker rm -fv "$container"
+            fi
+            ! docker inspect "$container" >/dev/null 2>&1
+          done
+          if sudo test -e /opt/keli-isolated; then
+            test "$(sudo cat /opt/keli-isolated/.r35-application-fixture)" = "$GITHUB_SHA"
+            sudo test ! -L /opt/keli-isolated
+            sudo rm -rf -- /opt/keli-isolated
+          fi
+          test ! -e /opt/keli-isolated
+          mkdir -p artifacts
+          printf '{"containers_removed":true,"fixed_fixture_removed":true}\n' >artifacts/service-cleanup.json
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: native-failover-${{ strategy.job-index }}
-          path: |
-            artifacts/native-failover.xml
-            artifacts/native-failover-summary.jsonl
-          if-no-files-found: ignore
+          name: r35-application-linux-evidence
+          path: artifacts/
+          if-no-files-found: error
           retention-days: 7
