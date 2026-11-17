@@ -133,6 +133,7 @@ final class MemberApplicationBootstrap
             try { $stream = fopen($path, 'x+b'); } finally { umask($mask); }
             self::need(is_resource($stream), 'installation_write_failed');
             try {
+                self::need(chmod($path, 0600), 'installation_file_permissions');
                 $raw = json_encode($value, JSON_THROW_ON_ERROR);
                 self::need(strlen($raw) <= 16384 && fwrite($stream, $raw) === strlen($raw)
                     && fflush($stream) && fsync($stream), 'installation_write_failed');
