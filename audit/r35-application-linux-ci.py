@@ -120,7 +120,7 @@ try:
         'test_member_installation_linux.InstallationServiceUserTests', 'test_member_execution.ExecutionTests',
         'test_member_assembly', 'test_member_initialization', 'test_member_cli', 'test_member_evidence', 'test_member_round',
         'test_member_transport', 'test_member_remote_setup', 'test_member_private_cleanup', 'test_member_bundle', 'test_member_runtime_bundle',
-        'test_member_host_installation', 'test_member_host_setup', 'test_member_operator_transport', 'test_member_control_transport', 'test_member_http_service'],
+        'test_member_host_installation', 'test_member_host_setup', 'test_member_connected_setup', 'test_member_operator_transport', 'test_member_control_transport', 'test_member_http_service'],
         cwd=TOOLS, capture_output=True, text=True, timeout=240)
     (ART / 'python.log').write_text(tests.stdout + tests.stderr)
     assert tests.returncode == 0, 'python_regression_failed'
@@ -283,6 +283,7 @@ try:
     if '--host-port-only' in sys.argv:
         from member_auxiliary import digest
         from member_host_setup import MemberHostSetup
+        from member_connected_setup import MemberConnectedSetup
         from member_remote_setup import MemberRemoteSetup
         from member_execution import MemberExecutionSetup
         from member_initialization import STAGES, MemberInitialization
@@ -299,18 +300,17 @@ try:
             aliyun=dict(access_key_id='synthetic-access-key', access_key_secret='synthetic-secret'), baseline_ids=[])).encode()
         settings = dict(app_key=base64.b64encode(b'x' * 32).decode(), database='keli_acceptance_application',
             username='keli_application', password='s' * 32, mysql_port=13306, redis_password='r' * 32, redis_port=16379)
-        host_arguments = dict(scope=install_scope, transport=install_transport, archive=bundle, settings=settings,
+        control_backend, creation_directory = control_port(work, REPO, install_scope, credentials, install_journal, ENV)
+        host_arguments = dict(scope=install_scope, archive=bundle, settings=settings,
             service=dict(uid=65534, gid=65534), credentials=credentials, tls_files=tls_files,
             import_permit=dict(scope=install_scope, credentials_sha256=hashlib.sha256(credentials).hexdigest(), authorized=True),
             load=install_journal.get, save=lambda k, v: install_journal.__setitem__(k, v))
-        host_port = MemberHostSetup(**host_arguments)
-        remote_port = MemberRemoteSetup(scope=install_scope, transport=install_transport,
-            grant_file=install_root / 'native-grant.json', load=install_journal.get,
-            save=lambda k, v: install_journal.__setitem__(k, v))
-        execution = MemberExecutionSetup(scope=install_scope, installation=host_port,
-            sources=remote_port.port('sources'), dns=remote_port.port('dns'), authority=remote_port.port('authority'),
-            load=install_journal.get, save=lambda k, v: install_journal.__setitem__(k, v), guard=lambda *_: None)
-        control_backend, creation_directory = control_port(work, REPO, install_scope, credentials, install_journal, ENV)
+        connected_arguments = dict(**host_arguments, control=control_backend,
+            identity_file=install_root / 'key', known_hosts=install_root / 'known',
+            grant_file=install_root / 'native-grant.json', guard=lambda *_: None,
+            ssh_guard=lambda *_: None, execute=installation_ssh)
+        execution = MemberConnectedSetup(**connected_arguments)
+        assert execution.rpc is None
         (creation_directory / 'fixture-dns.json').write_text(json.dumps(dict(rows=[], create=0, claim=0, delete=0)))
         (creation_directory / 'fixture-dns.json').chmod(0o600)
         setup_bindings = MemberSetupBindings(setup=execution, control=control_backend,
@@ -352,6 +352,15 @@ try:
                 if initialization.state['index'] == STAGES.index('callback-ready'): http_scope = install_scope
                 initialization.step()
         assert initialization.state['index'] == 6, 'initialization_did_not_complete_callback_ready'
+        install_transport, host_port, remote_port = execution.rpc, execution.host, execution.remote
+        assert isinstance(install_transport, StrictControllerTransport)
+        connection = install_journal['operator-control-connection']
+        assert install_transport.host == connection['host']
+        assert connection['control_sha256'] == digest(install_journal['setup-control-pin'])
+        assert install_journal['connected-setup-binding']['connection'] == connection
+        SUMMARY['deferred_control_connection'] = dict(actual_provider_readback=True, actual_deferred_port_assembly=True,
+            no_placeholder_host_used_by_setup=True, pinned_endpoint_and_key_material=True,
+            cloud_http_and_ssh_simulated=True)
         control = install_journal['setup-control-pin']
         cloud = json.loads((creation_directory / 'fixture-cloud.json').read_bytes())
         assert cloud['methods'].count('POST') == 1 and cloud['row']['id'] == int(control['external_id'])
@@ -637,14 +646,16 @@ try:
             actual_owned_dns_deleted_before_control=True, dns_delete_calls=3 if bound else 1,
             acceptance_not_claimed=not outer_whole)
         # Reconstruct the port after .env and TLS material have already gone.
-        resumed = MemberHostSetup(**host_arguments)
-        assert resumed.reconcile(stop_request)['resolved'] is True and resumed.snapshot() == host_port.snapshot()
+        resumed = MemberConnectedSetup(**connected_arguments)
+        assert resumed.reconcile(stop_request)['resolved'] is True
+        assert resumed.cleanup_scope(None) == execution.cleanup_scope(None)
         try:
             request = dict(run_id=RUN, stage='callback-ready', bundle_sha256=install_scope['bundle_sha256'],
-                request_id=digest([install_scope, 'callback-ready'])[:32], predecessors_sha256=digest(receipts))
-            execution.dispatch('callback-ready', request, receipts)
+                request_id=digest([install_scope, 'callback-ready'])[:32],
+                predecessors_sha256=digest({k: receipts[k] for k in STAGES[:5]}))
+            execution.dispatch('callback-ready', request, {k: receipts[k] for k in STAGES[:5]})
             raise AssertionError('stopped_execution_restarted')
-        except TransportError as error: assert str(error) == 'transport_execution_stopped'
+        except TransportError as error: assert str(error) == 'transport_connected_stopped'
         for port in (443, 7001):
             with socket.socket() as probe: assert probe.connect_ex(('127.0.0.1', port)) != 0
         assert not (ROOT / 'app/.env').exists()
