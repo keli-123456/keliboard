@@ -1224,12 +1224,22 @@ The [native task cleanup component](../../docs/evidence/linode-r35-native-cleanu
 binds the unchanged grant to host receipts and reuses the fixed CLI's durable
 controller. It verifies actual SIGKILL after a simulated candidate deletion,
 host restart without another DELETE, two absence reads at least ten seconds
-apart, retained task history and first errors. This is post-stop teardown;
-DNS/private cleanup remains pending and it is not an A1-to-A2 retry result.
+apart, retained task history and first errors. That component covers post-stop
+task teardown, not DNS/private cleanup or an A1-to-A2 retry result.
 The [concurrent stop component](../../docs/evidence/linode-r35-native-stop-linux-20261117.json)
 checks the exact stop request before revoking callback admission, even while the
 native RPC lock is busy. Acknowledgement still waits for admitted callbacks and
 the RPC to drain; bad request identities cannot revoke the grant.
+The [native DNS cleanup component](../../docs/evidence/linode-r35-native-dns-cleanup-linux-20261117.json)
+adds a stopped-only recovery RPC over the unchanged native grant and setup journal.
+Original create receipts stay immutable. A candidate address is eligible only
+with the exact authenticated A2 publication and dispatched wire journal, never
+from an arbitrary observed value. Selected cleanup pins persist across restart;
+delete reply loss cannot trigger another deletion. Linux verifies initial-record
+teardown, peer cleanup after reply loss and two absence reads ten seconds apart.
+A2 cutover pin validation is covered by application unit tests; full Linux A2
+cutover cleanup, private-material removal and controller-last teardown are not
+claimed by this component.
 Native A1/A2 whole-round cleanup, host installation composition and the final
 unarmed real-binary package are still pending. These component results do not
 authorize or establish live acceptance.
