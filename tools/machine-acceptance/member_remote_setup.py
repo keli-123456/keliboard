@@ -19,6 +19,10 @@ from staging import read_file
 
 
 class MemberRemoteSetup:
+    DISPATCH_KEYS = ('bootstrap-binding', 'bootstrap-import', 'bootstrap-configure',
+        'bootstrap-setup-issue', 'remote-setup-identity', 'setup-binding', 'setup-mutation',
+        'setup-cleanup', 'setup-native-grant', 'remote-native-grant')
+
     def __init__(self, *, scope, transport, grant_file, load, save):
         require(scope.get('run_id') == RUN and isinstance(transport, StrictControllerTransport)
                 and transport.run_id == RUN, 'transport_remote_setup_binding')
@@ -40,6 +44,8 @@ class MemberRemoteSetup:
         return copy.deepcopy(identity)
 
     def initialize(self):
+        require(self.load('remote-setup-stopped') is None
+                and self.load('remote-setup-stop-intent') is None, 'transport_remote_setup_stopped')
         require((self.load('bootstrap-import') or {}).get('completed') is True,
                 'transport_remote_setup_import_required')
         if self.load('bootstrap-configure') is None:
@@ -89,7 +95,8 @@ class MemberRemoteSetup:
                 and request.get('bundle_sha256') == self.scope['bundle_sha256']
                 and request.get('predecessors_sha256') == digest(receipts)
                 and request.get('request_id') == digest([self.scope, stage])[:32], 'transport_remote_setup_request')
-        require(self.load('remote-setup-stopped') is None, 'transport_remote_setup_stopped')
+        require(self.load('remote-setup-stopped') is None
+                and self.load('remote-setup-stop-intent') is None, 'transport_remote_setup_stopped')
         if stage == 'control-dns': self.initialize()
         operation = {'control-dns': 'dns-control', 'sources-initialize': 'advance',
                      'dns-initialize': 'dns-edges', 'native-grant': 'native-issue', 'native-ready': 'native-read'}[stage]
@@ -113,7 +120,16 @@ class MemberRemoteSetup:
         require(request.get('scope') == self.scope, 'cleanup_remote_setup_scope')
         if owner == 'authority':
             self.persist('remote-setup-stop-intent', dict(binding=digest(self.scope)))
-            self.rpc.bootstrap_call('stop')
+            # The enclosing round journal holds the exclusive writer lock. Seal
+            # new bootstrap calls before proving no remote authority was sent.
+            # Any prior dispatch, including a lost reply, still needs remote stop.
+            self.persist('bootstrap-stopped', dict(stopped=True))
+            if all(self.load(key) is None for key in self.DISPATCH_KEYS):
+                require(not self.grant_file.exists() and not self.grant_file.is_symlink(),
+                        'cleanup_remote_setup_unjournaled_grant')
+                self.persist('remote-setup-never-dispatched', dict(binding=digest(self.scope)))
+            else:
+                self.rpc.bootstrap_call('stop')
             self.persist('remote-setup-stopped', dict(binding=digest(self.scope)))
         require(self.load('remote-setup-stopped') == dict(binding=digest(self.scope)), 'cleanup_remote_setup_stop_required')
         if self.load('bootstrap-setup-issue') is not None:

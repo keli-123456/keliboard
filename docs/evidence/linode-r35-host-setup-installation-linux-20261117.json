@@ -1,0 +1,219 @@
+{
+  "schema": 1,
+  "date": "2026-11-17",
+  "status": "setup_retry_private_cleanup_and_agent_http_components_passed",
+  "main_base": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "installation": {
+    "run": 44103251135,
+    "commit": "514ad4299e3b1cb9795f0d2b96bd54388109ea1f",
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44103251135",
+    "artifact": 14336459372,
+    "status": "passed",
+    "actual": [
+      "Fixed PHP installation entry and exact host transport commands",
+      "Complete application and locked dependencies",
+      "Dedicated MySQL and Redis in network namespace without external routes",
+      "160 migrations and 157 tables",
+      "Non-root UID65534 service bootstrap with readonly executable paths",
+      "Shared installation/stop lock; stop drains in-flight operation and denies success afterwards",
+      "Readback after stop and lost completion; no repeated migration",
+      "First safe error retained; nonempty schema refused"
+    ],
+    "simulated": [
+      "SSH byte transport",
+      "Cloud and DNS boundaries",
+      "Node archive bytes; no node process executed"
+    ],
+    "python": {
+      "tests": 170,
+      "seconds": 5.035
+    },
+    "adjacent_php": {
+      "tests": 106,
+      "assertions": 708
+    },
+    "native_php": {
+      "tests": 53,
+      "assertions": 20401
+    },
+    "source_php": {
+      "tests": 17,
+      "assertions": 196
+    },
+    "cold_cli_python": {
+      "tests": 11
+    },
+    "containers_removed": true,
+    "fixed_fixture_removed": true,
+    "whole_host_installer_verified": false,
+    "artifact_sha256": {
+      "application-linux-summary.json": "7abf67c8e16f47568a3b4664b3baaec5209a812f808a13ea6873aefc9cd17999",
+      "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "python.log": "79de46974f7f8bcc81690939a9dada6b9b986e852aa311a064bd0918c5bfdce9",
+      "dns-phpunit.log": "de505a90a4aa710d9758a8597d866f40a220240ab39179c7f5af20eaca4740e1",
+      "cli-phpunit.log": "61b4f08462f341dc9a23a5892abe5b3e38016f4046ae773d43261818ec0f3da0",
+      "source-phpunit.log": "1e5112d3a7781836e32cf0c9d0da86d173bdfe178c1c9ed082a5c73be71938ba",
+      "native-entry-linux.log": "9a0e22a61dc3737d0883c37e90449319266285967b8a45db20dcb405052d9514",
+      "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+    }
+  },
+  "failed_predecessor": {
+    "run": 44100447872,
+    "commit": "63aae88e2b0a9690e31dec97203098f7a98c24fe",
+    "artifact": 14335939548,
+    "status": "failed_before_native_retry",
+    "reason": "transport_ssh_material_changed",
+    "diagnosis": "Temporary CI reused the SSH key variable for its TLS certificate private key, then passed the TLS path to native transport. The bootstrap hash guard correctly rejected it.",
+    "fix": "Keep a distinct tls_key variable and assert native SSH material matches the original bootstrap binding before round-ready.",
+    "partial_verified": [
+      "Concrete source/DNS/native grant setup ports through actual root RPC",
+      "Exact private native grant export and host publication",
+      "Actual setup and native controllers with synthetic HTTP telemetry"
+    ],
+    "fixture_and_containers_removed": true,
+    "artifact_sha256": {
+      "application-linux-summary.json": "4cc7f1b061ee237145457bfe813f4d5fd88a05fc80fdb4c4137587219e46be9e",
+      "application-linux.log": "9e9253cfb2fcc2ed70f8aaef9e846afda66037450d7e913645e575cf2755649f"
+    }
+  },
+  "full_followup": {
+    "run": 44103982430,
+    "commit": "514ad4299e3b1cb9795f0d2b96bd54388109ea1f",
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44103982430",
+    "status": "failed_at_stopped_resource_snapshot",
+    "artifact": 14339178945,
+    "reason": "cleanup_private_path_invalid",
+    "diagnosis": "PHP resource snapshot returned a relative native grant path while the exact cleanup contract requires an absolute path. No arbitrary path normalization was added.",
+    "fix_commit_temporary": "8bf916abde28b5c965e2e719a87c2d118ee24697",
+    "completed_before_failure": [
+      "Real isolated native A1 cleanup with two absence reads 13 seconds apart",
+      "Real 300 second cooldown; A2 dispatch 302 seconds after cleanup confirmation",
+      "A2 DNS cutover and unchanged B during execution",
+      "Post-stop four task resource deletes and three DNS deletes; lost replies reconciled without duplicate deletion"
+    ],
+    "private_cleanup_reached": false,
+    "fixture_and_containers_removed": true,
+    "artifact_sha256": {
+      "application-linux-summary.json": "7a89f621ab9b4b22a99b02f40938861f70f502d117dfca48c186646719b69ec6",
+      "application-linux.log": "55f686abd2618bbb6d6e210787f133e8a3d5928a1d0b5cbabf1a361b5efe86d5",
+      "native-retry-evidence.json": "6ad2b63a06f0b6cdb98b1f260f5a8450d6adbceb3bdc8565211bca3900c7d41d",
+      "native-retry-teardown-evidence.json": "5b756cffd26fee34c25b331d88a57278d1fd8dd9c3de2b6158bed2a31f50c877"
+    }
+  },
+  "path_fix_followup": {
+    "run": 44108499751,
+    "commit": "8bf916abde28b5c965e2e719a87c2d118ee24697",
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44108499751",
+    "artifact": 14341852307,
+    "status": "passed",
+    "absence_read_gap_seconds": 14,
+    "cooldown_before_a2_dispatch_seconds": 308,
+    "a1_exact_delete_calls": 1,
+    "a2_dns_updates": 1,
+    "b_unchanged_during_execution": true,
+    "post_stop_task_deletes": 4,
+    "post_stop_dns_deletes": 3,
+    "private_files_removed": 4,
+    "lost_private_delete_reply_inspected_without_replay": true,
+    "cold_cleanup_after_env_removal": true,
+    "stopped_resource_snapshots_verified": true,
+    "inner_evidence_hashes_verified": true,
+    "python": {"tests": 174, "seconds": 5.009},
+    "adjacent_php": {"tests": 106, "assertions": 708},
+    "native_php": {"tests": 53, "assertions": 20401},
+    "source_php": {"tests": 17, "assertions": 196},
+    "fixture_and_containers_removed": true,
+    "whole_host_installation_and_controller_last_cleanup_verified": false,
+    "artifact_sha256": {
+      "application-linux-summary.json": "e97ddda07ccbdf68394577bb2316eb7e39039ff26bb3099fa978b01782d84d3b",
+      "native-retry-evidence.json": "bb8cf4ee18ed21ed7e3c5e7bab426bb2001c7e0e9b6517266c0bb389f1346a18",
+      "native-retry-teardown-evidence.json": "faf932677e9ba10d86a88ae27d3217cfadc56f7b4efcc5033ed016d74f402763",
+      "native-retry-transitions.json": "549d45278e6e5629c3ba4acfe665f1bf384d4a791906f9844420579a77c37a32",
+      "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+    }
+  },
+  "agent_http_followup": {
+    "run": 44111353345,
+    "commit": "d259801328a775e04c17dbd93e9e853df2f63afe",
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44111353345",
+    "artifact": 14342270744,
+    "status": "passed",
+    "superseded_pending_run": 44109326174,
+    "pinned_agent_source": "3c707fc89b16e2895727c24251b6076252d5cab0",
+    "scope": "Scoped startup/report and pinned installer/release delivery through the actual HTTP kernel and TLS; node process not executed.",
+    "real_kernel_tls_and_uid65534": true,
+    "identity_conflicts_and_foreign_tokens_denied": true,
+    "exact_installer_manifest_archive_bytes_verified": true,
+    "foreign_version_and_changed_package_denied": true,
+    "stopped_requests_denied": true,
+    "node_bytes_synthetic": true,
+    "agent_process_executed": false,
+    "whole_host_installation_verified": false,
+    "fixture_and_containers_removed": true,
+    "artifact_sha256": {
+      "application-linux-summary.json": "048354887ef687f7318c2da7b4d224bd84657b376e6cdc2e8842215d40c0b43e",
+      "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cli-phpunit.log": "80b307e6d06209e496fbfaf3c15b207484cc776701d902d74f179edf6388612e",
+      "dns-phpunit.log": "10c536da4879b3b4655c6d258906ab7a6f35b08b2c3c2ba81693cfed59f0397b",
+      "native-entry-linux.log": "066a189442b2db31151dd4479b6827923840958b985874de9b50cb9dc141de38",
+      "python.log": "a15911abc272d1c5e78e85aaa5add63ce2e41e88738797409e79670db2e1ad54",
+      "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+      "source-phpunit.log": "654b250bd6dfe1bc1665c538529671f456fe07542d24ba2536c8a212af082eb8"
+    }
+  },
+  "local": {
+    "python": {
+      "tests": 219,
+      "skipped_linux": 33,
+      "seconds": 36.512
+    },
+    "targeted_python": {
+      "tests": 47
+    },
+    "cleanup_path_regression": {
+      "tests": 126,
+      "skipped_linux": 16,
+      "seconds": 3.024
+    },
+    "agent_http_parser": {
+      "tests": 6,
+      "assertions": 47
+    },
+    "bundle_followup": {
+      "tests": 16,
+      "seconds": 20.020
+    },
+    "install_php": {
+      "tests": 5,
+      "assertions": 74
+    },
+    "member_php_suite": {
+      "tests": 149,
+      "assertions": 21104,
+      "seconds": 102.931
+    },
+    "unrelated_baseline": {
+      "checked": 107,
+      "changed": 0
+    }
+  },
+  "boundaries": {
+    "production_read_or_write": false,
+    "production_credentials": false,
+    "cloud_instances_created": 0,
+    "live_dns_writes": false,
+    "main_committed_or_pushed": false,
+    "deployment": false,
+    "automatic_switches_changed": false,
+    "tanzhen_accessed": false,
+    "r34_executed": false
+  },
+  "remaining": [
+    "Concrete controller installation/runtime/private-material publication and TLS setup must be bound into run_execution_round, not replaced with stage receipt fixtures.",
+    "Scoped agent APIs and pinned installer/latest/manifest/archive delivery passed isolated real HTTP/TLS coverage with synthetic package bytes. A real node startup still needs integration; no live installation claim.",
+    "Independent controller-last provider cleanup still needs concrete whole-entry integration and failure recovery coverage.",
+    "Freeze final unarmed LF runtime with the pinned real node/vendor after remaining assembly passes; prepare new live scope and readonly preflight. Do not reuse historic live authorization."
+  ],
+  "goal_complete": false
+}

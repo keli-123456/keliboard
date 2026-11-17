@@ -172,11 +172,67 @@ class RemoteSetupTests(unittest.TestCase):
         with self.assertRaisesRegex(TransportError, 'resources_changed'): self.binding.port('dns').reconcile(request)
         self.assertEqual(self.saved['remote-setup-resources']['roles']['source-a']['external_id'], '901')
 
-    def test_never_issued_setup_has_empty_receipts_only_after_confirmed_stop(self):
+    def test_pre_install_failure_seals_unissued_setup_without_calling_missing_php_entry(self):
         self.saved.clear()
         self.binding.port('authority').reconcile(dict(scope=self.scope))
         self.assertEqual(self.binding.port('sources').snapshot()['roles'], {})
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.saved['bootstrap-stopped'], dict(stopped=True))
+        self.assertEqual(self.saved['remote-setup-never-dispatched'], dict(binding=digest(self.scope)))
+        with self.assertRaisesRegex(TransportError, 'stopped'):
+            self.rpc.bootstrap_call('import')
+        with self.assertRaisesRegex(TransportError, 'stopped'):
+            self.binding.initialize()
+        self.assertEqual(self.calls, [])
+
+    def test_never_issued_setup_after_import_still_requires_remote_stop(self):
+        self.saved.clear()
+        self.saved['bootstrap-import'] = dict(request=dict(operation='import'), completed=False)
+        self.binding.port('authority').reconcile(dict(scope=self.scope))
+        self.assertEqual(self.binding.port('sources').snapshot()['roles'], {})
         self.assertEqual(self.calls, ['stop'])
+        self.assertNotIn('remote-setup-never-dispatched', self.saved)
+
+    def test_any_dispatch_marker_or_lost_reply_cannot_use_local_absence_proof(self):
+        for key in self.binding.DISPATCH_KEYS:
+            with self.subTest(key=key):
+                self.saved.clear(); self.calls.clear()
+                self.saved[key] = {'uncertain': True}
+                with patch.object(self.rpc, 'bootstrap_call', side_effect=TransportError('unreachable')) as rpc:
+                    with self.assertRaisesRegex(TransportError, 'unreachable'):
+                        self.binding.port('authority').reconcile(dict(scope=self.scope))
+                    rpc.assert_called_once_with('stop')
+                self.assertNotIn('remote-setup-never-dispatched', self.saved)
+                self.assertNotIn('remote-setup-stopped', self.saved)
+                self.assertNotIn('remote-setup-resources', self.saved)
+                with self.assertRaisesRegex(TransportError, 'stopped'):
+                    self.dispatch('sources', 'sources-initialize')
+                self.assertEqual(self.calls, [])
+
+    def test_unjournaled_native_grant_blocks_empty_cleanup_claim(self):
+        self.saved.clear()
+        self.binding.grant_file.write_bytes(self.raw)
+        with self.assertRaisesRegex(TransportError, 'unjournaled_grant'):
+            self.binding.port('authority').reconcile(dict(scope=self.scope))
+        self.assertNotIn('remote-setup-resources', self.saved)
+        self.assertNotIn('remote-setup-stopped', self.saved)
+        self.assertEqual(self.calls, [])
+
+    def test_local_stop_proof_survives_restart_and_preserves_installation_cleanup(self):
+        self.saved.clear()
+        # Application/environment publication may have occurred, but it cannot
+        # authorize source/DNS work without the separately journaled RPC.
+        self.saved['application-initialize'] = dict(completed=False)
+        self.saved['upload-intent'] = dict(sha256='a' * 64)
+        for _ in range(2):
+            binding = MemberRemoteSetup(scope=self.scope, transport=self.rpc,
+                grant_file=self.binding.grant_file, load=self.saved.get, save=self.save)
+            for owner in ('authority', 'sources', 'dns'):
+                binding.port(owner).reconcile(dict(scope=self.scope))
+            self.assertEqual(binding.port('authority').snapshot(), dict(private_files=[], requests=[]))
+        self.assertEqual(self.calls, [])
+        self.assertIn('application-initialize', self.saved)
+        self.assertIn('upload-intent', self.saved)
 
     def test_wrong_owner_or_scope_never_calls_ssh(self):
         with self.assertRaisesRegex(TransportError, 'request'): self.dispatch('sources', 'dns-initialize')
