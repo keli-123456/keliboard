@@ -168,6 +168,9 @@ try:
         assert installed['complete']
     # Exercise the actual cold-boot CLI and journal permissions before the real
     # isolated application configuration is published.
+    entry_scratch = [ROOT / 'app' / name for name in ('.env', 'bootstrap/cache/packages.php',
+        'bootstrap/cache/services.php', 'storage/logs/laravel.log')]
+    assert not any(path.exists() or path.is_symlink() for path in entry_scratch)
     entry_tests = subprocess.run(['python3', '-B', '-m', 'unittest', '-v', 'test_member_cli_entry_linux'],
         cwd=TOOLS, env=dict(ENV, KELI_MEMBER_CLI_ENTRY='1'), capture_output=True, text=True, timeout=120)
     (ART / 'native-entry-linux.log').write_text(entry_tests.stdout + entry_tests.stderr)
@@ -179,6 +182,10 @@ try:
         assert path.is_file() and not path.is_symlink() and path.stat().st_nlink == 1
         path.unlink()
     native_journal.rmdir()
+    for path in entry_scratch:
+        if path.exists() or path.is_symlink():
+            assert path.resolve() == path and path.is_file() and path.stat().st_uid == 0 and path.stat().st_nlink == 1
+            path.unlink()
     SUMMARY['native_fixed_entry_permissions_passed'] = True
     settings = dict(app_key=base64.b64encode(b'x' * 32).decode(), database='keli_acceptance_application',
         username='keli_application', password='s' * 32, mysql_port=13306,
