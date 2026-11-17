@@ -7,9 +7,6 @@ ini_set('log_errors', '0');
 try {
     if (PHP_OS_FAMILY !== 'Linux' || !in_array(PHP_SAPI, ['fpm-fcgi', 'cli-server'], true)
         || !function_exists('posix_geteuid') || posix_geteuid() === 0
-        || ($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST'
-        || !in_array($_SERVER['REQUEST_URI'] ?? '', ['/api/v2/server/machine/provision/result',
-            '/api/v2/server/machine/status', '/api/v2/server/status'], true)
         || (int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > 8192)
         throw new RuntimeException('callback_denied');
     require_once __DIR__ . '/member_cli_authority.php';
@@ -18,6 +15,7 @@ try {
     require_once __DIR__ . '/member_source_configuration.php';
     require_once __DIR__ . '/member_setup_authority.php';
     require_once __DIR__ . '/member_candidate_callbacks.php';
+    require_once __DIR__ . '/member_callback_request.php';
     $app = Keli\Acceptance\MemberApplicationBootstrap::boot();
     $request = Illuminate\Http\Request::capture();
     $origin = parse_url(config('app.url'), PHP_URL_HOST);
@@ -25,7 +23,7 @@ try {
         && ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
     if (!$tls || $request->getHost() !== $origin || strlen($request->getContent()) > 8192)
         throw new RuntimeException('callback_denied');
-    $input = $request->json()->all();
+    $identity = Keli\Acceptance\MemberCallbackRequest::identify($request);
     $authority = Keli\Acceptance\MemberSetupAuthority::open();
     $handle = static function () use ($app, $request) {
         $kernel = $app->make(Illuminate\Contracts\Http\Kernel::class);
@@ -33,17 +31,10 @@ try {
         $kernel->terminate($request, $response);
         return $response;
     };
-    if ($request->getPathInfo() === '/api/v2/server/machine/provision/result') {
-        if (!is_string($input['task_id'] ?? null) || !is_string($input['installation_id'] ?? null)
-            || strlen($request->getContent()) > 2048) throw new RuntimeException('callback_denied');
-        $response = $authority->callback($input['task_id'], $input['installation_id'], $handle);
+    if ($identity['kind'] === 'callback') {
+        $response = $authority->callback($identity['task_id'], $identity['installation_id'], $handle);
     } else {
-        $installation = $request->header('X-Keli-Instance-Id');
-        $node = $request->getPathInfo() === '/api/v2/server/status' ? ($input['node_id'] ?? null) : null;
-        if (!is_int($input['machine_id'] ?? null) || !is_string($installation)
-            || ($request->getPathInfo() === '/api/v2/server/status' && !is_int($node)))
-            throw new RuntimeException('callback_denied');
-        $response = $authority->report($input['machine_id'], $installation, $node, $handle);
+        $response = $authority->report($identity['machine_id'], $identity['installation_id'], $identity['node_id'], $handle);
     }
     $response->send();
 } catch (Throwable) {

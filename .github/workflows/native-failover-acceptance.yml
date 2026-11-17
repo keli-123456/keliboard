@@ -11,6 +11,10 @@ on:
         type: boolean
         default: false
         description: Verify the real application installation CLI and shared stop lock only.
+      agent_http_only:
+        type: boolean
+        default: false
+        description: Verify scoped real agent API forms via isolated TLS and the full HTTP kernel.
 
 permissions:
   contents: read
@@ -105,6 +109,7 @@ jobs:
           test "$pid" -gt 1
           mode=--retry-flow
           if [ '${{ inputs.install_entry_only }}' = true ]; then mode=--install-entry-only; fi
+          if [ '${{ inputs.agent_http_only }}' = true ]; then mode=--agent-http-only; fi
           timeout --signal=TERM --kill-after=15s 1800s sudo nsenter --net="/proc/$pid/ns/net" \
             unshare --pid --fork --mount-proc --kill-child=SIGKILL \
             env -i PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 HOME=/root \

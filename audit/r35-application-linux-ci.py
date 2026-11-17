@@ -114,6 +114,7 @@ try:
         'tests/Unit/Services/MachineMemberPrerequisiteImportTest.php',
         'tests/Unit/Services/MachineMemberBootstrapControllerTest.php',
         'tests/Unit/Services/MachineMemberApplicationInstallTest.php',
+        'tests/Unit/Services/MachineMemberCallbackRequestTest.php',
         'tests/Unit/Services/MachineMemberSetupAuthorityTest.php',
         'tests/Unit/Services/MachineProviderGroupsTest.php',
         'tests/Unit/Services/MachineMemberProviderBindingsTest.php',
@@ -478,11 +479,12 @@ try:
         '-keyout', str(tls_key), '-out', str(certificate)])
 
     class Proxy(BaseHTTPRequestHandler):
+        def do_GET(self): self.do_POST()
         def do_POST(self):
             size = int(self.headers.get('Content-Length', '0'))
             assert 0 <= size <= 4096
             c = http.client.HTTPConnection('127.0.0.1', http_port, timeout=10)
-            c.request('POST', self.path, body=self.rfile.read(size), headers={
+            c.request(self.command, self.path, body=self.rfile.read(size), headers={
                 'Content-Type': 'application/json', 'Authorization': self.headers.get('Authorization', ''),
                 'X-Keli-Instance-Id': self.headers.get('X-Keli-Instance-Id', ''),
                 'Host': domain, 'X-Forwarded-Proto': 'https'})
@@ -519,6 +521,52 @@ try:
     observed = php('inspect', uid=65534)
     assert observed['states'] == ['succeeded'] and observed['callback_steps'] == 1
     SUMMARY['idempotent_callback_b_not_queued'] = True
+
+    if '--agent-http-only' in sys.argv:
+        from urllib.parse import urlencode
+        pin = pins['source-a']
+        def agent(path, method='GET', body=None, overrides=None, installation=None):
+            query = dict(machine_id=pin['machine_id'], node_id=pin['node_id'],
+                         node_type='v2node', token=pin['token'])
+            query.update(overrides or {})
+            if path.startswith('/api/v2/server/machine/'):
+                query = {}
+                body = dict(machine_id=pin['machine_id'], token=pin['token']) if body is None else body
+            c = Client(domain, server.server_port, timeout=15)
+            c.request(method, path + ('?' + urlencode(query) if query else ''),
+                body=None if body is None else json.dumps(body), headers={'Content-Type': 'application/json',
+                    'X-Keli-Instance-Id': installation or pin['installation_id']})
+            reply = c.getresponse(); raw = reply.read(65536); code = reply.status; c.close()
+            assert pin['token'].encode() not in raw
+            return code, raw
+        checks = {}
+        for path, method, body in [
+            ('/api/v2/server/machine/nodes', 'POST', None),
+            ('/api/v2/server/config', 'GET', None),
+            ('/api/v1/server/UniProxy/user', 'GET', None),
+            ('/api/v1/server/UniProxy/user_delta', 'GET', None),
+            ('/api/v1/server/UniProxy/alivelist', 'GET', None),
+            ('/api/v2/server/handshake', 'POST', None),
+            ('/api/v2/server/report', 'POST', dict(alive={}, online={}))]:
+            status, raw = agent(path, method, body)
+            assert status == 200, dict(path=path, status=status)
+            checks[path] = status
+        assert agent('/api/v2/server/config', overrides=dict(node_id=pin['node_id'] + 1))[0] == 403
+        assert agent('/api/v2/server/config', installation='f' * 32)[0] == 403
+        assert agent('/api/v2/server/config', overrides=dict(token='wrong'))[0] >= 400
+        assert agent('/api/v2/admin/config')[0] == 403
+        assert agent('/api/v2/server/report', 'POST', dict(machine_id=pin['machine_id'] + 1))[0] == 403
+        assert agent('/api/v2/server/%63onfig')[0] == 403
+        bootstrap_transport.bootstrap_call('stop')
+        assert agent('/api/v2/server/config')[0] == 403
+        assert agent('/api/v2/server/machine/nodes', 'POST')[0] == 403
+        assert callback() == 403
+        SUMMARY['agent_http_admission'] = dict(status='passed', real_kernel=True, real_tls=True,
+            actual_service_uid=65534, allowed=checks, identity_conflicts_denied=True,
+            original_token_authentication_retained=True, stopped_requests_denied=True,
+            agent_process_executed=False, pinned_release_delivery_tested=False, full_round=False)
+        SUMMARY['status'] = 'passed'
+        raise SystemExit(0)
 
     probe_config = None
     def report(role, *, node=False, wrapped_node=False, bad_hash=False, token=None, installation=None, node_id=None):
