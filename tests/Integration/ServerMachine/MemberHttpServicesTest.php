@@ -6,7 +6,6 @@ namespace Tests\Integration\ServerMachine;
 use App\Models\MachineProvisionTask as Task;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use PHPUnit\Framework\TestCase;
 use Tests\Support\NativeFailoverConcurrentFixture as Fixture;
 
@@ -133,12 +132,13 @@ final class MemberHttpServicesTest extends TestCase
 
     public function test_mysql_transaction_rolls_back_when_receipt_step_cannot_be_written(): void
     {
-        DB::unprepared("CREATE TRIGGER fixture_reject_step BEFORE INSERT ON v2_machine_provision_step "
-            . "FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'synthetic_receipt_failure'");
+        // Keep the table available but reject the insert after the task update.
+        // A column rename needs no global privileges or changes to server security.
+        DB::statement('ALTER TABLE v2_machine_provision_step RENAME COLUMN state TO fixture_saved_state');
         try {
             $this->assertSame(500, $this->request()[0]);
             $this->assertNull($this->a->fresh()->bootstrap_state);
-        } finally { DB::unprepared('DROP TRIGGER fixture_reject_step'); }
+        } finally { DB::statement('ALTER TABLE v2_machine_provision_step RENAME COLUMN fixture_saved_state TO state'); }
         $this->assertSame(200, $this->request()[0]);
     }
 }

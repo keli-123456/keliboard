@@ -5,7 +5,7 @@ nor start services. The caller supplies verified bytes and a new private root.
 """
 import hashlib
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import stat
 
 import member_runtime_bundle
@@ -48,6 +48,10 @@ class MemberInstallation:
             require(directory.resolve(strict=True) == directory and info.st_uid == os.geteuid()
                     and stat.S_IMODE(info.st_mode) == 0o755, 'transport_installation_directory_permissions')
         for name, pin in manifest['files'].items():
+            relative = PurePosixPath(name)
+            require(name == relative.as_posix() and not relative.is_absolute()
+                    and '..' not in relative.parts and '\\' not in name,
+                    'transport_installation_path_changed')
             path = target / name
             require(path.resolve(strict=True) == path and path.is_file(), 'transport_installation_path_changed')
             info = path.lstat()

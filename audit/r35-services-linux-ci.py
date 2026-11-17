@@ -86,7 +86,8 @@ try:
     SUMMARY['installation_root'] = python_suite(['test_member_installation_linux.InstallationServiceUserTests'],
                                                'installation-root.json', root=True)
     assert SUMMARY['installation_root']['skipped'] == 0
-    modules = ['test_member_execution.ExecutionTests', 'test_member_installation_linux.InstallationTests',
+    modules = ['test_member_execution.ExecutionTests', 'test_member_execution.ExecutionLinuxTests',
+        'test_member_installation_linux.InstallationTests',
         'test_member_assembly_linux', 'test_member_assembly', 'test_member_initialization',
         'test_member_cli', 'test_member_bound_linux', 'test_member_transport', 'test_member_round',
         'test_member_bundle', 'test_member_runtime_bundle', 'test_member_linux',

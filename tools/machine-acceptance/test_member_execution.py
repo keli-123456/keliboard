@@ -1,6 +1,9 @@
 """Exercise concrete stage routing through the existing whole-round fixture."""
 import copy
 import unittest
+import subprocess
+import sys
+from pathlib import Path
 
 from member_auxiliary import digest
 from member_execution import MemberExecutionSetup
@@ -113,6 +116,15 @@ class ExecutionTests(unittest.TestCase):
         request = dict(scope=self.f.setup_scope, intents={}, receipts={}, pending=None)
         with self.assertRaisesRegex(TransportError, 'receipts_changed'): self.setup().reconcile(request)
         self.assertEqual(prior, self.f.journal['execution-cleanup-scope'])
+
+
+from test_member_assembly_linux import MemberAssemblyLinuxTests, CHILD
+
+
+class ExecutionLinuxTests(MemberAssemblyLinuxTests):
+    def launch(self, directory, mode):
+        return subprocess.Popen([sys.executable, '-u', '-B', '-c', CHILD, directory, mode, 'execution'],
+            cwd=Path(__file__).parent, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
 
 if __name__ == '__main__': unittest.main()
