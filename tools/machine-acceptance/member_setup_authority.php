@@ -314,6 +314,10 @@ final class MemberSetupAuthority
                 && $distribution->latestLocalVersion('kelinode-rs', 'linux-x86_64') === $scope['version'], 'release_changed');
             $record = ServerMachineRelease::query()->findOrFail($scope['release_id']);
             foreach (['archive_path' => 'node/release.tar.gz', 'manifest_path' => 'node/release.json'] as $field => $source) {
+                $expected = $field === 'archive_path'
+                    ? $distribution->archivePath('kelinode-rs', $scope['version'], 'linux-x86_64')
+                    : $distribution->manifestPath('kelinode-rs', $scope['version'], 'linux-x86_64');
+                self::need($record->{$field} === $expected, 'release_path_changed');
                 $path = \Illuminate\Support\Facades\Storage::disk('local')->path($record->{$field});
                 self::need(is_file($path) && realpath($path) === $path && !is_link($path)
                     && hash_file('sha256', $path) === hash_file('sha256', MemberApplicationBootstrap::ROOT . '/' . $source), 'release_file_changed');
