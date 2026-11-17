@@ -126,6 +126,28 @@ try:
     finally: saved_receipt.rename(receipt_path)
     assert php('initialize-readback') == SUMMARY['migration']
     SUMMARY['migration_replay_and_missing_completion_refused'] = True
+    originals = [ROOT / ('private/application-migration-' + name + '.json') for name in ('intent', 'result')]
+    for path in originals:
+        assert path.stat().st_mode & 0o777 == 0o600
+        path.rename(path.with_suffix('.saved'))
+    try:
+        denied = php('migrate', ok=False)
+        assert denied['reason'] == 'member_application_database_not_empty'
+        first_error = ROOT / 'private/application-migration-first-error.json'
+        first_bytes = first_error.read_bytes()
+        diagnostic = json.loads(first_bytes)
+        assert set(diagnostic) == {'class', 'file', 'line'} and diagnostic['class'] == 'RuntimeException'
+        assert not originals[1].exists()
+        assert php('migrate', ok=False)['reason'] == 'member_application_initialization_intent_exists'
+        assert first_error.read_bytes() == first_bytes
+        assert first_error.stat().st_mode & 0o777 == 0o600
+    finally:
+        for name in ('intent', 'result', 'first-error'):
+            path = ROOT / ('private/application-migration-' + name + '.json')
+            if path.exists(): path.unlink()
+        for path in originals: path.with_suffix('.saved').rename(path)
+    assert php('initialize-readback') == SUMMARY['migration']
+    SUMMARY['existing_schema_rejected_first_error_retained'] = True
     observed = php('inspect', uid=65534)
     assert observed['booted'] and observed['kernel'] == 'App\\Http\\Kernel'
     assert observed['uid'] == 65534 and observed['states'] == [None, None]
