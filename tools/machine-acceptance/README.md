@@ -1267,6 +1267,19 @@ addition is not part of this Linux run. Full post-cutover auxiliary/private and
 controller-last teardown, host composition and the final unarmed package remain
 pending; the active goal is not complete.
 
+The [post-cutover cleanup component](../../docs/evidence/linode-r35-post-cutover-cleanup-linux-20261117.json)
+now covers native A2 DNS receipt selection, all four task resources, three DNS
+records, source/DNS DELETE reply loss, restart without another DELETE, and retained
+stopped evidence. The host persists the authenticated DNS completion before
+delegating private cleanup; original source-IP setup pins are not reused after
+cutover. B is untouched during execution, then explicitly cleaned after stop.
+The unresolved-candidate diagnostic regression also passed on Linux. Private
+cleanup remains an explicit pending delegate in this run. The next local change
+adds exact-file teardown for credentials, bootstrap/native authority and .env,
+with real operation locks, stop checks and durable absence receipts; it requires
+its own Linux result. Neither record establishes full host/controller teardown
+or live readiness.
+
 ## Protocol Interoperability
 
 The real HY2 tests bind temporary endpoints only to 127.0.0.1/127.0.0.2, generate
