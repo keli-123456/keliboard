@@ -34,17 +34,19 @@ class DiskJournal:
         return self.get(key) is not None
 
 
-def step(scope, bindings, journal, cleanup_factory, *, crash=False):
+def step(scope, bindings, journal, cleanup_factory, *, crash=False, native_factory=None, observe=None):
     def unused(*_):
         raise AssertionError('native_dispatch_forbidden_in_prefix_case')
 
     with round_journal(journal.directory, scope['run_id']) as (load, save):
         initialization = MemberInitialization(scope=scope, interfaces=bindings,
             load=load, save=save, guard=lambda *_: None)
-        port = InitializedMemberPort(initialization, unused)
+        port = InitializedMemberPort(initialization, native_factory or unused)
 
         def invoke(operation, request):
             reply = port(operation, request)
+            if observe is not None:
+                observe(operation, reply)
             if crash:
                 assert operation == 'bootstrap' and initialization.state['index'] == 6
                 assert load('initialization')['receipts']['callback-ready'] == initialization.state['receipts']['callback-ready']

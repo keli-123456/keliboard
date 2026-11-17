@@ -31,6 +31,7 @@ Http::fake(function ($request) use ($path, $directory, $dnsHttp) {
         if (!$state['present']) throw new RuntimeException('fixture_duplicate_delete');
         $state['present'] = false;
         file_put_contents($path, json_encode($state)); chmod($path, 0600);
+        if (getenv('KELI_OUTER_SUCCESS_FIXTURE') === '1') return Http::response('', 204);
         throw new Illuminate\Http\Client\ConnectionException('fixture-lost-delete-ack');
     }
     file_put_contents($path, json_encode($state)); chmod($path, 0600);

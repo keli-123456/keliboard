@@ -205,6 +205,7 @@ return static function (string $mode): array {
             $save('setup-dns-provider', $dns);
             if (in_array($mode, ['setup-native-rpc', 'setup-retry-cleanup-rpc'], true)
                 && $action === 'DeleteDomainRecord' && $id === '6002'
+                && getenv('KELI_OUTER_SUCCESS_FIXTURE') !== '1'
                 && $load('native-dns-lost-ack') === null) {
                 $save('native-dns-lost-ack', ['injected' => true]);
                 throw new Illuminate\Http\Client\ConnectionException('synthetic lost DNS delete reply');
@@ -270,7 +271,8 @@ return static function (string $mode): array {
                 sleep(120);
                 throw new RuntimeException('fixture_native_crash_not_killed');
             }
-            if ($id === 100001) throw new Illuminate\Http\Client\ConnectionException('fixture reply lost after delete');
+            if ($id === 100001 && getenv('KELI_OUTER_SUCCESS_FIXTURE') !== '1')
+                throw new Illuminate\Http\Client\ConnectionException('fixture reply lost after delete');
             return Http::response('', 204);
         }
         $need($request->method() === 'GET', 'mutation_outside_create'); $reads++;

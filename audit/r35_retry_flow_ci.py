@@ -4,7 +4,7 @@ import json
 import time
 
 
-def run_retry_flow(*, bound, php, report, callback, pins, root, artifacts, summary):
+def run_retry_flow(*, bound, php, report, callback, pins, root, artifacts, summary, advance_native=None):
     fixture = root / 'private/setup-fixture'
     seen = set()
     transitions = []
@@ -23,7 +23,7 @@ def run_retry_flow(*, bound, php, report, callback, pins, root, artifacts, summa
                         all_attempts[0]['status'] == 'cleaned' or (all_attempts[0]['cleanup'] or {}).get('delete_dispatched_at')):
                     continue
                 assert report(role) == report(role, node=True) == 200, role
-            state = bound.call('round-step')
+            state = bound.call('round-step') if advance_native is None else advance_native()
             snapshot = php('setup-flow-inspect')
             all_attempts = snapshot['attempts']
             phase = (state['native_phase'], snapshot['member_phase'], snapshot['member_reason'])

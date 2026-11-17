@@ -9,7 +9,8 @@ import time
 
 
 def continue_entry(*, initialization, transport, remote, scope, creation_directory, root,
-                   repo, env, certificate, domain, node_sha, journal, php, artifacts, summary):
+                   repo, env, certificate, domain, node_sha, journal, php, artifacts, summary,
+                   advance_initialization=None, advance_native=None):
     from member_cli import BoundControllerTransport
     from member_initialization import STAGES
     from member_transport import TransportError
@@ -101,7 +102,7 @@ def continue_entry(*, initialization, transport, remote, scope, creation_directo
             if role in pins:
                 assert report(role) == report(role, node=True) == 200
         before = initialization.state['index']
-        state = initialization.step()
+        state = initialization.step() if advance_initialization is None else advance_initialization(initialization)
         status = transport.setup_call('status', journal['remote-setup-identity'])
         current = (before, tuple((r, v['status'], v['fresh_reports']) for r, v in status['sources'].items()))
         summary['whole_entry_last_stage'] = dict(stage=STAGES[before], sources={
@@ -128,6 +129,7 @@ def continue_entry(*, initialization, transport, remote, scope, creation_directo
         run_id=scope['run_id'], host='9.9.9.10', identity_file=transport.identity, known_hosts=transport.known,
         guard=lambda *_: None, load=journal.get, save=lambda k, v: journal.__setitem__(k, v), execute=execute)
     run_retry_flow(bound=bound, php=php, report=report, callback=callback, pins=pins,
-        root=root, artifacts=artifacts, summary=summary)
+        root=root, artifacts=artifacts, summary=summary,
+        advance_native=(lambda: advance_native(bound)) if advance_native is not None else None)
     summary['native_retry_teardown_started'] = True
     return bound
