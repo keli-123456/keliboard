@@ -141,7 +141,7 @@ return static function (string $mode): array {
     }
     Http::preventStrayRequests();
     $writes = 0; $reads = 0;
-    Http::fake(static function ($request) use ($load, $save, &$writes, &$reads, $need) {
+    Http::fake(static function ($request) use ($load, $save, &$writes, &$reads, $need, $mode) {
         $need(parse_url($request->url(), PHP_URL_HOST) === 'api.linode.com', 'foreign_provider');
         $path = parse_url($request->url(), PHP_URL_PATH);
         $rows = $load('provider-rows') ?? [];
@@ -158,7 +158,20 @@ return static function (string $mode): array {
             $rows[$id] = $row; $save('provider-rows', $rows);
             return Http::response($row);
         }
+        if ($request->method() === 'DELETE') {
+            $need(str_starts_with($mode, 'setup-cleanup') && preg_match('~/linode/instances/(10000[12])$~D', $path, $match) === 1, 'delete_scope');
+            $id = (int) $match[1]; $need(isset($rows[$id]), 'duplicate_delete');
+            $calls = $load('cleanup-delete-count') ?? ['value' => 0]; $calls['value']++;
+            $save('cleanup-delete-count', $calls);
+            unset($rows[$id]); $save('provider-rows', $rows);
+            if ($id === 100001) throw new Illuminate\Http\Client\ConnectionException('fixture reply lost after delete');
+            return Http::response('', 204);
+        }
         $need($request->method() === 'GET', 'mutation_outside_create'); $reads++;
+        if ($mode === 'setup-cleanup-read-error' && $path === '/v4/linode/instances/100002')
+            return Http::response(['errors' => [['reason' => 'fixture unavailable']]], 503);
+        if (preg_match('~/linode/instances/(10000[12])$~D', $path, $match) && !isset($rows[(int) $match[1]]))
+            return Http::response(['errors' => [['reason' => 'Not found']]], 404);
         $filter = $request->header('X-Filter')[0] ?? null;
         $visible = $rows;
         if ($filter !== null) {
@@ -187,6 +200,21 @@ return static function (string $mode): array {
             + ['request_id' => bin2hex(random_bytes(16)), 'sequence' => $sequence, 'operation' => $operation];
     };
     $advance = static fn () => $controller->rpc($rpcRequest('advance'))['result'];
+    if (str_starts_with($mode, 'setup-cleanup')) {
+        $before = Task::query()->orderBy('id')->get()->toArray();
+        $firstError = $controller->dispatch(['operation' => 'status'])['first_error'];
+        $authority->stop();
+        $request = $rpcRequest('cleanup');
+        $reply = $controller->rpc($request);
+        $need($controller->rpc($request) === $reply, 'cleanup_replay_changed');
+        $need(Task::query()->orderBy('id')->get()->toArray() === $before, 'cleanup_task_history_changed');
+        $need($controller->dispatch(['operation' => 'status'])['first_error'] === $firstError, 'cleanup_first_error_changed');
+        $denied(fn () => $controller->rpc($rpcRequest('advance')), 'member_setup_stopped');
+        $need($writes === 0); $closed();
+        return $reply['result'] + ['delete_calls' => $load('cleanup-delete-count')['value'] ?? 0,
+            'provider_rows_remaining' => count($load('provider-rows') ?? []), 'task_history_unchanged' => true,
+            'first_error_retained' => true, 'duplicate_rpc_cached' => true, 'advance_stays_revoked' => true];
+    }
     if ($mode === 'setup-controller-hold') {
         $save('controller-holding', ['active' => true]); sleep(120);
         return ['unexpected_completion' => true];

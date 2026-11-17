@@ -411,6 +411,30 @@ try:
     assert php('setup-stop')['database_not_required']
     assert php('setup-stop')['stopped']
     assert php('setup-stopped-readback')['readback_allowed']
+    cleanup = php('setup-cleanup')
+    assert not cleanup['complete'] and cleanup['delete_calls'] == 2
+    assert cleanup['sources']['source-a']['classification'] == 'cleanup_unconfirmed'
+    assert cleanup['sources']['source-b']['classification'] == 'delete_dispatched'
+    assert cleanup['provider_rows_remaining'] == 0 and cleanup['first_error_retained']
+    first_cleanup = php('setup-cleanup')
+    assert not first_cleanup['complete'] and first_cleanup['delete_calls'] == 2
+    assert all(v['classification'] == 'exact_absence' and not v['complete'] for v in first_cleanup['sources'].values())
+    failed_read = php('setup-cleanup-read-error')
+    assert not failed_read['complete'] and failed_read['sources']['source-b']['classification'] == 'cleanup_unconfirmed'
+    time.sleep(10.1)
+    resumed_cleanup = php('setup-cleanup')
+    assert resumed_cleanup['sources']['source-a']['complete'] and not resumed_cleanup['sources']['source-b']['complete']
+    cleanup_absence_at = time.monotonic()
+    time.sleep(10.1)
+    completed_cleanup = php('setup-cleanup')
+    assert time.monotonic() - cleanup_absence_at >= 10 and completed_cleanup['complete']
+    assert completed_cleanup['delete_calls'] == 2 and completed_cleanup['task_history_unchanged']
+    SUMMARY['setup_source_cleanup'] = dict(actual_setup_rpc=True, native_cleanup_adapter=True,
+        exact_provider_deletes_simulated=2, lost_delete_ack_reconciled_without_repeat=True,
+        peer_cleanup_continues_after_first_role_error=True, real_absence_spacing_at_least_seconds=10,
+        intervening_503_resets_consecutive_proof=True, duplicate_rpc_cached=True,
+        first_error_and_task_history_retained=True, advance_stays_revoked=True,
+        native_execution_grant_required=False, live_cloud_calls=False)
     assert php('setup-queues')['no_redis_queued_delayed_or_reserved_jobs']
     assert callback() == 403
     SUMMARY['setup_authority'] = dict(actual_capability=True, real_mysql_redis_and_service_uid=True,

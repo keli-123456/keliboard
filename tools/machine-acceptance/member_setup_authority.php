@@ -171,13 +171,14 @@ final class MemberSetupAuthority
 
     public function allow(string $operation, string $role): void
     {
-        self::need(in_array($operation, array_merge(self::MUTATIONS, ['source-readback', 'callback', 'report']), true), 'operation_denied');
+        self::need(in_array($operation, array_merge(self::MUTATIONS, ['source-readback', 'source-cleanup', 'callback', 'report']), true), 'operation_denied');
         self::need(str_starts_with($operation, 'sources-') ? $role === 'control'
             : in_array($role, ['source-a', 'source-b'], true), 'role_denied');
         $this->check();
-        $mutating = $operation !== 'source-readback';
+        $mutating = !in_array($operation, ['source-readback', 'source-cleanup'], true);
         self::window($this->scope['started_at'], $this->scope['deadline_at'], time(), $mutating);
         if ($mutating) self::need(!$this->stopped(), 'stopped');
+        if ($operation === 'source-cleanup') self::need($this->stopped(), 'stop_required');
     }
 
     private function taskRole(Task $task): string
@@ -205,7 +206,8 @@ final class MemberSetupAuthority
         self::need(!in_array($operation, ['callback', 'report'], true), 'operation_denied');
         $sources = $this->scope['binding']['configuration']['sources'];
         $selected = $role === 'control' ? $sources : [$role => $sources[$role]];
-        return $this->temporary(['machine_provision.allow_live' => true,
+        $cleanup = $operation === 'source-cleanup';
+        return $this->temporary($cleanup ? [] : ['machine_provision.allow_live' => true,
             'machine_provision.allowed_test_machine_ids' => array_column($selected, 'machine_id'),
             'machine_acceptance.allow_verification' => true,
             'machine_acceptance.allowed_policy_ids' => array_column($selected, 'policy_id')], function () use ($callback) {
@@ -215,7 +217,7 @@ final class MemberSetupAuthority
                 self::need(Task::query()->count() <= 2, 'task_limit');
                 foreach (Task::query()->get() as $task) $this->taskRole($task);
                 return $result;
-            }, $operation === 'source-readback');
+            }, in_array($operation, ['source-readback', 'source-cleanup'], true));
     }
 
     public function callback(string $id, string $installation, \Closure $callback): mixed

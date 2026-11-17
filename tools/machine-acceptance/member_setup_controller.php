@@ -13,13 +13,13 @@ final class MemberSetupController
     private MemberSourceInitialization $sources;
     private array $binding;
 
-    public function __construct(private MemberSetupAuthority $authority)
+    public function __construct(private MemberSetupAuthority $authority, bool $recovery = false)
     {
         MemberApplicationBootstrap::initialized();
         $this->binding = $authority->sourceBinding();
         $directory = self::DIRECTORY;
         if (!file_exists($directory) && !is_link($directory)) {
-            $authority->allow('sources-advance', 'control');
+            $authority->allow($recovery ? 'source-cleanup' : 'sources-advance', $recovery ? 'source-a' : 'control');
             self::need(mkdir($directory, 0700), 'journal_unavailable');
         }
         clearstatcache(true, $directory);
@@ -55,7 +55,7 @@ final class MemberSetupController
 
     private function path(string $key): string
     {
-        self::need(is_resource($this->lock) && preg_match('/^(binding|first-error|rpc-mutation|rpc-[a-f0-9]{32}|source-[ab]|source-queue-source-[ab]|initialized-source-[ab])$/D', $key) === 1,
+        self::need(is_resource($this->lock) && preg_match('/^(binding|first-error|rpc-mutation|rpc-cleanup|rpc-[a-f0-9]{32}|source-[ab]|source-queue-source-[ab]|initialized-source-[ab]|cleanup-source-[ab])$/D', $key) === 1,
             'journal_key');
         return self::DIRECTORY . '/' . $key . '.json';
     }
@@ -99,8 +99,24 @@ final class MemberSetupController
     public function dispatch(array $request): array
     {
         self::need(is_resource($this->lock) && array_keys($request) === ['operation']
-            && in_array($request['operation'], ['advance', 'status'], true), 'request_invalid');
+            && in_array($request['operation'], ['advance', 'status', 'cleanup'], true), 'request_invalid');
         try {
+            if ($request['operation'] === 'cleanup') {
+                $this->authority->stop();
+                $result = ['complete' => true, 'sources' => []];
+                foreach (['source-a', 'source-b'] as $role) {
+                    try { $reply = $this->sources->cleanup($role); }
+                    catch (\Throwable $error) {
+                        $diagnostic = ['class' => (new \ReflectionClass($error))->getShortName(),
+                            'file' => basename($error->getFile()), 'line' => $error->getLine()];
+                        try { $this->save('first-error', $diagnostic); } catch (\Throwable) { }
+                        $reply = ['complete' => false, 'classification' => 'cleanup_unconfirmed', 'diagnostic' => $diagnostic];
+                    }
+                    $result['sources'][$role] = $reply;
+                    $result['complete'] = $result['complete'] && $reply['complete'];
+                }
+                return $result;
+            }
             if ($request['operation'] === 'advance') {
                 self::need($this->load('first-error') === null, 'prior_failure');
                 return $this->sources->advance($this->binding['scope']);
@@ -133,7 +149,7 @@ final class MemberSetupController
             && ($request['schema'] ?? null) === 1 && ($request['run_id'] ?? null) === MemberCliAuthority::RUN
             && is_int($request['deadline_at'] ?? null) && $request['deadline_at'] > 0
             && is_int($request['sequence'] ?? null) && $request['sequence'] >= 0
-            && in_array($request['operation'] ?? null, ['advance', 'status', 'stop'], true), 'request_invalid');
+            && in_array($request['operation'] ?? null, ['advance', 'status', 'stop', 'cleanup'], true), 'request_invalid');
         foreach (['grant_id' => 32, 'grant_sha256' => 64, 'request_id' => 32] as $key => $length)
             self::need(is_string($request[$key] ?? null)
                 && preg_match('/^[a-f0-9]{' . $length . '}$/D', $request[$key]) === 1, 'request_invalid');
@@ -145,31 +161,42 @@ final class MemberSetupController
         foreach ($this->authority->identity() as $key => $value)
             self::need($request[$key] === $value, 'request_binding_changed');
         self::need($request['operation'] !== 'stop', 'request_invalid');
-        $mutating = $request['operation'] === 'advance';
-        $this->authority->allow($mutating ? 'sources-advance' : 'source-readback', $mutating ? 'control' : 'source-a');
+        $cleanup = $request['operation'] === 'cleanup';
+        $mutating = $request['operation'] === 'advance' || $cleanup;
+        if ($cleanup) $this->authority->stop();
+        $this->authority->allow($cleanup ? 'source-cleanup' : ($mutating ? 'sources-advance' : 'source-readback'),
+            $mutating && !$cleanup ? 'control' : 'source-a');
         $key = 'rpc-' . $request['request_id'];
+        $mutationKey = $cleanup ? 'rpc-cleanup' : 'rpc-mutation';
         if ($mutating) {
             $prior = $this->load($key);
             if ($prior !== null) {
                 self::need($prior['request'] === $request, 'request_reused');
-                self::need(isset($prior['reply']), 'uncertain_request_readback_required');
-                return $prior['reply'];
+                self::need($cleanup || isset($prior['reply']), 'uncertain_request_readback_required');
+                if (isset($prior['reply'])) return $prior['reply'];
             }
-            $latest = $this->load('rpc-mutation');
-            self::need(!$latest || ($latest['completed'] ?? false), 'uncertain_request_readback_required');
-            self::need(!$latest || $request['sequence'] > $latest['sequence'], 'request_sequence_reused');
-            $this->save('rpc-mutation', ['sequence' => $request['sequence'], 'request_id' => $request['request_id'], 'completed' => false]);
+            $latest = $this->load($mutationKey);
+            self::need($cleanup || !$latest || ($latest['completed'] ?? false), 'uncertain_request_readback_required');
+            foreach (['rpc-mutation', 'rpc-cleanup'] as $ledger) {
+                $item = $this->load($ledger);
+                self::need(!$item || $request['sequence'] > $item['sequence']
+                    || ($cleanup && $prior !== null && $request['sequence'] === $item['sequence']
+                        && $request['request_id'] === $item['request_id']), 'request_sequence_reused');
+            }
+            $this->save($mutationKey, ['sequence' => $request['sequence'], 'request_id' => $request['request_id'], 'completed' => false]);
             $this->save($key, ['request' => $request]);
         }
         $result = $this->dispatch(['operation' => $request['operation']]);
         if (!$mutating) {
             $latest = $this->load('rpc-mutation');
             $result['uncertain_request'] = $latest && !$latest['completed'] ? $latest : null;
+            $cleanupLatest = $this->load('rpc-cleanup');
+            $result['uncertain_cleanup'] = $cleanupLatest && !$cleanupLatest['completed'] ? $cleanupLatest : null;
         }
         $reply = $request + ['ok' => true, 'result' => $result];
         if ($mutating) {
             $this->save($key, ['request' => $request, 'reply' => $reply]);
-            $this->save('rpc-mutation', ['sequence' => $request['sequence'], 'request_id' => $request['request_id'], 'completed' => true]);
+            $this->save($mutationKey, ['sequence' => $request['sequence'], 'request_id' => $request['request_id'], 'completed' => true]);
         }
         return $reply;
     }

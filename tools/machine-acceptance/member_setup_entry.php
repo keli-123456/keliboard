@@ -27,8 +27,10 @@ try {
         $identity = ['grant_id' => $identity['grant_id'], 'grant_sha256' => $identity['grant_sha256'], 'deadline_at' => $identity['deadline_at']];
         $reply = $request + ['ok' => true, 'result' => Keli\Acceptance\MemberSetupAuthority::revoke($identity)];
     } else {
+        if ($request['operation'] === 'cleanup') Keli\Acceptance\MemberSetupAuthority::revoke([
+            'grant_id' => $request['grant_id'], 'grant_sha256' => $request['grant_sha256'], 'deadline_at' => $request['deadline_at']]);
         Keli\Acceptance\MemberApplicationBootstrap::boot();
-        $controller = new Keli\Acceptance\MemberSetupController(Keli\Acceptance\MemberSetupAuthority::open());
+        $controller = new Keli\Acceptance\MemberSetupController(Keli\Acceptance\MemberSetupAuthority::open(), $request['operation'] === 'cleanup');
         $reply = $controller->rpc($request);
     }
     echo json_encode($reply, JSON_THROW_ON_ERROR), "\n";

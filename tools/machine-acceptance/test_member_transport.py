@@ -151,6 +151,29 @@ class MemberTransportTests(unittest.TestCase):
             self.rpc.setup_call('advance', pin)
         self.assertFalse(self.saved['setup-mutation']['completed'])
 
+    def test_setup_cleanup_does_not_clear_uncertain_advance_or_first_error(self):
+        pin = dict(grant_id='a' * 32, grant_sha256='b' * 64, deadline_at=9000)
+        self.rpc.execute = lambda *_: (_ for _ in ()).throw(TimeoutError('private'))
+        with self.assertRaises(TransportError): self.rpc.setup_call('advance', pin)
+        pending = copy.deepcopy(self.saved['setup-mutation'])
+        first = copy.deepcopy(self.saved['transport-first-error'])
+        with self.assertRaises(TransportError): self.rpc.setup_call('cleanup', pin)
+        self.assertEqual(self.saved['setup-cleanup']['request']['sequence'], 1)
+        self.rpc.execute = self.execute
+        self.rpc.setup_call('cleanup', pin)
+        self.assertEqual(self.saved['setup-cleanup']['request']['sequence'], 2)
+        self.assertTrue(self.saved['setup-cleanup']['completed'])
+        self.assertEqual(self.saved['setup-mutation'], pending)
+        self.assertEqual(self.saved['transport-first-error'], first)
+        with self.assertRaises(TransportError): self.rpc.setup_call('advance', pin)
+
+    def test_setup_cleanup_even_after_completed_advance_prevents_new_create_work(self):
+        pin = dict(grant_id='a' * 32, grant_sha256='b' * 64, deadline_at=9000)
+        self.rpc.setup_call('advance', pin)
+        self.rpc.setup_call('cleanup', pin)
+        with self.assertRaisesRegex(TransportError, 'cleanup_started'): self.rpc.setup_call('advance', pin)
+        self.assertEqual(len(self.calls), 2)
+
     def test_setup_rejects_malformed_scope_and_denied_authority_without_ssh(self):
         pin = dict(grant_id='a' * 32, grant_sha256='b' * 64, deadline_at=9000)
         for bad in (dict(pin, deadline_at=True), dict(pin, extra=True), dict(pin, grant_id='../key')):

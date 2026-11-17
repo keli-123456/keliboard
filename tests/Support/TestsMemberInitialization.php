@@ -10,6 +10,7 @@ trait TestsMemberInitialization
     private array $initializationScope = [];
     private array $initializationJournal = [];
     private bool $initializationStopped = false;
+    private bool $initializationJournalFails = false;
 
     private function initializationFixture(): Initialization
     {
@@ -34,10 +35,14 @@ trait TestsMemberInitialization
             function ($operation, $role, $callback) {
                 $this->assertTrue(app()->runningUnitTests());
                 $this->assertSame(':memory:', app('db')->connection()->getDatabaseName());
-                if ($this->initializationStopped && $operation !== 'source-readback') throw new \RuntimeException('setup_stopped');
+                if ($this->initializationStopped && !in_array($operation, ['source-readback', 'source-cleanup'], true)) throw new \RuntimeException('setup_stopped');
+                if ($operation === 'source-cleanup' && !$this->initializationStopped) throw new \RuntimeException('stop_required');
                 return $callback();
             }, fn ($key) => $this->initializationJournal[$key] ?? null,
-            function ($key, $value): void { $this->initializationJournal[$key] = $value; });
+            function ($key, $value): void {
+                if ($this->initializationJournalFails) throw new \RuntimeException('journal_unavailable');
+                $this->initializationJournal[$key] = $value;
+            });
     }
 
     private function bindPreparedSourceTasks(Initialization $api): void
@@ -193,5 +198,123 @@ trait TestsMemberInitialization
         $this->assertSame($aBefore, $a['source']->fresh()->getAttributes());
         $this->assertSame(0, $this->dnsWrites);
         $this->assertCount(1, $this->posts);
+    }
+
+    public function test_member_initialization_cleanup_requires_stop_and_keeps_peer_and_task_history(): void
+    {
+        $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api);
+        try { $api->cleanup('source-a'); $this->fail(); }
+        catch (\RuntimeException $e) { $this->assertSame('stop_required', $e->getMessage()); }
+        $this->initializationStopped = true;
+        $before = Task::orderBy('id')->get()->toArray(); $peer = $this->remote[902];
+        $this->assertSame('delete_dispatched', $api->cleanup('source-a')['classification']);
+        $first = $api->cleanup('source-a'); $this->assertFalse($first['complete']);
+        $this->assertSame('exact_absence', $first['classification']);
+        $this->assertFalse($api->cleanup('source-a')['complete']);
+        // Unit fixture only; the full Linux application test waits real elapsed time.
+        $this->initializationJournal['cleanup-source-a']['absence_at'] = time() - 11;
+        $this->assertTrue($this->initializationBindings()->cleanup('source-a')['complete']);
+        $this->assertSame(1, $this->candidateDeletes); $this->assertSame($peer, $this->remote[902]);
+        $this->assertArrayHasKey(700, $this->remote); $this->assertSame([], $this->posts);
+        $this->assertSame($before, Task::orderBy('id')->get()->toArray());
+    }
+
+    public function test_member_initialization_partial_cleanup_needs_no_registered_peer(): void
+    {
+        $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api);
+        $this->initializationStopped = true;
+        $this->fixtures[1]['source']->delete(); unset($this->remote[902]);
+        unset($this->initializationJournal['source-queue-source-b']);
+        $this->assertSame(['complete' => true, 'classification' => 'never_queued'], $api->cleanup('source-b'));
+        $this->assertSame('delete_dispatched', $api->cleanup('source-a')['classification']);
+        $this->assertSame(1, $this->candidateDeletes); $this->assertSame(0, $this->dnsWrites);
+    }
+
+    public function test_member_initialization_undispatched_cleanup_never_calls_provider(): void
+    {
+        $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api);
+        $this->initializationStopped = true;
+        $this->fixtures[0]['source']->refresh()->fill(['dispatched_at' => null, 'external_id' => null,
+            'provider_created_at' => null, 'public_ips' => []])->save();
+        \Illuminate\Support\Facades\Http::fake(fn () => throw new \RuntimeException('unexpected_provider_call'));
+        $reply = $api->cleanup('source-a');
+        $this->assertTrue($reply['complete']); $this->assertSame('never_dispatched', $reply['classification']);
+        $this->assertSame(0, $this->candidateDeletes);
+    }
+
+    public function test_member_initialization_missing_task_after_queue_intent_is_not_absence(): void
+    {
+        $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api);
+        $this->initializationStopped = true; $this->fixtures[0]['source']->delete();
+        $this->expectExceptionMessage('queue_readback_required'); $api->cleanup('source-a');
+    }
+
+    public function test_member_initialization_lost_create_reply_uses_exact_native_reconcile_without_task_rewrite(): void
+    {
+        $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api);
+        $this->initializationStopped = true;
+        $task = $this->fixtures[0]['source']->refresh();
+        $task->fill(['external_id' => null, 'provider_created_at' => null, 'public_ips' => []])->save();
+        $before = $task->fresh()->getAttributes();
+        $this->assertSame('delete_dispatched', $api->cleanup('source-a')['classification']);
+        $this->assertSame($before, $task->fresh()->getAttributes());
+        $this->assertSame('901', $this->initializationJournal['cleanup-source-a']['receipt']['external_id']);
+        $this->assertSame(1, $this->candidateDeletes); $this->assertSame([], $this->posts);
+    }
+
+    public function test_member_initialization_empty_inventory_cannot_resolve_lost_create_reply(): void
+    {
+        $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api);
+        $this->initializationStopped = true;
+        $this->fixtures[0]['source']->refresh()->fill(['external_id' => null, 'provider_created_at' => null, 'public_ips' => []])->save();
+        unset($this->remote[901]);
+        $this->assertSame(['complete' => false, 'classification' => 'create_receipt_unknown'], $api->cleanup('source-a'));
+        $this->assertSame(0, $this->candidateDeletes); $this->assertSame([], $this->posts);
+    }
+
+    public function test_member_initialization_uncertain_delete_is_read_only_on_resume(): void
+    {
+        $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api);
+        $this->initializationStopped = true; $remote = $this->remote[901];
+        $api->cleanup('source-a'); $this->remote[901] = $remote;
+        $this->assertSame(['complete' => false, 'classification' => 'delete_readback_required'],
+            $this->initializationBindings()->cleanup('source-a'));
+        $this->assertSame(1, $this->candidateDeletes); $this->assertSame([], $this->posts);
+    }
+
+    public function test_member_initialization_cleanup_journal_failure_or_scope_change_never_deletes(): void
+    {
+        $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api);
+        $this->initializationStopped = true; $this->initializationJournalFails = true;
+        try { $api->cleanup('source-a'); $this->fail(); }
+        catch (\RuntimeException $e) { $this->assertSame('journal_unavailable', $e->getMessage()); }
+        $this->initializationJournalFails = false;
+        $this->initializationScope['baseline_ids'][] = '901';
+        try { $this->initializationBindings()->cleanup('source-a'); $this->fail(); }
+        catch (\RuntimeException $e) { $this->assertSame('member_initialization_intent_changed', $e->getMessage()); }
+        $this->assertSame(0, $this->candidateDeletes); $this->assertSame([], $this->posts);
+    }
+
+    public function test_member_initialization_interrupted_read_resets_absence_proof(): void
+    {
+        $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api); $this->initializationStopped = true;
+        $api->cleanup('source-a'); $api->cleanup('source-a');
+        $this->initializationJournal['cleanup-source-a']['absence_at'] = time() - 11;
+        $this->initializationJournal['cleanup-source-a']['read_pending'] = true;
+        $this->assertFalse($api->cleanup('source-a')['complete']);
+        $this->assertSame(1, $this->candidateDeletes);
+    }
+
+    public function test_member_initialization_read_failure_resets_previous_absence_proof(): void
+    {
+        $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api); $this->initializationStopped = true;
+        $api->cleanup('source-a'); $api->cleanup('source-a');
+        $this->initializationJournal['cleanup-source-a']['absence_at'] = time() - 11;
+        $this->duringInstanceRead = fn () => \Illuminate\Support\Facades\Http::response(['errors' => [['reason' => 'fixture']]], 503);
+        try { $api->cleanup('source-a'); $this->fail(); }
+        catch (\App\Services\ServerMachine\Cloud\CloudRequestFailure) { }
+        $this->assertNull($this->initializationJournal['cleanup-source-a']['absence_at']);
+        $this->duringInstanceRead = null;
+        $this->assertFalse($api->cleanup('source-a')['complete']); $this->assertSame(1, $this->candidateDeletes);
     }
 }
