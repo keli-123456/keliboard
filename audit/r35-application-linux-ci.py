@@ -78,6 +78,12 @@ def import_rpc(operation, *, uid=0, ok=True):
     return value
 
 
+def import_denied(reason, *, uid=0):
+    value = import_rpc('import', uid=uid, ok=False)
+    assert value['reason'] == reason, value
+    return value
+
+
 assert sys.platform == 'linux' and os.geteuid() == 0
 assert not ROOT.exists() and not ROOT.is_symlink()
 ART.mkdir(exist_ok=True)
@@ -211,19 +217,19 @@ try:
     raw_authority = json.dumps(authority).encode()
     installer.private('bootstrap-authority', raw_authority, hashlib.sha256(raw_authority).hexdigest())
     authority_path = ROOT / 'private/bootstrap-authority'
-    assert import_rpc('import', uid=65534, ok=False)['reason'] == 'member_import_root_cli_required'
+    import_denied('member_import_root_cli_required', uid=65534)
     credentials_path = ROOT / 'private/credentials'
     credentials_path.chmod(0o644)
-    try: assert import_rpc('import', ok=False)['reason'] == 'member_import_file_invalid'
+    try: import_denied('member_import_file_invalid')
     finally: credentials_path.chmod(0o600)
     authority_path.write_bytes(json.dumps(dict(authority, bundle_sha256='0' * 64)).encode())
-    try: assert import_rpc('import', ok=False)['reason'] == 'member_import_authority_invalid'
+    try: import_denied('member_import_authority_invalid')
     finally: authority_path.write_bytes(raw_authority)
     expiry_start = int(time.time())
     authority_path.write_bytes(json.dumps(dict(authority, started_at=expiry_start, deadline_at=expiry_start + 1202)).encode())
     elapsed_start = time.monotonic(); time.sleep(2.2)
     try:
-        assert import_rpc('import', ok=False)['reason'] == 'member_import_expired_or_stopped'
+        import_denied('member_import_expired_or_stopped')
         assert time.monotonic() - elapsed_start >= 2.2
     finally: authority_path.write_bytes(raw_authority)
     assert not (ROOT / 'private/member-import/intent.json').exists()
@@ -237,10 +243,10 @@ try:
     result_path = ROOT / 'private/member-import/result.json'
     result_backup = result_path.with_suffix('.saved')
     result_path.rename(result_backup)
-    try: assert import_rpc('import', ok=False)['reason'] == 'member_import_result_unconfirmed'
+    try: import_denied('member_import_result_unconfirmed')
     finally: result_backup.rename(result_path)
     assert import_rpc('stop')['stopped']
-    assert import_rpc('import', ok=False)['reason'] == 'member_import_expired_or_stopped'
+    import_denied('member_import_expired_or_stopped')
     assert import_rpc('readback')['scope'] == imported['scope']
     SUMMARY['prerequisite_import'] = dict(actual_fixed_cli=True, actual_credential_services=True,
         actual_release_distribution_service=True, encrypted_mysql_credentials=True,
