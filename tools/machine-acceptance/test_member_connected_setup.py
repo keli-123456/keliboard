@@ -26,6 +26,10 @@ class ConnectedSetupTests(unittest.TestCase):
         php = self.f.root / 'php'; php.write_bytes(b'synthetic-not-executed')
         self.control = MemberControlTransport(directory=self.f.root.resolve(), scope=self.scope, php=php.resolve(),
             guard=lambda *_: None, load=self.saved.get, save=self.f.save, execute=self.provider)
+        # Fake process boundary, but real owner/hash checks against a local copy.
+        entry = self.f.root / 'member_operator_creation_entry.php'
+        entry.write_bytes(self.control.entry.read_bytes())
+        self.control.entry = entry.resolve()
         self.args = dict(self.f.arguments)
         self.args.pop('transport')
         self.args.update(control=self.control, identity_file=self.f.root / 'key', known_hosts=self.f.root / 'known',
