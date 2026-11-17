@@ -229,6 +229,13 @@ try:
                     if type(diagnostic.get('line')) is int and 0 < diagnostic['line'] < 100000:
                         allowed['line'] = diagnostic['line']
                     SUMMARY.setdefault('setup_rpc_first_error', dict(operation=request['operation'], diagnostic=allowed))
+                    provider_diagnostic = value.get('provider_diagnostic')
+                    if isinstance(provider_diagnostic, dict):
+                        safe = {k: v for k, v in provider_diagnostic.items() if k in ('class', 'file', 'reason')
+                            and isinstance(v, str) and __import__('re').fullmatch(r'[A-Za-z0-9_.-]{1,120}', v)}
+                        if type(provider_diagnostic.get('line')) is int and 0 < provider_diagnostic['line'] < 100000:
+                            safe['line'] = provider_diagnostic['line']
+                        SUMMARY.setdefault('setup_provider_first_error', safe)
                     raise RuntimeError('fixture_setup_rpc_unconfirmed')
                 return p.stdout
         if argv == ['python3', '-B', '/opt/keli-isolated/runtime/member_http_service.py']:

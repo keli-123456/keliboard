@@ -33,8 +33,11 @@ try {
     }
     echo json_encode($reply, JSON_THROW_ON_ERROR);
 } catch (Throwable $error) {
+    $path = ($argv[2] ?? '') . '/fixture-provider-first-error.json';
+    $provider = is_file($path) ? json_decode(file_get_contents($path), true, 8, JSON_THROW_ON_ERROR) : null;
     echo json_encode(['ok' => false, 'code' => 'fixture_setup_rpc_failed', 'diagnostic' => [
         'class' => (new ReflectionClass($error))->getShortName(), 'file' => basename($error->getFile()), 'line' => $error->getLine(),
-        'reason' => preg_match('/^(fixture|member)_[a-z_]{1,90}$/D', $error->getMessage()) ? $error->getMessage() : 'unclassified']]);
+        'reason' => preg_match('/^(fixture|member)_[a-z_]{1,90}$/D', $error->getMessage()) ? $error->getMessage() : 'unclassified'],
+        'provider_diagnostic' => $provider]);
     exit(1);
 } finally { $controller?->close(); }

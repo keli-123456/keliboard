@@ -12,7 +12,7 @@ return static function (string $directory): Closure {
     if (!is_file($dnsPath) || is_link($dnsPath) || (fileperms($dnsPath) & 0777) !== 0600)
         throw new RuntimeException('fixture_dns_file');
     Illuminate\Support\Facades\Http::preventStrayRequests();
-    return static function ($request) use ($row, $dnsPath) {
+    $handler = static function ($request) use ($row, $dnsPath) {
         $response = static fn ($value, $status = 200) => Illuminate\Support\Facades\Http::response($value, $status);
         if ($request->url() === 'https://alidns.aliyuncs.com/') {
             if ($request->method() !== 'POST' || !is_string($request['Signature'])) throw new RuntimeException('fixture_dns_signature');
@@ -62,5 +62,18 @@ return static function (string $directory): Closure {
             default => throw new RuntimeException('fixture_provider_operation'),
         };
         return $response(['data' => $rows, 'page' => 1, 'pages' => 1, 'results' => count($rows)]);
+    };
+    return static function ($request) use ($handler, $directory) {
+        try { return $handler($request); }
+        catch (Throwable $error) {
+            $path = $directory . '/fixture-provider-first-error.json';
+            if (!file_exists($path)) {
+                $value = ['class' => (new ReflectionClass($error))->getShortName(),
+                    'file' => basename($error->getFile()), 'line' => $error->getLine(),
+                    'reason' => preg_match('/^fixture_[a-z_]{1,80}$/D', $error->getMessage()) ? $error->getMessage() : 'unclassified'];
+                file_put_contents($path, json_encode($value, JSON_THROW_ON_ERROR)); chmod($path, 0600);
+            }
+            throw $error;
+        }
     };
 };
