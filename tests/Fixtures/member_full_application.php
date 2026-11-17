@@ -37,6 +37,9 @@ try {
     } elseif (str_starts_with($mode, 'configuration-')) {
         $configurationFixture = require __DIR__ . '/member_source_configuration_application.php';
         echo json_encode($configurationFixture($mode));
+    } elseif (str_starts_with($mode, 'setup-')) {
+        $setupFixture = require __DIR__ . '/member_setup_authority_application.php';
+        echo json_encode($setupFixture($mode));
     } elseif (str_starts_with($mode, 'dns-')) {
         $dnsFixture = require __DIR__ . '/member_dns_application.php';
         echo json_encode($dnsFixture($mode));
@@ -61,11 +64,12 @@ try {
         echo json_encode(['booted' => true, 'database' => $identity->db_name,
             'uid' => posix_geteuid(), 'kernel' => get_class($app->make(Illuminate\Contracts\Http\Kernel::class)),
             'states' => App\Models\MachineProvisionTask::query()->orderBy('machine_id')->pluck('bootstrap_state')->all(),
-            'callback_steps' => Illuminate\Support\Facades\DB::table('v2_machine_provision_step')->count()]);
+            'callback_steps' => Illuminate\Support\Facades\DB::table('v2_machine_provision_step')
+                ->where('state', 'like', 'bootstrap_%')->count()]);
     }
 } catch (Throwable $error) {
     http_response_code(500);
-    $reason = preg_match('/^(member_application|fixture)_[a-z_]{1,70}$/D', $error->getMessage())
+    $reason = preg_match('/^(member_application|member_setup|member_initialization|fixture)_[a-z_]{1,70}$/D', $error->getMessage())
         ? $error->getMessage() : 'fixture_failed';
     echo json_encode(['ok' => false, 'reason' => $reason, 'class' => (new ReflectionClass($error))->getShortName(),
         'file' => basename($error->getFile()), 'line' => $error->getLine()]);

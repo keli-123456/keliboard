@@ -29,6 +29,7 @@ ENV = dict(PATH='/usr/local/bin:/usr/bin:/bin', HOME='/nonexistent', LANG='C.UTF
     GITHUB_ACTIONS='true', KELI_MEMBER_FULL_APPLICATION='1', PYTHONDONTWRITEBYTECODE='1')
 server = None
 php_server = None
+hold_process = None
 work = None
 opt_stat = None
 
@@ -77,6 +78,7 @@ try:
     php_tests = subprocess.run(['php', 'vendor/phpunit/phpunit/phpunit',
         'tests/Unit/Services/MachineMemberDnsInitializationTest.php',
         'tests/Unit/Services/MachineMemberSourceConfigurationTest.php',
+        'tests/Unit/Services/MachineMemberSetupAuthorityTest.php',
         'tests/Unit/Services/MachineMemberProviderBindingsTest.php',
         'tests/Unit/Services/MachineDnsAliyunCompatibilityTest.php'],
         cwd=REPO, capture_output=True, text=True, timeout=120)
@@ -164,7 +166,7 @@ try:
     configured = php('configuration-create')
     assert configured['configuration_rows'] == [2, 2, 2, 1, 2, 2, 2] and configured['provider_gets'] == 4
     assert configured['provider_writes'] == 0 and not configured['tasks_or_health_fabricated']
-    for mode in ('configuration-read', 'configuration-repeat', 'configuration-recovery', 'configuration-drift', 'configuration-stop'):
+    for mode in ('configuration-read', 'configuration-repeat', 'configuration-recovery', 'configuration-drift'):
         result = php(mode)
         assert result['configuration_sha256'] == configured['configuration_sha256']
         assert result['provider_gets'] == 0 and result['configuration_rows'] == configured['configuration_rows']
@@ -179,10 +181,21 @@ try:
         existing_configuration_without_intent_not_adopted=True,
         node_policy_credential_drift_refused=True, stop_blocks_mutation_allows_readback=True,
         tasks_or_health_fabricated=False, persistent_gates_changed=False)
-    assert php('callback-prepare')['prepared']
+    SUMMARY['setup_issue'] = php('setup-issue')
+    assert SUMMARY['setup_issue']['issued'] and SUMMARY['setup_issue']['reissue_refused']
+    assert php('configuration-stop')['configuration_sha256'] == configured['configuration_sha256']
+    assert php('setup-service-denied', uid=65534)['root_operations_denied']
+    assert php('setup-drift')['policy_and_release_drift_refused']
+    preparation = php('setup-prepare')
+    assert preparation['native_task_queued'] and preparation['duplicate_preparation_idempotent']
+    assert preparation['exception_restores_capability_and_bus'] and preparation['provider_writes'] == 0
+    dispatched = php('setup-process')
+    assert dispatched['native_dispatch'] and dispatched['provider_writes_simulated'] == 1
+    assert php('setup-process-repeat')['provider_writes_simulated'] == 0
+    callback_pin = json.loads((ROOT / 'private/setup-fixture/callback.json').read_bytes())
     observed = php('inspect', uid=65534)
     assert observed['booted'] and observed['kernel'] == 'App\\Http\\Kernel'
-    assert observed['uid'] == 65534 and observed['states'] == [None, None]
+    assert observed['uid'] == 65534 and observed['states'] == [None]
     SUMMARY['service_boot'] = observed
     for settings_override in ({'DB_HOST': '203.0.113.1'}, {'APP_DEBUG': 'true'}, {'CACHE_PREFIX': 'outside'},
         {'APP_CONFIG_CACHE': '/tmp/untrusted.php'}, {'APP_BASE_PATH': '/tmp/foreign-app'}, {'APP_ENV': 'production'}):
@@ -194,7 +207,7 @@ try:
         port_socket.bind(('127.0.0.1', 0)); http_port = port_socket.getsockname()[1]
     php_server = subprocess.Popen(['setpriv', '--reuid=65534', '--regid=65534', '--clear-groups',
         '--no-new-privs', '--bounding-set=-all', 'php', '-d', 'display_errors=0', '-d', 'log_errors=0',
-        '-S', '127.0.0.1:' + str(http_port), str(ROOT / 'app/tests/Fixtures/member_full_application.php')],
+        '-S', '127.0.0.1:' + str(http_port), str(ROOT / 'runtime/member_callback_entry.php')],
         cwd=ROOT / 'app', env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(100):
         try:
@@ -230,22 +243,50 @@ try:
         def connect(self):
             self.sock = client_tls.wrap_socket(socket.create_connection(('127.0.0.1', self.port), 10), server_hostname=domain)
 
-    def callback(secret='f' * 64, state='succeeded'):
+    def callback(secret=None, state='succeeded', task=None, installation=None):
         c = Client(domain, server.server_port, timeout=15)
         c.request('POST', '/api/v2/server/machine/provision/result', json.dumps({
-            'task_id': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'installation_id': 'a' * 32, 'state': state}),
-            {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + secret})
+            'task_id': task or callback_pin['task_id'], 'installation_id': installation or callback_pin['installation_id'], 'state': state}),
+            {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (secret or callback_pin['secret'])})
         r = c.getresponse(); body = r.read(65536); status = r.status; c.close()
-        assert (b'f' * 64) not in body
+        assert callback_pin['secret'].encode() not in body
         if status == 500: raise AssertionError(json.loads(body))
         return status
 
+    assert callback(task='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa') == 403
+    assert callback(installation='a' * 32) == 403
     statuses = [callback('0' * 64), callback(), callback(), callback(state='failed')]
     assert statuses == [401, 200, 200, 409], statuses
     SUMMARY['tls_full_kernel_callback_statuses'] = statuses
     observed = php('inspect', uid=65534)
-    assert observed['states'] == ['succeeded', None] and observed['callback_steps'] == 1
-    SUMMARY['idempotent_and_sibling_unchanged'] = True
+    assert observed['states'] == ['succeeded'] and observed['callback_steps'] == 1
+    SUMMARY['idempotent_callback_b_not_queued'] = True
+    hold_process = subprocess.Popen(['php', '-d', 'display_errors=0', '-d', 'log_errors=0',
+        str(ROOT / 'app/tests/Fixtures/member_full_application.php'), 'setup-hold'],
+        cwd=ROOT / 'app', env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(100):
+        if (ROOT / 'private/setup-fixture/holding.json').exists(): break
+        assert hold_process.poll() is None
+        time.sleep(.1)
+    else: raise AssertionError('inflight_setup_not_ready')
+    assert php('setup-stop-busy')['drain_pending']
+    assert callback() == 403
+    hold_process.terminate(); hold_process.wait(timeout=5)
+    assert hold_process.returncode != 0
+    hold_process = None
+    assert php('setup-stop')['database_not_required']
+    assert php('setup-stop')['stopped']
+    assert php('setup-stopped-readback')['readback_allowed']
+    assert callback() == 403
+    SUMMARY['setup_authority'] = dict(actual_capability=True, real_mysql_redis_and_service_uid=True,
+        native_source_queue_and_dispatch=True, provider_creates_simulated=1, duplicate_create_prevented=True,
+        root_only_issue_and_revoke=True, bad_task_and_installation_refused=True,
+        policy_and_release_drift_refused=True, persistent_gates_changed=False,
+        exception_restores_capability_and_bus=True, callback_uses_actual_front_controller=True,
+        stop_blocks_new_callbacks_before_inflight_drained=True, sigterm_releases_inflight_lock=True,
+        revoke_without_database=True, stopped_readback_allowed=True,
+        expiry_boundary_unit_tested=True, real_elapsed_expiry_tested=False,
+        b_bootstrap_tested=False, b_not_queued=True, no_health_verdict_fabricated=True)
     prepared = php('dns-prepare')
     assert prepared['prepared'] and prepared['encrypted_credential'] and prepared['redis_counter'] == 1, prepared
     assert php('dns-control')['ready']
@@ -279,6 +320,10 @@ except BaseException as error:
     if isinstance(error, AssertionError): SUMMARY['failure_check'] = str(error)[:600]
     raise
 finally:
+    if hold_process is not None:
+        hold_process.terminate()
+        try: hold_process.wait(timeout=5)
+        except subprocess.TimeoutExpired: hold_process.kill(); hold_process.wait(timeout=5)
     if server is not None: server.shutdown(); server.server_close()
     if php_server is not None:
         php_server.terminate()

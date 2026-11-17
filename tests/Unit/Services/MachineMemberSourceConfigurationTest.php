@@ -52,10 +52,10 @@ class MachineMemberSourceConfigurationTest extends TestCase
         };
         $unexpected = static fn () => throw new \LogicException('journal_access_after_stop');
         $setup = new MemberSourceConfiguration($this->scope(), $guard, $unexpected, $unexpected);
-        foreach (['create', 'readback'] as $method) {
+        foreach (['create', 'readback', 'authorizationBinding'] as $method) {
             try { $setup->$method(); $this->fail('guard was bypassed'); }
             catch (\RuntimeException $error) { $this->assertSame('stopped', $error->getMessage()); }
         }
-        $this->assertSame(['source-configure', 'source-configuration-read'], $operations);
+        $this->assertSame(['source-configure', 'source-configuration-read', 'source-authorize'], $operations);
     }
 }

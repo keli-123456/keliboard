@@ -79,10 +79,16 @@ final class MemberSourceConfiguration
             'journal_unconfirmed');
     }
 
-    private static function nodePin(Server $node): array
+    public static function nodePin(Server $node): array
     {
         return $node->only(['machine_id', 'type', 'runtime', 'enabled', 'show', 'host', 'port',
             'server_port', 'group_ids', 'route_ids', 'protocol_settings']);
+    }
+
+    public function authorizationBinding(): array
+    {
+        $this->context('source-authorize');
+        return ['scope' => $this->scope, 'configuration' => $this->readback()];
     }
 
     public function create(): array

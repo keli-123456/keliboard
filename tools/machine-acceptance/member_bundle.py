@@ -23,7 +23,8 @@ RUNTIME = ('member_retry_driver.php', 'member_source_registry.php', 'member_cont
            'member_provider_bindings.php', 'aliyun_cleanup.php', 'member_control_creation.php',
            'member_setup_bindings.py', 'member_assembly.py', 'member_execution.py', 'member_installation.py',
            'member_environment.py', 'member_application.py', 'member_application_bootstrap.php',
-           'member_dns_initialization.php', 'member_source_configuration.php')
+           'member_dns_initialization.php', 'member_source_configuration.php',
+           'member_setup_authority.php', 'member_callback_entry.php')
 TESTS = ('tools/machine-acceptance/test_member_transport.py', 'tools/machine-acceptance/test_member_bundle.py',
          'tests/Support/TestsMemberTransport.php', 'tools/machine-acceptance/test_member_round.py',
          'tools/machine-acceptance/test_member_runtime_bundle.py', 'tools/machine-acceptance/test_member_linux.py',
@@ -36,7 +37,8 @@ TESTS = ('tools/machine-acceptance/test_member_transport.py', 'tools/machine-acc
          'tools/machine-acceptance/test_member_installation_linux.py',
          'tools/machine-acceptance/test_member_environment.py',
          'tests/Unit/Services/MachineMemberDnsInitializationTest.php',
-         'tests/Unit/Services/MachineMemberSourceConfigurationTest.php')
+         'tests/Unit/Services/MachineMemberSourceConfigurationTest.php',
+         'tests/Unit/Services/MachineMemberSetupAuthorityTest.php')
 FILES = tuple('tools/machine-acceptance/' + name for name in RUNTIME) + TESTS
 
 
@@ -123,7 +125,8 @@ def verify(path):
                     and b'\r' not in raw, 'bundle_file_changed')
         entry = archive.extractfile('tests/Unit/Services/MachineFailoverNativeBridgeTest.php').read()
         require(hashlib.sha256(entry).hexdigest() == manifest['test_entry_sha256'], 'bundle_test_entry_changed')
-        require(not any(Path(name).name in ('authorization.json', 'member-runtime-scope.json') for name in archive.getnames()),
+        require(not any(Path(name).name in ('authorization.json', 'member-runtime-scope.json',
+                    'member-setup-grant.json', 'member-setup-stop.json', 'member-setup-issuance.json') for name in archive.getnames()),
                 'bundle_authority_refused')
     return manifest
 
