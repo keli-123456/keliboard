@@ -73,7 +73,7 @@ final class MemberOperatorStore
     {
         $this->assertOpen();
         $pattern = $this->mode === 'cleanup' ? '/^(binding|first-error|provider-delete-[a-f0-9]{64})$/D'
-            : '/^(binding|first-error|control-creation|control-bound-request)$/D';
+            : '/^(binding|first-error|control-creation|control-bound-request|control-connection)$/D';
         self::need(preg_match($pattern, $key) === 1, 'journal_key');
         $name = 'journal-' . $key . '.json'; $path = $this->directory . '/' . $name;
         clearstatcache(true, $path);

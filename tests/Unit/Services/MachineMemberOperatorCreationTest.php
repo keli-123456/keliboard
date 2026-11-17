@@ -137,6 +137,27 @@ class MachineMemberOperatorCreationTest extends TestCase
         $this->assertCount($count, Http::recorded()); $this->assertFalse(config('machine_provision.allow_live'));
     }
 
+    public function test_connection_journal_is_creation_only_immutable_and_private(): void
+    {
+        $this->fake(); $operator = $this->operator();
+        $this->call($operator, 'control-create'); $value = $this->call($operator, 'control-connection')['connection'];
+        $operator->close();
+        $store = new \Keli\Acceptance\MemberOperatorStore($this->directory, 'creation');
+        try {
+            $this->assertSame($value, $store->load('control-connection'));
+            $store->save('control-connection', $value);
+            $this->assertSame(0600, fileperms($this->directory . '/journal-control-connection.json') & 0777);
+            try { $store->save('control-connection', array_replace($value, ['host' => '9.9.9.11'])); $this->fail(); }
+            catch (\RuntimeException $error) { $this->assertSame('member_operator_journal_changed', $error->getMessage()); }
+            $this->assertSame($value, $store->load('control-connection'));
+        } finally { $store->close(); }
+        $store = new \Keli\Acceptance\MemberOperatorStore($this->directory, 'cleanup');
+        try {
+            try { $store->load('control-connection'); $this->fail(); }
+            catch (\RuntimeException $error) { $this->assertSame('member_operator_journal_key', $error->getMessage()); }
+        } finally { $store->close(); }
+    }
+
     public function test_lost_post_ack_retains_ciphertext_and_first_error_without_recreating(): void
     {
         $this->fake(true); $operator = $this->operator();
