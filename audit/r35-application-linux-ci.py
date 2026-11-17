@@ -19,7 +19,7 @@ import threading
 import time
 from unittest.mock import patch
 
-if '--whole-entry' in sys.argv or '--setup-evidence' in sys.argv:
+if '--whole-entry' in sys.argv or '--setup-evidence' in sys.argv or '--outer-crash' in sys.argv:
     sys.argv.append('--host-port-only')
 
 REPO = Path(__file__).resolve().parents[1]
@@ -200,7 +200,12 @@ try:
         (install_root / name).write_bytes(b'synthetic-installation-host'); (install_root / name).chmod(0o600)
     install_scope = dict(run_id=RUN, bundle_sha256=frozen['archive_sha256'], started_at=int(time.time()))
     install_scope['deadline_at'] = install_scope['started_at'] + 7199
-    install_journal = {}
+    outer_crash = '--outer-crash' in sys.argv
+    if outer_crash:
+        from r35_outer_round_ci import DiskJournal, step as outer_step, kill_after_callback
+        install_journal = DiskJournal(work / 'outer-journal', RUN)
+    else:
+        install_journal = {}
     import member_http_service as http_service
     def http_invoke(args, timeout=20):
         if args[0] == 'systemd-run':
@@ -220,7 +225,7 @@ try:
                 ['php', '/opt/keli-isolated/runtime/member_setup_entry.php']):
             request = json.loads(payload)
             bootstrap = argv[-1].endswith('member_import_entry.php')
-            if not bootstrap and request['operation'] in ('evidence-export', 'native-issue') and '--setup-evidence' in sys.argv:
+            if not bootstrap and request['operation'] in ('evidence-export', 'native-issue') and ('--setup-evidence' in sys.argv or outer_crash):
                 p = subprocess.run(argv, input=payload, cwd=ROOT, env=ENV, capture_output=True, timeout=timeout)
                 value = json.loads(p.stdout)
                 if value.get('ok') is not True:
@@ -306,11 +311,32 @@ try:
             load=install_journal.get, save=lambda k, v: install_journal.__setitem__(k, v))
         initialization = MemberInitialization(scope=install_scope, interfaces=setup_bindings,
             load=install_journal.get, save=lambda k, v: install_journal.__setitem__(k, v), guard=lambda *_: None)
-        assert initialization.step() == dict(ready=False, waiting=True, stage='control-create')
-        assert initialization.state['index'] == 0 and not (ROOT / 'app').exists()
-        for _ in range(6):
-            if initialization.state['index'] == STAGES.index('callback-ready'): http_scope = install_scope
-            initialization.step()
+        if outer_crash:
+            def cleanup_not_ready(*_): raise AssertionError('cleanup_before_reconciliation')
+            outer_state = outer_step(install_scope, setup_bindings, install_journal, cleanup_not_ready)
+            assert outer_state['phase'] == 'bootstrap' and outer_state['first_error'] is None
+            assert install_journal['initialization']['index'] == 0 and not (ROOT / 'app').exists()
+            for _ in range(5):
+                outer_state = outer_step(install_scope, setup_bindings, install_journal, cleanup_not_ready)
+                assert outer_state['phase'] == 'bootstrap' and outer_state['first_error'] is None
+            assert install_journal['initialization']['index'] == 5
+            http_scope = install_scope
+            kill_after_callback(install_scope, setup_bindings, install_journal, cleanup_not_ready)
+            outer_state = install_journal['round']
+            assert outer_state['phase'] == 'bootstrap' and outer_state['pending']['operation'] == 'bootstrap'
+            assert outer_state['first_error'] is None
+            assert install_journal['initialization']['pending'] is None
+            initialization = MemberInitialization(scope=install_scope, interfaces=setup_bindings,
+                load=install_journal.get, save=lambda k, v: install_journal.__setitem__(k, v), guard=lambda *_: None)
+            SUMMARY['outer_round_crash'] = dict(actual_sigkill=True, signal=9, actual_disk_journal=True,
+                actual_outer_driver=True, crash_after_actual_callback_ready=True, outer_pending_preserved=True,
+                inner_receipt_preserved=True, actual_exclusive_lock=True, native_not_run=True)
+        else:
+            assert initialization.step() == dict(ready=False, waiting=True, stage='control-create')
+            assert initialization.state['index'] == 0 and not (ROOT / 'app').exists()
+            for _ in range(6):
+                if initialization.state['index'] == STAGES.index('callback-ready'): http_scope = install_scope
+                initialization.step()
         assert initialization.state['index'] == 6, 'initialization_did_not_complete_callback_ready'
         control = install_journal['setup-control-pin']
         cloud = json.loads((creation_directory / 'fixture-cloud.json').read_bytes())
@@ -331,10 +357,11 @@ try:
         assert http_service.status(install_scope, http_invoke) == 'running'
         bound = None
         native_cleanup_scope = None
-        setup_export = '--setup-evidence' in sys.argv
+        setup_export = '--setup-evidence' in sys.argv or outer_crash
         if setup_export:
             # Actual fixed entry: no provider stub can fabricate this failure or export.
             setup_identity = remote_port.identity()
+        if '--setup-evidence' in sys.argv:
             initial_provider_state = [(creation_directory / name).read_bytes() for name in ('fixture-cloud.json', 'fixture-dns.json')]
             try:
                 install_transport.setup_call('evidence-export', setup_identity)
@@ -357,8 +384,16 @@ try:
                 php=php, artifacts=ART, summary=SUMMARY)
             native_cleanup_scope = MemberControllerPort(bound)('reconcile', dict(run_id=RUN))['cleanup_scope']
         stop_request = dict(scope=install_scope, stopped=True)
-        assert setup_bindings.reconcile(stop_request)['resolved'] is True
-        scope_pins = setup_bindings.cleanup_scope(None)
+        if outer_crash:
+            outer_state = outer_step(install_scope, setup_bindings, install_journal, cleanup_not_ready)
+            assert outer_state['phase'] == 'cleanup' and outer_state['first_error'] == 'round_uncertain_dispatch'
+            assert outer_state['pending']['operation'] == 'bootstrap'
+            scope_pins = outer_state['cleanup_scope']['initialization']
+            assert outer_state['cleanup_scope']['native'] is None
+            SUMMARY['outer_round_crash']['restart_reconciled_without_replay'] = True
+        else:
+            assert setup_bindings.reconcile(stop_request)['resolved'] is True
+            scope_pins = setup_bindings.cleanup_scope(None)
         private_pins = scope_pins['auxiliary']['private_files']
         dns_pins = scope_pins['auxiliary']['records']
         assert len(private_pins) == (6 if bound else 5) and len(scope_pins['roles']) == (2 if bound else 0)
@@ -383,7 +418,7 @@ try:
             ('fixture-cloud.json', json.dumps(dict(present=cloud['present'], row=cloud['row'], methods=[])).encode()),
             ('fixture-dns.json', (creation_directory / 'fixture-dns.json').read_bytes())]:
             (operator / name).write_bytes(raw); (operator / name).chmod(0o600)
-        provider_journal = {}
+        provider_journal = DiskJournal(work / 'provider-journal', RUN) if outer_crash else {}
         def provider_execute(args, payload):
             assert args[-2] == str(TOOLS / 'member_operator_entry.php') and args[-1] == str(operator)
             if json.loads(payload)['operation'].startswith('control-'):
@@ -441,13 +476,19 @@ try:
             body = evidence_archive.verify(exported)
             if setup_export:
                 assert body['stopped'] and body['cleanup_complete_not_asserted'] and body['sources']['cloud_absence_not_asserted']
-                assert body['first_error_present'] and body['first_diagnostic']['class'] == 'RuntimeException'
-                assert body['first_diagnostic']['file'] == 'member_source_initialization.php'
-                assert body['first_diagnostic']['line'] > 0 and body['uncertain_request'] is not None
+                if outer_crash:
+                    assert not body['first_error_present'] and body['uncertain_request'] is None
+                    assert install_journal['round']['first_error'] == 'round_uncertain_dispatch'
+                    assert install_journal['round']['pending']['operation'] == 'bootstrap'
+                else:
+                    assert body['first_error_present'] and body['first_diagnostic']['class'] == 'RuntimeException'
+                    assert body['first_diagnostic']['file'] == 'member_source_initialization.php'
+                    assert body['first_diagnostic']['line'] > 0 and body['uncertain_request'] is not None
                 assert body['uncertain_cleanup'] is None and body['dns']['retained_record_count'] == 1
                 assert all(r['classification'] == 'no_queue_intent' for r in body['sources']['roles'].values())
                 assert not (ROOT / 'private/member-runtime-scope.json').exists()
-                assert (ROOT / 'private/member-setup-journal/first-error.json').read_bytes() == first_setup_error
+                if not outer_crash:
+                    assert (ROOT / 'private/member-setup-journal/first-error.json').read_bytes() == first_setup_error
                 assert provider_before_export == [(creation_directory / name).read_bytes() for name in ('fixture-cloud.json', 'fixture-dns.json')]
                 assert evidence_archive.capture() == exported
                 assert provider_before_export == [(creation_directory / name).read_bytes() for name in ('fixture-cloud.json', 'fixture-dns.json')]
@@ -457,7 +498,7 @@ try:
                 path = ART / 'setup-stopped-evidence.json'; path.write_bytes(raw); path.chmod(0o644)
                 SUMMARY['setup_evidence_export'] = dict(sha256=exported['sha256'], verified=True, actual_fixed_entry=True,
                     actual_application=True, native_grant_absent=True, first_error_preserved=True,
-                    pending_mutation_retained=True, provider_state_unchanged=True, readonly_export_denied_before_stop=True,
+                    pending_mutation_retained=True, provider_state_unchanged=True, readonly_export_denied_before_stop=not outer_crash,
                     repeated_export_same_digest=True, remote_file_mode='0600')
                 return exported
             assert body['stopped'] and body['reconciled'] and body['cleanup_complete_not_asserted']
@@ -482,23 +523,44 @@ try:
         assembly = MemberRoundAssembly(scope=install_scope, setup=execution, control=control_backend, native_transport=(lambda _: bound) if bound else unused,
             provider=provider, controller=install_transport, task_call=unused, reconcile=reconcile_local, export=export_missing,
             load=install_journal.get, save=lambda k, v: install_journal.__setitem__(k, v), guard=lambda *_: None)
-        cleanup = assembly.cleanup(combined, None)
+        if outer_crash:
+            assert install_journal['round']['cleanup_scope'] == combined
+        else:
+            cleanup = assembly.cleanup(combined, None)
         end = time.monotonic() + (180 if bound else 60)
         while time.monotonic() < end:
-            result = cleanup.step()
+            if outer_crash:
+                outer_state = outer_step(install_scope, setup_bindings, install_journal, assembly.cleanup)
+                result = outer_state['cleanup']
+                assert result is not None
+            else:
+                result = cleanup.step()
             if not ROOT.exists():
                 http_scope = None
                 install_transport.execute = lambda *_: (_ for _ in ()).throw(AssertionError('deleted-controller-rpc'))
             if result['phase'] == 'closed': break
             time.sleep(1)
             # Resume from persisted state after controller removal, with no SSH.
-            if not ROOT.exists(): cleanup = assembly.cleanup(combined, result)
+            if not ROOT.exists() and not outer_crash: cleanup = assembly.cleanup(combined, result)
         assert result['phase'] == 'closed' and not ROOT.exists(), 'operator_cleanup_not_closed'
         assert len(result['control_reads']) == 2 and result['control_reads'][1] - result['control_reads'][0] >= 10
         assert result['evidence_saved_and_read_back'] is bool(bound or setup_export) and result['first_error'] is not None
         if setup_export:
-            assert evidence_archive.verify(evidence_archive.journal.load('setup-evidence-first.json'))['first_error_present']
+            assert evidence_archive.verify(evidence_archive.journal.load('setup-evidence-first.json'))['first_error_present'] is (not outer_crash)
             SUMMARY['setup_evidence_export']['local_readback_after_controller_deleted'] = True
+        if outer_crash:
+            assert outer_state['phase'] == 'closed' and outer_state['resources_cleaned'] and not outer_state['acceptance_passed']
+            assert outer_state['first_error'] == 'round_uncertain_dispatch'
+            sequence = outer_state['sequence']
+            assert outer_step(install_scope, setup_bindings, install_journal, assembly.cleanup) == outer_state
+            assert outer_state['sequence'] == sequence == 7
+            assert json.loads((creation_directory / 'fixture-cloud.json').read_bytes())['methods'].count('POST') == 1
+            assert all(p.stat().st_mode & 0o077 == 0 for p in install_journal.directory.iterdir())
+            SUMMARY['outer_round_crash'].update(first_error_preserved=True, no_second_creation=True,
+                no_native_dispatch=True, closed_replay_noop=True, resources_cleaned=True,
+                acceptance_passed=False, journal_mode='0600', stopped_export_verified=True)
+            (ART / 'outer-round-state.json').write_text(json.dumps(outer_state, indent=2) + '\n')
+            (ART / 'outer-round-state.json').chmod(0o644)
         state = json.loads((operator / 'fixture-cloud.json').read_bytes())
         assert state['methods'].count('DELETE') == 1 and not state['present']
         if not bound:
