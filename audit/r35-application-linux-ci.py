@@ -171,6 +171,7 @@ try:
     entry_tests = subprocess.run(['python3', '-B', '-m', 'unittest', '-v', 'test_member_cli_entry_linux'],
         cwd=TOOLS, env=dict(ENV, KELI_MEMBER_CLI_ENTRY='1'), capture_output=True, text=True, timeout=120)
     (ART / 'native-entry-linux.log').write_text(entry_tests.stdout + entry_tests.stderr)
+    (ART / 'native-entry-linux.log').chmod(0o644)
     assert entry_tests.returncode == 0, 'native_entry_linux_regression_failed'
     native_journal = ROOT / 'private/member-journal'
     assert native_journal.resolve() == native_journal
