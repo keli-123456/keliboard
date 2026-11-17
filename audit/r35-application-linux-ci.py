@@ -76,6 +76,7 @@ try:
     SUMMARY['python_passed'] = True
     php_tests = subprocess.run(['php', 'vendor/phpunit/phpunit/phpunit',
         'tests/Unit/Services/MachineMemberDnsInitializationTest.php',
+        'tests/Unit/Services/MachineMemberSourceConfigurationTest.php',
         'tests/Unit/Services/MachineMemberProviderBindingsTest.php',
         'tests/Unit/Services/MachineDnsAliyunCompatibilityTest.php'],
         cwd=REPO, capture_output=True, text=True, timeout=120)
@@ -156,6 +157,27 @@ try:
         for path in originals: path.with_suffix('.saved').rename(path)
     assert php('initialize-readback') == SUMMARY['migration']
     SUMMARY['existing_schema_rejected_first_error_retained'] = True
+    assert php('configuration-prepare')['configuration_rows'] == [0] * 7
+    failures = php('configuration-failures')
+    assert failures['rollback_phases'] == 7 and failures['configuration_rows'] == [0] * 7
+    assert failures['first_error_safe_and_retained'] and failures['uncertain_replay_refused']
+    configured = php('configuration-create')
+    assert configured['configuration_rows'] == [2, 2, 2, 1, 2, 2, 2] and configured['provider_gets'] == 4
+    assert configured['provider_writes'] == 0 and not configured['tasks_or_health_fabricated']
+    for mode in ('configuration-read', 'configuration-repeat', 'configuration-drift', 'configuration-stop'):
+        result = php(mode)
+        assert result['configuration_sha256'] == configured['configuration_sha256']
+        assert result['provider_gets'] == 0 and result['configuration_rows'] == configured['configuration_rows']
+        assert result['closed_gates_unchanged']
+    SUMMARY['source_configuration'] = dict(actual_application_services=True, real_mysql_transactions=True,
+        real_redis_locks=True, provider_reads_simulated=True, provider_writes=0,
+        prerequisite_credentials_and_release_synthetic=True, concrete_import_authority_tested=False,
+        machines=2, nodes=2, policies=2, services=1, members=2, dns_sets=2, dns_slots=2,
+        failure_rollback_phases=7, uncertain_replay_refused=True, first_error_safe_and_retained=True,
+        process_restart_readback=True, duplicate_creation_refused=True,
+        node_policy_credential_drift_refused=True, stop_blocks_mutation_allows_readback=True,
+        tasks_or_health_fabricated=False, persistent_gates_changed=False)
+    assert php('callback-prepare')['prepared']
     observed = php('inspect', uid=65534)
     assert observed['booted'] and observed['kernel'] == 'App\\Http\\Kernel'
     assert observed['uid'] == 65534 and observed['states'] == [None, None]

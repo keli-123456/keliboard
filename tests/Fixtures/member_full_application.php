@@ -14,6 +14,10 @@ try {
     $mode = PHP_SAPI === 'cli-server' ? 'http' : ($argv[1] ?? 'inspect');
     if ($mode === 'migrate') {
         $initialized = Keli\Acceptance\MemberApplicationBootstrap::initialize($app);
+        echo json_encode($initialized);
+    } elseif ($mode === 'callback-prepare') {
+        Keli\Acceptance\MemberApplicationBootstrap::initialized();
+        if (App\Models\MachineProvisionTask::query()->exists()) throw new RuntimeException('fixture_tasks_exist');
         foreach (['a', 'b'] as $letter) {
             App\Models\MachineProvisionTask::query()->create([
                 'id' => str_repeat($letter, 8) . '-' . str_repeat($letter, 4) . '-4' . str_repeat($letter, 3)
@@ -27,9 +31,12 @@ try {
                 'dispatched_at' => time(), 'deadline_at' => time() + 600,
             ]);
         }
-        echo json_encode($initialized);
+        echo json_encode(['prepared' => true]);
     } elseif ($mode === 'initialize-readback') {
         echo json_encode(Keli\Acceptance\MemberApplicationBootstrap::initialized());
+    } elseif (str_starts_with($mode, 'configuration-')) {
+        $configurationFixture = require __DIR__ . '/member_source_configuration_application.php';
+        echo json_encode($configurationFixture($mode));
     } elseif (str_starts_with($mode, 'dns-')) {
         $dnsFixture = require __DIR__ . '/member_dns_application.php';
         echo json_encode($dnsFixture($mode));

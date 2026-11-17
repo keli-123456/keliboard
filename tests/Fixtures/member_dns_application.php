@@ -51,7 +51,7 @@ return static function (string $mode): array {
         foreach ($closed as $key => $value) $need(config($key) === $value);
         $cacheKey = 'dns-initialization-fixture';
         if ($mode === 'dns-prepare') {
-            $need(!MachineDnsCredential::query()->exists());
+            $need(!MachineDnsCredential::query()->where('name', 'r35-fixture')->exists());
             $credential = MachineDnsCredential::query()->create(['name' => 'r35-fixture', 'provider' => 'aliyun',
                 'revision' => 1, 'credentials' => ['access_key_id' => 'fixture-id', 'access_key_secret' => 'fixture-secret']]);
             $save('fixture', ['credential_id' => $credential->id, 'rows' => [], 'writes' => [], 'stopped' => false]);
