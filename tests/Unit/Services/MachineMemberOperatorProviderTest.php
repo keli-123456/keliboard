@@ -187,4 +187,21 @@ class MachineMemberOperatorProviderTest extends TestCase
         $this->assertTrue($this->call($this->operator(), 'dns-delete', $this->dns)['dispatched']);
         Http::assertSentCount(3);
     }
+
+    public function test_actual_cli_constructs_without_application_boot_and_rejects_create(): void
+    {
+        $process = new \Symfony\Component\Process\Process([PHP_BINARY, '-d', 'display_errors=0', '-d', 'log_errors=0',
+            base_path('tools/machine-acceptance/member_operator_entry.php'), $this->directory], $this->directory,
+            ['APP_ENV' => 'operator-no-application', 'DB_CONNECTION' => 'operator-no-database']);
+        $process->setInput(json_encode(['operation' => 'control-create', 'pin' => $this->control,
+            'scope_sha256' => Provider::digest($this->scope)]));
+        $process->setTimeout(10);
+        $this->assertSame(1, $process->run());
+        $this->assertSame(['ok' => false, 'code' => 'operator_cleanup_unconfirmed'],
+            json_decode($process->getOutput(), true, 8, JSON_THROW_ON_ERROR));
+        $this->assertSame('', $process->getErrorOutput());
+        $binding = json_decode(file_get_contents($this->directory . '/journal-binding.json'), true, 16, JSON_THROW_ON_ERROR);
+        $this->assertSame(Provider::digest($this->scope), $binding['scope_sha256']);
+        $this->assertCount(0, glob($this->directory . '/journal-provider-delete-*.json'));
+    }
 }

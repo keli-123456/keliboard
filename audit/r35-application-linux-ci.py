@@ -103,6 +103,11 @@ from member_application import configure
 from member_cli import RUN
 
 try:
+    # Install the pinned cleanup entry with the same owner as this isolated executor.
+    operator_entry = TOOLS / 'member_operator_entry.php'
+    assert operator_entry.is_file() and not operator_entry.is_symlink()
+    os.chown(operator_entry, os.geteuid(), os.getegid())
+    operator_entry.chmod(0o644)
     tests = subprocess.run(['python3', '-B', '-m', 'unittest', '-v', 'test_member_environment',
         'test_member_installation_linux.InstallationServiceUserTests', 'test_member_execution.ExecutionTests',
         'test_member_assembly', 'test_member_initialization', 'test_member_cli', 'test_member_round',

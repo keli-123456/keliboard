@@ -1,7 +1,9 @@
 """Operator-local exact cleanup transport with no cloud, SSH or DNS I/O."""
 import copy
 import json
+import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 
@@ -22,6 +24,12 @@ class OperatorTransportTests(unittest.TestCase):
         self.provider = MemberOperatorProviderTransport(directory=self.root, scope=self.scope, php=self.php,
             guard=lambda *_: None, load=self.saved.get, save=lambda k, v: self.saved.__setitem__(k, copy.deepcopy(v)),
             execute=self.execute)
+        self.assertEqual(Path(__file__).absolute().with_name('member_operator_entry.php'), self.provider.entry)
+        # The installed operator package belongs to its executor, unlike a sudo CI checkout.
+        installed = self.root / self.provider.entry.name
+        shutil.copyfile(self.provider.entry, installed)
+        installed.chmod(0o600)
+        self.provider.entry = installed
 
     def execute(self, command, payload):
         self.calls.append(command)
@@ -58,6 +66,14 @@ class OperatorTransportTests(unittest.TestCase):
             with self.assertRaisesRegex(TransportError, 'operator_pin'): self.provider.dispatch(operation, self.pin)
         with self.assertRaisesRegex(TransportError, 'operator_pin'):
             self.provider.dispatch('control-delete', dict(self.pin, external_id='999'))
+
+    @unittest.skipUnless(os.name == 'posix' and getattr(os, 'geteuid', lambda: -1)() == 0, 'Linux root ownership fixture')
+    def test_foreign_owned_entry_is_rejected_before_process_dispatch(self):
+        os.chown(self.provider.entry, 65534, 65534)
+        with self.assertRaisesRegex(Exception, 'staging_owner_mismatch'):
+            self.provider.dispatch('control-inspect', self.pin)
+        self.assertEqual([], self.calls)
+        self.assertEqual({}, self.saved)
 
 
 if __name__ == '__main__':
