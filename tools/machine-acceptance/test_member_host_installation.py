@@ -184,6 +184,29 @@ class HostPublicationLinuxTests(unittest.TestCase):
         (self.root / 'private/credentials').write_bytes(b'changed')
         with self.assertRaisesRegex(TransportError, 'private_changed'): self.call('journal-read')
 
+    def test_crash_before_public_application_receipt_preserves_and_cleans_exact_environment(self):
+        from member_installation import MemberInstallation
+        from member_private_cleanup import MemberPrivateCleanup
+        self.call('publish')
+        original = MemberInstallation.exclusive
+        def fail_receipt(path, *args, **kwargs):
+            if path == self.root / 'application.json': raise PermissionError('fixture-private-message')
+            return original(path, *args, **kwargs)
+        with patch.object(MemberInstallation, 'exclusive', staticmethod(fail_receipt)), self.assertRaises(PermissionError):
+            self.configure()
+        self.assertFalse((self.root / 'application.json').exists())
+        self.assertFalse((self.root / 'private/member-import').exists())
+        stopped = self.call('stop')
+        self.assertEqual(['configure'], stopped['uncertain_operations'])
+        self.assertEqual(1, len(stopped['private_files']))
+        cleaner = MemberPrivateCleanup(self.root)
+        pin = stopped['private_files'][0]
+        self.assertEqual('absent', cleaner.operation('remove', pin)['status'])
+        self.assertEqual('absent', MemberPrivateCleanup(self.root).operation('inspect', pin)['status'])
+        first = json.loads((self.root / 'private/host-installation/first-error.json').read_bytes())
+        self.assertEqual('PermissionError', first['diagnostic']['error_class'])
+        self.assertNotIn('fixture-private-message', json.dumps(first))
+
     def test_malformed_stop_and_result_are_not_confirmation(self):
         self.call('publish')
         result = self.root / 'private/host-installation/publish-result.json'
