@@ -390,6 +390,7 @@ try:
     assert observed['states'] == ['succeeded'] and observed['callback_steps'] == 1
     SUMMARY['idempotent_callback_b_not_queued'] = True
 
+    probe_config = None
     def report(role, *, node=False, wrapped_node=False, bad_hash=False, token=None, installation=None, node_id=None):
         pin = pins[role]
         body = dict(machine_id=pin['machine_id'], token=token or pin['token'])
@@ -405,6 +406,10 @@ try:
                     observation=dict(schema=1, session=('a' if role == 'source-a' else 'b') * 32,
                         pid=42, started_at=pin['dispatched_at'], uptime_seconds=max(1, int(time.time()) - pin['dispatched_at'])),
                     node_statuses=[dict(node_id=pin['node_id'], protocol='hysteria2', server_port=24443, status='configured')]))
+            if probe_config is not None:
+                body['status']['entry_probe'] = dict(schema=1, revision=probe_config['revision'],
+                    checked_at=int(time.time()), state='ready', targets=[dict(id=t['id'], source_ip=pin['ip'],
+                        status='unreachable' if role == 'source-a' else 'reachable') for t in probe_config['targets']])
             endpoint = '/api/v2/server/machine/status'
         c = Client(domain, server.server_port, timeout=15)
         c.request('POST', endpoint, json.dumps(body), {'Content-Type': 'application/json',
@@ -481,6 +486,51 @@ try:
     registered = setup_rpc('status')
     assert all(row['registered'] and row['status'] == 'accepted' for row in registered['sources'].values())
     assert not registered['health_or_forwarding_claimed'] and registered['first_error'] is None
+    probe_config = php('setup-probe-configuration')
+    assert probe_config['enabled'] and len(probe_config['targets']) == 4
+    grant = php('setup-native-issue')
+    assert grant['phase'] == 'setup_cooldown' and not grant['ready']
+    assert not (ROOT / 'private/member-runtime-scope.json').exists()
+    second_cooldown_start = time.monotonic()
+    while time.time() < grant['next_check_at'] + 1:
+        assert report('source-a') == report('source-a', node=True) == 200
+        assert report('source-b') == report('source-b', node=True) == 200
+        time.sleep(min(5, max(.1, grant['next_check_at'] + 1 - time.time())))
+    for i in range(3):
+        assert report('source-a') == report('source-a', node=True) == 200
+        assert report('source-b') == report('source-b', node=True) == 200
+        grant = php('setup-native-issue')
+        if i < 2:
+            assert grant == dict(ready=False, phase='source_failure_observation'), grant
+            assert not (ROOT / 'private/member-runtime-scope.json').exists()
+            time.sleep(5.1)
+    assert grant['ready'], grant
+    native_path = ROOT / 'private/member-runtime-scope.json'
+    native_bytes = native_path.read_bytes()
+    cap_path = ROOT / 'member-candidate-callbacks.json'
+    cap_bytes = cap_path.read_bytes()
+    native_scope = json.loads(native_bytes)
+    assert native_scope['started_at'] == json.loads((ROOT / 'member-setup-grant.json').read_bytes())['started_at']
+    assert native_path.stat().st_mode & 0o777 == 0o600
+    assert cap_path.stat().st_mode & 0o777 == 0o644
+    for _ in range(2):
+        assert setup_rpc('native-read') == grant
+        assert php('setup-native-read') == grant
+        assert native_path.read_bytes() == native_bytes and cap_path.read_bytes() == cap_bytes
+    request = dict(schema=2, **grant['identity'], request_id=os.urandom(16).hex(), sequence=1,
+        role='control', operation='round-ready')
+    native_reply = command(['php', '-d', 'display_errors=0', '-d', 'log_errors=0',
+        str(ROOT / 'runtime/member_transport_entry.php')], input=json.dumps(request).encode(), cwd=ROOT / 'app', env=ENV)
+    assert json.loads(native_reply.stdout)['result'] == dict(ready=True, automatic_switches_changed=False)
+    denied_private = subprocess.run(['setpriv', '--reuid=65534', '--regid=65534', '--clear-groups',
+        '--no-new-privs', 'test', '-r', str(native_path)], capture_output=True)
+    assert denied_private.returncode == 1
+    SUMMARY['native_grant_handoff'] = dict(actual_observer_and_cli=True, actual_setup_rpc_and_native_ready=True,
+        failure_samples_from_http_synthetic_reports=3, source_b_not_observed=True,
+        second_cooldown_real_wait_seconds=int(time.monotonic() - second_cooldown_start),
+        original_window_inherited=True, lost_ack_readback_same_grant=True, no_provider_writes_or_candidate_tasks=True,
+        private_grant_service_user_denied=True, candidate_derivative_public=True,
+        candidate_http_handoff_tested=False)
     hold_process = subprocess.Popen(['php', '-d', 'display_errors=0', '-d', 'log_errors=0',
         str(ROOT / 'app/tests/Fixtures/member_full_application.php'), 'setup-controller-hold'],
         cwd=ROOT / 'app', env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -519,6 +569,13 @@ try:
     assert hold_process.returncode != 0
     hold_process = None
     assert setup_rpc('stop')['stopped']
+    assert not setup_rpc('native-read', ok=False)['ok']
+    stopped = subprocess.run(['php', '-d', 'display_errors=0', '-d', 'log_errors=0',
+        str(ROOT / 'runtime/member_transport_entry.php')], input=json.dumps(request).encode(),
+        cwd=ROOT / 'app', env=ENV, capture_output=True, timeout=30)
+    assert stopped.returncode != 0 and not json.loads(stopped.stdout)['ok']
+    assert native_path.read_bytes() == native_bytes and cap_path.read_bytes() == cap_bytes
+    SUMMARY['native_grant_handoff']['stop_revokes_both_native_and_callback_authorities'] = True
     assert php('setup-stop')['database_not_required']
     assert php('setup-stop')['stopped']
     assert php('setup-stopped-readback')['readback_allowed']

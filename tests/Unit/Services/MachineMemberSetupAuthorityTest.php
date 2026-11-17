@@ -11,6 +11,7 @@ class MachineMemberSetupAuthorityTest extends TestCase
         require_once dirname(__DIR__, 3) . '/tools/machine-acceptance/member_setup_authority.php';
         require_once dirname(__DIR__, 3) . '/tools/machine-acceptance/member_cli_authority.php';
         require_once dirname(__DIR__, 3) . '/tools/machine-acceptance/member_setup_controller.php';
+        require_once dirname(__DIR__, 3) . '/tools/machine-acceptance/member_native_grant.php';
     }
 
     public static function deniedWindows(): array
@@ -45,7 +46,7 @@ class MachineMemberSetupAuthorityTest extends TestCase
         $request = ['schema' => 1, 'run_id' => \Keli\Acceptance\MemberCliAuthority::RUN,
             'grant_id' => str_repeat('a', 32), 'grant_sha256' => str_repeat('b', 64),
             'deadline_at' => 9000, 'request_id' => str_repeat('c', 32), 'sequence' => 0, 'operation' => 'advance'];
-        foreach (['advance', 'status', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback'] as $operation) {
+        foreach (['advance', 'status', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read'] as $operation) {
             \Keli\Acceptance\MemberSetupController::validateRequest(array_replace($request, ['operation' => $operation]));
             $this->addToAssertionCount(1);
         }
@@ -58,6 +59,44 @@ class MachineMemberSetupAuthorityTest extends TestCase
             } catch (\RuntimeException $error) {
                 $this->assertSame('member_setup_controller_request_invalid', $error->getMessage());
             }
+        }
+    }
+
+    public function testNativeGrantDecisionRetainsThresholdIdentityCooldownAndOtherBlockers(): void
+    {
+        $source = ['policy_id' => 1, 'policy_revision' => 2, 'installation_id' => str_repeat('a', 32)];
+        $summary = ['evidence_current' => true, 'threshold_reached' => true, 'observed_failures' => 3,
+            'probe' => ['state' => 'failed', 'installation_id' => $source['installation_id']],
+            'plan' => ['id' => 9, 'status' => 'blocked', 'policy_id' => 1, 'policy_revision' => 2,
+                'blockers' => ['pricing_unverified'], 'evidence' => ['installation_id' => $source['installation_id'],
+                    'required_failures' => 3, 'observed_failures' => 3]]];
+        $class = \Keli\Acceptance\MemberNativeGrant::class;
+        $this->assertSame(['ready' => true, 'plan_id' => 9], $class::decision($summary, $source, 100, 100));
+        $this->assertSame(['ready' => false, 'phase' => 'setup_cooldown', 'next_check_at' => 100], $class::decision($summary, $source, 100, 99));
+        foreach (['healthy', 'unknown', 'stale'] as $state) {
+            $changed = $summary; $changed['probe']['state'] = $state;
+            $this->assertFalse($class::decision($changed, $source, 100, 101)['ready']);
+        }
+        foreach (['evidence_current', 'threshold_reached'] as $key) {
+            $changed = $summary; $changed[$key] = false;
+            $this->assertFalse($class::decision($changed, $source, 100, 101)['ready']);
+        }
+        foreach (['cooldown_active', 'credential_capacity_full', 'permission_revoked', 'unknown'] as $code) {
+            $changed = $summary; $changed['plan']['blockers'][] = $code;
+            $this->assertSame(['ready' => false, 'phase' => 'source_plan_blocked'], $class::decision($changed, $source, 100, 101));
+        }
+        foreach (['probe_identity', 'plan_identity', 'plan_policy', 'plan_revision', 'threshold', 'count', 'plan_count', 'plan_id'] as $change) {
+            $changed = $summary;
+            if ($change === 'probe_identity') $changed['probe']['installation_id'] = str_repeat('b', 32);
+            if ($change === 'plan_identity') $changed['plan']['evidence']['installation_id'] = str_repeat('b', 32);
+            if ($change === 'plan_policy') $changed['plan']['policy_id']++;
+            if ($change === 'plan_revision') $changed['plan']['policy_revision']++;
+            if ($change === 'threshold') $changed['plan']['evidence']['required_failures'] = 2;
+            if ($change === 'count') $changed['observed_failures'] = 2;
+            if ($change === 'plan_count') $changed['plan']['evidence']['observed_failures'] = 2;
+            if ($change === 'plan_id') $changed['plan']['id'] = '9';
+            try { $class::decision($changed, $source, 100, 101); $this->fail('Changed native evidence accepted'); }
+            catch (\RuntimeException $error) { $this->assertStringStartsWith('member_native_grant_', $error->getMessage()); }
         }
     }
 }

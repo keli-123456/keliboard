@@ -20,7 +20,7 @@ return static function (string $mode): array {
     if (getenv('GITHUB_ACTIONS') !== 'true' || getenv('KELI_MEMBER_FULL_APPLICATION') !== '1'
         || PHP_OS_FAMILY !== 'Linux' || PHP_SAPI !== 'cli') throw new RuntimeException('fixture_only');
     foreach (['member_provider_bindings', 'member_source_configuration', 'member_source_registry', 'member_source_initialization',
-        'member_setup_authority', 'member_dns_initialization', 'member_setup_dns', 'member_setup_controller',
+        'member_setup_authority', 'member_dns_initialization', 'member_setup_dns', 'member_native_grant', 'member_setup_controller',
         'member_prerequisite_import', 'member_bootstrap_controller'] as $file)
         require_once '/opt/keli-isolated/runtime/' . $file . '.php';
     $need = static function (bool $ok, string $code = 'invalid'): void {
@@ -57,6 +57,12 @@ return static function (string $mode): array {
         }
         $need(DB::table('failed_jobs')->count() === 0, 'failed_job_escaped'); $closed();
         return ['no_redis_queued_delayed_or_reserved_jobs' => true, 'no_failed_jobs' => true];
+    }
+    if ($mode === 'setup-probe-configuration') {
+        // Synthetic client reports in a namespace without external routes; no ICMP is sent.
+        admin_setting(['server_entry_probe_enable' => true, 'server_entry_probe_interval' => 5,
+            'server_entry_probe_targets' => ['223.5.5.5', '119.29.29.29', '114.114.114.114', '180.76.76.76']]);
+        return app(App\Services\ServerMachine\MachineEntryProbe::class)->configuration();
     }
     if ($mode === 'setup-stop' || $mode === 'setup-stop-busy') {
         // Revocation must still work when MySQL is unavailable or configuration drifted.
@@ -254,6 +260,21 @@ return static function (string $mode): array {
             + ['request_id' => bin2hex(random_bytes(16)), 'sequence' => $sequence, 'operation' => $operation];
     };
     $advance = static fn () => $controller->rpc($rpcRequest('advance'))['result'];
+    if ($mode === 'setup-native-issue' || $mode === 'setup-native-read') {
+        $operation = substr($mode, strlen('setup-'));
+        $result = $controller->rpc($rpcRequest($operation))['result'];
+        $closed(); $need($writes === 0, 'native_grant_wrote_provider');
+        if ($result['ready']) {
+            $scope = Keli\Acceptance\MemberCliAuthority::readGrant()[0];
+            $need($scope['started_at'] === $authority->windowBinding()['started_at']
+                && $scope['deadline_at'] === $authority->windowBinding()['deadline_at'], 'native_window_extended');
+            $need(Task::query()->count() === 2 && App\Models\MachineFailoverExecution::query()->count() === 0,
+                'native_grant_created_task');
+            $need(App\Models\MachineFailoverObservation::query()->where('policy_id', $scope['driver']['policy_b'])->count() === 0,
+                'native_grant_observed_b');
+        }
+        return $result;
+    }
     if (in_array($mode, ['setup-dns-control', 'setup-dns-edges', 'setup-dns-readback'], true)) {
         $operation = substr($mode, strlen('setup-'));
         $before = app(App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate::class);

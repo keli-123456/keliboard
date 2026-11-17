@@ -11,7 +11,7 @@ try {
     if (realpath(__DIR__) !== '/opt/keli-isolated/runtime') throw new RuntimeException('setup_runtime_required');
     foreach (['member_cli_authority', 'member_application_bootstrap', 'member_provider_bindings', 'member_source_configuration',
         'member_source_registry', 'member_source_initialization', 'member_setup_authority', 'member_dns_initialization',
-        'member_setup_dns', 'member_setup_controller'] as $file) {
+        'member_setup_dns', 'member_native_grant', 'member_setup_controller'] as $file) {
         $path = __DIR__ . '/' . $file . '.php';
         if (realpath($path) !== $path || fileowner($path) !== 0 || (fileperms($path) & 0022))
             throw new RuntimeException('setup_runtime_changed');

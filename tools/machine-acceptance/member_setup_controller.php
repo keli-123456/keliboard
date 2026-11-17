@@ -99,8 +99,17 @@ final class MemberSetupController
     public function dispatch(array $request): array
     {
         self::need(is_resource($this->lock) && array_keys($request) === ['operation']
-            && in_array($request['operation'], ['advance', 'status', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback'], true), 'request_invalid');
+            && in_array($request['operation'], ['advance', 'status', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read'], true), 'request_invalid');
         try {
+            if (str_starts_with($request['operation'], 'native-')) {
+                self::need($this->load('first-error') === null, 'prior_failure');
+                $native = new MemberNativeGrant($this->authority, function (): array {
+                    foreach (['source-a', 'source-b'] as $role)
+                        self::need($this->load('initialized-' . $role) !== null, 'sources_not_registered');
+                    return $this->sources->registeredScope($this->binding['scope'])['sources'];
+                }, fn () => $this->dns()->readback());
+                return $request['operation'] === 'native-issue' ? $native->issue() : $native->readback();
+            }
             if (str_starts_with($request['operation'], 'dns-')) {
                 if ($request['operation'] === 'dns-readback') return $this->dns()->readback();
                 self::need($this->load('first-error') === null, 'prior_failure');
@@ -149,7 +158,7 @@ final class MemberSetupController
                 return ['sources' => $sources, 'first_error' => $this->load('first-error'), 'health_or_forwarding_claimed' => false];
             });
         } catch (\Throwable $error) {
-            if (in_array($request['operation'], ['advance', 'dns-control', 'dns-edges'], true)) {
+            if (in_array($request['operation'], ['advance', 'dns-control', 'dns-edges', 'native-issue'], true)) {
                 try { $this->save('first-error', ['class' => (new \ReflectionClass($error))->getShortName(),
                     'file' => basename($error->getFile()), 'line' => $error->getLine()]); }
                 catch (\Throwable) { /* Preserve the initiating error. */ }
@@ -165,7 +174,7 @@ final class MemberSetupController
             && ($request['schema'] ?? null) === 1 && ($request['run_id'] ?? null) === MemberCliAuthority::RUN
             && is_int($request['deadline_at'] ?? null) && $request['deadline_at'] > 0
             && is_int($request['sequence'] ?? null) && $request['sequence'] >= 0
-            && in_array($request['operation'] ?? null, ['advance', 'status', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback'], true), 'request_invalid');
+            && in_array($request['operation'] ?? null, ['advance', 'status', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read'], true), 'request_invalid');
         foreach (['grant_id' => 32, 'grant_sha256' => 64, 'request_id' => 32] as $key => $length)
             self::need(is_string($request[$key] ?? null)
                 && preg_match('/^[a-f0-9]{' . $length . '}$/D', $request[$key]) === 1, 'request_invalid');
@@ -179,10 +188,11 @@ final class MemberSetupController
         self::need($request['operation'] !== 'stop', 'request_invalid');
         $cleanup = $request['operation'] === 'cleanup';
         $dns = str_starts_with($request['operation'], 'dns-');
-        $mutating = in_array($request['operation'], ['advance', 'cleanup', 'dns-control', 'dns-edges'], true);
+        $native = str_starts_with($request['operation'], 'native-');
+        $mutating = in_array($request['operation'], ['advance', 'cleanup', 'dns-control', 'dns-edges', 'native-issue'], true);
         if ($cleanup) $this->authority->stop();
-        $this->authority->allow($dns ? $request['operation'] : ($cleanup ? 'source-cleanup' : ($mutating ? 'sources-advance' : 'source-readback')),
-            $dns || $mutating && !$cleanup ? 'control' : 'source-a');
+        $this->authority->allow($native ? 'sources-observe' : ($dns ? $request['operation'] : ($cleanup ? 'source-cleanup' : ($mutating ? 'sources-advance' : 'source-readback'))),
+            $native || $dns || $mutating && !$cleanup ? 'control' : 'source-a');
         $key = 'rpc-' . $request['request_id'];
         $mutationKey = $cleanup ? 'rpc-cleanup' : 'rpc-mutation';
         if ($mutating) {

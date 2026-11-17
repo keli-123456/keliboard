@@ -23,7 +23,7 @@ final class MemberSetupAuthority
     private const GRANT = 'member-setup-grant.json';
     private const STOP = 'member-setup-stop.json';
     private const CANDIDATES = 'member-candidate-callbacks.json';
-    private const MUTATIONS = ['source-prepare', 'source-process', 'sources-advance', 'sources-pin'];
+    private const MUTATIONS = ['source-prepare', 'source-process', 'sources-advance', 'sources-pin', 'sources-observe'];
     private bool $active = false;
 
     private static function need(bool $ok, string $code): void
@@ -266,10 +266,12 @@ final class MemberSetupAuthority
         $sources = $this->scope['binding']['configuration']['sources'];
         $selected = $role === 'control' ? $sources : [$role => $sources[$role]];
         $cleanup = $operation === 'source-cleanup' || str_starts_with($operation, 'dns-');
-        return $this->temporary($cleanup ? [] : ['machine_provision.allow_live' => true,
+        $enable = $cleanup ? [] : ['machine_provision.allow_live' => true,
             'machine_provision.allowed_test_machine_ids' => array_column($selected, 'machine_id'),
             'machine_acceptance.allow_verification' => true,
-            'machine_acceptance.allowed_policy_ids' => array_column($selected, 'policy_id')], function () use ($callback) {
+            'machine_acceptance.allowed_policy_ids' => array_column($selected, 'policy_id')];
+        if ($operation === 'sources-observe') $enable = ['machine_failover.observe_enabled' => true];
+        return $this->temporary($enable, function () use ($callback) {
                 self::need(Task::query()->count() <= 2, 'task_limit');
                 foreach (Task::query()->get() as $task) $this->taskRole($task);
                 $result = $callback();
