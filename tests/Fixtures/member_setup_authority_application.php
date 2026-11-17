@@ -7,6 +7,7 @@ use Illuminate\Contracts\Bus\Dispatcher as BusContract;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Keli\Acceptance\MemberApplicationBootstrap;
+use Keli\Acceptance\MemberBootstrapController;
 use Keli\Acceptance\MemberCliAuthority;
 use Keli\Acceptance\MemberProviderBindings;
 use Keli\Acceptance\MemberSetupAuthority;
@@ -19,7 +20,8 @@ return static function (string $mode): array {
     if (getenv('GITHUB_ACTIONS') !== 'true' || getenv('KELI_MEMBER_FULL_APPLICATION') !== '1'
         || PHP_OS_FAMILY !== 'Linux' || PHP_SAPI !== 'cli') throw new RuntimeException('fixture_only');
     foreach (['member_provider_bindings', 'member_source_configuration', 'member_source_registry', 'member_source_initialization',
-        'member_setup_authority', 'member_dns_initialization', 'member_setup_dns', 'member_setup_controller'] as $file)
+        'member_setup_authority', 'member_dns_initialization', 'member_setup_dns', 'member_setup_controller',
+        'member_prerequisite_import', 'member_bootstrap_controller'] as $file)
         require_once '/opt/keli-isolated/runtime/' . $file . '.php';
     $need = static function (bool $ok, string $code = 'invalid'): void {
         if (!$ok) throw new RuntimeException('fixture_setup_' . $code);
@@ -89,16 +91,8 @@ return static function (string $mode): array {
         $need(rename($path, $journal . '/' . $key . '.json'));
     };
     if ($mode === 'setup-issue') {
-        $configRoot = $root . '/configuration-fixture';
-        $lock = fopen($configRoot . '/lock', 'r+b'); $need($lock !== false && flock($lock, LOCK_EX | LOCK_NB));
+        $bootstrap = new MemberBootstrapController();
         try {
-            $scope = $read($configRoot, 'scope');
-            $guard = static function ($operation) use ($read, $configRoot): void {
-                if ($read($configRoot, 'stopped') !== null && $operation !== 'source-configuration-read')
-                    throw new RuntimeException('fixture_configuration_stopped');
-            };
-            $configuration = new MemberSourceConfiguration($scope, $guard, fn ($key) => $read($configRoot, $key),
-                static fn () => throw new LogicException('fixture_setup_configuration_write'));
             $taskId = '00000000-0000-4000-8000-000000000071';
             $control = ['run_id' => MemberCliAuthority::RUN, 'external_id' => '100000', 'task_id' => $taskId,
                 'label' => 'keli-' . str_replace('-', '', $taskId), 'marker' => 'keli-create-' . str_replace('-', '', $taskId),
@@ -112,13 +106,27 @@ return static function (string $mode): array {
                 $need($request->method() === 'GET' && $request->url() === 'https://api.linode.com/v4/linode/instances/100000');
                 return Http::response($row);
             });
-            $authority = MemberSetupAuthority::issue($configuration, time(), time() + 7200, $control);
-            $save('initialization', $configuration->readback()['initialization_scope']);
-            $save('identity', $authority->identity());
-            $denied(fn () => MemberSetupAuthority::issue($configuration, time(), time() + 7200, $control), 'member_setup_issuance_exists');
+            $request = ['operation' => 'setup-issue', 'control' => $control];
+            $identity = $bootstrap->rpc($request)['setup'];
+            $save('initialization', $bootstrap->rpc(['operation' => 'configuration-read'])['configuration']['initialization_scope']);
+            $save('identity', $identity);
+            $grant = '/opt/keli-isolated/member-setup-grant.json'; $before = file_get_contents($grant);
+            $need($bootstrap->rpc($request)['setup'] === $identity && file_get_contents($grant) === $before);
+            $original = json_decode(file_get_contents($root . '/bootstrap-authority'), true, 32, JSON_THROW_ON_ERROR);
+            $need(MemberSetupAuthority::open()->windowBinding() === ['started_at' => $original['started_at'], 'deadline_at' => $original['deadline_at']]);
+            $resultPath = $root . '/member-import/setup-issuance-result.json'; $backup = $resultPath . '.saved';
+            $need(rename($resultPath, $backup));
+            try {
+                $need($bootstrap->rpc(['operation' => 'setup-read'])['setup'] === $identity);
+                $need(file_get_contents($resultPath) === file_get_contents($backup) && file_get_contents($grant) === $before);
+            } finally { unlink($backup); }
+            $changed = $request; $changed['control']['external_id'] = '100099';
+            $denied(fn () => $bootstrap->rpc($changed), 'member_import_setup_binding_changed');
             $closed();
-            return ['issued' => true, 'reissue_refused' => true, 'persistent_gates_closed' => true];
-        } finally { flock($lock, LOCK_UN); fclose($lock); }
+            return ['issued' => true, 'reissue_refused' => true, 'persistent_gates_closed' => true,
+                'actual_bootstrap_controller' => true, 'original_window_inherited' => true,
+                'lost_result_reconciled_without_reissue' => true, 'changed_control_refused' => true];
+        } finally { $bootstrap->close(); }
     }
     $authority = MemberSetupAuthority::open();
     $need($authority->identity() === $load('identity'), 'grant_changed');

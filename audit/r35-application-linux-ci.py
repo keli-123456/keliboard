@@ -66,11 +66,11 @@ def setup_rpc(operation, *, ok=True):
     return value.get('result', value)
 
 
-def import_rpc(operation, *, uid=0, ok=True):
+def import_rpc(operation, *, uid=0, ok=True, extra=None):
     prefix = [] if uid == 0 else ['setpriv', '--reuid=65534', '--regid=65534', '--clear-groups', '--no-new-privs']
     p = subprocess.run(prefix + ['php', '-d', 'display_errors=0', '-d', 'log_errors=0',
         str(ROOT / 'runtime/member_import_entry.php')], input=json.dumps(dict(operation=operation)).encode(),
-        cwd=ROOT / 'app', env=ENV, capture_output=True, timeout=90)
+        cwd=ROOT / 'app', env=dict(ENV, **(extra or {})), capture_output=True, timeout=90)
     value = json.loads(p.stdout)
     assert (p.returncode == 0) == ok and value['ok'] == ok, value
     for secret in (b'synthetic-no-live-token', b'synthetic-secret'):
@@ -112,6 +112,7 @@ try:
         'tests/Unit/Services/MachineMemberDnsInitializationTest.php',
         'tests/Unit/Services/MachineMemberSourceConfigurationTest.php',
         'tests/Unit/Services/MachineMemberPrerequisiteImportTest.php',
+        'tests/Unit/Services/MachineMemberBootstrapControllerTest.php',
         'tests/Unit/Services/MachineMemberSetupAuthorityTest.php',
         'tests/Unit/Services/MachineMemberProviderBindingsTest.php',
         'tests/Unit/Services/MachineDnsAliyunCompatibilityTest.php'],
@@ -256,9 +257,6 @@ try:
     result_path.rename(result_backup)
     try: import_denied('member_import_result_unconfirmed')
     finally: result_backup.rename(result_path)
-    assert import_rpc('stop')['stopped']
-    import_denied('member_import_expired_or_stopped')
-    assert import_rpc('readback')['scope'] == imported['scope']
     SUMMARY['prerequisite_import'] = dict(actual_fixed_cli=True, actual_credential_services=True,
         actual_release_distribution_service=True, encrypted_mysql_credentials=True,
         bundle_machine_and_private_material_bound=True, root_only=True,
@@ -281,6 +279,12 @@ try:
         assert result['configuration_sha256'] == configured['configuration_sha256']
         assert result['provider_gets'] == 0 and result['configuration_rows'] == configured['configuration_rows']
         assert result['closed_gates_unchanged']
+    read_configuration = import_rpc('configuration-read')['configuration']
+    assert read_configuration['service_sha256'] == configured['configuration_sha256']
+    repeated_configuration = import_rpc('configure')['configuration']
+    assert read_configuration == repeated_configuration
+    assert not repeated_configuration['cloud_or_dns_writes']
+    assert import_rpc('configure', uid=65534, ok=False)['reason'] == 'member_import_root_cli_required'
     SUMMARY['source_configuration'] = dict(actual_application_services=True, real_mysql_transactions=True,
         real_redis_locks=True, provider_reads_simulated=True, provider_writes=0,
         prerequisite_credentials_and_node_bytes_synthetic=True, concrete_import_authority_tested=True,
@@ -293,7 +297,13 @@ try:
         tasks_or_health_fabricated=False, persistent_gates_changed=False)
     SUMMARY['setup_issue'] = php('setup-issue')
     assert SUMMARY['setup_issue']['issued'] and SUMMARY['setup_issue']['reissue_refused']
-    assert php('configuration-stop')['configuration_sha256'] == configured['configuration_sha256']
+    assert SUMMARY['setup_issue']['actual_bootstrap_controller']
+    assert SUMMARY['setup_issue']['original_window_inherited']
+    assert SUMMARY['setup_issue']['lost_result_reconciled_without_reissue']
+    actual_grant = json.loads((ROOT / 'member-setup-grant.json').read_bytes())
+    assert actual_grant['started_at'] == authority['started_at'] and actual_grant['deadline_at'] == authority['deadline_at']
+    actual_setup = import_rpc('setup-read')['setup']
+    assert actual_setup['grant_id'] == actual_grant['grant_id'] and actual_setup['deadline_at'] == authority['deadline_at']
     assert php('setup-service-denied', uid=65534)['root_operations_denied']
     assert php('setup-drift')['policy_and_release_drift_refused']
     control_dns = php('setup-dns-control')
@@ -571,6 +581,24 @@ try:
         cloud_side_effects_simulated=True, mutation_phase_crash_tested=False)
     assert php('setup-queues')['no_redis_queued_delayed_or_reserved_jobs']
     assert callback() == 403
+    with import_lock.open('r+b') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert import_rpc('stop', ok=False)['reason'] == 'member_import_busy'
+        assert (ROOT / 'private/import-stopped').exists()
+    assert import_rpc('stop', extra={'DB_PORT': '1', 'REDIS_PORT': '1'})['stopped']
+    import_denied('member_import_expired_or_stopped')
+    assert import_rpc('readback')['scope'] == imported['scope']
+    assert import_rpc('configure', ok=False)['reason'] == 'member_import_expired_or_stopped'
+    assert import_rpc('configuration-read')['configuration'] == read_configuration
+    assert import_rpc('setup-read')['setup'] == actual_setup
+    assert php('configuration-stop')['configuration_sha256'] == configured['configuration_sha256']
+    SUMMARY['bootstrap_entry'] = dict(actual_fixed_cli_readback_and_replay=True,
+        actual_configuration_and_grant_controller=True, scope_from_actual_import_not_request=True,
+        original_started_and_deadline_inherited=True, caller_cannot_extend_window=True,
+        same_grant_reused_no_reissue=True, lost_result_reconciled_by_existing_grant=True,
+        changed_control_refused=True, stop_marker_precedes_lock_drain=True,
+        stop_does_not_boot_database_or_cache=True, stopped_readbacks_allowed=True,
+        whole_round_installation_and_native_ports_composed=False)
     SUMMARY['setup_authority'] = dict(actual_capability=True, real_mysql_redis_and_service_uid=True,
         native_source_queue_and_dispatch=True, provider_creates_simulated=2, duplicate_create_prevented=True,
         root_only_issue_and_revoke=True, bad_task_and_installation_refused=True,

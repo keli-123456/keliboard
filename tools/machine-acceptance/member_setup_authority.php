@@ -132,6 +132,12 @@ final class MemberSetupAuthority
             'deadline_at' => $this->scope['deadline_at']];
     }
 
+    public function windowBinding(): array
+    {
+        $this->check();
+        return ['started_at' => $this->scope['started_at'], 'deadline_at' => $this->scope['deadline_at']];
+    }
+
     public function sourceBinding(): array
     {
         $this->check();

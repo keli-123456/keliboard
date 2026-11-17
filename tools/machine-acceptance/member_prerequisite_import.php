@@ -106,6 +106,7 @@ final class MemberPrerequisiteImport
             'component' => 'kelinode-rs', 'platform' => 'linux-x86_64',
             'sha256' => $manifest['files']['node/release.tar.gz']['sha256'], 'version' => 'v0.1.387'], 'release_changed');
         return ['credentials' => $credentials, 'release' => $release,
+            'started_at' => $authority['started_at'], 'deadline_at' => $authority['deadline_at'],
             'identity' => ['authority_sha256' => hash('sha256', $rawAuthority), 'bundle_sha256' => $application['bundle_sha256']]];
     }
 
@@ -177,7 +178,9 @@ final class MemberPrerequisiteImport
         $account = MachineCloudAccount::query()->findOrFail($s['account_id']);
         $dns = MachineDnsCredential::query()->findOrFail($s['dns_credential_id']);
         $release = ServerMachineRelease::query()->findOrFail($s['release_id']);
-        self::need(User::query()->whereKey($s['admin_id'])->where('is_admin', true)->exists()
+        self::need($s['baseline_ids'] === $c['credentials']['baseline_ids']
+            && $s['version'] === $c['release']['version'] && $s['binary_sha256'] === $c['release']['binary_sha256']
+            && User::query()->whereKey($s['admin_id'])->where('is_admin', true)->exists()
             && MachineCloudAccount::query()->count() === 1 && $account->provider === 'linode'
             && $account->revision === $s['account_revision'] && $account->group_id === $s['group_id']
             && $account->credentials === $c['credentials']['linode']
@@ -191,6 +194,13 @@ final class MemberPrerequisiteImport
             && !$release->is_default && !ServerMachineRelease::query()->where('is_default', true)->exists(), 'data_changed');
         $this->publishedFiles($release, false);
         return $s;
+    }
+
+    public function authorization(bool $mutating): array
+    {
+        $c = $this->context($mutating);
+        return ['scope' => $this->readback(), 'identity' => $c['identity'],
+            'started_at' => $c['started_at'], 'deadline_at' => $c['deadline_at']];
     }
 
     private function publishedFiles(ServerMachineRelease $release, bool $prepare): void

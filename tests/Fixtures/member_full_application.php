@@ -72,7 +72,7 @@ try {
     }
 } catch (Throwable $error) {
     http_response_code(500);
-    $reason = preg_match('/^(member_application|member_import|member_setup|member_initialization|fixture)_[a-z_]{1,70}$/D', $error->getMessage())
+    $reason = preg_match('/^(member_application|member_import|member_configuration|member_setup|member_initialization|fixture)_[a-z_]{1,70}$/D', $error->getMessage())
         ? $error->getMessage() : 'fixture_failed';
     echo json_encode(['ok' => false, 'reason' => $reason, 'class' => (new ReflectionClass($error))->getShortName(),
         'file' => basename($error->getFile()), 'line' => $error->getLine()]);

@@ -9,6 +9,7 @@ use App\Services\ServerMachine\Cloud\MachineFailoverCredentials;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Keli\Acceptance\MemberApplicationBootstrap;
+use Keli\Acceptance\MemberBootstrapController;
 use Keli\Acceptance\MemberCliAuthority;
 use Keli\Acceptance\MemberProviderBindings;
 use Keli\Acceptance\MemberSourceConfiguration;
@@ -19,8 +20,9 @@ return static function (string $mode): array {
         || PHP_OS_FAMILY !== 'Linux' || PHP_SAPI !== 'cli' || posix_geteuid() !== 0)
         throw new RuntimeException('fixture_only');
     MemberApplicationBootstrap::initialized();
-    require_once '/opt/keli-isolated/runtime/member_provider_bindings.php';
-    require_once '/opt/keli-isolated/runtime/member_source_configuration.php';
+    foreach (['member_provider_bindings', 'member_source_configuration', 'member_prerequisite_import',
+        'member_setup_authority', 'member_bootstrap_controller'] as $name)
+        require_once '/opt/keli-isolated/runtime/' . $name . '.php';
     $need = static function (bool $ok, string $code = 'invalid'): void {
         if (!$ok) throw new RuntimeException('fixture_configuration_' . $code);
     };
@@ -80,7 +82,6 @@ return static function (string $mode): array {
             if ($load('stopped') !== null && $operation !== 'source-configuration-read')
                 throw new RuntimeException('fixture_configuration_stopped');
         };
-        $setup = new MemberSourceConfiguration($scope, $guard, $load, $save);
         if ($mode === 'configuration-failures') {
             $phases = ['source-configure-commit', 'source-configure-a', 'source-configure-b',
                 'source-configure-service', 'source-configure-dns-a', 'source-configure-dns-b', 'source-configure-complete'];
@@ -104,12 +105,14 @@ return static function (string $mode): array {
             return ['rollback_phases' => count($phases), 'first_error_safe_and_retained' => true,
                 'uncertain_replay_refused' => true, 'configuration_rows' => $counts(), 'provider_gets' => $reads];
         }
+        $controller = new MemberBootstrapController();
+        $setup = $controller->configuration();
         if ($mode === 'configuration-create') {
-            $result = $setup->create(); $save('observed', $result);
+            $result = $controller->rpc(['operation' => 'configure'])['configuration']; $save('observed', $result);
         } elseif ($mode === 'configuration-read') {
-            $result = $setup->readback(); $need($same($result, $load('observed')), 'readback_changed');
+            $result = $controller->rpc(['operation' => 'configuration-read'])['configuration']; $need($same($result, $load('observed')), 'readback_changed');
         } elseif ($mode === 'configuration-repeat') {
-            $result = $setup->create(); $need($same($result, $load('observed')), 'repeat_changed');
+            $result = $controller->rpc(['operation' => 'configure'])['configuration']; $need($same($result, $load('observed')), 'repeat_changed');
         } elseif ($mode === 'configuration-recovery') {
             app()->instance(MachineFailoverCredentials::class, new class extends MachineFailoverCredentials {
                 public function selection(MachineFailoverPolicy $policy): array {
@@ -117,8 +120,8 @@ return static function (string $mode): array {
                 }
             });
             $result = $setup->readback(); $need($same($result, $load('observed')), 'recovery_changed');
-            $receipt = $root . '/source-configuration-result.json';
-            $backup = $root . '/source-configuration-result.saved';
+            $receipt = '/opt/keli-isolated/private/member-import/source-configuration-result.json';
+            $backup = '/opt/keli-isolated/private/member-import/source-configuration-result.saved';
             $need(rename($receipt, $backup));
             try {
                 try { $setup->create(); throw new LogicException('fixture_unconfirmed_commit_replayed'); }
@@ -134,10 +137,13 @@ return static function (string $mode): array {
             } catch (RuntimeException $error) { $need($error->getMessage() === 'member_configuration_fresh_database_required'); }
             $need($get('source-configuration-intent') === null);
         } elseif ($mode === 'configuration-stop') {
-            $save('stopped', ['stop' => true]);
-            try { $setup->create(); throw new LogicException('fixture_stop_ignored'); }
-            catch (RuntimeException $error) { $need($error->getMessage() === 'fixture_configuration_stopped'); }
-            $result = $setup->readback(); $need($same($result, $load('observed')), 'stop_readback_changed');
+            $controller->close();
+            $need(MemberBootstrapController::stop()['stopped']);
+            $controller = new MemberBootstrapController();
+            try { $controller->rpc(['operation' => 'configure']); throw new LogicException('fixture_stop_ignored'); }
+            catch (RuntimeException $error) { $need($error->getMessage() === 'member_import_expired_or_stopped'); }
+            $result = $controller->rpc(['operation' => 'configuration-read'])['configuration'];
+            $need($same($result, $load('observed')), 'stop_readback_changed');
         } elseif ($mode === 'configuration-drift') {
             $original = $load('observed'); $a = $original['sources']['source-a'];
             $changes = [
@@ -158,13 +164,14 @@ return static function (string $mode): array {
         $need($counts() === [2, 2, 2, 1, 2, 2, 2]);
         $need($result['service_revision'] === 3 && !$result['health_or_forwarding_claimed'] && !$result['cloud_or_dns_writes']);
         $need(MachineFailoverPolicy::query()->orderBy('id')->pluck('daily_limit')->all() === [3, 1]);
-        foreach (['v2_machine_provision_task', 'v2_machine_owned_instance', 'v2_machine_failover_execution'] as $table)
-            $need(DB::table($table)->count() === 0);
+        if ($mode !== 'configuration-stop')
+            foreach (['v2_machine_provision_task', 'v2_machine_owned_instance', 'v2_machine_failover_execution'] as $table)
+                $need(DB::table($table)->count() === 0);
         foreach (MemberCliAuthority::closed() as $key => $value) $need(config($key) === $value);
         $encrypted = DB::table('v2_machine_cloud_account')->where('id', $scope['account_id'])->value('credentials');
         $need(!str_contains($encrypted, 'synthetic-no-live-token'));
         return ['configuration_rows' => $counts(), 'provider_gets' => $reads, 'provider_writes' => 0,
             'tasks_or_health_fabricated' => false, 'closed_gates_unchanged' => true,
             'service_revision' => $result['service_revision'], 'configuration_sha256' => $result['service_sha256']];
-    } finally { flock($lock, LOCK_UN); fclose($lock); }
+    } finally { if (isset($controller)) $controller->close(); flock($lock, LOCK_UN); fclose($lock); }
 };
