@@ -224,10 +224,15 @@ class StrictControllerTransport:
             if operation in ('native-issue', 'native-read'):
                 value = result['result']
                 if value.get('ready') is False:
-                    require(operation == 'native-issue' and set(value) <= {'ready', 'phase', 'next_check_at'}
+                    require(operation == 'native-issue' and set(value) <= {'ready', 'phase', 'next_check_at', 'blockers'}
                             and value.get('phase') in ('setup_cooldown', 'source_failure_observation', 'source_plan_blocked')
                             and ('next_check_at' not in value or type(value['next_check_at']) is int
                                  and 0 < value['next_check_at'] < identity['deadline_at']), 'transport_native_reply_invalid')
+                    if 'blockers' in value:
+                        require(value['phase'] == 'source_plan_blocked' and isinstance(value['blockers'], list)
+                                and 0 < len(value['blockers']) <= 30
+                                and all(isinstance(v, str) and re.fullmatch(r'[a-z][a-z0-9_]{0,79}', v)
+                                        for v in value['blockers']), 'transport_native_reply_invalid')
                 else:
                     grant = value.get('identity')
                     require(set(value) == {'ready', 'identity', 'deadline_at', 'cloud_or_dns_writes'}

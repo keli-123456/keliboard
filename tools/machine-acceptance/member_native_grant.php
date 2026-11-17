@@ -60,7 +60,9 @@ final class MemberNativeGrant
         self::need(is_array($p['blockers'] ?? null), 'failure_plan_invalid');
         $blockers = array_values(array_diff($p['blockers'], ['pricing_unverified', 'execution_disabled',
             'provider_not_checked', 'external_ownership_unverified', 'forwarding_not_verified']));
-        if ($blockers) return ['ready' => false, 'phase' => 'source_plan_blocked'];
+        if ($blockers) return ['ready' => false, 'phase' => 'source_plan_blocked', 'blockers' => array_map(
+            static fn ($code) => is_string($code) && preg_match('/^[a-z][a-z0-9_]{0,79}$/D', $code)
+                ? $code : 'unknown_blocker', array_slice($blockers, 0, 30))];
         return ['ready' => true, 'plan_id' => $p['id']];
     }
 

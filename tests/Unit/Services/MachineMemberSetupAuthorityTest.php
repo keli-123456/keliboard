@@ -83,7 +83,7 @@ class MachineMemberSetupAuthorityTest extends TestCase
         }
         foreach (['cooldown_active', 'credential_capacity_full', 'permission_revoked', 'unknown'] as $code) {
             $changed = $summary; $changed['plan']['blockers'][] = $code;
-            $this->assertSame(['ready' => false, 'phase' => 'source_plan_blocked'], $class::decision($changed, $source, 100, 101));
+            $this->assertSame(['ready' => false, 'phase' => 'source_plan_blocked', 'blockers' => [$code]], $class::decision($changed, $source, 100, 101));
         }
         foreach (['probe_identity', 'plan_identity', 'plan_policy', 'plan_revision', 'threshold', 'count', 'plan_count', 'plan_id'] as $change) {
             $changed = $summary;
