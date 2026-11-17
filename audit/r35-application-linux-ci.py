@@ -435,6 +435,8 @@ try:
         def export_checked():
             if evidence_archive is None:
                 raise RuntimeError('fixture-partial-evidence-export-failure')
+            if setup_export:
+                provider_before_export = [(creation_directory / name).read_bytes() for name in ('fixture-cloud.json', 'fixture-dns.json')]
             exported = evidence_archive.capture()
             body = evidence_archive.verify(exported)
             if setup_export:
@@ -446,8 +448,9 @@ try:
                 assert all(r['classification'] == 'no_queue_intent' for r in body['sources']['roles'].values())
                 assert not (ROOT / 'private/member-runtime-scope.json').exists()
                 assert (ROOT / 'private/member-setup-journal/first-error.json').read_bytes() == first_setup_error
-                assert initial_provider_state == [(creation_directory / name).read_bytes() for name in ('fixture-cloud.json', 'fixture-dns.json')]
+                assert provider_before_export == [(creation_directory / name).read_bytes() for name in ('fixture-cloud.json', 'fixture-dns.json')]
                 assert evidence_archive.capture() == exported
+                assert provider_before_export == [(creation_directory / name).read_bytes() for name in ('fixture-cloud.json', 'fixture-dns.json')]
                 remote = ROOT / 'private/member-setup-journal' / ('evidence-' + exported['sha256'] + '.json')
                 assert remote.stat().st_uid == 0 and remote.stat().st_mode & 0o777 == 0o600
                 raw = (evidence_directory / ('setup-evidence-' + exported['sha256'] + '.json')).read_bytes()
@@ -471,7 +474,7 @@ try:
                 frames = traceback.extract_tb(error.__traceback__)
                 frame = frames[-1]
                 reason = str(error)
-                safe_reason = reason if __import__('re').fullmatch(r'(evidence|transport|journal)_[a-z_]{1,100}', reason) else 'unclassified'
+                safe_reason = reason if __import__('re').fullmatch(r'(evidence|transport|journal)_[a-z0-9_]{1,100}', reason) else 'unclassified'
                 SUMMARY.setdefault('export_first_error', dict(error_class=type(error).__name__, reason=safe_reason,
                     file=Path(frame.filename).name, line=frame.lineno))
                 raise

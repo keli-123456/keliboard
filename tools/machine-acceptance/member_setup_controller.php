@@ -110,7 +110,14 @@ final class MemberSetupController
     private function exportEvidence(): array
     {
         $summary = $this->evidence(); // Requires revocation, including after expiry.
-        $sources = $this->sources->evidence();
+        try { $sources = $this->sources->evidence(); }
+        catch (\Throwable $error) {
+            $sources = ['resolved' => false, 'cloud_absence_not_asserted' => true,
+                'roles' => array_fill_keys(['source-a', 'source-b'], ['resolved' => false,
+                    'task_id' => null, 'classification' => 'unresolved', 'resource' => null,
+                    'diagnostic' => MemberRoundBridge::safeDiagnostic(['class' => (new \ReflectionClass($error))->getShortName(),
+                        'file' => basename($error->getFile()), 'line' => $error->getLine()])])];
+        }
         try {
             $records = $this->dns()->resourcePins();
             $dns = ['resolved' => true, 'retained_record_count' => count($records),

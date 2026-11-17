@@ -150,10 +150,13 @@ class MemberSetupEvidenceArchive(MemberEvidenceArchive):
         expected = dict(self.scope, **self.identity)
         require(set(body) == {'schema', 'kind', *expected, 'configuration_sha256', 'stopped', 'sources', 'dns',
                 'first_error_present', 'first_diagnostic', 'uncertain_request', 'uncertain_cleanup', 'cleanup_complete_not_asserted'}
-                and type(body['schema']) is int and body['schema'] == 1 and body['kind'] == 'member-setup-evidence'
-                and all(type(body[k]) is type(v) and body[k] == v for k, v in expected.items())
-                and body['configuration_sha256'] == self.configuration['evidence_sha256']
-                and body['stopped'] is True and body['cleanup_complete_not_asserted'] is True
+                and type(body['schema']) is int and body['schema'] == 1 and body['kind'] == 'member-setup-evidence',
+                'evidence_setup_binding_changed')
+        for key, value in expected.items():
+            require(type(body[key]) is type(value) and body[key] == value, 'evidence_setup_binding_changed_' + key)
+        require(body['configuration_sha256'] == self.configuration['evidence_sha256'],
+                'evidence_setup_binding_changed_configuration_sha256')
+        require(body['stopped'] is True and body['cleanup_complete_not_asserted'] is True
                 and type(body['first_error_present']) is bool and self._diagnostic(body['first_diagnostic'])
                 and body['first_error_present'] is (body['first_diagnostic'] is not None)
                 and all(self._uncertain(body[k]) for k in ('uncertain_request', 'uncertain_cleanup')),
