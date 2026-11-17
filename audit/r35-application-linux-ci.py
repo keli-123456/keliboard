@@ -78,7 +78,12 @@ try:
     (ROOT / '.r35-application-fixture').write_text(sha)
     work = Path(tempfile.mkdtemp(prefix='r35-app-fixture-'))
     owned_repo = work / 'source'
-    command(['git', 'clone', '--no-hardlinks', '--quiet', str(REPO), str(owned_repo)])
+    owned_repo.mkdir()
+    shutil.copytree(REPO / '.git', owned_repo / '.git')
+    for name in member_bundle.FILES:
+        target = owned_repo / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(REPO / name, target)
     assert command(['git', 'rev-parse', 'HEAD'], cwd=owned_repo).stdout.decode().strip() == sha
     shutil.copytree(REPO / 'vendor', owned_repo / 'vendor')
     application = work / 'application.tar.gz'
