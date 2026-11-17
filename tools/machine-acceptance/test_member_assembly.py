@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from member_assembly import MemberRoundAssembly, run_assembled_round
-from member_auxiliary import digest
+from member_auxiliary import MemberAuxiliary, digest
 from member_cli import BoundControllerTransport, RUN
 from member_initialization import STAGES
 from member_transport import TransportError
@@ -89,6 +89,21 @@ class AssemblyTests(unittest.TestCase):
         elif op == 'round-status':
             result = dict(run_id=RUN, stopped=self.stopped, resolved=True,
                           roles={r: self.f.roles[r] for r in self.f.created_roles})
+        elif op == 'round-dns-cleanup':
+            self.assertTrue(self.stopped)
+            scope = dict(run_id=RUN, control=None, faults=[], private_files=[], requests=[],
+                         records=copy.deepcopy(self.f.original_scope['records']))
+            dns = MemberAuxiliary(scope=scope, io=self.f.io,
+                load=lambda key: self.f.journal.get('native-dns-fixture-' + key),
+                save=lambda key, value: self.f.save('native-dns-fixture-' + key, value), clock=lambda: self.f.now)
+            records = {}
+            for pin in scope['records']:
+                role = next(r for r in ('control', 'edge-a', 'edge-b') if pin['name'].startswith(r + '-'))
+                try: complete = dns.absent('dns', pin)
+                except Exception: complete = False
+                records[role] = dict(complete=complete)
+            dns.persist()
+            result = dict(complete=all(r['complete'] for r in records.values()), records=records)
         else:
             self.assertIn(op, ('task-inspect', 'task-delete'))
             result = self.f.task(op, request['role'])
@@ -143,6 +158,8 @@ class AssemblyTests(unittest.TestCase):
         self.assertLess(ops.index('round-stop'), ops.index('setup-reconcile'))
         self.assertLess(ops.index('private-remove'), ops.index('control-delete'))
         self.assertEqual(ops.count('control-create'), 1); self.assertEqual(ops.count('control-delete'), 1)
+        self.assertIn('round-dns-cleanup', ops)
+        self.assertLess(ops.index('round-dns-cleanup'), ops.index('private-remove'))
         self.assertEqual(self.f.journal['assembly-cleanup-scope']['auxiliary']['records'][1]['value'], '192.0.2.55')
 
     def test_failure_before_or_after_each_stage_cleans_only_created_resources(self):

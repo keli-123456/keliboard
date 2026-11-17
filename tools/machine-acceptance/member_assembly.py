@@ -92,7 +92,12 @@ class MemberRoundAssembly:
         scope = self.cleanup_scope(combined)
         if combined['native'] is not None:
             self.native_port(self.initialization.state['receipts']['native-grant'])
-        bindings = MemberAuxiliaryBindings(scope=scope['auxiliary'], provider=self.provider,
+        auxiliary_scope = copy.deepcopy(scope['auxiliary'])
+        if self.native is not None:
+            # Native DNS may now hold A2. Only the original signed publication
+            # journal can resolve that pin; never reuse a mutable setup snapshot.
+            auxiliary_scope['records'] = []
+        bindings = MemberAuxiliaryBindings(scope=auxiliary_scope, provider=self.provider,
             controller=self.controller, reconcile=self.reconcile, export=self.export,
             load=self.load, save=self.save)
 
@@ -100,8 +105,10 @@ class MemberRoundAssembly:
             self.guard('cleanup-' + operation)
             return bindings(operation, pin)
 
-        auxiliary = MemberAuxiliary(scope=scope['auxiliary'], io=io, load=self.load,
+        auxiliary = MemberAuxiliary(scope=auxiliary_scope, io=io, load=self.load,
                                     save=self.save, clock=self.clock)
+        if self.native is not None:
+            auxiliary = self.native.native_auxiliary(auxiliary)
         # Validate the complete ledger before persisting it or sending a delete.
         def call(operation, role):
             self.guard('cleanup-' + operation)

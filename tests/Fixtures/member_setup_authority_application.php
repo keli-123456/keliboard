@@ -203,7 +203,8 @@ return static function (string $mode): array {
                 else throw new RuntimeException('fixture_setup_dns_operation');
             }
             $save('setup-dns-provider', $dns);
-            if ($mode === 'setup-native-rpc' && $action === 'DeleteDomainRecord' && $id === '6002'
+            if (in_array($mode, ['setup-native-rpc', 'setup-retry-cleanup-rpc'], true)
+                && $action === 'DeleteDomainRecord' && $id === '6002'
                 && $load('native-dns-lost-ack') === null) {
                 $save('native-dns-lost-ack', ['injected' => true]);
                 throw new Illuminate\Http\Client\ConnectionException('synthetic lost DNS delete reply');
@@ -255,7 +256,8 @@ return static function (string $mode): array {
             return Http::response($row);
         }
         if ($request->method() === 'DELETE') {
-            $nativeCleanup = str_starts_with($mode, 'setup-native-rpc') || $mode === 'setup-flow-rpc';
+            $nativeCleanup = str_starts_with($mode, 'setup-native-rpc')
+                || $mode === 'setup-flow-rpc' || $mode === 'setup-retry-cleanup-rpc';
             $need((str_starts_with($mode, 'setup-cleanup') || $nativeCleanup)
                 && preg_match('~/linode/instances/(10000[1234])$~D', $path, $match) === 1
                 && ($nativeCleanup || $match[1] !== '100003'), 'delete_scope');
@@ -360,12 +362,32 @@ return static function (string $mode): array {
             'dns_updates' => $load('setup-dns-provider')['update'] ?? 0,
             'provider_first_error' => $load('provider-first-error')];
     }
-    if (str_starts_with($mode, 'setup-native-rpc')) {
+    if (str_starts_with($mode, 'setup-native-rpc') || str_starts_with($mode, 'setup-retry-cleanup-')) {
+        $retryCleanup = str_starts_with($mode, 'setup-retry-cleanup-');
+        if ($retryCleanup) {
+            $need(file_exists('/opt/keli-isolated/private/member-journal/round-stop.json')
+                && file_exists('/opt/keli-isolated/member-setup-stop.json'), 'retry_cleanup_not_stopped');
+            $state = json_decode(file_get_contents('/opt/keli-isolated/private/member-journal/round-driver.json'), true, 32, JSON_THROW_ON_ERROR);
+            $need($state['phase'] === 'cleanup' && $state['first_error'] === null
+                && $state['branches']['native_cleanup'] && $state['branches']['cooldown']
+                && $state['branches']['retry'] && $state['branches']['dns_cutover']
+                && $state['branches']['b_unchanged'], 'retry_cleanup_flow_incomplete');
+        }
         $history = MemberProviderBindings::digest(Task::orderBy('id')->get()->toArray());
         $before = $load('native-cleanup-history');
         if ($before === null) $save('native-cleanup-history', ['sha256' => $history]);
         else $need($before['sha256'] === $history, 'native_cleanup_changed_history');
-        $need(Task::count() === 3 && App\Models\MachineFailoverAttempt::count() === 1, 'native_cleanup_task_scope');
+        $need(Task::count() === ($retryCleanup ? 4 : 3)
+            && App\Models\MachineFailoverAttempt::count() === ($retryCleanup ? 2 : 1), 'native_cleanup_task_scope');
+        if ($mode === 'setup-retry-cleanup-summary') {
+            $dns = $load('setup-dns-provider'); $closed();
+            return ['task_history_unchanged' => true, 'tasks' => Task::count(),
+                'attempts' => App\Models\MachineFailoverAttempt::count(),
+                'provider_rows' => count($load('provider-rows') ?? []),
+                'delete_calls' => $load('cleanup-delete-count')['value'] ?? 0,
+                'dns_records_remaining' => count($dns['rows']), 'dns_delete_calls' => $dns['delete'],
+                'dns_update_calls' => $dns['update'] ?? 0, 'dns_create_calls' => $dns['create']];
+        }
         if ($mode === 'setup-native-rpc-dns-summary') {
             $dns = $load('setup-dns-provider'); $closed();
             return ['task_history_unchanged' => true, 'records_remaining' => count($dns['rows']),

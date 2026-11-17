@@ -171,7 +171,43 @@ class MemberControllerPort:
         return dict(run_id=self.transport.run_id, resolved=True,
                     cleanup_scope={'run_id': self.transport.run_id, 'roles': result['roles']})
 
-    def cleanup_factory(self, auxiliary, save, clock=time.time):
+    def native_auxiliary(self, auxiliary):
+        """Use authenticated post-cutover DNS receipts before private teardown.
+
+        The delegate must not also delete the initialization DNS pins. Its other
+        responsibilities (faults, evidence, private material, control) are unchanged.
+        """
+        key = 'native-dns-cleanup-confirmed'
+        expected = dict(identity=self.transport.identity_binding, complete=True,
+                        records=['control', 'edge-a', 'edge-b'])
+
+        def call(operation):
+            previous = self.transport.load(key)
+            require(previous is None or (isinstance(previous, dict) and previous.get('complete') is True
+                    and previous == expected), 'cleanup_native_dns_receipt_changed')
+            if operation == 'dns-and-private-cleanup' and previous is None:
+                result = self.transport.call('round-dns-cleanup')
+                require(isinstance(result, dict) and set(result) == {'complete', 'records'}
+                        and type(result['complete']) is bool and isinstance(result['records'], dict)
+                        and set(result['records']) == set(expected['records']), 'cleanup_native_dns_unconfirmed')
+                records = list(result['records'].values())
+                require(all(isinstance(r, dict) and type(r.get('complete')) is bool for r in records)
+                        and result['complete'] is all(r['complete'] for r in records),
+                        'cleanup_native_dns_unconfirmed')
+                if not result['complete']:
+                    return {'pending': True}
+                require(all(r == {'complete': True} for r in records), 'cleanup_native_dns_unconfirmed')
+                self.transport.save(key, copy.deepcopy(expected))
+                require(self.transport.load(key) == expected, 'cleanup_native_dns_readback_failed')
+            if operation == 'control-delete-or-inspect':
+                require(previous == expected, 'cleanup_native_dns_unconfirmed')
+            return auxiliary(operation)
+
+        return call
+
+    def cleanup_factory(self, auxiliary, save, clock=time.time, *, native_dns=False):
+        if native_dns:
+            auxiliary = self.native_auxiliary(auxiliary)
         def build(scope, restored):
             require(scope.get('run_id') == self.transport.run_id, 'transport_round_binding_changed')
             return MemberCleanup(run_id=scope['run_id'], roles=scope['roles'], call=self.transport.call,

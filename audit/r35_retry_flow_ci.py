@@ -83,3 +83,74 @@ def run_retry_flow(*, bound, php, report, callback, pins, root, artifacts, summa
         transition_path = artifacts / 'native-retry-transitions.json'
         transition_path.write_text(json.dumps(transitions, sort_keys=True) + '\n')
         transition_path.chmod(0o644)
+
+
+def run_retry_teardown(*, bound, rebind, php, callback, report, save, load, work, artifacts, summary):
+    from member_cli import MemberControllerPort, RUN
+    from member_evidence import MemberEvidenceArchive
+
+    summary['native_retry_teardown_started'] = True
+    port = MemberControllerPort(bound)
+    scope = port('reconcile', dict(run_id=RUN))['cleanup_scope']
+    assert set(scope['roles']) == {'source-a', 'source-b', 'candidate-a1', 'candidate-a2'}
+    assert callback(role='candidate-a2') == report('candidate-a2') == report('candidate-a2', node=True) == 403
+    before = php('setup-retry-cleanup-summary')
+    assert before['provider_rows'] == 3 and before['delete_calls'] == 1
+    assert before['dns_records_remaining'] == 3 and before['dns_update_calls'] == 1
+    private_calls = []
+
+    def pending_private(operation):
+        if operation == 'restore-faults': return dict(restored=True)  # No fault was injected.
+        assert operation == 'dns-and-private-cleanup', 'controller_removal_not_bound'
+        private_calls.append(operation)
+        # Do not manufacture a private-material/controller teardown receipt.
+        return dict(pending=True)
+
+    cleanup = port.cleanup_factory(pending_private, lambda v: save('retry-cleanup', v),
+                                  native_dns=True)(scope, None)
+    first = cleanup.step()
+    error = json.loads(json.dumps(first['first_error']))
+    assert error and first['phase'] == 'tasks' and not private_calls
+    # Lose source A's DELETE reply, then reconstruct host transport/cleanup. A1
+    # was already deleted natively and must not receive a second DELETE.
+    bound = rebind(); port = MemberControllerPort(bound)
+    cleanup = port.cleanup_factory(pending_private, lambda v: save('retry-cleanup', v),
+                                  native_dns=True)(scope, load('retry-cleanup'))
+    for _ in range(12):
+        state = cleanup.step()
+        assert state['first_error'] == error
+        if load('native-dns-cleanup-confirmed') is not None:
+            assert state['phase'] == 'auxiliary' and private_calls
+            break
+        assert not private_calls and state['phase'] in ('tasks', 'auxiliary')
+        time.sleep(10.1)
+    else: raise AssertionError('post_cutover_cleanup_unconfirmed')
+    assert all(len(v) == 2 and v[1] - v[0] >= 10 for v in state['reads'].values())
+    finished = php('setup-retry-cleanup-summary')
+    assert finished == dict(task_history_unchanged=True, tasks=4, attempts=2, provider_rows=0,
+        delete_calls=4, dns_records_remaining=0, dns_delete_calls=3, dns_update_calls=1, dns_create_calls=3), finished
+    assert bound.call('round-dns-cleanup') == dict(complete=True,
+        records={role: dict(complete=True) for role in ('control', 'edge-a', 'edge-b')})
+    assert php('setup-retry-cleanup-summary') == finished
+    archive_dir = work / 'retry-teardown-evidence'; archive_dir.mkdir(mode=0o700)
+    archive = MemberEvidenceArchive(bound, archive_dir)
+    exported = archive.capture(); body = archive.verify(exported)
+    assert body['stopped'] and body['reconciled'] and body['cleanup_complete_not_asserted']
+    assert set(body['tasks']) == set(scope['roles']) and body['setup']['first_error_present']
+    assert body['setup']['first_diagnostic']['class'] == 'ConnectionException'
+    assert not body['driver']['first_error_present']
+    restarted = MemberEvidenceArchive(rebind(), archive_dir)
+    assert restarted.capture() == exported and restarted.verify(exported) == body
+    raw = (archive_dir / ('evidence-' + exported['sha256'] + '.json')).read_bytes()
+    assert all(secret.encode() not in raw for secret in ('s' * 32, 'r' * 32))
+    assert not any(key in raw for key in (b'api_token', b'access_key_secret', b'callback_hash', b'"payload"'))
+    assert all(p.stat().st_mode & 0o777 == 0o600 for p in archive_dir.iterdir())
+    path = artifacts / 'native-retry-teardown-evidence.json'
+    path.write_bytes(raw); path.chmod(0o644)
+    summary['native_retry_teardown'] = dict(actual_bound_host_cleanup=True, actual_native_a2_dns_receipt_resolution=True,
+        source_candidate_exact_deletes_total=4, dns_exact_deletes_total=3, no_duplicate_delete=True,
+        real_absence_read_gap_minimum_seconds=10, source_and_dns_delete_reply_loss_reconciled=True,
+        local_dns_confirmation_blocks_early_private_cleanup=True, task_and_attempt_history_retained=True,
+        first_error_retained=True, stopped_evidence_sha256=exported['sha256'], immutable_host_readback=True,
+        post_stop_source_b_explicitly_cleaned=True, private_cleanup_pending=True, controller_last_cleanup_pending=True,
+        whole_round_cleanup_not_claimed=True, cloud_ssh_dns_simulated=True)

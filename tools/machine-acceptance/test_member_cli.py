@@ -34,6 +34,7 @@ class MemberCliTests(unittest.TestCase):
         self.requests, self.commands = [], []
         self.fail_operation, self.changed, self.unknown = None, None, False
         self.stopped = False
+        self.native_dns = dict(complete=True, records={r: {'complete': True} for r in ('control', 'edge-a', 'edge-b')})
         self.trans = self.make_transport()
         self.port = MemberControllerPort(self.trans)
         for name in ('socket.socket', 'subprocess.Popen'):
@@ -55,6 +56,7 @@ class MemberCliTests(unittest.TestCase):
         if op == 'round-ready': result = {'ready': True}
         elif op == 'round-stop': self.stopped = True; result = {'stopped': True}
         elif op == 'round-status': result = dict(run_id=RUN, resolved=not self.unknown, stopped=self.stopped, roles=self.f.roles)
+        elif op == 'round-dns-cleanup': result = copy.deepcopy(self.native_dns)
         elif op == 'round-evidence':
             body = dict(schema=1, **self.trans.identity_binding, scope_sha256='f' * 64, stopped=self.stopped,
                 reconciled=not self.unknown, reconcile_diagnostic=None, tasks={}, driver={}, setup={},
@@ -132,6 +134,70 @@ class MemberCliTests(unittest.TestCase):
             self.trans.call('round-dns-cleanup', 'source-a')
         with self.assertRaisesRegex(TransportError, 'expired_or_stopped'):
             self.trans.call('round-step')
+
+    def test_native_auxiliary_waits_for_exact_dns_receipt_before_private_material(self):
+        events = []
+        auxiliary = self.port.native_auxiliary(lambda op: events.append(op) or {'private_materials_removed': True})
+        self.trans.call('round-stop')
+        self.native_dns['complete'] = False
+        self.native_dns['records']['edge-a'] = {'complete': False, 'diagnostic': {'class': 'ConnectionException'}}
+        self.assertEqual({'pending': True}, auxiliary('dns-and-private-cleanup'))
+        self.assertEqual([], events)
+        with self.assertRaisesRegex(TransportError, 'native_dns_unconfirmed'):
+            auxiliary('control-delete-or-inspect')
+        self.native_dns['complete'] = True
+        self.native_dns['records']['edge-a'] = {'complete': True}
+        auxiliary('dns-and-private-cleanup')
+        self.assertEqual(['dns-and-private-cleanup'], events)
+        count = len(self.requests)
+        # Removing the controller environment must not require another PHP DNS RPC.
+        self.trans = self.make_transport()
+        restarted = MemberControllerPort(self.trans).native_auxiliary(lambda op: events.append(op) or {})
+        self.fail_operation = 'round-dns-cleanup'
+        restarted('dns-and-private-cleanup'); restarted('control-delete-or-inspect')
+        self.assertEqual(count, len(self.requests))
+
+    def test_native_auxiliary_does_not_accept_missing_mixed_or_nonboolean_dns_results(self):
+        self.trans.call('round-stop')
+        valid = copy.deepcopy(self.native_dns)
+        for change in ('missing', 'extra', 'aggregate', 'number', 'extra_success_data'):
+            self.native_dns = copy.deepcopy(valid)
+            if change == 'missing': del self.native_dns['records']['edge-b']
+            if change == 'extra': self.native_dns['records']['foreign'] = {'complete': True}
+            if change == 'aggregate': self.native_dns['records']['edge-a']['complete'] = False
+            if change == 'number': self.native_dns['records']['edge-a']['complete'] = 1
+            if change == 'extra_success_data': self.native_dns['records']['edge-a']['diagnostic'] = {'message': 'secret'}
+            with self.subTest(change=change):
+                auxiliary = self.port.native_auxiliary(lambda _: self.fail('private cleanup was reached'))
+                with self.assertRaisesRegex(TransportError, 'native_dns_unconfirmed'):
+                    auxiliary('dns-and-private-cleanup')
+                self.assertNotIn('native-dns-cleanup-confirmed', self.f.journal)
+
+    def test_native_auxiliary_recovers_lost_dns_ack_but_rejects_changed_durable_binding(self):
+        self.trans.call('round-stop')
+        auxiliary = self.port.native_auxiliary(lambda _: {})
+        self.fail_operation = 'round-dns-cleanup'
+        with self.assertRaises(TransportError): auxiliary('dns-and-private-cleanup')
+        self.assertNotIn('native-dns-cleanup-confirmed', self.f.journal)
+        self.fail_operation = None
+        auxiliary('dns-and-private-cleanup')
+        self.f.journal['native-dns-cleanup-confirmed']['complete'] = 1
+        with self.assertRaisesRegex(TransportError, 'native_dns_receipt_changed'):
+            auxiliary('dns-and-private-cleanup')
+        self.f.journal['native-dns-cleanup-confirmed']['complete'] = True
+        self.f.journal['native-dns-cleanup-confirmed']['identity']['grant_id'] = 'e' * 32
+        with self.assertRaisesRegex(TransportError, 'native_dns_receipt_changed'):
+            auxiliary('dns-and-private-cleanup')
+
+    def test_native_auxiliary_failed_local_readback_blocks_private_removal(self):
+        self.trans.call('round-stop')
+        auxiliary = self.port.native_auxiliary(lambda _: self.fail('private cleanup was reached'))
+        original = self.trans.save
+        def save(key, value):
+            if key != 'native-dns-cleanup-confirmed': original(key, value)
+        self.trans.save = save
+        with self.assertRaisesRegex(TransportError, 'native_dns_readback_failed'):
+            auxiliary('dns-and-private-cleanup')
 
     def test_changed_grant_host_material_and_response_fail_closed(self):
         self.known.write_bytes(b'different host key')

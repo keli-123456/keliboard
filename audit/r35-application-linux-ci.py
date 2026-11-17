@@ -607,6 +607,8 @@ try:
             else:
                 assert remote == 'php /opt/keli-isolated/runtime/member_transport_entry.php'
                 mode = 'setup-flow-rpc' if '--retry-flow' in sys.argv else 'setup-native-rpc'
+                if mode == 'setup-flow-rpc' and SUMMARY.get('native_retry_teardown_started'):
+                    mode = 'setup-retry-cleanup-rpc'
                 if mode == 'setup-native-rpc' and crash_pending and request_body['operation'] == 'task-delete' and request_body['role'] == 'candidate-a1':
                     mode = 'setup-native-rpc-crash'; crash_pending = False
                 argv = [str(ROOT / 'app/tests/Fixtures/member_full_application.php'), mode]
@@ -640,9 +642,13 @@ try:
         bound = BoundControllerTransport(grant_file=native_path,
             grant_sha256=hashlib.sha256(native_bytes).hexdigest(), **transport_args)
         if '--retry-flow' in sys.argv:
-            from r35_retry_flow_ci import run_retry_flow
+            from r35_retry_flow_ci import run_retry_flow, run_retry_teardown
             run_retry_flow(bound=bound, php=php, report=report, callback=callback, pins=pins,
                            root=ROOT, artifacts=ART, summary=SUMMARY)
+            run_retry_teardown(bound=bound, rebind=lambda: BoundControllerTransport(grant_file=native_path,
+                grant_sha256=hashlib.sha256(native_bytes).hexdigest(), **transport_args),
+                php=php, callback=callback, report=report, save=host_save, load=host_load,
+                work=work, artifacts=ART, summary=SUMMARY)
             SUMMARY['status'] = 'passed'
             raise SystemExit(0)
         started_native = php('setup-candidate-start')
