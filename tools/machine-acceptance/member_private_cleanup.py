@@ -93,10 +93,38 @@ class MemberPrivateCleanup:
     def barrier(self):
         from member_http_service import assert_stopped
         assert_stopped(self.root)
-        application = unique_json(self.read(self.root / 'application.json', 0o644))
-        require(application.get('run_id') == RUN and application.get('machine_id_sha256')
-                == hashlib.sha256(Path('/etc/machine-id').read_bytes()).hexdigest(),
+        machine = hashlib.sha256(Path('/etc/machine-id').read_bytes()).hexdigest()
+        stops = {'private/import-stopped': 0o600}
+        locks = {}
+        cold = 'private/host-installation/binding.json'
+        has_cold = os.path.lexists(self.root / cold)
+        if has_cold:
+            from member_host_installation import validate
+            binding = unique_json(self.read(self.root / cold))
+            require(isinstance(binding, dict) and set(binding) == {'scope', 'machine_id_sha256'}
+                    and binding['machine_id_sha256'] == machine, 'cleanup_private_installation_changed')
+            validate(dict(operation='journal-read', scope=binding['scope']))
+            stops[cold] = 0o600
+            locks['private/host-installation/round.lock'] = 0o600
+        has_application = os.path.lexists(self.root / 'application.json')
+        require(has_application or has_cold, 'cleanup_private_installation_changed')
+        if has_application:
+            application = unique_json(self.read(self.root / 'application.json', 0o644))
+            require(application.get('run_id') == RUN and application.get('machine_id_sha256') == machine,
+                    'cleanup_private_installation_changed')
+            if has_cold:
+                require(application.get('bundle_sha256') == binding['scope']['bundle_sha256'],
+                        'cleanup_private_installation_changed')
+            stops['application.json'] = 0o644
+        else:
+            require(not any(os.path.lexists(self.root / name) for name in (
+                'member-setup-grant.json', 'private/member-runtime-scope.json', 'private/member-journal')),
                 'cleanup_private_installation_changed')
+        # A failed cold configure can precede PHP's first lock. A present import
+        # directory still requires its lock; an incomplete directory is not proof
+        # of absence. Later PHP mutations must check import-stopped under that lock.
+        if not has_cold or os.path.lexists(self.root / 'private/member-import'):
+            locks['private/member-import/lock'] = 0o600
         path = self.directory / 'barrier.json'
         if os.path.lexists(path):
             value = unique_json(self.read(path))
@@ -104,11 +132,11 @@ class MemberPrivateCleanup:
                     and value['run_id'] == RUN and isinstance(value['stops'], dict)
                     and isinstance(value['locks'], dict), 'cleanup_private_barrier_changed')
             allowed = {'application.json': 0o644, 'private/import-stopped': 0o600,
-                       'member-setup-stop.json': 0o644, 'private/member-journal/round-stop.json': 0o600}
-            require({'application.json', 'private/import-stopped'} <= set(value['stops']) <= set(allowed)
-                    and set(value['locks']) <= {'private/member-import/lock', 'member-setup-grant.json',
-                                               'private/member-journal/rpc.lock'}, 'cleanup_private_barrier_changed')
-            expected_locks = {'private/member-import/lock': 0o600}
+                       cold: 0o600, 'member-setup-stop.json': 0o644, 'private/member-journal/round-stop.json': 0o600}
+            optional = {'member-setup-stop.json', 'private/member-journal/round-stop.json'}
+            require(set(value['stops']) - optional == set(stops) and set(value['stops']) <= set(allowed),
+                    'cleanup_private_barrier_changed')
+            expected_locks = dict(locks)
             if 'member-setup-stop.json' in value['stops']:
                 expected_locks['member-setup-grant.json'] = 0o644
             if 'private/member-journal/round-stop.json' in value['stops']:
@@ -120,8 +148,6 @@ class MemberPrivateCleanup:
             return value
         require(self.read(self.root / 'private/import-stopped') == (RUN + '\n').encode(),
                 'cleanup_private_bootstrap_not_stopped')
-        stops = {'application.json': 0o644, 'private/import-stopped': 0o600}
-        locks = {'private/member-import/lock': 0o600}
         grant = self.root / 'member-setup-grant.json'
         if os.path.lexists(grant):
             raw = self.read(grant, 0o644)

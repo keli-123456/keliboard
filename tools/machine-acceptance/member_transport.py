@@ -493,6 +493,17 @@ class StrictControllerTransport:
                 'cleanup_private_operation_invalid')
         self.guard('private-' + operation, 'control')
         binding = self.load('bootstrap-binding')
+        cold = self.load('host-installation-binding')
+        if cold is not None:
+            from member_host_installation import validate
+            require(isinstance(cold, dict) and set(cold) == {'scope', 'host', 'identity_sha256', 'known_hosts_sha256'},
+                    'transport_host_install_binding_changed')
+            validate(dict(operation='journal-read', scope=cold['scope']))
+            require(cold['scope']['run_id'] == self.run_id and self.load('host-installation-stopped')
+                    == dict(binding=digest(cold)), 'cleanup_private_installation_not_stopped')
+            pinned = dict(run_id=self.run_id, **{k: cold[k] for k in ('host', 'identity_sha256', 'known_hosts_sha256')})
+            require(binding is None or binding == pinned, 'transport_bootstrap_binding_changed')
+            binding = pinned
         require(isinstance(binding, dict) and binding.get('run_id') == self.run_id
                 and binding.get('host') == self.host, 'transport_bootstrap_binding_changed')
         for file, key in ((self.identity, 'identity_sha256'), (self.known, 'known_hosts_sha256')):

@@ -107,7 +107,7 @@ try:
         'test_member_installation_linux.InstallationServiceUserTests', 'test_member_execution.ExecutionTests',
         'test_member_assembly', 'test_member_initialization', 'test_member_cli', 'test_member_round',
         'test_member_transport', 'test_member_remote_setup', 'test_member_private_cleanup', 'test_member_bundle', 'test_member_runtime_bundle',
-        'test_member_host_installation', 'test_member_http_service'],
+        'test_member_host_installation', 'test_member_host_setup', 'test_member_http_service'],
         cwd=TOOLS, capture_output=True, text=True, timeout=240)
     (ART / 'python.log').write_text(tests.stdout + tests.stderr)
     assert tests.returncode == 0, 'python_regression_failed'
@@ -211,7 +211,9 @@ try:
         prefix = ['setpriv', '--reuid=65534', '--regid=65534', '--clear-groups', '--no-new-privs', '--bounding-set=-all']
         upload = (argv[:2] == ['python3', '-c'] and len(argv) == 4
                   and argv[-1] == frozen['archive_sha256'] and '/opt/keli-isolated/incoming' in argv[2])
-        assert upload or argv in (expected, prefix + expected, ['python3', '-I', '-B', '-c', BOOTSTRAP])
+        assert upload or argv in (expected, prefix + expected, ['python3', '-I', '-B', '-c', BOOTSTRAP],
+            ['php', '/opt/keli-isolated/runtime/member_import_entry.php'],
+            ['python3', '-B', '/opt/keli-isolated/runtime/member_private_cleanup.py'])
         p = subprocess.run(argv, input=payload, cwd=ROOT, env=ENV, capture_output=True, timeout=timeout)
         assert p.returncode == 0, json.loads(p.stdout)
         return p.stdout
@@ -219,6 +221,84 @@ try:
         known_hosts=install_root / 'known', guard=lambda *_: None, load=install_journal.get,
         save=lambda k, v: install_journal.__setitem__(k, v), execute=installation_ssh)
     (ROOT / 'incoming').mkdir(mode=0o700)
+    if '--host-port-only' in sys.argv:
+        from member_auxiliary import digest
+        from member_host_setup import MemberHostSetup
+        from member_remote_setup import MemberRemoteSetup
+        from member_execution import MemberExecutionSetup
+        from member_initialization import STAGES
+        task = '11111111-1111-4111-8111-111111111111'; suffix = task.replace('-', '')
+        control = dict(run_id=RUN, task_id=task, external_id='999', label='keli-' + suffix,
+            marker='keli-create-' + suffix, region='sg-sin-2', size='g6-standard-2', image='linode/debian12',
+            provider_created_at='2026-11-18T01:00:00Z')
+        install_journal['setup-control-pin'] = control
+        domain = 'control-' + RUN + '.dnscloudcloud.top'
+        certificate, tls_key = work / 'certificate.pem', work / 'key.pem'
+        command(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+            '-subj', '/CN=' + domain, '-addext', 'subjectAltName=DNS:' + domain,
+            '-keyout', str(tls_key), '-out', str(certificate)])
+        tls_files = {name: dict(sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+            base64=base64.b64encode(path.read_bytes()).decode()) for name, path in [('certificate', certificate), ('key', tls_key)]}
+        credentials = json.dumps(dict(schema=1, run_id=RUN, linode=dict(api_token='synthetic-no-live-token'),
+            aliyun=dict(access_key_id='synthetic-access-key', access_key_secret='synthetic-secret'), baseline_ids=[])).encode()
+        settings = dict(app_key=base64.b64encode(b'x' * 32).decode(), database='keli_acceptance_application',
+            username='keli_application', password='s' * 32, mysql_port=13306, redis_password='r' * 32, redis_port=16379)
+        host_arguments = dict(scope=install_scope, transport=install_transport, archive=bundle, settings=settings,
+            service=dict(uid=65534, gid=65534), credentials=credentials, tls_files=tls_files,
+            import_permit=dict(scope=install_scope, credentials_sha256=hashlib.sha256(credentials).hexdigest(), authorized=True),
+            load=install_journal.get, save=lambda k, v: install_journal.__setitem__(k, v))
+        host_port = MemberHostSetup(**host_arguments)
+        remote_port = MemberRemoteSetup(scope=install_scope, transport=install_transport,
+            grant_file=install_root / 'native-grant.json', load=install_journal.get,
+            save=lambda k, v: install_journal.__setitem__(k, v))
+        execution = MemberExecutionSetup(scope=install_scope, installation=host_port,
+            sources=remote_port.port('sources'), dns=remote_port.port('dns'), authority=remote_port.port('authority'),
+            load=install_journal.get, save=lambda k, v: install_journal.__setitem__(k, v), guard=lambda *_: None)
+        receipts = {'control-create': dict(evidence_sha256=digest(control))}
+        for stage in host_port.STAGES:
+            # Creation and DNS are explicitly outside this component fixture.
+            for predecessor in STAGES[:STAGES.index(stage)]:
+                receipts.setdefault(predecessor, dict(synthetic_external_predecessor=True))
+            request = dict(run_id=RUN, bundle_sha256=install_scope['bundle_sha256'], stage=stage,
+                predecessors_sha256=digest(receipts), request_id=digest([install_scope, stage])[:32])
+            if stage == 'callback-ready': http_scope = install_scope
+            receipt = execution.dispatch(stage, request, receipts)
+            assert receipt['completed'] is True
+            receipts[stage] = receipt['receipt']
+        SUMMARY['migration'] = install_transport.application_call('readback', install_scope)
+        assert SUMMARY['migration']['migrated'] and SUMMARY['migration']['tables'] > 100
+        assert install_transport.application_call('service-smoke', install_scope, dict(uid=65534, gid=65534))['ready']
+        assert http_service.status(install_scope, http_invoke) == 'running'
+        stop_request = dict(scope=install_scope, stopped=True)
+        assert execution.reconcile(stop_request)['resolved'] is True
+        scope_pins = execution.cleanup_scope(None)
+        private_pins = scope_pins['auxiliary']['private_files']
+        assert len(private_pins) == 5 and scope_pins['roles'] == {} and scope_pins['auxiliary']['records'] == []
+        assert http_service.cgroup_empty(install_scope)
+        for pin in private_pins:
+            assert install_transport.remove_private(pin)['status'] == 'absent'
+            assert install_transport.inspect_private(pin)['status'] == 'absent'
+        # Reconstruct the port after .env and TLS material have already gone.
+        resumed = MemberHostSetup(**host_arguments)
+        assert resumed.reconcile(stop_request)['resolved'] is True and resumed.snapshot() == host_port.snapshot()
+        try:
+            execution.dispatch('callback-ready', request, receipts)
+            raise AssertionError('stopped_execution_restarted')
+        except TransportError as error: assert str(error) == 'transport_execution_stopped'
+        for port in (443, 7001):
+            with socket.socket() as probe: assert probe.connect_ex(('127.0.0.1', port)) != 0
+        assert not (ROOT / 'app/.env').exists()
+        SUMMARY['host_installation_port'] = dict(real_stage_execution=True, real_cold_subprocess=True,
+            actual_mysql_redis_migration=True, nonroot_uid=65534, private_import_actual=True,
+            real_systemd_nginx_php_tls=True, application_smoke_not_mocked=True,
+            stopped_via_execution_reconcile=True, exact_private_files_removed=5,
+            reconstruction_after_private_cleanup=True, stopped_stage_replay_denied=True,
+            controller_creation_and_dns_predecessors_simulated=True, certificate_self_signed_fixture=True,
+            whole_host_entry=False, source_candidate_retry_not_run=True, os_bootstrap_not_run=True)
+        SUMMARY['application_files'] = frozen['files']
+        SUMMARY['composer_lock_sha256'] = frozen['composer_lock_sha256']
+        SUMMARY['status'] = 'passed'
+        raise SystemExit(0)
     assert install_transport.upload(bundle, frozen['archive_sha256'])['staged'] is True
     publication = install_transport.installation_call(dict(operation='publish', scope=install_scope))
     assert publication['completed_operations'] == ['publish'] and not publication['uncertain_operations']
@@ -1300,6 +1380,11 @@ finally:
         try: hold_process.wait(timeout=5)
         except subprocess.TimeoutExpired: hold_process.kill(); hold_process.wait(timeout=5)
     http_clean = True
+    service_binding = ROOT / 'private/http-service/binding.json'
+    if http_scope is None and service_binding.exists():
+        import member_http_service as http_service
+        http_scope = json.loads(service_binding.read_bytes())['scope']
+        http_invoke = http_service.command
     if http_scope is not None:
         try:
             stopped = http_service.execute(dict(operation='stop', scope=http_scope), invoke=http_invoke)

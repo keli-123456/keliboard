@@ -55,6 +55,18 @@ class PrivateTransportTests(unittest.TestCase):
         with self.assertRaises(TransportError): self.rpc.remove_private(self.pin)
         self.assertEqual([], self.calls)
 
+    def test_cold_failure_cleanup_requires_same_stopped_ssh_binding(self):
+        from test_member_host_installation import scope
+        bootstrap = self.saved.pop('bootstrap-binding')
+        cold = dict(scope=scope(), **{k: bootstrap[k] for k in ('host', 'identity_sha256', 'known_hosts_sha256')})
+        self.saved['host-installation-binding'] = cold
+        with self.assertRaisesRegex(TransportError, 'installation_not_stopped'): self.rpc.remove_private(self.pin)
+        self.saved['host-installation-stopped'] = dict(binding=digest(cold))
+        self.assertEqual('absent', self.rpc.remove_private(self.pin)['status'])
+        self.saved['bootstrap-binding'] = dict(bootstrap, host='192.0.2.21')
+        with self.assertRaisesRegex(TransportError, 'binding_changed'): self.rpc.remove_private(self.pin)
+        self.assertEqual(1, len(self.calls))
+
     def test_ack_loss_keeps_first_error_and_inspection_can_recover(self):
         self.rpc.execute = lambda *_: (_ for _ in ()).throw(TimeoutError('synthetic-secret'))
         with self.assertRaises(TransportError): self.rpc.remove_private(self.pin)
@@ -214,6 +226,70 @@ class PrivateLinuxTests(unittest.TestCase):
         with patch.object(Path, 'unlink', unlink), self.assertRaises(RuntimeError):
             self.cleaner.operation('remove', self.pin)
         self.assertEqual('absent', MemberPrivateCleanup(self.root).operation('inspect', self.pin)['status'])
+
+
+@unittest.skipUnless(os.name == 'posix' and getattr(os, 'geteuid', lambda: -1)() == 0,
+                     'real Linux root and flock required')
+class ColdPrivateLinuxTests(unittest.TestCase):
+    def setUp(self):
+        from test_member_host_installation import scope
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / 'controller'; self.root.mkdir(mode=0o711)
+        self.scope = scope()
+        self.binding = dict(scope=self.scope, machine_id_sha256=hashlib.sha256(Path('/etc/machine-id').read_bytes()).hexdigest())
+        self.write('private/host-installation/binding.json', json.dumps(self.binding).encode())
+        self.write('private/host-installation/round.lock', b'')
+        self.write('private/import-stopped', (RUN + '\n').encode())
+        self.secret = b'synthetic-env-before-application-receipt'
+        self.write('app/.env', self.secret, 0o640)
+        self.pin = dict(run_id=RUN, path=ROOT + '/app/.env', sha256=hashlib.sha256(self.secret).hexdigest())
+        self.cleaner = MemberPrivateCleanup(self.root)
+
+    def write(self, name, raw, mode=0o600):
+        path = self.root / name
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.write_bytes(raw); path.chmod(mode)
+        return path
+
+    def test_before_application_receipt_and_import_lock_is_removable_and_resumable(self):
+        self.assertEqual('owned', self.cleaner.operation('inspect', self.pin)['status'])
+        self.assertEqual('absent', self.cleaner.operation('remove', self.pin)['status'])
+        self.assertEqual('absent', MemberPrivateCleanup(self.root).operation('inspect', self.pin)['status'])
+        self.assertFalse((self.root / 'application.json').exists())
+        self.assertFalse((self.root / 'private/member-import').exists())
+
+    def test_cold_writer_lock_and_missing_import_lock_are_not_empty_state(self):
+        import fcntl
+        with (self.root / 'private/host-installation/round.lock').open('rb') as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(TransportError, 'operations_pending'): self.cleaner.operation('remove', self.pin)
+        (self.root / 'private/member-import').mkdir(mode=0o700)
+        with self.assertRaises(FileNotFoundError): self.cleaner.operation('remove', self.pin)
+        self.assertTrue((self.root / 'app/.env').exists())
+
+    def test_stop_or_machine_change_never_deletes_and_grants_without_app_are_refused(self):
+        self.write('private/host-installation/binding.json', json.dumps(dict(self.binding, machine_id_sha256='0' * 64)).encode())
+        with self.assertRaisesRegex(TransportError, 'installation_changed'): self.cleaner.operation('remove', self.pin)
+        self.write('private/host-installation/binding.json', json.dumps(self.binding).encode())
+        self.write('private/import-stopped', b'foreign\n')
+        with self.assertRaisesRegex(TransportError, 'not_stopped'): self.cleaner.operation('remove', self.pin)
+        self.write('private/import-stopped', (RUN + '\n').encode())
+        self.write('member-setup-grant.json', b'{}', 0o644)
+        with self.assertRaisesRegex(TransportError, 'installation_changed'): self.cleaner.operation('remove', self.pin)
+        self.assertTrue((self.root / 'app/.env').exists())
+
+    def test_initialized_application_requires_both_cold_and_php_locks(self):
+        import fcntl
+        self.write('application.json', json.dumps(dict(run_id=RUN, bundle_sha256=self.scope['bundle_sha256'],
+            machine_id_sha256=self.binding['machine_id_sha256'])).encode(), 0o644)
+        lock_path = self.write('private/member-import/lock', b'')
+        with lock_path.open('rb') as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(TransportError, 'operations_pending'): self.cleaner.operation('remove', self.pin)
+        self.assertEqual('absent', self.cleaner.operation('remove', self.pin)['status'])
+        changed = dict(self.binding, scope=dict(self.scope, deadline_at=self.scope['deadline_at'] - 1))
+        self.write('private/host-installation/binding.json', json.dumps(changed).encode())
+        with self.assertRaisesRegex(TransportError, 'stop_changed'): self.cleaner.operation('inspect', self.pin)
 
 
 if __name__ == '__main__':

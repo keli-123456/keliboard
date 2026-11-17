@@ -15,6 +15,10 @@ on:
         type: boolean
         default: false
         description: Verify scoped real agent API forms via isolated TLS and the full HTTP kernel.
+      host_port_only:
+        type: boolean
+        default: false
+        description: Verify concrete installation-stage composition and private teardown with real isolated services.
 
 permissions:
   contents: read
@@ -51,7 +55,7 @@ jobs:
               test -z "$(ip -4 route show)"
               test -z "$(ip -6 route show)"
               cd tools/machine-acceptance
-              python3 -B -m unittest -v test_member_assembly test_member_execution.ExecutionTests test_member_private_cleanup test_member_round test_member_transport test_member_remote_setup test_member_host_installation >../../artifacts/cleanup-python.log 2>&1
+              python3 -B -m unittest -v test_member_assembly test_member_execution.ExecutionTests test_member_private_cleanup test_member_round test_member_transport test_member_remote_setup test_member_host_installation test_member_host_setup >../../artifacts/cleanup-python.log 2>&1
               cd ../..
               php vendor/phpunit/phpunit/phpunit tests/Unit/Services/MachineMemberProviderBindingsTest.php >artifacts/cleanup-php.log 2>&1
               test ! -e /opt/keli-isolated
@@ -113,6 +117,7 @@ jobs:
           mode=--retry-flow
           if [ '${{ inputs.install_entry_only }}' = true ]; then mode=--install-entry-only; fi
           if [ '${{ inputs.agent_http_only }}' = true ]; then mode=--agent-http-only; fi
+          if [ '${{ inputs.host_port_only }}' = true ]; then mode=--host-port-only; fi
           timeout --signal=TERM --kill-after=15s 1800s sudo nsenter --net="/proc/$pid/ns/net" \
             env -i PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 HOME=/root \
             PYTHONDONTWRITEBYTECODE=1 KELI_HTTP_NETNS="/proc/$pid/ns/net" KELI_HTTP_FIXTURE_COMMIT="$GITHUB_SHA" python3 -B audit/r35-application-linux-ci.py "$mode" >artifacts/application-linux.log 2>&1
