@@ -178,6 +178,12 @@ return static function (string $mode): array {
                 else throw new RuntimeException('fixture_setup_dns_operation');
             }
             $save('setup-dns-provider', $dns);
+            if ($mode === 'setup-cleanup-crash' && $action === 'DeleteDomainRecord' && $id === '6001') {
+                // The simulated provider committed; the actual RPC has not received its reply.
+                $save('cleanup-crash-boundary', ['provider_delete_committed' => true, 'dns_delete_calls' => $dns['delete']]);
+                sleep(60);
+                throw new RuntimeException('fixture_crash_injection_not_killed');
+            }
             return Http::response(['RecordId' => $id, 'RequestId' => 'fixture-request']);
         }
         $need(parse_url($request->url(), PHP_URL_HOST) === 'api.linode.com', 'foreign_provider');
@@ -270,7 +276,14 @@ return static function (string $mode): array {
         $before = Task::query()->orderBy('id')->get()->toArray();
         $firstError = $controller->dispatch(['operation' => 'status'])['first_error'];
         $authority->stop();
-        $request = $rpcRequest('cleanup');
+        if ($mode === 'setup-cleanup-resume') {
+            $saved = $load('cleanup-crash-request'); $need(is_array($saved), 'crash_request_missing');
+            $request = $saved['request'];
+            $need(MemberProviderBindings::digest($before) === $saved['tasks_sha256']
+                && $firstError === $saved['first_error'], 'crash_changed_history');
+        } else $request = $rpcRequest('cleanup');
+        if ($mode === 'setup-cleanup-crash') $save('cleanup-crash-request', ['request' => $request,
+            'tasks_sha256' => MemberProviderBindings::digest($before), 'first_error' => $firstError]);
         $reply = $controller->rpc($request);
         $need($controller->rpc($request) === $reply, 'cleanup_replay_changed');
         $need(Task::query()->orderBy('id')->get()->toArray() === $before, 'cleanup_task_history_changed');

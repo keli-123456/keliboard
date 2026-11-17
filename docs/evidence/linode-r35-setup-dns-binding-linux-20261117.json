@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "status": "component_passed_not_live_ready",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "ci_run": 44020705328,
+  "ci_url": "https://github.com/keli-123456/keliboard/actions/runs/44020705328",
+  "tested_commit": "79f64cc679fbfb30a516f0d06a48e78b07dba296",
+  "artifact_id": 14301232360,
+  "prior_failed_run": {
+    "id": 44020370707,
+    "reason": "fixture_setup_dns_gate_not_restored",
+    "fix": "Restore both the original execution gate and its shared or transient container lifetime.",
+    "resources_cleaned": true
+  },
+  "actual_isolated_services": {
+    "full_application_and_vendor": true,
+    "application_files": 14078,
+    "mysql": "8.4",
+    "redis": "7",
+    "migrations": 160,
+    "tables": 157,
+    "service_uid": 65534,
+    "http_tls_callbacks": true,
+    "native_setup_controller_and_rpc": true
+  },
+  "verified": {
+    "control_dns_before_source_tasks": true,
+    "edge_dns_after_both_sources_registered": true,
+    "markers_from_native_record_sets": true,
+    "setup_grant_binds_control_and_dns_revision": true,
+    "duplicate_rpc_does_not_repeat_write": true,
+    "uncertain_mutation_blocks_other_mutations": true,
+    "stop_denies_new_dns_writes": true,
+    "cleanup_and_readback_allowed_after_stop": true,
+    "exact_acknowledged_record_cleanup": true,
+    "two_absence_reads_at_least_10_seconds_apart": true,
+    "shared_and_transient_execution_gate_restored": true,
+    "old_initialization_stage_journal_rejected": true,
+    "dns_creates_claims_deletes": [3, 3, 3]
+  },
+  "limits": {
+    "cloud_ssh_dns": "simulated",
+    "credentials": "synthetic",
+    "node_fixture": "synthetic_not_executed",
+    "source_reports": "synthetic_client_inputs_through_actual_http_routes",
+    "whole_round_ports_composed": false,
+    "callback_ready_stage_concrete_binding": false,
+    "native_execution_grant_issuer": false,
+    "real_cloud_or_dns_acceptance": false,
+    "real_a1_cleanup_cooldown_a2_retry": false
+  },
+  "cleanup": {
+    "containers_removed": true,
+    "fixed_fixture_removed": true,
+    "external_routes_before_and_after": false,
+    "production_changed": false,
+    "cloud_instances_created": 0,
+    "automatic_switches_changed": false,
+    "main_pushed": false
+  },
+  "artifact_sha256": {
+    "application-linux-summary.json": "88c19237cadb32c392c52f207ac29c5a27b59956cbdd02f371e4b2d2645f29b4",
+    "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "dns-phpunit.log": "de278ccee172aa899dd0fa2230a94d5ab6e7f1f1108835d1e3955ec05c685b13",
+    "python.log": "94984aa76e95cfa22c2ad4f41271dba91888d2d615a8339123767fe186d53b95",
+    "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+    "source-phpunit.log": "c92db7e076d219c54bef233b223ab4a27e3253152a10b606bfe65553e3bfc835"
+  }
+}
