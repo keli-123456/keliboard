@@ -1253,6 +1253,20 @@ Native A1/A2 whole-round cleanup, host installation composition and the final
 unarmed real-binary package are still pending. These component results do not
 authorize or establish live acceptance.
 
+The [full native retry component](../../docs/evidence/linode-r35-native-retry-flow-linux-20261117.json)
+now verifies actual application A1 cleanup, two absence reads 14 seconds apart,
+a real 300-second cooldown and A2 creation at 305 seconds, then one A2 DNS update.
+B's task, owned instance, provider identity, DNS and execution count stay unchanged.
+The fixture uses real MySQL/Redis, root RPC and service-user HTTP/TLS; cloud/SSH/DNS
+side effects and telemetry remain simulated. The source collector now runs during
+prepared-role handoff and cooldown, registration comparisons tolerate JSON object
+key order without accepting type changes, and initialized limits remain A=2/B=1.
+A subsequent locally tested change exports lineage-checked candidate first errors
+even without a cloud ID, while exact-ID cleanup remains blocked. That diagnostic
+addition is not part of this Linux run. Full post-cutover auxiliary/private and
+controller-last teardown, host composition and the final unarmed package remain
+pending; the active goal is not complete.
+
 ## Protocol Interoperability
 
 The real HY2 tests bind temporary endpoints only to 127.0.0.1/127.0.0.2, generate

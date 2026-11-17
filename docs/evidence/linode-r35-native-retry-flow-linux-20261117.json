@@ -1,0 +1,162 @@
+{
+  "schema": 1,
+  "status": "component_passed_not_live_ready",
+  "date": "2026-11-17",
+  "purpose": "Full application native A1 cleanup, real cooldown, A2 retry, DNS publication and B isolation",
+  "main_base": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "tested_commit": "a5b474660b6b2a456d649fd7466739db3e0f9b1f",
+  "linux_run": 44079246364,
+  "linux_url": "https://github.com/keli-123456/keliboard/actions/runs/44079246364",
+  "artifact": 14327596902,
+  "changes": [
+    "Keep collecting actual source A observations throughout candidate advancement, real retry cooldown and prepared-role registration handoff. Do not observe B's failover policy or manufacture source health.",
+    "Compare canonical JSON objects for configured nodes and source-registration readback. Object key order may change across canonical files/MySQL; strict value types, list order and immutable receipt checks remain enforced.",
+    "Initialize the already-approved member limits as A=2/B=1. Readback verifies service/member limits; no production limit or history is changed.",
+    "Exercise actual fixed root RPC controller, native bridge, signed provider adapters, real MySQL/Redis and HTTP/TLS service UID65534. Cloud, SSH and DNS side effects and telemetry remain synthetic.",
+    "Keep sanitized first failure artifacts readable by the CI uploader, without loosening private runtime file permissions."
+  ],
+  "local": {
+    "full_native": {
+      "tests": 414,
+      "assertions": 26311,
+      "seconds": 410.587
+    },
+    "latest_member": {
+      "tests": 75,
+      "assertions": 20713,
+      "seconds": 100.957
+    },
+    "python": {
+      "tests": 136,
+      "skipped_linux_only": 10
+    },
+    "unresolved_candidate_diagnostic_followup": {
+      "temporary_commit": "495988dff022182ecaf56a45994f771ad826e770",
+      "regression_before": "candidate-a1 omitted from stopped evidence when dispatched without external ID",
+      "regression_after": {
+        "tests": 5,
+        "assertions": 167
+      },
+      "linux_tested": false,
+      "safety": "Lineage-checked read-only diagnostics now retained; unresolved reconciliation stays false and exact-ID status/deletion gates still reject. No adoption of changed lineage."
+    }
+  },
+  "linux": {
+    "status": "passed",
+    "php_native_component": {
+      "tests": 51,
+      "assertions": 20317
+    },
+    "php_adjacent": {
+      "tests": 103,
+      "assertions": 694
+    },
+    "php_source": {
+      "tests": 17,
+      "assertions": 196
+    },
+    "python_tests": 137,
+    "cold_fixed_cli_tests": 11,
+    "real_application_mysql_redis_tls": true,
+    "service_uid": 65534,
+    "tasks": 4,
+    "attempts": 2,
+    "simulated_provider_creates": 4,
+    "a1_simulated_deletes": 1,
+    "a1_failure_samples": 3,
+    "a1_failure_threshold": 3,
+    "a1_absence_spacing_seconds": 14,
+    "minimum_retry_cooldown_seconds": 300,
+    "actual_confirmed_to_a2_create_seconds": 305,
+    "a2_final_status": "accepted",
+    "native_execution_member": "completed",
+    "simulated_dns_updates": 1,
+    "b_task_owned_instance_provider_dns_and_execution_count_unchanged": true,
+    "branches": {
+      "native_cleanup": true,
+      "cooldown": true,
+      "retry": true,
+      "b_unchanged": true,
+      "dns_cutover": true,
+      "retry_exhausted": false,
+      "final_cleanup": false
+    },
+    "first_error": null,
+    "stopped_evidence_sha256": "15a1117f568bbd725d4506b38f2ffffdd0947eb4e492faebba9140dadf360da6",
+    "stopped_evidence_digest_independently_verified": true,
+    "fixed_fixture_removed": true,
+    "containers_removed": true,
+    "external_ipv4_or_ipv6_routes": false,
+    "node_bytes_and_telemetry_synthetic": true,
+    "final_native_teardown_not_covered": true
+  },
+  "predecessors": [
+    {
+      "run": 44072895048,
+      "sha": "61dee54499c6e6f2105dcb19e4044b9604d8d56e",
+      "conclusion": "cancelled",
+      "cleanup_step": "success",
+      "reason": "Local regression proved missing ongoing source collection."
+    },
+    {
+      "run": 44074101695,
+      "sha": "d9a998960a7618bb5bad1c30607d75a4fd8ad4e6",
+      "conclusion": "failure",
+      "cleanup_step": "success",
+      "reason": "Application execution failed; artifact upload hit EACCES. Application cause not established from missing artifact."
+    },
+    {
+      "run": 44076374230,
+      "sha": "312d655a0f5d629942e5b895cea1a115eb067446",
+      "conclusion": "cancelled",
+      "cleanup_step": "success",
+      "reason": "Local reproduction established order-sensitive registration/configured-node comparisons."
+    },
+    {
+      "run": 44076820242,
+      "sha": "b05f2774080363cc16e59c8d736c75ce89833199",
+      "conclusion": "failure",
+      "artifact": 14325968073,
+      "cleanup_step": "success",
+      "reason": "Retained native first error member_limits_changed before candidate creation. B initialized with attempt_limit2 while R35 requires1; fixed initializer rather than bypassing guard."
+    },
+    {
+      "run": 44078341661,
+      "sha": "5de093ddc569d39e55638955cd8bf982d5a8f767",
+      "conclusion": "cancelled",
+      "cleanup_step": "success",
+      "reason": "Stopped before rerunning known B-limit mismatch; corrected to A2/B1."
+    }
+  ],
+  "boundaries": {
+    "production_access": false,
+    "main_commit_or_push": false,
+    "cloud_instances_created": 0,
+    "cloud_ssh_dns": "simulated",
+    "automatic_switches_changed": false,
+    "tanzhen_access": false,
+    "r34_executed": false,
+    "live_ready": false
+  },
+  "limitations": [
+    "This result covers the complete native retry/publication branch, not complete host installation and final whole-round teardown.",
+    "A2-cutover DNS cleanup, private-material removal and controller-last teardown still require concrete host composition and full-application validation.",
+    "The two source tasks and two candidate tasks are actual application-generated tasks; provider instances, DNS records and incoming telemetry are simulated. No public Ping or node process is claimed.",
+    "Stopped candidate diagnostics without an external ID were improved in a subsequent temporary commit and locally tested; that addition is not part of this Linux run.",
+    "Native elapsed expiry and creation-phase crash boundaries, final unarmed real-node/vendor freeze and a fresh live scope/preflight remain pending.",
+    "Automatic gates remain closed; this result does not authorize live execution and does not complete the active goal."
+  ],
+  "artifact_hashes": {
+    "native-retry-transitions.json": "674462ca34bacb3d22d1a9a5d8215af8ef0d967efad8b54bc94d9bad8486d10d",
+    "dns-phpunit.log": "0c2b8502d4b3441b562f2d18bd9eb8742d50a6c28587bee27aefa5fcffbc5dc3",
+    "python.log": "cdf6ae6c79831f5699fda3c8c63c5156f54890eed6a4469f55204b4c641897ae",
+    "native-entry-linux.log": "3cf16ffaa1fa76cd309613971b7ed9d02d2016b8cf71756d635c9abfe5116a44",
+    "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+    "cli-phpunit.log": "e52322e9cbfb20b01f5de76a36bc5898e9ef90e4ce16befd435619ac3bc51fd1",
+    "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "source-phpunit.log": "44bf45f876eea376656eb87f8f35251326b778851b25f18a9f78dbce7ce55ff0",
+    "application-linux-summary.json": "92b6d87764e9a5572be83e9cfdf069b917d807616a7b8d7bac4cd06db365f5a7",
+    "native-retry-evidence.json": "3fa68a483aee16eae05ffff435e98e4c5ba1f3100721d7c55a301ceafb8a77ad"
+  }
+}
