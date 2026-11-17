@@ -111,7 +111,8 @@ final class MemberSetupController
                     $task = Task::query()->where('machine_id', $pin['machine_id'])->first();
                     $sources[$role] = ['queued' => $task !== null, 'status' => $task?->status,
                         'registered' => $this->load('initialized-' . $role) !== null,
-                        'fresh_reports' => count($this->load($role)['samples'] ?? [])];
+                        'fresh_reports' => count($this->load($role)['samples'] ?? []),
+                        'next_check_at' => $task?->next_check_at];
                 }
                 return ['sources' => $sources, 'first_error' => $this->load('first-error'), 'health_or_forwarding_claimed' => false];
             });

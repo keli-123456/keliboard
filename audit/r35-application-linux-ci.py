@@ -100,6 +100,12 @@ try:
     (ART / 'dns-phpunit.log').write_text(php_tests.stdout + php_tests.stderr)
     assert php_tests.returncode == 0, 'dns_phpunit_regression_failed'
     SUMMARY['dns_phpunit_passed'] = True
+    source_tests = subprocess.run(['php', 'vendor/phpunit/phpunit/phpunit',
+        'tests/Unit/Services/MachineFailoverNativeBridgeTest.php', '--filter', 'test_member_initialization_'],
+        cwd=REPO, capture_output=True, text=True, timeout=120)
+    (ART / 'source-phpunit.log').write_text(source_tests.stdout + source_tests.stderr)
+    assert source_tests.returncode == 0, 'source_phpunit_regression_failed'
+    SUMMARY['source_phpunit_passed'] = True
     os.umask(0o077)
     # Hosted runners make /opt writable by the runner user. Match a fresh
     # controller's root-owned parent only in this disposable CI VM, then restore.
@@ -280,14 +286,14 @@ try:
     assert observed['states'] == ['succeeded'] and observed['callback_steps'] == 1
     SUMMARY['idempotent_callback_b_not_queued'] = True
 
-    def report(role, *, node=False, flat_node=False, bad_hash=False, token=None, installation=None, node_id=None):
+    def report(role, *, node=False, wrapped_node=False, bad_hash=False, token=None, installation=None, node_id=None):
         pin = pins[role]
         body = dict(machine_id=pin['machine_id'], token=token or pin['token'])
         stats = dict(cpu=1, mem=dict(total=8192, used=128), swap=dict(total=0, used=0), disk=dict(total=16384, used=256))
         if node:
             body.update(node_id=node_id or pin['node_id'], node_type='v2node')
-            if flat_node: body.update(stats)
-            else: body['status'] = stats
+            if wrapped_node: body['status'] = stats
+            else: body.update(stats)
             endpoint = '/api/v2/server/status'
         else:
             body['status'] = dict(stats, version='v0.1.387', ip=dict(public_ipv4=pin['ip']),
@@ -303,20 +309,32 @@ try:
         assert pin['token'].encode() not in raw
         return status
 
+    def advance_due():
+        deadline = time.monotonic() + 70
+        while True:
+            value = php('setup-advance')
+            if value.get('reason') != 'native_wait': return value
+            assert time.monotonic() < deadline, value
+            assert value['retry_at'] > time.time() - 1, value
+            time.sleep(max(.1, min(10, value['retry_at'] + 1 - time.time())))
+
     assert report('source-a', token='incorrect') == 401
     assert report('source-a', installation='f' * 32) == 403
     assert report('source-a', node=True, node_id=pins['source-a']['node_id'] + 1) == 403
     time.sleep(1.1)
     assert report('source-a') == 200
-    assert php('setup-advance')['reason'] == 'process'
+    assert advance_due()['reason'] == 'process'
     assert setup_rpc('status')['sources']['source-a']['status'] == 'waiting_node_reports'
-    assert report('source-a', node=True, flat_node=True) == 200
-    assert php('setup-advance')['reason'] == 'process'
-    assert setup_rpc('status')['sources']['source-a']['status'] == 'waiting_node_reports'
-    assert report('source-a', node=True) == 200
+    assert report('source-a', node=True, wrapped_node=True) == 422
+    waiting_status = setup_rpc('status')['sources']['source-a']
+    assert waiting_status['status'] == 'waiting_node_reports'
+    waiting = php('setup-advance')
+    assert waiting['reason'] == 'native_wait' and waiting['retry_at'] == waiting_status['next_check_at'], waiting
+    node_status = report('source-a', node=True)
+    assert node_status == 200, dict(status=node_status, phase='source_node_status')
     assert report('source-a', bad_hash=True) == 200
-    assert php('setup-advance')['reason'] == 'process'
-    observed = php('setup-advance')
+    assert advance_due()['reason'] == 'process'
+    observed = advance_due()
     assert observed['reason'] == 'fresh_reports', observed
     assert setup_rpc('status')['sources']['source-a']['fresh_reports'] == 0
 
@@ -325,8 +343,8 @@ try:
             time.sleep(1.1)
             assert report(role) == report(role, node=True) == 200
             # Processing a dispatched task and observing its reports are separate native steps.
-            result = php('setup-advance')
-            if result.get('reason') == 'process': result = php('setup-advance')
+            result = advance_due()
+            if result.get('reason') == 'process': result = advance_due()
             state = setup_rpc('status')['sources'][role]
             assert state['fresh_reports'] == i + 1, state
             if i < 2:

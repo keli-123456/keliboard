@@ -198,8 +198,12 @@ final class MemberSourceInitialization
                 self::need($this->intent($role) !== null, 'queue_intent_missing');
                 self::need(!in_array($task->status, ['failed', 'cancelled', 'outcome_unknown', 'needs_review'], true), 'source_failed');
                 if (!$task->external_id || $task->bootstrap_state !== 'succeeded'
-                    || !in_array($task->status, ['waiting_ipv4_probe', 'awaiting_acceptance', 'accepted'], true))
+                    || !in_array($task->status, ['waiting_ipv4_probe', 'awaiting_acceptance', 'accepted'], true)) {
+                    if ($task->next_check_at > time())
+                        return ['ready' => false, 'waiting' => true, 'role' => $role, 'reason' => 'native_wait',
+                            'retry_at' => $task->next_check_at];
                     return ['action' => 'process', 'role' => $role];
+                }
                 $pins = [];
                 foreach ($this->scope['sources'] as $peerRole => $peer) {
                     $peerTask = $this->existing($peerRole);

@@ -169,6 +169,12 @@ trait TestsMemberInitialization
         $this->assertSame('process', $api->advance($base)['reason']);
         $task = Task::query()->where('machine_id', $b['machine']->id)->firstOrFail();
         $this->assertCount(1, $this->posts);
+        $beforeWait = $task->getAttributes();
+        $waiting = $api->advance($base);
+        $this->assertSame('native_wait', $waiting['reason']);
+        $this->assertSame($task->next_check_at, $waiting['retry_at']);
+        $this->assertSame($beforeWait, $task->fresh()->getAttributes());
+        $this->assertCount(1, $this->posts);
         app(\App\Services\ServerMachine\Cloud\MachineProvisionService::class)->callback($task->id,
             $task->installation_id, $this->callbackSecret($task), 'succeeded');
         $task->refresh()->fill(['dispatched_at' => time() - 30])->save();
