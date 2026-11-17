@@ -168,6 +168,8 @@ return static function (string $mode): array {
         $need($counts() === [2, 2, 2, 1, 2, 2, 2]);
         $need($result['service_revision'] === 3 && !$result['health_or_forwarding_claimed'] && !$result['cloud_or_dns_writes']);
         $need(MachineFailoverPolicy::query()->orderBy('id')->pluck('daily_limit')->all() === [3, 1]);
+        $need(App\Models\MachineFailoverMember::query()->orderBy('priority')->pluck('attempt_limit')->all() === [2, 1],
+            'member_attempt_limits');
         if ($mode !== 'configuration-stop')
             foreach (['v2_machine_provision_task', 'v2_machine_owned_instance', 'v2_machine_failover_execution'] as $table)
                 $need(DB::table($table)->count() === 0);
@@ -175,7 +177,7 @@ return static function (string $mode): array {
         $encrypted = DB::table('v2_machine_cloud_account')->where('id', $scope['account_id'])->value('credentials');
         $need(!str_contains($encrypted, 'synthetic-no-live-token'));
         return ['configuration_rows' => $counts(), 'provider_gets' => $reads, 'provider_writes' => 0,
-            'tasks_or_health_fabricated' => false, 'closed_gates_unchanged' => true,
+            'tasks_or_health_fabricated' => false, 'closed_gates_unchanged' => true, 'member_attempt_limits' => [2, 1],
             'service_revision' => $result['service_revision'], 'configuration_sha256' => $result['service_sha256']];
     } finally { if (isset($controller)) $controller->close(); flock($lock, LOCK_UN); fclose($lock); }
 };

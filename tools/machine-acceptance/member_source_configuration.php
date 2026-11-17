@@ -134,7 +134,8 @@ final class MemberSourceConfiguration
                             'region' => 'sg-sin-2', 'size' => 'g6-standard-4', 'image' => 'linode/debian12', 'authorized_keys' => []]),
                         'configured_nodes' => [['id' => $node->id, 'protocol' => 'hysteria2', 'port' => 24443]]];
                     $members[] = ['policy_id' => $policy['id'], 'policy_revision' => $policy['revision'],
-                        'name' => strtoupper($letter), 'priority' => $index + 1, 'enabled' => true, 'attempt_limit' => 2];
+                        'name' => strtoupper($letter), 'priority' => $index + 1, 'enabled' => true,
+                        'attempt_limit' => $letter === 'a' ? 2 : 1];
                 }
                 ($this->guard)('source-configure-service');
                 $service = app(MachineFailoverServiceRegistry::class)->save(['name' => 'R35 isolated members',
@@ -175,6 +176,8 @@ final class MemberSourceConfiguration
             && ($result['scope_sha256'] ?? null) === $binding['scope_sha256'], 'result_unconfirmed');
         $snapshot = app(MachineFailoverServiceRegistry::class)->snapshot($result['service_id'], $result['service_revision']);
         self::need(MemberProviderBindings::digest($snapshot) === $result['service_sha256'], 'configuration_changed');
+        self::need($snapshot['service']['max_parallel'] === 1 && $snapshot['service']['attempt_limit'] === 2
+            && count($snapshot['members']) === 2, 'member_limits_changed');
         $sources = [];
         foreach ($result['sources'] as $role => $pin) {
             $policy = MachineFailoverPolicy::query()->findOrFail($pin['policy_id']);
@@ -183,6 +186,9 @@ final class MemberSourceConfiguration
             self::need($policy->failure_threshold === 3 && $policy->cooldown_seconds === 300
                 && $policy->stale_after_seconds === 300 && $policy->daily_limit === ($role === 'source-a' ? 3 : 1),
                 'policy_changed');
+            $members = array_values(array_filter($snapshot['members'], fn ($member) => $member['policy_id'] === $policy->id));
+            self::need(count($members) === 1 && $members[0]['attempt_limit'] === ($role === 'source-a' ? 2 : 1),
+                'member_limits_changed');
             // Recovery reads the original choice, even while A owns the create lane.
             // The native dispatch service still enforces live capacity before mutation.
             $plan = ProvisionPlan::normalize($pin['plan']);
