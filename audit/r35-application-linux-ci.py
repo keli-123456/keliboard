@@ -30,6 +30,7 @@ ENV = dict(PATH='/usr/local/bin:/usr/bin:/bin', HOME='/nonexistent', LANG='C.UTF
 server = None
 php_server = None
 work = None
+opt_stat = None
 
 
 def command(args, *, timeout=90, **kwargs):
@@ -74,6 +75,11 @@ try:
     assert tests.returncode == 0, 'python_regression_failed'
     SUMMARY['python_passed'] = True
     os.umask(0o077)
+    # Hosted runners make /opt writable by the runner user. Match a fresh
+    # controller's root-owned parent only in this disposable CI VM, then restore.
+    assert Path('/opt').resolve() == Path('/opt') and Path('/opt').is_dir()
+    opt_stat = Path('/opt').stat()
+    os.chown('/opt', 0, 0); os.chmod('/opt', 0o755)
     ROOT.mkdir(mode=0o711)
     (ROOT / '.r35-application-fixture').write_text(sha)
     work = Path(tempfile.mkdtemp(prefix='r35-app-fixture-'))
@@ -185,6 +191,8 @@ finally:
     if ROOT.exists():
         assert ROOT.resolve() == ROOT and (ROOT / '.r35-application-fixture').read_text() == sha
         shutil.rmtree(ROOT)
+    if opt_stat is not None:
+        os.chown('/opt', opt_stat.st_uid, opt_stat.st_gid); os.chmod('/opt', opt_stat.st_mode & 0o7777)
     if work is not None:
         assert work.resolve() == work and work.parent == Path(tempfile.gettempdir()) and work.name.startswith('r35-app-fixture-')
         shutil.rmtree(work)
