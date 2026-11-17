@@ -39,7 +39,9 @@ return static function (string $directory): Closure {
                 $state['create']++;
             } elseif ($request['RecordId'] === $id && isset($state['rows'][$id])) {
                 if ($action === 'UpdateDomainRecordRemark' && $state['claim'] === 0
-                    && preg_match('/^keli-set-[a-f0-9]{48}$/D', $request['Remark'])) {
+                    && is_string($request['Remark']) && preg_match('/^keli-set-b64-[A-Za-z0-9_-]{32}$/D', $request['Remark'])
+                    && App\Services\ServerMachine\Dns\MachineDnsRecordSetProvider::aliyunMarker(
+                        App\Services\ServerMachine\Dns\MachineDnsRecordSetProvider::canonicalAliyunMarker($request['Remark'])) === $request['Remark']) {
                     $state['rows'][$id]['Remark'] = $request['Remark']; $state['claim']++;
                 } elseif ($action === 'DeleteDomainRecord' && $state['delete'] === 0) {
                     unset($state['rows'][$id]); $state['delete']++;

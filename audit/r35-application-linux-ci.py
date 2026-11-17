@@ -323,6 +323,10 @@ try:
         dns_pins = scope_pins['auxiliary']['records']
         assert len(private_pins) == 5 and scope_pins['roles'] == {} and len(dns_pins) == 1
         assert dns_pins[0]['record_id'] == '6001' and dns_pins[0]['name'] == domain
+        remark = dns_state['rows']['6001']['Remark']
+        expected_remark = 'keli-set-b64-' + base64.urlsafe_b64encode(bytes.fromhex(dns_pins[0]['marker'][9:])).decode()
+        assert remark == expected_remark and len(remark) < 50
+        SUMMARY['concrete_control_dns']['compressed_wire_marker_preserves_complete_identity'] = True
         assert http_service.cgroup_empty(install_scope)
         from member_operator_transport import MemberOperatorProviderTransport
         from member_assembly import MemberRoundAssembly
