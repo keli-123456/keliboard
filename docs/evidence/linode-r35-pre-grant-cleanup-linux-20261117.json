@@ -1,0 +1,112 @@
+{
+  "schema": 1,
+  "scope": "R35 source cleanup before native execution grant issuance",
+  "status": "isolated_component_passed_whole_round_pending",
+  "date": "2026-11-17",
+  "tested_commit": "c8cc0a2ddd11bbf57ac09e64eb69997c74dbd1fd",
+  "main_head_unchanged": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "workflow_run": {
+    "id": 44017506252,
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44017506252",
+    "event": "workflow_dispatch",
+    "conclusion": "success",
+    "artifact_id": 14299717985
+  },
+  "environment": {
+    "full_application_and_locked_vendor_files": 14075,
+    "composer_lock_sha256": "1a7bc62c308529c9edd7f495ca544e93c53933d39570f4eb43fe92c6365f64e1",
+    "mysql": "8.4",
+    "redis": "7",
+    "migrations": 160,
+    "tables": 157,
+    "actual_http_tls_callbacks_and_reports": true,
+    "http_service_uid": 65534,
+    "cloud_ssh_dns": "simulated",
+    "node_fixture": "synthetic ELF, not executed",
+    "node_reports": "synthetic client input to actual authenticated application routes",
+    "external_ipv4_and_ipv6_routes": false
+  },
+  "implementation": [
+    "Root-only cleanup RPC revokes setup capability and drains admitted work before cloud cleanup; no native execution grant is needed",
+    "Source cleanup remains bound to the original durable queue intent, task, account revision, standard label and native ownership marker",
+    "The existing cloud provider reconciliation and MachineCandidateCleanupClient perform exact reads and deletes under the original account lock",
+    "A missing create receipt is reconciled read-only; recovered identity is kept in the cleanup journal without rewriting task/bootstrap history",
+    "An empty inventory does not prove absence after an uncertain create",
+    "Delete intent is persisted and read back immediately before dispatch; an uncertain previous delete is never repeated",
+    "Exact absence needs two reads separated by at least ten seconds; read errors and interrupted reads invalidate the previous consecutive proof",
+    "Cleanup has a separate RPC ledger and cannot clear an uncertain advance ledger or permit another create",
+    "Per-role cleanup continues after the other role fails, without replacing the initiating first error"
+  ],
+  "linux_full_application_checks": {
+    "actual_setup_controller_rpc_with_mock_provider": true,
+    "native_cleanup_adapter_used": true,
+    "simulated_provider_deletes": 2,
+    "delete_ack_lost_after_provider_mutation": true,
+    "delete_not_repeated_after_lost_ack": true,
+    "b_cleanup_continues_after_a_error": true,
+    "two_exact_absence_reads_real_spacing_at_least_seconds": 10,
+    "intervening_503_requires_new_consecutive_absence_pair": true,
+    "duplicate_rpc_uses_cached_receipt": true,
+    "original_first_error_retained": true,
+    "original_task_history_unchanged": true,
+    "new_advance_refused_after_cleanup": true,
+    "persistent_gates_remain_closed": true,
+    "redis_queued_delayed_reserved_and_failed_jobs_empty": true,
+    "dual_source_three_fresh_reports_each_regression": true,
+    "source_serial_cooldown_real_seconds": 300,
+    "dns_create_claim_delete_regression_counts": [3, 3, 3]
+  },
+  "additional_unit_checks": [
+    "Partial A-only initialization can be cleaned while B was never queued",
+    "Undispatched tasks require no provider call; missing task after queue intent stays unresolved",
+    "Lost create reply uses exact provider reconciliation without a second POST or a task rewrite",
+    "Empty inventory, changed scope and unconfirmed journals cannot authorize deletion",
+    "Repeated delete and interrupted absence-read recovery remain fail-closed",
+    "Strict SSH setup binding permits cleanup after uncertain advance without erasing its ledger or first error"
+  ],
+  "tests": {
+    "linux_python": {"tests": 114, "skipped": 0},
+    "linux_component_phpunit": {"tests": 66, "assertions": 298},
+    "linux_source_initialization_phpunit": {"tests": 17, "assertions": 196},
+    "windows_python": {"tests": 114, "linux_only_skipped": 10},
+    "windows_member_phpunit": {"tests": 56, "assertions": 10607}
+  },
+  "limitations_and_remaining_gates": [
+    "This is not completed R35 whole-round acceptance or a live cloud run",
+    "Partial source states and lost create receipt recovery passed unit tests, not this full-application two-registered-source scenario",
+    "Cleanup runs the actual controller RPC handler inside a fixture that mocks provider HTTP; actual SSH transport and the outer cleanup CLI subprocess are not composed end to end yet",
+    "A process crash precisely between provider mutation and RPC reply remains to be injected; the current lost DELETE response is a mocked transport exception",
+    "The concrete installation, private import, source, DNS and native authority ports still need whole-round entry composition",
+    "Control DNS/TLS must precede source callbacks, with edge DNS initialized after source identity registration",
+    "Native execution grant issuance, real elapsed authority expiry, A1 cleanup/cooldown/A2 retry and B isolation still need assembled full-application tests",
+    "No real node binary or source installation script ran here; final unarmed LF runtime freeze still needs real node and dependency provenance",
+    "Future live scope, fresh read-only preflight and cleanup approval are separate from this isolated test"
+  ],
+  "cleanup": {
+    "containers_and_anonymous_volumes_removed": true,
+    "fixed_application_fixture_removed": true,
+    "temporary_runtime_and_private_fixture_material_removed": true,
+    "parent_permissions_restored": true
+  },
+  "evidence_sha256": {
+    "application-linux-summary.json": "45090a8cac47cf55b018c120a1f479624a23692a67de4bf90536dbe70d002097",
+    "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "dns-phpunit.log": "df912c32f6d7f33ea4cbc3ef8a641abc4c14f36c81b616108e0e44df437cfd91",
+    "source-phpunit.log": "bf6ef5adc1c9fab65913a9d8e51eccf8d1ba190a4e19f7ec5f53510e19db0ab7",
+    "python.log": "e6d04747f53775d7e9fec0b16ee75efb1792be8491f3d86ea3c14fe646e4b527",
+    "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+  },
+  "restrictions": {
+    "main_merged_or_pushed": false,
+    "image_published": false,
+    "cloud_instances_created": 0,
+    "production_bridge_used": false,
+    "production_database_connected": false,
+    "production_or_tanzhen_changed": false,
+    "persistent_automatic_switches_changed": false,
+    "r34_or_historical_live_round_executed": false,
+    "unrelated_dirty_files_checked": 108,
+    "unrelated_dirty_files_changed": 0
+  }
+}
