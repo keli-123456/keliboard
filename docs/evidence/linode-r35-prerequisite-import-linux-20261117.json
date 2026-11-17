@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "status": "component_passed_not_live_ready",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "ci_run": 44025605870,
+  "ci_url": "https://github.com/keli-123456/keliboard/actions/runs/44025605870",
+  "tested_commit": "fa8b7eeb1c36455f4af5c5ca5cf8efbc9baae7cc",
+  "artifact_id": 14303286453,
+  "environment": {
+    "application_files": 14088,
+    "full_application_and_locked_vendor": true,
+    "composer_lock_sha256": "1a7bc62c308529c9edd7f495ca544e93c53933d39570f4eb43fe92c6365f64e1",
+    "mysql": "8.4",
+    "redis": "7",
+    "migrations": 160,
+    "tables": 157,
+    "http_tls_and_service_uid": true,
+    "external_network_routes": false,
+    "cloud_ssh_dns": "simulated",
+    "credential_values": "synthetic",
+    "node_binary_fixture": "synthetic_not_executed"
+  },
+  "prerequisite_import": {
+    "actual_fixed_cli": true,
+    "actual_account_group_dns_and_release_services": true,
+    "encrypted_mysql_credentials": true,
+    "authority_bound_to_bundle_host_private_material_and_original_deadline": true,
+    "root_only": true,
+    "private_files_0600": true,
+    "new_lock_acl_narrowed_only_on_exclusive_creation": true,
+    "existing_bad_lock_permissions_refused_without_repair": true,
+    "concurrent_cli_import_refused": true,
+    "actual_elapsed_dispatch_expiry": true,
+    "transaction_rollback_phases": 5,
+    "uncertain_result_blocks_replay": true,
+    "first_error_safe_and_retained": true,
+    "stop_denies_mutation_allows_readback": true,
+    "service_uid_can_read_published_release_not_write_or_read_private_credentials": true,
+    "default_release_unset": true,
+    "runtime_contains_release_archive_and_matching_manifest": true,
+    "production_or_cloud_calls": false
+  },
+  "regressions": {
+    "python": {"tests": 116, "passed": true},
+    "component_php": {"tests": 70, "assertions": 332},
+    "source_php": {"tests": 17, "assertions": 196},
+    "native_cli_binding_lifetime_php": {"tests": 9, "assertions": 713},
+    "native_shared_and_transient_bindings_restored": true,
+    "actual_dual_source_registration_and_http_routes": true,
+    "synthetic_reports_per_source": 3,
+    "account_cooldown_real_seconds": 300,
+    "setup_dns_authority_and_precise_cleanup": true,
+    "cleanup_rpc_sigkill_recovery": true,
+    "source_and_dns_deletes_not_repeated": true,
+    "cleanup_absence_spacing_at_least_seconds": 10
+  },
+  "prior_failures": [
+    {
+      "ci_run": 44024875881,
+      "tested_commit": "e2c35201f0f3e54c92ccfe6c2e64944e9ad68b82",
+      "result": "failed_then_cleaned",
+      "finding": "A rejection assertion hid the structured error code; the test harness was changed to retain only safe diagnostics."
+    },
+    {
+      "ci_run": 44025283648,
+      "tested_commit": "edbe4792626ba237dc3acf0f7c7438562c3b263e",
+      "result": "failed_then_cleaned",
+      "finding": "The Linux default ACL widened a newly created lock despite umask. Only exclusive new files now receive explicit 0600; existing unexpected permissions still fail closed."
+    }
+  ],
+  "limits": {
+    "whole_round_concrete_setup_ports_complete": false,
+    "configuration_and_setup_grant_whole_entry_binding_complete": false,
+    "native_execution_grant_issuer_complete": false,
+    "native_execution_grant_real_elapsed_expiry_tested": false,
+    "creation_phase_process_crash_tested": false,
+    "assembled_a1_cleanup_cooldown_a2_retry_tested": false,
+    "node_binary_execution_tested_in_this_run": false,
+    "final_real_binary_runtime_frozen": false,
+    "real_cloud_acceptance": false,
+    "live_ready": false
+  },
+  "cleanup": {
+    "service_containers_and_volumes_removed": true,
+    "fixed_fixture_removed": true,
+    "temporary_material_removed": true,
+    "external_routes_after": false,
+    "production_changed": false,
+    "cloud_instances_created": 0,
+    "persistent_automatic_switches_changed": false,
+    "main_pushed": false
+  },
+  "artifact_sha256": {
+    "application-linux-summary.json": "6998cad1151a46d5e40c6f41263ef7880e1983ba0c65138bca3c3f9cbf43fdde",
+    "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cli-phpunit.log": "c3e19f3359c809bae6217fe7bdbdfdc461d8aeac3a58eecc1fc5b2225b677f16",
+    "dns-phpunit.log": "2fb1ea89afd3836908b09e2b89322b433a55f07dd45f11330fed92f395221602",
+    "python.log": "c0373485ec30dbda1ffa2ab9676ad933477907622edc242e86808c7914a24a52",
+    "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+    "source-phpunit.log": "3ef216e246d71a3c4b7f117e6ac812046064fb22f3c939dac2a3dbc42101ec77"
+  }
+}
