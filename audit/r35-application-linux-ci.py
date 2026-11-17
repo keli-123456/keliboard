@@ -223,7 +223,7 @@ try:
     assert observed['states'] == ['succeeded', None] and observed['callback_steps'] == 1
     SUMMARY['idempotent_and_sibling_unchanged'] = True
     prepared = php('dns-prepare')
-    assert prepared['prepared'] and prepared['encrypted_credential'] and prepared['redis_counter'] == 1
+    assert prepared['prepared'] and prepared['encrypted_credential'] and prepared['redis_counter'] == 1, prepared
     assert php('dns-control')['ready']
     lost = php('dns-edge-a-lost')
     assert lost['provider_failure'] and lost['create_calls'] == 2 and lost['claim_calls'] == 2
@@ -243,7 +243,8 @@ try:
     assert second['delete_calls'] == 3 and second['create_calls'] == 3 and second['claim_calls'] == 3
     assert second['redis_counter'] == 10 and second['closed_gates_unchanged']
     SUMMARY['dns_initialization'] = dict(full_application=True, encrypted_mysql_credential=True,
-        real_redis=True, durable_journal_across_php_processes=True, create_calls=3, claim_calls=3,
+        real_redis=True, redis_read_type=prepared['redis_read_type'],
+        durable_journal_across_php_processes=True, create_calls=3, claim_calls=3,
         delete_calls=3, claim_ack_loss_reconciled_without_replay=True,
         unclaimed_record_cleaned_by_exact_create_ack=True, stopped_creation_denied=True,
         two_absence_reads_at_least_ten_seconds_apart=True, persistent_gates_changed=False,

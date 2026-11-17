@@ -133,7 +133,10 @@ return static function (string $mode): array {
         }
         foreach ($closed as $key => $value) $need(config($key) === $value);
         // Export counters only. Synthetic secrets, API payloads and record bodies stay local.
-        return $result + ['encrypted_credential' => true, 'redis_counter' => Cache::get($cacheKey),
+        $counter = Cache::get($cacheKey);
+        $need((is_int($counter) || is_string($counter) && ctype_digit($counter)) && $counter >= 1 && $counter <= 100);
+        return $result + ['encrypted_credential' => true, 'redis_counter' => (int) $counter,
+            'redis_read_type' => get_debug_type($counter),
             'create_calls' => count(array_filter($fixture['writes'], fn ($a) => $a === 'AddDomainRecord')),
             'claim_calls' => count(array_filter($fixture['writes'], fn ($a) => $a === 'UpdateDomainRecordRemark')),
             'delete_calls' => count(array_filter($fixture['writes'], fn ($a) => $a === 'DeleteDomainRecord')),
