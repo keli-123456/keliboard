@@ -472,10 +472,10 @@ try:
             assert php_server.poll() is None; time.sleep(.1)
     else: raise AssertionError('http_fixture_not_ready')
     domain = 'control-' + RUN + '.dnscloudcloud.top'
-    certificate, key = work / 'certificate.pem', work / 'key.pem'
+    certificate, tls_key = work / 'certificate.pem', work / 'key.pem'
     command(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
         '-subj', '/CN=' + domain, '-addext', 'subjectAltName=DNS:' + domain,
-        '-keyout', str(key), '-out', str(certificate)])
+        '-keyout', str(tls_key), '-out', str(certificate)])
 
     class Proxy(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -492,7 +492,7 @@ try:
         def log_message(self, *_): pass
 
     server = ThreadingHTTPServer(('127.0.0.1', 0), Proxy)
-    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); tls.load_cert_chain(certificate, key)
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); tls.load_cert_chain(certificate, tls_key)
     server.socket = tls.wrap_socket(server.socket, server_side=True)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     client_tls = ssl.create_default_context(cafile=str(certificate))
@@ -748,6 +748,9 @@ try:
         assert bootstrap_transport.setup_call('native-read', actual_setup) == confirmed_readback
         bound = BoundControllerTransport(grant_file=remote_setup.grant_file,
             grant_sha256=hashlib.sha256(native_bytes).hexdigest(), **transport_args)
+        assert bound.identity == bootstrap_transport.identity and bound.known == bootstrap_transport.known
+        assert hashlib.sha256(bound.identity.read_bytes()).hexdigest() == host_load('bootstrap-binding')['identity_sha256']
+        assert bound.identity != tls_key
         if '--retry-flow' in sys.argv:
             from r35_retry_flow_ci import run_retry_flow, run_retry_teardown, run_private_teardown
             run_retry_flow(bound=bound, php=php, report=report, callback=callback, pins=pins,
