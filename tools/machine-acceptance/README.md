@@ -1214,9 +1214,15 @@ The [Linux component record](../../docs/evidence/linode-r35-native-grant-catalog
 uses the full application, isolated MySQL/Redis, real HTTP/TLS and service UID,
 with cloud/SSH/DNS side effects simulated. It verifies real cooldown, immutable
 grant readback, partial-publication denial, stop revocation and setup cleanup.
-Candidate HTTP callbacks, native A1/A2 whole-round cleanup, host installation
-composition and the final unarmed real-binary package are still pending. This
-component result does not authorize or establish live acceptance.
+The [candidate HTTP component](../../docs/evidence/linode-r35-candidate-http-linux-20261117.json)
+also covers actual native task creation, TLS callbacks/reports, missing-capability
+and wrong-identity denial, duplicate receipt handling and stop revocation. Its
+provider operations and client telemetry are simulated; it does not verify DNS
+cutover or node execution. Native-grant waiting keeps the original request/window;
+an unknown reply still requires stopped reconciliation, not a new issuance.
+Native A1/A2 whole-round cleanup, host installation composition and the final
+unarmed real-binary package are still pending. These component results do not
+authorize or establish live acceptance.
 
 ## Protocol Interoperability
 
