@@ -16,7 +16,7 @@ final class MemberNativeGrant
     private const INTENT = '/opt/keli-isolated/private/member-native-issuance.json';
     public const RUNTIME = ['member_transport_entry.php', 'member_cli_authority.php', 'member_round_bridge.php',
         'member_retry_driver.php', 'member_controller_bridge.php', 'member_source_registry.php', 'member_native_controller.php',
-        'member_application_bootstrap.php', 'member_provider_bindings.php', 'member_setup_authority.php',
+        'member_application_bootstrap.php', 'member_application_entry.php', 'member_provider_bindings.php', 'member_setup_authority.php',
         'member_candidate_callbacks.php', 'member_source_configuration.php', 'member_source_initialization.php',
         'member_dns_initialization.php', 'member_setup_dns.php', 'member_setup_controller.php',
         'member_native_dns_receipt.php', 'aliyun_cleanup.php'];

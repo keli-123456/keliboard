@@ -13,6 +13,60 @@ final class MemberApplicationBootstrap
         if (!$value) throw new \RuntimeException('member_application_' . $reason);
     }
 
+    public static function validateInstallRequest(array $request, int $now): void
+    {
+        $keys = ['schema', 'run_id', 'bundle_sha256', 'started_at', 'deadline_at', 'request_id', 'operation'];
+        self::need(count($request) === count($keys) && !array_diff(array_keys($request), $keys)
+            && ($request['schema'] ?? null) === 1 && ($request['run_id'] ?? null) === MemberCliAuthority::RUN
+            && in_array($request['operation'] ?? null, ['initialize', 'readback', 'service-smoke'], true)
+            && is_int($request['started_at'] ?? null) && $request['started_at'] > 0
+            && is_int($request['deadline_at'] ?? null)
+            && $request['deadline_at'] - $request['started_at'] > 1200
+            && $request['deadline_at'] - $request['started_at'] <= 7200, 'install_request_invalid');
+        foreach (['bundle_sha256' => 64, 'request_id' => 32] as $key => $length)
+            self::need(is_string($request[$key] ?? null)
+                && preg_match('/^[a-f0-9]{' . $length . '}$/D', $request[$key]) === 1, 'install_request_invalid');
+        self::need($now >= $request['started_at'], 'install_clock_invalid');
+        if ($request['operation'] === 'initialize')
+            self::need($now < $request['deadline_at'] - 1200, 'install_window_expired');
+    }
+
+    public static function install(array $request): array
+    {
+        self::need(PHP_SAPI === 'cli' && function_exists('posix_geteuid') && function_exists('posix_getegid'), 'installer_cli_required');
+        self::validateInstallRequest($request, time());
+        $pin = self::receipt();
+        self::need(hash_equals($pin['bundle_sha256'], $request['bundle_sha256']), 'install_bundle_changed');
+        $smoke = $request['operation'] === 'service-smoke';
+        self::need($smoke ? posix_geteuid() === $pin['uid'] && posix_getegid() === $pin['gid']
+            : posix_geteuid() === 0, 'installer_identity_changed');
+        if ($request['operation'] === 'initialize') {
+            foreach (['private/import-stopped', 'member-setup-stop.json', 'private/member-runtime-scope.json'] as $name)
+                self::need(!file_exists(self::ROOT . '/' . $name) && !is_link(self::ROOT . '/' . $name), 'installation_stopped');
+        }
+        if (!$smoke) {
+            $result = MemberBootstrapController::withinInstallation(static function () use ($request): array {
+                $app = self::boot();
+                return $request['operation'] === 'initialize' ? self::initialize($app) : self::initialized();
+            }, $request['operation'] === 'initialize');
+        } else {
+            $app = self::boot();
+            foreach (['app/artisan', 'app/bootstrap/app.php', 'app/bootstrap/cache', 'runtime'] as $name)
+                self::need(!is_writable(self::ROOT . '/' . $name), 'service_executable_writable');
+            foreach (['storage/logs', 'storage/app/public', 'storage/framework'] as $name)
+                self::need(is_writable(self::ROOT . '/app/' . $name), 'service_state_not_writable');
+            self::need(count(\Illuminate\Support\Facades\DB::select('SELECT 1 AS ready')) === 1, 'service_database_unavailable');
+            foreach (['default', 'cache'] as $connection) {
+                $reply = \Illuminate\Support\Facades\Redis::connection($connection)->ping();
+                self::need($reply === true || strtoupper((string) $reply) === 'PONG' || (string) $reply === '+PONG', 'service_cache_unavailable');
+            }
+            $result = ['ready' => true, 'uid' => posix_geteuid(), 'gid' => posix_getegid(),
+                'kernel' => get_class($app->make(\Illuminate\Contracts\Http\Kernel::class)),
+                'database_and_cache_reachable' => true, 'executable_paths_read_only' => true];
+        }
+        return $request + ['ok' => true, 'result' => $result];
+    }
+
     public static function receipt(): array
     {
         self::need(PHP_OS_FAMILY === 'Linux' && in_array(PHP_SAPI, ['cli', 'cli-server', 'fpm-fcgi'], true), 'linux_required');

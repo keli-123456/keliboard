@@ -277,6 +277,78 @@ class StrictControllerTransport:
                 raise
             raise TransportError('transport_setup_uncertain') from None
 
+    def application_call(self, operation, scope, service=None):
+        """Initialize/read the pinned isolated app; never accept an Artisan command."""
+        from member_auxiliary import digest
+        from staging import read_file
+        require(operation in ('initialize', 'readback', 'service-smoke')
+                and isinstance(scope, dict) and set(scope) == {'run_id', 'bundle_sha256', 'started_at', 'deadline_at'}
+                and scope['run_id'] == self.run_id
+                and isinstance(scope['bundle_sha256'], str) and re.fullmatch(r'[a-f0-9]{64}', scope['bundle_sha256'])
+                and type(scope['started_at']) is int and scope['started_at'] > 0
+                and type(scope['deadline_at']) is int and 1200 < scope['deadline_at'] - scope['started_at'] <= 7200,
+                'transport_application_scope_invalid')
+        require((service is not None) == (operation == 'service-smoke'), 'transport_application_service_invalid')
+        if service is not None:
+            require(isinstance(service, dict) and set(service) == {'uid', 'gid'}
+                    and all(type(v) is int and 0 < v < 2**31 for v in service.values()), 'transport_application_service_invalid')
+        binding = dict(scope=copy.deepcopy(scope), host=self.host)
+        for path, key in ((self.identity, 'identity_sha256'), (self.known, 'known_hosts_sha256')):
+            binding[key] = read_file(path, 1048576)[0]['sha256']
+        prior_binding = self.load('application-binding')
+        require(prior_binding is None or prior_binding == binding, 'transport_application_binding_changed')
+        self.guard('application-' + operation, 'control')
+        if prior_binding is None:
+            self.save('application-binding', copy.deepcopy(binding))
+            require(self.load('application-binding') == binding, 'transport_application_journal_unconfirmed')
+        request = dict(schema=1, **scope, operation=operation, request_id=digest([scope, operation])[:32])
+        prior = self.load('application-initialize')
+        if operation == 'initialize':
+            require(prior is None, 'transport_application_readback_required')
+            intent = dict(request=request, completed=False)
+            self.save('application-initialize', intent)
+            require(self.load('application-initialize') == intent, 'transport_application_journal_unconfirmed')
+        else:
+            require(isinstance(prior, dict) and prior.get('request') == dict(schema=1, **scope,
+                    operation='initialize', request_id=digest([scope, 'initialize'])[:32]), 'transport_application_intent_missing')
+            if operation == 'service-smoke': require(prior.get('completed') is True, 'transport_application_readback_required')
+        command = 'php /opt/keli-isolated/runtime/member_application_entry.php'
+        if service is not None:
+            command = ('setpriv --reuid=%d --regid=%d --clear-groups --no-new-privs --bounding-set=-all ' %
+                       (service['uid'], service['gid'])) + command
+        try:
+            raw = self.execute(self._command(command), json.dumps(request, separators=(',', ':')).encode(),
+                               180 if operation == 'initialize' else 45)
+            require(isinstance(raw, bytes) and len(raw) <= LIMIT, 'transport_response_too_large')
+            reply = unique_json(raw)
+            require(isinstance(reply, dict) and set(reply) == set(request) | {'ok', 'result'}
+                    and reply['ok'] is True and all(type(reply[k]) is type(v) and reply[k] == v for k, v in request.items()),
+                    'transport_application_reply_changed')
+            value = reply['result']
+            require(isinstance(value, dict), 'transport_application_reply_changed')
+            if service is None:
+                require(set(value) == {'schema', 'run_id', 'bundle_sha256', 'environment_sha256', 'machine_id_sha256',
+                        'migrated', 'migration_count', 'migrations_sha256', 'tables'} and value['schema'] == 1
+                        and value['run_id'] == self.run_id and value['bundle_sha256'] == scope['bundle_sha256']
+                        and value['migrated'] is True and all(type(value[k]) is int and value[k] > 0 for k in ('migration_count', 'tables'))
+                        and all(isinstance(value[k], str) and re.fullmatch(r'[a-f0-9]{64}', value[k])
+                                for k in ('environment_sha256', 'machine_id_sha256', 'migrations_sha256')),
+                        'transport_application_reply_changed')
+                evidence = digest(value)
+                require(prior is None or prior.get('completed') is not True or prior.get('evidence_sha256') == evidence,
+                        'transport_application_readback_changed')
+                completed = dict(request=prior['request'] if prior else request, completed=True, evidence_sha256=evidence)
+                self.save('application-initialize', copy.deepcopy(completed))
+                require(self.load('application-initialize') == completed, 'transport_application_journal_unconfirmed')
+            else:
+                require(value == dict(ready=True, **service, kernel='App\\Http\\Kernel',
+                    database_and_cache_reachable=True, executable_paths_read_only=True), 'transport_application_service_unconfirmed')
+            return copy.deepcopy(value)
+        except Exception as error:
+            self._first_error('application-' + operation, 'control', error)
+            if isinstance(error, TransportError): raise
+            raise TransportError('transport_application_uncertain') from None
+
     def private_call(self, operation, pin):
         """Fixed root-only file removal endpoint; no arbitrary path or shell input."""
         from member_private_cleanup import validate_pin

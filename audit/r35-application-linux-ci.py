@@ -113,6 +113,7 @@ try:
         'tests/Unit/Services/MachineMemberSourceConfigurationTest.php',
         'tests/Unit/Services/MachineMemberPrerequisiteImportTest.php',
         'tests/Unit/Services/MachineMemberBootstrapControllerTest.php',
+        'tests/Unit/Services/MachineMemberApplicationInstallTest.php',
         'tests/Unit/Services/MachineMemberSetupAuthorityTest.php',
         'tests/Unit/Services/MachineProviderGroupsTest.php',
         'tests/Unit/Services/MachineMemberProviderBindingsTest.php',
@@ -193,7 +194,32 @@ try:
     configure(ROOT, frozen['archive_sha256'], settings, uid=65534, gid=65534)
     SUMMARY['application_files'] = frozen['files']
     SUMMARY['composer_lock_sha256'] = frozen['composer_lock_sha256']
-    SUMMARY['migration'] = php('migrate')
+    from member_transport import StrictControllerTransport, TransportError
+    install_root = work / 'installation-host'; install_root.mkdir(mode=0o700)
+    for name in ('key', 'known'):
+        (install_root / name).write_bytes(b'synthetic-installation-host'); (install_root / name).chmod(0o600)
+    install_scope = dict(run_id=RUN, bundle_sha256=frozen['archive_sha256'], started_at=int(time.time()))
+    install_scope['deadline_at'] = install_scope['started_at'] + 7199
+    install_journal = {}
+    def installation_ssh(args, payload, timeout):
+        import shlex
+        assert args[-2] == 'root@9.9.9.10' and 'StrictHostKeyChecking=yes' in args
+        argv = shlex.split(args[-1])
+        expected = ['php', '/opt/keli-isolated/runtime/member_application_entry.php']
+        prefix = ['setpriv', '--reuid=65534', '--regid=65534', '--clear-groups', '--no-new-privs', '--bounding-set=-all']
+        assert argv in (expected, prefix + expected)
+        p = subprocess.run(argv, input=payload, cwd=ROOT / 'app', env=ENV, capture_output=True, timeout=timeout)
+        assert p.returncode == 0, json.loads(p.stdout)
+        return p.stdout
+    install_transport = StrictControllerTransport(run_id=RUN, host='9.9.9.10', identity_file=install_root / 'key',
+        known_hosts=install_root / 'known', guard=lambda *_: None, load=install_journal.get,
+        save=lambda k, v: install_journal.__setitem__(k, v), execute=installation_ssh)
+    SUMMARY['migration'] = install_transport.application_call('initialize', install_scope)
+    assert install_transport.application_call('readback', install_scope) == SUMMARY['migration']
+    smoke = install_transport.application_call('service-smoke', install_scope, dict(uid=65534, gid=65534))
+    assert smoke['database_and_cache_reachable'] and smoke['executable_paths_read_only']
+    SUMMARY['application_install_entry'] = dict(actual_root_migration=True, actual_uid=smoke['uid'],
+        actual_mysql_redis=True, fixed_ssh_command_simulated_locally=True, no_cloud_or_dns=True)
     assert php('initialize-readback') == SUMMARY['migration']
     rejected = php('migrate', ok=False)
     assert rejected['reason'] == 'member_application_initialization_intent_exists'
@@ -230,6 +256,30 @@ try:
         for path in originals: path.with_suffix('.saved').rename(path)
     assert php('initialize-readback') == SUMMARY['migration']
     SUMMARY['existing_schema_rejected_first_error_retained'] = True
+    if '--install-entry-only' in sys.argv:
+        # Stop drains the same root lock as initialization; an in-flight installer
+        # must not return a success acknowledgement after this stop appears.
+        hold_process = subprocess.Popen(['php', str(ROOT / 'app/tests/Fixtures/member_full_application.php'), 'installation-drain'],
+            cwd=ROOT / 'app', env=ENV, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        marker = ROOT / 'private/installation-drain-ready'
+        for _ in range(100):
+            if marker.exists(): break
+            assert hold_process.poll() is None; time.sleep(.05)
+        else: raise AssertionError('installation_drain_not_ready')
+        stopped = import_rpc('stop', ok=False)
+        assert stopped['reason'] == 'member_import_busy', stopped
+        output, errors = hold_process.communicate(timeout=10)
+        assert hold_process.returncode == 1 and json.loads(output)['reason'] == 'member_import_expired_or_stopped'
+        hold_process = None
+        assert import_rpc('stop')['stopped'] is True
+        assert install_transport.application_call('readback', install_scope) == SUMMARY['migration']
+        SUMMARY['application_install_entry']['stop_drains_shared_lock'] = True
+        SUMMARY['application_install_entry']['no_success_after_stop'] = True
+        SUMMARY['application_install_entry']['readback_after_stop'] = True
+        SUMMARY['install_entry_only'] = True
+        SUMMARY['whole_host_installer_verified'] = False
+        SUMMARY['status'] = 'passed'
+        raise SystemExit(0)
     installer = MemberInstallation(ROOT)
     credentials = json.dumps(dict(schema=1, run_id=RUN, linode=dict(api_token='synthetic-no-live-token'),
         aliyun=dict(access_key_id='synthetic-id', access_key_secret='synthetic-secret'), baseline_ids=[])).encode()

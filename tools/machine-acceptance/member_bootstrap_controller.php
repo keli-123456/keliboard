@@ -66,6 +66,20 @@ final class MemberBootstrapController
         } catch (\Throwable $error) { if (is_resource($lock)) fclose($lock); throw $error; }
     }
 
+    public static function withinInstallation(\Closure $callback, bool $mutating): array
+    {
+        self::root();
+        // Share the bootstrap lock with stop and private teardown. Migration is
+        // not acknowledged while a concurrent stop is waiting for it to drain.
+        $lock = self::acquire();
+        try {
+            if ($mutating) self::need(!file_exists(self::STOP) && !is_link(self::STOP), 'expired_or_stopped');
+            $result = $callback();
+            if ($mutating) self::need(!file_exists(self::STOP) && !is_link(self::STOP), 'expired_or_stopped');
+            return $result;
+        } finally { flock($lock, LOCK_UN); fclose($lock); }
+    }
+
     public function __construct()
     {
         self::root(); MemberApplicationBootstrap::initialized();

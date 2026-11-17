@@ -7,6 +7,10 @@ on:
         type: boolean
         default: false
         description: Run bounded cleanup regressions only; no service containers.
+      install_entry_only:
+        type: boolean
+        default: false
+        description: Verify the real application installation CLI and shared stop lock only.
 
 permissions:
   contents: read
@@ -99,10 +103,12 @@ jobs:
           name="r35-application-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           pid="$(docker inspect -f '{{.State.Pid}}' "$name-mysql")"
           test "$pid" -gt 1
+          mode=--retry-flow
+          if [ '${{ inputs.install_entry_only }}' = true ]; then mode=--install-entry-only; fi
           timeout --signal=TERM --kill-after=15s 1800s sudo nsenter --net="/proc/$pid/ns/net" \
             unshare --pid --fork --mount-proc --kill-child=SIGKILL \
             env -i PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 HOME=/root \
-            PYTHONDONTWRITEBYTECODE=1 python3 -B audit/r35-application-linux-ci.py --retry-flow >artifacts/application-linux.log 2>&1
+            PYTHONDONTWRITEBYTECODE=1 python3 -B audit/r35-application-linux-ci.py "$mode" >artifacts/application-linux.log 2>&1
       - name: Retain bounded nonsecret status even if artifact upload fails
         if: always()
         shell: bash

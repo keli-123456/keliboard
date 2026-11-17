@@ -15,6 +15,26 @@ try {
     if ($mode === 'migrate') {
         $initialized = Keli\Acceptance\MemberApplicationBootstrap::initialize($app);
         echo json_encode($initialized);
+    } elseif ($mode === 'installation-drain') {
+        require_once '/opt/keli-isolated/runtime/member_bootstrap_controller.php';
+        Keli\Acceptance\MemberBootstrapController::withinInstallation(static function (): array {
+            $path = '/opt/keli-isolated/private/installation-drain-ready';
+            $stream = fopen($path, 'x+b');
+            if (!$stream || !chmod($path, 0600) || fwrite($stream, 'ready') !== 5 || !fflush($stream) || !fsync($stream))
+                throw new RuntimeException('fixture_installation_marker_failed');
+            fclose($stream);
+            $deadline = microtime(true) + 20;
+            while (microtime(true) < $deadline) {
+                clearstatcache(true, '/opt/keli-isolated/private/import-stopped');
+                if (file_exists('/opt/keli-isolated/private/import-stopped')) {
+                    usleep(1000000);
+                    return ['completed' => true];
+                }
+                usleep(100000);
+            }
+            throw new RuntimeException('fixture_installation_stop_missing');
+        }, true);
+        throw new RuntimeException('fixture_installation_stop_ignored');
     } elseif ($mode === 'callback-prepare') {
         Keli\Acceptance\MemberApplicationBootstrap::initialized();
         if (App\Models\MachineProvisionTask::query()->exists()) throw new RuntimeException('fixture_tasks_exist');

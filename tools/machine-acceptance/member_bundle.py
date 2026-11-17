@@ -22,7 +22,7 @@ RUNTIME = ('member_retry_driver.php', 'member_source_registry.php', 'member_cont
            'member_initialization.py', 'member_auxiliary_bindings.py', 'member_source_initialization.php',
            'member_provider_bindings.php', 'aliyun_cleanup.php', 'member_control_creation.php',
            'member_setup_bindings.py', 'member_assembly.py', 'member_execution.py', 'member_remote_setup.py', 'member_installation.py',
-           'member_environment.py', 'member_application.py', 'member_application_bootstrap.php', 'member_private_cleanup.py',
+           'member_environment.py', 'member_application.py', 'member_application_bootstrap.php', 'member_application_entry.php', 'member_private_cleanup.py',
            'member_dns_initialization.php', 'member_native_dns_receipt.php', 'member_source_configuration.php',
            'member_prerequisite_import.php', 'member_import_entry.php', 'member_bootstrap_controller.php',
            'member_setup_authority.php', 'member_candidate_callbacks.php', 'member_native_grant.php', 'member_setup_dns.php', 'member_callback_entry.php', 'member_setup_controller.php', 'member_setup_entry.php')
@@ -44,6 +44,7 @@ TESTS = ('tools/machine-acceptance/test_member_transport.py', 'tools/machine-acc
          'tests/Unit/Services/MachineMemberPrerequisiteImportTest.php',
          'tests/Unit/Services/MachineMemberBootstrapControllerTest.php',
          'tests/Unit/Services/MachineMemberSetupAuthorityTest.php',
+         'tests/Unit/Services/MachineMemberApplicationInstallTest.php',
          'tests/Unit/Services/MachineProviderGroupsTest.php')
 FILES = tuple('tools/machine-acceptance/' + name for name in RUNTIME) + TESTS + (
     'tests/Support/TestsMemberRetryDriver.php',

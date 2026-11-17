@@ -329,6 +329,46 @@ class MemberTransportTests(unittest.TestCase):
         with self.assertRaisesRegex(TransportError, 'readback_uncertain'): self.rpc.setup_call('native-read', pin)
         self.assertEqual(self.saved['setup-native-grant'], core)
 
+    def test_application_initialize_once_readback_and_fixed_service_command(self):
+        scope = dict(run_id=self.rpc.run_id, bundle_sha256='a' * 64, started_at=1000, deadline_at=8200)
+        migrated = dict(schema=1, run_id=self.rpc.run_id, bundle_sha256='a' * 64, environment_sha256='b' * 64,
+            machine_id_sha256='c' * 64, migrated=True, migration_count=200, migrations_sha256='d' * 64, tables=100)
+        def execute(command, raw, timeout):
+            self.calls.append((command, raw, timeout)); request = json.loads(raw)
+            value = migrated
+            if request['operation'] == 'service-smoke':
+                self.assertEqual(command[-1], 'setpriv --reuid=65534 --regid=65534 --clear-groups --no-new-privs --bounding-set=-all php /opt/keli-isolated/runtime/member_application_entry.php')
+                value = dict(ready=True, uid=65534, gid=65534, kernel='App\\Http\\Kernel',
+                    database_and_cache_reachable=True, executable_paths_read_only=True)
+            else: self.assertEqual(command[-1], 'php /opt/keli-isolated/runtime/member_application_entry.php')
+            return json.dumps(dict(request, ok=True, result=value)).encode()
+        self.rpc.execute = execute
+        self.assertEqual(self.rpc.application_call('initialize', scope), migrated)
+        with self.assertRaisesRegex(TransportError, 'readback_required'): self.rpc.application_call('initialize', scope)
+        self.assertEqual(self.rpc.application_call('readback', scope), migrated)
+        self.assertTrue(self.rpc.application_call('service-smoke', scope, dict(uid=65534, gid=65534))['ready'])
+        migrated['migration_count'] += 1
+        with self.assertRaisesRegex(TransportError, 'readback_changed'): self.rpc.application_call('readback', scope)
+
+    def test_application_lost_ack_never_replays_initialization_or_accepts_ssh_drift(self):
+        scope = dict(run_id=self.rpc.run_id, bundle_sha256='a' * 64, started_at=1000, deadline_at=8200)
+        self.rpc.execute = lambda *_: (_ for _ in ()).throw(TimeoutError('private'))
+        with self.assertRaisesRegex(TransportError, 'uncertain'): self.rpc.application_call('initialize', scope)
+        with self.assertRaisesRegex(TransportError, 'readback_required'): self.rpc.application_call('initialize', scope)
+        with self.assertRaisesRegex(TransportError, 'readback_required'):
+            self.rpc.application_call('service-smoke', scope, dict(uid=65534, gid=65534))
+        self.key.write_text('changed')
+        with self.assertRaisesRegex(TransportError, 'binding_changed'): self.rpc.application_call('readback', scope)
+        self.assertNotIn('private', json.dumps(self.saved))
+
+    def test_application_invalid_scope_or_root_smoke_never_uses_transport(self):
+        scope = dict(run_id=self.rpc.run_id, bundle_sha256='a' * 64, started_at=1000, deadline_at=8200)
+        for operation, changed, service in [('migrate:fresh', scope, None), ('initialize', dict(scope, host='other'), None),
+            ('initialize', dict(scope, started_at=True), None), ('service-smoke', scope, dict(uid=0, gid=0)),
+            ('service-smoke', scope, dict(uid='65534', gid=65534)), ('readback', scope, dict(uid=1, gid=1))]:
+            with self.assertRaises(TransportError): self.rpc.application_call(operation, changed, service)
+        self.assertEqual(self.calls, [])
+
 
 class MemberCleanupTests(unittest.TestCase):
     def setUp(self):
