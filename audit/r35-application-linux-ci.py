@@ -508,8 +508,11 @@ try:
         assert hold_process.poll() is None
         time.sleep(.1)
     else: raise AssertionError('inflight_setup_not_ready')
-    assert php('setup-stop-busy')['drain_pending']
-    assert callback() == 403
+    with import_lock.open('r+b') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        stopping = php('setup-stop-busy')
+        assert stopping['drain_pending'] and stopping['bootstrap_stop']
+        assert callback() == 403
     hold_process.terminate(); hold_process.wait(timeout=5)
     assert hold_process.returncode != 0
     hold_process = None
@@ -599,6 +602,7 @@ try:
         original_started_and_deadline_inherited=True, caller_cannot_extend_window=True,
         same_grant_reused_no_reissue=True, lost_result_reconciled_by_existing_grant=True,
         changed_control_refused=True, stop_marker_precedes_lock_drain=True,
+        callback_revoked_before_bootstrap_lock_drain=True,
         stop_does_not_boot_database_or_cache=True, stopped_readbacks_allowed=True,
         whole_round_installation_and_native_ports_composed=False)
     SUMMARY['setup_authority'] = dict(actual_capability=True, real_mysql_redis_and_service_uid=True,

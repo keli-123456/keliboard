@@ -186,9 +186,13 @@ final class MemberBootstrapController
         self::need($stat && realpath(self::STOP) === self::STOP && is_file(self::STOP) && $stat['uid'] === 0
             && $stat['nlink'] === 1 && ($stat['mode'] & 0777) === 0600
             && file_get_contents(self::STOP) === MemberCliAuthority::RUN . "\n", 'stop_unconfirmed');
+        $grant = MemberApplicationBootstrap::ROOT . '/member-setup-grant.json';
+        // Revoke callback admission before waiting for an unrelated bootstrap lock.
+        // An in-flight issuer must see STOP before committing its own acknowledgement.
+        if (file_exists($grant) || is_link($grant)) MemberSetupAuthority::revoke();
         $lock = self::acquire();
         try {
-            $grant = MemberApplicationBootstrap::ROOT . '/member-setup-grant.json';
+            // The issuer may have published after the first check; the lock drains it.
             if (file_exists($grant) || is_link($grant)) MemberSetupAuthority::revoke();
             return ['stopped' => true];
         } finally { flock($lock, LOCK_UN); fclose($lock); }

@@ -62,8 +62,9 @@ return static function (string $mode): array {
         // Revocation must still work when MySQL is unavailable or configuration drifted.
         DB::purge(); config(['database.connections.mysql.port' => 1]);
         if ($mode === 'setup-stop-busy') {
-            $denied(fn () => MemberSetupAuthority::revoke(), 'member_setup_revocation_pending');
-            return ['new_admissions_stopped' => true, 'drain_pending' => true];
+            $denied(fn () => MemberBootstrapController::stop(), 'member_setup_revocation_pending');
+            $need(file_exists('/opt/keli-isolated/private/import-stopped'));
+            return ['new_admissions_stopped' => true, 'drain_pending' => true, 'bootstrap_stop' => true];
         }
         $result = MemberSetupAuthority::revoke();
         return ['stopped' => $result['stopped'], 'database_not_required' => true];
