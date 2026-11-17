@@ -242,9 +242,14 @@ return static function (string $mode): array {
     if (in_array($mode, ['setup-dns-control', 'setup-dns-edges', 'setup-dns-readback'], true)) {
         $operation = substr($mode, strlen('setup-'));
         $before = app(App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate::class);
+        if ($operation === 'dns-edges') app()->instance(App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate::class, $before);
+        $shared = app()->isShared(App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate::class);
         $request = $rpcRequest($operation); $reply = $controller->rpc($request);
         $need($controller->rpc($request) === $reply, 'dns_rpc_replayed');
-        $need(app(App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate::class) === $before, 'dns_gate_not_restored');
+        $after = app(App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate::class);
+        $need(get_class($after) === get_class($before)
+            && app()->isShared(App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate::class) === $shared
+            && (!$shared || $after === $before), 'dns_gate_not_restored');
         if ($operation === 'dns-control') $need(Task::query()->count() === 0, 'control_dns_after_sources');
         if ($operation === 'dns-edges') {
             $need(Task::query()->where('status', 'accepted')->count() === 2, 'dns_before_registration');

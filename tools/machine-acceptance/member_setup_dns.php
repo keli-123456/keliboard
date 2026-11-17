@@ -46,6 +46,7 @@ final class MemberSetupDns
     private function within(string $operation, \Closure $callback): array
     {
         return $this->authority->within($operation, 'control', function () use ($operation, $callback): array {
+            $shared = app()->isShared(MachineFailoverExecutionGate::class);
             $old = app(MachineFailoverExecutionGate::class);
             $guard = fn () => $this->authority->allow($operation, 'control');
             app()->instance(MachineFailoverExecutionGate::class, new class($guard, $operation) extends MachineFailoverExecutionGate {
@@ -59,7 +60,10 @@ final class MemberSetupDns
                 }
             });
             try { return $callback($guard); }
-            finally { app()->instance(MachineFailoverExecutionGate::class, $old); }
+            finally {
+                if ($shared) app()->instance(MachineFailoverExecutionGate::class, $old);
+                else app()->forgetInstance(MachineFailoverExecutionGate::class);
+            }
         });
     }
 
