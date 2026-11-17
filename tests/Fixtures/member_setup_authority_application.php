@@ -10,6 +10,7 @@ use Keli\Acceptance\MemberApplicationBootstrap;
 use Keli\Acceptance\MemberCliAuthority;
 use Keli\Acceptance\MemberProviderBindings;
 use Keli\Acceptance\MemberSetupAuthority;
+use Keli\Acceptance\MemberSetupController;
 use Keli\Acceptance\MemberSourceConfiguration;
 use Keli\Acceptance\MemberSourceInitialization;
 
@@ -17,7 +18,8 @@ use Keli\Acceptance\MemberSourceInitialization;
 return static function (string $mode): array {
     if (getenv('GITHUB_ACTIONS') !== 'true' || getenv('KELI_MEMBER_FULL_APPLICATION') !== '1'
         || PHP_OS_FAMILY !== 'Linux' || PHP_SAPI !== 'cli') throw new RuntimeException('fixture_only');
-    foreach (['member_provider_bindings', 'member_source_configuration', 'member_source_initialization', 'member_setup_authority'] as $file)
+    foreach (['member_provider_bindings', 'member_source_configuration', 'member_source_registry', 'member_source_initialization',
+        'member_setup_authority', 'member_setup_controller'] as $file)
         require_once '/opt/keli-isolated/runtime/' . $file . '.php';
     $need = static function (bool $ok, string $code = 'invalid'): void {
         if (!$ok) throw new RuntimeException('fixture_setup_' . $code);
@@ -117,7 +119,7 @@ return static function (string $mode): array {
     if ($mode === 'setup-stopped-readback') {
         $denied(fn () => $authority->within('source-prepare', 'source-a', fn () => []), 'member_setup_stopped');
         $result = $authority->within('source-readback', 'source-a', fn () => ['count' => Task::query()->count()]);
-        $need($result['count'] === 1); $closed();
+        $need($result['count'] === 2); $closed();
         return ['mutation_denied' => true, 'readback_allowed' => true];
     }
     if ($mode === 'setup-drift') {
@@ -137,44 +139,88 @@ return static function (string $mode): array {
         $closed();
         return ['policy_and_release_drift_refused' => true];
     }
-    $init = new MemberSourceInitialization($load('initialization'), $authority->within(...), $load, $save);
     Http::preventStrayRequests();
     $writes = 0; $reads = 0;
     Http::fake(static function ($request) use ($load, $save, &$writes, &$reads, $need) {
         $need(parse_url($request->url(), PHP_URL_HOST) === 'api.linode.com', 'foreign_provider');
         $path = parse_url($request->url(), PHP_URL_PATH);
-        $row = $load('provider-row');
+        $rows = $load('provider-rows') ?? [];
         if ($request->method() === 'POST') {
-            $need($path === '/v4/linode/instances' && $row === null, 'duplicate_create'); $writes++;
-            $row = ['id' => 100001, 'status' => 'running', 'label' => $request['label'], 'tags' => $request['tags'],
+            $task = Task::query()->get()->first(fn ($task) => $task->payload['request']['label'] === $request['label']);
+            $scope = $load('initialization');
+            $role = $task?->machine_id === $scope['sources']['source-a']['plan']['machine_id'] ? 'source-a' : 'source-b';
+            $need($task !== null && $task->machine_id === $scope['sources'][$role]['plan']['machine_id'], 'provider_role');
+            $id = $role === 'source-a' ? 100001 : 100002;
+            $need($path === '/v4/linode/instances' && !isset($rows[$id]) && count($rows) < 2, 'duplicate_create'); $writes++;
+            $row = ['id' => $id, 'status' => 'running', 'label' => $request['label'], 'tags' => $request['tags'],
                 'region' => $request['region'], 'type' => $request['type'], 'image' => $request['image'],
-                'created' => gmdate('Y-m-d\TH:i:s'), 'ipv4' => ['8.8.4.4'], 'ipv6' => ''];
-            $save('provider-row', $row);
+                'created' => gmdate('Y-m-d\TH:i:s'), 'ipv4' => [$role === 'source-a' ? '8.8.4.4' : '8.8.8.8'], 'ipv6' => ''];
+            $rows[$id] = $row; $save('provider-rows', $rows);
             return Http::response($row);
         }
         $need($request->method() === 'GET', 'mutation_outside_create'); $reads++;
+        $filter = $request->header('X-Filter')[0] ?? null;
+        $visible = $rows;
+        if ($filter !== null) {
+            $filter = json_decode($filter, true, 8, JSON_THROW_ON_ERROR);
+            $need(array_keys($filter) === ['label']);
+            $visible = array_filter($rows, fn ($row) => $row['label'] === $filter['label']);
+        }
         $response = match ($path) {
             '/v4/account' => ['euuid' => 'fixture-account-0001'],
             '/v4/account/settings' => ['backups_enabled' => false],
             '/v4/regions/sg-sin-2' => ['id' => 'sg-sin-2', 'status' => 'ok', 'capabilities' => ['Metadata']],
             '/v4/images/linode%2Fdebian12' => ['id' => 'linode/debian12', 'status' => 'available', 'deprecated' => false, 'capabilities' => ['cloud-init']],
             '/v4/linode/types/g6-standard-4' => ['id' => 'g6-standard-4', 'class' => 'standard'],
-            '/v4/linode/instances' => ['data' => $row === null ? [] : [$row], 'page' => 1, 'pages' => 1, 'results' => $row === null ? 0 : 1],
-            '/v4/linode/instances/100001' => $row,
+            '/v4/linode/instances' => ['data' => array_values($visible), 'page' => 1, 'pages' => 1, 'results' => count($visible)],
+            '/v4/linode/instances/100001' => $rows[100001] ?? null,
+            '/v4/linode/instances/100002' => $rows[100002] ?? null,
             default => throw new RuntimeException('fixture_setup_provider_operation'),
         };
         return Http::response($response);
     });
+    $controller = new MemberSetupController($authority);
+    if ($mode === 'setup-controller-hold') {
+        $save('controller-holding', ['active' => true]); sleep(120);
+        return ['unexpected_completion' => true];
+    }
+    if ($mode === 'setup-controller-first-error') {
+        $base = '/opt/keli-isolated/private/member-setup-journal';
+        $path = $base . '/source-queue-source-a.json'; $backup = $base . '/source-queue-source-a.saved';
+        $need(rename($path, $backup));
+        try {
+            $denied(fn () => $controller->dispatch(['operation' => 'advance']), 'member_initialization_registration_changed');
+        } finally { $need(rename($backup, $path)); }
+        $first = $controller->dispatch(['operation' => 'status'])['first_error'];
+        $need(array_keys($first) === ['class', 'file', 'line'] && $first['class'] === 'RuntimeException');
+        $denied(fn () => $controller->dispatch(['operation' => 'advance']), 'member_setup_controller_prior_failure');
+        $need($controller->dispatch(['operation' => 'status'])['first_error'] === $first);
+        return ['missing_intent_blocks_mutation' => true, 'first_error_safe_and_retained' => true];
+    }
+    if ($mode === 'setup-status') return $controller->dispatch(['operation' => 'status']);
+    if ($mode === 'setup-advance') {
+        $result = $controller->dispatch(['operation' => 'advance']);
+        $closed();
+        return $result + ['provider_writes_simulated' => $writes];
+    }
     if ($mode === 'setup-prepare') {
         $bus = app(BusContract::class);
         $denied(fn () => $authority->within('source-prepare', 'source-a', static fn () => throw new RuntimeException('fixture_failure')),
             'fixture_failure');
         $need(app(BusContract::class) === $bus); $closed();
-        $receipt = $init->prepare('source-a');
-        $need(Task::query()->count() === 1 && $receipt['status'] === 'queued');
-        $again = $init->prepare('source-a');
-        $need($again === $receipt && Task::query()->count() === 1);
-        $task = Task::query()->firstOrFail();
+        $receipt = $controller->dispatch(['operation' => 'advance']);
+        $need(Task::query()->count() === 1 && $receipt['reason'] === 'prepare' && $receipt['role'] === 'source-a');
+        $status = $controller->dispatch(['operation' => 'status']);
+        $need($status['sources']['source-a']['status'] === 'queued' && !$status['sources']['source-b']['queued']);
+        $closed();
+        return ['native_task_queued' => true, 'b_not_queued' => true,
+            'exception_restores_capability_and_bus' => true, 'provider_writes' => $writes];
+    }
+    if ($mode === 'setup-callback-pins') {
+        foreach (Task::query()->get() as $task) {
+        $scope = $load('initialization');
+        $role = $task->machine_id === $scope['sources']['source-a']['plan']['machine_id'] ? 'source-a' : 'source-b';
+        $need($task->dispatched_at > 0 && $task->external_id !== null);
         $yaml = Symfony\Component\Yaml\Yaml::parse(base64_decode($task->payload['request']['metadata']['user_data'], true));
         $secret = null;
         foreach ($yaml['write_files'] as $file) {
@@ -184,16 +230,19 @@ return static function (string $mode): array {
                 if (preg_match('/^header = "Authorization: Bearer ([a-f0-9]{64})"$/D', $line, $match)) $secret = $match[1];
         }
         $need(is_string($secret) && hash_equals($task->callback_hash, hash('sha256', $secret)), 'callback_secret_missing');
-        $save('callback', ['task_id' => $task->id, 'installation_id' => $task->installation_id, 'secret' => $secret]);
+        $save($role . '-callback', ['task_id' => $task->id, 'installation_id' => $task->installation_id, 'secret' => $secret,
+            'machine_id' => $task->machine_id, 'token' => App\Models\ServerMachine::findOrFail($task->machine_id)->token,
+            'node_id' => $scope['sources'][$role]['configured_nodes'][0]['id'], 'ip' => $task->public_ips[0],
+            'created_at' => $task->created_at, 'dispatched_at' => $task->dispatched_at]);
+        }
         $closed();
-        return ['native_task_queued' => true, 'duplicate_preparation_idempotent' => true,
-            'exception_restores_capability_and_bus' => true, 'provider_writes' => $writes];
+        return ['private_fixture_material_written' => true, 'roles' => Task::query()->count()];
     }
     if ($mode === 'setup-process' || $mode === 'setup-process-repeat') {
-        $receipt = $init->process('source-a');
+        $controller->dispatch(['operation' => 'advance']);
         $task = Task::query()->firstOrFail();
         if ($task->reason !== null) throw new RuntimeException('fixture_setup_native_' . $task->reason);
-        $need($receipt['external_id'] === '100001' && $receipt['status'] === 'waiting_initialization'
+        $need($task->external_id === '100001' && $task->status === 'waiting_initialization'
             && $task->dispatched_at > 0 && $task->bootstrap_state === null, 'dispatch_not_ready');
         $need($writes === ($mode === 'setup-process' ? 1 : 0), 'create_count');
         $need(Task::query()->count() === 1); $closed();

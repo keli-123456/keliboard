@@ -124,6 +124,12 @@ final class MemberSetupAuthority
             'deadline_at' => $this->scope['deadline_at']];
     }
 
+    public function sourceBinding(): array
+    {
+        $this->check();
+        return $this->scope['binding'];
+    }
+
     private function stopped(): bool
     {
         $path = MemberApplicationBootstrap::ROOT . '/' . self::STOP;
@@ -165,7 +171,7 @@ final class MemberSetupAuthority
 
     public function allow(string $operation, string $role): void
     {
-        self::need(in_array($operation, array_merge(self::MUTATIONS, ['source-readback', 'callback']), true), 'operation_denied');
+        self::need(in_array($operation, array_merge(self::MUTATIONS, ['source-readback', 'callback', 'report']), true), 'operation_denied');
         self::need(str_starts_with($operation, 'sources-') ? $role === 'control'
             : in_array($role, ['source-a', 'source-b'], true), 'role_denied');
         $this->check();
@@ -196,7 +202,7 @@ final class MemberSetupAuthority
     {
         self::need(PHP_SAPI === 'cli' && posix_geteuid() === 0, 'root_cli_required');
         $this->allow($operation, $role);
-        self::need($operation !== 'callback', 'operation_denied');
+        self::need(!in_array($operation, ['callback', 'report'], true), 'operation_denied');
         $sources = $this->scope['binding']['configuration']['sources'];
         $selected = $role === 'control' ? $sources : [$role => $sources[$role]];
         return $this->temporary(['machine_provision.allow_live' => true,
@@ -220,6 +226,20 @@ final class MemberSetupAuthority
         self::need($task !== null && hash_equals($task->installation_id, $installation), 'callback_invalid');
         $role = $this->taskRole($task); $this->allow('callback', $role);
         return $this->temporary(['machine_provision.allow_live' => true], $callback);
+    }
+
+    public function report(int $machine, string $installation, ?int $node, \Closure $callback): mixed
+    {
+        self::need($machine > 0 && preg_match('/^[a-f0-9]{32}$/D', $installation) === 1, 'report_invalid');
+        $tasks = Task::query()->where('machine_id', $machine)->where('installation_id', $installation)->get();
+        self::need($tasks->count() === 1, 'report_invalid');
+        $task = $tasks->first(); $role = $this->taskRole($task);
+        self::need($task->dispatched_at > 0 && $task->external_id !== null
+            && ($node === null || $node === $this->scope['binding']['configuration']['sources'][$role]['node_id']), 'report_invalid');
+        $this->allow('report', $role);
+        // Native machine/node token authentication still runs in the HTTP kernel.
+        // Report reception needs no create, replacement or DNS permission.
+        return $this->temporary([], $callback);
     }
 
     private static function executionLock(bool $exclusive)

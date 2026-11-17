@@ -51,6 +51,15 @@ def php(mode, *, uid=0, extra=None, ok=True):
     return value
 
 
+def setup_rpc(operation, *, ok=True):
+    p = subprocess.run(['php', '-d', 'display_errors=0', '-d', 'log_errors=0',
+        str(ROOT / 'runtime/member_setup_entry.php')], input=json.dumps(dict(operation=operation)).encode(),
+        cwd=ROOT / 'app', env=ENV, capture_output=True, timeout=30)
+    value = json.loads(p.stdout)
+    assert (p.returncode == 0) == ok and value['ok'] == ok, value
+    return value.get('result', value)
+
+
 assert sys.platform == 'linux' and os.geteuid() == 0
 assert not ROOT.exists() and not ROOT.is_symlink()
 ART.mkdir(exist_ok=True)
@@ -187,12 +196,13 @@ try:
     assert php('setup-service-denied', uid=65534)['root_operations_denied']
     assert php('setup-drift')['policy_and_release_drift_refused']
     preparation = php('setup-prepare')
-    assert preparation['native_task_queued'] and preparation['duplicate_preparation_idempotent']
+    assert preparation['native_task_queued'] and preparation['b_not_queued']
     assert preparation['exception_restores_capability_and_bus'] and preparation['provider_writes'] == 0
     dispatched = php('setup-process')
     assert dispatched['native_dispatch'] and dispatched['provider_writes_simulated'] == 1
     assert php('setup-process-repeat')['provider_writes_simulated'] == 0
-    callback_pin = json.loads((ROOT / 'private/setup-fixture/callback.json').read_bytes())
+    assert php('setup-callback-pins')['roles'] == 1
+    pins = {'source-a': json.loads((ROOT / 'private/setup-fixture/source-a-callback.json').read_bytes())}
     observed = php('inspect', uid=65534)
     assert observed['booted'] and observed['kernel'] == 'App\\Http\\Kernel'
     assert observed['uid'] == 65534 and observed['states'] == [None]
@@ -228,6 +238,7 @@ try:
             c = http.client.HTTPConnection('127.0.0.1', http_port, timeout=10)
             c.request('POST', self.path, body=self.rfile.read(size), headers={
                 'Content-Type': 'application/json', 'Authorization': self.headers.get('Authorization', ''),
+                'X-Keli-Instance-Id': self.headers.get('X-Keli-Instance-Id', ''),
                 'Host': domain, 'X-Forwarded-Proto': 'https'})
             r = c.getresponse(); body = r.read(65536)
             self.send_response(r.status); self.send_header('Content-Type', 'application/json')
@@ -243,7 +254,8 @@ try:
         def connect(self):
             self.sock = client_tls.wrap_socket(socket.create_connection(('127.0.0.1', self.port), 10), server_hostname=domain)
 
-    def callback(secret=None, state='succeeded', task=None, installation=None):
+    def callback(secret=None, state='succeeded', task=None, installation=None, role='source-a'):
+        callback_pin = pins[role]
         c = Client(domain, server.server_port, timeout=15)
         c.request('POST', '/api/v2/server/machine/provision/result', json.dumps({
             'task_id': task or callback_pin['task_id'], 'installation_id': installation or callback_pin['installation_id'], 'state': state}),
@@ -261,6 +273,97 @@ try:
     observed = php('inspect', uid=65534)
     assert observed['states'] == ['succeeded'] and observed['callback_steps'] == 1
     SUMMARY['idempotent_callback_b_not_queued'] = True
+
+    def report(role, *, node=False, bad_hash=False, token=None, installation=None, node_id=None):
+        pin = pins[role]
+        body = dict(machine_id=pin['machine_id'], token=token or pin['token'])
+        stats = dict(cpu=1, mem=dict(total=8192, used=128), swap=dict(total=0, used=0), disk=dict(total=16384, used=256))
+        if node:
+            body.update(stats, node_id=node_id or pin['node_id'], node_type='v2node')
+            endpoint = '/api/v2/server/status'
+        else:
+            body['status'] = dict(stats, version='v0.1.387', ip=dict(public_ipv4=pin['ip']),
+                runtime=dict(binary_sha256=('e' if bad_hash else 'd') * 64,
+                    observation=dict(schema=1, session=('a' if role == 'source-a' else 'b') * 32,
+                        pid=42, started_at=pin['dispatched_at'], uptime_seconds=max(1, int(time.time()) - pin['dispatched_at'])),
+                    node_statuses=[dict(node_id=pin['node_id'], protocol='hysteria2', server_port=24443, status='configured')]))
+            endpoint = '/api/v2/server/machine/status'
+        c = Client(domain, server.server_port, timeout=15)
+        c.request('POST', endpoint, json.dumps(body), {'Content-Type': 'application/json',
+            'X-Keli-Instance-Id': installation or pin['installation_id']})
+        r = c.getresponse(); raw = r.read(65536); status = r.status; c.close()
+        assert pin['token'].encode() not in raw
+        return status
+
+    assert report('source-a', token='incorrect') == 401
+    assert report('source-a', installation='f' * 32) == 403
+    assert report('source-a', node=True, node_id=pins['source-a']['node_id'] + 1) == 403
+    time.sleep(1.1)
+    assert report('source-a') == 200
+    assert php('setup-advance')['reason'] == 'process'
+    assert setup_rpc('status')['sources']['source-a']['status'] == 'waiting_node_reports'
+    assert report('source-a', node=True) == 200
+    assert report('source-a', bad_hash=True) == 200
+    assert php('setup-advance')['reason'] == 'process'
+    assert php('setup-advance')['reason'] == 'fresh_reports'
+    assert setup_rpc('status')['sources']['source-a']['fresh_reports'] == 0
+
+    def register(role):
+        for i in range(3):
+            time.sleep(1.1)
+            assert report(role) == report(role, node=True) == 200
+            # Processing a dispatched task and observing its reports are separate native steps.
+            result = php('setup-advance')
+            if result.get('reason') == 'process': result = php('setup-advance')
+            state = setup_rpc('status')['sources'][role]
+            assert state['fresh_reports'] == i + 1, state
+            if i < 2:
+                assert result['reason'] == 'fresh_reports' and not state['registered']
+                php('setup-advance')
+                assert setup_rpc('status')['sources'][role]['fresh_reports'] == i + 1
+            else: assert result['reason'] == 'registered' and state['registered'] and state['status'] == 'accepted'
+
+    register('source-a')
+    waiting = php('setup-advance')
+    assert waiting['reason'] == 'account_cooldown' and waiting['role'] == 'source-b'
+    assert not setup_rpc('status')['sources']['source-b']['queued']
+    assert waiting['retry_at'] == pins['source-a']['created_at'] + 300
+    cooldown_started = time.monotonic()
+    while time.time() < waiting['retry_at'] + 1:
+        time.sleep(min(10, waiting['retry_at'] + 1 - time.time()))
+    SUMMARY['source_serial_cooldown_wait_seconds'] = int(time.monotonic() - cooldown_started)
+    assert php('setup-advance')['reason'] == 'prepare'
+    assert php('setup-advance')['reason'] == 'process'
+    assert php('setup-callback-pins')['roles'] == 2
+    pins['source-b'] = json.loads((ROOT / 'private/setup-fixture/source-b-callback.json').read_bytes())
+    assert pins['source-b']['created_at'] - pins['source-a']['created_at'] >= 300
+    assert callback(role='source-b') == 200
+    register('source-b')
+    assert php('setup-advance')['ready']
+    registered = setup_rpc('status')
+    assert all(row['registered'] and row['status'] == 'accepted' for row in registered['sources'].values())
+    assert not registered['health_or_forwarding_claimed'] and registered['first_error'] is None
+    hold_process = subprocess.Popen(['php', '-d', 'display_errors=0', '-d', 'log_errors=0',
+        str(ROOT / 'app/tests/Fixtures/member_full_application.php'), 'setup-controller-hold'],
+        cwd=ROOT / 'app', env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(100):
+        if (ROOT / 'private/setup-fixture/controller-holding.json').exists(): break
+        assert hold_process.poll() is None; time.sleep(.1)
+    else: raise AssertionError('controller_lock_not_ready')
+    assert not setup_rpc('status', ok=False)['ok']
+    hold_process.kill(); hold_process.wait(timeout=5); hold_process = None
+    assert setup_rpc('status') == registered
+    assert php('setup-controller-first-error')['first_error_safe_and_retained']
+    SUMMARY['dual_sources'] = dict(actual_setup_controller=True, actual_status_and_stop_cli=True,
+        native_tasks_queued_dispatched_registered=2, provider_creates_simulated=2,
+        actual_machine_and_node_http_routes=True, reports_are_synthetic_client_input=True,
+        fresh_samples_per_role=3, no_node_report_blocks_registration=True,
+        wrong_binary_blocks_registration=True, repeated_observation_does_not_add_samples=True,
+        bad_token_installation_and_node_refused=True, account_cooldown_real_seconds=300,
+        second_source_not_queued_during_cooldown=True, first_source_stays_registered=True,
+        exclusive_controller_lock=True, sigkill_releases_controller_lock=True,
+        restart_reads_same_registered_state=True, missing_intent_retains_safe_first_error=True,
+        no_health_or_forwarding_claimed=True, node_binary_installation_tested=False)
     hold_process = subprocess.Popen(['php', '-d', 'display_errors=0', '-d', 'log_errors=0',
         str(ROOT / 'app/tests/Fixtures/member_full_application.php'), 'setup-hold'],
         cwd=ROOT / 'app', env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -274,13 +377,14 @@ try:
     hold_process.terminate(); hold_process.wait(timeout=5)
     assert hold_process.returncode != 0
     hold_process = None
+    assert setup_rpc('stop')['stopped']
     assert php('setup-stop')['database_not_required']
     assert php('setup-stop')['stopped']
     assert php('setup-stopped-readback')['readback_allowed']
     assert php('setup-queues')['no_redis_queued_delayed_or_reserved_jobs']
     assert callback() == 403
     SUMMARY['setup_authority'] = dict(actual_capability=True, real_mysql_redis_and_service_uid=True,
-        native_source_queue_and_dispatch=True, provider_creates_simulated=1, duplicate_create_prevented=True,
+        native_source_queue_and_dispatch=True, provider_creates_simulated=2, duplicate_create_prevented=True,
         root_only_issue_and_revoke=True, bad_task_and_installation_refused=True,
         policy_and_release_drift_refused=True, persistent_gates_changed=False,
         exception_restores_capability_and_bus=True, callback_uses_actual_front_controller=True,
@@ -288,7 +392,7 @@ try:
         revoke_without_database=True, stopped_readback_allowed=True,
         redis_queues_delayed_reserved_and_failed_jobs_empty=True,
         expiry_boundary_unit_tested=True, real_elapsed_expiry_tested=False,
-        b_bootstrap_tested=False, b_not_queued=True, no_health_verdict_fabricated=True)
+        b_bootstrap_tested=False, both_sources_registered=True, no_health_verdict_fabricated=True)
     prepared = php('dns-prepare')
     assert prepared['prepared'] and prepared['encrypted_credential'] and prepared['redis_counter'] == 1, prepared
     assert php('dns-control')['ready']

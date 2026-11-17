@@ -15,7 +15,7 @@ final class MemberApplicationBootstrap
 
     public static function receipt(): array
     {
-        self::need(PHP_OS_FAMILY === 'Linux' && in_array(PHP_SAPI, ['cli', 'cli-server'], true), 'linux_required');
+        self::need(PHP_OS_FAMILY === 'Linux' && in_array(PHP_SAPI, ['cli', 'cli-server', 'fpm-fcgi'], true), 'linux_required');
         foreach (['APP_BASE_PATH', 'APP_CONFIG_CACHE', 'APP_SERVICES_CACHE', 'APP_PACKAGES_CACHE',
                   'APP_ROUTES_CACHE', 'APP_EVENTS_CACHE', 'LARAVEL_STORAGE_PATH'] as $key)
             self::need(getenv($key) === false && !isset($_ENV[$key]) && !isset($_SERVER[$key]), 'path_override_refused');
