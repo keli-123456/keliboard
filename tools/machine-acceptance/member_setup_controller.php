@@ -120,7 +120,7 @@ final class MemberSetupController
                     self::need($scope['run_id'] === MemberCliAuthority::RUN
                         && $scope['bundle_sha256'] === MemberApplicationBootstrap::receipt()['bundle_sha256']
                         && $scope['started_at'] === $window['started_at'] && $scope['deadline_at'] === $window['deadline_at'], 'native_scope_changed');
-                    $files[] = ['run_id' => MemberCliAuthority::RUN, 'path' => 'private/member-runtime-scope.json', 'sha256' => $hash];
+                    $files[] = ['run_id' => MemberCliAuthority::RUN, 'path' => $path, 'sha256' => $hash];
                 }
                 return ['resolved' => true, 'roles' => (object) $this->sources->resourcePins(),
                     'records' => $this->dns()->resourcePins(), 'private_files' => $files];

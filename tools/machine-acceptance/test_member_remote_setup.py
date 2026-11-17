@@ -130,6 +130,41 @@ class RemoteSetupTests(unittest.TestCase):
         self.assertNotIn('remote-setup-resources', self.saved)
         self.assertIsNotNone(self.saved.get('remote-setup-stopped'))
 
+    def test_native_grant_exact_absolute_pin_survives_stop_and_reconcile(self):
+        pin = dict(run_id=RUN, path='/opt/keli-isolated/private/member-runtime-scope.json',
+                   sha256=hashlib.sha256(self.raw).hexdigest())
+        self.resources['private_files'] = [pin]
+        for owner in ('authority', 'sources', 'dns'):
+            self.binding.port(owner).reconcile(dict(scope=self.scope))
+        self.assertEqual(self.binding.port('authority').snapshot()['private_files'], [pin])
+        self.assertEqual(self.saved['remote-setup-resources']['private_files'], [pin])
+
+    def test_relative_traversal_or_unowned_private_paths_are_not_normalized(self):
+        for path in ('private/member-runtime-scope.json',
+                     '/opt/keli-isolated/private/../private/member-runtime-scope.json',
+                     '/opt/keli-isolated/private/unowned.json', '/etc/shadow'):
+            with self.subTest(path=path):
+                self.resources['private_files'] = [dict(run_id=RUN, path=path, sha256='a' * 64)]
+                with self.assertRaisesRegex(TransportError, 'cleanup_private_path_invalid'):
+                    self.binding.port('authority').reconcile(dict(scope=self.scope))
+                self.assertNotIn('remote-setup-resources', self.saved)
+
+    def test_private_pin_hash_change_after_snapshot_is_rejected(self):
+        pin = dict(run_id=RUN, path='/opt/keli-isolated/private/member-runtime-scope.json', sha256='a' * 64)
+        self.resources['private_files'] = [pin]
+        self.binding.port('authority').reconcile(dict(scope=self.scope))
+        pin['sha256'] = 'b' * 64
+        with self.assertRaisesRegex(TransportError, 'resources_changed'):
+            self.binding.port('authority').reconcile(dict(scope=self.scope))
+        self.assertEqual(self.saved['remote-setup-resources']['private_files'][0]['sha256'], 'a' * 64)
+
+    def test_private_pin_invalid_hash_is_not_saved(self):
+        self.resources['private_files'] = [dict(run_id=RUN,
+            path='/opt/keli-isolated/private/member-runtime-scope.json', sha256='not-a-hash')]
+        with self.assertRaisesRegex(TransportError, 'cleanup_private_pin_invalid'):
+            self.binding.port('authority').reconcile(dict(scope=self.scope))
+        self.assertNotIn('remote-setup-resources', self.saved)
+
     def test_changed_resource_receipt_on_resume_blocks_cleanup(self):
         request = dict(scope=self.scope)
         self.binding.port('authority').reconcile(request)

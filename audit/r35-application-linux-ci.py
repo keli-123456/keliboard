@@ -765,7 +765,7 @@ try:
             snapshots = {owner: remote_setup.port(owner).snapshot() for owner in ('authority', 'sources', 'dns')}
             assert len(snapshots['sources']['roles']) == 2 and len(snapshots['dns']['records']) == 3
             assert snapshots['authority']['private_files'] == [dict(run_id=RUN,
-                path='private/member-runtime-scope.json', sha256=hashlib.sha256(native_bytes).hexdigest())]
+                path='/opt/keli-isolated/private/member-runtime-scope.json', sha256=hashlib.sha256(native_bytes).hexdigest())]
             SUMMARY['concrete_host_setup_ports']['stopped_resource_receipts_after_native_cleanup'] = True
             run_private_teardown(transport=bootstrap_transport, root=ROOT, summary=SUMMARY,
                                  artifacts=ART, load=host_load, save=host_save)
