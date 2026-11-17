@@ -316,16 +316,26 @@ return static function (string $mode): array {
         if ($load('native-cleanup-dns') === null)
             $save('native-cleanup-dns', ['sha256' => MemberProviderBindings::digest($load('setup-dns-provider'))]);
         [$nativeScope, $nativeHash] = MemberCliAuthority::readGrant();
-        $native = new Keli\Acceptance\MemberNativeController($nativeScope, $nativeHash);
+        $raw = stream_get_contents(STDIN, 8193); $need(strlen($raw) <= 8192, 'native_rpc_size');
+        $request = json_decode($raw, true, 16, JSON_THROW_ON_ERROR); $need(is_array($request), 'native_rpc_request');
+        $native = new Keli\Acceptance\MemberNativeController($nativeScope, $nativeHash, $request);
         try {
-            $raw = stream_get_contents(STDIN, 8193); $need(strlen($raw) <= 8192, 'native_rpc_size');
-            $request = json_decode($raw, true, 16, JSON_THROW_ON_ERROR); $need(is_array($request), 'native_rpc_request');
             $reply = $native->dispatch($request);
             $need(MemberProviderBindings::digest(Task::orderBy('id')->get()->toArray()) === $history,
                 'native_cleanup_changed_history');
             $closed();
             return $reply;
         } finally { $native->close(); }
+    }
+    if ($mode === 'setup-candidate-hold') {
+        $scope = MemberCliAuthority::readGrant()[0];
+        $attempt = App\Models\MachineFailoverAttempt::query()->where('ordinal', 1)->sole();
+        $task = Task::findOrFail($attempt->task_id);
+        $need($task->machine_id === $scope['sources']['source-a']['machine_id'], 'candidate_hold_scope');
+        return $authority->callback($task->id, $task->installation_id, static function () use ($save): array {
+            $save('candidate-holding', ['active' => true]); sleep(120);
+            return ['unexpected_completion' => true];
+        });
     }
     if (str_starts_with($mode, 'setup-candidate-') && $mode !== 'setup-candidate-pins') {
         [$nativeScope, $nativeHash] = MemberCliAuthority::readGrant();

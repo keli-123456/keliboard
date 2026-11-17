@@ -256,6 +256,22 @@ trait TestsMemberCli
         $this->cliAssertClosed(); $this->assertSame([], $this->posts);
     }
 
+    public function test_member_cli_stop_preflight_requires_exact_request_without_mutating_journal(): void
+    {
+        [$authority] = $this->cliFixture();
+        $before = $this->memberTransportJournal;
+        $request = $this->cliRequest('round-stop');
+        Bridge::authorizeRequest($request, $authority);
+        foreach ([['grant_id' => str_repeat('e', 32)], ['grant_sha256' => str_repeat('e', 64)],
+            ['bundle_sha256' => str_repeat('e', 64)], ['role' => 'source-a'], ['sequence' => -1],
+            ['request_id' => 'invalid'], ['confirmed' => true]] as $patch) {
+            try { Bridge::authorizeRequest(array_replace($request, $patch), $authority); $this->fail('Unbound stop request'); }
+            catch (\RuntimeException $error) { $this->assertMatchesRegularExpression('/^member_(cli|round)_/', $error->getMessage()); }
+        }
+        $this->assertSame($before, $this->memberTransportJournal);
+        $this->assertSame([], $this->posts); $this->cliAssertClosed();
+    }
+
     public function test_member_cli_expired_or_stopped_round_can_only_read_and_clean_exact_roles(): void
     {
         [, $bridge] = $this->cliFixture();

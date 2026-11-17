@@ -10,7 +10,7 @@ final class MemberNativeController
     private $lock = null;
     private MemberCliAuthority $authority;
 
-    public function __construct(private array $scope, string $hash)
+    public function __construct(private array $scope, string $hash, ?array $request = null)
     {
         self::need(PHP_SAPI === 'cli' && PHP_OS_FAMILY === 'Linux' && posix_geteuid() === 0, 'isolated_cli_required');
         $stat = @lstat(self::JOURNAL);
@@ -34,8 +34,14 @@ final class MemberNativeController
             if (!$stat) self::need(chmod($path, 0600), 'isolated_rpc_lock_mode_changed');
             clearstatcache(true, $path); $opened = fstat($this->lock);
             self::need(($opened['mode'] & 0077) === 0, 'isolated_rpc_lock_mode_changed');
-            self::need(flock($this->lock, LOCK_EX | LOCK_NB), 'isolated_rpc_busy');
             $this->authority = MemberCliAuthority::controller($scope, $hash, fn () => $this->load('round-stop') !== null);
+            if ($request !== null) {
+                MemberRoundBridge::authorizeRequest($request, $this->authority);
+                // Revoke admission before waiting on an in-flight native RPC.
+                // A busy lock still prevents a successful stop acknowledgement.
+                if ($request['operation'] === 'round-stop') $this->authority->stopCallbacks();
+            }
+            self::need(flock($this->lock, LOCK_EX | LOCK_NB), 'isolated_rpc_busy');
         } catch (\Throwable $error) { $this->close(); throw $error; }
     }
 

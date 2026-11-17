@@ -681,6 +681,51 @@ try:
             times.append(received['report_at'])
         assert times == sorted(set(times)) and len(times) == 3
         assert native_path.read_bytes() == native_bytes and cap_path.read_bytes() == cap_bytes
+        # The actual fixed CLI must revoke admission even while the native RPC
+        # journal is busy, but must not acknowledge before callbacks/RPC drain.
+        native_scope = json.loads(native_bytes)
+        stop_request = dict(schema=2, run_id=RUN, grant_id=native_scope['grant_id'],
+            grant_sha256=hashlib.sha256(native_bytes).hexdigest(), bundle_sha256=native_scope['bundle_sha256'],
+            request_id='a' * 32, sequence=0, operation='round-stop', role='control')
+        def fixed_native(request, ok):
+            process = subprocess.run(['php', '-d', 'display_errors=0', '-d', 'log_errors=0',
+                str(ROOT / 'runtime/member_transport_entry.php')], input=json.dumps(request).encode(),
+                cwd=ROOT / 'app', env=ENV, capture_output=True, timeout=20)
+            reply = json.loads(process.stdout)
+            assert (process.returncode == 0) == ok, reply
+            assert reply['ok'] is ok, reply
+            return reply
+        hold_process = subprocess.Popen(['php', '-d', 'display_errors=0', '-d', 'log_errors=0',
+            str(ROOT / 'app/tests/Fixtures/member_full_application.php'), 'setup-candidate-hold'],
+            cwd=ROOT / 'app', env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(100):
+            if (ROOT / 'private/setup-fixture/candidate-holding.json').exists(): break
+            assert hold_process.poll() is None; time.sleep(.1)
+        else: raise AssertionError('candidate_callback_lock_not_ready')
+        with (ROOT / 'private/member-journal/rpc.lock').open('a+b') as native_lock:
+            os.chmod(native_lock.name, 0o600)
+            fcntl.flock(native_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            for change in ({'grant_id': 'e' * 32}, {'grant_sha256': 'e' * 64}, {'confirmed': True}):
+                fixed_native(dict(stop_request, **change), ok=False)
+                assert not (ROOT / 'member-setup-stop.json').exists()
+            pending_stop = fixed_native(stop_request, ok=False)
+            assert pending_stop['diagnostic']['file'] == 'member_setup_authority.php', pending_stop
+            assert (ROOT / 'member-setup-stop.json').exists()
+            assert not (ROOT / 'private/member-journal/round-stop.json').exists()
+            assert callback(role='candidate-a1') == report('candidate-a1') == 403
+            hold_process.terminate(); hold_process.wait(timeout=5)
+            assert hold_process.returncode != 0; hold_process = None
+            busy_stop = fixed_native(stop_request, ok=False)
+            assert busy_stop['diagnostic']['code'] == 'isolated_rpc_busy', busy_stop
+            assert not (ROOT / 'private/member-journal/round-stop.json').exists()
+        stopped_fixed = fixed_native(stop_request, ok=True)
+        assert stopped_fixed['result'] == dict(stopped=True)
+        assert fixed_native(stop_request, ok=True) == stopped_fixed
+        SUMMARY['native_stop_drain'] = dict(actual_fixed_cli=True, actual_inflight_candidate_callback=True,
+            actual_exclusive_native_rpc_lock=True, invalid_stop_does_not_revoke=True,
+            public_stop_precedes_rpc_lock=True, new_callbacks_and_reports_denied=True,
+            acknowledgement_waits_for_callback_and_rpc_drain=True, sigterm_releases_callback_lock=True,
+            exact_stop_retry_is_idempotent=True, runtime_or_grant_not_rewritten=True)
         port = MemberControllerPort(bound)
         scope = port('reconcile', dict(run_id=RUN))['cleanup_scope']
         assert set(scope['roles']) == {'source-a', 'source-b', 'candidate-a1'}

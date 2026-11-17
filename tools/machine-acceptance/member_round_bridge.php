@@ -19,16 +19,22 @@ final class MemberRoundBridge
     public function __construct(private array $scope, private MemberCliAuthority $authority,
         private \Closure $load, private \Closure $save, private \Closure $clock) {}
 
-    public function dispatch(array $request): array
+    public static function authorizeRequest(array $request, MemberCliAuthority $authority): void
     {
         $keys = ['schema', 'run_id', 'grant_id', 'grant_sha256', 'bundle_sha256', 'request_id', 'sequence', 'role', 'operation'];
         self::need(count($request) === count($keys) && !array_diff(array_keys($request), $keys)
             && ($request['schema'] ?? null) === 2 && is_int($request['sequence'] ?? null) && $request['sequence'] >= 0
             && is_string($request['request_id'] ?? null) && preg_match('/^[a-f0-9]{32}$/D', $request['request_id']), 'request_invalid');
-        foreach ($this->authority->identity() as $key => $value) self::need(($request[$key] ?? null) === $value, 'request_binding_changed');
+        foreach ($authority->identity() as $key => $value) self::need(($request[$key] ?? null) === $value, 'request_binding_changed');
         $operation = $request['operation']; $role = $request['role'];
         self::need(is_string($operation) && is_string($role), 'request_invalid');
-        $this->authority->allow($operation, $role);
+        $authority->allow($operation, $role);
+    }
+
+    public function dispatch(array $request): array
+    {
+        self::authorizeRequest($request, $this->authority);
+        $operation = $request['operation']; $role = $request['role'];
         $mutation = in_array($operation, ['round-step', 'source-register', 'task-delete'], true);
         $key = 'rpc-' . $request['request_id'];
         $prior = ($this->load)($key);

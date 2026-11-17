@@ -58,15 +58,15 @@ try {
     foreach ([Illuminate\Foundation\Bootstrap\LoadEnvironmentVariables::class,
         Illuminate\Foundation\Bootstrap\LoadConfiguration::class] as $bootstrapper)
         $app->make($bootstrapper)->bootstrap($app);
-    require __DIR__ . '/member_native_controller.php';
-    $controller = new Keli\Acceptance\MemberNativeController($scope, $grantHash);
-    $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
     $raw = stream_get_contents(STDIN, 8193);
     if (strlen($raw) > 8192) throw new RuntimeException('isolated_request_too_large');
     $request = json_decode($raw, true, 16, JSON_THROW_ON_ERROR);
     if (!is_array($request)) throw new RuntimeException('isolated_request_invalid');
     foreach (['member_source_registry.php', 'member_controller_bridge.php', 'member_retry_driver.php', 'member_round_bridge.php'] as $file)
         require __DIR__ . '/' . $file;
+    require __DIR__ . '/member_native_controller.php';
+    $controller = new Keli\Acceptance\MemberNativeController($scope, $grantHash, $request);
+    $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
     echo json_encode($controller->dispatch($request), JSON_THROW_ON_ERROR), "\n";
 } catch (Throwable $error) {
     $file = basename($error->getFile());
