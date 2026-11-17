@@ -77,8 +77,12 @@ try:
     ROOT.mkdir(mode=0o711)
     (ROOT / '.r35-application-fixture').write_text(sha)
     work = Path(tempfile.mkdtemp(prefix='r35-app-fixture-'))
+    owned_repo = work / 'source'
+    command(['git', 'clone', '--no-hardlinks', '--quiet', str(REPO), str(owned_repo)])
+    assert command(['git', 'rev-parse', 'HEAD'], cwd=owned_repo).stdout.decode().strip() == sha
+    shutil.copytree(REPO / 'vendor', owned_repo / 'vendor')
     application = work / 'application.tar.gz'
-    member_bundle.freeze(REPO, sha, application, RUN)
+    member_bundle.freeze(owned_repo, sha, application, RUN)
     node = work / 'synthetic-node.tar.gz'
     binary = b'\x7fELF\x02\x01' + b'\0' * 12 + b'\x3e\x00' + b'synthetic-not-executed'
     with tarfile.open(node, 'w:gz') as archive:
@@ -87,7 +91,7 @@ try:
     with patch.object(runtime, 'NODE_ARCHIVE_SHA', hashlib.sha256(node.read_bytes()).hexdigest()), \
          patch.object(runtime, 'NODE_SHA', hashlib.sha256(binary).hexdigest()):
         bundle = work / 'runtime.tar.gz'
-        frozen = runtime.assemble(application, REPO / 'vendor', node, bundle)
+        frozen = runtime.assemble(application, owned_repo / 'vendor', node, bundle)
         installed = MemberInstallation(ROOT).publish_runtime(bundle, frozen['archive_sha256'])
         assert installed['complete']
     settings = dict(app_key=base64.b64encode(b'x' * 32).decode(), database='keli_acceptance_application',
