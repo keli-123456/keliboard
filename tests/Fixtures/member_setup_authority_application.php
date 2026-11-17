@@ -255,11 +255,12 @@ return static function (string $mode): array {
             $save('catalog-reads', ['count' => ($load('catalog-reads')['count'] ?? 0) + 1]);
             return Http::response(['data' => $catalogRows, 'page' => 1, 'pages' => 1, 'results' => count($catalogRows)]);
         }
-        $visible = $rows;
+        // Capacity includes the already-created controller, not just provisioned sources.
+        $visible = [$load('control-row'), ...array_values($rows)];
         if ($filter !== null) {
             $filter = json_decode($filter, true, 8, JSON_THROW_ON_ERROR);
             $need(array_keys($filter) === ['label']);
-            $visible = array_filter($rows, fn ($row) => $row['label'] === $filter['label']);
+            $visible = array_filter($visible, fn ($row) => $row['label'] === $filter['label']);
         }
         $response = match ($path) {
             '/v4/account' => ['euuid' => 'fixture-account-0001'],
