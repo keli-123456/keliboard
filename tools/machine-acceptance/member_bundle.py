@@ -41,8 +41,11 @@ TESTS = ('tools/machine-acceptance/test_member_transport.py', 'tools/machine-acc
          'tests/Unit/Services/MachineMemberSourceConfigurationTest.php',
          'tests/Unit/Services/MachineMemberPrerequisiteImportTest.php',
          'tests/Unit/Services/MachineMemberBootstrapControllerTest.php',
-         'tests/Unit/Services/MachineMemberSetupAuthorityTest.php')
-FILES = tuple('tools/machine-acceptance/' + name for name in RUNTIME) + TESTS
+         'tests/Unit/Services/MachineMemberSetupAuthorityTest.php',
+         'tests/Unit/Services/MachineProviderGroupsTest.php')
+FILES = tuple('tools/machine-acceptance/' + name for name in RUNTIME) + TESTS + (
+    'app/Services/ServerMachine/Cloud/MachineCloudCatalog.php',
+    'app/Services/ServerMachine/Cloud/MachineFailoverPolicyService.php')
 
 
 def require(value, reason):

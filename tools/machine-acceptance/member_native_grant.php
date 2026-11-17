@@ -23,7 +23,9 @@ final class MemberNativeGrant
         'app/Services/ServerMachine/Cloud/MachineFailoverExecutionGate.php',
         'app/Services/ServerMachine/Cloud/MachineFailoverNativeBridge.php',
         'app/Services/ServerMachine/Cloud/MachineCandidateRetry.php',
-        'app/Services/ServerMachine/Cloud/MachineCandidateCleanupClient.php'];
+        'app/Services/ServerMachine/Cloud/MachineCandidateCleanupClient.php',
+        'app/Services/ServerMachine/Cloud/MachineCloudCatalog.php',
+        'app/Services/ServerMachine/Cloud/MachineFailoverPolicyService.php'];
 
     public function __construct(private MemberSetupAuthority $authority, private \Closure $sources,
         private \Closure $dns) {}

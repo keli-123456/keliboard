@@ -207,7 +207,7 @@ class MachineFailoverPolicyService
         $supported = MachineProvisionProviders::templateSupported($credentials->provider($policy) ?? '', $policy->region, $policy->size, $policy->image);
         $add($supported ? 'template_supported' : 'template_unsupported', $supported ? 'passed' : 'blocked');
         if ($grouped && ($task === null || $task->dispatched_at === null)) {
-            try { app(MachineCloudCatalog::class)->validate($policy->toArray()); $add('provider_template_valid', 'passed'); }
+            try { app(MachineCloudCatalog::class)->validateSavedTemplate($policy); $add('provider_template_valid', 'passed'); }
             catch (CloudException $error) { $add($error->getMessage(), 'blocked'); }
         }
         if (!$policy->dns_credential_id || $policy->dns_hostname === '') $add('dns_not_configured', 'blocked');

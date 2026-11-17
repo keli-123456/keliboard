@@ -38,6 +38,9 @@ try {
         'app/Services/ServerMachine/Cloud/MachineFailoverNativeBridge.php',
         'app/Services/ServerMachine/Cloud/MachineCandidateRetry.php',
         'app/Services/ServerMachine/Cloud/MachineCandidateCleanupClient.php'];
+    if (file_exists($root . '/member-setup-grant.json') || is_link($root . '/member-setup-grant.json'))
+        array_push($protected, 'app/Services/ServerMachine/Cloud/MachineCloudCatalog.php',
+            'app/Services/ServerMachine/Cloud/MachineFailoverPolicyService.php');
     foreach ($protected as $name)
         if (realpath($root . '/app/' . $name) !== $root . '/app/' . $name
             || fileowner($root . '/app/' . $name) !== 0 || (fileperms($root . '/app/' . $name) & 0022)

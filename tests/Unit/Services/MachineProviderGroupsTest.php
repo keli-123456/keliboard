@@ -200,6 +200,65 @@ class MachineProviderGroupsTest extends TestCase
         $this->assertSame(0, Policy::query()->count());
     }
 
+    public function test_saved_policy_runtime_refreshes_expired_catalog_without_changing_policy_or_editor_gate(): void
+    {
+        $policy = $this->policy(); $before = $policy->getAttributes();
+        $pool = app(MachineFailoverCredentials::class)->pool($this->group->id, 'linode');
+        Cache::forget('machine-cloud:catalog:' . $pool['fingerprint']);
+        $checks = app(MachineFailoverPolicyService::class)->localChecks($policy);
+        $this->assertContains(['code' => 'provider_template_valid', 'status' => 'passed'], $checks);
+        $this->assertNotContains('catalog_expired', array_column($checks, 'code'));
+        $this->assertSame($before, $policy->fresh()->getAttributes());
+        Http::assertSentCount(6);
+        app(MachineFailoverPolicyService::class)->localChecks($policy);
+        Http::assertSentCount(6);
+        $this->code('catalog_expired', fn () => app(MachineCloudCatalog::class)->validate(array_replace($policy->toArray(), ['catalog_fingerprint' => str_repeat('0', 64)])));
+        $this->assertSame(0, Task::query()->count()); Bus::assertNothingDispatched();
+    }
+
+    public static function savedTemplateProviders(): array { return [['linode'], ['digitalocean'], ['vultr']]; }
+
+    public function test_saved_template_refresh_does_not_reenter_the_callers_group_lock(): void
+    {
+        $policy = $this->policy();
+        $pool = app(MachineFailoverCredentials::class)->pool($this->group->id, 'linode');
+        Cache::forget('machine-cloud:catalog:' . $pool['fingerprint']);
+        $catalog = app(MachineCloudGroupService::class)->withGroup($this->group->id,
+            fn () => app(MachineCloudCatalog::class)->validateSavedTemplate($policy));
+        $this->assertSame($pool['fingerprint'], $catalog['pool_fingerprint']);
+        Http::assertSentCount(6);
+        $this->assertSame(0, Task::query()->count()); Bus::assertNothingDispatched();
+    }
+
+    public function test_saved_template_refresh_rejects_a_pool_change_during_read(): void
+    {
+        $policy = $this->policy(); $before = $policy->getAttributes();
+        $pool = app(MachineFailoverCredentials::class)->pool($this->group->id, 'linode');
+        $key = 'machine-cloud:catalog:' . $pool['fingerprint']; Cache::forget($key);
+        $this->fault = 'move';
+        $this->code('credential_group_changed', fn () => app(MachineCloudCatalog::class)->validateSavedTemplate($policy));
+        $this->assertNull(Cache::get($key));
+        $this->assertSame($before, $policy->fresh()->getAttributes());
+        $this->assertSame(0, Task::query()->count()); Bus::assertNothingDispatched();
+    }
+
+    #[DataProvider('savedTemplateProviders')]
+    public function test_saved_template_refresh_rejects_removed_options_and_provider_errors(string $provider): void
+    {
+        $catalog = $this->catalog($provider); $input = $this->input($catalog);
+        $saved = app(MachineFailoverPolicyService::class)->save($input, $this->admin->id);
+        $policy = Policy::query()->findOrFail($saved['id']); $before = $policy->getAttributes();
+        $key = 'machine-cloud:catalog:' . $catalog['pool_fingerprint'];
+        $catalog['sizes'] = [];
+        Cache::put($key, $catalog, 600);
+        $this->code('provider_template_mismatch', fn () => app(MachineCloudCatalog::class)->validateSavedTemplate($policy));
+        Cache::forget($key); $this->fault = 'forbidden';
+        $this->code('provider_forbidden', fn () => app(MachineCloudCatalog::class)->validateSavedTemplate($policy));
+        $this->assertNull(Cache::get($key));
+        $this->assertSame($before, $policy->fresh()->getAttributes());
+        $this->assertSame(0, Task::query()->count()); Bus::assertNothingDispatched();
+    }
+
     public static function catalogFaults(): array { return [['forbidden', 'provider_forbidden'], ['duplicate', 'catalog_incomplete'], ['malformed', 'provider_invalid'], ['incomplete', 'catalog_incomplete'], ['miscount', 'catalog_incomplete'], ['next', 'catalog_incomplete']]; }
     #[DataProvider('catalogFaults')]
     public function test_failed_catalog_refresh_discards_previous_proof_and_never_uses_foreign_options(string $fault, string $expected): void

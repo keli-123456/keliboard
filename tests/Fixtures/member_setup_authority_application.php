@@ -233,6 +233,19 @@ return static function (string $mode): array {
         if (preg_match('~/linode/instances/(10000[12])$~D', $path, $match) && !isset($rows[(int) $match[1]]))
             return Http::response(['errors' => [['reason' => 'Not found']]], 404);
         $filter = $request->header('X-Filter')[0] ?? null;
+        $catalogRows = match ($path) {
+            '/v4/regions' => [['id' => 'sg-sin-2', 'label' => 'Singapore', 'status' => 'ok', 'site_type' => 'core',
+                'capabilities' => ['Linodes', 'Metadata']]],
+            '/v4/linode/types' => [['id' => 'g6-standard-4', 'class' => 'standard', 'vcpus' => 4,
+                'memory' => 8192, 'disk' => 163840, 'price' => ['monthly' => 48]]],
+            '/v4/images' => [['id' => 'linode/debian12', 'label' => 'Debian 12', 'is_public' => true,
+                'deprecated' => false, 'status' => 'available', 'capabilities' => ['cloud-init'], 'min_disk_size' => 4]],
+            default => null,
+        };
+        if ($catalogRows !== null) {
+            $save('catalog-reads', ['count' => ($load('catalog-reads')['count'] ?? 0) + 1]);
+            return Http::response(['data' => $catalogRows, 'page' => 1, 'pages' => 1, 'results' => count($catalogRows)]);
+        }
         $visible = $rows;
         if ($filter !== null) {
             $filter = json_decode($filter, true, 8, JSON_THROW_ON_ERROR);

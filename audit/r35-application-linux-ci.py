@@ -114,6 +114,7 @@ try:
         'tests/Unit/Services/MachineMemberPrerequisiteImportTest.php',
         'tests/Unit/Services/MachineMemberBootstrapControllerTest.php',
         'tests/Unit/Services/MachineMemberSetupAuthorityTest.php',
+        'tests/Unit/Services/MachineProviderGroupsTest.php',
         'tests/Unit/Services/MachineMemberProviderBindingsTest.php',
         'tests/Unit/Services/MachineDnsAliyunCompatibilityTest.php'],
         cwd=REPO, capture_output=True, text=True, timeout=120)
@@ -505,6 +506,7 @@ try:
             assert not (ROOT / 'private/member-runtime-scope.json').exists()
             time.sleep(5.1)
     assert grant['ready'], grant
+    assert json.loads((ROOT / 'private/setup-fixture/catalog-reads.json').read_bytes())['count'] == 3
     native_path = ROOT / 'private/member-runtime-scope.json'
     native_bytes = native_path.read_bytes()
     cap_path = ROOT / 'member-candidate-callbacks.json'
@@ -546,6 +548,7 @@ try:
         failure_samples_from_http_synthetic_reports=3, source_b_not_observed=True,
         second_cooldown_real_wait_seconds=int(time.monotonic() - second_cooldown_start),
         original_window_inherited=True, lost_ack_readback_same_grant=True, no_provider_writes_or_candidate_tasks=True,
+        expired_editor_catalog_refreshed_without_policy_rewrite=True,
         private_grant_service_user_denied=True, candidate_derivative_public=True,
         incomplete_callback_publication_blocks_native_admission=True,
         incomplete_callback_publication_preserves_recovery_readback=True,
