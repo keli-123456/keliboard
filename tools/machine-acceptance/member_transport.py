@@ -349,6 +349,77 @@ class StrictControllerTransport:
             if isinstance(error, TransportError): raise
             raise TransportError('transport_application_uncertain') from None
 
+    def installation_call(self, request):
+        """Cold Python installer over the same pinned SSH; never a caller command."""
+        from member_host_installation import validate
+        from member_install_bootstrap import BOOTSTRAP
+        from member_auxiliary import digest
+        from staging import read_file
+        operation, scope = validate(request)
+        require(scope['run_id'] == self.run_id, 'transport_host_install_scope')
+        self.guard('host-installation-' + operation, 'control')
+        binding = dict(scope=copy.deepcopy(scope), host=self.host)
+        for path, key in ((self.identity, 'identity_sha256'), (self.known, 'known_hosts_sha256')):
+            binding[key] = read_file(path, 1048576)[0]['sha256']
+        prior = self.load('host-installation-binding')
+        require(prior is None or prior == binding, 'transport_host_install_binding_changed')
+        if prior is None:
+            self.save('host-installation-binding', copy.deepcopy(binding))
+            require(self.load('host-installation-binding') == binding, 'transport_host_install_journal')
+        mutation = operation in ('publish', 'configure', 'private')
+        if mutation:
+            require(self.load('host-installation-stopped') is None, 'transport_host_install_stopped')
+            key = 'host-installation-' + operation
+            require(self.load(key) is None, 'transport_host_install_readback_required')
+            intent = dict(request_sha256=digest(request), completed=False)
+            self.save(key, copy.deepcopy(intent))
+            require(self.load(key) == intent, 'transport_host_install_journal')
+        if operation == 'stop':
+            self.save('host-installation-stopped', dict(binding=digest(binding)))
+            require(self.load('host-installation-stopped') == dict(binding=digest(binding)), 'transport_host_install_journal')
+        try:
+            raw = self.execute(self._command('python3 -I -B -c ' + shlex.quote(BOOTSTRAP)),
+                json.dumps(request, separators=(',', ':')).encode(), 180)
+            require(isinstance(raw, bytes) and len(raw) <= 65536, 'transport_host_install_response')
+            response = unique_json(raw)
+            require(isinstance(response, dict) and set(response) == {'ok', 'request_sha256', 'result'}
+                    and response['ok'] is True and response['request_sha256'] == digest(request),
+                    'transport_host_install_response')
+            result = response['result']
+            require(isinstance(result, dict) and set(result) == {'completed_operations', 'uncertain_operations', 'private_files', 'stopped'}
+                    and type(result['stopped']) is bool and isinstance(result['private_files'], list),
+                    'transport_host_install_response')
+            for field in ('completed_operations', 'uncertain_operations'):
+                values = result[field]
+                require(isinstance(values, list) and all(isinstance(v, str) and v in ('publish', 'configure', 'private') for v in values)
+                        and len(set(values)) == len(values), 'transport_host_install_response')
+            require(not set(result['completed_operations']).intersection(result['uncertain_operations']),
+                    'transport_host_install_response')
+            stages = ['publish', 'configure', 'private']
+            require(result['completed_operations'] == stages[:len(result['completed_operations'])]
+                    and result['uncertain_operations'] in ([], stages[len(result['completed_operations']):len(result['completed_operations']) + 1]),
+                    'transport_host_install_response')
+            from member_private_cleanup import validate_pin
+            paths = set()
+            for pin in result['private_files']:
+                validate_pin(pin)
+                require(pin['run_id'] == self.run_id and pin['path'] not in paths and pin['path'] in (
+                    '/opt/keli-isolated/app/.env', '/opt/keli-isolated/private/credentials',
+                    '/opt/keli-isolated/private/bootstrap-authority'), 'transport_host_install_response')
+                paths.add(pin['path'])
+            if mutation:
+                require(not result['stopped'] and operation in result['completed_operations']
+                        and not result['uncertain_operations'], 'transport_host_install_unconfirmed')
+                self.save(key, dict(intent, completed=True, evidence_sha256=digest(result)))
+                require(self.load(key) == dict(intent, completed=True, evidence_sha256=digest(result)),
+                        'transport_host_install_journal')
+            if operation == 'stop': require(result['stopped'], 'transport_host_install_stop_unconfirmed')
+            return copy.deepcopy(result)
+        except Exception as error:
+            self._first_error('host-installation-' + operation, 'control', error)
+            if isinstance(error, TransportError): raise
+            raise TransportError('transport_host_install_uncertain') from None
+
     def private_call(self, operation, pin):
         """Fixed root-only file removal endpoint; no arbitrary path or shell input."""
         from member_private_cleanup import validate_pin

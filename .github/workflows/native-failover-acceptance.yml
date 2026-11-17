@@ -47,11 +47,11 @@ jobs:
           mkdir -p artifacts
           timeout --signal=TERM --kill-after=15s 300s sudo unshare --net --pid --fork --mount-proc --kill-child=SIGKILL \
             env -i PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 HOME=/root \
-            PYTHONDONTWRITEBYTECODE=1 bash -eu -c '
+            PYTHONDONTWRITEBYTECODE=1 KELI_MEMBER_HOST_ENTRY=1 bash -eu -c '
               test -z "$(ip -4 route show)"
               test -z "$(ip -6 route show)"
               cd tools/machine-acceptance
-              python3 -B -m unittest -v test_member_assembly test_member_execution.ExecutionTests test_member_private_cleanup test_member_round test_member_transport test_member_remote_setup >../../artifacts/cleanup-python.log 2>&1
+              python3 -B -m unittest -v test_member_assembly test_member_execution.ExecutionTests test_member_private_cleanup test_member_round test_member_transport test_member_remote_setup test_member_host_installation >../../artifacts/cleanup-python.log 2>&1
               cd ../..
               php vendor/phpunit/phpunit/phpunit tests/Unit/Services/MachineMemberProviderBindingsTest.php >artifacts/cleanup-php.log 2>&1
               test ! -e /opt/keli-isolated
