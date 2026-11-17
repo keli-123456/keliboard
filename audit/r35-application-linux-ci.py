@@ -431,7 +431,8 @@ try:
             if probe_config is not None:
                 body['status']['entry_probe'] = dict(schema=1, revision=probe_config['revision'],
                     checked_at=int(time.time()), state='ready', targets=[dict(id=t['id'], source_ip=pin['ip'],
-                        status='unreachable' if role == 'source-a' else 'reachable') for t in probe_config['targets']])
+                        status='unreachable' if role == 'source-a' or ('--retry-flow' in sys.argv and role == 'candidate-a1')
+                            else 'reachable') for t in probe_config['targets']])
             endpoint = '/api/v2/server/machine/status'
         c = Client(domain, server.server_port, timeout=15)
         c.request('POST', endpoint, json.dumps(body), {'Content-Type': 'application/json',
@@ -575,7 +576,7 @@ try:
         incomplete_callback_publication_blocks_native_admission=True,
         incomplete_callback_publication_preserves_recovery_readback=True,
         candidate_http_handoff_tested=False)
-    if '--candidate-callbacks' in sys.argv:
+    if '--candidate-callbacks' in sys.argv or '--retry-flow' in sys.argv:
         # Host bootstrap receipts bind the unmodified controller-issued grant.
         # SSH is replaced at its byte boundary; the root PHP controllers are real.
         from driver_journal import DriverJournal
@@ -605,8 +606,8 @@ try:
                 argv = [str(ROOT / 'runtime/member_setup_entry.php')]
             else:
                 assert remote == 'php /opt/keli-isolated/runtime/member_transport_entry.php'
-                mode = 'setup-native-rpc'
-                if crash_pending and request_body['operation'] == 'task-delete' and request_body['role'] == 'candidate-a1':
+                mode = 'setup-flow-rpc' if '--retry-flow' in sys.argv else 'setup-native-rpc'
+                if mode == 'setup-native-rpc' and crash_pending and request_body['operation'] == 'task-delete' and request_body['role'] == 'candidate-a1':
                     mode = 'setup-native-rpc-crash'; crash_pending = False
                 argv = [str(ROOT / 'app/tests/Fixtures/member_full_application.php'), mode]
                 if mode == 'setup-native-rpc-crash':
@@ -638,6 +639,12 @@ try:
         assert bootstrap_transport.setup_call('native-read', actual_setup) == confirmed_readback
         bound = BoundControllerTransport(grant_file=native_path,
             grant_sha256=hashlib.sha256(native_bytes).hexdigest(), **transport_args)
+        if '--retry-flow' in sys.argv:
+            from r35_retry_flow_ci import run_retry_flow
+            run_retry_flow(bound=bound, php=php, report=report, callback=callback, pins=pins,
+                           root=ROOT, artifacts=ART, summary=SUMMARY)
+            SUMMARY['status'] = 'passed'
+            raise SystemExit(0)
         started_native = php('setup-candidate-start')
         assert started_native['task_count'] == 2 and started_native['attempt_count'] == 0, started_native
         assert php('setup-candidate-start') == started_native

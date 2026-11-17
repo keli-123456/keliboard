@@ -191,6 +191,13 @@ return static function (string $mode): array {
             } else {
                 $id = $request['RecordId']; $need(isset($dns['rows'][$id]), 'dns_identity');
                 if ($action === 'UpdateDomainRecordRemark') { $dns['rows'][$id]['Remark'] = $request['Remark']; $dns['claim']++; }
+                elseif ($action === 'UpdateDomainRecord' && $mode === 'setup-flow-rpc') {
+                    $need($id === '6002' && $request['Value'] === '9.9.9.12'
+                        && $request['Type'] === 'A' && $request['Line'] === 'default', 'flow_dns_scope');
+                    $dns['rows'][$id]['Value'] = $request['Value'];
+                    $dns['rows'][$id]['TTL'] = (int) $request['TTL'];
+                    $dns['update'] = ($dns['update'] ?? 0) + 1;
+                }
                 elseif ($action === 'DeleteDomainRecord') { unset($dns['rows'][$id]); $dns['delete']++; }
                 else throw new RuntimeException('fixture_setup_dns_operation');
             }
@@ -220,24 +227,36 @@ return static function (string $mode): array {
             $candidate = isset($task->payload['coordinated_attempt']);
             if ($candidate) {
                 $attempt = App\Models\MachineFailoverAttempt::findOrFail($task->payload['coordinated_attempt']);
-                $need($mode === 'setup-candidate-step' && $role === 'source-a' && $attempt->ordinal === 1
+                $flow = $mode === 'setup-flow-rpc';
+                $need(($flow || $mode === 'setup-candidate-step') && $role === 'source-a'
+                    && in_array($attempt->ordinal, $flow ? [1, 2] : [1], true)
                     && $attempt->task_id === $task->id
                     && $attempt->account_id === $scope['sources']['source-a']['plan']['account_id'], 'candidate_create_scope');
-                $id = 100003;
+                $id = 100002 + $attempt->ordinal;
+                if ($attempt->ordinal === 2) {
+                    $previous = App\Models\MachineFailoverAttempt::where('execution_member_id', $attempt->execution_member_id)
+                        ->where('ordinal', 1)->sole();
+                    $proof = app(App\Services\ServerMachine\Cloud\MachineCandidateRetry::class)->confirmed(
+                        $previous, Task::findOrFail($previous->task_id));
+                    $need(!isset($rows[100003]) && time() >= $proof['retry_at'], 'flow_retry_before_cleanup');
+                }
             }
             $need($path === '/v4/linode/instances' && !isset($rows[$id])
                 && count($rows) === ($candidate ? 2 : ($role === 'source-a' ? 0 : 1)), 'duplicate_create'); $writes++;
             $row = ['id' => $id, 'status' => 'running', 'label' => $request['label'], 'tags' => $request['tags'],
                 'region' => $request['region'], 'type' => $request['type'], 'image' => $request['image'],
                 'created' => gmdate('Y-m-d\TH:i:s'),
-                'ipv4' => [$candidate ? '9.9.9.11' : ($role === 'source-a' ? '8.8.4.4' : '8.8.8.8')], 'ipv6' => ''];
+                'ipv4' => [$candidate ? ($id === 100003 ? '9.9.9.11' : '9.9.9.12') : ($role === 'source-a' ? '8.8.4.4' : '8.8.8.8')], 'ipv6' => ''];
             $rows[$id] = $row; $save('provider-rows', $rows);
+            $events = $load('provider-create-events') ?? [];
+            $need(!isset($events[$id]), 'repeat_create_dispatch');
+            $events[$id] = time(); $save('provider-create-events', $events);
             return Http::response($row);
         }
         if ($request->method() === 'DELETE') {
-            $nativeCleanup = str_starts_with($mode, 'setup-native-rpc');
+            $nativeCleanup = str_starts_with($mode, 'setup-native-rpc') || $mode === 'setup-flow-rpc';
             $need((str_starts_with($mode, 'setup-cleanup') || $nativeCleanup)
-                && preg_match('~/linode/instances/(10000[123])$~D', $path, $match) === 1
+                && preg_match('~/linode/instances/(10000[1234])$~D', $path, $match) === 1
                 && ($nativeCleanup || $match[1] !== '100003'), 'delete_scope');
             $id = (int) $match[1]; $need(isset($rows[$id]), 'duplicate_delete');
             $calls = $load('cleanup-delete-count') ?? ['value' => 0]; $calls['value']++;
@@ -256,7 +275,7 @@ return static function (string $mode): array {
         if (in_array($mode, ['setup-cleanup-read-error', 'setup-native-rpc-read-error'], true)
             && $path === '/v4/linode/instances/100002')
             return Http::response(['errors' => [['reason' => 'fixture unavailable']]], 503);
-        if (preg_match('~/linode/instances/(10000[123])$~D', $path, $match) && !isset($rows[(int) $match[1]]))
+        if (preg_match('~/linode/instances/(10000[1234])$~D', $path, $match) && !isset($rows[(int) $match[1]]))
             return Http::response(['errors' => [['reason' => 'Not found']]], 404);
         $filter = $request->header('X-Filter')[0] ?? null;
         $catalogRows = match ($path) {
@@ -289,6 +308,7 @@ return static function (string $mode): array {
             '/v4/linode/instances/100001' => $rows[100001] ?? null,
             '/v4/linode/instances/100002' => $rows[100002] ?? null,
             '/v4/linode/instances/100003' => $rows[100003] ?? null,
+            '/v4/linode/instances/100004' => $rows[100004] ?? null,
             default => throw new RuntimeException('fixture_setup_provider_operation'),
         };
         return Http::response($response);
@@ -306,6 +326,39 @@ return static function (string $mode): array {
             throw $error;
         }
     });
+    if ($mode === 'setup-flow-inspect' || $mode === 'setup-flow-rpc') {
+        [$nativeScope, $nativeHash] = MemberCliAuthority::readGrant();
+        $b = Task::findOrFail($nativeScope['sources']['source-b']['task_id']);
+        $facts = ['task' => $b->getAttributes(),
+            'owned' => App\Models\MachineOwnedInstance::where('task_id', $b->id)->sole()->getAttributes(),
+            'provider' => ($load('provider-rows') ?? [])[100002] ?? null,
+            'dns' => ($load('setup-dns-provider')['rows'] ?? [])['6003'] ?? null,
+            'executions' => App\Models\MachineFailoverExecutionMember::where('policy_id', $nativeScope['driver']['policy_b'])->count()];
+        $digest = MemberProviderBindings::digest($facts);
+        if ($load('flow-b-baseline') === null) $save('flow-b-baseline', ['sha256' => $digest]);
+        $need($load('flow-b-baseline')['sha256'] === $digest, 'flow_b_changed');
+        if ($mode === 'setup-flow-rpc') {
+            $raw = stream_get_contents(STDIN, 8193); $need(strlen($raw) <= 8192, 'flow_rpc_size');
+            $request = json_decode($raw, true, 16, JSON_THROW_ON_ERROR);
+            $native = new Keli\Acceptance\MemberNativeController($nativeScope, $nativeHash, $request);
+            try { $reply = $native->dispatch($request); $closed(); return $reply; }
+            finally { $native->close(); }
+        }
+        $attempts = [];
+        foreach (App\Models\MachineFailoverAttempt::orderBy('ordinal')->get() as $attempt) {
+            $task = $attempt->task_id ? Task::findOrFail($attempt->task_id) : null;
+            $attempts[] = ['ordinal' => $attempt->ordinal, 'status' => $attempt->status,
+                'task_status' => $task?->status, 'task_reason' => $task?->reason,
+                'dispatched_at' => $task?->dispatched_at, 'next_check_at' => $task?->next_check_at,
+                'cleanup' => app(App\Services\ServerMachine\Cloud\MachineCandidateRetry::class)->summary($attempt)];
+        }
+        $member = App\Models\MachineFailoverExecutionMember::first(); $closed();
+        return ['attempts' => $attempts, 'member_phase' => $member?->phase, 'member_reason' => $member?->reason,
+            'b_unchanged' => true, 'task_count' => Task::count(), 'create_events' => $load('provider-create-events'),
+            'delete_calls' => $load('cleanup-delete-count')['value'] ?? 0,
+            'dns_updates' => $load('setup-dns-provider')['update'] ?? 0,
+            'provider_first_error' => $load('provider-first-error')];
+    }
     if (str_starts_with($mode, 'setup-native-rpc')) {
         $history = MemberProviderBindings::digest(Task::orderBy('id')->get()->toArray());
         $before = $load('native-cleanup-history');
@@ -537,13 +590,16 @@ return static function (string $mode): array {
         foreach (Task::query()->get() as $task) {
         $candidate = isset($task->payload['coordinated_attempt']);
         if ($candidate !== ($mode === 'setup-candidate-pins')) continue;
+        if ($candidate && in_array($task->status, ['failed', 'cancelled', 'needs_review'], true)) continue;
         $scope = $load('initialization');
         $role = $task->machine_id === $scope['sources']['source-a']['plan']['machine_id'] ? 'source-a' : 'source-b';
         $nodeId = $scope['sources'][$role]['configured_nodes'][0]['id'];
         if ($candidate) {
             $cap = json_decode(file_get_contents('/opt/keli-isolated/member-candidate-callbacks.json'), true, 32, JSON_THROW_ON_ERROR);
             $need(Keli\Acceptance\MemberCandidateCallbacks::role($cap, $task) === 'source-a', 'candidate_lineage');
-            $role = 'candidate-a1';
+            $ordinal = App\Models\MachineFailoverAttempt::findOrFail($task->payload['coordinated_attempt'])->ordinal;
+            $need(in_array($ordinal, [1, 2], true), 'candidate_ordinal');
+            $role = 'candidate-a' . $ordinal;
         }
         $need($task->dispatched_at > 0 && $task->external_id !== null);
         $yaml = Symfony\Component\Yaml\Yaml::parse(base64_decode($task->payload['request']['metadata']['user_data'], true));
