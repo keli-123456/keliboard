@@ -32,6 +32,7 @@ TESTS = ('tools/machine-acceptance/test_member_transport.py', 'tools/machine-acc
          'tests/Support/TestsMemberTransport.php', 'tools/machine-acceptance/test_member_round.py',
          'tools/machine-acceptance/test_member_runtime_bundle.py', 'tools/machine-acceptance/test_member_linux.py',
          'tests/Support/TestsMemberCli.php', 'tools/machine-acceptance/test_member_cli.py',
+         'tools/machine-acceptance/test_member_evidence.py',
          'tests/Support/TestsMemberInitialization.php', 'tools/machine-acceptance/test_member_initialization.py',
          'tests/Unit/Services/MachineMemberProviderBindingsTest.php',
          'tests/Unit/Services/MachineMemberOperatorProviderTest.php',

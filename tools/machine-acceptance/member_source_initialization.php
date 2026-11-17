@@ -179,6 +179,46 @@ final class MemberSourceInitialization
         return $pins;
     }
 
+    /** Stopped, local observations only. Unknown creation is never an absence receipt. */
+    public function evidence(): array
+    {
+        return $this->within('source-cleanup', 'source-a', function (): array {
+            $roles = []; $resolved = true; $externalIds = [];
+            foreach (array_keys($this->scope['sources']) as $role) {
+                try {
+                    $intent = $this->intent($role); $task = $this->existing($role);
+                    self::need($task === null || $intent !== null, 'queue_intent_missing');
+                    self::need($task !== null || $intent === null, 'queue_readback_required');
+                    $pin = null;
+                    if ($task !== null) {
+                        self::need(is_string($task->id)
+                            && preg_match('/^[a-f0-9-]{36}$/D', $task->id) === 1, 'task_changed');
+                        if (!$task->dispatched_at) {
+                            self::need(!$task->external_id && !$task->provider_created_at && empty($task->public_ips), 'task_changed');
+                        } else {
+                            self::need(is_string($task->external_id)
+                                && preg_match('/^[1-9][0-9]{0,15}$/D', $task->external_id) === 1
+                                && $task->provider_created_at && !empty($task->public_ips), 'create_receipt_unknown');
+                            $pin = ['task_id' => $task->id, 'external_id' => $task->external_id];
+                            self::need(!in_array($task->external_id, $externalIds, true), 'roles_collide');
+                            $externalIds[] = $task->external_id;
+                        }
+                    }
+                    $roles[$role] = ['resolved' => true, 'task_id' => $task?->id,
+                        'classification' => $task === null ? 'no_queue_intent' : ($pin === null ? 'not_dispatched' : 'retained_create_receipt'),
+                        'resource' => $pin, 'diagnostic' => null];
+                } catch (\Throwable $error) {
+                    $resolved = false;
+                    $roles[$role] = ['resolved' => false, 'task_id' => null, 'classification' => 'unresolved',
+                        'resource' => null, 'diagnostic' => MemberRoundBridge::safeDiagnostic([
+                            'class' => (new \ReflectionClass($error))->getShortName(),
+                            'file' => basename($error->getFile()), 'line' => $error->getLine()])];
+                }
+            }
+            return ['resolved' => $resolved, 'roles' => $roles, 'cloud_absence_not_asserted' => true];
+        });
+    }
+
     public function registeredScope(array $base): array
     {
         return $this->within('sources-pin', 'control', function () use ($base): array {

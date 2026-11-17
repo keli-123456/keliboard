@@ -186,7 +186,7 @@ class StrictControllerTransport:
     def setup_call(self, operation, identity):
         """Fixed setup CLI, with a durable intent before each advancing RPC."""
         require(operation in ('advance', 'status', 'resources', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback',
-                              'native-issue', 'native-read', 'native-export'), 'transport_setup_operation_invalid')
+                              'native-issue', 'native-read', 'native-export', 'evidence-export'), 'transport_setup_operation_invalid')
         require(isinstance(identity, dict) and set(identity) == {'grant_id', 'grant_sha256', 'deadline_at'}
                 and type(identity['deadline_at']) is int and identity['deadline_at'] > 0
                 and all(isinstance(identity[k], str) and re.fullmatch(r'[a-f0-9]{%d}' % n, identity[k])

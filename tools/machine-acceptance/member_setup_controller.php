@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace Keli\Acceptance;
 
 use App\Models\MachineProvisionTask as Task;
+use App\Services\ServerMachine\Cloud\MachineIntentJson;
 
 /** Actual source setup command binding. Caller closes the handle after one RPC. */
 final class MemberSetupController
@@ -55,7 +56,7 @@ final class MemberSetupController
 
     private function path(string $key): string
     {
-        self::need(is_resource($this->lock) && preg_match('/^(binding|first-error|rpc-mutation|rpc-cleanup|rpc-[a-f0-9]{32}|source-[ab]|source-queue-source-[ab]|initialized-source-[ab]|cleanup-source-[ab]|dns-scope-(control|edges)|(dns-initialize|dns-cleanup|dns-native-pin|provider-delete)-[a-f0-9]{64})$/D', $key) === 1,
+        self::need(is_resource($this->lock) && preg_match('/^(binding|first-error|rpc-mutation|rpc-cleanup|rpc-[a-f0-9]{32}|source-[ab]|source-queue-source-[ab]|initialized-source-[ab]|cleanup-source-[ab]|dns-scope-(control|edges)|(evidence|dns-initialize|dns-cleanup|dns-native-pin|provider-delete)-[a-f0-9]{64})$/D', $key) === 1,
             'journal_key');
         return self::DIRECTORY . '/' . $key . '.json';
     }
@@ -77,7 +78,8 @@ final class MemberSetupController
     {
         $path = $this->path($key); $old = $this->load($key);
         if (($key === 'binding' || str_starts_with($key, 'source-queue-') || str_starts_with($key, 'initialized-')
-            || str_starts_with($key, 'dns-scope-') || str_starts_with($key, 'dns-native-pin-')) && $old !== null) {
+            || str_starts_with($key, 'dns-scope-') || str_starts_with($key, 'dns-native-pin-')
+            || str_starts_with($key, 'evidence-')) && $old !== null) {
             self::need(MemberProviderBindings::digest($old) === MemberProviderBindings::digest($value), 'intent_changed');
             return;
         }
@@ -105,11 +107,48 @@ final class MemberSetupController
             'first_diagnostic' => MemberRoundBridge::safeDiagnostic($this->load('first-error'))];
     }
 
+    private function exportEvidence(): array
+    {
+        $summary = $this->evidence(); // Requires revocation, including after expiry.
+        $sources = $this->sources->evidence();
+        try {
+            $records = $this->dns()->resourcePins();
+            $dns = ['resolved' => true, 'retained_record_count' => count($records),
+                'retained_records_sha256' => MemberProviderBindings::digest($records), 'diagnostic' => null];
+        } catch (\Throwable $error) {
+            $dns = ['resolved' => false, 'retained_record_count' => null, 'retained_records_sha256' => null,
+                'diagnostic' => MemberRoundBridge::safeDiagnostic(['class' => (new \ReflectionClass($error))->getShortName(),
+                    'file' => basename($error->getFile()), 'line' => $error->getLine()])];
+        }
+        $uncertain = [];
+        foreach (['uncertain_request' => 'rpc-mutation', 'uncertain_cleanup' => 'rpc-cleanup'] as $key => $ledger) {
+            $item = $this->load($ledger);
+            if ($item !== null) self::need(count($item) === 3 && is_int($item['sequence'] ?? null) && $item['sequence'] >= 0
+                && is_string($item['request_id'] ?? null) && preg_match('/^[a-f0-9]{32}$/D', $item['request_id']) === 1
+                && is_bool($item['completed'] ?? null), 'rpc_ledger_invalid');
+            $uncertain[$key] = $item && !$item['completed'] ? $item : null;
+        }
+        $body = ['schema' => 1, 'kind' => 'member-setup-evidence', 'run_id' => MemberCliAuthority::RUN]
+            + $this->authority->identity() + $this->authority->windowBinding() + $uncertain
+            + ['bundle_sha256' => MemberApplicationBootstrap::receipt()['bundle_sha256'],
+                'configuration_sha256' => MemberProviderBindings::digest($this->binding['configuration']),
+                'stopped' => true, 'sources' => $sources, 'dns' => $dns,
+                'first_error_present' => $summary['first_error_present'], 'first_diagnostic' => $summary['first_diagnostic'],
+                'cleanup_complete_not_asserted' => true];
+        $raw = MachineIntentJson::encode($body);
+        $value = ['schema' => 1, 'sha256' => hash('sha256', $raw), 'content' => $raw];
+        $key = 'evidence-' . $value['sha256'];
+        $this->save($key, $value);
+        self::need($this->load($key) === $value, 'evidence_readback_changed');
+        return $value;
+    }
+
     public function dispatch(array $request): array
     {
         self::need(is_resource($this->lock) && array_keys($request) === ['operation']
-            && in_array($request['operation'], ['advance', 'status', 'resources', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read', 'native-export'], true), 'request_invalid');
+            && in_array($request['operation'], ['advance', 'status', 'resources', 'evidence-export', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read', 'native-export'], true), 'request_invalid');
         try {
+            if ($request['operation'] === 'evidence-export') return $this->exportEvidence();
             if ($request['operation'] === 'resources') {
                 $this->authority->allow('source-cleanup', 'source-a');
                 $files = [];
@@ -214,7 +253,7 @@ final class MemberSetupController
             && ($request['schema'] ?? null) === 1 && ($request['run_id'] ?? null) === MemberCliAuthority::RUN
             && is_int($request['deadline_at'] ?? null) && $request['deadline_at'] > 0
             && is_int($request['sequence'] ?? null) && $request['sequence'] >= 0
-            && in_array($request['operation'] ?? null, ['advance', 'status', 'resources', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read', 'native-export'], true), 'request_invalid');
+            && in_array($request['operation'] ?? null, ['advance', 'status', 'resources', 'evidence-export', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read', 'native-export'], true), 'request_invalid');
         foreach (['grant_id' => 32, 'grant_sha256' => 64, 'request_id' => 32] as $key => $length)
             self::need(is_string($request[$key] ?? null)
                 && preg_match('/^[a-f0-9]{' . $length . '}$/D', $request[$key]) === 1, 'request_invalid');

@@ -19,7 +19,7 @@ import threading
 import time
 from unittest.mock import patch
 
-if '--whole-entry' in sys.argv:
+if '--whole-entry' in sys.argv or '--setup-evidence' in sys.argv:
     sys.argv.append('--host-port-only')
 
 REPO = Path(__file__).resolve().parents[1]
@@ -114,7 +114,7 @@ try:
         operator_entry.chmod(0o644)
     tests = subprocess.run(['python3', '-B', '-m', 'unittest', '-v', 'test_member_environment',
         'test_member_installation_linux.InstallationServiceUserTests', 'test_member_execution.ExecutionTests',
-        'test_member_assembly', 'test_member_initialization', 'test_member_cli', 'test_member_round',
+        'test_member_assembly', 'test_member_initialization', 'test_member_cli', 'test_member_evidence', 'test_member_round',
         'test_member_transport', 'test_member_remote_setup', 'test_member_private_cleanup', 'test_member_bundle', 'test_member_runtime_bundle',
         'test_member_host_installation', 'test_member_host_setup', 'test_member_operator_transport', 'test_member_control_transport', 'test_member_http_service'],
         cwd=TOOLS, capture_output=True, text=True, timeout=240)
@@ -220,6 +220,9 @@ try:
                 ['php', '/opt/keli-isolated/runtime/member_setup_entry.php']):
             request = json.loads(payload)
             bootstrap = argv[-1].endswith('member_import_entry.php')
+            if not bootstrap and request['operation'] in ('evidence-export', 'native-issue') and '--setup-evidence' in sys.argv:
+                p = subprocess.run(argv, input=payload, cwd=ROOT, env=ENV, capture_output=True, timeout=timeout)
+                return p.stdout
             if not bootstrap or request['operation'] in ('configure', 'configuration-read', 'setup-issue', 'setup-read'):
                 argv = ['php', str(REPO / 'audit/r35-setup-rpc-fixture.php'),
                         'bootstrap' if bootstrap else 'setup', str(creation_directory)]
@@ -321,6 +324,23 @@ try:
         assert http_service.status(install_scope, http_invoke) == 'running'
         bound = None
         native_cleanup_scope = None
+        setup_export = '--setup-evidence' in sys.argv
+        if setup_export:
+            # Actual fixed entry: no provider stub can fabricate this failure or export.
+            setup_identity = remote_port.identity()
+            initial_provider_state = [(creation_directory / name).read_bytes() for name in ('fixture-cloud.json', 'fixture-dns.json')]
+            try:
+                install_transport.setup_call('evidence-export', setup_identity)
+                raise AssertionError('unstopped_export_accepted')
+            except TransportError: pass
+            assert not (ROOT / 'private/member-setup-journal/first-error.json').exists()
+            try:
+                install_transport.setup_call('native-issue', setup_identity)
+                raise AssertionError('native_grant_issued_without_sources')
+            except TransportError: pass
+            first_setup_error = (ROOT / 'private/member-setup-journal/first-error.json').read_bytes()
+            assert not (ROOT / 'private/member-runtime-scope.json').exists()
+            assert initial_provider_state == [(creation_directory / name).read_bytes() for name in ('fixture-cloud.json', 'fixture-dns.json')]
         if '--whole-entry' in sys.argv:
             from r35_whole_entry_ci import continue_entry
             from member_cli import MemberControllerPort
@@ -400,11 +420,36 @@ try:
             from member_evidence import MemberEvidenceArchive
             evidence_directory = work / 'whole-evidence'; evidence_directory.mkdir(mode=0o700)
             evidence_archive = MemberEvidenceArchive(bound, evidence_directory)
+        elif setup_export:
+            from member_evidence import MemberSetupEvidenceArchive
+            evidence_directory = work / 'setup-evidence'; evidence_directory.mkdir(mode=0o700)
+            evidence_archive = MemberSetupEvidenceArchive(install_transport, evidence_directory,
+                scope=install_scope, identity=setup_identity)
         def export_missing():
             if evidence_archive is None:
                 raise RuntimeError('fixture-partial-evidence-export-failure')
             exported = evidence_archive.capture()
             body = evidence_archive.verify(exported)
+            if setup_export:
+                assert body['stopped'] and body['cleanup_complete_not_asserted'] and body['sources']['cloud_absence_not_asserted']
+                assert body['first_error_present'] and body['first_diagnostic']['class'] == 'RuntimeException'
+                assert body['first_diagnostic']['file'] == 'member_source_initialization.php'
+                assert body['first_diagnostic']['line'] > 0 and body['uncertain_request'] is not None
+                assert body['uncertain_cleanup'] is None and body['dns']['retained_record_count'] == 1
+                assert all(r['classification'] == 'no_queue_intent' for r in body['sources']['roles'].values())
+                assert not (ROOT / 'private/member-runtime-scope.json').exists()
+                assert (ROOT / 'private/member-setup-journal/first-error.json').read_bytes() == first_setup_error
+                assert initial_provider_state == [(creation_directory / name).read_bytes() for name in ('fixture-cloud.json', 'fixture-dns.json')]
+                assert evidence_archive.capture() == exported
+                remote = ROOT / 'private/member-setup-journal' / ('evidence-' + exported['sha256'] + '.json')
+                assert remote.stat().st_uid == 0 and remote.stat().st_mode & 0o777 == 0o600
+                raw = (evidence_directory / ('setup-evidence-' + exported['sha256'] + '.json')).read_bytes()
+                path = ART / 'setup-stopped-evidence.json'; path.write_bytes(raw); path.chmod(0o644)
+                SUMMARY['setup_evidence_export'] = dict(sha256=exported['sha256'], verified=True, actual_fixed_entry=True,
+                    actual_application=True, native_grant_absent=True, first_error_preserved=True,
+                    pending_mutation_retained=True, provider_state_unchanged=True, readonly_export_denied_before_stop=True,
+                    repeated_export_same_digest=True, remote_file_mode='0600')
+                return exported
             assert body['stopped'] and body['reconciled'] and body['cleanup_complete_not_asserted']
             assert set(body['tasks']) == {'source-a', 'source-b', 'candidate-a1', 'candidate-a2'}
             raw = (evidence_directory / ('evidence-' + exported['sha256'] + '.json')).read_bytes()
@@ -428,7 +473,10 @@ try:
             if not ROOT.exists(): cleanup = assembly.cleanup(combined, result)
         assert result['phase'] == 'closed' and not ROOT.exists(), 'operator_cleanup_not_closed'
         assert len(result['control_reads']) == 2 and result['control_reads'][1] - result['control_reads'][0] >= 10
-        assert result['evidence_saved_and_read_back'] is bool(bound) and result['first_error'] is not None
+        assert result['evidence_saved_and_read_back'] is bool(bound or setup_export) and result['first_error'] is not None
+        if setup_export:
+            assert evidence_archive.verify(evidence_archive.journal.load('setup-evidence-first.json'))['first_error_present']
+            SUMMARY['setup_evidence_export']['local_readback_after_controller_deleted'] = True
         state = json.loads((operator / 'fixture-cloud.json').read_bytes())
         assert state['methods'].count('DELETE') == 1 and not state['present']
         if not bound:
@@ -439,7 +487,7 @@ try:
             cloud_http_only_simulated=True, actual_assembly_cleanup=True, delete_ack_lost=True,
             delete_calls=1, independent_of_controller_files_and_ssh=True,
             real_absence_interval_seconds=result['control_reads'][1] - result['control_reads'][0],
-            stopped_snapshot_resumed=True, evidence_failure_did_not_prevent_resource_cleanup=not bool(bound),
+            stopped_snapshot_resumed=True, evidence_failure_did_not_prevent_resource_cleanup=not bool(bound or setup_export),
             actual_owned_dns_deleted_before_control=True, dns_delete_calls=3 if bound else 1,
             acceptance_not_claimed=True)
         # Reconstruct the port after .env and TLS material have already gone.

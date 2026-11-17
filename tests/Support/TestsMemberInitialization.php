@@ -16,6 +16,7 @@ trait TestsMemberInitialization
     {
         require_once base_path('tools/machine-acceptance/member_provider_bindings.php');
         require_once base_path('tools/machine-acceptance/member_source_initialization.php');
+        require_once base_path('tools/machine-acceptance/member_round_bridge.php');
         $this->memberTransportFixture();
         $this->initializationScope = ['run_id' => Provider::RUN, 'admin_id' => $this->admin->id, 'release_id' => $this->release->id,
             'baseline_ids' => ['700'], 'sources' => []];
@@ -54,6 +55,70 @@ trait TestsMemberInitialization
             $this->initializationJournal['source-queue-' . $role] = ['request_id' => $request,
                 'scope_sha256' => Provider::digest($this->initializationScope)];
         }
+    }
+
+    public function test_member_setup_evidence_requires_stop_and_does_not_mutate_tasks_or_call_providers(): void
+    {
+        $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api);
+        try { $api->evidence(); $this->fail('Unstopped export accepted'); }
+        catch (\RuntimeException $error) { $this->assertSame('stop_required', $error->getMessage()); }
+        $this->initializationStopped = true;
+        $before = Task::all()->map->getAttributes()->all(); $journal = $this->initializationJournal;
+        $gates = config()->all();
+        \Illuminate\Support\Facades\Http::fake();
+        $evidence = $api->evidence();
+        $this->assertTrue($evidence['resolved']);
+        $this->assertTrue($evidence['cloud_absence_not_asserted']);
+        foreach ($evidence['roles'] as $i => $role) {
+            $this->assertSame('retained_create_receipt', $role['classification']);
+            $this->assertSame($i === 'source-a' ? '901' : '902', $role['resource']['external_id']);
+        }
+        $this->assertSame($before, Task::all()->map->getAttributes()->all());
+        $this->assertSame($journal, $this->initializationJournal);
+        $this->assertSame($gates, config()->all());
+        \Illuminate\Support\Facades\Http::assertNothingSent();
+    }
+
+    public function test_member_setup_evidence_preserves_unknowns_without_hiding_the_other_role(): void
+    {
+        $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api);
+        $this->initializationStopped = true;
+        foreach (['intent_missing', 'task_missing', 'create_unknown', 'task_changed', 'duplicate_external'] as $case) {
+            $task = $this->fixtures[0]['source']->fresh(); $before = $task->getAttributes();
+            $journal = $this->initializationJournal;
+            if ($case === 'intent_missing') unset($this->initializationJournal['source-queue-source-a']);
+            if ($case === 'task_missing') $task->forceFill(['request_key' => str_repeat('0', 64)])->save();
+            if ($case === 'create_unknown') $task->forceFill(['external_id' => null])->save();
+            if ($case === 'task_changed') $task->forceFill(['slot' => 'changed-private-slot'])->save();
+            if ($case === 'duplicate_external') $task->forceFill(['external_id' => '902'])->save();
+            $evidence = $api->evidence();
+            $this->assertFalse($evidence['resolved'], $case);
+            $role = $case === 'duplicate_external' ? 'source-b' : 'source-a';
+            $this->assertSame('unresolved', $evidence['roles'][$role]['classification']);
+            $this->assertNull($evidence['roles'][$role]['resource']);
+            $this->assertSame('RuntimeException', $evidence['roles'][$role]['diagnostic']['class']);
+            $this->assertSame('member_source_initialization.php', $evidence['roles'][$role]['diagnostic']['file']);
+            $this->assertTrue($evidence['roles'][$role === 'source-a' ? 'source-b' : 'source-a']['resolved']);
+            $this->assertStringNotContainsString('changed-private-slot', json_encode($evidence));
+            $task->setRawAttributes($before)->save(); $this->initializationJournal = $journal;
+        }
+        $this->assertSame([], $this->posts); $this->assertSame(0, $this->dnsWrites);
+    }
+
+    public function test_member_setup_evidence_distinguishes_no_intent_from_queued_without_claiming_cloud_absence(): void
+    {
+        $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api);
+        $this->initializationStopped = true;
+        $this->fixtures[0]['source']->forceFill(['dispatched_at' => null, 'external_id' => null,
+            'provider_created_at' => null, 'public_ips' => []])->save();
+        $this->fixtures[1]['source']->delete(); unset($this->initializationJournal['source-queue-source-b']);
+        $reply = $api->evidence();
+        $this->assertTrue($reply['resolved']); $this->assertTrue($reply['cloud_absence_not_asserted']);
+        $this->assertSame('not_dispatched', $reply['roles']['source-a']['classification']);
+        $this->assertSame($this->fixtures[0]['source']->id, $reply['roles']['source-a']['task_id']);
+        $this->assertSame('no_queue_intent', $reply['roles']['source-b']['classification']);
+        $this->assertNull($reply['roles']['source-b']['task_id']);
+        $this->assertNull($reply['roles']['source-a']['resource']);
     }
 
     public function test_member_initialization_binds_both_original_tasks_and_native_source_registry(): void
