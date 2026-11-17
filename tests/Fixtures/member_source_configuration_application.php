@@ -8,6 +8,7 @@ use App\Models\ServerMachineRelease;
 use App\Models\User;
 use App\Services\ServerMachine\Cloud\MachineCloudGroupService;
 use App\Services\ServerMachine\Cloud\MachineCloudService;
+use App\Services\ServerMachine\Cloud\MachineFailoverCredentials;
 use App\Services\ServerMachine\Dns\MachineDnsService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -25,7 +26,10 @@ return static function (string $mode): array {
     MemberApplicationBootstrap::initialized();
     require_once '/opt/keli-isolated/runtime/member_provider_bindings.php';
     require_once '/opt/keli-isolated/runtime/member_source_configuration.php';
-    $need = static function (bool $ok): void { if (!$ok) throw new RuntimeException('fixture_configuration_invalid'); };
+    $need = static function (bool $ok, string $code = 'invalid'): void {
+        if (!$ok) throw new RuntimeException('fixture_configuration_' . $code);
+    };
+    $same = static fn (array $a, array $b): bool => MemberProviderBindings::digest($a) === MemberProviderBindings::digest($b);
     $root = '/opt/keli-isolated/private/configuration-fixture';
     if ($mode === 'configuration-prepare') { $need(!file_exists($root)); mkdir($root, 0700); }
     $need(realpath($root) === $root && (fileperms($root) & 0077) === 0);
@@ -123,14 +127,37 @@ return static function (string $mode): array {
         if ($mode === 'configuration-create') {
             $result = $setup->create(); $save('observed', $result);
         } elseif ($mode === 'configuration-read') {
-            $result = $setup->readback(); $need($result === $load('observed'));
+            $result = $setup->readback(); $need($same($result, $load('observed')), 'readback_changed');
         } elseif ($mode === 'configuration-repeat') {
-            $result = $setup->create(); $need($result === $load('observed'));
+            $result = $setup->create(); $need($same($result, $load('observed')), 'repeat_changed');
+        } elseif ($mode === 'configuration-recovery') {
+            app()->instance(MachineFailoverCredentials::class, new class extends MachineFailoverCredentials {
+                public function selection(MachineFailoverPolicy $policy): array {
+                    throw new RuntimeException('fixture_recovery_must_not_select_again');
+                }
+            });
+            $result = $setup->readback(); $need($same($result, $load('observed')), 'recovery_changed');
+            $receipt = $root . '/source-configuration-result.json';
+            $backup = $root . '/source-configuration-result.saved';
+            $need(rename($receipt, $backup));
+            try {
+                try { $setup->create(); throw new LogicException('fixture_unconfirmed_commit_replayed'); }
+                catch (RuntimeException $error) { $need($error->getMessage() === 'member_configuration_result_unconfirmed'); }
+                $need($counts() === [2, 2, 2, 1, 2, 2, 2] && $reads === 0);
+            } finally { $need(rename($backup, $receipt)); }
+            $need($same($setup->readback(), $result), 'recovery_changed');
+            $get = static fn ($key) => $load('fresh-' . $key);
+            $put = static fn ($key, $value) => $save('fresh-' . $key, $value);
+            try {
+                (new MemberSourceConfiguration($scope, $guard, $get, $put))->create();
+                throw new LogicException('fixture_existing_configuration_adopted');
+            } catch (RuntimeException $error) { $need($error->getMessage() === 'member_configuration_fresh_database_required'); }
+            $need($get('source-configuration-intent') === null);
         } elseif ($mode === 'configuration-stop') {
             $save('stopped', ['stop' => true]);
             try { $setup->create(); throw new LogicException('fixture_stop_ignored'); }
             catch (RuntimeException $error) { $need($error->getMessage() === 'fixture_configuration_stopped'); }
-            $result = $setup->readback(); $need($result === $load('observed'));
+            $result = $setup->readback(); $need($same($result, $load('observed')), 'stop_readback_changed');
         } elseif ($mode === 'configuration-drift') {
             $original = $load('observed'); $a = $original['sources']['source-a'];
             $changes = [
@@ -146,7 +173,7 @@ return static function (string $mode): array {
                     catch (RuntimeException $error) { $need(str_starts_with($error->getMessage(), 'member_configuration_')); }
                 } finally { DB::rollBack(); }
             }
-            $result = $setup->readback(); $need($result === $original);
+            $result = $setup->readback(); $need($same($result, $original), 'drift_readback_changed');
         } else throw new RuntimeException('fixture_mode_invalid');
         $need($counts() === [2, 2, 2, 1, 2, 2, 2]);
         $need($result['service_revision'] === 3 && !$result['health_or_forwarding_claimed'] && !$result['cloud_or_dns_writes']);

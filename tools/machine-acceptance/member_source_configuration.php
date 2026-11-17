@@ -74,7 +74,9 @@ final class MemberSourceConfiguration
     private function persist(string $key, array $value): void
     {
         ($this->save)($key, $value);
-        self::need(($this->load)($key) === $value, 'journal_unconfirmed');
+        $observed = ($this->load)($key);
+        self::need(is_array($observed) && MemberProviderBindings::digest($observed) === MemberProviderBindings::digest($value),
+            'journal_unconfirmed');
     }
 
     private static function nodePin(Server $node): array
@@ -120,6 +122,10 @@ final class MemberSourceConfiguration
                     $sources['source-' . $letter] = ['machine_id' => $machine->id, 'node_id' => $node->id,
                         'policy_id' => $policy['id'], 'policy_revision' => $policy['revision'],
                         'node_sha256' => MemberProviderBindings::digest(self::nodePin($node->fresh())),
+                        'plan' => ProvisionPlan::normalize(app(MachineFailoverCredentials::class)->context(
+                            MachineFailoverPolicy::query()->findOrFail($policy['id'])) + [
+                            'machine_id' => $machine->id, 'slot' => $policy['slot'], 'panel_origin' => config('app.url'),
+                            'region' => 'sg-sin-2', 'size' => 'g6-standard-4', 'image' => 'linode/debian12', 'authorized_keys' => []]),
                         'configured_nodes' => [['id' => $node->id, 'protocol' => 'hysteria2', 'port' => 24443]]];
                     $members[] = ['policy_id' => $policy['id'], 'policy_revision' => $policy['revision'],
                         'name' => strtoupper($letter), 'priority' => $index + 1, 'enabled' => true, 'attempt_limit' => 2];
@@ -171,9 +177,17 @@ final class MemberSourceConfiguration
             self::need($policy->failure_threshold === 3 && $policy->cooldown_seconds === 300
                 && $policy->stale_after_seconds === 300 && $policy->daily_limit === ($role === 'source-a' ? 3 : 1),
                 'policy_changed');
-            $plan = ProvisionPlan::normalize(app(MachineFailoverCredentials::class)->context($policy) + [
-                'machine_id' => $policy->machine_id, 'slot' => $policy->slot, 'panel_origin' => config('app.url'),
-                'region' => $policy->region, 'size' => $policy->size, 'image' => $policy->image, 'authorized_keys' => []]);
+            // Recovery reads the original choice, even while A owns the create lane.
+            // The native dispatch service still enforces live capacity before mutation.
+            $plan = ProvisionPlan::normalize($pin['plan']);
+            self::need(MemberProviderBindings::digest($plan) === MemberProviderBindings::digest($pin['plan'])
+                && $plan['account_id'] === $this->scope['account_id']
+                && $plan['machine_id'] === $policy->machine_id && $plan['slot'] === $policy->slot
+                && $plan['panel_origin'] === config('app.url') && $plan['region'] === $policy->region
+                && $plan['size'] === $policy->size && $plan['image'] === $policy->image
+                && $plan['provider'] === 'linode' && $plan['authorized_keys'] === []
+                && $plan['credential_pool']['group_id'] === $this->scope['group_id']
+                && $plan['credential_pool']['account_revision'] === $this->scope['account_revision'], 'plan_changed');
             $sources[$role] = ['policy_id' => $policy->id, 'policy_revision' => $policy->revision,
                 'configured_nodes' => $pin['configured_nodes'], 'plan' => $plan];
         }

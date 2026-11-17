@@ -164,7 +164,7 @@ try:
     configured = php('configuration-create')
     assert configured['configuration_rows'] == [2, 2, 2, 1, 2, 2, 2] and configured['provider_gets'] == 4
     assert configured['provider_writes'] == 0 and not configured['tasks_or_health_fabricated']
-    for mode in ('configuration-read', 'configuration-repeat', 'configuration-drift', 'configuration-stop'):
+    for mode in ('configuration-read', 'configuration-repeat', 'configuration-recovery', 'configuration-drift', 'configuration-stop'):
         result = php(mode)
         assert result['configuration_sha256'] == configured['configuration_sha256']
         assert result['provider_gets'] == 0 and result['configuration_rows'] == configured['configuration_rows']
@@ -175,6 +175,8 @@ try:
         machines=2, nodes=2, policies=2, services=1, members=2, dns_sets=2, dns_slots=2,
         failure_rollback_phases=7, uncertain_replay_refused=True, first_error_safe_and_retained=True,
         process_restart_readback=True, duplicate_creation_refused=True,
+        recovery_does_not_reselect_credentials=True, lost_result_prevents_replay=True,
+        existing_configuration_without_intent_not_adopted=True,
         node_policy_credential_drift_refused=True, stop_blocks_mutation_allows_readback=True,
         tasks_or_health_fabricated=False, persistent_gates_changed=False)
     assert php('callback-prepare')['prepared']
