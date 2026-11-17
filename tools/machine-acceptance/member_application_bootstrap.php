@@ -138,10 +138,13 @@ final class MemberApplicationBootstrap
                     && fflush($stream) && fsync($stream), 'installation_write_failed');
             } finally { fclose($stream); }
         }
+        clearstatcache(true, $path);
         $stat = @lstat($path);
-        self::need($stat && realpath($path) === $path && is_file($path) && $stat['uid'] === 0
-            && $stat['nlink'] === 1 && ($stat['mode'] & 0777) === 0600 && $stat['size'] <= 16384,
-            'installation_readback_required');
+        self::need($stat !== false, 'installation_readback_required');
+        self::need(realpath($path) === $path && is_file($path), 'installation_file_path_changed');
+        self::need($stat['uid'] === 0 && $stat['nlink'] === 1 && ($stat['mode'] & 0777) === 0600,
+            'installation_file_permissions');
+        self::need($stat['size'] <= 16384, 'installation_file_size');
         $observed = json_decode(file_get_contents($path), true, 16, JSON_THROW_ON_ERROR);
         self::need(is_array($observed) && ($value === null || $observed === $value), 'installation_readback_changed');
         return $observed;
