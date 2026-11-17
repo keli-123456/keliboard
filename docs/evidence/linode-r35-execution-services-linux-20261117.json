@@ -1,0 +1,167 @@
+{
+  "schema": 1,
+  "recorded_date": "2026-11-17",
+  "timezone": "Asia/Shanghai",
+  "kind": "r35_execution_bindings_and_isolated_services",
+  "status": "passed",
+  "execution_authorized": false,
+  "live_ready": false,
+  "base_commit": "c2a48a8f5f23d043d2dcc7e81248fc33f6f51d8e",
+  "tested_commit": "9062a7d67835249f50ed5d32f46ade0670c4c0ae",
+  "temporary_branch": "acceptance/r35-services-linux-20261117",
+  "changes": [
+    "MemberExecutionSetup binds installation, serial source initialization, DNS initialization and native authority ports to original stage requests and predecessor receipts.",
+    "run_execution_round holds the existing exclusive round journal lock through setup, native operations and unified cleanup; all infrastructure is explicit and no default live transport or credential discovery is added.",
+    "Completed setup replies can be read back, but an uncertain mutation cannot be replayed. Recovery stops authority first and requires every interface to reconcile before exact cleanup pins are collected.",
+    "Only allowlisted safe receipts and cleanup fields enter the journal. Changed original requests, foreign roles, duplicate pins, unprojected private fields and changed recovery receipts are rejected.",
+    "MemberInstallation uses the existing verified runtime extractor for real filesystem installation checks and exclusive private-file imports. Hash, owner, link and mode validation precede publication.",
+    "Linux testing found that a restrictive umask left the installation root untraversable by the service user. Verified runtime installation now explicitly grants 0711 traversal; private directories remain 0700 and private files 0600.",
+    "The unarmed runtime packaging inventory includes the new modules and their complete Linux test dependencies. No new full runtime or node release was frozen."
+  ],
+  "workflow": {
+    "name": "R35 Temporary Services Linux Acceptance",
+    "event": "workflow_dispatch",
+    "run_id": 43993526462,
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/43993526462",
+    "conclusion": "success",
+    "runner": "ubuntu-24.04",
+    "php": "8.2.35",
+    "phpunit": "11.5.55",
+    "mysql": "8.4",
+    "redis": "7",
+    "composer_lock_sha256": "1a7bc62c308529c9edd7f495ca544e93c53933d39570f4eb43fe92c6365f64e1"
+  },
+  "results": {
+    "total_tests": 252,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "fixed_cli": {
+      "tests": 8
+    },
+    "root_installation": {
+      "tests": 4
+    },
+    "python": {
+      "tests": 167
+    },
+    "php_services": {
+      "tests": 68,
+      "assertions": 10619
+    },
+    "http_mysql_redis": {
+      "tests": 5,
+      "assertions": 67
+    },
+    "local_windows": {
+      "tests": 93,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "php_files_syntax_checked": true
+    }
+  },
+  "real_checks": [
+    "Actual Linux file locks, SIGKILL/SIGTERM, on-disk recovery and once-only mutations through both assembled and newly bound execution entries.",
+    "Real runtime extraction with synthetic archive inputs, public PHP loading by a separate unprivileged service user, private-file denial, symlink/hash/permission drift rejection.",
+    "Real loopback HTTP POST to the existing MachineProvisionController and MachineProvisionService with a minimal disposable application container.",
+    "MySQL 8.4 InnoDB persistence across HTTP process restart, duplicate receipt idempotency and unchanged sibling task.",
+    "Wrong bearer token, mismatched installation identity, unexpected fields, oversized requests, expired task and disabled callback gate rejection.",
+    "A real Redis account lock held in the parent process produces HTTP 503 without updating the task; a later callback succeeds after release.",
+    "Conflicting callbacks return HTTP 409 without overwriting success.",
+    "A synthetic missing-column failure after the task update proves the real MySQL transaction rolls back; schema restoration permits a subsequent successful callback."
+  ],
+  "isolation": {
+    "cloud_ssh_dns": "mocked",
+    "network": "MySQL and Redis share a network=none Docker namespace; tests enter that namespace; no external IPv4/IPv6 routes or published host ports",
+    "mysql_privileges": "dedicated database-only user; no global grants or SUPER privilege",
+    "service_credentials": "synthetic fixture-only values; no real cloud, DNS, SSH or panel credentials",
+    "http": "127.0.0.1 random port; exact test URI; no redirects",
+    "queues": "callback dispatcher is NullQueue; no Horizon or queue worker is started; only disposable fixture configuration is used",
+    "dependencies": "locked Composer install before namespace entry, scripts/plugins disabled",
+    "cleanup": {
+      "containers_removed": true,
+      "anonymous_service_volumes_removed_by_rm_v": true,
+      "fixed_fixture_removed": true,
+      "external_routes_after": false,
+      "external_ipv6_routes_after": false
+    }
+  },
+  "attempts": [
+    {
+      "run_id": 43992333930,
+      "sha": "855839fc55b848457e69e8fbb8cae828740968cb",
+      "result": "failed",
+      "cause": "Real service-user loading exposed a 0700 installation root after umask filtering.",
+      "cleanup_confirmed": true
+    },
+    {
+      "run_id": 43992688179,
+      "sha": "e4032c9cf32ccb2cd8c2517dce9eeaeb6b49f93f",
+      "result": "failed",
+      "cause": "Rollback fixture attempted a trigger requiring extra MySQL privilege; switched to reversible column-rename fault injection without broadening database privileges.",
+      "cleanup_confirmed": true
+    },
+    {
+      "run_id": 43993156422,
+      "sha": "448322663c55f4f01e42bf633f205d2d83514a9d",
+      "result": "passed",
+      "tests": 250
+    },
+    {
+      "run_id": 43993526462,
+      "sha": "9062a7d67835249f50ed5d32f46ade0670c4c0ae",
+      "result": "passed",
+      "tests": 252
+    }
+  ],
+  "artifact": {
+    "id": 14288807576,
+    "name": "r35-services-linux-evidence",
+    "zip_sha256": "61870db8615891bf870583bf7f58613474779e62bc945a0a4eb0b75a4d4327b1",
+    "summary_sha256": "bd9e90fcb05907590e5f6d9c1c6ddd1dc3c6ebf2c1c3d764fdc6fd8c21f6bac6",
+    "http_junit_sha256": "f4ab727a4c418eb7c0a2e2c233c2d1d06af023f6ba9b051838382ecc7451c1df",
+    "local_relative_directory": ".codex-audit/r35-services-linux-evidence-20261117/43993526462/unpacked"
+  },
+  "merge_boundary": {
+    "main_unchanged": true,
+    "portable_files": [
+      "tools/machine-acceptance/member_assembly.py",
+      "tools/machine-acceptance/member_bundle.py",
+      "tools/machine-acceptance/member_execution.py",
+      "tools/machine-acceptance/member_installation.py",
+      "tools/machine-acceptance/test_member_execution.py",
+      "tools/machine-acceptance/test_member_installation_linux.py",
+      "tools/machine-acceptance/test_member_assembly_linux.py",
+      "tests/Fixtures/member_http_callback.php",
+      "tests/Integration/ServerMachine/MemberHttpServicesTest.php"
+    ],
+    "temporary_only_do_not_merge": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/native-failover-acceptance.yml",
+      "audit/r35-services-linux-ci.py"
+    ]
+  },
+  "safety": {
+    "production_connections": 0,
+    "cloud_instances_created": 0,
+    "real_dns_changes": 0,
+    "real_ssh_connections": 0,
+    "deployment": false,
+    "r34_executed": false,
+    "r35_live_executed": false,
+    "persistent_switches_changed": false,
+    "production_queue_configuration_changed": false,
+    "tanzhen_accessed_or_modified": false,
+    "ordinary_ci_runs_for_test_commits": 0,
+    "image_publish_runs_for_test_commits": 0,
+    "new_dependencies": false
+  },
+  "limitations": [
+    "Setup and recovery infrastructure ports are simulated. This verifies explicit bindings and real local installation primitives, not a completed remote bootstrap or a live R35 run.",
+    "HTTP tests invoke the real receipt controller/service over TCP with a minimal application container, not production Nginx/TLS or the complete application middleware stack.",
+    "Installation permission tests use synthetic archives and PHP payloads. They do not prove the whole frozen application starts under the eventual service configuration.",
+    "Real cloud capacity, actual agent installations/continuous reports, wall-clock cooldown, SSH authorization and external DNS propagation remain unverified.",
+    "New complete LF runtime freeze, scoped read-only preflight and renewed execution authority remain necessary. This evidence is not permission to deploy, create machines or execute R34."
+  ]
+}
