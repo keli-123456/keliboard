@@ -1,0 +1,78 @@
+{
+  "schema": 1,
+  "status": "component_passed_not_live_ready",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "ci_run": 44021978009,
+  "ci_url": "https://github.com/keli-123456/keliboard/actions/runs/44021978009",
+  "tested_commit": "d34a18be4511aba9dae85c8e6fe03cc405ffa61f",
+  "artifact_id": 14302430162,
+  "environment": {
+    "application_files": 14079,
+    "full_application_and_vendor": true,
+    "mysql": "8.4",
+    "redis": "7",
+    "migrations": 160,
+    "http_tls_and_service_uid": true,
+    "cloud_ssh_dns": "simulated",
+    "node_binary_fixture": "synthetic_not_executed",
+    "external_network_routes": false
+  },
+  "crash_boundary": {
+    "operation": "cleanup",
+    "actual_linux_signal": "SIGKILL",
+    "child_returncode": -9,
+    "boundary": "Mock provider committed the last control DNS DELETE before the actual RPC received the reply.",
+    "durable_rpc_pending_before_kill": true,
+    "success_reply_absent_before_kill": true,
+    "restart_exposes_uncertain_cleanup": true,
+    "original_request_resumed": true,
+    "source_delete_calls": 2,
+    "dns_delete_calls": 3,
+    "no_repeat_deletes": true,
+    "fresh_absence_confirmation_required": true,
+    "minimum_absence_spacing_seconds": 10,
+    "intervening_read_failure_resets_proof": true,
+    "first_error_and_task_history_retained": true,
+    "new_mutations_stay_denied": true,
+    "creation_phase_process_crash_tested": false
+  },
+  "tests": {
+    "linux_python": 116,
+    "linux_component_php": {"tests": 69, "assertions": 306},
+    "linux_source_php": {"tests": 17, "assertions": 196},
+    "native_cli_gate_lifetime_followup": {
+      "environment": "local Windows PHP 8.2.33, isolated in-memory SQLite",
+      "changes": "Restore shared and transient execution-gate and bus bindings on success and exception.",
+      "cli_tests": 9,
+      "cli_assertions": 713,
+      "all_member_tests": 57,
+      "all_member_assertions": 10712,
+      "included_in_this_linux_tested_commit": false
+    }
+  },
+  "limits": {
+    "whole_round_concrete_setup_ports_complete": false,
+    "native_execution_grant_issuer_complete": false,
+    "real_elapsed_expiry_tested": false,
+    "assembled_a1_cleanup_cooldown_a2_retry_tested": false,
+    "real_cloud_acceptance": false,
+    "live_ready": false
+  },
+  "cleanup": {
+    "service_containers_and_volumes_removed": true,
+    "fixed_fixture_removed": true,
+    "temporary_material_removed": true,
+    "production_changed": false,
+    "cloud_instances_created": 0,
+    "automatic_switches_changed": false,
+    "main_pushed": false
+  },
+  "artifact_sha256": {
+    "application-linux-summary.json": "9b54b9aaeb3d1f2068fc2874ab8f303dddf33bbd2e74619c25a3ba2da7f4b6cc",
+    "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "dns-phpunit.log": "cafcd7cfe741a7187bb945b48c291421b955a8e607f7ef96bc2e56f7ca694d0b",
+    "python.log": "88aff8465ac8c20af60082df1584844a1dfa17012932fc5d4369fd1e1ae8144b",
+    "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+    "source-phpunit.log": "d97b7c05a344ae79e6325acd0a16724b6df9034858aabe3f8074c301aac49f3a"
+  }
+}

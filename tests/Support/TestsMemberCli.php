@@ -83,6 +83,35 @@ trait TestsMemberCli
         $this->assertSame([], $this->posts);
     }
 
+    public function test_member_cli_restores_transient_and_shared_binding_lifetimes(): void
+    {
+        [$authority] = $this->cliFixture();
+        $busContract = \Illuminate\Contracts\Bus\Dispatcher::class;
+        foreach ([false, true] as $shared) foreach ([false, true] as $throw) {
+            app()->bind(Gate::class, fn () => new Gate(), $shared);
+            app()->bind($busContract, fn () => new \Illuminate\Bus\Dispatcher(app()), $shared);
+            $gate = app(Gate::class); $bus = app($busContract);
+            try {
+                $this->assertSame('completed', $authority->within('round-status', 'control', function () use ($throw) {
+                    if ($throw) throw new \RuntimeException('fixture_lifetime_failure');
+                    return 'completed';
+                }));
+                $this->assertFalse($throw);
+            } catch (\RuntimeException $error) {
+                $this->assertTrue($throw);
+                $this->assertSame('fixture_lifetime_failure', $error->getMessage());
+            }
+            foreach ([Gate::class => $gate, $busContract => $bus] as $type => $original) {
+                $this->assertSame($shared, app()->isShared($type));
+                $this->assertSame(get_class($original), get_class(app($type)));
+                if ($shared) $this->assertSame($original, app($type));
+                else $this->assertNotSame($original, app($type));
+            }
+            $this->cliAssertClosed();
+        }
+        $this->assertSame([], $this->posts);
+    }
+
     public function test_member_cli_rejects_wrong_environment_grant_and_changed_persistent_switches(): void
     {
         [$authority] = $this->cliFixture(); $before = $this->cliEnvironment;

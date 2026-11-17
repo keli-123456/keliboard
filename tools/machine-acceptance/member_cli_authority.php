@@ -232,8 +232,10 @@ final class MemberCliAuthority
     {
         self::need(!$this->active, 'nested_authority_denied');
         $this->allow($operation, $role);
+        $gateShared = app()->isShared(MachineFailoverExecutionGate::class);
         $oldGate = app(MachineFailoverExecutionGate::class);
         $busContract = \Illuminate\Contracts\Bus\Dispatcher::class;
+        $busShared = app()->isShared($busContract);
         $oldBus = app($busContract);
         $before = []; foreach (self::closed() as $key => $_) $before[$key] = config($key);
         $this->expected = $before;
@@ -261,8 +263,10 @@ final class MemberCliAuthority
             return $callback();
         } finally {
             config($before);
-            app()->instance($busContract, $oldBus);
-            app()->instance(MachineFailoverExecutionGate::class, $oldGate);
+            if ($busShared) app()->instance($busContract, $oldBus);
+            else app()->forgetInstance($busContract);
+            if ($gateShared) app()->instance(MachineFailoverExecutionGate::class, $oldGate);
+            else app()->forgetInstance(MachineFailoverExecutionGate::class);
             $this->active = false; $this->operation = ''; $this->expected = [];
         }
     }
