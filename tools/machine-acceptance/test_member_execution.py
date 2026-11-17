@@ -117,6 +117,28 @@ class ExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(TransportError, 'receipts_changed'): self.setup().reconcile(request)
         self.assertEqual(prior, self.f.journal['execution-cleanup-scope'])
 
+    def test_cleanup_snapshots_cannot_export_private_fields(self):
+        self.f.fail = ('private-import', 'after')
+        original = self.ports['installation'].snapshot
+        def unsafe():
+            value = original()
+            value['private_files'][0]['credential'] = 'synthetic-must-not-export'
+            return value
+        self.ports['installation'].snapshot = unsafe
+        driver = self.round()
+        for _ in range(20): driver.step(); self.f.now += 10
+        self.assertFalse(driver.state['resources_cleaned'])
+        self.assertNotIn('execution-cleanup-scope', self.f.journal)
+        self.assertNotIn('synthetic-must-not-export', str(self.f.journal))
+        self.ports['installation'].snapshot = original
+        self.assertTrue(self.base.finish(self.round())['resources_cleaned'])
+
+    def test_changed_original_request_is_refused_before_installation(self):
+        setup = self.setup()
+        with self.assertRaisesRegex(TransportError, 'request_changed'):
+            setup.dispatch('control-install', {'run_id': 'different'}, {})
+        self.assertEqual([], self.f.events)
+
 
 from test_member_assembly_linux import MemberAssemblyLinuxTests, CHILD
 

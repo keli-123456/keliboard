@@ -29,7 +29,8 @@ TESTS = ('tools/machine-acceptance/test_member_transport.py', 'tools/machine-acc
          'tests/Support/TestsMemberInitialization.php', 'tools/machine-acceptance/test_member_initialization.py',
          'tests/Unit/Services/MachineMemberProviderBindingsTest.php',
          'tests/Unit/Services/MachineMemberControlCreationTest.php',
-         'tools/machine-acceptance/test_member_assembly.py', 'tools/machine-acceptance/test_member_execution.py',
+         'tools/machine-acceptance/test_member_assembly.py', 'tools/machine-acceptance/test_member_assembly_linux.py',
+         'tools/machine-acceptance/test_member_execution.py',
          'tools/machine-acceptance/test_member_installation_linux.py')
 FILES = tuple('tools/machine-acceptance/' + name for name in RUNTIME) + TESTS
 
