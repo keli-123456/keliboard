@@ -24,6 +24,29 @@ scenario condition, not the operational failover rule. Candidate reachability,
 identity-bound TCP/UDP receipts, DNS ownership and execution gates are unchanged.
 See [probe admission rules](../../docs/machine-failover-probe-admission.md).
 
+## V2 Acceptance Branches
+
+Use [branch acceptance](../../docs/machine-v2-branch-acceptance.md) to distinguish
+expected rejection of an unreachable candidate from successful DNS cutover.
+`acceptance_branches.py` is a local report projection, not a runner or execution
+gate. It reads a reviewed redacted result and prints a separate hash-bound branch
+record; it never rewrites the source, reopens a round, invokes SSH, or calls a
+provider. Missing evidence is unverified, not success. Simulation is labelled
+explicitly and cannot certify a live cutover.
+
+```text
+python -B tools/machine-acceptance/acceptance_branches.py --record docs/evidence/linode-r33-result-20261116.json --evidence-kind historical_live
+```
+
+The V2 `agent_readiness_v1` primary path does not use the optional HY2 forwarding
+specialist as its cutover gate. Its candidate identity, fresh reports, real
+domestic IPv4 health, DNS ownership and cleanup requirements remain in force.
+An unreachable candidate can pass the protection branch only when no candidate
+DNS write was dispatched and cleanup and protected-environment checks passed.
+The successful-cutover branch remains unexercised in that run. This is separate
+from the production task lifecycle: the real bridge may wait for health and does
+not gain permission to delete a candidate because a test round was cleaned up.
+
 ## Test-Only Loopback Selfcheck
 
 `entry_probe_diagnostics.loopback_selfcheck(run_id, task_id, role, enabled=True)` adds a separate
@@ -1151,6 +1174,55 @@ acceptance. Build flags are not ECH/Brutal activation evidence; sampled RSS is
 not peak performance or a high-user-count memory test. Further end-to-end
 failover testing still needs a fresh scope and authorization.
 
+## V2 Source Registration Transition
+
+R31 was closed after the first post-injection registration observation was still
+healthy. Its strict PHP collector correctly refused registration before a failed
+window existed. This does not prove why that individual Ping report was healthy.
+Do not weaken `source_fixture.php` or reopen the closed R31 bundle.
+
+`source_transition.py` adds a bounded, controller-local failure-only wait before
+the single `adopt-source` command. Initial in-flight healthy reports can be
+observed but cannot qualify. Require three distinct complete failures newer than
+the boundary and the real observer's threshold, including a higher configured
+threshold. Natural-failure recovery, or recovery after the first new failure in
+the controlled branch, stops the attempt. Unknown, repeated, stale, foreign or
+out-of-order evidence cannot satisfy the window. The existing strict PHP
+registration still recollects current evidence after this wait.
+
+The adapter validates installation, process start/PID, binary, configuration,
+task and target bindings before/after sampling. It exclusively records a new
+intent and writes qualifying evidence plus dispatch intent before registration.
+It preserves the first exception if later evidence storage fails, never retries
+registration, and delegates all fault restoration/cleanup to the original driver.
+The wait is at most 60 seconds with a 70-second SSH call limit; the driver reserves
+300 seconds plus its existing cleanup allowance. No cloud create, DNS mutation,
+node restart or protocol verifier is performed by the adapter itself.
+
+Fresh V2 scopes must explicitly contain the exact typed
+`source_registration_transition` contract from `source_transition.RULES` and
+include the helper in the frozen manifest. `diagnostic_round_runner.py` installs
+the wrapper for `agent_readiness_v1` without replacing its V2 baseline adapter.
+A separately prepared launcher must use `source_transition.runner` too, not
+directly instantiate an old `RoundRunner`. Offline-test that actual entry before
+any new authorization is consumed. The new wait is a separately declared third
+source observation window, not implicit reuse of R31's two-window permission;
+it only reads already configured probe reports, not an extra Ping diagnostic.
+
+Local regression:
+
+```sh
+python -B -m unittest -q test_probe_sampling test_source_transition test_diagnostic_capture
+```
+
+Set `PHP_BINARY` to additionally exercise the actual inventory, observer and
+strict source registration against in-memory SQLite, with all HTTP mocked and
+stray requests denied. The Python composed-driver tests verify wrapper ordering
+and failure/cleanup delegation, not real provider deletion or public DNS. The
+application's `MachineFailoverNativeBridgeTest` separately exercises the real V2
+candidate/readiness/DNS services with simulated providers. Neither substitutes
+for a newly authorized end-to-end cloud run.
+
 ## R35 Multi-source Offline Driver
 
 `member_retry_driver.php` coordinates separate source A/B and candidate A1/A2
@@ -1200,6 +1272,23 @@ requirements are recorded in `docs/machine-r35-cli-binding-20261116.md`.
 without authorization, credentials or a node release. It does not yet constitute
 a complete live round. See [R35 transport preparation](../../docs/machine-r35-transport-offline-20261116.md)
 for the remaining bootstrap, auxiliary teardown and Linux preflight gates.
+
+### R35 setup-to-native authorization
+
+`member_native_grant.php` derives a root-only native capability from the actual
+registered A/B sources, claimed test DNS and current source-failure plan. It
+inherits the original setup window, retains uncertain issuance, and publishes a
+bounded callback derivative. Readback cannot mint a replacement or extend time.
+Saved provider selections recheck current catalog options after cache expiry;
+editor fingerprint checks and provider/credential failures remain enforced.
+
+The [Linux component record](../../docs/evidence/linode-r35-native-grant-catalog-linux-20261117.json)
+uses the full application, isolated MySQL/Redis, real HTTP/TLS and service UID,
+with cloud/SSH/DNS side effects simulated. It verifies real cooldown, immutable
+grant readback, partial-publication denial, stop revocation and setup cleanup.
+Candidate HTTP callbacks, native A1/A2 whole-round cleanup, host installation
+composition and the final unarmed real-binary package are still pending. This
+component result does not authorize or establish live acceptance.
 
 ## Protocol Interoperability
 
