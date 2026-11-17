@@ -21,11 +21,12 @@ try {
     $grant = json_decode(file_get_contents('/opt/keli-isolated/member-setup-grant.json'), true, 32, JSON_THROW_ON_ERROR);
     if (!$cloud['present'] || count($dns['rows']) !== 1 || $dns['create'] !== 1 || $dns['claim'] !== 1)
         throw new RuntimeException('fixture_prefix_provider_state');
-    if ((string) $cloud['row']['id'] !== $grant['control']['external_id']
-        || $cloud['row']['label'] !== $grant['control']['label']
-        || $cloud['row']['tags'] !== [$grant['control']['marker']]
-        || $grant['binding']['configuration'] !== $configuration)
-        throw new RuntimeException('fixture_prefix_identity_changed');
+    foreach (['id' => (string) $cloud['row']['id'] === $grant['control']['external_id'],
+        'label' => $cloud['row']['label'] === $grant['control']['label'],
+        'marker' => $cloud['row']['tags'] === [$grant['control']['marker']],
+        'configuration' => Keli\Acceptance\MemberProviderBindings::digest($grant['binding']['configuration'])
+            === Keli\Acceptance\MemberProviderBindings::digest($configuration)] as $field => $matches)
+        if (!$matches) throw new RuntimeException('fixture_prefix_' . $field . '_changed');
     if (App\Models\MachineProvisionTask::count() !== 0) throw new RuntimeException('fixture_preexisting_tasks');
     mkdir($directory, 0700);
     foreach (['identity' => $identity, 'initialization' => $configuration['initialization_scope'],
