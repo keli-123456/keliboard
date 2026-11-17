@@ -44,8 +44,11 @@ try {
         if (realpath($directory) !== $directory || !is_dir($directory) || fileowner($directory) !== 0
             || (fileperms($directory) & 0777) !== 0700) throw new RuntimeException('member_import_journal_invalid');
         if (is_link($directory . '/lock')) throw new RuntimeException('member_import_lock_invalid');
+        $newLock = !file_exists($directory . '/lock');
         $mask = umask(0077);
-        try { $lock = fopen($directory . '/lock', 'c+b'); } finally { umask($mask); }
+        try { $lock = fopen($directory . '/lock', $newLock ? 'x+b' : 'r+b'); } finally { umask($mask); }
+        // Default ACLs may override umask. Narrow only a file this process created.
+        if ($newLock && $lock && !chmod($directory . '/lock', 0600)) throw new RuntimeException('member_import_lock_invalid');
         $stat = $lock ? fstat($lock) : false;
         if (!$stat || $stat['uid'] !== 0 || $stat['nlink'] !== 1 || ($stat['mode'] & 0777) !== 0600
             || !flock($lock, LOCK_EX | LOCK_NB)) throw new RuntimeException('member_import_busy');

@@ -222,6 +222,17 @@ try:
     credentials_path.chmod(0o644)
     try: import_denied('member_import_file_invalid')
     finally: credentials_path.chmod(0o600)
+    import_lock = ROOT / 'private/member-import/lock'
+    assert import_lock.stat().st_mode & 0o777 == 0o600
+    import_lock.chmod(0o644)
+    try:
+        import_denied('member_import_busy')
+        assert import_lock.stat().st_mode & 0o777 == 0o644
+    finally: import_lock.chmod(0o600)
+    import fcntl
+    with import_lock.open('r+b') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        import_denied('member_import_busy')
     authority_path.write_bytes(json.dumps(dict(authority, bundle_sha256='0' * 64)).encode())
     try: import_denied('member_import_authority_invalid')
     finally: authority_path.write_bytes(raw_authority)
@@ -251,6 +262,8 @@ try:
     SUMMARY['prerequisite_import'] = dict(actual_fixed_cli=True, actual_credential_services=True,
         actual_release_distribution_service=True, encrypted_mysql_credentials=True,
         bundle_machine_and_private_material_bound=True, root_only=True,
+        new_lock_acl_narrowed_only_on_creation=True, existing_lock_permissions_not_repaired=True,
+        concurrent_cli_import_refused=True,
         real_elapsed_dispatch_expiry=True, service_user_reads_release_not_private_material=True,
         rollback_phases=5, uncertain_replay_refused=True, first_error_retained=True,
         stop_denies_import_allows_readback=True, default_release_unset=True,
