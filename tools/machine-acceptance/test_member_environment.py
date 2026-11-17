@@ -33,8 +33,8 @@ class EnvironmentTests(unittest.TestCase):
             with self.subTest(extra=extra), self.assertRaises(TransportError):
                 environment(dict(settings(), **{extra: 'production'}))
         for key, values in {
-            'database': ['keliboard', 'keli_acceptance_../app', 'keli_acceptance_x\nAPP_DEBUG=true'],
-            'username': ['root', 'keli_x\nDB_HOST=outside'],
+            'database': [None, [], 'keliboard', 'keli_acceptance_../app', 'keli_acceptance_x\nAPP_DEBUG=true'],
+            'username': [True, {}, 'root', 'keli_x\nDB_HOST=outside'],
             'app_key': ['x' * 44, base64.b64encode(b'x' * 16).decode()],
             'password': ['short', 'x' * 30 + '\nAPP_DEBUG=true', 'x' * 30 + '#comment'],
             'redis_password': ['null', '${DB_PASSWORD}'],

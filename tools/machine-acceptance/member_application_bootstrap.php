@@ -16,6 +16,10 @@ final class MemberApplicationBootstrap
     public static function receipt(): array
     {
         self::need(PHP_OS_FAMILY === 'Linux' && in_array(PHP_SAPI, ['cli', 'cli-server'], true), 'linux_required');
+        foreach (['APP_BASE_PATH', 'APP_CONFIG_CACHE', 'APP_SERVICES_CACHE', 'APP_PACKAGES_CACHE',
+                  'APP_ROUTES_CACHE', 'APP_EVENTS_CACHE', 'LARAVEL_STORAGE_PATH'] as $key)
+            self::need(getenv($key) === false && !isset($_ENV[$key]) && !isset($_SERVER[$key]), 'path_override_refused');
+        self::need(getenv('APP_ENV') === false || getenv('APP_ENV') === 'acceptance', 'environment_override_refused');
         foreach ([self::ROOT, self::ROOT . '/app', self::ROOT . '/runtime'] as $directory) {
             $stat = @lstat($directory);
             self::need($stat && realpath($directory) === $directory && is_dir($directory)
@@ -39,6 +43,17 @@ final class MemberApplicationBootstrap
             && $stat['size'] <= 16384 && hash_equals($pin['environment_sha256'], (string) hash_file('sha256', $path)),
             'environment_changed');
         self::need(!file_exists(self::ROOT . '/app/bootstrap/cache/config.php'), 'cached_configuration_refused');
+        $cache = self::ROOT . '/app/bootstrap/cache'; $stat = @lstat($cache);
+        self::need($stat && realpath($cache) === $cache && is_dir($cache)
+            && $stat['uid'] === 0 && ($stat['mode'] & 0022) === 0, 'executable_cache_permissions');
+        foreach (scandir($cache) as $name) {
+            if (in_array($name, ['.', '..'], true)) continue;
+            self::need(in_array($name, ['.gitignore', 'packages.php', 'services.php'], true), 'unexpected_executable_cache');
+            $stat = @lstat($cache . '/' . $name);
+            self::need($stat && realpath($cache . '/' . $name) === $cache . '/' . $name
+                && is_file($cache . '/' . $name) && $stat['uid'] === 0 && $stat['nlink'] === 1
+                && ($stat['mode'] & 0022) === 0, 'executable_cache_permissions');
+        }
         return $pin;
     }
 
@@ -85,7 +100,11 @@ final class MemberApplicationBootstrap
                   \Illuminate\Foundation\Bootstrap\LoadConfiguration::class] as $bootstrapper)
             $app->make($bootstrapper)->bootstrap($app);
         self::assertConfiguration($pin);
-        $app->make(\Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+        // Root prewarms only provider/package caches; the service user cannot
+        // modify PHP later loaded by a privileged CLI process.
+        $mask = umask(0022);
+        try { $app->make(\Illuminate\Contracts\Console\Kernel::class)->bootstrap(); }
+        finally { umask($mask); }
         self::assertConfiguration($pin);
         return $app;
     }

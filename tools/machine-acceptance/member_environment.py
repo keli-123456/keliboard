@@ -11,8 +11,9 @@ FIELDS = {'app_key', 'database', 'username', 'password', 'mysql_port', 'redis_pa
 
 def environment(settings):
     require(isinstance(settings, dict) and set(settings) == FIELDS, 'transport_application_settings_invalid')
-    require(re.fullmatch(r'keli_acceptance_[a-z0-9_]{3,60}', settings.get('database', ''))
-            and re.fullmatch(r'keli_[a-z0-9_]{3,25}', settings.get('username', '')),
+    require(isinstance(settings['database'], str) and isinstance(settings['username'], str)
+            and re.fullmatch(r'keli_acceptance_[a-z0-9_]{3,60}', settings['database'])
+            and re.fullmatch(r'keli_[a-z0-9_]{3,25}', settings['username']),
             'transport_application_database_invalid')
     for name in ('password', 'redis_password'):
         require(isinstance(settings[name], str) and re.fullmatch(r'[A-Za-z0-9_-]{24,128}', settings[name]),

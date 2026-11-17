@@ -48,6 +48,12 @@ class MemberInstallation:
 
     def verify_tree(self, manifest, target):
         require(target.resolve(strict=True) == target and target.is_dir(), 'transport_installation_path_changed')
+        extra = {'runtime-manifest.json'} if target == self.root / 'payload' else set()
+        actual = {p.relative_to(target).as_posix() for p in target.rglob('*') if not p.is_dir()}
+        require(actual == set(manifest['files']) | extra, 'transport_installation_unexpected_files')
+        if extra:
+            require(unique_json((target / 'runtime-manifest.json').read_bytes()) == manifest,
+                    'transport_installation_manifest_changed')
         for directory in [target, *[p for p in target.rglob('*') if p.is_dir()]]:
             info = directory.lstat()
             require(directory.resolve(strict=True) == directory and info.st_uid == os.geteuid()

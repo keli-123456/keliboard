@@ -116,10 +116,11 @@ try:
     assert observed['booted'] and observed['kernel'] == 'App\\Http\\Kernel'
     assert observed['uid'] == 65534 and observed['states'] == [None, None]
     SUMMARY['service_boot'] = observed
-    for settings_override in ({'DB_HOST': '203.0.113.1'}, {'APP_DEBUG': 'true'}, {'CACHE_PREFIX': 'outside'}):
+    for settings_override in ({'DB_HOST': '203.0.113.1'}, {'APP_DEBUG': 'true'}, {'CACHE_PREFIX': 'outside'},
+        {'APP_CONFIG_CACHE': '/tmp/untrusted.php'}, {'APP_BASE_PATH': '/tmp/foreign-app'}, {'APP_ENV': 'production'}):
         rejected = php('inspect', uid=65534, extra=settings_override, ok=False)
         assert rejected['reason'].startswith('member_application_')
-    SUMMARY['foreign_configuration_rejected'] = 3
+    SUMMARY['foreign_configuration_rejected'] = 6
 
     with socket.socket() as port_socket:
         port_socket.bind(('127.0.0.1', 0)); http_port = port_socket.getsockname()[1]

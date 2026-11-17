@@ -15,7 +15,8 @@ from member_installation import MemberInstallation
 from member_transport import require
 
 
-WRITABLE = ('storage/logs', 'storage/app', 'storage/framework', 'bootstrap/cache')
+WRITABLE = ('storage/logs', 'storage/app/public', 'storage/framework')
+READONLY_DATA = ('storage/app/geoip/GeoLite2-City.mmdb', 'storage/app/geoip/GeoLite2-Country.mmdb')
 REQUIRED = ('storage/logs', 'storage/app/public', 'storage/framework/cache/data',
             'storage/framework/sessions', 'storage/framework/views', 'bootstrap/cache')
 
@@ -36,10 +37,11 @@ def configure(root, bundle_sha256, settings, *, uid, gid):
             'transport_application_configuration_exists')
     # Only generated Laravel state is writable. A package containing precomputed
     # executable cache/config or logs is not a clean initial application.
-    for name in WRITABLE:
+    for name in ('storage/logs', 'storage/app', 'storage/framework', 'bootstrap/cache'):
         target = app / name
         if target.exists():
-            require(all(p.is_dir() or p.name == '.gitignore' for p in target.rglob('*')),
+            require(all(p.is_dir() or p.name == '.gitignore' or p.relative_to(app).as_posix() in READONLY_DATA
+                        for p in target.rglob('*')),
                     'transport_application_dirty_state')
     machine = Path('/etc/machine-id')
     require(machine.is_file() and not machine.is_symlink(), 'transport_application_machine_identity')
@@ -55,7 +57,7 @@ def configure(root, bundle_sha256, settings, *, uid, gid):
         (app / name).mkdir(mode=0o755, parents=True, exist_ok=True)
     # mkdir(parents=True) also obeys umask. Keep only the writable subtree roots
     # service-owned; their ancestors remain root-owned and traversable.
-    for name in ('storage', 'bootstrap'):
+    for name in ('storage', 'storage/app', 'bootstrap', 'bootstrap/cache'):
         target = app / name
         require(target.resolve(strict=True) == target and target.stat().st_uid == 0,
                 'transport_application_state_path_changed')

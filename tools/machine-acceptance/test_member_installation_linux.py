@@ -93,6 +93,12 @@ class InstallationTests(unittest.TestCase):
         with self.assertRaisesRegex(TransportError, 'hash_changed'):
             self.installer.publication(self.result['archive_sha256'])
 
+    def test_unmanifested_executable_file_is_rejected(self):
+        self.installer.publish_runtime(self.archive, self.result['archive_sha256'])
+        (self.root / 'app/unexpected.php').write_bytes(b'<?php echo "unexpected";')
+        with self.assertRaisesRegex(TransportError, 'unexpected_files'):
+            self.installer.publication(self.result['archive_sha256'])
+
 
 @unittest.skipUnless(os.name == 'posix' and os.geteuid() == 0, 'root-owned installation fixture required')
 class InstallationServiceUserTests(InstallationTests):
@@ -128,9 +134,9 @@ class InstallationServiceUserTests(InstallationTests):
         code = '''import pathlib,sys
 r=pathlib.Path(sys.argv[1])
 assert b"APP_ENV=acceptance" in (r/'app/.env').read_bytes()
-for name in ('storage/logs/check', 'storage/framework/cache/data/check', 'bootstrap/cache/check'):
+for name in ('storage/logs/check', 'storage/framework/cache/data/check', 'storage/app/public/check'):
  p=r/'app'/name;p.write_bytes(b'ok');p.unlink()
-for p in (r/'app/.env', r/'app/vendor/autoload.php', r/'runtime/member_cli_authority.php'):
+for p in (r/'app/.env', r/'app/vendor/autoload.php', r/'runtime/member_cli_authority.php', r/'app/bootstrap/cache/services.php', r/'app/storage/app/check'):
  try:
   with p.open('ab'): pass
  except PermissionError: continue
@@ -152,7 +158,7 @@ else: raise AssertionError('private_readable')
             member_application.configure(self.root, self.result['archive_sha256'], settings(), uid=0, gid=0)
         cache = self.root / 'app/bootstrap/cache'
         cache.mkdir(mode=0o755); (cache / 'config.php').write_text('<?php return [];')
-        with self.assertRaisesRegex(TransportError, 'dirty_state'):
+        with self.assertRaisesRegex(TransportError, 'dirty_state|unexpected_files'):
             member_application.configure(self.root, self.result['archive_sha256'], settings(), uid=65534, gid=65534)
         self.assertFalse((self.root / 'app/.env').exists())
 
