@@ -158,3 +158,28 @@ def run_execution_round(directory, *, setup_ports, **bindings):
                                      guard=bindings['guard'], **setup_ports)
         assembly = MemberRoundAssembly(setup=setup, load=load, save=save, **bindings)
         return run(assembly.round())
+
+
+def run_connected_round(directory, *, control_inputs, setup_inputs, **bindings):
+    """Bind the concrete deferred setup under the existing whole-round lock.
+
+    No host placeholder, permit or default provider is supplied. The caller's
+    reviewed native/cleanup bindings and pre-existing private inputs are still
+    required; importing this entry never connects or enables execution.
+    """
+    from member_connected_setup import MemberConnectedSetup
+    from member_control_transport import MemberControlTransport
+    control_keys = {'directory', 'php', 'guard'}
+    setup_keys = {'archive', 'identity_file', 'known_hosts', 'grant_file', 'settings',
+                  'service', 'credentials', 'import_permit', 'tls_files', 'ssh_guard'}
+    require(isinstance(control_inputs, dict) and control_keys <= set(control_inputs)
+            <= control_keys | {'execute'} and isinstance(setup_inputs, dict)
+            and setup_keys <= set(setup_inputs) <= setup_keys | {'execute'}
+            and not {'setup', 'control', 'load', 'save'}.intersection(bindings),
+            'transport_connected_entry_bindings')
+    with round_journal(directory, RUN) as (load, save):
+        control = MemberControlTransport(scope=bindings['scope'], load=load, save=save, **control_inputs)
+        setup = MemberConnectedSetup(scope=bindings['scope'], control=control, load=load, save=save,
+            guard=bindings['guard'], clock=bindings.get('clock', time.time), **setup_inputs)
+        assembly = MemberRoundAssembly(setup=setup, control=control, load=load, save=save, **bindings)
+        return run(assembly.round())

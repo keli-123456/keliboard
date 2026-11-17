@@ -2,6 +2,8 @@
 import copy
 import json
 import unittest
+from contextlib import contextmanager
+from unittest.mock import patch
 
 from member_auxiliary import digest
 from member_cli import RUN
@@ -178,6 +180,88 @@ class ConnectedSetupTests(unittest.TestCase):
         self.reconcile()
         self.assertEqual([], self.f.calls)
         self.assertEqual(['control-connection'], self.provider_calls)
+
+    def test_each_installation_reply_loss_recovers_without_rebinding_or_replay(self):
+        cases = {'upload': 'control-install', 'cold-publish': 'control-install',
+            'cold-configure': 'runtime-install', 'app-initialize': 'runtime-install',
+            'app-service-smoke': 'runtime-install', 'app-readback': 'private-import',
+            'cold-private': 'private-import', 'bootstrap-import': 'private-import'}
+        stages = ('control-install', 'runtime-install', 'private-import')
+        for operation, failed_stage in cases.items():
+            with self.subTest(operation=operation):
+                self.setUp()
+                for stage in stages[:stages.index(failed_stage)]: self.dispatch(stage)
+                self.f.failure = operation
+                with self.assertRaises(TransportError): self.dispatch(failed_stage)
+                first = copy.deepcopy(self.saved['host-setup-first-error'])
+                calls = list(self.f.calls)
+                self.port = MemberConnectedSetup(**self.args)
+                with self.assertRaisesRegex(TransportError, 'readback_required'): self.dispatch(failed_stage)
+                self.assertEqual(calls, self.f.calls)
+                self.f.failure = None
+                self.f.now = self.scope['deadline_at'] + 1
+                self.connection_failure = True
+                self.port = MemberConnectedSetup(**self.args)
+                self.reconcile()
+                self.assertEqual(first, self.saved['host-setup-first-error'])
+                self.assertEqual(['control-connection'], self.provider_calls)
+                self.assertEqual(1, self.f.calls.count(operation))
+                self.assertNotIn('synthetic-secret-must-not-be-saved', json.dumps(self.saved))
+
+    def test_expiry_during_connection_readback_does_not_bind_or_upload(self):
+        original = self.control.execute
+        def expire(command, payload):
+            result = original(command, payload)
+            self.f.now = self.scope['deadline_at'] - 1200
+            return result
+        self.control.execute = expire
+        with self.assertRaisesRegex(TransportError, 'expired_or_clock'): self.dispatch('control-install')
+        self.assertIn('operator-control-connection', self.saved)
+        self.assertNotIn('connected-setup-binding', self.saved)
+        self.reconcile()
+        self.assertEqual([], self.f.calls)
+        self.assertEqual(['control-connection'], self.provider_calls)
+
+    def test_connected_host_entry_constructs_concrete_ports_inside_one_journal_lock(self):
+        from member_assembly import run_connected_round
+        active = []
+        @contextmanager
+        def journal(directory, run_id):
+            self.assertEqual(directory, self.f.root)
+            self.assertEqual(run_id, RUN)
+            active.append(True)
+            try: yield self.saved.get, self.f.save
+            finally: active.pop()
+        setup_inputs = {k: v for k, v in self.args.items()
+            if k not in ('scope', 'control', 'load', 'save', 'guard', 'clock')}
+        control_inputs = dict(directory=self.control.directory, php=self.control.php,
+            guard=lambda *_: None, execute=self.provider)
+        def assemble(**options):
+            self.assertEqual(active, [True])
+            self.assertIsInstance(options['setup'], MemberConnectedSetup)
+            self.assertIsInstance(options['control'], MemberControlTransport)
+            self.assertIs(options['setup'].control, options['control'])
+            self.assertEqual(options['load'], self.saved.get)
+            self.assertEqual(options['setup'].load, self.saved.get)
+            self.assertEqual(options['control'].load, self.saved.get)
+            self.assertIsNone(options['setup'].rpc)
+            return self
+        def drive(value):
+            self.assertIs(value, self)
+            self.assertEqual(active, [True])
+            return {'fixture': 'entry-wiring-only'}
+        with patch('member_assembly.round_journal', journal), \
+                patch('member_assembly.MemberRoundAssembly', assemble), \
+                patch('member_assembly.run', drive), patch.object(self, 'round', lambda: self, create=True):
+            result = run_connected_round(self.f.root, control_inputs=control_inputs, setup_inputs=setup_inputs,
+                scope=self.scope, guard=lambda *_: None, clock=lambda: self.f.now)
+        self.assertEqual(result, {'fixture': 'entry-wiring-only'})
+        self.assertEqual([], active + self.provider_calls + self.f.calls)
+        with self.assertRaisesRegex(TransportError, 'entry_bindings'):
+            run_connected_round(self.f.root, control_inputs=dict(control_inputs, host=self.host), setup_inputs=setup_inputs)
+        with self.assertRaisesRegex(TransportError, 'entry_bindings'):
+            run_connected_round(self.f.root, control_inputs=control_inputs,
+                setup_inputs=dict(setup_inputs, scope=self.scope))
 
 
 if __name__ == '__main__': unittest.main()
