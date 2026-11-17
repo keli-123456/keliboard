@@ -17,6 +17,8 @@ def continue_entry(*, initialization, transport, remote, scope, creation_directo
 
     result = subprocess.run(['php', str(repo / 'audit/r35-whole-context.php'), str(creation_directory)],
         cwd=root, env=env, capture_output=True, timeout=45)
+    if result.returncode != 0:
+        summary.setdefault('whole_context_first_error', json.loads(result.stdout).get('diagnostic', {}))
     assert result.returncode == 0, 'actual_prefix_context_binding_failed'
     assert json.loads(result.stdout) == dict(bound=True, application_tasks=0, provider_records=1)
     previous_execute = transport.execute

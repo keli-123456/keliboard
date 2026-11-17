@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 // Transfer only the simulated provider's existing state, never stage receipts.
+try {
 if (getenv('GITHUB_ACTIONS') !== 'true' || getenv('KELI_MEMBER_FULL_APPLICATION') !== '1'
     || PHP_OS_FAMILY !== 'Linux' || posix_geteuid() !== 0 || count($argv) !== 2) exit(1);
 $runtime = '/opt/keli-isolated/runtime/';
@@ -23,7 +24,7 @@ try {
     if ((string) $cloud['row']['id'] !== $grant['control']['external_id']
         || $cloud['row']['label'] !== $grant['control']['label']
         || $cloud['row']['tags'] !== [$grant['control']['marker']]
-        || $grant['binding']['scope'] !== $configuration['initialization_scope'])
+        || $grant['binding']['configuration'] !== $configuration)
         throw new RuntimeException('fixture_prefix_identity_changed');
     if (App\Models\MachineProvisionTask::count() !== 0) throw new RuntimeException('fixture_preexisting_tasks');
     mkdir($directory, 0700);
@@ -38,3 +39,11 @@ try {
     }
     echo json_encode(['bound' => true, 'application_tasks' => 0, 'provider_records' => 1]);
 } finally { $bootstrap->close(); }
+} catch (Throwable $error) {
+    echo json_encode(['ok' => false, 'diagnostic' => [
+        'class' => (new ReflectionClass($error))->getShortName(),
+        'file' => basename($error->getFile()), 'line' => $error->getLine(),
+        'reason' => preg_match('/^(fixture|member)_[a-z_]{1,90}$/D', $error->getMessage())
+            ? $error->getMessage() : 'unclassified']]);
+    exit(1);
+}
