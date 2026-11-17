@@ -137,3 +137,15 @@ def run_assembled_round(directory, **bindings):
     with round_journal(directory, RUN) as (load, save):
         assembly = MemberRoundAssembly(load=load, save=save, **bindings)
         return run(assembly.round())
+
+
+def run_execution_round(directory, *, setup_ports, **bindings):
+    """Compose the explicit setup APIs and native work under the same journal lock."""
+    from member_execution import MemberExecutionSetup
+    require(set(setup_ports) == {'installation', 'sources', 'dns', 'authority'}
+            and 'setup' not in bindings, 'transport_execution_bindings_invalid')
+    with round_journal(directory, RUN) as (load, save):
+        setup = MemberExecutionSetup(scope=bindings['scope'], load=load, save=save,
+                                     guard=bindings['guard'], **setup_ports)
+        assembly = MemberRoundAssembly(setup=setup, load=load, save=save, **bindings)
+        return run(assembly.round())

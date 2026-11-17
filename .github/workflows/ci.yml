@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches-ignore: ['acceptance/r35-services-linux-20261117']
   pull_request:
     types: [opened, synchronize, reopened]
 

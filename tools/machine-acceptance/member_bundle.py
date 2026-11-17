@@ -21,7 +21,7 @@ RUNTIME = ('member_retry_driver.php', 'member_source_registry.php', 'member_cont
            'member_auxiliary.py', 'member_round.py', 'member_runtime_bundle.py', 'application_bundle.py', 'staging.py',
            'member_initialization.py', 'member_auxiliary_bindings.py', 'member_source_initialization.php',
            'member_provider_bindings.php', 'aliyun_cleanup.php', 'member_control_creation.php',
-           'member_setup_bindings.py', 'member_assembly.py')
+           'member_setup_bindings.py', 'member_assembly.py', 'member_execution.py', 'member_installation.py')
 TESTS = ('tools/machine-acceptance/test_member_transport.py', 'tools/machine-acceptance/test_member_bundle.py',
          'tests/Support/TestsMemberTransport.php', 'tools/machine-acceptance/test_member_round.py',
          'tools/machine-acceptance/test_member_runtime_bundle.py', 'tools/machine-acceptance/test_member_linux.py',
@@ -29,7 +29,8 @@ TESTS = ('tools/machine-acceptance/test_member_transport.py', 'tools/machine-acc
          'tests/Support/TestsMemberInitialization.php', 'tools/machine-acceptance/test_member_initialization.py',
          'tests/Unit/Services/MachineMemberProviderBindingsTest.php',
          'tests/Unit/Services/MachineMemberControlCreationTest.php',
-         'tools/machine-acceptance/test_member_assembly.py')
+         'tools/machine-acceptance/test_member_assembly.py', 'tools/machine-acceptance/test_member_execution.py',
+         'tools/machine-acceptance/test_member_installation_linux.py')
 FILES = tuple('tools/machine-acceptance/' + name for name in RUNTIME) + TESTS
 
 
