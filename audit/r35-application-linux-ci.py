@@ -46,7 +46,7 @@ def php(mode, *, uid=0, extra=None, ok=True):
         cwd=ROOT / 'app', env=dict(ENV, **(extra or {})), capture_output=True, timeout=180)
     try: value = json.loads(p.stdout)
     except Exception: raise AssertionError('non_json_full_application_result') from None
-    if ok and p.returncode != 0: raise AssertionError(value)
+    if ok and p.returncode != 0: raise AssertionError(dict(stage=mode, **value))
     if not ok: assert p.returncode != 0
     return value
 
@@ -264,7 +264,7 @@ try:
         concurrent_cli_import_refused=True,
         real_elapsed_dispatch_expiry=True, service_user_reads_release_not_private_material=True,
         rollback_phases=5, uncertain_replay_refused=True, first_error_retained=True,
-        stop_denies_import_allows_readback=True, default_release_unset=True,
+        stop_denies_import_allows_readback=False, default_release_unset=True,
         credential_values_synthetic=True, node_bytes_synthetic_not_executed=True,
         production_or_cloud_calls=False, whole_round_ports_composed=False)
     assert php('configuration-prepare')['configuration_rows'] == [0] * 7
@@ -293,7 +293,7 @@ try:
         process_restart_readback=True, duplicate_creation_refused=True,
         recovery_does_not_reselect_credentials=True, lost_result_prevents_replay=True,
         existing_configuration_without_intent_not_adopted=True,
-        node_policy_credential_drift_refused=True, stop_blocks_mutation_allows_readback=True,
+        node_policy_credential_drift_refused=True, stop_blocks_mutation_allows_readback=False,
         tasks_or_health_fabricated=False, persistent_gates_changed=False)
     SUMMARY['setup_issue'] = php('setup-issue')
     assert SUMMARY['setup_issue']['issued'] and SUMMARY['setup_issue']['reissue_refused']
@@ -592,6 +592,8 @@ try:
     assert import_rpc('configuration-read')['configuration'] == read_configuration
     assert import_rpc('setup-read')['setup'] == actual_setup
     assert php('configuration-stop')['configuration_sha256'] == configured['configuration_sha256']
+    SUMMARY['prerequisite_import']['stop_denies_import_allows_readback'] = True
+    SUMMARY['source_configuration']['stop_blocks_mutation_allows_readback'] = True
     SUMMARY['bootstrap_entry'] = dict(actual_fixed_cli_readback_and_replay=True,
         actual_configuration_and_grant_controller=True, scope_from_actual_import_not_request=True,
         original_started_and_deadline_inherited=True, caller_cannot_extend_window=True,

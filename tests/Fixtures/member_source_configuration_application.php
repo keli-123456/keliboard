@@ -156,7 +156,11 @@ return static function (string $mode): array {
                 try {
                     DB::table($table)->where('id', $id)->update([$field => $value]);
                     try { $setup->readback(); throw new LogicException('fixture_drift_ignored'); }
-                    catch (RuntimeException $error) { $need(str_starts_with($error->getMessage(), 'member_configuration_')); }
+                    catch (RuntimeException $error) {
+                        $need(str_starts_with($error->getMessage(), 'member_configuration_')
+                            || $table === 'v2_machine_cloud_account' && $error->getMessage() === 'member_import_data_changed',
+                            'drift_rejection_changed');
+                    }
                 } finally { DB::rollBack(); }
             }
             $result = $setup->readback(); $need($same($result, $original), 'drift_readback_changed');
