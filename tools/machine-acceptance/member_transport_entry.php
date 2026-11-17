@@ -71,10 +71,22 @@ try {
 } catch (Throwable $error) {
     $file = basename($error->getFile());
     $class = (new ReflectionClass($error))->getShortName();
+    $callsite = null;
+    foreach ($error->getTrace() as $frame) {
+        if (($frame['class'] ?? null) === Keli\Acceptance\MemberNativeController::class
+            && ($frame['function'] ?? null) === 'need'
+            && ($frame['file'] ?? null) === __DIR__ . '/member_native_controller.php') {
+            $callsite = $frame['line'] ?? null;
+            break;
+        }
+    }
+    $code = $file === 'member_native_controller.php'
+        && preg_match('/^isolated_[a-z_]{1,60}$/D', $error->getMessage()) ? $error->getMessage() : null;
     echo json_encode(['schema' => 2, 'ok' => false, 'reason' => 'isolated_operation_rejected',
         'diagnostic' => ['class' => preg_match('/^[A-Za-z][A-Za-z0-9_]{0,63}$/D', $class) ? $class : 'Throwable',
             'file' => in_array($file, $runtime, true) ? $file : 'application',
-            'line' => in_array($file, $runtime, true) ? $error->getLine() : null]]), "\n";
+            'line' => in_array($file, $runtime, true) ? $error->getLine() : null,
+            'code' => $code, 'callsite' => $callsite]]), "\n";
     $controller?->close();
     exit(1);
 } finally {
