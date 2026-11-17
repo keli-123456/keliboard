@@ -1280,6 +1280,21 @@ with real operation locks, stop checks and durable absence receipts; it requires
 its own Linux result. Neither record establishes full host/controller teardown
 or live readiness.
 
+The [private cleanup and certificate regression record](../../docs/evidence/linode-r35-private-cleanup-linux-20261117.json)
+adds actual cold Python file teardown after native task/DNS cleanup, using root
+operation locks, exact file hashes, stopped authorities and durable receipts.
+The Linux full-application run removes credentials, bootstrap/native authority
+and .env, recovers a lost deletion reply and verifies absence without restarting
+the removed application configuration. A runtime-only import regression exposed
+and fixed a missing worker.py dependency. A separate short Linux run covers the
+later host-owned certificate TXT retention fix, unconfirmed deletion and lost
+reply recovery; that fix is not part of the preceding full-application run.
+Cloud/SSH/DNS effects and telemetry remain synthetic. Private journals/database
+and the fixture are removed by CI's finalizer, not by a claimed controller-last
+host operation. Concrete whole-entry host installation/TLS/setup composition,
+controller-last cleanup, final real-node/vendor freeze and renewed live scope
+remain pending. Main is not committed or pushed; the goal is still active.
+
 ## Protocol Interoperability
 
 The real HY2 tests bind temporary endpoints only to 127.0.0.1/127.0.0.2, generate

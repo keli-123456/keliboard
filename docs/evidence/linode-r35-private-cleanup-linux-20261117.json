@@ -1,0 +1,189 @@
+{
+  "schema": 1,
+  "status": "components_passed_not_live_ready",
+  "date": "2026-11-17",
+  "purpose": "Post-cutover exact private-file cleanup and host-owned certificate TXT retention",
+  "main_base": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "full_application_run": {
+    "id": 44092627968,
+    "commit": "0371529f93520a6bc50d95542737e3b954f20250",
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44092627968",
+    "artifact": 14332889726,
+    "status": "passed",
+    "actual": [
+      "Full application and locked vendor",
+      "Dedicated MySQL/Redis with no external routes",
+      "Root CLI and UID65534 HTTP/TLS services",
+      "Native state machine, filesystem locks and durable host journals",
+      "Real elapsed 300-second candidate cooldown"
+    ],
+    "simulated": [
+      "Cloud API effects",
+      "SSH byte transport",
+      "Aliyun DNS",
+      "Client telemetry and node bytes"
+    ],
+    "node_binary_executed": false,
+    "python": {
+      "tests": 154,
+      "seconds": 5.041
+    },
+    "native_php": {
+      "tests": 53,
+      "assertions": 20401
+    },
+    "adjacent_php": {
+      "tests": 103,
+      "assertions": 694
+    },
+    "source_php": {
+      "tests": 17,
+      "assertions": 196
+    },
+    "cold_cli_python": {
+      "tests": 11
+    },
+    "retry": {
+      "tasks": 4,
+      "attempts": 2,
+      "a1_failures": 3,
+      "required_failures": 3,
+      "a1_absence_at": [
+        1794922826,
+        1794922840
+      ],
+      "confirmed_at": 1794922840,
+      "retry_at": 1794923140,
+      "a2_dispatched_at": 1794923146,
+      "actual_cooldown_seconds": 300,
+      "dns_updates": 1,
+      "b_unchanged_during_execution": true
+    },
+    "post_cutover": {
+      "task_resource_deletes": 4,
+      "dns_record_deletes": 3,
+      "source_and_dns_ack_loss_reconciled": true,
+      "duplicate_delete": false,
+      "task_and_attempt_history_retained": true,
+      "b_removed_only_after_stop": true,
+      "setup_first_error": "ConnectionException",
+      "driver_first_error": null,
+      "native_dns_completion_persisted_before_private": true
+    },
+    "private_files": {
+      "removed": [
+        "private/credentials",
+        "private/bootstrap-authority",
+        "private/member-runtime-scope.json",
+        "app/.env"
+      ],
+      "actual_fixed_cold_python_entry": true,
+      "bootstrap_setup_native_stop_checks": true,
+      "active_lock_prevents_removal": true,
+      "exact_run_path_hash_and_permissions_required": true,
+      "intent_persisted_and_read_back_before_unlink": true,
+      "lost_delete_reply_readback": true,
+      "repeated_delete_idempotent": true,
+      "post_env_removal_inspection_without_application_or_database": true,
+      "actual_auxiliary_bindings_and_durable_stopped_request_receipt": true,
+      "remaining_private_journals_and_database_removed_by_ci_finalizer_not_this_component": true,
+      "controller_last_cleanup_not_claimed": true
+    },
+    "evidence_sha256": "47bd52b28e376b5930f8821fea7b3fd6caf697e5ff37ff441549d831b7d18810",
+    "downloaded_inner_content_hash_verified": true,
+    "service_containers_removed": true,
+    "fixed_fixture_removed": true,
+    "artifact_sha256": {
+      "native-entry-linux.log": "6b3922d029d0e6d8c49e84e4999627652b2c446ab623c19c1f4014c664993c66",
+      "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+      "cli-phpunit.log": "cf5fb893d222e25efcb00852425082f059fd0939068a9f5747bf32b81c661e61",
+      "native-retry-transitions.json": "c72c913e883791767beab891d6018dcde4e9b3628195c271292975ec147cee98",
+      "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native-retry-evidence.json": "ff74e4c9c9463b644749d626718ef7e8597674ae392b4e4752d77f50122cbef2",
+      "dns-phpunit.log": "3fa3f640caa74709ce9dd1932985c40a0c58b335df8b4b2273764ec8f1d7be14",
+      "application-linux-summary.json": "5473586cf8f67fee77d5015f8da14c947d97c0b52fda40a23aae2d3bee5d34e3",
+      "source-phpunit.log": "37d52b5934e3a00417282663e53260d73689628a287339a21c1312b76b4f8a70",
+      "python.log": "18223bda3cd3dc9255ae6df3142d4a972c3e666f43602246da9d7ab4efd8105b",
+      "native-retry-teardown-evidence.json": "c5a6556a141d37906442982a813cbe918b4c209451b61f0e956d1f81c58ec0e3"
+    }
+  },
+  "certificate_cleanup_regression": {
+    "id": 44094571349,
+    "commit": "739347127966b5c7e9bb2ed8eab82b77bc020626",
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44094571349",
+    "artifact": 14334316267,
+    "status": "passed",
+    "actual_linux_no_external_routes": true,
+    "python": {
+      "tests": 90,
+      "seconds": 0.578
+    },
+    "php": {
+      "tests": 15,
+      "assertions": 66
+    },
+    "scope": "Focused offline cleanup regression; no full application service round",
+    "reproduced_before_fix": "Native A cleanup caused host auxiliary scope to discard certificate TXT pins.",
+    "fix": "Keep exact host-owned certificate TXT pins while native cleanup resolves authenticated A2 A-record pins.",
+    "verified": [
+      "TXT deletion precedes private removal",
+      "Unconfirmed TXT deletion retains private files and controller",
+      "Lost TXT delete reply recovers through two exact absence reads without another DELETE",
+      "Runtime-only cold import contains worker.py",
+      "Stopped-scope receipt survives .env removal"
+    ],
+    "txt_fix_not_in_full_application_run": true,
+    "artifact_sha256": {
+      "cleanup-summary.json": "407668554ab7f22c90b8b92c3688ef2e016733406d8dc317c4f6f5dc1adc226e",
+      "cleanup-php.log": "4731d740033b91bd7f8e0e5b27838a8e0d073db09f71716e11f09cb37216beef",
+      "cleanup-python.log": "c57b348018b16bf99933acf20fef5881cdd74202e78a68f43b13770a8ddc5b04"
+    }
+  },
+  "failed_predecessor": {
+    "run": 44087030680,
+    "commit": "402b8d6376b34718489e3ba406bb9d2e95fae8ba",
+    "artifact": 14331787516,
+    "status": "failed_at_first_cold_private_inspection",
+    "private_delete_dispatched": false,
+    "native_retry_and_task_dns_cleanup_passed": true,
+    "fixture_and_containers_removed": true,
+    "remote_failure": "TransportError; raw cold-process error not retained",
+    "independently_reproduced_package_fault": "ModuleNotFoundError: worker",
+    "reproduction": "Isolated Python import with only declared runtime files failed before adding worker.py; passed after fix.",
+    "correction": "Include existing worker.py dependency in the declared runtime. No new dependency installed."
+  },
+  "local": {
+    "python": {
+      "tests": 223,
+      "skipped_linux_only": 54,
+      "seconds": 35.419
+    },
+    "provider_php": {
+      "tests": 15,
+      "assertions": 66
+    },
+    "unrelated_files_checked": 107,
+    "unrelated_files_changed": 0
+  },
+  "boundaries": {
+    "production_read_or_write": false,
+    "production_credentials": false,
+    "cloud_instances_created": 0,
+    "live_dns_writes": false,
+    "main_committed_or_pushed": false,
+    "deployment": false,
+    "automatic_switches_changed": false,
+    "tanzhen_accessed": false,
+    "r34_executed": false,
+    "historical_live_round_reopened": false
+  },
+  "remaining": [
+    "Bind concrete host installation/TLS, setup ports and independent controller-last provider cleanup into the single whole-round entry.",
+    "Verify remaining whole-entry stage failures, expiry and crash recovery without replacing real component receipts with synthetic success.",
+    "Combine the TXT follow-up with the complete host assembly; focused Linux coverage is not a whole-round claim.",
+    "Freeze the final unarmed LF runtime with real node and vendor provenance after the remaining assembly passes.",
+    "Prepare a fresh live scope and minimal readonly preflight/cleanup checklist; historic live authorization is expired and not reused."
+  ],
+  "goal_complete": false
+}
