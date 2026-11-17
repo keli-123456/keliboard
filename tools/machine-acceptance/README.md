@@ -1220,6 +1220,12 @@ and wrong-identity denial, duplicate receipt handling and stop revocation. Its
 provider operations and client telemetry are simulated; it does not verify DNS
 cutover or node execution. Native-grant waiting keeps the original request/window;
 an unknown reply still requires stopped reconciliation, not a new issuance.
+The [native task cleanup component](../../docs/evidence/linode-r35-native-cleanup-linux-20261117.json)
+binds the unchanged grant to host receipts and reuses the fixed CLI's durable
+controller. It verifies actual SIGKILL after a simulated candidate deletion,
+host restart without another DELETE, two absence reads at least ten seconds
+apart, retained task history and first errors. This is post-stop teardown;
+DNS/private cleanup remains pending and it is not an A1-to-A2 retry result.
 Native A1/A2 whole-round cleanup, host installation composition and the final
 unarmed real-binary package are still pending. These component results do not
 authorize or establish live acceptance.
