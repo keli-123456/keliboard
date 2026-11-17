@@ -1226,6 +1226,10 @@ controller. It verifies actual SIGKILL after a simulated candidate deletion,
 host restart without another DELETE, two absence reads at least ten seconds
 apart, retained task history and first errors. This is post-stop teardown;
 DNS/private cleanup remains pending and it is not an A1-to-A2 retry result.
+The [concurrent stop component](../../docs/evidence/linode-r35-native-stop-linux-20261117.json)
+checks the exact stop request before revoking callback admission, even while the
+native RPC lock is busy. Acknowledgement still waits for admitted callbacks and
+the RPC to drain; bad request identities cannot revoke the grant.
 Native A1/A2 whole-round cleanup, host installation composition and the final
 unarmed real-binary package are still pending. These component results do not
 authorize or establish live acceptance.
