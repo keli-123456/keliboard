@@ -97,6 +97,53 @@ class ExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(TransportError, 'readback_required'): self.setup().dispatch(stage, request, receipts)
         self.assertEqual(1, [e[0] for e in self.f.events].count(stage))
 
+    def test_native_grant_explicit_wait_then_same_request_completion_is_cached(self):
+        self.f.grant_polls = 2
+        driver = self.round()
+        for _ in range(STAGES.index('native-grant') + 2): driver.step(); self.f.now += 1
+        pending = copy.deepcopy(self.f.journal['execution-native-grant'])
+        self.assertTrue(pending['reply']['waiting'])
+        self.assertNotIn('native-grant', self.f.journal['initialization']['receipts'])
+        receipts = copy.deepcopy(self.f.journal['initialization']['receipts'])
+        driver.step()
+        completed = self.f.journal['execution-native-grant']
+        self.assertEqual(completed['reply'], self.setup().dispatch('native-grant', pending['request'], receipts))
+        state = self.base.finish(driver)
+        self.assertTrue(state['acceptance_passed']); self.assertTrue(state['resources_cleaned'])
+        completed = self.f.journal['execution-native-grant']
+        self.assertEqual(pending['request'], completed['request'])
+        self.assertTrue(completed['reply']['completed'])
+        self.assertEqual(3, sum(e[0] == 'native-grant' for e in self.f.events))
+        self.assertEqual(1, sum(e[0] == 'private-import' for e in self.f.events))
+
+    def test_lost_native_grant_reply_after_wait_needs_stopped_reconciliation(self):
+        self.f.grant_polls = 1
+        driver = self.round()
+        for _ in range(STAGES.index('native-grant') + 1): driver.step(); self.f.now += 1
+        pending = copy.deepcopy(self.f.journal['execution-native-grant'])
+        receipts = copy.deepcopy(self.f.journal['initialization']['receipts'])
+        self.f.fail = ('native-grant', 'after')
+        with self.assertRaises(TimeoutError): self.setup().dispatch('native-grant', pending['request'], receipts)
+        with self.assertRaisesRegex(TransportError, 'readback_required'):
+            self.setup().dispatch('native-grant', pending['request'], receipts)
+        self.assertEqual(2, sum(e[0] == 'native-grant' for e in self.f.events))
+        state = self.base.finish(driver)
+        self.assertFalse(state['acceptance_passed']); self.assertTrue(state['resources_cleaned'])
+        self.assertEqual(2, sum(e[0] == 'native-grant' for e in self.f.events))
+        ops = [e[0] for e in self.f.events]
+        self.assertLess(ops.index('reconcile-authority'), ops.index('reconcile-sources'))
+
+    def test_stop_during_native_grant_wait_cleans_without_grant_reissue(self):
+        self.f.grant_polls = 999
+        driver = self.round()
+        for _ in range(STAGES.index('native-grant') + 1): driver.step(); self.f.now += 1
+        driver.step(stop=True)
+        state = self.base.finish(driver)
+        self.assertTrue(state['resources_cleaned']); self.assertFalse(state['acceptance_passed'])
+        self.assertNotIn('native-grant', self.f.journal['initialization']['receipts'])
+        self.assertEqual(1, sum(e[0] == 'native-grant' for e in self.f.events))
+        self.assertFalse(any(e[0] == 'native-step' for e in self.f.events))
+
     def test_stopped_setup_cannot_resume_and_bad_bindings_are_rejected(self):
         setup = self.setup(); setup.persist('execution-stopped', {'binding': digest(self.f.setup_scope)})
         with self.assertRaisesRegex(TransportError, 'stopped'): setup.dispatch('control-install', {}, {})

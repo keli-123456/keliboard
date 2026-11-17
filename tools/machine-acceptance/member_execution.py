@@ -4,7 +4,7 @@ import re
 
 from member_auxiliary import MemberAuxiliary, digest
 from member_cli import RUN
-from member_initialization import STAGES
+from member_initialization import POLLING, STAGES
 from member_transport import require
 
 
@@ -49,7 +49,7 @@ class MemberExecutionSetup:
             require(prior.get('reply') is not None, 'transport_execution_readback_required')
             if prior['reply'].get('completed') is True:
                 return copy.deepcopy(prior['reply'])
-            require(stage in ('sources-initialize', 'native-ready'), 'transport_execution_replay_refused')
+            require(stage in POLLING, 'transport_execution_replay_refused')
         self.guard(stage)
         self.persist(key, {'request': request, 'reply': None})
         # Only the projected reply is journaled. Raw API logs or secret data never are.
@@ -57,7 +57,7 @@ class MemberExecutionSetup:
         require(isinstance(reply, dict) and reply.get('request_sha256') == digest(request),
                 'transport_execution_reply_changed')
         if reply.get('waiting') is True:
-            require(stage in ('sources-initialize', 'native-ready')
+            require(stage in POLLING
                     and reply == {'request_sha256': digest(request), 'waiting': True},
                     'transport_execution_wait_invalid')
         else:

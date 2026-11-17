@@ -48,6 +48,9 @@ class SetupInterfaces:
         if stage == 'sources-initialize' and f.polls > 0:
             f.polls -= 1
             return {'request_sha256': digest(request), 'waiting': True}
+        if stage == 'native-grant' and f.grant_polls > 0:
+            f.grant_polls -= 1
+            return {'request_sha256': digest(request), 'waiting': True}
         receipt = {'run_id': RUN, 'stage': stage, 'request_id': request['request_id'], 'evidence_sha256': 'e' * 64}
         if stage == 'native-grant': receipt['grant_sha256'] = 'c' * 64
         if f.secret_reply: receipt['credentials'] = 'must-not-persist'
@@ -82,6 +85,7 @@ class BootstrapFixture(RoundFixture):
         self.created_control = self.created_dns = self.created_private = False
         self.created_records = set()
         self.fail, self.polls, self.resolved = None, 0, True
+        self.grant_polls = 0
         self.changed_reply = self.secret_reply = False
         self.interfaces = SetupInterfaces(self)
         self.setup_scope = {'run_id': RUN, 'bundle_sha256': 'd' * 64, 'started_at': self.now, 'deadline_at': self.now + 7200}
@@ -158,6 +162,32 @@ class InitializationTests(unittest.TestCase):
         self.f.journal['initialization'].pop('stages')
         with self.assertRaisesRegex(TransportError, 'topology_changed'): self.f.initialization()
         self.assertEqual(1, len(self.f.events))
+
+    def test_native_grant_wait_resumes_same_request_without_extending_window(self):
+        self.f.grant_polls = 2
+        for _ in range(STAGES.index('native-grant')): self.f.initialization().step()
+        original = copy.deepcopy(self.f.setup_scope)
+        for _ in range(2):
+            reply = self.f.initialization().step()
+            self.assertEqual(dict(ready=False, waiting=True, stage='native-grant'), reply)
+            self.assertNotIn('native-grant', self.f.journal['initialization']['receipts'])
+            self.assertIsNone(self.f.journal['initialization']['pending'])
+            self.f.now += 5
+        self.f.initialization().step()
+        requests = [e[1] for e in self.f.events if e[0] == 'native-grant']
+        self.assertEqual([requests[0]] * 3, requests)
+        self.assertEqual(original, self.f.setup_scope)
+        self.assertIn('native-grant', self.f.journal['initialization']['receipts'])
+
+    def test_native_grant_wait_expiry_prevents_further_dispatch(self):
+        self.f.grant_polls = 999
+        for _ in range(STAGES.index('native-grant') + 1): self.f.initialization().step()
+        self.f.now = self.f.setup_scope['deadline_at'] - 1200
+        with self.assertRaisesRegex(TransportError, 'initialization_expired'): self.f.initialization().step()
+        self.assertNotIn('native-grant', self.f.journal['initialization']['receipts'])
+        self.assertEqual(1, sum(e[0] == 'native-grant' for e in self.f.events))
+        self.f.initialization().reconcile()
+        self.assertTrue(self.f.journal['initialization']['stopped'])
 
     def test_every_stage_failure_before_and_after_effect_cleans_only_original_receipts(self):
         for stage in STAGES:

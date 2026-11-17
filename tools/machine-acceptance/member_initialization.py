@@ -17,8 +17,9 @@ STAGES = ('control-create', 'control-install', 'runtime-install', 'private-impor
           'control-dns', 'callback-ready', 'sources-initialize', 'dns-initialize',
           'native-grant', 'native-ready')
 # Source initialization is a durable, idempotent service state machine, not a
-# repeated raw create call. Each role owns its own persisted native queue intent.
-POLLING = {'control-create', 'sources-initialize', 'native-ready'}
+# repeated raw create call. Native grant polling only follows an explicit waiting
+# receipt; an unknown grant result still requires stopped reconciliation.
+POLLING = {'control-create', 'sources-initialize', 'native-grant', 'native-ready'}
 
 
 class MemberInitialization:
