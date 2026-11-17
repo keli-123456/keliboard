@@ -52,6 +52,9 @@ class HttpRequestTests(unittest.TestCase):
             with self.assertRaises(TransportError): http.status(s, lambda *_: state(s, True, **changed))
         with self.assertRaises(TransportError): http.status(s, lambda *_: (1, b''))
         with self.assertRaises(TransportError): http.status(s, lambda *_: (0, state(s)[1] + b'MainPID=0\n'))
+        self.assertEqual('absent', http.status(s, lambda *_: (1, b'LoadState=not-found\nActiveState=inactive\nSubState=dead\n')))
+        with self.assertRaises(TransportError):
+            http.status(s, lambda *_: (1, b'LoadState=not-found\nActiveState=inactive\n'))
 
     def test_stop_requires_empty_cgroup_and_never_stops_foreign_unit(self):
         s = scope(); calls = []
@@ -174,7 +177,7 @@ Only systemd's network namespace property is injected by this test adapter.
         fixture_commit = os.environ['KELI_HTTP_FIXTURE_COMMIT']
         self.assertRegex(fixture_commit, r'^[a-f0-9]{40}$')
         (self.root / '.r35-application-fixture').write_text(fixture_commit)
-        self.s = scope()
+        self.s = scope(hashlib.sha256(self.id().encode()).hexdigest())
         self.s['started_at'] = int(time.time()) - 1800
         self.s['deadline_at'] = int(time.time()) + 1250
         (self.root / 'private').mkdir(mode=0o700)
@@ -208,7 +211,13 @@ Only systemd's network namespace property is injected by this test adapter.
             namespace = os.environ['KELI_HTTP_NETNS']
             self.assertRegex(namespace, r'^/proc/[1-9][0-9]*/ns/net$')
             args = [args[0], '--property=NetworkNamespacePath=' + namespace, *args[1:]]
-        return http.command(args, timeout)
+        code, raw = http.command(args, timeout)
+        if args[:2] == ['systemctl', 'show'] and b'LoadState=' not in raw:
+            diagnostic = subprocess.run(args, capture_output=True, timeout=timeout, env=http.ENV)
+            print(json.dumps(dict(systemd_probe_code=code, output_bytes=len(raw),
+                no_manager=b'not been booted' in diagnostic.stderr,
+                bus_failure=b'connect to bus' in diagnostic.stderr)))
+        return code, raw
 
     def call(self, operation, **kwargs):
         return http.execute(dict(operation=operation, scope=self.s, **kwargs), invoke=self.invoke, smoke=lambda *_: None)

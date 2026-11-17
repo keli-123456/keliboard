@@ -114,7 +114,6 @@ jobs:
           if [ '${{ inputs.install_entry_only }}' = true ]; then mode=--install-entry-only; fi
           if [ '${{ inputs.agent_http_only }}' = true ]; then mode=--agent-http-only; fi
           timeout --signal=TERM --kill-after=15s 1800s sudo nsenter --net="/proc/$pid/ns/net" \
-            unshare --pid --fork --mount-proc --kill-child=SIGKILL \
             env -i PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 HOME=/root \
             PYTHONDONTWRITEBYTECODE=1 KELI_HTTP_NETNS="/proc/$pid/ns/net" KELI_HTTP_FIXTURE_COMMIT="$GITHUB_SHA" python3 -B audit/r35-application-linux-ci.py "$mode" >artifacts/application-linux.log 2>&1
       - name: Retain bounded nonsecret status even if artifact upload fails

@@ -66,13 +66,17 @@ def status(scope, invoke=command, *, allow_pending=False):
     code, raw = invoke(['systemctl', 'show', unit(scope), '--no-pager', '--all', '--property=' + ','.join(PROPERTIES)])
     lines = raw.decode('ascii').splitlines()
     pairs = [line.split('=', 1) for line in lines]
-    require(all(len(p) == 2 for p in pairs) and len(pairs) == len(PROPERTIES), 'transport_http_unit_readback')
+    require(all(len(p) == 2 for p in pairs), 'transport_http_unit_readback')
     value = dict(pairs)
-    require(set(value) == set(PROPERTIES), 'transport_http_unit_readback')
-    if value['LoadState'] == 'not-found':
-        require(code in (0, 1) and value['ActiveState'] == 'inactive' and value['MainPID'] == '0'
-                and value['ControlGroup'] == '', 'transport_http_unit_readback')
+    require(len(value) == len(pairs) and set(value) <= set(PROPERTIES), 'transport_http_unit_readback')
+    if value.get('LoadState') == 'not-found':
+        # An unloaded unit can omit service-interface properties even with --all.
+        # Absence still requires the manager's explicit unit state, never empty output.
+        require(code in (0, 1) and value.get('ActiveState') == 'inactive' and value.get('SubState') == 'dead'
+                and value.get('MainPID', '0') == '0' and value.get('ControlGroup', '') == ''
+                and value.get('Transient', 'no') == 'no', 'transport_http_unit_readback')
         return 'absent'
+    require(set(value) == set(PROPERTIES), 'transport_http_unit_readback')
     require(code == 0 and value['LoadState'] == 'loaded' and value['Transient'] == 'yes'
             and value['Description'] == 'keli-r35-http:' + digest(scope)
             and value['ControlGroup'] in ('', '/system.slice/' + unit(scope)), 'transport_http_unit_owner')
