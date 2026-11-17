@@ -154,6 +154,20 @@ trait TestsMemberRetryDriver
         $this->assertSame($calls, count($this->memberDriverCalls));
     }
 
+    public function test_member_driver_keeps_collecting_source_during_real_cooldown_without_creating(): void
+    {
+        $driver = $this->memberDriverCandidate();
+        $this->memberDriverFailCandidate($driver); $this->memberDriverConfirm($driver);
+        $this->memberDriverCalls = [];
+        $state = $driver->step();
+        $calls = array_values(array_filter($this->memberDriverCalls, fn ($call) => $call[0] === 'observe_sources'));
+        $this->assertCount(1, $calls);
+        $this->assertSame(['source-a'], $calls[0][1]['roles']);
+        $this->assertSame('candidate_retry_cooldown', $state['phase']);
+        $this->assertCount(1, $this->posts);
+        $this->assertFalse($state['branches']['retry']);
+    }
+
     public function test_member_driver_unknown_native_cleanup_read_does_not_release_or_retry(): void
     {
         $driver = $this->memberDriverCandidate(); $this->memberDriverFailCandidate($driver);

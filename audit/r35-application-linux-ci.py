@@ -128,7 +128,7 @@ try:
     assert source_tests.returncode == 0, 'source_phpunit_regression_failed'
     SUMMARY['source_phpunit_passed'] = True
     cli_tests = subprocess.run(['php', 'vendor/phpunit/phpunit/phpunit',
-        'tests/Unit/Services/MachineFailoverNativeBridgeTest.php', '--filter', 'test_member_(cli|candidate|native_dns)'],
+        'tests/Unit/Services/MachineFailoverNativeBridgeTest.php', '--filter', 'test_member_(cli|candidate|native_dns|driver|evidence)'],
         cwd=REPO, capture_output=True, text=True, timeout=120)
     (ART / 'cli-phpunit.log').write_text(cli_tests.stdout + cli_tests.stderr)
     assert cli_tests.returncode == 0, 'cli_phpunit_regression_failed'

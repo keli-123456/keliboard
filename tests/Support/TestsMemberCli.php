@@ -416,6 +416,34 @@ trait TestsMemberCli
         $this->assertSame([], $this->posts); $this->assertSame(0, $this->dnsWrites); $this->cliAssertClosed();
     }
 
+    public function test_member_cli_collects_new_source_report_before_candidate_step_without_observing_b(): void
+    {
+        [$authority, $bridge] = $this->cliFixture();
+        foreach ([-12, -7, -2] as $offset) foreach ($this->fixtures as $index => $f) {
+            $this->report($f, $f['source']->fresh(), $f['sourceIp'], $index === 1, time() + $offset);
+            $bridge->dispatch($this->cliRequest('source-observe', $index === 0 ? 'source-a' : 'source-b'));
+        }
+        foreach (['source-a', 'source-b'] as $role) $bridge->dispatch($this->cliRequest('source-register', $role));
+        $authority->within('round-step', 'control', fn () => $this->sourceReport($this->fixtures[0], false, time() - 1));
+        $this->cliScope['driver']['plan_id'] = \App\Models\MachineFailoverPlan::where('policy_id', $this->fixtures[0]['policy']->id)
+            ->latest('id')->value('id');
+        [, $bridge] = $this->cliBindings();
+        foreach (['source-a', 'source-b', 'setup_cooldown', 'native'] as $phase) {
+            $state = $bridge->dispatch($this->cliRequest('round-step'))['result'];
+            $this->assertSame($phase, $state['native_phase'], json_encode($this->memberTransportJournal['round-driver']));
+        }
+        $observations = \App\Models\MachineFailoverObservation::where('policy_id', $this->fixtures[1]['policy']->id)->count();
+        sleep(5);
+        $at = time(); $f = $this->fixtures[0];
+        $this->report($f, $f['source']->fresh(), $f['sourceIp'], false, $at);
+        $result = $bridge->dispatch($this->cliRequest('round-step'))['result'];
+        $this->assertSame($at, \App\Models\MachineFailoverObservation::where('policy_id', $f['policy']->id)->latest('id')->value('checked_at'));
+        $this->assertSame('waiting_initialization', $result['native_phase'], json_encode($result));
+        $this->assertNull($result['first_error']);
+        $this->assertSame($observations, \App\Models\MachineFailoverObservation::where('policy_id', $this->fixtures[1]['policy']->id)->count());
+        $this->cliAssertClosed();
+    }
+
     public function test_member_cli_native_a1_cleanup_cooldown_a2_dns_and_exact_final_teardown(): void
     {
         [$authority, $bridge] = $this->cliFixture();
