@@ -46,13 +46,15 @@ class MachineMemberSetupAuthorityTest extends TestCase
         $request = ['schema' => 1, 'run_id' => \Keli\Acceptance\MemberCliAuthority::RUN,
             'grant_id' => str_repeat('a', 32), 'grant_sha256' => str_repeat('b', 64),
             'deadline_at' => 9000, 'request_id' => str_repeat('c', 32), 'sequence' => 0, 'operation' => 'advance'];
-        foreach (['advance', 'status', 'resources', 'evidence-export', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read', 'native-export'] as $operation) {
+        foreach (['advance', 'status', 'resources', 'evidence-export', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read', 'native-export',
+            'source-inspect-a', 'source-inspect-b', 'source-delete-a', 'source-delete-b'] as $operation) {
             \Keli\Acceptance\MemberSetupController::validateRequest(array_replace($request, ['operation' => $operation]));
             $this->addToAssertionCount(1);
         }
         foreach ([['schema' => true], ['run_id' => 'another'], ['grant_id' => '../invalid'],
             ['grant_sha256' => null], ['deadline_at' => '9000'], ['sequence' => -1], ['sequence' => false],
-            ['request_id' => str_repeat('d', 33)], ['operation' => 'create'], ['extra' => true]] as $change) {
+            ['request_id' => str_repeat('d', 33)], ['operation' => 'create'], ['operation' => 'source-delete-c'],
+            ['operation' => 'source-delete-candidate-a1'], ['extra' => true]] as $change) {
             try {
                 \Keli\Acceptance\MemberSetupController::validateRequest(array_replace($request, $change));
                 $this->fail('Malformed setup request accepted');

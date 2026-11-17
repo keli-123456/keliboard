@@ -9,6 +9,7 @@ use App\Services\ServerMachine\Cloud\MachineIntentJson;
 /** Actual source setup command binding. Caller closes the handle after one RPC. */
 final class MemberSetupController
 {
+    public const SOURCE_RECOVERY = ['source-inspect-a', 'source-inspect-b', 'source-delete-a', 'source-delete-b'];
     private const DIRECTORY = '/opt/keli-isolated/private/member-setup-journal';
     private $lock = null;
     private MemberSourceInitialization $sources;
@@ -153,8 +154,12 @@ final class MemberSetupController
     public function dispatch(array $request): array
     {
         self::need(is_resource($this->lock) && array_keys($request) === ['operation']
-            && in_array($request['operation'], ['advance', 'status', 'resources', 'evidence-export', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read', 'native-export'], true), 'request_invalid');
+            && in_array($request['operation'], array_merge(self::SOURCE_RECOVERY, ['advance', 'status', 'resources', 'evidence-export', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read', 'native-export']), true), 'request_invalid');
         try {
+            if (in_array($request['operation'], self::SOURCE_RECOVERY, true)) {
+                $role = 'source-' . substr($request['operation'], -1);
+                return $this->sources->cleanup($role, str_starts_with($request['operation'], 'source-delete-'));
+            }
             if ($request['operation'] === 'evidence-export') return $this->exportEvidence();
             if ($request['operation'] === 'resources') {
                 $this->authority->allow('source-cleanup', 'source-a');
@@ -260,7 +265,7 @@ final class MemberSetupController
             && ($request['schema'] ?? null) === 1 && ($request['run_id'] ?? null) === MemberCliAuthority::RUN
             && is_int($request['deadline_at'] ?? null) && $request['deadline_at'] > 0
             && is_int($request['sequence'] ?? null) && $request['sequence'] >= 0
-            && in_array($request['operation'] ?? null, ['advance', 'status', 'resources', 'evidence-export', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read', 'native-export'], true), 'request_invalid');
+            && in_array($request['operation'] ?? null, array_merge(self::SOURCE_RECOVERY, ['advance', 'status', 'resources', 'evidence-export', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read', 'native-export']), true), 'request_invalid');
         foreach (['grant_id' => 32, 'grant_sha256' => 64, 'request_id' => 32] as $key => $length)
             self::need(is_string($request[$key] ?? null)
                 && preg_match('/^[a-f0-9]{' . $length . '}$/D', $request[$key]) === 1, 'request_invalid');
@@ -272,13 +277,14 @@ final class MemberSetupController
         foreach ($this->authority->identity() as $key => $value)
             self::need($request[$key] === $value, 'request_binding_changed');
         self::need($request['operation'] !== 'stop', 'request_invalid');
-        $cleanup = $request['operation'] === 'cleanup';
+        $sourceRecovery = in_array($request['operation'], self::SOURCE_RECOVERY, true);
+        $cleanup = $request['operation'] === 'cleanup' || str_starts_with($request['operation'], 'source-delete-');
         $dns = str_starts_with($request['operation'], 'dns-');
         $native = str_starts_with($request['operation'], 'native-');
-        $mutating = in_array($request['operation'], ['advance', 'cleanup', 'dns-control', 'dns-edges', 'native-issue'], true);
+        $mutating = $cleanup || in_array($request['operation'], ['advance', 'dns-control', 'dns-edges', 'native-issue'], true);
         if ($cleanup) $this->authority->stop();
-        $this->authority->allow($native ? 'sources-observe' : ($dns ? $request['operation'] : ($cleanup ? 'source-cleanup' : ($mutating ? 'sources-advance' : 'source-readback'))),
-            $native || $dns || $mutating && !$cleanup ? 'control' : 'source-a');
+        $this->authority->allow($native ? 'sources-observe' : ($dns ? $request['operation'] : ($cleanup || $sourceRecovery ? 'source-cleanup' : ($mutating ? 'sources-advance' : 'source-readback'))),
+            $sourceRecovery ? 'source-' . substr($request['operation'], -1) : ($native || $dns || $mutating && !$cleanup ? 'control' : 'source-a'));
         $key = 'rpc-' . $request['request_id'];
         $mutationKey = $cleanup ? 'rpc-cleanup' : 'rpc-mutation';
         if ($mutating) {

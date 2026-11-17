@@ -120,7 +120,7 @@ try:
         'test_member_installation_linux.InstallationServiceUserTests', 'test_member_execution.ExecutionTests',
         'test_member_assembly', 'test_member_initialization', 'test_member_cli', 'test_member_evidence', 'test_member_round',
         'test_member_transport', 'test_member_remote_setup', 'test_member_private_cleanup', 'test_member_bundle', 'test_member_runtime_bundle',
-        'test_member_host_installation', 'test_member_host_setup', 'test_member_connected_setup', 'test_member_operator_transport', 'test_member_control_transport', 'test_member_http_service'],
+        'test_member_host_installation', 'test_member_host_setup', 'test_member_connected_setup', 'test_member_connected_runtime', 'test_member_operator_transport', 'test_member_control_transport', 'test_member_http_service'],
         cwd=TOOLS, capture_output=True, text=True, timeout=240)
     (ART / 'python.log').write_text(tests.stdout + tests.stderr)
     assert tests.returncode == 0, 'python_regression_failed'
@@ -312,6 +312,9 @@ try:
             grant_file=install_root / 'native-grant.json', guard=lambda *_: None,
             ssh_guard=lambda *_: None, execute=installation_ssh)
         execution = MemberConnectedSetup(**connected_arguments)
+        from member_connected_runtime import MemberConnectedRuntime
+        connected_evidence = work / 'connected-evidence'; connected_evidence.mkdir(mode=0o700)
+        connected_runtime = MemberConnectedRuntime(execution, connected_evidence)
         assert execution.rpc is None
         (creation_directory / 'fixture-dns.json').write_text(json.dumps(dict(rows=[], create=0, claim=0, delete=0)))
         (creation_directory / 'fixture-dns.json').chmod(0o600)
@@ -433,6 +436,7 @@ try:
                 certificate=certificate, domain=domain, node_sha=frozen['node_sha256'], journal=install_journal,
                 php=php, artifacts=ART, summary=SUMMARY,
                 bind_execute=lambda callback: setattr(execution, 'execute', callback),
+                native_transport=connected_runtime.native_transport if outer_mode else None,
                 advance_initialization=advance_initialization if outer_whole else None,
                 advance_native=advance_native if outer_whole else None)
             if not outer_whole:
@@ -517,6 +521,8 @@ try:
         auxiliary['auxiliary']['control'] = control
         combined = dict(run_id=RUN, initialization=auxiliary, native=native_cleanup_scope)
         def reconcile_local(requests):
+            if outer_mode:
+                return connected_runtime.reconcile(requests)
             assert requests == [install_journal['setup-control-request']['request_id']]
             assert install_journal['execution-stopped'] == dict(binding=digest(install_scope))
             assert host_port.snapshot() == install_journal['host-setup-resources']
@@ -526,11 +532,13 @@ try:
         evidence_archive = None
         if bound:
             from member_evidence import MemberEvidenceArchive
-            evidence_directory = work / 'whole-evidence'; evidence_directory.mkdir(mode=0o700)
+            evidence_directory = connected_evidence if outer_mode else work / 'whole-evidence'
+            if not outer_mode: evidence_directory.mkdir(mode=0o700)
             evidence_archive = MemberEvidenceArchive(bound, evidence_directory)
         elif setup_export:
             from member_evidence import MemberSetupEvidenceArchive
-            evidence_directory = work / 'setup-evidence'; evidence_directory.mkdir(mode=0o700)
+            evidence_directory = connected_evidence if outer_mode else work / 'setup-evidence'
+            if not outer_mode: evidence_directory.mkdir(mode=0o700)
             evidence_archive = MemberSetupEvidenceArchive(install_transport, evidence_directory,
                 scope=install_scope, identity=setup_identity)
         def export_checked():
@@ -538,7 +546,7 @@ try:
                 raise RuntimeError('fixture-partial-evidence-export-failure')
             if setup_export:
                 provider_before_export = [(creation_directory / name).read_bytes() for name in ('fixture-cloud.json', 'fixture-dns.json')]
-            exported = evidence_archive.capture()
+            exported = connected_runtime.export() if outer_mode else evidence_archive.capture()
             body = evidence_archive.verify(exported)
             if setup_export:
                 assert body['stopped'] and body['cleanup_complete_not_asserted'] and body['sources']['cloud_absence_not_asserted']
@@ -588,8 +596,10 @@ try:
                     file=Path(frame.filename).name, line=frame.lineno))
                 raise
         def unused(*_): raise AssertionError('fixture-no-source-or-native-task')
-        assembly = MemberRoundAssembly(scope=install_scope, setup=execution, control=control_backend, native_transport=(lambda _: bound) if bound else unused,
-            provider=provider, controller=install_transport, task_call=unused, reconcile=reconcile_local, export=export_missing,
+        assembly = MemberRoundAssembly(scope=install_scope, setup=execution, control=control_backend,
+            native_transport=connected_runtime.native_transport if outer_mode else ((lambda _: bound) if bound else unused),
+            provider=provider, controller=connected_runtime if outer_mode else install_transport,
+            task_call=connected_runtime.task_call if outer_mode else unused, reconcile=reconcile_local, export=export_missing,
             load=install_journal.get, save=lambda k, v: install_journal.__setitem__(k, v), guard=lambda *_: None)
         if outer_mode:
             assert install_journal['round']['cleanup_scope'] == combined
@@ -646,6 +656,10 @@ try:
                 resources_cleaned=True, isolated_acceptance_passed=True, live_ready=False,
                 cloud_ssh_dns_simulated=True, real_node_not_executed=True)
         state = json.loads((operator / 'fixture-cloud.json').read_bytes())
+        if outer_mode:
+            SUMMARY['connected_runtime_binding'] = dict(actual_native_factory=True,
+                actual_stopped_reconcile_and_evidence=True, actual_private_cleanup_binding=True,
+                partial_source_rpc_covered_by_component_tests_only=True, operator_cleanup_permit_fixture_prepared=True)
         assert state['methods'].count('DELETE') == 1 and not state['present']
         if not bound:
             dns_state = json.loads((operator / 'fixture-dns.json').read_bytes())

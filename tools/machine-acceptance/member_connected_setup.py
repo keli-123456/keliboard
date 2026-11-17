@@ -77,6 +77,19 @@ class MemberConnectedSetup:
                 'transport_connected_expired_or_clock')
         self.persist('connected-setup-clock', dict(at=now))
 
+    def bound_transport(self):
+        """Reconstruct only the sealed endpoint, including expired recovery."""
+        bound = self.load('connected-setup-binding')
+        material = self.material()
+        require(isinstance(bound, dict) and set(bound) == {'material', 'connection'}
+                and bound['material'] == material, 'transport_connected_material_changed')
+        connection = bound['connection']
+        require(isinstance(connection, dict) and connection == self.load('operator-control-connection')
+                and connection.get('control_sha256') == material['control_sha256']
+                and connection.get('port') == 22, 'transport_connected_endpoint_changed')
+        return StrictControllerTransport(run_id=RUN, host=connection['host'], identity_file=self.identity,
+            known_hosts=self.known, guard=self.ssh_guard, load=self.load, save=self.save, execute=self.execute)
+
     def components(self, *, recover=False):
         if recover:
             require(self.load('connected-setup-stopped') == dict(binding=digest(self.scope)),
@@ -100,14 +113,7 @@ class MemberConnectedSetup:
             bound = dict(material=material, connection=connection)
             self.persist('connected-setup-binding', bound)
         else:
-            require(isinstance(bound, dict) and set(bound) == {'material', 'connection'}
-                    and bound['material'] == material, 'transport_connected_material_changed')
-            connection = bound['connection']
-            require(connection == self.load('operator-control-connection')
-                    and connection.get('control_sha256') == material['control_sha256']
-                    and connection.get('port') == 22, 'transport_connected_endpoint_changed')
-            rpc = StrictControllerTransport(run_id=RUN, host=connection['host'], identity_file=self.identity,
-                known_hosts=self.known, guard=self.ssh_guard, load=self.load, save=self.save, execute=self.execute)
+            rpc = self.bound_transport()
         # Constructing these ports is side-effect free; bind before any delegation.
         self.rpc = rpc
         self.host = MemberHostSetup(transport=rpc, **self.parameters)

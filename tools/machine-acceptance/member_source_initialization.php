@@ -309,12 +309,12 @@ final class MemberSourceInitialization
     }
 
     /** Recovery never queues/processes a task or manufactures a provisioning receipt. */
-    public function cleanup(string $role): array
+    public function cleanup(string $role, bool $delete = true): array
     {
         $this->requestId($role);
-        return $this->within('source-cleanup', $role, function () use ($role): array {
+        return $this->within('source-cleanup', $role, function () use ($role, $delete): array {
             $accountId = $this->scope['sources'][$role]['plan']['account_id'];
-            return Cache::lock('machine-cloud:account:' . $accountId, 120)->block(2, function () use ($role): array {
+            return Cache::lock('machine-cloud:account:' . $accountId, 120)->block(2, function () use ($role, $delete): array {
                 $intent = $this->intent($role); $task = $this->existing($role);
                 if ($task === null) {
                     self::need($intent === null, 'queue_readback_required');
@@ -374,6 +374,8 @@ final class MemberSourceInitialization
                     }
                     $state['absence_at'] = null;
                     $this->cleanupSave($key, $state);
+                    if (!$delete) return ['complete' => false, 'classification' => 'present',
+                        'task_id' => $task->id, 'external_id' => $bound->external_id];
                     if ($state['delete_intent']) return ['complete' => false, 'classification' => 'delete_readback_required'];
                     $client->delete($bound, function () use ($key, &$state, $role, $task): void {
                         self::need($this->existing($role)?->getAttributes() === $task->getAttributes(), 'cleanup_identity_changed');

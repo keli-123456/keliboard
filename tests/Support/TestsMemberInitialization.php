@@ -284,6 +284,29 @@ trait TestsMemberInitialization
         $this->assertSame($before, Task::orderBy('id')->get()->toArray());
     }
 
+    public function test_member_partial_source_inspection_never_deletes_and_keeps_exact_readback(): void
+    {
+        $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api);
+        try { $api->cleanup('source-a', false); $this->fail(); }
+        catch (\RuntimeException $e) { $this->assertSame('stop_required', $e->getMessage()); }
+        $this->initializationStopped = true;
+        $before = Task::orderBy('id')->get()->toArray(); $peer = $this->remote[902];
+        $present = $api->cleanup('source-a', false);
+        $this->assertSame('present', $present['classification']);
+        $this->assertSame('901', $present['external_id']);
+        $this->assertSame($this->fixtures[0]['source']->id, $present['task_id']);
+        $this->assertSame(0, $this->candidateDeletes);
+        $this->assertFalse($this->initializationJournal['cleanup-source-a']['delete_intent']);
+        $this->assertSame('delete_dispatched', $api->cleanup('source-a')['classification']);
+        $absent = $api->cleanup('source-a', false);
+        $this->assertSame('exact_absence', $absent['classification']);
+        $this->assertFalse($absent['complete']);
+        $this->assertSame('901', $absent['external_id']);
+        $this->assertSame(1, $this->candidateDeletes);
+        $this->assertSame($peer, $this->remote[902]);
+        $this->assertSame($before, Task::orderBy('id')->get()->toArray());
+    }
+
     public function test_member_resource_pins_are_read_only_and_include_partial_bootstrap(): void
     {
         $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api);

@@ -186,7 +186,8 @@ class StrictControllerTransport:
     def setup_call(self, operation, identity):
         """Fixed setup CLI, with a durable intent before each advancing RPC."""
         require(operation in ('advance', 'status', 'resources', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback',
-                              'native-issue', 'native-read', 'native-export', 'evidence-export'), 'transport_setup_operation_invalid')
+                              'native-issue', 'native-read', 'native-export', 'evidence-export',
+                              'source-inspect-a', 'source-inspect-b', 'source-delete-a', 'source-delete-b'), 'transport_setup_operation_invalid')
         require(isinstance(identity, dict) and set(identity) == {'grant_id', 'grant_sha256', 'deadline_at'}
                 and type(identity['deadline_at']) is int and identity['deadline_at'] > 0
                 and all(isinstance(identity[k], str) and re.fullmatch(r'[a-f0-9]{%d}' % n, identity[k])
@@ -209,8 +210,9 @@ class StrictControllerTransport:
         sequence = max((item['request']['sequence'] for item in (previous, prior_cleanup) if item), default=-1) + 1
         request = dict(schema=1, run_id=self.run_id, **identity, request_id=uuid.uuid4().hex,
                        sequence=sequence, operation=operation)
-        ledger = 'setup-cleanup' if operation == 'cleanup' else 'setup-mutation'
-        if mutation or operation == 'cleanup':
+        cleanup = operation == 'cleanup' or operation.startswith('source-delete-')
+        ledger = 'setup-cleanup' if cleanup else 'setup-mutation'
+        if mutation or cleanup:
             intent = dict(request=request, completed=False)
             self.save(ledger, copy.deepcopy(intent))
             require(self.load(ledger) == intent, 'transport_setup_journal_unconfirmed')
@@ -266,7 +268,7 @@ class StrictControllerTransport:
                                 and document.get('deadline_at') == identity['deadline_at'], 'transport_native_export_changed')
                     self.save('setup-native-grant', copy.deepcopy(value))
                     require(self.load('setup-native-grant') == value, 'transport_setup_journal_unconfirmed')
-            if mutation or operation == 'cleanup':
+            if mutation or cleanup:
                 complete = dict(request=request, completed=True, reply=result)
                 self.save(ledger, copy.deepcopy(complete))
                 require(self.load(ledger) == complete, 'transport_setup_journal_unconfirmed')

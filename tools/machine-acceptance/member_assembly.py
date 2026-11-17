@@ -160,7 +160,7 @@ def run_execution_round(directory, *, setup_ports, **bindings):
         return run(assembly.round())
 
 
-def run_connected_round(directory, *, control_inputs, setup_inputs, **bindings):
+def run_connected_round(directory, *, control_inputs, setup_inputs, evidence_directory=None, **bindings):
     """Bind the concrete deferred setup under the existing whole-round lock.
 
     No host placeholder, permit or default provider is supplied. The caller's
@@ -181,5 +181,12 @@ def run_connected_round(directory, *, control_inputs, setup_inputs, **bindings):
         control = MemberControlTransport(scope=bindings['scope'], load=load, save=save, **control_inputs)
         setup = MemberConnectedSetup(scope=bindings['scope'], control=control, load=load, save=save,
             guard=bindings['guard'], clock=bindings.get('clock', time.time), **setup_inputs)
+        if evidence_directory is not None:
+            from member_connected_runtime import MemberConnectedRuntime
+            require(not {'native_transport', 'controller', 'task_call', 'reconcile', 'export'}.intersection(bindings),
+                    'transport_connected_runtime_override')
+            runtime = MemberConnectedRuntime(setup, evidence_directory)
+            bindings.update(native_transport=runtime.native_transport, controller=runtime,
+                task_call=runtime.task_call, reconcile=runtime.reconcile, export=runtime.export)
         assembly = MemberRoundAssembly(setup=setup, control=control, load=load, save=save, **bindings)
         return run(assembly.round())

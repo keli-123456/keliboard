@@ -10,7 +10,7 @@ import time
 
 def continue_entry(*, initialization, transport, remote, scope, creation_directory, root,
                    repo, env, certificate, domain, node_sha, journal, php, artifacts, summary,
-                   advance_initialization=None, advance_native=None, bind_execute=None):
+                   advance_initialization=None, advance_native=None, bind_execute=None, native_transport=None):
     from member_cli import BoundControllerTransport
     from member_initialization import STAGES
     from member_transport import TransportError
@@ -126,7 +126,7 @@ def continue_entry(*, initialization, transport, remote, scope, creation_directo
         synthetic_agent_payloads=True, real_source_serial_cooldown_seconds=300,
         source_create_gap_seconds=pins['source-b']['created_at'] - pins['source-a']['created_at'],
         native_grant_from_actual_setup=True, cloud_ssh_dns_simulated=True, real_node_binary_execution=False)
-    bound = BoundControllerTransport(grant_file=remote.grant_file,
+    bound = native_transport(initialization.state['receipts']['native-grant']) if native_transport else BoundControllerTransport(grant_file=remote.grant_file,
         grant_sha256=initialization.state['receipts']['native-grant']['grant_sha256'],
         run_id=scope['run_id'], host='9.9.9.10', identity_file=transport.identity, known_hosts=transport.known,
         guard=lambda *_: None, load=journal.get, save=lambda k, v: journal.__setitem__(k, v), execute=execute)
