@@ -103,8 +103,13 @@ class MachineMemberOperatorProviderTest extends TestCase
 
     public function test_lost_delete_ack_is_never_reissued_and_first_error_is_safe(): void
     {
-        Http::fake(function ($request) {
-            if ($request->method() === 'DELETE') throw new ConnectionException('synthetic-private-response');
+        $deletes = 0;
+        Http::fake(function ($request) use (&$deletes) {
+            // Failed fake responses are not included in Laravel's recorded pairs.
+            if ($request->method() === 'DELETE') {
+                ++$deletes;
+                throw new ConnectionException('synthetic-private-response');
+            }
             return Http::response($this->cloud);
         });
         $operator = $this->operator();
@@ -114,7 +119,7 @@ class MachineMemberOperatorProviderTest extends TestCase
         $operator = $this->operator();
         $this->assertFalse($this->call($operator, 'control-delete')['dispatched']);
         $this->assertTrue($this->call($operator, 'control-delete')['reconciliation_required']);
-        $this->assertCount(1, Http::recorded(fn ($r) => $r->method() === 'DELETE'));
+        $this->assertSame(1, $deletes);
         $this->assertStringNotContainsString('synthetic-private-response', $first);
         $this->assertSame($first, file_get_contents($this->directory . '/journal-first-error.json'));
     }
