@@ -74,6 +74,14 @@ try:
     (ART / 'python.log').write_text(tests.stdout + tests.stderr)
     assert tests.returncode == 0, 'python_regression_failed'
     SUMMARY['python_passed'] = True
+    php_tests = subprocess.run(['php', 'vendor/phpunit/phpunit/phpunit',
+        'tests/Unit/Services/MachineMemberDnsInitializationTest.php',
+        'tests/Unit/Services/MachineMemberProviderBindingsTest.php',
+        'tests/Unit/Services/MachineDnsAliyunCompatibilityTest.php'],
+        cwd=REPO, capture_output=True, text=True, timeout=120)
+    (ART / 'dns-phpunit.log').write_text(php_tests.stdout + php_tests.stderr)
+    assert php_tests.returncode == 0, 'dns_phpunit_regression_failed'
+    SUMMARY['dns_phpunit_passed'] = True
     os.umask(0o077)
     # Hosted runners make /opt writable by the runner user. Match a fresh
     # controller's root-owned parent only in this disposable CI VM, then restore.
@@ -214,6 +222,32 @@ try:
     observed = php('inspect', uid=65534)
     assert observed['states'] == ['succeeded', None] and observed['callback_steps'] == 1
     SUMMARY['idempotent_and_sibling_unchanged'] = True
+    prepared = php('dns-prepare')
+    assert prepared['prepared'] and prepared['encrypted_credential'] and prepared['redis_counter'] == 1
+    assert php('dns-control')['ready']
+    lost = php('dns-edge-a-lost')
+    assert lost['provider_failure'] and lost['create_calls'] == 2 and lost['claim_calls'] == 2
+    readback = php('dns-edge-a-read')
+    resumed = php('dns-edge-a')
+    assert readback['ready'] and resumed['ready'] and resumed['create_calls'] == 2 and resumed['claim_calls'] == 2
+    denied = php('dns-edge-b-reject')
+    assert denied['provider_failure'] and denied['create_calls'] == 3 and denied['claim_calls'] == 3
+    assert php('dns-stop')['stopped']
+    assert php('dns-control', ok=False)['reason'] == 'fixture_dns_stopped'
+    first = php('dns-cleanup')
+    assert first['absent'] == 3 and first['delete_calls'] == 3
+    absent_at = time.monotonic()
+    time.sleep(10.1)
+    second = php('dns-cleanup')
+    assert time.monotonic() - absent_at >= 10 and second['absent'] == 3
+    assert second['delete_calls'] == 3 and second['create_calls'] == 3 and second['claim_calls'] == 3
+    assert second['redis_counter'] == 10 and second['closed_gates_unchanged']
+    SUMMARY['dns_initialization'] = dict(full_application=True, encrypted_mysql_credential=True,
+        real_redis=True, durable_journal_across_php_processes=True, create_calls=3, claim_calls=3,
+        delete_calls=3, claim_ack_loss_reconciled_without_replay=True,
+        unclaimed_record_cleaned_by_exact_create_ack=True, stopped_creation_denied=True,
+        two_absence_reads_at_least_ten_seconds_apart=True, persistent_gates_changed=False,
+        signed_provider_requests_simulated=True, concrete_setup_authority_tested=False)
     SUMMARY['status'] = 'passed'
 except BaseException as error:
     SUMMARY['status'] = 'failed'; SUMMARY['failure_class'] = type(error).__name__

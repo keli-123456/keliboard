@@ -30,6 +30,9 @@ try {
         echo json_encode($initialized);
     } elseif ($mode === 'initialize-readback') {
         echo json_encode(Keli\Acceptance\MemberApplicationBootstrap::initialized());
+    } elseif (str_starts_with($mode, 'dns-')) {
+        $dnsFixture = require __DIR__ . '/member_dns_application.php';
+        echo json_encode($dnsFixture($mode));
     } elseif ($mode === 'http') {
         if (posix_geteuid() === 0 || ($_SERVER['REMOTE_ADDR'] ?? '') !== '127.0.0.1'
             || ($_SERVER['REQUEST_URI'] ?? '') !== '/api/v2/server/machine/provision/result'

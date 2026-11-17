@@ -102,6 +102,11 @@ final class MemberProviderBindings
         $expected = ['RecordId' => $pin['record_id'], 'DomainName' => 'dnscloudcloud.top',
             'RR' => substr($pin['name'], 0, -strlen('.dnscloudcloud.top')), 'Type' => $pin['type'],
             'Line' => 'default', 'Value' => $pin['value'], 'Remark' => $pin['marker'], 'TTL' => 600];
+        if (($row['Remark'] ?? '') === '') {
+            require_once __DIR__ . '/member_dns_initialization.php';
+            self::need(MemberDnsInitialization::hasCreateReceipt($pin, $this->load), 'dns_identity_changed');
+            $row['Remark'] = $pin['marker'];
+        }
         foreach ($expected as $key => $value) self::need(($row[$key] ?? null) === $value, 'dns_identity_changed');
         self::need(($row['Locked'] ?? false) === false, 'dns_identity_changed');
         return $row;
