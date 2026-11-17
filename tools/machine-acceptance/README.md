@@ -1240,6 +1240,15 @@ teardown, peer cleanup after reply loss and two absence reads ten seconds apart.
 A2 cutover pin validation is covered by application unit tests; full Linux A2
 cutover cleanup, private-material removal and controller-last teardown are not
 claimed by this component.
+The [stopped evidence export component](../../docs/evidence/linode-r35-native-evidence-export-linux-20261117.json)
+adds a read-only recovery RPC and content-addressed native/host snapshots. It
+exports bounded diagnostic projections, not payloads, credentials or raw errors.
+The actual Linux CLI and host archive verify immutable copies, restart readback
+and a retained artifact after controller-fixture deletion. An export is not a
+resource-cleanup receipt. Unresolved lineage is reported explicitly; unresolved
+candidate task diagnostics and concrete private teardown still need integration.
+Evidence failure must fail acceptance, but must not strand billable resources;
+the existing mandatory cleanup-on-failure policy remains unchanged.
 Native A1/A2 whole-round cleanup, host installation composition and the final
 unarmed real-binary package are still pending. These component results do not
 authorize or establish live acceptance.
