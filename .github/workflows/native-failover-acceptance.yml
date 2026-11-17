@@ -56,7 +56,7 @@ jobs:
           timeout --signal=TERM --kill-after=15s 1200s sudo nsenter --net="/proc/$pid/ns/net" \
             unshare --pid --fork --mount-proc --kill-child=SIGKILL \
             env -i PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 HOME=/root \
-            PYTHONDONTWRITEBYTECODE=1 python3 -B audit/r35-application-linux-ci.py >artifacts/application-linux.log 2>&1
+            PYTHONDONTWRITEBYTECODE=1 python3 -B audit/r35-application-linux-ci.py --candidate-callbacks >artifacts/application-linux.log 2>&1
       - name: Delete only this run's service containers and anonymous volumes
         if: always()
         shell: bash

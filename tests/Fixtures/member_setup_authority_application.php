@@ -210,10 +210,19 @@ return static function (string $mode): array {
             $role = $task?->machine_id === $scope['sources']['source-a']['plan']['machine_id'] ? 'source-a' : 'source-b';
             $need($task !== null && $task->machine_id === $scope['sources'][$role]['plan']['machine_id'], 'provider_role');
             $id = $role === 'source-a' ? 100001 : 100002;
-            $need($path === '/v4/linode/instances' && !isset($rows[$id]) && count($rows) < 2, 'duplicate_create'); $writes++;
+            $candidate = isset($task->payload['coordinated_attempt']);
+            if ($candidate) {
+                $attempt = App\Models\MachineFailoverAttempt::findOrFail($task->payload['coordinated_attempt']);
+                $need($mode === 'setup-candidate-step' && $role === 'source-a' && $attempt->ordinal === 1
+                    && $attempt->task_id === $task->id && $attempt->account_id === $scope['account_id'], 'candidate_create_scope');
+                $id = 100003;
+            }
+            $need($path === '/v4/linode/instances' && !isset($rows[$id])
+                && count($rows) === ($candidate ? 2 : ($role === 'source-a' ? 0 : 1)), 'duplicate_create'); $writes++;
             $row = ['id' => $id, 'status' => 'running', 'label' => $request['label'], 'tags' => $request['tags'],
                 'region' => $request['region'], 'type' => $request['type'], 'image' => $request['image'],
-                'created' => gmdate('Y-m-d\TH:i:s'), 'ipv4' => [$role === 'source-a' ? '8.8.4.4' : '8.8.8.8'], 'ipv6' => ''];
+                'created' => gmdate('Y-m-d\TH:i:s'),
+                'ipv4' => [$candidate ? '9.9.9.11' : ($role === 'source-a' ? '8.8.4.4' : '8.8.8.8')], 'ipv6' => ''];
             $rows[$id] = $row; $save('provider-rows', $rows);
             return Http::response($row);
         }
@@ -261,10 +270,66 @@ return static function (string $mode): array {
             '/v4/linode/instances' => ['data' => array_values($visible), 'page' => 1, 'pages' => 1, 'results' => count($visible)],
             '/v4/linode/instances/100001' => $rows[100001] ?? null,
             '/v4/linode/instances/100002' => $rows[100002] ?? null,
+            '/v4/linode/instances/100003' => $rows[100003] ?? null,
             default => throw new RuntimeException('fixture_setup_provider_operation'),
         };
         return Http::response($response);
     });
+    if (str_starts_with($mode, 'setup-candidate-') && $mode !== 'setup-candidate-pins') {
+        [$nativeScope, $nativeHash] = MemberCliAuthority::readGrant();
+        $nativeAuthority = MemberCliAuthority::controller($nativeScope, $nativeHash,
+            static fn () => file_exists('/opt/keli-isolated/member-setup-stop.json'));
+        $nativeAuthority->allow('round-status'); $nativeAuthority->assertData();
+        $d = $nativeScope['driver'];
+        $bFacts = static function () use ($nativeScope, $d, $load): array {
+            $task = Task::findOrFail($nativeScope['sources']['source-b']['task_id']);
+            return ['task' => $task->getAttributes(),
+                'owned' => App\Models\MachineOwnedInstance::where('task_id', $task->id)->firstOrFail()->getAttributes(),
+                'dns' => $load('setup-dns-provider'),
+                'b_executions' => App\Models\MachineFailoverExecutionMember::where('policy_id', $d['policy_b'])->count()];
+        };
+        $hash = MemberProviderBindings::digest($bFacts());
+        if ($mode === 'setup-candidate-start') {
+            if ($load('candidate-b-baseline') === null) $save('candidate-b-baseline', ['hash' => $hash]);
+            $request = substr(hash('sha256', MachineIntentJson::encode([MemberCliAuthority::RUN, 'native-a'])), 0, 32);
+            $result = $nativeAuthority->within('round-step', 'control', static fn () =>
+                app(App\Services\ServerMachine\Cloud\MachineFailoverNativeBridge::class)->start(
+                    $d['service_id'], $d['service_revision'], [$d['plan_id']], $d['release_id'], $request, $d['admin_id']));
+            $saved = $load('candidate-execution');
+            $need($saved === null || $saved['id'] === $result['id'], 'candidate_execution_replaced');
+            if ($saved === null) $save('candidate-execution', ['id' => $result['id']]);
+            $need(Task::count() === 2 && $writes === 0, 'candidate_start_created_task');
+        } elseif ($mode === 'setup-candidate-step') {
+            $execution = $load('candidate-execution'); $need(is_array($execution), 'candidate_execution_missing');
+            $result = $nativeAuthority->within('round-step', 'control', static fn () =>
+                app(App\Services\ServerMachine\Cloud\MachineFailoverNativeBridge::class)->advance($execution['id'], $d['admin_id']));
+        } elseif ($mode !== 'setup-candidate-inspect') throw new RuntimeException('fixture_candidate_mode');
+        $need($load('candidate-b-baseline')['hash'] === MemberProviderBindings::digest($bFacts()), 'candidate_changed_b_or_dns');
+        $execution = App\Models\MachineFailoverExecution::findOrFail($load('candidate-execution')['id']);
+        $member = App\Models\MachineFailoverExecutionMember::where('execution_id', $execution->id)->sole();
+        $attempt = $member->attempt_id ? App\Models\MachineFailoverAttempt::findOrFail($member->attempt_id) : null;
+        $task = $attempt?->task_id ? Task::findOrFail($attempt->task_id) : null;
+        $health = null; $at = null;
+        if ($task) {
+            $machine = App\Models\ServerMachine::findOrFail($task->machine_id);
+            $row = app(App\Services\ServerMachine\MachineAddressInventory::class)
+                ->snapshots([$machine], true)[$machine->id][$task->installation_id] ?? [];
+            $at = $row['at'] ?? null;
+            $health = app(App\Services\ServerMachine\Cloud\MachineCloudHealth::class)->snapshot(
+                new App\Models\MachineCloudResource(['machine_id' => $task->machine_id,
+                    'installation_id' => $task->installation_id, 'machine_authority' => $task->machine_authority,
+                    'public_ips' => $task->public_ips]), $task->dispatched_at);
+        }
+        $closed();
+        return ['native_execution' => $execution->status, 'member_phase' => $member->phase,
+            'member_reason' => $member->reason, 'task_status' => $task?->status, 'task_reason' => $task?->reason,
+            'task_count' => Task::count(), 'attempt_count' => App\Models\MachineFailoverAttempt::count(),
+            'callback_state' => $task?->bootstrap_state, 'report_at' => $at, 'health' => $health,
+            'callback_steps' => $task ? DB::table('v2_machine_provision_step')->where('task_id', $task->id)
+                ->where('state', 'like', 'bootstrap_%')->count() : 0,
+            'provider_writes_simulated' => $writes, 'provider_rows' => count($load('provider-rows') ?? []),
+            'b_and_dns_unchanged' => true, 'persistent_gates_closed' => true];
+    }
     $controller = new MemberSetupController($authority);
     $rpcRequest = static function (string $operation) use ($authority, $load, $save): array {
         $sequence = ($load('rpc-sequence')['value'] ?? -1) + 1;
@@ -392,10 +457,19 @@ return static function (string $mode): array {
             'exception_restores_capability_and_bus' => true, 'provider_writes' => $writes,
             'rpc_replay_cached' => true, 'rpc_sequence_and_grant_checked' => true, 'existing_journal_permissions_not_repaired' => true];
     }
-    if ($mode === 'setup-callback-pins') {
+    if ($mode === 'setup-callback-pins' || $mode === 'setup-candidate-pins') {
+        $exported = 0;
         foreach (Task::query()->get() as $task) {
+        $candidate = isset($task->payload['coordinated_attempt']);
+        if ($candidate !== ($mode === 'setup-candidate-pins')) continue;
         $scope = $load('initialization');
         $role = $task->machine_id === $scope['sources']['source-a']['plan']['machine_id'] ? 'source-a' : 'source-b';
+        $nodeId = $scope['sources'][$role]['configured_nodes'][0]['id'];
+        if ($candidate) {
+            $cap = json_decode(file_get_contents('/opt/keli-isolated/member-candidate-callbacks.json'), true, 32, JSON_THROW_ON_ERROR);
+            $need(Keli\Acceptance\MemberCandidateCallbacks::role($cap, $task) === 'source-a', 'candidate_lineage');
+            $role = 'candidate-a1';
+        }
         $need($task->dispatched_at > 0 && $task->external_id !== null);
         $yaml = Symfony\Component\Yaml\Yaml::parse(base64_decode($task->payload['request']['metadata']['user_data'], true));
         $secret = null;
@@ -408,11 +482,12 @@ return static function (string $mode): array {
         $need(is_string($secret) && hash_equals($task->callback_hash, hash('sha256', $secret)), 'callback_secret_missing');
         $save($role . '-callback', ['task_id' => $task->id, 'installation_id' => $task->installation_id, 'secret' => $secret,
             'machine_id' => $task->machine_id, 'token' => App\Models\ServerMachine::findOrFail($task->machine_id)->token,
-            'node_id' => $scope['sources'][$role]['configured_nodes'][0]['id'], 'ip' => $task->public_ips[0],
+            'node_id' => $nodeId, 'ip' => $task->public_ips[0],
             'created_at' => $task->created_at, 'dispatched_at' => $task->dispatched_at]);
+        $exported++;
         }
         $closed();
-        return ['private_fixture_material_written' => true, 'roles' => Task::query()->count()];
+        return ['private_fixture_material_written' => true, 'roles' => $exported];
     }
     if ($mode === 'setup-process' || $mode === 'setup-process-repeat') {
         $advance();

@@ -554,6 +554,73 @@ try:
         incomplete_callback_publication_blocks_native_admission=True,
         incomplete_callback_publication_preserves_recovery_readback=True,
         candidate_http_handoff_tested=False)
+    if '--candidate-callbacks' in sys.argv:
+        started_native = php('setup-candidate-start')
+        assert started_native['task_count'] == 2 and started_native['attempt_count'] == 0, started_native
+        assert php('setup-candidate-start') == started_native
+        created = php('setup-candidate-step')
+        assert created['task_count'] == 3 and created['attempt_count'] == 1, created
+        assert created['provider_writes_simulated'] == 1 and created['task_status'] == 'waiting_initialization', created
+        assert php('setup-candidate-step')['provider_writes_simulated'] == 0
+        assert php('setup-candidate-pins')['roles'] == 1
+        pins['candidate-a1'] = json.loads((ROOT / 'private/setup-fixture/candidate-a1-callback.json').read_bytes())
+        assert pins['candidate-a1']['machine_id'] == pins['source-a']['machine_id']
+        assert pins['candidate-a1']['installation_id'] != pins['source-a']['installation_id']
+        assert callback(role='candidate-a1', installation=pins['source-a']['installation_id']) == 403
+        assert callback(role='candidate-a1', secret='0' * 64) == 401
+        cap_path.rename(cap_backup)
+        try:
+            assert callback(role='candidate-a1') == 403
+            assert report('candidate-a1') == 403
+        finally: cap_backup.rename(cap_path)
+        candidate_statuses = [callback(role='candidate-a1'), callback(role='candidate-a1'),
+                              callback(role='candidate-a1', state='failed')]
+        assert candidate_statuses == [200, 200, 409], candidate_statuses
+        receipt = php('setup-candidate-inspect')
+        assert receipt['callback_state'] == 'succeeded' and receipt['callback_steps'] == 1, receipt
+        assert not receipt['health']['ready']
+        assert report('candidate-a1', token='incorrect') == 401
+        assert report('candidate-a1', installation='e' * 32) == 403
+        assert report('candidate-a1', node=True, node_id=pins['source-b']['node_id']) == 403
+        time.sleep(1.1)
+        assert report('candidate-a1') == 200
+        without_node = php('setup-candidate-inspect')
+        assert without_node['health'] == dict(agent='fresh', nodes='waiting', ready=False), without_node
+        after_machine = php('setup-candidate-step')
+        assert after_machine['task_status'] == 'waiting_node_reports', after_machine
+        times = []
+        for _ in range(3):
+            time.sleep(1.1)
+            assert report('candidate-a1') == report('candidate-a1', node=True) == 200
+            received = php('setup-candidate-inspect')
+            assert received['health'] == dict(agent='fresh', nodes='fresh', ready=True), received
+            assert received['task_count'] == 3 and received['attempt_count'] == 1
+            times.append(received['report_at'])
+        assert times == sorted(set(times)) and len(times) == 3
+        assert native_path.read_bytes() == native_bytes and cap_path.read_bytes() == cap_bytes
+        assert setup_rpc('stop')['stopped']
+        assert callback(role='candidate-a1') == report('candidate-a1') == report('candidate-a1', node=True) == 403
+        assert php('setup-candidate-inspect') == received
+        stopped_step = php('setup-candidate-step', ok=False)
+        assert not stopped_step['ok']
+        assert php('setup-queues')['no_redis_queued_delayed_or_reserved_jobs']
+        SUMMARY['candidate_http_handoff'] = dict(actual_native_start_and_advance=True,
+            actual_mysql_task_count=3, actual_native_attempt_count=1, candidate_provider_create_simulated=1,
+            duplicate_start_and_step_no_additional_create=True, callback_statuses=candidate_statuses,
+            actual_tls_and_service_uid=True, actual_kernel_callback_and_report_routes=True,
+            callback_requires_original_native_lineage=True, missing_callback_capability_denies=True,
+            bad_installation_token_and_node_denied=True, missing_node_report_not_ready=True,
+            three_distinct_http_receive_times=True, report_payloads_synthetic=True,
+            native_readiness_dns_advance_not_exercised=True, b_and_dns_unchanged=True,
+            stop_denies_candidate_callback_report_and_advance=True, immutable_grants_retained=True,
+            queue_jobs_did_not_escape=True, native_candidate_cleanup_handoff_pending=True)
+        SUMMARY['native_grant_handoff']['candidate_http_handoff_tested'] = True
+        SUMMARY['candidate_callback_http_full_application_tested'] = True
+        SUMMARY['native_grant_handoff']['stop_revokes_both_native_and_callback_authorities'] = True
+        SUMMARY['status'] = 'passed'
+        # This component keeps task history intact; the enclosing isolated fixture
+        # owns teardown. It does not claim native candidate/final cleanup coverage.
+        raise SystemExit(0)
     hold_process = subprocess.Popen(['php', '-d', 'display_errors=0', '-d', 'log_errors=0',
         str(ROOT / 'app/tests/Fixtures/member_full_application.php'), 'setup-controller-hold'],
         cwd=ROOT / 'app', env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -725,6 +792,10 @@ try:
         two_absence_reads_at_least_ten_seconds_apart=True, persistent_gates_changed=False,
         signed_provider_requests_simulated=True, concrete_setup_authority_tested=False)
     SUMMARY['status'] = 'passed'
+except SystemExit as error:
+    if error.code != 0 or SUMMARY['status'] != 'passed':
+        SUMMARY['status'] = 'failed'
+        raise
 except BaseException as error:
     SUMMARY['status'] = 'failed'; SUMMARY['failure_class'] = type(error).__name__
     if isinstance(error, AssertionError): SUMMARY['failure_check'] = str(error)[:600]
