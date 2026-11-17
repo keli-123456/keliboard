@@ -657,7 +657,8 @@ try:
                 grant_sha256=hashlib.sha256(native_bytes).hexdigest(), **transport_args),
                 php=php, callback=callback, report=report, save=host_save, load=host_load,
                 work=work, artifacts=ART, summary=SUMMARY)
-            run_private_teardown(transport=bootstrap_transport, root=ROOT, summary=SUMMARY)
+            run_private_teardown(transport=bootstrap_transport, root=ROOT, summary=SUMMARY,
+                                 artifacts=ART, load=host_load, save=host_save)
             SUMMARY['status'] = 'passed'
             raise SystemExit(0)
         started_native = php('setup-candidate-start')

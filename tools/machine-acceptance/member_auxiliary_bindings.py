@@ -40,9 +40,21 @@ class MemberAuxiliaryBindings:
         if operation == 'intents-inspect':
             require(pin == {'run_id': self.scope['run_id'], 'requests': self.scope['requests']},
                     'cleanup_binding_requests_changed')
-            result = self.reconcile(copy.deepcopy(self.scope['requests']))
-            require(isinstance(result, dict) and result.get('requests_sha256') == digest(self.scope['requests'])
-                    and result.get('resolved') is True, 'cleanup_binding_requests_unresolved')
+            key = 'auxiliary-intents-readback'
+            value = dict(scope_sha256=self.binding, requests_sha256=digest(self.scope['requests']), resolved=True)
+            previous = self.load(key)
+            require(previous is None or previous == value and previous.get('resolved') is True,
+                    'cleanup_binding_requests_changed')
+            if previous is None:
+                result = self.reconcile(copy.deepcopy(self.scope['requests']))
+                require(isinstance(result, dict) and result.get('requests_sha256') == value['requests_sha256']
+                        and result.get('resolved') is True, 'cleanup_binding_requests_unresolved')
+                # This stopped-scope receipt must survive .env removal. Later
+                # cleanup cannot depend on starting the application again.
+                self.save(key, value)
+                observed = self.load(key)
+                require(observed == value and observed.get('resolved') is True,
+                        'cleanup_binding_requests_readback_failed')
             return {'pin_sha256': digest(pin), 'resolved': True}
         require(operation == 'evidence-export-readback' and pin == {'run_id': self.scope['run_id']},
                 'cleanup_binding_operation_invalid')

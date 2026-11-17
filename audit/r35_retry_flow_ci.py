@@ -156,7 +156,9 @@ def run_retry_teardown(*, bound, rebind, php, callback, report, save, load, work
         whole_round_cleanup_not_claimed=True, cloud_ssh_dns_simulated=True)
 
 
-def run_private_teardown(*, transport, root, summary):
+def run_private_teardown(*, transport, root, summary, artifacts, load, save):
+    from member_auxiliary import MemberAuxiliary, digest
+    from member_auxiliary_bindings import MemberAuxiliaryBindings
     from member_cli import RUN
     from member_transport import TransportError
     assert summary['native_retry_teardown']['immutable_host_readback']
@@ -164,15 +166,47 @@ def run_private_teardown(*, transport, root, summary):
     paths = ('private/credentials', 'private/bootstrap-authority', 'private/member-runtime-scope.json', 'app/.env')
     pins = [dict(run_id=RUN, path='/opt/keli-isolated/' + name,
                  sha256=hashlib.sha256((root / name).read_bytes()).hexdigest()) for name in paths]
-    for index, pin in enumerate(pins):
+    for pin in pins:
         assert transport.inspect_private(pin)['status'] == 'owned'
-        try:
-            assert transport.remove_private(pin)['status'] == 'absent'
-            assert index != 0, 'delete_ack_loss_not_injected'
-        except TransportError:
-            assert index == 0 and summary['private_ack_lost']
-        assert transport.inspect_private(pin)['status'] == 'absent'
-        assert transport.remove_private(pin)['status'] == 'absent'
+    calls = []
+    setup_requests = {key: load(key) for key in ('bootstrap-import', 'bootstrap-setup-issue')}
+    assert all(value['completed'] is True for value in setup_requests.values())
+    requests = [digest(value['request']) for value in setup_requests.values()]
+    def reconcile(requests):
+        assert requests == [digest(value['request']) for value in setup_requests.values()]
+        assert all(load(key) == value for key, value in setup_requests.items())
+        cleanup = load('retry-cleanup')
+        assert cleanup['phase'] == 'auxiliary' and len(cleanup['reads']) == 4
+        assert all(len(v) == 2 and v[1] - v[0] >= 10 for v in cleanup['reads'].values())
+        assert load('bound-stop') == dict(stopped=True)
+        assert load('native-dns-cleanup-confirmed')['complete'] is True
+        assert transport.bootstrap_call('stop')['verified']
+        calls.append('stopped-reconcile')
+        return dict(requests_sha256=digest(requests), resolved=True)
+    def export():
+        envelope = json.loads((artifacts / 'native-retry-teardown-evidence.json').read_bytes())
+        assert hashlib.sha256(envelope['content'].encode()).hexdigest() == envelope['sha256']
+        assert envelope['sha256'] == summary['native_retry_teardown']['stopped_evidence_sha256']
+        assert json.loads(envelope['content'])['run_id'] == RUN
+        return dict(run_id=RUN, sha256=envelope['sha256'], verified=True)
+    scope = dict(run_id=RUN, control=None, records=[], faults=[], private_files=pins, requests=requests)
+    def auxiliary(reconciler):
+        bindings = MemberAuxiliaryBindings(scope=scope, provider=None, controller=transport,
+            reconcile=reconciler, export=export, load=load, save=save)
+        return MemberAuxiliary(scope=scope, io=bindings, load=load, save=save)
+    try:
+        auxiliary(reconcile)('dns-and-private-cleanup')
+        raise AssertionError('delete_ack_loss_not_injected')
+    except TransportError:
+        assert summary['private_ack_lost'] and not (root / paths[0]).exists()
+        assert transport.inspect_private(pins[0])['status'] == 'absent'
+    def closed_application(_requests):
+        raise AssertionError('application_must_not_be_restarted_for_cleanup_readback')
+    final = auxiliary(closed_application)('dns-and-private-cleanup')
+    assert final == dict(dns_absent_twice=True, intents_reconciled=True, private_materials_removed=True,
+        pending=False, evidence_saved_and_read_back=True), final
+    assert auxiliary(closed_application)('dns-and-private-cleanup') == final
+    assert calls == ['stopped-reconcile']
     # Inspection must still work after .env and the native grant have been removed.
     for pin in pins:
         assert transport.inspect_private(pin)['status'] == 'absent'
@@ -183,6 +217,7 @@ def run_private_teardown(*, transport, root, summary):
         native_dns_cleanup_and_evidence_readback_before_deletion=True,
         lost_delete_reply_recovered_by_inspection=True, repeat_delete_idempotent=True,
         no_application_database_needed_after_env_removal=True,
+        actual_auxiliary_binding_and_durable_reconcile_receipt=True,
         ssh_byte_transport_simulated=True, controller_last_cleanup_pending=True,
         private_journals_database_and_fixture_materials_removed_by_ci_finalizer_not_this_component=True,
         whole_round_cleanup_not_claimed=True)

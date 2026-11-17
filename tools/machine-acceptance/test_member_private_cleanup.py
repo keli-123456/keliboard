@@ -4,6 +4,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -62,6 +65,56 @@ class PrivateTransportTests(unittest.TestCase):
         self.assertNotIn('synthetic-secret', json.dumps(self.saved))
         self.rpc.execute = self.execute
         self.assertEqual('absent', self.rpc.inspect_private(self.pin)['status'])
+
+    def test_cold_import_uses_only_the_declared_runtime_files(self):
+        from member_bundle import RUNTIME
+        destination = self.root / 'runtime'; destination.mkdir()
+        for name in RUNTIME:
+            if name.endswith('.py'):
+                shutil.copyfile(Path(__file__).with_name(name), destination / name)
+        command = [sys.executable, '-I', '-B', '-c',
+                   'import sys; sys.path.insert(0, sys.argv[1]); import member_private_cleanup; print("loaded")',
+                   str(destination)]
+        result = subprocess.run(command, cwd=self.root, capture_output=True, text=True, timeout=15)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('loaded', result.stdout.strip())
+
+
+class StoppedIntentReceiptTests(unittest.TestCase):
+    def setUp(self):
+        from member_auxiliary_bindings import MemberAuxiliaryBindings
+        self.saved, self.calls = {}, []
+        self.scope = dict(run_id=RUN, control=None, records=[], faults=[], private_files=[], requests=['fixed-request'])
+        self.pin = dict(run_id=RUN, requests=['fixed-request'])
+        def reconcile(requests):
+            self.calls.append(requests)
+            return dict(requests_sha256=digest(requests), resolved=True)
+        self.arguments = dict(scope=self.scope, provider=None, controller=None, reconcile=reconcile,
+            export=None, load=self.saved.get, save=lambda k, v: self.saved.__setitem__(k, copy.deepcopy(v)))
+        self.factory = MemberAuxiliaryBindings
+
+    def test_reconstruction_uses_pinned_receipt_after_environment_removal(self):
+        reply = self.factory(**self.arguments)('intents-inspect', self.pin)
+        self.arguments['reconcile'] = lambda _: (_ for _ in ()).throw(AssertionError('application already removed'))
+        self.assertEqual(reply, self.factory(**self.arguments)('intents-inspect', self.pin))
+        self.assertEqual([['fixed-request']], self.calls)
+
+    def test_changed_scope_and_numeric_boolean_are_not_cached_success(self):
+        self.factory(**self.arguments)('intents-inspect', self.pin)
+        value = copy.deepcopy(self.saved['auxiliary-intents-readback'])
+        for changed in (dict(value, resolved=1), dict(value, scope_sha256='x'), dict(value, extra=True)):
+            self.saved['auxiliary-intents-readback'] = changed
+            with self.assertRaises(TransportError): self.factory(**self.arguments)('intents-inspect', self.pin)
+        self.assertEqual(1, len(self.calls))
+
+    def test_failed_local_readback_and_unresolved_requests_do_not_release_cleanup(self):
+        self.arguments['save'] = lambda *_: None
+        with self.assertRaisesRegex(TransportError, 'readback_failed'):
+            self.factory(**self.arguments)('intents-inspect', self.pin)
+        self.arguments['reconcile'] = lambda requests: dict(requests_sha256=digest(requests), resolved=False)
+        with self.assertRaisesRegex(TransportError, 'unresolved'):
+            self.factory(**self.arguments)('intents-inspect', self.pin)
+        self.assertEqual({}, self.saved)
 
 
 @unittest.skipUnless(os.name == 'posix' and getattr(os, 'geteuid', lambda: -1)() == 0,
