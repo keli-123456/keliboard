@@ -116,7 +116,7 @@ jobs:
           timeout --signal=TERM --kill-after=15s 1800s sudo nsenter --net="/proc/$pid/ns/net" \
             unshare --pid --fork --mount-proc --kill-child=SIGKILL \
             env -i PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 HOME=/root \
-            PYTHONDONTWRITEBYTECODE=1 KELI_HTTP_NETNS="/proc/$pid/ns/net" python3 -B audit/r35-application-linux-ci.py "$mode" >artifacts/application-linux.log 2>&1
+            PYTHONDONTWRITEBYTECODE=1 KELI_HTTP_NETNS="/proc/$pid/ns/net" KELI_HTTP_FIXTURE_COMMIT="$GITHUB_SHA" python3 -B audit/r35-application-linux-ci.py "$mode" >artifacts/application-linux.log 2>&1
       - name: Retain bounded nonsecret status even if artifact upload fails
         if: always()
         shell: bash
@@ -138,6 +138,18 @@ jobs:
         run: |
           set -euo pipefail
           name="r35-application-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if sudo test -e /opt/keli-isolated/private/http-service/binding.json; then
+            test "$(sudo cat /opt/keli-isolated/.r35-application-fixture)" = "$GITHUB_SHA"
+            sudo python3 -B - <<'PY'
+          import json, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools/machine-acceptance')
+          from member_http_service import execute, assert_stopped
+          binding = json.loads(Path('/opt/keli-isolated/private/http-service/binding.json').read_bytes())
+          assert execute(dict(operation='stop', scope=binding['scope']))['state'] == 'stopped'
+          assert_stopped()
+          PY
+          fi
           for suffix in redis mysql; do
             container="$name-$suffix"
             if docker inspect "$container" >/dev/null 2>&1; then

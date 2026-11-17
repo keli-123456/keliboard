@@ -170,6 +170,9 @@ Only systemd's network namespace property is injected by this test adapter.
         self.opt = Path('/opt').stat()
         os.chown('/opt', 0, 0); os.chmod('/opt', 0o755)
         self.root.mkdir(mode=0o711)
+        fixture_commit = os.environ['KELI_HTTP_FIXTURE_COMMIT']
+        self.assertRegex(fixture_commit, r'^[a-f0-9]{40}$')
+        (self.root / '.r35-application-fixture').write_text(fixture_commit)
         self.s = scope()
         self.s['started_at'] = int(time.time()) - 1800
         self.s['deadline_at'] = int(time.time()) + 1250

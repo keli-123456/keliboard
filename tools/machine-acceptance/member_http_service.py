@@ -5,6 +5,7 @@ an ambiguous start is inspected, never replayed. systemd owns the whole cgroup.
 """
 import base64
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
@@ -146,14 +147,11 @@ def tls_probe(root):
             require(stream.getpeercert(binary_form=True) == ssl.PEM_cert_to_DER_cert(leaf.decode('ascii')),
                     'transport_http_certificate_changed')
             stream.sendall(('GET /_keli_r35_reject HTTP/1.1\r\nHost: ' + HOST + '\r\nConnection: close\r\n\r\n').encode())
-            response = b''
-            while len(response) <= 8192:
-                block = stream.recv(8193 - len(response))
-                if not block: break
-                response += block
-            if response.startswith(b'HTTP/1.1 502 '): raise ConnectionError('transport_http_upstream_starting')
-            require(len(response) <= 8192 and response.split(b'\r\n', 1)[0] == b'HTTP/1.1 403 Forbidden'
-                    and response.endswith(b'{"message":"isolated_callback_denied"}'), 'transport_http_callback_probe')
+            response = http.client.HTTPResponse(stream)
+            response.begin(); body = response.read(8193)
+            if response.status == 502: raise ConnectionError('transport_http_upstream_starting')
+            require(response.status == 403 and body == b'{"message":"isolated_callback_denied"}',
+                    'transport_http_callback_probe')
 
 
 def execute(request, *, root=ROOT, invoke=command, clock=time.time, probe=tls_probe, smoke=service_smoke):
