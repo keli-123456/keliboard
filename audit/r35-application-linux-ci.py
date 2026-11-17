@@ -609,8 +609,13 @@ try:
             (ART / 'outer-round-state.json').write_text(json.dumps(outer_state, indent=2) + '\n')
             (ART / 'outer-round-state.json').chmod(0o644)
         if outer_whole:
+            (ART / 'outer-round-state.json').write_text(json.dumps(outer_state, indent=2) + '\n')
+            (ART / 'outer-round-state.json').chmod(0o644)
             assert outer_state['phase'] == 'closed' and outer_state['resources_cleaned'] and outer_state['acceptance_passed']
-            assert outer_state['first_error'] is None and all(outer_state['branches'].values())
+            required = ('native_cleanup', 'cooldown', 'retry', 'b_unchanged', 'dns_cutover')
+            assert outer_state['first_error'] is None and all(outer_state['branches'].get(k) is True for k in required)
+            assert outer_state['branches']['retry_exhausted'] is False
+            assert outer_state['branches']['final_cleanup'] is False
             assert outer_step(install_scope, setup_bindings, install_journal, assembly.cleanup) == outer_state
             assert json.loads((creation_directory / 'fixture-cloud.json').read_bytes())['methods'].count('POST') == 1
             SUMMARY['outer_round_whole'] = dict(actual_outer_driver=True, actual_disk_journal=True,
@@ -618,8 +623,6 @@ try:
                 real_cooldown_seconds=300, actual_exclusive_lock=True, closed_replay_noop=True,
                 resources_cleaned=True, isolated_acceptance_passed=True, live_ready=False,
                 cloud_ssh_dns_simulated=True, real_node_not_executed=True)
-            (ART / 'outer-round-state.json').write_text(json.dumps(outer_state, indent=2) + '\n')
-            (ART / 'outer-round-state.json').chmod(0o644)
         state = json.loads((operator / 'fixture-cloud.json').read_bytes())
         assert state['methods'].count('DELETE') == 1 and not state['present']
         if not bound:

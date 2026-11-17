@@ -99,6 +99,42 @@ class AuxiliaryTests(unittest.TestCase):
         self.assertTrue(state['resources_cleaned']); self.assertFalse(state['acceptance_passed'])
         self.assertEqual(state['cleanup']['first_error']['reason'], 'cleanup_evidence_unconfirmed')
 
+    def test_native_diagnostic_branches_are_not_all_required_success_conditions(self):
+        original = self.f.port
+
+        def port(operation, request):
+            reply = original(operation, request)
+            if operation == 'native-step':
+                # These native observations stay false when final teardown is host-owned.
+                reply['branches'].update(retry_exhausted=False, final_cleanup=False)
+            return reply
+
+        self.f.port = port
+        state = self.finish(self.f.round())
+        self.assertTrue(state['resources_cleaned'])
+        self.assertTrue(state['acceptance_passed'])
+        self.assertFalse(state['branches']['retry_exhausted'])
+        self.assertFalse(state['branches']['final_cleanup'])
+        self.assertEqual(state['cleanup']['phase'], 'closed')
+
+    def test_required_native_branch_must_be_true_even_after_complete_cleanup(self):
+        for branch in ('native_cleanup', 'cooldown', 'retry', 'b_unchanged', 'dns_cutover'):
+            for value in (None, False, 1, 'true'):
+                with self.subTest(branch=branch, value=value):
+                    self.f = RoundFixture()
+                    original = self.f.port
+
+                    def port(operation, request):
+                        reply = original(operation, request)
+                        if operation == 'native-step':
+                            reply['branches'][branch] = value
+                        return reply
+
+                    self.f.port = port
+                    state = self.finish(self.f.round())
+                    self.assertTrue(state['resources_cleaned'])
+                    self.assertFalse(state['acceptance_passed'])
+
     def test_lost_bootstrap_response_reconciles_never_recreates(self):
         self.f.fail_operation = 'bootstrap'
         driver = self.f.round(); driver.step()
