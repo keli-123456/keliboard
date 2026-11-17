@@ -1,0 +1,74 @@
+{
+  "schema": 1,
+  "status": "component_passed_not_live_ready",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "ci_run": 44031888132,
+  "ci_url": "https://github.com/keli-123456/keliboard/actions/runs/44031888132",
+  "tested_commit": "fccb4375e4b07280ad187352670aa4abe239efd6",
+  "artifact_id": 14306165869,
+  "scope": {
+    "full_application_and_locked_vendor": true,
+    "real_isolated_mysql_redis_http_tls_and_service_uid": true,
+    "cloud_ssh_dns": "simulated",
+    "candidate_callback_component_database": "sqlite_in_memory",
+    "candidate_tasks_created_by_actual_native_services_with_simulated_provider": true,
+    "candidate_callback_http_full_application_tested": false,
+    "node_binary_fixture": "synthetic_not_executed"
+  },
+  "verified": {
+    "strict_ssh_bootstrap_fixed_command_and_host_identity": true,
+    "bootstrap_intent_saved_before_dispatch": true,
+    "uncertain_mutation_readback_without_redispatch": true,
+    "bootstrap_replies_retained_as_digest_not_full_configuration": true,
+    "native_callback_checks_task_attempt_member_execution_and_original_plan": true,
+    "candidate_callback_cannot_create_rotate_or_write_dns": true,
+    "other_member_and_retired_candidate_rejected": true,
+    "candidate_capability_cannot_extend_setup_window": true,
+    "existing_bootstrap_stop_and_callback_drain_regression": true,
+    "dual_source_real_http_registration_and_300_second_cooldown_regression": true,
+    "setup_dns_and_sigkill_cleanup_recovery_regression": true,
+    "native_cli_and_callback_component_tests": 12,
+    "native_cli_and_callback_component_assertions": 853
+  },
+  "post_dispatch_local_tests": {
+    "not_in_tested_ci_commit": true,
+    "member_suite_tests": 70,
+    "member_suite_assertions": 11081,
+    "transport_tests": 31,
+    "a2_callback_requires_native_retry_proof_and_old_a1_is_refused": true,
+    "callback_exception_restores_shared_native_binding": true,
+    "malformed_bootstrap_journal_rejected_before_ssh": true,
+    "future_linux_regression_still_required_for_these_extra_assertions": true
+  },
+  "remaining": [
+    "Concrete installation and TLS readiness ports and whole host composition",
+    "Native execution grant issuer using current real source evidence and original time window",
+    "Wire candidate capability publication into the issuer and verify actual candidate HTTP callbacks/reports",
+    "Transfer cleanup ownership from source setup to native candidate and switched-DNS scope",
+    "Assembled A1 exact cleanup, real 300-second cooldown, A2 retry and B isolation",
+    "Native expiry and creation-phase crash verification",
+    "Final unarmed runtime with real pinned node binary, vendor and renewed live preflight checklist"
+  ],
+  "cleanup_and_boundaries": {
+    "containers_and_anonymous_volumes_removed": true,
+    "fixed_fixture_and_private_material_removed": true,
+    "external_network_routes": false,
+    "cloud_instances_created": 0,
+    "production_database_or_credentials_accessed": false,
+    "main_pushed": false,
+    "deployment_or_image_release": false,
+    "persistent_automatic_switches_changed": false,
+    "tanzhen_accessed": false,
+    "r34_or_old_live_round_executed": false,
+    "live_ready": false
+  },
+  "artifact_sha256": {
+    "application-linux-summary.json": "02f8ff020ab02689491e459bcb3e046b17e73e8face85d152971e0d5921d1820",
+    "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cli-phpunit.log": "b792138f757fd6179378b2edec90f92b8055d175dce158f8e082935dde9bb0ba",
+    "dns-phpunit.log": "2b62b911bb903393a1ad6d0fbe2b3b67eb17e2a1917bf2bca8e304361cbe500a",
+    "python.log": "2fb9c24234c31135957f5ce2a898a1f7c8f80c2822278a8c1e80abddd3094f61",
+    "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+    "source-phpunit.log": "3dd552702cbd60131f5fd69239badf6330938f404969f0d74d3d83eee7a42590"
+  }
+}

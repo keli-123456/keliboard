@@ -77,6 +77,12 @@ trait TestsMemberCli
             $result = $bridge->dispatch($this->cliRequest('round-step'))['result'];
             $this->assertSame($phase, $result['native_phase']);
         }
+        return $this->memberCallbackProjection();
+    }
+
+    private function memberCallbackProjection(): array
+    {
+        require_once base_path('tools/machine-acceptance/member_candidate_callbacks.php');
         $s = $this->cliScope; $d = $s['driver'];
         $setup = ['run_id' => Authority::RUN, 'started_at' => $s['started_at'], 'deadline_at' => $s['deadline_at'],
             'bundle_sha256' => $s['bundle_sha256'], 'machine_id_sha256' => $s['controller_machine_id_sha256'],
@@ -154,6 +160,14 @@ trait TestsMemberCli
             $this->fail('Revoked guard accepted');
         } catch (\RuntimeException $error) { $this->assertSame('revoked', $error->getMessage()); }
         $this->assertFalse($ran); $this->cliAssertClosed();
+        $gate = app(Gate::class); $native = app(\App\Services\ServerMachine\Cloud\MachineFailoverNativeBridge::class);
+        app()->instance(\App\Services\ServerMachine\Cloud\MachineFailoverNativeBridge::class, $native);
+        try {
+            $type::within($cap, $task, static fn () => null, static fn () => throw new \RuntimeException('handler_failed'));
+            $this->fail('Callback exception lost');
+        } catch (\RuntimeException $error) { $this->assertSame('handler_failed', $error->getMessage()); }
+        $this->assertSame($gate, app(Gate::class));
+        $this->assertSame($native, app(\App\Services\ServerMachine\Cloud\MachineFailoverNativeBridge::class));
     }
 
     public function test_member_cli_temporarily_scopes_permissions_and_restores_on_exception(): void
@@ -331,6 +345,8 @@ trait TestsMemberCli
         foreach (['source-a', 'source-b', 'setup_cooldown', 'native', 'waiting_initialization'] as $phase)
             $this->assertSame($phase, $step()['native_phase']);
         $first = $this->task(); $originalRequest = $first->payload['request'];
+        [, $callbackCap] = $this->memberCallbackProjection();
+        $this->assertSame('source-a', \Keli\Acceptance\MemberCandidateCallbacks::role($callbackCap, $first));
         $authority->within('round-step', 'control', fn () => app(\App\Services\ServerMachine\Cloud\MachineProvisionService::class)
             ->callback($first->id, $first->installation_id, $this->callbackSecret($first), 'succeeded'));
         $first->refresh()->fill(['dispatched_at' => time() - 30, 'status' => 'waiting_ipv4_probe', 'next_check_at' => time() + 60])->save();
@@ -349,6 +365,9 @@ trait TestsMemberCli
         $this->assertSame('waiting_initialization', $step()['native_phase']);
         $this->assertCount(2, $this->posts);
         $task = $this->task();
+        $this->assertSame('source-a', \Keli\Acceptance\MemberCandidateCallbacks::role($callbackCap, $task));
+        try { \Keli\Acceptance\MemberCandidateCallbacks::role($callbackCap, $first->fresh()); $this->fail('Cleaned A1 admitted'); }
+        catch (\RuntimeException $error) { $this->assertSame('member_candidate_callback_member_changed', $error->getMessage()); }
         $authority->within('round-step', 'control', fn () => app(\App\Services\ServerMachine\Cloud\MachineProvisionService::class)
             ->callback($task->id, $task->installation_id, $this->callbackSecret($task), 'succeeded'));
         $task->refresh()->fill(['dispatched_at' => time() - 2, 'next_check_at' => 0])->save();

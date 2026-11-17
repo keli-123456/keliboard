@@ -141,8 +141,13 @@ class StrictControllerTransport:
         elif operation == 'stop':
             persist('bootstrap-stopped', dict(stopped=True))
         else:
-            require(isinstance(prior, dict) and set(prior) in ({'request', 'completed'}, {'request', 'completed', 'evidence_sha256'})
-                    and prior['request'].get('operation') == owner, 'transport_bootstrap_intent_missing')
+            require(isinstance(prior, dict) and type(prior.get('completed')) is bool
+                    and isinstance(prior.get('request'), dict)
+                    and set(prior['request']) == ({'operation', 'control'} if owner == 'setup-issue' else {'operation'})
+                    and prior['request'].get('operation') == owner
+                    and set(prior) == ({'request', 'completed', 'evidence_sha256'} if prior['completed'] else {'request', 'completed'})
+                    and (not prior['completed'] or (isinstance(prior.get('evidence_sha256'), str)
+                         and re.fullmatch(r'[a-f0-9]{64}', prior['evidence_sha256']))), 'transport_bootstrap_intent_missing')
         try:
             raw = self.execute(self._command('php /opt/keli-isolated/runtime/member_import_entry.php'),
                 json.dumps(request, separators=(',', ':')).encode(), 90)

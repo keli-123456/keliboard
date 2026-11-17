@@ -177,6 +177,18 @@ class MemberTransportTests(unittest.TestCase):
         with self.assertRaisesRegex(TransportError, 'journal_unconfirmed'): self.rpc.bootstrap_call('import')
         self.assertEqual(self.calls, [])
 
+    def test_bootstrap_corrupt_completed_state_cannot_be_repaired_by_remote_readback(self):
+        self.rpc.execute = self.bootstrap_execute
+        for prior in (dict(request=[], completed=False), dict(request=dict(operation='import'), completed='true'),
+                      dict(request=dict(operation='import'), completed=True),
+                      dict(request=dict(operation='import'), completed=False, evidence_sha256='a' * 64),
+                      dict(request=dict(operation='import', extra=True), completed=False),
+                      dict(request=dict(operation='import'), completed=True, evidence_sha256='changed')):
+            self.saved['bootstrap-import'] = prior
+            with self.assertRaisesRegex(TransportError, 'intent_missing'): self.rpc.bootstrap_call('readback')
+            self.assertEqual(self.saved['bootstrap-import'], prior)
+        self.assertEqual(self.calls, [])
+
     def test_setup_fixed_cli_and_bound_identity_with_advancing_sequences(self):
         pin = dict(grant_id='a' * 32, grant_sha256='b' * 64, deadline_at=9000)
         for operation in ('advance', 'advance', 'status', 'stop'):
