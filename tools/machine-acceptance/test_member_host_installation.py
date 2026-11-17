@@ -193,6 +193,24 @@ class HostPublicationLinuxTests(unittest.TestCase):
         marker = self.root / 'private/import-stopped'; marker.write_bytes(b'other-run'); marker.chmod(0o600)
         with self.assertRaisesRegex(TransportError, 'stop'): self.call('journal-read')
 
+    def test_preexisting_private_file_is_not_adopted_even_when_hash_matches(self):
+        self.call('publish'); self.configure()
+        unowned = self.root / 'private/credentials'
+        unowned.write_bytes(base64.b64decode(private_files()['credentials']['base64'])); unowned.chmod(0o600)
+        with self.assertRaisesRegex(TransportError, 'target_exists'):
+            self.call('private', files=private_files())
+        self.assertFalse((self.root / 'private/host-installation/private-intent.json').exists())
+        self.assertEqual(1, len(self.call('journal-read')['private_files']))
+        self.assertTrue(unowned.exists())
+
+    def test_changed_environment_is_refused_before_credentials_are_written(self):
+        self.call('publish'); self.configure()
+        (self.root / 'app/.env').write_bytes(b'changed')
+        with self.assertRaisesRegex(TransportError, 'private_changed'):
+            self.call('private', files=private_files())
+        self.assertFalse((self.root / 'private/credentials').exists())
+        self.assertFalse((self.root / 'private/host-installation/private-intent.json').exists())
+
     def test_expiry_stop_during_publication_and_changed_scope(self):
         with patch('member_host_installation.time.time', return_value=self.scope['deadline_at']):
             with self.assertRaisesRegex(TransportError, 'expired'):

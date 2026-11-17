@@ -172,10 +172,12 @@ def execute(request, *, root=ROOT, clock=time.time):
                 require(load('publish-result') is not None, 'transport_host_install_publication_required')
             if operation == 'private':
                 require(load('configure-result') is not None, 'transport_host_install_configuration_required')
+            require(not snapshot()['uncertain_operations'], 'transport_host_install_readback_required')
             files = ({'app/.env': hashlib.sha256(environment(request['settings'])).hexdigest()}
                      if operation == 'configure' else
                      {'private/' + name: pin['sha256'] for name, pin in request['files'].items()}
                      if operation == 'private' else {})
+            require(all(not os.path.lexists(root / name) for name in files), 'transport_host_install_target_exists')
             # Persist only hashes, never the settings or encoded credential body.
             persist(operation + '-intent', dict(request_sha256=digest(request), files=files))
             if operation == 'publish':
