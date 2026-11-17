@@ -170,6 +170,8 @@ def run_connected_round(directory, *, control_inputs, setup_inputs, evidence_dir
     """
     from member_connected_setup import MemberConnectedSetup
     from member_control_transport import MemberControlTransport
+    from pathlib import Path
+    from staging import read_json
     control_keys = {'directory', 'php', 'guard'}
     setup_keys = {'archive', 'identity_file', 'known_hosts', 'grant_file', 'settings',
                   'service', 'credentials', 'import_permit', 'tls_files', 'ssh_guard'}
@@ -179,7 +181,12 @@ def run_connected_round(directory, *, control_inputs, setup_inputs, evidence_dir
             and not {'setup', 'control', 'load', 'save'}.intersection(bindings),
             'transport_connected_entry_bindings')
     with round_journal(directory, RUN) as (load, save):
-        control = MemberControlTransport(scope=bindings['scope'], load=load, save=save, **control_inputs)
+        creation_scope = read_json(Path(control_inputs['directory']).absolute() / 'creation-scope.json')[0]
+        require(set(creation_scope) == {'run_id', 'task_id', 'account_id', 'bundle_sha256', 'bootstrap_sha256',
+                'started_at', 'deadline_at', 'baseline_ids', 'plan'}
+                and all(creation_scope.get(k) == v for k, v in bindings['scope'].items()),
+                'transport_connected_creation_scope')
+        control = MemberControlTransport(scope=creation_scope, load=load, save=save, **control_inputs)
         setup = MemberConnectedSetup(scope=bindings['scope'], control=control, load=load, save=save,
             guard=bindings['guard'], clock=bindings.get('clock', time.time), **setup_inputs)
         if evidence_directory is not None:

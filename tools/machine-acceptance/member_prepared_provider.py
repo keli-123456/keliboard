@@ -58,6 +58,11 @@ class MemberPreparedProvider:
                                                    65536, collect=True, private=True)
         approval_hash, raw, _ = read_file(self.root / 'cleanup-parent.json', 65536, collect=True, private=True)
         material, approval = unique_json(credentials), unique_json(raw)
+        original = self.runtime.setup.parameters['credentials']
+        creation_hash = read_file(self.runtime.setup.control.directory / 'provider-credentials.json',
+                                  65536, private=True)[0]['sha256']
+        require(isinstance(original, bytes) and hashlib.sha256(original).hexdigest() == credential_hash['sha256']
+                == creation_hash, 'cleanup_preparation_credentials_changed')
         machine = read_file(self.machine, 4096, collect=True)[1]
         require(bool(machine), 'cleanup_preparation_machine_required')
         baseline = material.get('baseline_ids') if isinstance(material, dict) else None
@@ -65,6 +70,7 @@ class MemberPreparedProvider:
                 and all(isinstance(v, str) and v.isascii() and v.isdecimal() and 1 <= len(v) <= 16
                         and not v.startswith('0') for v in baseline)
                 and len(set(baseline)) == len(baseline), 'cleanup_preparation_baseline')
+        require(self.runtime.setup.control.scope.get('baseline_ids') == baseline, 'cleanup_preparation_baseline')
         expected = dict(schema=1, operation='prepare-provider-cleanup', authorized=True,
             scope=self.runtime.setup.scope, credentials_sha256=credential_hash['sha256'],
             operator_machine_sha256=hashlib.sha256(machine).hexdigest(), baseline_ids=baseline)

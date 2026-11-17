@@ -228,6 +228,10 @@ class ConnectedSetupTests(unittest.TestCase):
 
     def test_connected_host_entry_constructs_concrete_ports_inside_one_journal_lock(self):
         from member_assembly import run_connected_round
+        creation_scope = dict(self.scope, task_id='11111111-1111-4111-8111-111111111111', account_id=1,
+            bootstrap_sha256='a' * 64, baseline_ids=[], plan={})
+        creation_path = self.control.directory / 'creation-scope.json'
+        creation_path.write_text(json.dumps(creation_scope)); creation_path.chmod(0o600)
         active = []
         @contextmanager
         def journal(directory, run_id):
@@ -245,6 +249,7 @@ class ConnectedSetupTests(unittest.TestCase):
             self.assertIsInstance(options['setup'], MemberConnectedSetup)
             self.assertIsInstance(options['control'], MemberControlTransport)
             self.assertIs(options['setup'].control, options['control'])
+            self.assertEqual(creation_scope, options['control'].scope)
             self.assertEqual(options['load'], self.saved.get)
             self.assertEqual(options['setup'].load, self.saved.get)
             self.assertEqual(options['control'].load, self.saved.get)
@@ -261,6 +266,10 @@ class ConnectedSetupTests(unittest.TestCase):
                 scope=self.scope, guard=lambda *_: None, clock=lambda: self.f.now)
         self.assertEqual(result, {'fixture': 'entry-wiring-only'})
         self.assertEqual([], active + self.provider_calls + self.f.calls)
+        creation_path.write_text(json.dumps(dict(creation_scope, bundle_sha256='0' * 64)))
+        with patch('member_assembly.round_journal', journal), self.assertRaisesRegex(TransportError, 'creation_scope'):
+            run_connected_round(self.f.root, control_inputs=control_inputs, setup_inputs=setup_inputs,
+                scope=self.scope, guard=lambda *_: None)
         with self.assertRaisesRegex(TransportError, 'entry_bindings'):
             run_connected_round(self.f.root, control_inputs=dict(control_inputs, host=self.host), setup_inputs=setup_inputs)
         with self.assertRaisesRegex(TransportError, 'entry_bindings'):

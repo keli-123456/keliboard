@@ -38,12 +38,16 @@ class PreparedProviderTests(unittest.TestCase):
             operator_machine_sha256=hashlib.sha256(self.machine.read_bytes()).hexdigest(), baseline_ids=['99'])
         self.write('provider-credentials.json', self.credentials)
         self.write('cleanup-parent.json', json.dumps(self.approval).encode())
+        self.creation = self.root / 'creation'; self.creation.mkdir(mode=0o700)
+        (self.creation / 'provider-credentials.json').write_bytes(self.credentials)
+        (self.creation / 'provider-credentials.json').chmod(0o600)
         def persist(k, v): self.saved[k] = copy.deepcopy(v)
         def stopped():
             if not self.stopped: raise TransportError('cleanup_connected_runtime_not_stopped')
             return copy.deepcopy(self.cleanup)
         self.runtime = SimpleNamespace(load=self.saved.get, save=persist, stopped=stopped,
-            setup=SimpleNamespace(scope=self.scope, persist=persist))
+            setup=SimpleNamespace(scope=self.scope, persist=persist, parameters={'credentials': self.credentials},
+                control=SimpleNamespace(directory=self.creation, scope={'baseline_ids': ['99']})))
 
     def write(self, name, raw):
         path = self.root / name; path.write_bytes(raw); path.chmod(0o600)
@@ -121,6 +125,18 @@ class PreparedProviderTests(unittest.TestCase):
             with self.assertRaisesRegex(TransportError, 'operation'): provider.dispatch(op, self.control)
         self.assertEqual([], self.calls)
 
+    def test_replacing_even_approved_cleanup_credentials_cannot_switch_creation_account(self):
+        provider = self.provider(); self.stopped = True
+        changed = self.credentials.replace(b'synthetic-only', b'another-account')
+        self.approval['credentials_sha256'] = hashlib.sha256(changed).hexdigest()
+        self.write('provider-credentials.json', changed)
+        self.write('cleanup-parent.json', json.dumps(self.approval).encode())
+        with self.assertRaisesRegex(TransportError, 'credentials_changed'): provider.prepare()
+        self.write('provider-credentials.json', self.credentials)
+        (self.creation / 'provider-credentials.json').write_bytes(changed)
+        with self.assertRaisesRegex(TransportError, 'credentials_changed'): self.provider()
+        self.assertEqual([], self.calls)
+
     def test_lost_provider_delete_is_not_replayed_on_new_instance(self):
         provider = self.provider(); self.stopped = True
         def lose(*_): raise TimeoutError('synthetic-secret')
@@ -147,6 +163,11 @@ class PreparedProviderTests(unittest.TestCase):
         f = fixture.ConnectedSetupTests('runTest'); f.setUp(); self.addCleanup(f.doCleanups)
         self.approval['scope'] = f.scope
         self.write('cleanup-parent.json', json.dumps(self.approval).encode())
+        creation_scope = dict(f.scope, task_id=self.control['task_id'], account_id=1,
+            bootstrap_sha256='c' * 64, baseline_ids=['99'], plan={})
+        for name, raw in [('creation-scope.json', json.dumps(creation_scope).encode()),
+                          ('provider-credentials.json', self.credentials)]:
+            path = f.control.directory / name; path.write_bytes(raw); path.chmod(0o600)
         setup_inputs = {k: v for k, v in f.args.items()
             if k not in ('scope', 'control', 'load', 'save', 'guard', 'clock')}
         setup_inputs.update(credentials=self.credentials, import_permit=dict(scope=f.scope,
@@ -158,6 +179,7 @@ class PreparedProviderTests(unittest.TestCase):
             self.assertIsInstance(options['provider'], MemberPreparedProvider)
             self.assertIsInstance(options['controller'], MemberConnectedRuntime)
             self.assertIs(options['provider'].runtime, options['controller'])
+            self.assertEqual(creation_scope, options['control'].scope)
             self.assertIn('provider-preparation-inputs', f.saved)
             self.assertFalse(options['provider'].prepared.exists())
             assembled.append(options)
