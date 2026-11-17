@@ -262,9 +262,13 @@ return static function (string $mode): array {
     $advance = static fn () => $controller->rpc($rpcRequest('advance'))['result'];
     if ($mode === 'setup-native-issue' || $mode === 'setup-native-read') {
         $operation = substr($mode, strlen('setup-'));
-        $result = $controller->rpc($rpcRequest($operation))['result'];
+        $request = $rpcRequest($operation);
+        $reply = $controller->rpc($request); $result = $reply['result'];
         $closed(); $need($writes === 0, 'native_grant_wrote_provider');
         if ($result['ready']) {
+            $before = file_get_contents('/opt/keli-isolated/private/member-runtime-scope.json');
+            $need($controller->rpc($request) === $reply
+                && file_get_contents('/opt/keli-isolated/private/member-runtime-scope.json') === $before, 'native_rpc_reissued');
             $scope = Keli\Acceptance\MemberCliAuthority::readGrant()[0];
             $need($scope['started_at'] === $authority->windowBinding()['started_at']
                 && $scope['deadline_at'] === $authority->windowBinding()['deadline_at'], 'native_window_extended');

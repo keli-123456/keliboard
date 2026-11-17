@@ -104,9 +104,13 @@ final class MemberSetupController
             if (str_starts_with($request['operation'], 'native-')) {
                 self::need($this->load('first-error') === null, 'prior_failure');
                 $native = new MemberNativeGrant($this->authority, function (): array {
-                    foreach (['source-a', 'source-b'] as $role)
-                        self::need($this->load('initialized-' . $role) !== null, 'sources_not_registered');
-                    return $this->sources->registeredScope($this->binding['scope'])['sources'];
+                    $sources = $this->sources->registeredScope($this->binding['scope'])['sources'];
+                    foreach ($sources as $role => $pin) {
+                        self::need($this->load('initialized-' . $role) === ['task_id' => $pin['task_id'],
+                            'scope_sha256' => MemberProviderBindings::digest($this->binding['configuration']['initialization_scope'])]
+                            && Task::query()->findOrFail($pin['task_id'])->status === 'accepted', 'sources_not_registered');
+                    }
+                    return $sources;
                 }, fn () => $this->dns()->readback());
                 return $request['operation'] === 'native-issue' ? $native->issue() : $native->readback();
             }

@@ -522,6 +522,23 @@ try:
     native_reply = command(['php', '-d', 'display_errors=0', '-d', 'log_errors=0',
         str(ROOT / 'runtime/member_transport_entry.php')], input=json.dumps(request).encode(), cwd=ROOT / 'app', env=ENV)
     assert json.loads(native_reply.stdout)['result'] == dict(ready=True, automatic_switches_changed=False)
+    cap_backup = ROOT / 'private/candidate-callback-capability.saved'
+    cap_path.rename(cap_backup)
+    try:
+        incomplete = subprocess.run(['php', '-d', 'display_errors=0', '-d', 'log_errors=0',
+            str(ROOT / 'runtime/member_transport_entry.php')], input=json.dumps(request).encode(),
+            cwd=ROOT / 'app', env=ENV, capture_output=True, timeout=30)
+        assert incomplete.returncode != 0 and not json.loads(incomplete.stdout)['ok']
+        recovery = command(['php', '-d', 'display_errors=0', '-d', 'log_errors=0',
+            str(ROOT / 'runtime/member_transport_entry.php')], input=json.dumps(dict(request, operation='round-status')).encode(),
+            cwd=ROOT / 'app', env=ENV)
+        assert json.loads(recovery.stdout)['result']['resolved']
+        # Readback completes only the identical derivative, never resets the native grant.
+        assert setup_rpc('native-read') == grant
+        assert cap_path.read_bytes() == cap_backup.read_bytes() and native_path.read_bytes() == native_bytes
+    finally:
+        if not cap_path.exists(): cap_backup.rename(cap_path)
+        else: cap_backup.unlink()
     denied_private = subprocess.run(['setpriv', '--reuid=65534', '--regid=65534', '--clear-groups',
         '--no-new-privs', 'test', '-r', str(native_path)], capture_output=True)
     assert denied_private.returncode == 1
@@ -530,6 +547,8 @@ try:
         second_cooldown_real_wait_seconds=int(time.monotonic() - second_cooldown_start),
         original_window_inherited=True, lost_ack_readback_same_grant=True, no_provider_writes_or_candidate_tasks=True,
         private_grant_service_user_denied=True, candidate_derivative_public=True,
+        incomplete_callback_publication_blocks_native_admission=True,
+        incomplete_callback_publication_preserves_recovery_readback=True,
         candidate_http_handoff_tested=False)
     hold_process = subprocess.Popen(['php', '-d', 'display_errors=0', '-d', 'log_errors=0',
         str(ROOT / 'app/tests/Fixtures/member_full_application.php'), 'setup-controller-hold'],

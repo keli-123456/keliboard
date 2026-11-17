@@ -185,7 +185,8 @@ class StrictControllerTransport:
 
     def setup_call(self, operation, identity):
         """Fixed setup CLI, with a durable intent before each advancing RPC."""
-        require(operation in ('advance', 'status', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback'), 'transport_setup_operation_invalid')
+        require(operation in ('advance', 'status', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback',
+                              'native-issue', 'native-read'), 'transport_setup_operation_invalid')
         require(isinstance(identity, dict) and set(identity) == {'grant_id', 'grant_sha256', 'deadline_at'}
                 and type(identity['deadline_at']) is int and identity['deadline_at'] > 0
                 and all(isinstance(identity[k], str) and re.fullmatch(r'[a-f0-9]{%d}' % n, identity[k])
@@ -201,7 +202,7 @@ class StrictControllerTransport:
             require(self.load('setup-binding') == pin, 'transport_setup_journal_unconfirmed')
         previous = self.load('setup-mutation')
         prior_cleanup = self.load('setup-cleanup')
-        mutation = operation in ('advance', 'dns-control', 'dns-edges')
+        mutation = operation in ('advance', 'dns-control', 'dns-edges', 'native-issue')
         if mutation:
             require(previous is None or previous.get('completed') is True, 'transport_setup_readback_required')
             require(prior_cleanup is None, 'transport_setup_cleanup_started')
@@ -220,6 +221,27 @@ class StrictControllerTransport:
             result = unique_json(raw)
             require(all(result.get(k) == v for k, v in request.items()), 'transport_response_binding_changed')
             require(result.get('ok') is True and isinstance(result.get('result'), dict), 'transport_remote_rejected')
+            if operation in ('native-issue', 'native-read'):
+                value = result['result']
+                if value.get('ready') is False:
+                    require(operation == 'native-issue' and set(value) <= {'ready', 'phase', 'next_check_at'}
+                            and value.get('phase') in ('setup_cooldown', 'source_failure_observation', 'source_plan_blocked')
+                            and ('next_check_at' not in value or type(value['next_check_at']) is int
+                                 and 0 < value['next_check_at'] < identity['deadline_at']), 'transport_native_reply_invalid')
+                else:
+                    grant = value.get('identity')
+                    require(set(value) == {'ready', 'identity', 'deadline_at', 'cloud_or_dns_writes'}
+                            and value['ready'] is True and value['cloud_or_dns_writes'] is False
+                            and value['deadline_at'] == identity['deadline_at']
+                            and isinstance(grant, dict) and set(grant) == {'run_id', 'grant_id', 'grant_sha256', 'bundle_sha256'}
+                            and grant['run_id'] == self.run_id
+                            and all(isinstance(grant[k], str) and re.fullmatch(r'[a-f0-9]{%d}' % n, grant[k])
+                                    for k, n in [('grant_id', 32), ('grant_sha256', 64), ('bundle_sha256', 64)]),
+                            'transport_native_reply_invalid')
+                    prior_grant = self.load('setup-native-grant')
+                    require(prior_grant is None or prior_grant == value, 'transport_native_grant_changed')
+                    self.save('setup-native-grant', copy.deepcopy(value))
+                    require(self.load('setup-native-grant') == value, 'transport_setup_journal_unconfirmed')
             if mutation or operation == 'cleanup':
                 complete = dict(request=request, completed=True, reply=result)
                 self.save(ledger, copy.deepcopy(complete))

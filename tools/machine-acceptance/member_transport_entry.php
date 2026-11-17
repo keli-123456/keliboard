@@ -15,10 +15,10 @@ try {
     foreach ([$root, $root . '/private', $root . '/runtime', $root . '/app'] as $directory)
         if (realpath($directory) !== $directory || !is_dir($directory) || (fileperms($directory) & 0022))
             throw new RuntimeException('isolated_directory_required');
-    $read = static function (string $path, int $max): array {
+    $read = static function (string $path, int $max, bool $public = false): array {
         $stat = @lstat($path);
         if (!$stat || realpath($path) !== $path || !is_file($path) || $stat['nlink'] !== 1
-            || $stat['uid'] !== 0 || ($stat['mode'] & 0077) || $stat['size'] > $max)
+            || $stat['uid'] !== 0 || ($public ? ($stat['mode'] & 0777) !== 0644 : ($stat['mode'] & 0077) !== 0) || $stat['size'] > $max)
             throw new RuntimeException('isolated_file_rejected');
         $value = json_decode(file_get_contents($path), true, 32, JSON_THROW_ON_ERROR);
         if (!is_array($value)) throw new RuntimeException('isolated_json_required');
@@ -94,6 +94,19 @@ try {
     if (strlen($raw) > 8192) throw new RuntimeException('isolated_request_too_large');
     $request = json_decode($raw, true, 16, JSON_THROW_ON_ERROR);
     if (!is_array($request)) throw new RuntimeException('isolated_request_invalid');
+    if (!in_array($request['operation'] ?? null, ['round-status', 'round-stop', 'task-inspect', 'task-delete'], true)
+        && (file_exists($root . '/member-setup-grant.json') || is_link($root . '/member-setup-grant.json'))) {
+        $setup = $read($root . '/member-setup-grant.json', 65536, true);
+        $cap = $read($root . '/member-candidate-callbacks.json', 65536, true);
+        if (($cap['schema'] ?? null) !== 1 || ($cap['run_id'] ?? null) !== ($scope['run_id'] ?? null)
+            || ($cap['native_sha256'] ?? null) !== hash_file('sha256', $root . '/private/member-runtime-scope.json')
+            || ($cap['setup_sha256'] ?? null) !== hash_file('sha256', $root . '/member-setup-grant.json')
+            || ($cap['driver'] ?? null) !== ($scope['driver'] ?? null))
+            throw new RuntimeException('isolated_callback_grant_changed');
+        foreach (['started_at', 'deadline_at'] as $key)
+            if (!isset($scope[$key]) || ($setup[$key] ?? null) !== $scope[$key] || ($cap[$key] ?? null) !== $scope[$key])
+                throw new RuntimeException('isolated_callback_grant_changed');
+    }
     foreach (['member_source_registry.php', 'member_controller_bridge.php', 'member_retry_driver.php', 'member_round_bridge.php'] as $file)
         require __DIR__ . '/' . $file;
     $bridge = new Keli\Acceptance\MemberRoundBridge($scope, $authority, $load, $save, static fn (): int => time());

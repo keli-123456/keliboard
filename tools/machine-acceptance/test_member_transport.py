@@ -279,6 +279,40 @@ class MemberTransportTests(unittest.TestCase):
         with self.assertRaisesRegex(TransportError, 'not_authorized'): self.rpc.setup_call('advance', pin)
         self.assertEqual(self.calls, [])
 
+    def test_native_issue_uncertainty_only_allows_bound_readback_not_reissuance(self):
+        pin = dict(grant_id='a' * 32, grant_sha256='b' * 64, deadline_at=9000)
+        self.rpc.execute = lambda *_: (_ for _ in ()).throw(TimeoutError('private'))
+        with self.assertRaisesRegex(TransportError, 'uncertain'): self.rpc.setup_call('native-issue', pin)
+        pending = copy.deepcopy(self.saved['setup-mutation'])
+        result = dict(ready=True, identity=dict(run_id=self.rpc.run_id, grant_id='c' * 32,
+            grant_sha256='d' * 64, bundle_sha256='e' * 64), deadline_at=9000, cloud_or_dns_writes=False)
+        def reply(command, raw, timeout):
+            self.calls.append((command, raw, timeout))
+            return json.dumps(dict(json.loads(raw), ok=True, result=result)).encode()
+        self.rpc.execute = reply
+        self.assertEqual(self.rpc.setup_call('native-read', pin), result)
+        self.assertEqual(self.saved['setup-native-grant'], result)
+        self.assertEqual(self.saved['setup-mutation'], pending)
+        with self.assertRaisesRegex(TransportError, 'readback_required'): self.rpc.setup_call('native-issue', pin)
+        result['deadline_at'] += 1
+        with self.assertRaisesRegex(TransportError, 'native_reply_invalid'): self.rpc.setup_call('native-read', pin)
+        result['deadline_at'] -= 1
+        result['identity']['grant_id'] = 'f' * 32
+        with self.assertRaisesRegex(TransportError, 'native_grant_changed'): self.rpc.setup_call('native-read', pin)
+        self.assertEqual(self.saved['setup-native-grant']['identity']['grant_id'], 'c' * 32)
+
+    def test_native_waiting_does_not_grant_permission_or_skip_cleanup_barrier(self):
+        pin = dict(grant_id='a' * 32, grant_sha256='b' * 64, deadline_at=9000)
+        result = dict(ready=False, phase='setup_cooldown', next_check_at=100)
+        self.rpc.execute = lambda cmd, raw, timeout: json.dumps(dict(json.loads(raw), ok=True, result=result)).encode()
+        self.assertEqual(self.rpc.setup_call('native-issue', pin), result)
+        self.assertNotIn('setup-native-grant', self.saved)
+        result['next_check_at'] = 9001
+        with self.assertRaisesRegex(TransportError, 'native_reply_invalid'): self.rpc.setup_call('native-issue', pin)
+        self.rpc.execute = self.execute
+        self.rpc.setup_call('cleanup', pin)
+        with self.assertRaises(TransportError): self.rpc.setup_call('native-issue', pin)
+
 
 class MemberCleanupTests(unittest.TestCase):
     def setUp(self):
