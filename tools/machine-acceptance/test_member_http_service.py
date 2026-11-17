@@ -61,6 +61,7 @@ class HttpRequestTests(unittest.TestCase):
             return state(s, len(calls) == 1)
         with patch.object(http, 'cgroup_empty', return_value=True): http.stop_unit(s, invoke)
         self.assertEqual(['systemctl', 'stop', http.unit(s)], calls[1])
+        self.assertIn('--all', calls[0])
         with patch.object(http, 'cgroup_empty', return_value=False), self.assertRaises(TransportError):
             http.stop_unit(s, lambda *_: state(s))
         calls.clear()

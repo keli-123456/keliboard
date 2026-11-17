@@ -195,7 +195,10 @@ try:
             namespace = os.environ['KELI_HTTP_NETNS']
             assert __import__('re').fullmatch(r'/proc/[1-9][0-9]*/ns/net', namespace)
             args = [args[0], '--property=NetworkNamespacePath=' + namespace, *args[1:]]
-        return http_service.command(args, timeout)
+        code, output = http_service.command(args, timeout)
+        if args[:2] == ['systemctl', 'show']:
+            SUMMARY['systemd_readback'] = dict(code=code, fields=[line.split('=', 1)[0] for line in output.decode('ascii').splitlines()])
+        return code, output
     def installation_ssh(args, payload, timeout):
         import shlex
         assert args[-2] == 'root@9.9.9.10' and 'StrictHostKeyChecking=yes' in args
@@ -1296,15 +1299,21 @@ finally:
         hold_process.terminate()
         try: hold_process.wait(timeout=5)
         except subprocess.TimeoutExpired: hold_process.kill(); hold_process.wait(timeout=5)
+    http_clean = True
     if http_scope is not None:
-        stopped = http_service.execute(dict(operation='stop', scope=http_scope), invoke=http_invoke)
-        assert stopped['state'] == 'stopped'
-        http_service.assert_stopped(ROOT, http_invoke)
+        try:
+            stopped = http_service.execute(dict(operation='stop', scope=http_scope), invoke=http_invoke)
+            assert stopped['state'] == 'stopped'
+            http_service.assert_stopped(ROOT, http_invoke)
+        except BaseException as failure:
+            http_clean = False
+            SUMMARY['http_cleanup_failure'] = type(failure).__name__
+            SUMMARY['status'] = 'failed'
     if php_server is not None:
         php_server.terminate()
         try: php_server.wait(timeout=5)
         except subprocess.TimeoutExpired: php_server.kill(); php_server.wait(timeout=5)
-    if ROOT.exists():
+    if ROOT.exists() and http_clean:
         assert ROOT.resolve() == ROOT and (ROOT / '.r35-application-fixture').read_text() == sha
         shutil.rmtree(ROOT)
     if opt_stat is not None:

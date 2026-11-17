@@ -63,7 +63,7 @@ def command(args, timeout=20):
 
 
 def status(scope, invoke=command, *, allow_pending=False):
-    code, raw = invoke(['systemctl', 'show', unit(scope), '--no-pager', '--property=' + ','.join(PROPERTIES)])
+    code, raw = invoke(['systemctl', 'show', unit(scope), '--no-pager', '--all', '--property=' + ','.join(PROPERTIES)])
     lines = raw.decode('ascii').splitlines()
     pairs = [line.split('=', 1) for line in lines]
     require(all(len(p) == 2 for p in pairs) and len(pairs) == len(PROPERTIES), 'transport_http_unit_readback')
