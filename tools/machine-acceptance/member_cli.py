@@ -15,8 +15,8 @@ from member_transport import (StrictControllerTransport, MemberCleanup, Transpor
                               require, ROLES, OPERATIONS, REMOTE_ENTRY, LIMIT)
 
 RUN = 'keli-accept-20261116-r35-f4940b41'
-ROUND_OPS = ('round-ready', 'round-step', 'round-status', 'round-stop', 'round-dns-cleanup')
-RECOVERY = ('round-stop', 'round-status', 'round-dns-cleanup', 'task-inspect', 'task-delete')
+ROUND_OPS = ('round-ready', 'round-step', 'round-status', 'round-stop', 'round-dns-cleanup', 'round-evidence')
+RECOVERY = ('round-stop', 'round-status', 'round-dns-cleanup', 'round-evidence', 'task-inspect', 'task-delete')
 
 
 class BoundControllerTransport(StrictControllerTransport):
@@ -100,7 +100,7 @@ class BoundControllerTransport(StrictControllerTransport):
             require(self.load('bound-uncertain') is None, 'transport_mutation_reconcile_required')
             active = self.load('bound-active')
             require(active is None or active.get('completed') is True, 'transport_mutation_reconcile_required')
-        if operation in ('task-delete', 'round-dns-cleanup'):
+        if operation in ('task-delete', 'round-dns-cleanup', 'round-evidence'):
             require(self.load('bound-stop') is not None, 'transport_cleanup_requires_stop')
         self.guard(operation, role)
         for path, key in [(self.identity, 'identity_sha256'), (self.known, 'known_hosts_sha256')]:

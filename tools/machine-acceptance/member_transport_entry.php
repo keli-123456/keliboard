@@ -72,7 +72,8 @@ try {
     require __DIR__ . '/member_native_controller.php';
     $controller = new Keli\Acceptance\MemberNativeController($scope, $grantHash, $request);
     $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-    if ($request['operation'] === 'round-dns-cleanup') {
+    if (in_array($request['operation'], ['round-dns-cleanup', 'round-evidence'], true)
+        && file_exists($root . '/member-setup-grant.json')) {
         foreach (['member_application_bootstrap', 'member_provider_bindings', 'member_source_configuration',
             'member_source_initialization', 'member_setup_authority', 'member_dns_initialization',
             'member_setup_dns', 'member_setup_controller', 'member_native_dns_receipt'] as $file)

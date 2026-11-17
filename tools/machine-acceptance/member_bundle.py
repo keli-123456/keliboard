@@ -17,7 +17,7 @@ import staging
 
 RUNTIME = ('member_retry_driver.php', 'member_source_registry.php', 'member_controller_bridge.php',
            'member_transport_entry.php', 'member_transport.py', 'driver_journal.py', 'member_bundle.py',
-           'member_cli_authority.php', 'member_round_bridge.php', 'member_native_controller.php', 'member_cli.py',
+           'member_cli_authority.php', 'member_round_bridge.php', 'member_native_controller.php', 'member_cli.py', 'member_evidence.py',
            'member_auxiliary.py', 'member_round.py', 'member_runtime_bundle.py', 'application_bundle.py', 'staging.py',
            'member_initialization.py', 'member_auxiliary_bindings.py', 'member_source_initialization.php',
            'member_provider_bindings.php', 'aliyun_cleanup.php', 'member_control_creation.php',

@@ -97,6 +97,14 @@ final class MemberSetupController
         self::need(MemberProviderBindings::digest($this->load($key)) === MemberProviderBindings::digest($value), 'journal_unconfirmed');
     }
 
+    public function evidence(): array
+    {
+        self::need(is_resource($this->lock), 'closed');
+        $this->authority->allow('dns-cleanup', 'control');
+        return ['available' => true, 'first_error_present' => $this->load('first-error') !== null,
+            'first_diagnostic' => MemberRoundBridge::safeDiagnostic($this->load('first-error'))];
+    }
+
     public function dispatch(array $request): array
     {
         self::need(is_resource($this->lock) && array_keys($request) === ['operation']

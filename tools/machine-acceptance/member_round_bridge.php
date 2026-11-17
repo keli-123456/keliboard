@@ -57,6 +57,7 @@ final class MemberRoundBridge
                 $this->authority->stopCallbacks();
                 return ['stopped' => true];
             }
+            if ($operation === 'round-evidence') return $this->evidence();
             if (!in_array($operation, ['round-status', 'task-inspect', 'task-delete'], true)) $this->authority->assertData();
             if ($operation === 'round-ready') return ['ready' => true, 'automatic_switches_changed' => false];
             if ($operation === 'round-status') return $this->status();
@@ -79,6 +80,75 @@ final class MemberRoundBridge
             ($this->save)('rpc-mutation', ['sequence' => $request['sequence'], 'completed' => true]);
         }
         return $reply;
+    }
+
+    public static function safeDiagnostic(mixed $value): ?array
+    {
+        if (!is_array($value)) return null;
+        $classes = ['ErrorException', 'RuntimeException', 'LogicException', 'TypeError', 'Error', 'JsonException',
+            'QueryException', 'ModelNotFoundException', 'LockTimeoutException', 'CloudException', 'CloudRequestFailure', 'ConnectionException'];
+        $files = ['member_retry_driver.php', 'member_source_initialization.php', 'member_setup_controller.php',
+            'member_setup_dns.php', 'member_provider_bindings.php', 'member_native_dns_receipt.php',
+            'member_round_bridge.php', 'member_native_controller.php', 'member_cli_authority.php',
+            'member_setup_authority.php', 'member_source_configuration.php', 'member_dns_initialization.php',
+            'member_application_bootstrap.php'];
+        $file = ($value['site'] ?? null) === 'member_retry_driver' ? 'member_retry_driver.php' : ($value['file'] ?? null);
+        $known = in_array($file, $files, true) && is_int($value['line'] ?? null) && $value['line'] > 0 && $value['line'] <= 1000000;
+        return ['class' => in_array($value['class'] ?? null, $classes, true) ? $value['class'] : 'other',
+            'file' => $known ? $file : null, 'line' => $known ? $value['line'] : null];
+    }
+
+    private function evidence(): array
+    {
+        // Keep error recovery usable even if a native binding is no longer valid.
+        // Unknown lineage is flagged, never adopted or treated as cleaned.
+        $resolved = true; $diagnostic = null; $pins = $this->scope['sources'];
+        try { $this->authority->assertData(); $pins = $this->taskPins(); }
+        catch (\Throwable $error) {
+            $resolved = false;
+            $diagnostic = self::safeDiagnostic(['class' => (new \ReflectionClass($error))->getShortName(),
+                'file' => basename($error->getFile()), 'line' => $error->getLine()]);
+        }
+        $tasks = [];
+        foreach ($pins as $role => $pin) {
+            $task = Task::query()->find($pin['task_id']);
+            $bound = $task !== null && $task->account_id === $this->scope['driver']['account_id'];
+            foreach (['machine_id', 'installation_id', 'external_id', 'marker', 'account_revision', 'provider_created_at'] as $field)
+                $bound = $bound && isset($pin[$field]) && $task->{$field} === $pin[$field];
+            $tasks[$role] = ['task_id' => $pin['task_id'], 'binding_current' => $bound];
+            if (!$bound) { $resolved = false; continue; }
+            $value = $task->evidence[\App\Services\ServerMachine\Cloud\MachineProvisionDiagnostic::KEY] ?? null;
+            $tasks[$role] += ['status' => in_array($task->status, [...Task::TERMINAL, 'queued', 'creating', 'polling', 'bootstrapping', 'waiting_reports'], true)
+                    ? $task->status : 'other', 'first_error_present' => $value !== null,
+                'first_diagnostic' => \App\Services\ServerMachine\Cloud\MachineProvisionDiagnostic::safe($value)];
+        }
+        $state = ($this->load)('round-driver'); $branches = [];
+        foreach (['native_cleanup', 'cooldown', 'retry', 'b_unchanged', 'dns_cutover', 'retry_exhausted', 'final_cleanup'] as $key)
+            $branches[$key] = ($state['branches'][$key] ?? null) === true;
+        $setup = ['available' => false];
+        if (file_exists(MemberCliAuthority::ROOT . '/member-setup-grant.json') || is_link(MemberCliAuthority::ROOT . '/member-setup-grant.json')) {
+            try {
+                $controller = new MemberSetupController(MemberSetupAuthority::open(), true);
+                try { $setup = $controller->evidence(); } finally { $controller->close(); }
+            } catch (\Throwable $error) {
+                $setup = ['available' => false, 'diagnostic' => self::safeDiagnostic([
+                    'class' => (new \ReflectionClass($error))->getShortName(), 'file' => basename($error->getFile()), 'line' => $error->getLine()])];
+            }
+        }
+        $body = ['schema' => 1] + $this->authority->identity() + [
+            'scope_sha256' => hash('sha256', MachineIntentJson::encode($this->scope)), 'stopped' => true,
+            'reconciled' => $resolved, 'reconcile_diagnostic' => $diagnostic, 'tasks' => $tasks,
+            'driver' => ['present' => $state !== null, 'branches' => $branches,
+                'first_error_present' => ($state['first_error'] ?? null) !== null,
+                'first_diagnostic' => self::safeDiagnostic($state['first_diagnostic'] ?? null)],
+            'setup' => $setup, 'cleanup_complete_not_asserted' => true];
+        $content = MachineIntentJson::encode($body);
+        self::need(strlen($content) <= 65536, 'evidence_too_large');
+        $result = ['schema' => 1, 'sha256' => hash('sha256', $content), 'content' => $content];
+        $key = 'evidence-' . $result['sha256'];
+        ($this->save)($key, $result);
+        self::need(($this->load)($key) === $result, 'evidence_readback_failed');
+        return $result;
     }
 
     private function registry(string $operation): MemberSourceRegistry

@@ -70,7 +70,7 @@ final class MemberNativeController
 
     private function load(string $key): ?array
     {
-        self::need(preg_match('/^(source-[ab]|delete-(source-[ab]|candidate-a[12])|round-driver|round-stop|rpc-mutation|rpc-[a-f0-9]{32})$/D', $key) === 1,
+        self::need(preg_match('/^(source-[ab]|delete-(source-[ab]|candidate-a[12])|round-driver|round-stop|evidence-[a-f0-9]{64}|rpc-mutation|rpc-[a-f0-9]{32})$/D', $key) === 1,
             'isolated_journal_key');
         $path = self::JOURNAL . '/' . $key . '.json'; clearstatcache(true, $path);
         return @lstat($path) ? self::read($path, 262144) : null;
@@ -79,7 +79,7 @@ final class MemberNativeController
     private function save(string $key, array $value): void
     {
         $previous = $this->load($key);
-        if ((str_starts_with($key, 'delete-') || $key === 'round-stop') && $previous !== null) {
+        if ((str_starts_with($key, 'delete-') || str_starts_with($key, 'evidence-') || $key === 'round-stop') && $previous !== null) {
             self::need($previous === $value, 'isolated_intent_changed');
             return;
         }
@@ -104,7 +104,7 @@ final class MemberNativeController
     {
         self::need(is_resource($this->lock), 'isolated_rpc_closed');
         $root = MemberCliAuthority::ROOT;
-        if (!in_array($request['operation'] ?? null, ['round-status', 'round-stop', 'round-dns-cleanup', 'task-inspect', 'task-delete'], true)
+        if (!in_array($request['operation'] ?? null, ['round-status', 'round-stop', 'round-dns-cleanup', 'round-evidence', 'task-inspect', 'task-delete'], true)
             && (file_exists($root . '/member-setup-grant.json') || is_link($root . '/member-setup-grant.json'))) {
             $setup = self::read($root . '/member-setup-grant.json', 65536, true);
             $cap = self::read($root . '/member-candidate-callbacks.json', 65536, true);

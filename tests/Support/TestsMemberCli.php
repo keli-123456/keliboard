@@ -97,6 +97,67 @@ trait TestsMemberCli
         return $this->memberCallbackProjection();
     }
 
+    public function test_member_evidence_requires_stop_preserves_task_errors_and_never_exports_raw_payloads(): void
+    {
+        [$authority, $bridge] = $this->cliFixture();
+        try { $bridge->dispatch($this->cliRequest('round-evidence')); $this->fail(); }
+        catch (\RuntimeException $error) { $this->assertSame('member_cli_final_cleanup_required', $error->getMessage()); }
+        $task = $this->fixtures[0]['source']->fresh();
+        $safe = \App\Services\ServerMachine\Cloud\MachineProvisionDiagnostic::project(new \RuntimeException('secret-task-message'), 'reports');
+        $task->evidence = ['task_diagnostic' => $safe, 'raw' => 'secret-task-body']; $task->save();
+        $this->memberTransportJournal['round-driver'] = ['first_error' => 'secret-driver-message',
+            'first_diagnostic' => ['class' => 'RuntimeException', 'site' => 'member_retry_driver', 'line' => 99,
+                'native_reason' => 'secret-reason', 'stack' => 'secret-stack'],
+            'branches' => ['b_unchanged' => true, 'unknown' => 'secret-branch']];
+        $bridge->dispatch($this->cliRequest('round-stop'));
+        $this->retryClock->at = $this->cliScope['deadline_at'] + 10;
+        $before = $task->fresh()->getRawOriginal();
+        $reply = $bridge->dispatch($this->cliRequest('round-evidence'))['result'];
+        $this->assertSame(hash('sha256', $reply['content']), $reply['sha256']);
+        $body = json_decode($reply['content'], true, 32, JSON_THROW_ON_ERROR);
+        $this->assertTrue($body['reconciled']); $this->assertTrue($body['stopped']);
+        $this->assertTrue($body['cleanup_complete_not_asserted']);
+        $this->assertTrue($body['driver']['first_error_present']);
+        $this->assertSame(['class' => 'RuntimeException', 'file' => 'member_retry_driver.php', 'line' => 99], $body['driver']['first_diagnostic']);
+        $this->assertEquals($safe, $body['tasks']['source-a']['first_diagnostic']);
+        $this->assertTrue($body['tasks']['source-a']['first_error_present']);
+        $this->assertStringNotContainsString('secret-', $reply['content']);
+        foreach (['payload', 'credentials', 'callback_hash', 'installation_id'] as $key) $this->assertStringNotContainsString('"' . $key . '"', $reply['content']);
+        $this->assertSame($reply, $bridge->dispatch($this->cliRequest('round-evidence'))['result']);
+        $this->assertSame($reply, $this->memberTransportJournal['evidence-' . $reply['sha256']]);
+        $this->assertSame($before, $task->fresh()->getRawOriginal());
+        $this->assertSame(0, $this->dnsWrites); $this->assertCount(0, $this->posts); $this->cliAssertClosed();
+    }
+
+    public function test_member_evidence_reports_drift_without_adopting_it_or_losing_prior_snapshot(): void
+    {
+        [, $bridge] = $this->cliFixture();
+        $bridge->dispatch($this->cliRequest('round-stop'));
+        $first = $bridge->dispatch($this->cliRequest('round-evidence'))['result'];
+        $task = $this->fixtures[0]['source']->fresh(); $task->external_id = '999999'; $task->save();
+        $second = $bridge->dispatch($this->cliRequest('round-evidence'))['result'];
+        $body = json_decode($second['content'], true, 32, JSON_THROW_ON_ERROR);
+        $this->assertFalse($body['reconciled']); $this->assertFalse($body['tasks']['source-a']['binding_current']);
+        $this->assertArrayNotHasKey('status', $body['tasks']['source-a']);
+        $this->assertStringNotContainsString('999999', $second['content']);
+        $this->assertNotSame($first['sha256'], $second['sha256']);
+        $this->assertSame($first, $this->memberTransportJournal['evidence-' . $first['sha256']]);
+        $this->assertSame(0, $this->dnsWrites); $this->assertCount(0, $this->posts); $this->cliAssertClosed();
+    }
+
+    public function test_member_evidence_rejects_false_readback_and_projects_only_known_diagnostic_fields(): void
+    {
+        [$authority] = $this->cliFixture();
+        $this->memberTransportJournal['round-stop'] = ['stopped' => true];
+        $bridge = new Bridge($this->cliScope, $authority, fn ($k) => $this->memberTransportJournal[$k] ?? null,
+            static fn () => null, fn () => $this->retryClock->at);
+        try { $bridge->dispatch($this->cliRequest('round-evidence')); $this->fail(); }
+        catch (\RuntimeException $error) { $this->assertSame('member_round_evidence_readback_failed', $error->getMessage()); }
+        $this->assertSame(['class' => 'other', 'file' => null, 'line' => null], Bridge::safeDiagnostic([
+            'class' => 'private-token', 'file' => '/secret/member_retry_driver.php', 'line' => 100, 'message' => 'secret']));
+        $this->cliAssertClosed();
+    }
+
     private function memberCallbackProjection(): array
     {
         require_once base_path('tools/machine-acceptance/member_candidate_callbacks.php');

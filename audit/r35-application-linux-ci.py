@@ -785,6 +785,40 @@ try:
         dns_summary = php('setup-native-rpc-dns-summary')
         assert dns_summary == dict(task_history_unchanged=True, records_remaining=0,
             delete_calls=3, create_calls=3, claim_calls=3), dns_summary
+        from member_evidence import MemberEvidenceArchive
+        evidence_directory = fixture_root / 'host-evidence'
+        evidence_directory.mkdir(mode=0o700)
+        def evidence_ssh(command, payload, timeout):
+            assert command[-1] == 'php /opt/keli-isolated/runtime/member_transport_entry.php'
+            request = json.loads(payload)
+            assert request['operation'] == 'round-evidence' and timeout == 45
+            return json.dumps(fixed_native(request, ok=True)).encode()
+        evidence_transport = BoundControllerTransport(grant_file=native_path,
+            grant_sha256=hashlib.sha256(native_bytes).hexdigest(),
+            **dict(transport_args, execute=evidence_ssh))
+        archive = MemberEvidenceArchive(evidence_transport, evidence_directory)
+        exported = archive.capture()
+        body = archive.verify(exported)
+        assert body['stopped'] and body['reconciled'] and body['cleanup_complete_not_asserted'], body
+        assert set(body['tasks']) == {'source-a', 'source-b', 'candidate-a1'}
+        assert all(t['binding_current'] for t in body['tasks'].values()), body
+        assert body['setup']['available'] and body['setup']['first_error_present'], body
+        assert body['setup']['first_diagnostic']['class'] == 'ConnectionException', body
+        archive = MemberEvidenceArchive(evidence_transport, evidence_directory)
+        assert archive.capture() == exported and archive.verify(exported) == body
+        raw_evidence = (evidence_directory / ('evidence-' + exported['sha256'] + '.json')).read_bytes()
+        assert all(secret.encode() not in raw_evidence for secret in ('s' * 32, 'r' * 32))
+        assert not any(key in raw_evidence for key in (b'api_token', b'access_key_secret', b'callback_hash', b'"payload"'))
+        assert all(p.stat().st_mode & 0o777 == 0o600 for p in evidence_directory.iterdir())
+        assert php('setup-native-rpc-dns-summary') == dns_summary
+        assert php('setup-native-rpc-summary') == dict(summary, dns_unchanged=False)
+        assert dns_first_error_path.read_bytes() == dns_first_error
+        SUMMARY['native_evidence_export'] = dict(actual_fixed_cli=True, actual_mysql_and_setup_journal=True,
+            stopped_only=True, host_byte_transport_simulated=True, cloud_or_dns_requests=0,
+            local_atomic_journal_and_readback=True, restart_same_digest=True, files_mode_0600=True,
+            setup_first_error_preserved=True, task_history_preserved=True, payloads_and_credentials_excluded=True,
+            evidence_digest=exported['sha256'], cleanup_completion_not_claimed=True,
+            private_removal_and_controller_deletion_pending=True)
         SUMMARY['native_dns_cleanup_handoff'] = dict(actual_shared_root_rpc_and_setup_journal=True,
             actual_host_bound_transport=True, ssh_byte_transport_simulated=True,
             original_dns_create_receipts_preserved=True, no_native_dns_cutover_in_this_component=True,

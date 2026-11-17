@@ -11,13 +11,14 @@ from member_cli import BoundControllerTransport, MemberControllerPort, RUN
 from member_round import MemberRound
 from member_transport import TransportError, REMOTE_ENTRY
 from member_auxiliary import digest
+from member_evidence import MemberEvidenceArchive
 from test_member_round import RoundFixture
 
 
 class MemberCliTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
-        self.directory = Path(self.tmp.name)
+        self.directory = Path(self.tmp.name).resolve()
         self.f = RoundFixture()
         self.f.scope = json.loads(json.dumps(self.f.scope).replace(self.f.scope['run_id'], RUN))
         self.f.pins = {digest(p): True for p in [self.f.scope['control'], *self.f.scope['records'], *self.f.scope['private_files']]}
@@ -54,6 +55,12 @@ class MemberCliTests(unittest.TestCase):
         if op == 'round-ready': result = {'ready': True}
         elif op == 'round-stop': self.stopped = True; result = {'stopped': True}
         elif op == 'round-status': result = dict(run_id=RUN, resolved=not self.unknown, stopped=self.stopped, roles=self.f.roles)
+        elif op == 'round-evidence':
+            body = dict(schema=1, **self.trans.identity_binding, scope_sha256='f' * 64, stopped=self.stopped,
+                reconciled=not self.unknown, reconcile_diagnostic=None, tasks={}, driver={}, setup={},
+                cleanup_complete_not_asserted=True)
+            content = json.dumps(body, sort_keys=True, separators=(',', ':'))
+            result = dict(schema=1, sha256=hashlib.sha256(content.encode()).hexdigest(), content=content)
         elif op == 'round-step':
             result = dict(phase='finished', branches=dict.fromkeys(('native_cleanup', 'cooldown', 'retry', 'b_unchanged', 'dns_cutover'), True))
         elif op in ('task-delete', 'task-inspect'): result = self.f.task(op, r['role'])
@@ -136,6 +143,59 @@ class MemberCliTests(unittest.TestCase):
         self.changed = None
         with self.assertRaisesRegex(TransportError, 'reconcile_required'): self.trans.call('round-step')
         self.trans.call('round-stop'); self.trans.call('round-status')
+
+    def test_evidence_export_requires_stop_reads_local_copy_and_retains_earlier_snapshot(self):
+        archive = MemberEvidenceArchive(self.trans, self.directory)
+        with self.assertRaisesRegex(TransportError, 'cleanup_requires_stop'): archive.capture()
+        self.assertEqual([], self.requests)
+        self.trans.call('round-stop')
+        first = archive.capture()
+        self.assertTrue(archive.verify(first)['reconciled'])
+        self.unknown = True
+        self.f.now = self.g['deadline_at'] + 1
+        archive = MemberEvidenceArchive(self.make_transport(), self.directory)
+        second = archive.capture()
+        self.assertNotEqual(first['sha256'], second['sha256'])
+        self.assertTrue(archive.verify(first)['reconciled'])
+        self.assertFalse(archive.verify(second)['reconciled'])
+        self.assertEqual(first, archive.journal.load('evidence-first.json'))
+        self.assertEqual(second, archive.journal.load('evidence-latest.json'))
+        self.assertEqual(second, archive.capture())
+        self.assertNotIn('bound-uncertain', self.f.journal)
+        self.assertEqual({'round-stop', 'round-evidence'}, {r['operation'] for r in self.requests})
+
+    def test_evidence_corrupt_local_copy_or_failed_write_never_reports_verified(self):
+        self.trans.call('round-stop')
+        archive = MemberEvidenceArchive(self.trans, self.directory)
+        with patch.object(archive.journal, 'save', side_effect=PermissionError('private/path')):
+            with self.assertRaises(PermissionError): archive.capture()
+        self.assertFalse((self.directory / 'evidence-latest.json').exists())
+        receipt = archive.capture()
+        path = self.directory / ('evidence-' + receipt['sha256'] + '.json')
+        path.write_text('{}', encoding='utf-8')
+        with self.assertRaisesRegex(TransportError, 'local_copy_changed'): archive.capture()
+        with self.assertRaisesRegex(TransportError, 'local_copy_changed'): archive.verify(receipt)
+
+    def test_evidence_rejects_wrong_scope_digest_duplicate_json_or_cleanup_claim(self):
+        self.trans.call('round-stop')
+        archive = MemberEvidenceArchive(self.trans, self.directory)
+        original = self.trans.call('round-evidence')
+        for field, value in [('grant_id', '0' * 32), ('run_id', 'another-run'), ('stopped', False),
+                             ('cleanup_complete_not_asserted', False), ('schema', True)]:
+            changed = copy.deepcopy(original)
+            body = json.loads(changed['content']); body[field] = value
+            changed['content'] = json.dumps(body); changed['sha256'] = hashlib.sha256(changed['content'].encode()).hexdigest()
+            with patch.object(self.trans, 'call', return_value=changed):
+                with self.assertRaisesRegex(TransportError, 'binding_changed'): archive.capture()
+        changed = dict(original, sha256='0' * 64)
+        with patch.object(self.trans, 'call', return_value=changed):
+            with self.assertRaisesRegex(TransportError, 'digest_changed'): archive.capture()
+        changed = dict(original, content=original['content'][:-1] + ',"schema":1}')
+        changed['sha256'] = hashlib.sha256(changed['content'].encode()).hexdigest()
+        from driver_journal import Rejected
+        with patch.object(self.trans, 'call', return_value=changed):
+            with self.assertRaisesRegex(Rejected, 'duplicate_journal_key'): archive.capture()
+        self.assertFalse((self.directory / 'evidence-latest.json').exists())
 
     def test_mutated_authority_file_and_arbitrary_operations_are_rejected(self):
         with self.assertRaisesRegex(TransportError, 'operation_invalid'): self.trans.call('create', 'candidate-a1')
