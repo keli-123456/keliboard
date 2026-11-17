@@ -106,7 +106,8 @@ return static function (string $mode): array {
                 'region' => 'sg-sin-2', 'size' => 'g6-standard-2', 'image' => 'linode/debian12', 'provider_created_at' => gmdate('Y-m-d\TH:i:s\Z')];
             $row = ['id' => 100000, 'label' => $control['label'], 'tags' => [$control['marker']],
                 'region' => $control['region'], 'type' => $control['size'], 'image' => $control['image'],
-                'created' => rtrim($control['provider_created_at'], 'Z'), 'ipv4' => ['9.9.9.10']];
+                'created' => rtrim($control['provider_created_at'], 'Z'), 'ipv4' => ['9.9.9.10'],
+                'ipv6' => '', 'status' => 'running'];
             $save('control-row', $row);
             Http::preventStrayRequests();
             Http::fake(static function ($request) use ($row, $need) {
