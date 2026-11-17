@@ -171,7 +171,7 @@ return static function (string $mode): array {
     }
     Http::preventStrayRequests();
     $writes = 0; $reads = 0;
-    Http::fake(static function ($request) use ($load, $save, &$writes, &$reads, $need, $mode) {
+    $provider = static function ($request) use ($load, $save, &$writes, &$reads, $need, $mode) {
         if ($request->url() === 'https://alidns.aliyuncs.com/') {
             $need(is_string($request['Signature']), 'dns_signature');
             $dns = $load('setup-dns-provider') ?? ['rows' => [], 'next_id' => 6001, 'create' => 0, 'claim' => 0, 'delete' => 0];
@@ -214,7 +214,8 @@ return static function (string $mode): array {
             if ($candidate) {
                 $attempt = App\Models\MachineFailoverAttempt::findOrFail($task->payload['coordinated_attempt']);
                 $need($mode === 'setup-candidate-step' && $role === 'source-a' && $attempt->ordinal === 1
-                    && $attempt->task_id === $task->id && $attempt->account_id === $scope['account_id'], 'candidate_create_scope');
+                    && $attempt->task_id === $task->id
+                    && $attempt->account_id === $scope['sources']['source-a']['plan']['account_id'], 'candidate_create_scope');
                 $id = 100003;
             }
             $need($path === '/v4/linode/instances' && !isset($rows[$id])
@@ -275,6 +276,19 @@ return static function (string $mode): array {
             default => throw new RuntimeException('fixture_setup_provider_operation'),
         };
         return Http::response($response);
+    };
+    Http::fake(static function ($request) use ($provider, $load, $save) {
+        try { return $provider($request); }
+        catch (Throwable $error) {
+            try {
+                if ($load('provider-first-error') === null) $save('provider-first-error', [
+                    'class' => (new ReflectionClass($error))->getShortName(),
+                    'reason' => preg_match('/^fixture_[a-z_]{1,80}$/D', $error->getMessage()) ? $error->getMessage() : 'fixture_provider_error',
+                    'file' => $error->getFile() === __FILE__ ? basename(__FILE__) : null,
+                    'line' => $error->getFile() === __FILE__ ? $error->getLine() : null]);
+            } catch (Throwable) { /* Diagnostic storage cannot replace the original error. */ }
+            throw $error;
+        }
     });
     if (str_starts_with($mode, 'setup-candidate-') && $mode !== 'setup-candidate-pins') {
         [$nativeScope, $nativeHash] = MemberCliAuthority::readGrant();
@@ -328,6 +342,9 @@ return static function (string $mode): array {
             'callback_state' => $task?->bootstrap_state, 'report_at' => $at, 'health' => $health,
             'callback_steps' => $task ? DB::table('v2_machine_provision_step')->where('task_id', $task->id)
                 ->where('state', 'like', 'bootstrap_%')->count() : 0,
+            'task_diagnostic' => App\Services\ServerMachine\Cloud\MachineProvisionDiagnostic::safe(
+                $task?->evidence[App\Services\ServerMachine\Cloud\MachineProvisionDiagnostic::KEY] ?? null),
+            'provider_first_error' => $load('provider-first-error'),
             'provider_writes_simulated' => $writes, 'provider_rows' => count($load('provider-rows') ?? []),
             'b_and_dns_unchanged' => true, 'persistent_gates_closed' => true];
     }
