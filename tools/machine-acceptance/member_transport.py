@@ -185,8 +185,8 @@ class StrictControllerTransport:
 
     def setup_call(self, operation, identity):
         """Fixed setup CLI, with a durable intent before each advancing RPC."""
-        require(operation in ('advance', 'status', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback',
-                              'native-issue', 'native-read'), 'transport_setup_operation_invalid')
+        require(operation in ('advance', 'status', 'resources', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback',
+                              'native-issue', 'native-read', 'native-export'), 'transport_setup_operation_invalid')
         require(isinstance(identity, dict) and set(identity) == {'grant_id', 'grant_sha256', 'deadline_at'}
                 and type(identity['deadline_at']) is int and identity['deadline_at'] > 0
                 and all(isinstance(identity[k], str) and re.fullmatch(r'[a-f0-9]{%d}' % n, identity[k])
@@ -221,11 +221,13 @@ class StrictControllerTransport:
             result = unique_json(raw)
             require(all(result.get(k) == v for k, v in request.items()), 'transport_response_binding_changed')
             require(result.get('ok') is True and isinstance(result.get('result'), dict), 'transport_remote_rejected')
-            if operation in ('native-issue', 'native-read'):
+            if operation in ('native-issue', 'native-read', 'native-export'):
                 value = copy.deepcopy(result['result'])
+                exported = value.pop('grant_base64', None)
+                require((exported is not None) == (operation == 'native-export'), 'transport_native_export_invalid')
                 metadata = {'uncertain_request', 'uncertain_cleanup'}
                 if metadata & set(value):
-                    require(operation == 'native-read' and metadata <= set(value)
+                    require(operation in ('native-read', 'native-export') and metadata <= set(value)
                             and all(value[key] is None for key in metadata), 'transport_native_readback_uncertain')
                     for key in metadata: value.pop(key)
                 if value.get('ready') is False:
@@ -250,6 +252,18 @@ class StrictControllerTransport:
                             'transport_native_reply_invalid')
                     prior_grant = self.load('setup-native-grant')
                     require(prior_grant is None or prior_grant == value, 'transport_native_grant_changed')
+                    if operation == 'native-export':
+                        import base64
+                        require(isinstance(exported, str) and len(exported) <= 87384, 'transport_native_export_invalid')
+                        try: grant_raw = base64.b64decode(exported, validate=True)
+                        except (ValueError, TypeError): raise TransportError('transport_native_export_invalid') from None
+                        require(len(grant_raw) <= 65536 and hashlib.sha256(grant_raw).hexdigest() == grant['grant_sha256'],
+                                'transport_native_export_changed')
+                        document = unique_json(grant_raw)
+                        require(isinstance(document, dict) and document.get('schema') == 2
+                                and document.get('execution_authorized') is True and document.get('isolated') is True
+                                and all(document.get(key) == grant[key] for key in ('run_id', 'grant_id', 'bundle_sha256'))
+                                and document.get('deadline_at') == identity['deadline_at'], 'transport_native_export_changed')
                     self.save('setup-native-grant', copy.deepcopy(value))
                     require(self.load('setup-native-grant') == value, 'transport_setup_journal_unconfirmed')
             if mutation or operation == 'cleanup':

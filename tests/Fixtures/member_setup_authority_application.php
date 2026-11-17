@@ -482,6 +482,14 @@ return static function (string $mode): array {
             'b_and_dns_unchanged' => true, 'persistent_gates_closed' => true];
     }
     $controller = new MemberSetupController($authority);
+    if ($mode === 'setup-host-rpc') {
+        $raw = stream_get_contents(STDIN, 1025);
+        $need(strlen($raw) <= 1024, 'host_request_too_large');
+        $request = json_decode($raw, true, 8, JSON_THROW_ON_ERROR);
+        $reply = $controller->rpc($request);
+        $closed();
+        return $reply;
+    }
     $rpcRequest = static function (string $operation) use ($authority, $load, $save): array {
         $sequence = ($load('rpc-sequence')['value'] ?? -1) + 1;
         $save('rpc-sequence', ['value' => $sequence]);

@@ -108,8 +108,23 @@ final class MemberSetupController
     public function dispatch(array $request): array
     {
         self::need(is_resource($this->lock) && array_keys($request) === ['operation']
-            && in_array($request['operation'], ['advance', 'status', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read'], true), 'request_invalid');
+            && in_array($request['operation'], ['advance', 'status', 'resources', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read', 'native-export'], true), 'request_invalid');
         try {
+            if ($request['operation'] === 'resources') {
+                $this->authority->allow('source-cleanup', 'source-a');
+                $files = [];
+                $path = MemberCliAuthority::ROOT . '/private/member-runtime-scope.json';
+                if (file_exists($path) || is_link($path)) {
+                    [$scope, $hash] = MemberCliAuthority::readGrant();
+                    $window = $this->authority->windowBinding();
+                    self::need($scope['run_id'] === MemberCliAuthority::RUN
+                        && $scope['bundle_sha256'] === MemberApplicationBootstrap::receipt()['bundle_sha256']
+                        && $scope['started_at'] === $window['started_at'] && $scope['deadline_at'] === $window['deadline_at'], 'native_scope_changed');
+                    $files[] = ['run_id' => MemberCliAuthority::RUN, 'path' => 'private/member-runtime-scope.json', 'sha256' => $hash];
+                }
+                return ['resolved' => true, 'roles' => (object) $this->sources->resourcePins(),
+                    'records' => $this->dns()->resourcePins(), 'private_files' => $files];
+            }
             if (str_starts_with($request['operation'], 'native-')) {
                 self::need($this->load('first-error') === null, 'prior_failure');
                 $native = new MemberNativeGrant($this->authority, function (): array {
@@ -121,7 +136,9 @@ final class MemberSetupController
                     }
                     return $sources;
                 }, fn () => $this->dns()->readback());
-                return $request['operation'] === 'native-issue' ? $native->issue() : $native->readback();
+                return match ($request['operation']) {
+                    'native-issue' => $native->issue(), 'native-export' => $native->export(), default => $native->readback(),
+                };
             }
             if (str_starts_with($request['operation'], 'dns-')) {
                 if ($request['operation'] === 'dns-readback') return $this->dns()->readback();
@@ -197,7 +214,7 @@ final class MemberSetupController
             && ($request['schema'] ?? null) === 1 && ($request['run_id'] ?? null) === MemberCliAuthority::RUN
             && is_int($request['deadline_at'] ?? null) && $request['deadline_at'] > 0
             && is_int($request['sequence'] ?? null) && $request['sequence'] >= 0
-            && in_array($request['operation'] ?? null, ['advance', 'status', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read'], true), 'request_invalid');
+            && in_array($request['operation'] ?? null, ['advance', 'status', 'resources', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read', 'native-export'], true), 'request_invalid');
         foreach (['grant_id' => 32, 'grant_sha256' => 64, 'request_id' => 32] as $key => $length)
             self::need(is_string($request[$key] ?? null)
                 && preg_match('/^[a-f0-9]{' . $length . '}$/D', $request[$key]) === 1, 'request_invalid');

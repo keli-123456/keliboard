@@ -89,7 +89,12 @@ class MemberExecutionSetup:
         return {'request_sha256': digest(request), 'resolved': True}
 
     def collect_scope(self):
-        pieces = {name: port.snapshot() for name, port in self.ports.items()}
+        return self.scope_from_snapshots({name: port.snapshot() for name, port in self.ports.items()})
+
+    @staticmethod
+    def scope_from_snapshots(pieces):
+        require(isinstance(pieces, dict) and set(pieces) == {'installation', 'sources', 'dns', 'authority'},
+                'cleanup_execution_snapshot_invalid')
         roles, auxiliary = {}, dict(run_id=RUN, control=None, records=[], faults=[], private_files=[], requests=[])
         allowed = {'installation': {'private_files', 'requests'}, 'sources': {'roles', 'faults', 'requests'},
                    'dns': {'records', 'requests'}, 'authority': {'private_files', 'requests'}}

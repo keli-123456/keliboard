@@ -219,6 +219,46 @@ trait TestsMemberInitialization
         $this->assertSame($before, Task::orderBy('id')->get()->toArray());
     }
 
+    public function test_member_resource_pins_are_read_only_and_include_partial_bootstrap(): void
+    {
+        $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api);
+        $this->fixtures[0]['source']->refresh()->fill(['bootstrap_state' => 'failed'])->save();
+        $before = Task::orderBy('id')->get()->toArray(); $journal = $this->initializationJournal;
+        \Illuminate\Support\Facades\Http::fake(fn () => throw new \RuntimeException('unexpected_provider_call'));
+        $this->assertSame(['source-a' => ['task_id' => $this->fixtures[0]['source']->id, 'external_id' => '901'],
+            'source-b' => ['task_id' => $this->fixtures[1]['source']->id, 'external_id' => '902']], $api->resourcePins());
+        $this->assertSame($before, Task::orderBy('id')->get()->toArray());
+        $this->assertSame($journal, $this->initializationJournal);
+        $this->assertSame(0, $this->candidateDeletes); $this->assertSame(0, $this->dnsWrites);
+    }
+
+    public function test_member_resource_pins_do_not_turn_lost_create_ack_into_absence(): void
+    {
+        $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api);
+        $this->fixtures[0]['source']->refresh()->fill(['external_id' => null, 'provider_created_at' => null, 'public_ips' => []])->save();
+        $this->expectExceptionMessage('create_receipt_unknown'); $api->resourcePins();
+    }
+
+    public function test_member_resource_pins_refuse_missing_or_unowned_task(): void
+    {
+        $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api);
+        unset($this->initializationJournal['source-queue-source-a']);
+        try { $api->resourcePins(); $this->fail(); }
+        catch (\RuntimeException $error) { $this->assertSame('member_initialization_queue_intent_missing', $error->getMessage()); }
+        $this->bindPreparedSourceTasks($api); $this->fixtures[0]['source']->delete();
+        $this->expectExceptionMessage('queue_readback_required'); $api->resourcePins();
+    }
+
+    public function test_member_resource_pins_distinguish_never_queued_and_never_dispatched(): void
+    {
+        $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api);
+        $this->fixtures[0]['source']->refresh()->fill(['dispatched_at' => null, 'external_id' => null,
+            'provider_created_at' => null, 'public_ips' => []])->save();
+        $this->fixtures[1]['source']->delete(); unset($this->initializationJournal['source-queue-source-b']);
+        $this->assertSame([], $api->resourcePins());
+        $this->assertSame(0, $this->candidateDeletes);
+    }
+
     public function test_member_initialization_partial_cleanup_needs_no_registered_peer(): void
     {
         $api = $this->initializationFixture(); $this->bindPreparedSourceTasks($api);

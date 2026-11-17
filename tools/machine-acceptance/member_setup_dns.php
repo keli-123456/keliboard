@@ -130,6 +130,22 @@ final class MemberSetupDns
         });
     }
 
+    public function resourcePins(): array
+    {
+        $this->authority->allow('dns-readback', 'control');
+        $pins = [];
+        foreach (['control', 'edges'] as $kind) {
+            $scope = ($this->load)('dns-scope-' . $kind);
+            if ($scope === null) continue;
+            $dns = new MemberDnsInitialization($scope, $this->credential(), static fn () => null, $this->load, $this->save);
+            foreach (array_keys($scope['records']) as $role) {
+                $pin = $dns->cleanupReceipt($role);
+                if ($pin !== null) $pins[] = $pin;
+            }
+        }
+        return $pins;
+    }
+
     public function cleanup(): array
     {
         $this->authority->stop();

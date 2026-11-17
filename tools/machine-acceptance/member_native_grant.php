@@ -192,6 +192,15 @@ final class MemberNativeGrant
         return $this->readback();
     }
 
+    public function export(): array
+    {
+        $receipt = $this->readback();
+        // The host must retain these exact bytes, never reserialize a privileged grant.
+        $raw = file_get_contents(self::GRANT);
+        self::need(is_string($raw) && hash_equals($receipt['identity']['grant_sha256'], hash('sha256', $raw)), 'export_changed');
+        return $receipt + ['grant_base64' => base64_encode($raw)];
+    }
+
     public function readback(): array
     {
         $this->guard();

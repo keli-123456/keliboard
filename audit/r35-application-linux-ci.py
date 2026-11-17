@@ -103,7 +103,7 @@ try:
     tests = subprocess.run(['python3', '-B', '-m', 'unittest', '-v', 'test_member_environment',
         'test_member_installation_linux.InstallationServiceUserTests', 'test_member_execution.ExecutionTests',
         'test_member_assembly', 'test_member_initialization', 'test_member_cli', 'test_member_round',
-        'test_member_transport', 'test_member_private_cleanup', 'test_member_bundle', 'test_member_runtime_bundle'],
+        'test_member_transport', 'test_member_remote_setup', 'test_member_private_cleanup', 'test_member_bundle', 'test_member_runtime_bundle'],
         cwd=TOOLS, capture_output=True, text=True, timeout=240)
     (ART / 'python.log').write_text(tests.stdout + tests.stderr)
     assert tests.returncode == 0, 'python_regression_failed'
@@ -339,6 +339,64 @@ try:
     dispatched = php('setup-process')
     assert dispatched['native_dispatch'] and dispatched['provider_writes_simulated'] == 1
     assert php('setup-process-repeat')['provider_writes_simulated'] == 0
+    # Bind the remaining source/DNS/grant stages to the actual controller. Early
+    # fixture setup above deliberately exercises fault injection before this handoff.
+    from driver_journal import DriverJournal
+    from member_transport import StrictControllerTransport, TransportError
+    from member_remote_setup import MemberRemoteSetup
+    from member_auxiliary import digest
+    host_root = work / 'native-host'; host_root.mkdir(mode=0o700)
+    key = host_root / 'key'; known = host_root / 'known_hosts'
+    key.write_bytes(b'synthetic-ssh-key'); known.write_bytes(b'synthetic-known-host')
+    key.chmod(0o600); known.chmod(0o600)
+    (host_root / 'journal').mkdir(mode=0o700)
+    host_journal = DriverJournal(host_root / 'journal', RUN)
+    def host_load(name):
+        try: return host_journal.load(name + '.json')
+        except FileNotFoundError: return None
+    def host_save(name, value): host_journal.save(name + '.json', value)
+    setup_last = {}
+    def setup_ssh(args, payload, timeout):
+        for option in ('BatchMode=yes', 'IdentitiesOnly=yes', 'StrictHostKeyChecking=yes', 'UpdateHostKeys=no'):
+            assert option in args
+        assert args[-2] == 'root@9.9.9.10'
+        if args[-1] == 'php /opt/keli-isolated/runtime/member_import_entry.php':
+            argv = [str(ROOT / 'runtime/member_import_entry.php')]
+        else:
+            assert args[-1] == 'php /opt/keli-isolated/runtime/member_setup_entry.php'
+            argv = [str(ROOT / 'app/tests/Fixtures/member_full_application.php'), 'setup-host-rpc']
+        p = subprocess.run(['php', '-d', 'display_errors=0', '-d', 'log_errors=0', *argv], input=payload,
+            cwd=ROOT / 'app', env=ENV, capture_output=True, timeout=timeout)
+        value = json.loads(p.stdout)
+        assert p.returncode == 0, dict(stage='setup_host_rpc', **value)
+        setup_last.clear(); setup_last.update(value)
+        return p.stdout
+    transport_args = dict(run_id=RUN, host='9.9.9.10', identity_file=key, known_hosts=known,
+        guard=lambda *_: None, load=host_load, save=host_save, execute=setup_ssh)
+    bootstrap_transport = StrictControllerTransport(**transport_args)
+    assert bootstrap_transport.bootstrap_call('import')['verified']
+    setup_identity = bootstrap_transport.bootstrap_call('setup-issue', actual_grant['control'])['setup']
+    host_save('remote-setup-identity', setup_identity)
+    # Retain the real preceding fixture RPC receipt when crossing into the host
+    # port; never alter the remote sequence or synthesize a completed mutation.
+    latest_rpc = json.loads((ROOT / 'private/member-setup-journal/rpc-mutation.json').read_bytes())
+    prior_rpc = json.loads((ROOT / ('private/member-setup-journal/rpc-' + latest_rpc['request_id'] + '.json')).read_bytes())
+    assert latest_rpc['completed'] and prior_rpc['reply']['ok']
+    host_save('setup-mutation', dict(request=prior_rpc['request'], completed=True, reply=prior_rpc['reply']))
+    host_scope = {key: actual_grant[key] for key in ('run_id', 'bundle_sha256', 'started_at', 'deadline_at')}
+    remote_setup = MemberRemoteSetup(scope=host_scope, transport=bootstrap_transport,
+        grant_file=host_root / 'native-grant.json', load=host_load, save=host_save)
+    setup_port_receipts = {}
+    def host_stage(stage, owner):
+        predecessors = dict(full_application_predecessors=True)
+        request = dict(run_id=RUN, bundle_sha256=host_scope['bundle_sha256'], stage=stage,
+            predecessors_sha256=digest(predecessors), request_id=digest([host_scope, stage])[:32])
+        reply = remote_setup.port(owner).dispatch(stage, request, predecessors)
+        if reply.get('completed'): setup_port_receipts[stage] = reply['receipt']
+        # Diagnostic phase detail is the real RPC result, not a substitute receipt.
+        value = dict(setup_last['result']); value.pop('grant_base64', None)
+        value.pop('uncertain_request', None); value.pop('uncertain_cleanup', None)
+        return value
     assert php('setup-callback-pins')['roles'] == 1
     pins = {'source-a': json.loads((ROOT / 'private/setup-fixture/source-a-callback.json').read_bytes())}
     observed = php('inspect', uid=65534)
@@ -444,7 +502,7 @@ try:
     def advance_due():
         deadline = time.monotonic() + 70
         while True:
-            value = php('setup-advance')
+            value = host_stage('sources-initialize', 'sources')
             if value.get('reason') != 'native_wait': return value
             assert time.monotonic() < deadline, value
             assert value['retry_at'] > time.time() - 1, value
@@ -460,7 +518,7 @@ try:
     assert report('source-a', node=True, wrapped_node=True) == 422
     waiting_status = setup_rpc('status')['sources']['source-a']
     assert waiting_status['status'] == 'waiting_node_reports'
-    waiting = php('setup-advance')
+    waiting = host_stage('sources-initialize', 'sources')
     assert waiting['reason'] == 'native_wait' and waiting['retry_at'] == waiting_status['next_check_at'], waiting
     node_status = report('source-a', node=True)
     assert node_status == 200, dict(status=node_status, phase='source_node_status')
@@ -481,12 +539,12 @@ try:
             assert state['fresh_reports'] == i + 1, state
             if i < 2:
                 assert result['reason'] == 'fresh_reports' and not state['registered']
-                php('setup-advance')
+                host_stage('sources-initialize', 'sources')
                 assert setup_rpc('status')['sources'][role]['fresh_reports'] == i + 1
             else: assert result['reason'] == 'registered' and state['registered'] and state['status'] == 'accepted'
 
     register('source-a')
-    waiting = php('setup-advance')
+    waiting = host_stage('sources-initialize', 'sources')
     assert waiting['reason'] == 'account_cooldown' and waiting['role'] == 'source-b'
     assert not setup_rpc('status')['sources']['source-b']['queued']
     assert waiting['retry_at'] == pins['source-a']['created_at'] + 300
@@ -494,24 +552,23 @@ try:
     while time.time() < waiting['retry_at'] + 1:
         time.sleep(min(10, waiting['retry_at'] + 1 - time.time()))
     SUMMARY['source_serial_cooldown_wait_seconds'] = int(time.monotonic() - cooldown_started)
-    assert php('setup-advance')['reason'] == 'prepare'
-    assert php('setup-advance')['reason'] == 'process'
+    assert host_stage('sources-initialize', 'sources')['reason'] == 'prepare'
+    assert host_stage('sources-initialize', 'sources')['reason'] == 'process'
     assert php('setup-callback-pins')['roles'] == 2
     pins['source-b'] = json.loads((ROOT / 'private/setup-fixture/source-b-callback.json').read_bytes())
     assert pins['source-b']['created_at'] - pins['source-a']['created_at'] >= 300
     assert callback(role='source-b') == 200
     register('source-b')
-    assert php('setup-advance')['ready']
-    edge_dns = php('setup-dns-edges')
-    assert edge_dns['ready'] and edge_dns['record_count'] == 2
-    assert edge_dns['provider_create'] == edge_dns['provider_claim'] == 3
+    assert host_stage('sources-initialize', 'sources')['ready']
+    edge_dns = host_stage('dns-initialize', 'dns')
+    assert edge_dns['ready'] and len(edge_dns['records']) == 2
     assert php('setup-dns-readback')['record_count'] == 3
     registered = setup_rpc('status')
     assert all(row['registered'] and row['status'] == 'accepted' for row in registered['sources'].values())
     assert not registered['health_or_forwarding_claimed'] and registered['first_error'] is None
     probe_config = php('setup-probe-configuration')
     assert probe_config['enabled'] and len(probe_config['targets']) == 4
-    grant = php('setup-native-issue')
+    grant = host_stage('native-grant', 'authority')
     assert grant['phase'] == 'setup_cooldown' and not grant['ready']
     assert not (ROOT / 'private/member-runtime-scope.json').exists()
     second_cooldown_start = time.monotonic()
@@ -522,12 +579,17 @@ try:
     for i in range(3):
         assert report('source-a') == report('source-a', node=True) == 200
         assert report('source-b') == report('source-b', node=True) == 200
-        grant = php('setup-native-issue')
+        grant = host_stage('native-grant', 'authority')
         if i < 2:
             assert grant == dict(ready=False, phase='source_failure_observation'), grant
             assert not (ROOT / 'private/member-runtime-scope.json').exists()
             time.sleep(5.1)
     assert grant['ready'], grant
+    assert host_stage('native-ready', 'authority')['ready']
+    assert remote_setup.grant_file.read_bytes() == (ROOT / 'private/member-runtime-scope.json').read_bytes()
+    SUMMARY['concrete_host_setup_ports'] = dict(actual_root_rpc=True, partial_fixture_setup_before_handoff=True,
+        stages=list(setup_port_receipts), private_grant_exact_bytes=True, cloud_ssh_dns_simulated=True,
+        whole_host_installer_not_verified=True)
     assert json.loads((ROOT / 'private/setup-fixture/catalog-reads.json').read_bytes())['count'] == 3
     native_path = ROOT / 'private/member-runtime-scope.json'
     native_bytes = native_path.read_bytes()
@@ -582,16 +644,6 @@ try:
         from driver_journal import DriverJournal
         from member_transport import StrictControllerTransport, TransportError
         from member_cli import BoundControllerTransport, MemberControllerPort
-        host_root = work / 'native-host'; host_root.mkdir(mode=0o700)
-        key = host_root / 'key'; known = host_root / 'known_hosts'
-        key.write_bytes(b'synthetic-ssh-key'); known.write_bytes(b'synthetic-known-host')
-        key.chmod(0o600); known.chmod(0o600)
-        (host_root / 'journal').mkdir(mode=0o700)
-        host_journal = DriverJournal(host_root / 'journal', RUN)
-        def host_load(name):
-            try: return host_journal.load(name + '.json')
-            except FileNotFoundError: return None
-        def host_save(name, value): host_journal.save(name + '.json', value)
         crash_pending = True
         def local_ssh(command_args, payload, timeout):
             global hold_process, crash_pending
@@ -642,21 +694,26 @@ try:
             return p.stdout
         transport_args = dict(run_id=RUN, host='9.9.9.10', identity_file=key, known_hosts=known,
             guard=lambda *_: None, load=host_load, save=host_save, execute=local_ssh)
-        bootstrap_transport = StrictControllerTransport(**transport_args)
-        assert bootstrap_transport.bootstrap_call('import')['verified']
-        control_pin = json.loads(native_bytes)['control']
-        assert bootstrap_transport.bootstrap_call('setup-issue', control_pin)['setup'] == actual_setup
+        bootstrap_transport.execute = local_ssh
         assert bootstrap_transport.setup_call('native-read', actual_setup) == confirmed_readback
-        bound = BoundControllerTransport(grant_file=native_path,
+        bound = BoundControllerTransport(grant_file=remote_setup.grant_file,
             grant_sha256=hashlib.sha256(native_bytes).hexdigest(), **transport_args)
         if '--retry-flow' in sys.argv:
             from r35_retry_flow_ci import run_retry_flow, run_retry_teardown, run_private_teardown
             run_retry_flow(bound=bound, php=php, report=report, callback=callback, pins=pins,
                            root=ROOT, artifacts=ART, summary=SUMMARY)
-            run_retry_teardown(bound=bound, rebind=lambda: BoundControllerTransport(grant_file=native_path,
+            run_retry_teardown(bound=bound, rebind=lambda: BoundControllerTransport(grant_file=remote_setup.grant_file,
                 grant_sha256=hashlib.sha256(native_bytes).hexdigest(), **transport_args),
                 php=php, callback=callback, report=report, save=host_save, load=host_load,
                 work=work, artifacts=ART, summary=SUMMARY)
+            cleanup_request = dict(scope=host_scope)
+            for owner in ('authority', 'sources', 'dns'):
+                assert remote_setup.port(owner).reconcile(cleanup_request)['resolved']
+            snapshots = {owner: remote_setup.port(owner).snapshot() for owner in ('authority', 'sources', 'dns')}
+            assert len(snapshots['sources']['roles']) == 2 and len(snapshots['dns']['records']) == 3
+            assert snapshots['authority']['private_files'] == [dict(run_id=RUN,
+                path='private/member-runtime-scope.json', sha256=hashlib.sha256(native_bytes).hexdigest())]
+            SUMMARY['concrete_host_setup_ports']['stopped_resource_receipts_after_native_cleanup'] = True
             run_private_teardown(transport=bootstrap_transport, root=ROOT, summary=SUMMARY,
                                  artifacts=ART, load=host_load, save=host_save)
             SUMMARY['status'] = 'passed'

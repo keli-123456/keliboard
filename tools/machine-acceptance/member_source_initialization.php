@@ -155,6 +155,30 @@ final class MemberSourceInitialization
             });
     }
 
+    /** Read exact retained receipts, including incomplete bootstrap, without advancing tasks. */
+    public function resourcePins(): array
+    {
+        $pins = [];
+        foreach ($this->scope['sources'] as $role => $source) {
+            $intent = $this->intent($role); $task = $this->existing($role);
+            if ($task === null) {
+                self::need($intent === null, 'queue_readback_required');
+                continue;
+            }
+            self::need($intent !== null, 'queue_intent_missing');
+            if (!$task->dispatched_at) {
+                self::need(!$task->external_id && !$task->provider_created_at && empty($task->public_ips), 'task_changed');
+                continue;
+            }
+            self::need(is_string($task->external_id) && preg_match('/^[1-9][0-9]{0,15}$/D', $task->external_id) === 1
+                && $task->provider_created_at && !empty($task->public_ips), 'create_receipt_unknown');
+            $pins[$role] = ['task_id' => $task->id, 'external_id' => $task->external_id];
+        }
+        foreach (['task_id', 'external_id'] as $field)
+            self::need(count(array_unique(array_column($pins, $field))) === count($pins), 'roles_collide');
+        return $pins;
+    }
+
     public function registeredScope(array $base): array
     {
         return $this->within('sources-pin', 'control', function () use ($base): array {

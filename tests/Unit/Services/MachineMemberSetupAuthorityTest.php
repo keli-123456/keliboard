@@ -46,7 +46,7 @@ class MachineMemberSetupAuthorityTest extends TestCase
         $request = ['schema' => 1, 'run_id' => \Keli\Acceptance\MemberCliAuthority::RUN,
             'grant_id' => str_repeat('a', 32), 'grant_sha256' => str_repeat('b', 64),
             'deadline_at' => 9000, 'request_id' => str_repeat('c', 32), 'sequence' => 0, 'operation' => 'advance'];
-        foreach (['advance', 'status', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read'] as $operation) {
+        foreach (['advance', 'status', 'resources', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read', 'native-export'] as $operation) {
             \Keli\Acceptance\MemberSetupController::validateRequest(array_replace($request, ['operation' => $operation]));
             $this->addToAssertionCount(1);
         }
