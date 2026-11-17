@@ -19,6 +19,9 @@ import threading
 import time
 from unittest.mock import patch
 
+if '--whole-entry' in sys.argv:
+    sys.argv.append('--host-port-only')
+
 REPO = Path(__file__).resolve().parents[1]
 TOOLS = REPO / 'tools/machine-acceptance'
 ROOT = Path('/opt/keli-isolated')
@@ -316,15 +319,27 @@ try:
         assert SUMMARY['migration']['migrated'] and SUMMARY['migration']['tables'] > 100
         assert install_transport.application_call('service-smoke', install_scope, dict(uid=65534, gid=65534))['ready']
         assert http_service.status(install_scope, http_invoke) == 'running'
+        bound = None
+        native_cleanup_scope = None
+        if '--whole-entry' in sys.argv:
+            from r35_whole_entry_ci import continue_entry
+            from member_cli import MemberControllerPort
+            bound = continue_entry(initialization=initialization, transport=install_transport, remote=remote_port,
+                scope=install_scope, creation_directory=creation_directory, root=ROOT, repo=REPO, env=ENV,
+                certificate=certificate, domain=domain, node_sha=frozen['node_sha256'], journal=install_journal,
+                php=php, artifacts=ART, summary=SUMMARY)
+            native_cleanup_scope = MemberControllerPort(bound)('reconcile', dict(run_id=RUN))['cleanup_scope']
         stop_request = dict(scope=install_scope, stopped=True)
         assert setup_bindings.reconcile(stop_request)['resolved'] is True
         scope_pins = setup_bindings.cleanup_scope(None)
         private_pins = scope_pins['auxiliary']['private_files']
         dns_pins = scope_pins['auxiliary']['records']
-        assert len(private_pins) == 5 and scope_pins['roles'] == {} and len(dns_pins) == 1
-        assert dns_pins[0]['record_id'] == '6001' and dns_pins[0]['name'] == domain
+        assert len(private_pins) == (6 if bound else 5) and len(scope_pins['roles']) == (2 if bound else 0)
+        assert len(dns_pins) == (3 if bound else 1)
+        control_dns = next(pin for pin in dns_pins if pin['record_id'] == '6001')
+        assert control_dns['name'] == domain
         remark = dns_state['rows']['6001']['Remark']
-        expected_remark = 'keli-set-b64-' + base64.urlsafe_b64encode(bytes.fromhex(dns_pins[0]['marker'][9:])).decode()
+        expected_remark = 'keli-set-b64-' + base64.urlsafe_b64encode(bytes.fromhex(control_dns['marker'][9:])).decode()
         assert remark == expected_remark and len(remark) < 50
         SUMMARY['concrete_control_dns']['compressed_wire_marker_preserves_complete_identity'] = True
         assert http_service.cgroup_empty(install_scope)
@@ -346,8 +361,17 @@ try:
             assert args[-2] == str(TOOLS / 'member_operator_entry.php') and args[-1] == str(operator)
             if json.loads(payload)['operation'].startswith('control-'):
                 assert all(not Path(pin['path']).exists() for pin in private_pins), 'controller_delete_before_private_cleanup'
-                dns = json.loads((operator / 'fixture-dns.json').read_bytes())
-                assert dns['rows'] == [] and dns['delete'] == 1, 'controller_delete_before_dns_cleanup'
+                if bound:
+                    if ROOT.exists():
+                        dns = json.loads((ROOT / 'private/setup-fixture/setup-dns-provider.json').read_bytes())
+                        assert not dns['rows'] and dns['delete'] == 3, 'controller_delete_before_native_dns_cleanup'
+                        rows = json.loads((ROOT / 'private/setup-fixture/provider-rows.json').read_bytes())
+                        assert not rows, 'controller_delete_before_native_tasks_cleanup'
+                        SUMMARY['whole_native_dns_cleanup'] = dict(deletes=dns['delete'], updates=dns['update'], remaining=0)
+                    assert SUMMARY.get('whole_native_dns_cleanup', {}).get('remaining') == 0
+                else:
+                    dns = json.loads((operator / 'fixture-dns.json').read_bytes())
+                    assert dns['rows'] == [] and dns['delete'] == 1, 'controller_delete_before_dns_cleanup'
             actual = [*args[:-2], str(REPO / 'audit/r35-operator-provider-fixture.php'), args[-1]]
             result = subprocess.run(actual, input=payload, capture_output=True, timeout=90, env=ENV, cwd=REPO)
             state = json.loads((operator / 'fixture-cloud.json').read_bytes())
@@ -363,7 +387,7 @@ try:
             save=lambda k, v: provider_journal.__setitem__(k, v), execute=provider_execute)
         auxiliary = json.loads(json.dumps(scope_pins))
         auxiliary['auxiliary']['control'] = control
-        combined = dict(run_id=RUN, initialization=auxiliary, native=None)
+        combined = dict(run_id=RUN, initialization=auxiliary, native=native_cleanup_scope)
         def reconcile_local(requests):
             assert requests == [install_journal['setup-control-request']['request_id']]
             assert install_journal['execution-stopped'] == dict(binding=digest(install_scope))
@@ -371,14 +395,28 @@ try:
             observed = control_backend.dispatch('control-readback', install_journal['setup-control-request'])
             assert observed['resolved'] and observed['pin'] == control and not observed['ready']
             return dict(requests_sha256=digest(requests), resolved=True)
+        evidence_archive = None
+        if bound:
+            from member_evidence import MemberEvidenceArchive
+            evidence_directory = work / 'whole-evidence'; evidence_directory.mkdir(mode=0o700)
+            evidence_archive = MemberEvidenceArchive(bound, evidence_directory)
         def export_missing():
-            raise RuntimeError('fixture-partial-evidence-export-failure')
+            if evidence_archive is None:
+                raise RuntimeError('fixture-partial-evidence-export-failure')
+            exported = evidence_archive.capture()
+            body = evidence_archive.verify(exported)
+            assert body['stopped'] and body['reconciled'] and body['cleanup_complete_not_asserted']
+            assert set(body['tasks']) == {'source-a', 'source-b', 'candidate-a1', 'candidate-a2'}
+            raw = (evidence_directory / ('evidence-' + exported['sha256'] + '.json')).read_bytes()
+            path = ART / 'whole-stopped-evidence.json'; path.write_bytes(raw); path.chmod(0o644)
+            SUMMARY['whole_evidence_export'] = dict(sha256=exported['sha256'], verified=True, actual_application=True)
+            return dict(run_id=RUN, sha256=exported['sha256'], verified=True)
         def unused(*_): raise AssertionError('fixture-no-source-or-native-task')
-        assembly = MemberRoundAssembly(scope=install_scope, setup=execution, control=None, native_transport=unused,
+        assembly = MemberRoundAssembly(scope=install_scope, setup=execution, control=control_backend, native_transport=(lambda _: bound) if bound else unused,
             provider=provider, controller=install_transport, task_call=unused, reconcile=reconcile_local, export=export_missing,
             load=install_journal.get, save=lambda k, v: install_journal.__setitem__(k, v), guard=lambda *_: None)
         cleanup = assembly.cleanup(combined, None)
-        end = time.monotonic() + 60
+        end = time.monotonic() + (180 if bound else 60)
         while time.monotonic() < end:
             result = cleanup.step()
             if not ROOT.exists():
@@ -390,18 +428,19 @@ try:
             if not ROOT.exists(): cleanup = assembly.cleanup(combined, result)
         assert result['phase'] == 'closed' and not ROOT.exists(), 'operator_cleanup_not_closed'
         assert len(result['control_reads']) == 2 and result['control_reads'][1] - result['control_reads'][0] >= 10
-        assert result['evidence_saved_and_read_back'] is False and result['first_error'] is not None
+        assert result['evidence_saved_and_read_back'] is bool(bound) and result['first_error'] is not None
         state = json.loads((operator / 'fixture-cloud.json').read_bytes())
         assert state['methods'].count('DELETE') == 1 and not state['present']
-        dns_state = json.loads((operator / 'fixture-dns.json').read_bytes())
-        assert dns_state['rows'] == [] and dns_state['delete'] == 1
+        if not bound:
+            dns_state = json.loads((operator / 'fixture-dns.json').read_bytes())
+            assert dns_state['rows'] == [] and dns_state['delete'] == 1
         assert 'operator-provider-first-error' in provider_journal
         SUMMARY['operator_cleanup'] = dict(real_standalone_php_and_provider_adapter=True,
             cloud_http_only_simulated=True, actual_assembly_cleanup=True, delete_ack_lost=True,
             delete_calls=1, independent_of_controller_files_and_ssh=True,
             real_absence_interval_seconds=result['control_reads'][1] - result['control_reads'][0],
-            stopped_snapshot_resumed=True, evidence_failure_did_not_prevent_resource_cleanup=True,
-            actual_owned_dns_deleted_before_control=True, dns_delete_calls=1,
+            stopped_snapshot_resumed=True, evidence_failure_did_not_prevent_resource_cleanup=not bool(bound),
+            actual_owned_dns_deleted_before_control=True, dns_delete_calls=3 if bound else 1,
             acceptance_not_claimed=True)
         # Reconstruct the port after .env and TLS material have already gone.
         resumed = MemberHostSetup(**host_arguments)
@@ -418,10 +457,10 @@ try:
         SUMMARY['host_installation_port'] = dict(real_stage_execution=True, real_cold_subprocess=True,
             actual_mysql_redis_migration=True, nonroot_uid=65534, private_import_actual=True,
             real_systemd_nginx_php_tls=True, application_smoke_not_mocked=True,
-            stopped_via_execution_reconcile=True, exact_private_files_removed=5,
+            stopped_via_execution_reconcile=True, exact_private_files_removed=len(private_pins),
             reconstruction_after_private_cleanup=True, stopped_stage_replay_denied=True,
             controller_creation_provider_http_simulated=True, dns_predecessor_receipt_simulated=False, certificate_self_signed_fixture=True,
-            whole_host_entry=False, source_candidate_retry_not_run=True, os_bootstrap_not_run=True)
+            whole_host_entry=bool(bound), source_candidate_retry_not_run=not bool(bound), os_bootstrap_not_run=True)
         SUMMARY['application_files'] = frozen['files']
         SUMMARY['composer_lock_sha256'] = frozen['composer_lock_sha256']
         SUMMARY['status'] = 'passed'

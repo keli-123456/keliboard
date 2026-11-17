@@ -274,7 +274,8 @@ return static function (string $mode): array {
             return Http::response('', 204);
         }
         $need($request->method() === 'GET', 'mutation_outside_create'); $reads++;
-        if ($path === '/v4/linode/instances/100000') return Http::response($load('control-row'));
+        $controlRow = $load('control-row');
+        if ($path === '/v4/linode/instances/' . $controlRow['id']) return Http::response($controlRow);
         if (in_array($mode, ['setup-cleanup-read-error', 'setup-native-rpc-read-error'], true)
             && $path === '/v4/linode/instances/100002')
             return Http::response(['errors' => [['reason' => 'fixture unavailable']]], 503);
@@ -622,6 +623,7 @@ return static function (string $mode): array {
         $candidate = isset($task->payload['coordinated_attempt']);
         if ($candidate !== ($mode === 'setup-candidate-pins')) continue;
         if ($candidate && in_array($task->status, ['failed', 'cancelled', 'needs_review'], true)) continue;
+        if (!$task->dispatched_at || $task->external_id === null) continue;
         $scope = $load('initialization');
         $role = $task->machine_id === $scope['sources']['source-a']['plan']['machine_id'] ? 'source-a' : 'source-b';
         $nodeId = $scope['sources'][$role]['configured_nodes'][0]['id'];
