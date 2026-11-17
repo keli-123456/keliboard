@@ -280,12 +280,14 @@ try:
     assert observed['states'] == ['succeeded'] and observed['callback_steps'] == 1
     SUMMARY['idempotent_callback_b_not_queued'] = True
 
-    def report(role, *, node=False, bad_hash=False, token=None, installation=None, node_id=None):
+    def report(role, *, node=False, flat_node=False, bad_hash=False, token=None, installation=None, node_id=None):
         pin = pins[role]
         body = dict(machine_id=pin['machine_id'], token=token or pin['token'])
         stats = dict(cpu=1, mem=dict(total=8192, used=128), swap=dict(total=0, used=0), disk=dict(total=16384, used=256))
         if node:
-            body.update(stats, node_id=node_id or pin['node_id'], node_type='v2node')
+            body.update(node_id=node_id or pin['node_id'], node_type='v2node')
+            if flat_node: body.update(stats)
+            else: body['status'] = stats
             endpoint = '/api/v2/server/status'
         else:
             body['status'] = dict(stats, version='v0.1.387', ip=dict(public_ipv4=pin['ip']),
@@ -308,10 +310,14 @@ try:
     assert report('source-a') == 200
     assert php('setup-advance')['reason'] == 'process'
     assert setup_rpc('status')['sources']['source-a']['status'] == 'waiting_node_reports'
+    assert report('source-a', node=True, flat_node=True) == 200
+    assert php('setup-advance')['reason'] == 'process'
+    assert setup_rpc('status')['sources']['source-a']['status'] == 'waiting_node_reports'
     assert report('source-a', node=True) == 200
     assert report('source-a', bad_hash=True) == 200
     assert php('setup-advance')['reason'] == 'process'
-    assert php('setup-advance')['reason'] == 'fresh_reports'
+    observed = php('setup-advance')
+    assert observed['reason'] == 'fresh_reports', observed
     assert setup_rpc('status')['sources']['source-a']['fresh_reports'] == 0
 
     def register(role):
