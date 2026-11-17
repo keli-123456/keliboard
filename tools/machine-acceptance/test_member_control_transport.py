@@ -58,5 +58,58 @@ class ControlTransportTests(unittest.TestCase):
         with self.assertRaisesRegex(TransportError, 'binding_changed'): self.transport.dispatch('control-readback', self.request)
         self.assertEqual(1, len(self.calls))
 
+    def connection_fixture(self, **changes):
+        task = '11111111-1111-4111-8111-111111111111'
+        pin = dict(run_id=RUN, external_id='800', task_id=task, label='keli-' + task.replace('-', ''),
+            marker='keli-create-' + task.replace('-', ''), region='sg-sin-2', size='g6-standard-2',
+            image='linode/debian12', provider_created_at='2026-11-18T01:00:00Z')
+        self.journal['setup-control-pin'] = pin
+        connection = dict(control_sha256=digest(pin), host='9.9.9.10', port=22)
+        connection.update(changes)
+        def execute(command, payload):
+            self.calls.append(command)
+            outer = json.loads(payload)
+            self.assertEqual('control-connection', outer['operation'])
+            return json.dumps(dict(ok=True, request_sha256=digest(outer), result=dict(request_sha256=digest(outer['request']),
+                resolved=True, dispatched=True, ready=True, pin=pin, connection=connection))).encode()
+        self.transport.execute = execute
+        return connection
+
+    def test_exact_connection_constructs_strict_ssh_without_connecting_or_creating(self):
+        connection = self.connection_fixture()
+        rpc = self.transport.strict_transport(self.request, identity_file=self.root / 'approved-key',
+            known_hosts=self.root / 'approved-hosts', guard=lambda *_: None)
+        self.assertEqual(connection['host'], rpc.host)
+        command = rpc._command('true')
+        for flag in ('StrictHostKeyChecking=yes', 'BatchMode=yes', 'IdentitiesOnly=yes',
+                     'UpdateHostKeys=no', 'PasswordAuthentication=no', 'ForwardAgent=no'):
+            self.assertIn(flag, command)
+        self.assertEqual('root@9.9.9.10', command[-2])
+        self.assertEqual(connection, self.journal['operator-control-connection'])
+        self.assertEqual(1, len(self.calls))
+        self.assertEqual('member_operator_creation_entry.php', Path(self.calls[0][-2]).name)
+
+    def test_address_identity_port_and_extra_private_fields_are_denied(self):
+        for changes in (dict(host='127.0.0.1'), dict(host='10.0.0.1'), dict(host='::1'),
+                        dict(host='224.0.0.1'), dict(host='example.test'), dict(host=123),
+                        dict(port=True), dict(port=2222), dict(control_sha256='0' * 64),
+                        dict(password='never-export-this')):
+            with self.subTest(changes=changes):
+                self.connection_fixture(**changes)
+                with self.assertRaises(TransportError): self.transport.dispatch('control-connection', self.request)
+                self.assertNotIn('operator-control-connection', self.journal)
+                self.assertNotIn('never-export-this', json.dumps(self.journal))
+
+    def test_readback_cannot_move_pinned_endpoint_or_adopt_unregistered_control(self):
+        original = self.connection_fixture()
+        self.transport.dispatch('control-connection', self.request)
+        self.connection_fixture(host='9.9.9.11')
+        with self.assertRaisesRegex(TransportError, 'connection_changed'):
+            self.transport.dispatch('control-connection', self.request)
+        self.assertEqual(original, self.journal['operator-control-connection'])
+        self.journal.pop('setup-control-pin')
+        with self.assertRaisesRegex(TransportError, 'connection_invalid'):
+            self.transport.dispatch('control-connection', self.request)
+
 
 if __name__ == '__main__': unittest.main()

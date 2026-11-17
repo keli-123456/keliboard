@@ -81,7 +81,7 @@ final class MemberOperatorCreation
         foreach ($this->binding['files'] as $name => $hash)
             self::need(hash('sha256', $this->store->read($name)) === $hash, 'material_changed');
         self::need(hash_file('sha256', '/etc/machine-id') === $this->binding['operator_machine_sha256'], 'machine_changed');
-        if ($operation === 'control-create') self::need(time() >= $this->scope['started_at']
+        if (in_array($operation, ['control-create', 'control-connection'], true)) self::need(time() >= $this->scope['started_at']
             && time() < $this->scope['deadline_at'] - 1200, 'expired');
         return true;
     }
@@ -89,7 +89,7 @@ final class MemberOperatorCreation
     public function dispatch(array $request): array
     {
         self::need(count($request) === 3 && !array_diff(array_keys($request), ['operation', 'scope_sha256', 'request'])
-            && in_array($request['operation'], ['control-create', 'control-readback'], true)
+            && in_array($request['operation'], ['control-create', 'control-readback', 'control-connection'], true)
             && $request['scope_sha256'] === $this->binding['scope_sha256'] && is_array($request['request']), 'request_invalid');
         $inner = $request['request'];
         $scope = array_intersect_key($this->scope, array_flip(['run_id', 'bundle_sha256', 'started_at', 'deadline_at']));

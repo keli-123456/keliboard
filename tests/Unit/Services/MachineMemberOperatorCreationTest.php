@@ -122,6 +122,21 @@ class MachineMemberOperatorCreationTest extends TestCase
         $this->assertSame(1, $this->posts); $second->close(); $this->assertFalse(config('machine_provision.allow_live'));
     }
 
+    public function test_connection_operation_keeps_live_switch_off_and_stop_prevents_resolution(): void
+    {
+        $this->fake(); $operator = $this->operator();
+        $created = $this->call($operator, 'control-create'); $operator->close();
+        $operator = $this->operator();
+        $connection = $this->call($operator, 'control-connection');
+        $this->assertSame($created['pin'], $connection['pin']);
+        $this->assertSame(['control_sha256' => Provider::digest($created['pin']), 'host' => '9.9.9.10', 'port' => 22], $connection['connection']);
+        $this->assertSame(1, $this->posts);
+        $this->call($operator, 'control-readback'); $count = count(Http::recorded());
+        try { $this->call($operator, 'control-connection'); $this->fail(); }
+        catch (\RuntimeException $error) { $this->assertSame('member_control_stopped_or_expired', $error->getMessage()); }
+        $this->assertCount($count, Http::recorded()); $this->assertFalse(config('machine_provision.allow_live'));
+    }
+
     public function test_lost_post_ack_retains_ciphertext_and_first_error_without_recreating(): void
     {
         $this->fake(true); $operator = $this->operator();

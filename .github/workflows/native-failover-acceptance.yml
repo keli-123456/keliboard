@@ -71,9 +71,11 @@ jobs:
               test -z "$(ip -4 route show)"
               test -z "$(ip -6 route show)"
               cd tools/machine-acceptance
-              python3 -B -m unittest -v test_member_assembly test_member_execution.ExecutionTests test_member_private_cleanup test_member_round test_member_transport test_member_remote_setup test_member_host_installation test_member_host_setup >../../artifacts/cleanup-python.log 2>&1
+              python3 -B -m unittest -v test_member_assembly test_member_execution.ExecutionTests test_member_private_cleanup test_member_round test_member_transport test_member_remote_setup test_member_host_installation test_member_host_setup test_member_control_transport >../../artifacts/cleanup-python.log 2>&1
               cd ../..
               php vendor/phpunit/phpunit/phpunit tests/Unit/Services/MachineMemberProviderBindingsTest.php >artifacts/cleanup-php.log 2>&1
+              php vendor/phpunit/phpunit/phpunit tests/Unit/Services/MachineMemberControlCreationTest.php >artifacts/connection-control-php.log 2>&1
+              php vendor/phpunit/phpunit/phpunit tests/Unit/Services/MachineMemberOperatorCreationTest.php >artifacts/connection-operator-php.log 2>&1
               test ! -e /opt/keli-isolated
               printf "{\"status\":\"passed\",\"external_routes\":false,\"cloud_ssh_dns\":\"simulated\",\"full_round\":false,\"production_access\":false}\n" >artifacts/cleanup-summary.json
             '
