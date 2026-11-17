@@ -358,6 +358,10 @@ class StrictControllerTransport:
         operation, scope = validate(request)
         require(scope['run_id'] == self.run_id, 'transport_host_install_scope')
         self.guard('host-installation-' + operation, 'control')
+        upload = self.load('upload-intent')
+        require(isinstance(upload, dict) and set(upload) == {'sha256', 'bytes'}
+                and upload['sha256'] == scope['bundle_sha256'] and type(upload['bytes']) is int
+                and 0 < upload['bytes'] <= 100 * 1024 * 1024, 'transport_host_install_upload_required')
         binding = dict(scope=copy.deepcopy(scope), host=self.host)
         for path, key in ((self.identity, 'identity_sha256'), (self.known, 'known_hosts_sha256')):
             binding[key] = read_file(path, 1048576)[0]['sha256']

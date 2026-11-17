@@ -64,6 +64,7 @@ class HostTransportTests(unittest.TestCase):
             known_hosts=self.root / 'known', guard=lambda *_: None, load=self.saved.get,
             save=lambda k, v: self.saved.__setitem__(k, copy.deepcopy(v)), execute=self.invoke)
         self.scope = scope()
+        self.saved['upload-intent'] = dict(sha256=self.scope['bundle_sha256'], bytes=1)
         self.result = dict(completed_operations=['publish'], uncertain_operations=[], private_files=[], stopped=False)
         network = patch('socket.socket', side_effect=AssertionError('offline only'))
         network.start(); self.addCleanup(network.stop)
@@ -107,6 +108,12 @@ class HostTransportTests(unittest.TestCase):
         with self.assertRaisesRegex(TransportError, 'binding_changed'):
             self.rpc.installation_call(dict(operation='journal-read', scope=self.scope))
         self.assertEqual(before, len(self.calls))
+
+    def test_unknown_staging_never_loads_remote_code(self):
+        self.saved['upload-intent']['sha256'] = '0' * 64
+        with self.assertRaisesRegex(TransportError, 'upload_required'):
+            self.rpc.installation_call(dict(operation='publish', scope=self.scope))
+        self.assertEqual(self.calls, [])
 
 
 @unittest.skipUnless(os.name == 'posix' and os.geteuid() == 0, 'root Linux publication required')
@@ -176,6 +183,15 @@ class HostPublicationLinuxTests(unittest.TestCase):
         self.assertEqual(2, len(result['private_files']))
         (self.root / 'private/credentials').write_bytes(b'changed')
         with self.assertRaisesRegex(TransportError, 'private_changed'): self.call('journal-read')
+
+    def test_malformed_stop_and_result_are_not_confirmation(self):
+        self.call('publish')
+        result = self.root / 'private/host-installation/publish-result.json'
+        original = result.read_bytes(); result.write_text('{}')
+        with self.assertRaisesRegex(TransportError, 'journal'): self.call('journal-read')
+        result.write_bytes(original)
+        marker = self.root / 'private/import-stopped'; marker.write_bytes(b'other-run'); marker.chmod(0o600)
+        with self.assertRaisesRegex(TransportError, 'stop'): self.call('journal-read')
 
     def test_expiry_stop_during_publication_and_changed_scope(self):
         with patch('member_host_installation.time.time', return_value=self.scope['deadline_at']):

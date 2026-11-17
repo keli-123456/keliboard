@@ -128,12 +128,19 @@ def execute(request, *, root=ROOT, clock=time.time):
 
         def snapshot():
             completed, uncertain, pins = [], [], []
+            if stopped():
+                require(read_owned(private / 'import-stopped', 0o600) == (RUN + '\n').encode(),
+                        'transport_host_install_stop')
             for name in MUTATIONS:
                 intent, result = load(name + '-intent'), load(name + '-result')
                 require(result is None or intent is not None, 'transport_host_install_journal')
                 if intent is None: continue
                 require(isinstance(intent, dict) and set(intent) == {'request_sha256', 'files'}
-                        and isinstance(intent['files'], dict), 'transport_host_install_journal')
+                        and isinstance(intent['files'], dict) and isinstance(intent['request_sha256'], str)
+                        and re.fullmatch('[a-f0-9]{64}', intent['request_sha256']), 'transport_host_install_journal')
+                require(result is None or isinstance(result, dict) and set(result) == {'evidence_sha256'}
+                        and isinstance(result['evidence_sha256'], str) and re.fullmatch('[a-f0-9]{64}', result['evidence_sha256']),
+                        'transport_host_install_journal')
                 (completed if result is not None else uncertain).append(name)
                 allowed = {'configure': {'app/.env': 0o640},
                            'private': {'private/credentials': 0o600, 'private/bootstrap-authority': 0o600},

@@ -1,5 +1,6 @@
 """Temporary CI-only full application verification; no real cloud/SSH/DNS."""
 import base64
+import ast
 import hashlib
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -103,7 +104,8 @@ try:
     tests = subprocess.run(['python3', '-B', '-m', 'unittest', '-v', 'test_member_environment',
         'test_member_installation_linux.InstallationServiceUserTests', 'test_member_execution.ExecutionTests',
         'test_member_assembly', 'test_member_initialization', 'test_member_cli', 'test_member_round',
-        'test_member_transport', 'test_member_remote_setup', 'test_member_private_cleanup', 'test_member_bundle', 'test_member_runtime_bundle'],
+        'test_member_transport', 'test_member_remote_setup', 'test_member_private_cleanup', 'test_member_bundle', 'test_member_runtime_bundle',
+        'test_member_host_installation'],
         cwd=TOOLS, capture_output=True, text=True, timeout=240)
     (ART / 'python.log').write_text(tests.stdout + tests.stderr)
     assert tests.returncode == 0, 'python_regression_failed'
@@ -156,18 +158,54 @@ try:
     assert command(['git', 'rev-parse', 'HEAD'], cwd=owned_repo).stdout.decode().strip() == sha
     shutil.copytree(REPO / 'vendor', owned_repo / 'vendor')
     application = work / 'application.tar.gz'
-    member_bundle.freeze(owned_repo, sha, application, RUN)
     node = work / 'synthetic-node.tar.gz'
     binary = b'\x7fELF\x02\x01' + b'\0' * 12 + b'\x3e\x00' + b'synthetic-not-executed'
     with tarfile.open(node, 'w:gz') as archive:
         info = tarfile.TarInfo(runtime.NODE_MEMBER); info.size = len(binary)
         archive.addfile(info, io.BytesIO(binary))
+    # Only fixture pins change. The cold child executes the actual verifier and
+    # installer from this hash-locked synthetic runtime, without parent mocks.
+    runtime_source = owned_repo / 'tools/machine-acceptance/member_runtime_bundle.py'
+    tree = ast.parse(runtime_source.read_text())
+    fixture_hashes = dict(NODE_ARCHIVE_SHA=hashlib.sha256(node.read_bytes()).hexdigest(),
+                          NODE_SHA=hashlib.sha256(binary).hexdigest())
+    for item in tree.body:
+        if isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name):
+            if item.targets[0].id in fixture_hashes:
+                item.value = ast.Constant(fixture_hashes[item.targets[0].id])
+    runtime_source.write_text(ast.unparse(tree) + '\n')
+    member_bundle.freeze(owned_repo, sha, application, RUN)
     with patch.object(runtime, 'NODE_ARCHIVE_SHA', hashlib.sha256(node.read_bytes()).hexdigest()), \
          patch.object(runtime, 'NODE_SHA', hashlib.sha256(binary).hexdigest()):
         bundle = work / 'runtime.tar.gz'
         frozen = runtime.assemble(application, owned_repo / 'vendor', node, bundle)
-        installed = MemberInstallation(ROOT).publish_runtime(bundle, frozen['archive_sha256'])
-        assert installed['complete']
+    from member_transport import StrictControllerTransport, TransportError
+    from member_install_bootstrap import BOOTSTRAP
+    install_root = work / 'installation-host'; install_root.mkdir(mode=0o700)
+    for name in ('key', 'known'):
+        (install_root / name).write_bytes(b'synthetic-installation-host'); (install_root / name).chmod(0o600)
+    install_scope = dict(run_id=RUN, bundle_sha256=frozen['archive_sha256'], started_at=int(time.time()))
+    install_scope['deadline_at'] = install_scope['started_at'] + 7199
+    install_journal = {}
+    def installation_ssh(args, payload, timeout):
+        import shlex
+        assert args[-2] == 'root@9.9.9.10' and 'StrictHostKeyChecking=yes' in args
+        argv = shlex.split(args[-1])
+        expected = ['php', '/opt/keli-isolated/runtime/member_application_entry.php']
+        prefix = ['setpriv', '--reuid=65534', '--regid=65534', '--clear-groups', '--no-new-privs', '--bounding-set=-all']
+        upload = (argv[:2] == ['python3', '-c'] and len(argv) == 4
+                  and argv[-1] == frozen['archive_sha256'] and '/opt/keli-isolated/incoming' in argv[2])
+        assert upload or argv in (expected, prefix + expected, ['python3', '-I', '-B', '-c', BOOTSTRAP])
+        p = subprocess.run(argv, input=payload, cwd=ROOT, env=ENV, capture_output=True, timeout=timeout)
+        assert p.returncode == 0, json.loads(p.stdout)
+        return p.stdout
+    install_transport = StrictControllerTransport(run_id=RUN, host='9.9.9.10', identity_file=install_root / 'key',
+        known_hosts=install_root / 'known', guard=lambda *_: None, load=install_journal.get,
+        save=lambda k, v: install_journal.__setitem__(k, v), execute=installation_ssh)
+    (ROOT / 'incoming').mkdir(mode=0o700)
+    assert install_transport.upload(bundle, frozen['archive_sha256'])['staged'] is True
+    publication = install_transport.installation_call(dict(operation='publish', scope=install_scope))
+    assert publication['completed_operations'] == ['publish'] and not publication['uncertain_operations']
     # Exercise the actual cold-boot CLI and journal permissions before the real
     # isolated application configuration is published.
     entry_scratch = [ROOT / 'app' / name for name in ('.env', 'bootstrap/cache/packages.php',
@@ -192,29 +230,15 @@ try:
     settings = dict(app_key=base64.b64encode(b'x' * 32).decode(), database='keli_acceptance_application',
         username='keli_application', password='s' * 32, mysql_port=13306,
         redis_password='r' * 32, redis_port=16379)
-    configure(ROOT, frozen['archive_sha256'], settings, uid=65534, gid=65534)
+    configuration = install_transport.installation_call(dict(operation='configure', scope=install_scope,
+        settings=settings, service=dict(uid=65534, gid=65534)))
+    assert configuration['completed_operations'] == ['publish', 'configure']
+    SUMMARY['cold_host_publication'] = dict(actual_fresh_python_subprocess=True, actual_upload_bytes=True,
+        actual_runtime_and_environment=True, no_preinstalled_application_cli=True,
+        original_stage_intents_retained=True, node_fixture_hashes_only_modified=True,
+        os_packages_and_tls_daemons_not_installed=True, whole_host_installer=False)
     SUMMARY['application_files'] = frozen['files']
     SUMMARY['composer_lock_sha256'] = frozen['composer_lock_sha256']
-    from member_transport import StrictControllerTransport, TransportError
-    install_root = work / 'installation-host'; install_root.mkdir(mode=0o700)
-    for name in ('key', 'known'):
-        (install_root / name).write_bytes(b'synthetic-installation-host'); (install_root / name).chmod(0o600)
-    install_scope = dict(run_id=RUN, bundle_sha256=frozen['archive_sha256'], started_at=int(time.time()))
-    install_scope['deadline_at'] = install_scope['started_at'] + 7199
-    install_journal = {}
-    def installation_ssh(args, payload, timeout):
-        import shlex
-        assert args[-2] == 'root@9.9.9.10' and 'StrictHostKeyChecking=yes' in args
-        argv = shlex.split(args[-1])
-        expected = ['php', '/opt/keli-isolated/runtime/member_application_entry.php']
-        prefix = ['setpriv', '--reuid=65534', '--regid=65534', '--clear-groups', '--no-new-privs', '--bounding-set=-all']
-        assert argv in (expected, prefix + expected)
-        p = subprocess.run(argv, input=payload, cwd=ROOT / 'app', env=ENV, capture_output=True, timeout=timeout)
-        assert p.returncode == 0, json.loads(p.stdout)
-        return p.stdout
-    install_transport = StrictControllerTransport(run_id=RUN, host='9.9.9.10', identity_file=install_root / 'key',
-        known_hosts=install_root / 'known', guard=lambda *_: None, load=install_journal.get,
-        save=lambda k, v: install_journal.__setitem__(k, v), execute=installation_ssh)
     SUMMARY['migration'] = install_transport.application_call('initialize', install_scope)
     assert install_transport.application_call('readback', install_scope) == SUMMARY['migration']
     smoke = install_transport.application_call('service-smoke', install_scope, dict(uid=65534, gid=65534))
@@ -284,14 +308,18 @@ try:
     installer = MemberInstallation(ROOT)
     credentials = json.dumps(dict(schema=1, run_id=RUN, linode=dict(api_token='synthetic-no-live-token'),
         aliyun=dict(access_key_id='synthetic-id', access_key_secret='synthetic-secret'), baseline_ids=[])).encode()
-    installer.private('credentials', credentials, hashlib.sha256(credentials).hexdigest())
     app_identity = json.loads((ROOT / 'application.json').read_bytes())
-    started = int(time.time())
+    started = install_scope['started_at']
     authority = dict(schema=1, run_id=RUN, operation='private-import', authorized=True,
         bundle_sha256=frozen['archive_sha256'], machine_id_sha256=app_identity['machine_id_sha256'],
         started_at=started, deadline_at=started + 7199, credentials_sha256=hashlib.sha256(credentials).hexdigest())
     raw_authority = json.dumps(authority).encode()
-    installer.private('bootstrap-authority', raw_authority, hashlib.sha256(raw_authority).hexdigest())
+    private_publication = install_transport.installation_call(dict(operation='private', scope=install_scope,
+        files={name: dict(base64=base64.b64encode(raw).decode(), sha256=hashlib.sha256(raw).hexdigest())
+               for name, raw in [('credentials', credentials), ('bootstrap-authority', raw_authority)]}))
+    assert private_publication['completed_operations'] == ['publish', 'configure', 'private']
+    assert len(private_publication['private_files']) == 3
+    SUMMARY['cold_host_publication']['private_files_through_actual_entry'] = True
     authority_path = ROOT / 'private/bootstrap-authority'
     import_denied('member_import_root_cli_required', uid=65534)
     credentials_path = ROOT / 'private/credentials'
