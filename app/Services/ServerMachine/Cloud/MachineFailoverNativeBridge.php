@@ -497,13 +497,18 @@ class MachineFailoverNativeBridge
             if (isset($member->payload['dns_source'])) return false;
             $expected = $member->payload['dns']; $instance = MachineOwnedInstance::query()->where('task_id', $task->id)->firstOrFail();
             return $this->bindingCurrent($attempt, $task)
-                && $transition->request_key === hash('sha256', $run->admin_id . ':' . substr($this->hash([$attempt->id, 'dns']), 0, 32))
+                && $transition->request_key === $this->dnsRequestKey($attempt, $run->admin_id)
                 && $transition->admin_id === $run->admin_id && $transition->recovery_of === null && $transition->dns_id === $expected['id']
                 && $transition->dns_revision === $expected['revision'] && $transition->from_instance_id === $member->payload['source_instance_id']
                 && $transition->from_ip === $expected['ip'] && $transition->to_instance_id === $instance->id && $transition->to_ip === $instance->ip
                 && $transition->policy_revision === $member->policy_revision
                 && (!isset($attempt->payload['transition_id']) || $attempt->payload['transition_id'] === $transition->id);
         } catch (\Throwable) { return false; }
+    }
+
+    public function dnsRequestKey(Attempt $attempt, int $admin): string
+    {
+        return hash('sha256', $admin . ':' . substr($this->hash([$attempt->id, 'dns']), 0, 32));
     }
 
     public function definitelyRejected(Task $task): bool

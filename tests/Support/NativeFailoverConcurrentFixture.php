@@ -6,10 +6,14 @@ namespace Tests\Support;
 use App\Models\MachineFailoverAttempt as Attempt;
 use App\Models\MachineFailoverExecution as Execution;
 use App\Models\MachineFailoverExecutionMember as Member;
+use App\Models\MachineFailoverHandoverGrant as Grant;
 use App\Models\MachineFailoverRuntime as Runtime;
 use App\Models\MachineProvisionTask as Task;
 use App\Models\User;
+use App\Services\ServerMachine\Cloud\CloudException;
 use App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate;
+use App\Services\ServerMachine\Cloud\MachineFailoverHandover;
+use App\Services\ServerMachine\Cloud\MachineFailoverHandoverEvidence;
 use App\Services\ServerMachine\Cloud\MachineFailoverObserver;
 use App\Services\ServerMachine\Cloud\MachineFailoverRunner;
 use App\Services\ServerMachine\Cloud\MachineFailoverQueue;
@@ -259,6 +263,58 @@ final class NativeFailoverConcurrentFixture
             }
             throw new \RuntimeException('Unexpected outbound HTTP blocked by fixture.');
         });
+    }
+
+    public static function handoverAction(): void
+    {
+        self::assertOwner();
+        $input = self::control('handover-action:' . self::$worker);
+        $keys = self::control('handover-public-keys');
+        if (self::control('handover') !== true || !is_array($keys) || !in_array($input['operation'] ?? null, ['issue', 'close', 'close_uncommitted'], true))
+            throw new \RuntimeException('Explicit synthetic handover action required.');
+        app()->instance(MachineFailoverHandoverEvidence::class, new MachineFailoverHandoverEvidence($keys));
+        DB::listen(function ($query) use ($input) {
+            $sql = strtolower($query->sql);
+            if (!str_starts_with($sql, 'select') || !str_contains($sql, Grant::TABLE)) return;
+            if ($input['operation'] === 'issue' && str_contains($sql, 'writer_slot')) self::barrier('handover_issue_before_insert');
+            if ($input['operation'] === 'close' && str_starts_with($sql, 'select `execution_id`'))
+                self::control('handover-close-read:' . self::$worker, true, true);
+        });
+        $handover = app(MachineFailoverHandover::class);
+        try {
+            if ($input['operation'] === 'issue') {
+                self::barrier('handover_issue_ready');
+                $grant = $handover->issue($input['scope'], $input['admin'], $input['proof']);
+                self::event('handover_issued', $grant);
+            } elseif ($input['operation'] === 'close') {
+                $handover->releaseStopped($input['grant'], $input['admin'], $input['proof']);
+                self::event('handover_closed');
+            } else {
+                DB::transaction(function () use ($handover, $input) {
+                    $handover->releaseStopped($input['grant'], $input['admin'], $input['proof']);
+                    self::barrier('handover_close_uncommitted');
+                    throw new \RuntimeException('Do not commit the staged fixture closure.');
+                });
+            }
+        } catch (CloudException $error) {
+            if (!in_array($error->getMessage(), ['handover_slot_held', 'handover_conflict', 'handover_evidence_used',
+                'handover_release_not_stopped', 'handover_evidence_scope_changed'], true)) throw $error;
+            self::event('handover_denied', $error->getMessage());
+        }
+    }
+
+    public static function expireHandoverRegistryLock(): void
+    {
+        self::assertOwner();
+        $redis = self::rawRedis();
+        try {
+            $key = self::prefix() . 'cache:machine-failover:write';
+            if ($redis->pttl($key) <= 0 || !$redis->pexpire($key, 1)) throw new \RuntimeException('Expected fixture registry lock missing.');
+            $until = microtime(true) + 2;
+            do { if (!$redis->exists($key)) { self::control('forced_registry_expiry', true, true); return; } usleep(1000); }
+            while (microtime(true) < $until);
+            throw new \RuntimeException('Expected fixture registry lock did not expire.');
+        } finally { $redis->close(); }
     }
 
     public function initialized(): void

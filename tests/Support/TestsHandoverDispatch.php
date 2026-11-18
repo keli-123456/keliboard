@@ -13,11 +13,13 @@ use App\Models\MachineFailoverRuntime as Runtime;
 use App\Models\MachineOwnedInstance;
 use App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate;
 use App\Services\ServerMachine\Cloud\MachineFailoverHandover;
+use App\Services\ServerMachine\Cloud\MachineFailoverHandoverEvidence;
 use App\Services\ServerMachine\Cloud\MachineFailoverHandoverRecovery;
 use App\Services\ServerMachine\Cloud\MachineFailoverNativeBridge;
 use App\Services\ServerMachine\Cloud\MachineFailoverServiceRegistry;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -27,11 +29,14 @@ trait TestsHandoverDispatch
     private function issueHandover(int $service, int $revision): string
     {
         (require base_path('database/migrations/2026_11_18_000000_create_machine_failover_handover_grants.php'))->up();
+        (require base_path('database/migrations/2026_11_18_010000_add_machine_failover_handover_receipts.php'))->up();
+        HandoverEvidenceFixture::trust();
         $registry = app(MachineFailoverServiceRegistry::class);
-        return app(MachineFailoverHandover::class)->issue(['service_id' => $service, 'service_revision' => $revision,
+        $scope = ['service_id' => $service, 'service_revision' => $revision,
             'context_hash' => $registry->fingerprint($registry->snapshot($service, $revision)),
             'release' => $this->release->only(['id', 'component', 'platform', 'version', 'sha256', 'binary_sha256']),
-            'evidence_sha256' => hash('sha256', 'fixture stopped old writer'), 'expires_at' => time() + 600], $this->admin->id);
+            'evidence_sha256' => hash('sha256', 'fixture stopped old writer'), 'expires_at' => time() + 600];
+        return app(MachineFailoverHandover::class)->issue($scope, $this->admin->id, HandoverEvidenceFixture::stop($scope, $this->admin->id));
     }
 
     private function handoverStart(string $dns = 'single'): array
@@ -183,5 +188,159 @@ trait TestsHandoverDispatch
         $count = Http::recorded()->count();
         $this->code('orchestration_disabled', fn () => app(MachineFailoverHandoverRecovery::class)->cloud($run['id'], $attempt->id, $this->admin->id));
         $this->assertSame($count, Http::recorded()->count());
+    }
+
+    public function test_handover_closure_requires_a_settled_parent_and_separate_authority_even_with_no_dispatch(): void
+    {
+        $run = $this->handoverStart(); $grant = Grant::query()->sole(); $admin = $this->admin->id;
+        $handover = app(MachineFailoverHandover::class);
+        $scope = fn () => $handover->closureScope($grant->id, $admin);
+        $job = Bus::dispatched(MachineFailoverRunJob::class)->last();
+        $this->code('handover_release_not_stopped', $scope);
+        $this->revokeHandover();
+        $this->code('handover_release_not_stopped', $scope);
+        $job->handle($this->runner());
+        $closed = $scope(); $this->assertSame([], $closed['operations']);
+        $proof = HandoverEvidenceFixture::close($closed);
+        $oldScope = $grant->only(['service_id', 'service_revision', 'context_hash', 'release', 'evidence_sha256', 'expires_at']);
+        $this->code('handover_evidence_invalid', fn () => $handover->releaseStopped($grant->id, $admin, HandoverEvidenceFixture::stop($oldScope, $admin)));
+        app()->forgetInstance(MachineFailoverHandoverEvidence::class);
+        $this->code('handover_authority_unavailable', fn () => $handover->releaseStopped($grant->id, $admin, $proof));
+        HandoverEvidenceFixture::trust();
+        Runtime::query()->whereKey($run['id'])->update(['ticket_hash' => str_repeat('f', 64)]);
+        $this->code('handover_release_not_stopped', fn () => $handover->releaseStopped($grant->id, $admin, $proof));
+        Runtime::query()->whereKey($run['id'])->update(['ticket_hash' => null]);
+        $this->assertSame(1, $grant->fresh()->writer_slot);
+        $http = Http::recorded()->count();
+        try {
+            DB::transaction(function () use ($handover, $grant, $admin, $proof) {
+                $handover->releaseStopped($grant->id, $admin, $proof);
+                throw new \RuntimeException('fixture rollback after writing closure');
+            });
+            $this->fail('Expected rolled-back release.');
+        } catch (\RuntimeException $error) {
+            $this->assertSame('fixture rollback after writing closure', $error->getMessage());
+        }
+        $this->assertSame(1, $grant->fresh()->writer_slot);
+        $this->assertNull($grant->fresh()->closure_receipt);
+        $handover->releaseStopped($grant->id, $admin, $proof);
+        $this->assertNull($grant->fresh()->writer_slot);
+        $this->assertArrayNotHasKey('closure_receipt', $grant->fresh()->toArray());
+        $this->assertSame('fixture-reviewer', $grant->fresh()->closure_receipt['issuer']);
+        $this->code('handover_release_not_stopped', fn () => $handover->releaseStopped($grant->id, $admin, $proof));
+        $job->handle($this->runner());
+        $this->assertSame($http, Http::recorded()->count());
+        $this->assertSame(0, Attempt::query()->count());
+    }
+
+    public function test_handover_closure_after_lost_create_ack_needs_final_evidence_and_preserves_history(): void
+    {
+        $run = $this->handoverStart(); $grant = Grant::query()->sole(); $admin = $this->admin->id;
+        $handover = app(MachineFailoverHandover::class);
+        $this->mode = 'unknown_success'; $this->duringPost = fn () => $this->revokeHandover();
+        $this->tick($run);
+        $attempt = Attempt::query()->sole(); $task = $this->task();
+        $scope = $handover->closureScope($grant->id, $admin);
+        $this->assertSame(['cloud_create'], array_column($scope['operations'], 'kind'));
+        $this->assertNull($scope['operations'][0]['known_outcome']);
+        $review = HandoverEvidenceFixture::close($scope)['body']['outcomes'];
+        foreach ([[], [array_replace($review[0], ['result' => 'unknown'])], [array_replace($review[0], ['basis' => 'inventory_empty'])]] as $outcomes) {
+            $this->code('handover_closure_incomplete', fn () => $handover->releaseStopped($grant->id, $admin, HandoverEvidenceFixture::close($scope, ['outcomes' => $outcomes])));
+        }
+        $this->code('handover_closure_incomplete', fn () => $handover->releaseStopped($grant->id, $admin, HandoverEvidenceFixture::close($scope, ['in_flight' => 1])));
+        $this->code('handover_closure_incomplete', fn () => $handover->releaseStopped($grant->id, $admin, HandoverEvidenceFixture::close($scope, ['fence_state' => 'resumed'])));
+        $this->code('handover_closure_incomplete', fn () => $handover->releaseStopped($grant->id, $admin, HandoverEvidenceFixture::close($scope, ['observed_at' => $scope['settled_at'] - 1])));
+        $this->code('handover_evidence_expired', fn () => $handover->releaseStopped($grant->id, $admin, HandoverEvidenceFixture::close($scope, ['valid_until' => time() - 1])));
+        $proof = HandoverEvidenceFixture::close($scope);
+        $task->fill(['reason' => 'fixture_changed_after_snapshot'])->save();
+        $this->code('handover_evidence_scope_changed', fn () => $handover->releaseStopped($grant->id, $admin, $proof));
+        $this->assertSame(1, $grant->fresh()->writer_slot);
+        $readback = app(MachineFailoverHandoverRecovery::class)->cloud($run['id'], $attempt->id, $admin);
+        $this->assertSame('matched_original', $readback['result']);
+        $review[0]['evidence_sha256'] = $readback['observation_sha256'];
+        $before = $task->refresh()->getRawOriginal(); $http = Http::recorded()->count();
+        $scope = $handover->closureScope($grant->id, $admin);
+        $handover->releaseStopped($grant->id, $admin, HandoverEvidenceFixture::close($scope, ['outcomes' => $review]));
+        $this->assertSame($before, $task->fresh()->getRawOriginal());
+        $this->assertSame('needs_review', Member::query()->sole()->phase);
+        $this->assertSame($review, $grant->fresh()->closure_receipt['outcomes']);
+        $this->assertNull($grant->fresh()->writer_slot);
+        $this->assertCount(1, $this->posts); $this->assertSame(0, $this->dnsWrites);
+        $next = $grant->only(['service_id', 'service_revision', 'context_hash', 'release', 'expires_at']);
+        $next['evidence_sha256'] = hash('sha256', 'fixture: newly reviewed old-writer evidence');
+        $nextId = $handover->issue($next, $admin, HandoverEvidenceFixture::stop($next, $admin));
+        $this->assertNotSame($grant->id, $nextId);
+        $this->assertSame($http, Http::recorded()->count());
+    }
+
+    public function test_handover_partial_dns_closure_binds_every_original_write_and_keeps_the_candidate_inactive(): void
+    {
+        $run = $this->tick($this->handoverStart('cloudflare'));
+        $this->runtimeReady($run); $run = $this->tick($run);
+        $this->duringDnsWrite = function () { $this->duringDnsWrite = null; $this->revokeHandover(); };
+        $this->tick($run);
+        $grant = Grant::query()->sole(); $admin = $this->admin->id; $handover = app(MachineFailoverHandover::class);
+        $scope = $handover->closureScope($grant->id, $admin);
+        $this->assertSame(['cloud_create', 'dns_record'], array_column($scope['operations'], 'kind'));
+        $this->assertSame('confirmed_applied', $scope['operations'][0]['known_outcome']);
+        $dns = DnsRun::query()->sole(); $attempt = Attempt::query()->sole();
+        $original = $attempt->payload; $missingLink = $original; unset($missingLink['dns_set_runs']);
+        $attempt->fill(['payload' => $missingLink])->save();
+        $this->code('handover_closure_journal_changed', fn () => $handover->closureScope($grant->id, $admin));
+        $attempt->fill(['payload' => $original])->save();
+        $scope = $handover->closureScope($grant->id, $admin);
+        $review = HandoverEvidenceFixture::close($scope)['body']['outcomes'];
+        foreach ([[$review[0]], [$review[0], $review[0]], [array_replace($review[0], ['result' => 'confirmed_not_applied']), $review[1]]] as $outcomes) {
+            $this->code('handover_closure_incomplete', fn () => $handover->releaseStopped($grant->id, $admin, HandoverEvidenceFixture::close($scope, ['outcomes' => $outcomes])));
+        }
+        $this->assertSame(1, $grant->fresh()->writer_slot);
+        $readback = app(MachineFailoverHandoverRecovery::class)->dnsSet($run['id'], $attempt->id, $dns->id, $admin);
+        $this->assertSame('matched_original', $readback['result']);
+        $review[1]['evidence_sha256'] = $readback['observation_sha256'];
+        $records = $this->records; $http = Http::recorded()->count();
+        $handover->releaseStopped($grant->id, $admin, HandoverEvidenceFixture::close($scope, ['outcomes' => $review]));
+        $this->assertSame($records, $this->records);
+        $this->assertSame($http, Http::recorded()->count());
+        $this->assertSame(1, $this->dnsWrites); $this->assertSame(0, $this->candidateDeletes);
+        $this->assertSame($dns->getRawOriginal(), $dns->fresh()->getRawOriginal());
+        $this->assertNull(MachineOwnedInstance::query()->where('task_id', $attempt->task_id)->firstOrFail()->active_policy_id);
+        $this->assertNull($grant->fresh()->writer_slot);
+    }
+
+    public function test_handover_does_not_settle_an_unconfirmed_candidate_delete_from_one_missing_read(): void
+    {
+        $run = $this->retryFixture(handover: true);
+        $run = $this->candidateSample($run, time() - 15, viaRunner: true);
+        $run = $this->candidateSample($run, time() - 10, viaRunner: true);
+        $this->assertSame('confirming_candidate_cleanup', $run['members'][0]['phase']);
+        $this->revokeHandover(); $this->tick($run);
+        $grant = Grant::query()->sole(); $admin = $this->admin->id; $handover = app(MachineFailoverHandover::class);
+        $scope = $handover->closureScope($grant->id, $admin);
+        $this->assertSame(['candidate_delete', 'cloud_create'], array_column($scope['operations'], 'kind'));
+        $this->assertNull($scope['operations'][0]['known_outcome']);
+        $outcomes = HandoverEvidenceFixture::close($scope)['body']['outcomes'];
+        $outcomes[0]['basis'] = 'single_404';
+        $this->code('handover_closure_incomplete', fn () => $handover->releaseStopped($grant->id, $admin, HandoverEvidenceFixture::close($scope, ['outcomes' => $outcomes])));
+        $this->task()->fill(['external_id' => '98765'])->save();
+        $this->code('candidate_cleanup_identity_changed', fn () => $handover->closureScope($grant->id, $admin));
+        $this->assertSame(1, $grant->fresh()->writer_slot);
+        $this->assertSame(1, $this->candidateDeletes); $this->assertCount(1, $this->posts); $this->assertSame(0, $this->dnsWrites);
+    }
+
+    public function test_handover_closure_can_release_a_revoked_completed_run_without_reopening_it(): void
+    {
+        $run = $this->tick($this->handoverStart());
+        $this->runtimeReady($run); $run = $this->tick($run); $run = $this->tick($run);
+        $this->assertSame('completed', $run['status']);
+        $grant = Grant::query()->sole(); $handover = app(MachineFailoverHandover::class);
+        $scope = fn () => $handover->closureScope($grant->id, $this->admin->id);
+        $this->code('handover_release_not_stopped', $scope);
+        $this->revokeHandover(); $closing = $scope();
+        $this->assertSame(['cloud_create', 'dns_transition'], array_column($closing['operations'], 'kind'));
+        $this->assertSame(['confirmed_applied', 'confirmed_applied'], array_column($closing['operations'], 'known_outcome'));
+        $handover->releaseStopped($grant->id, $this->admin->id, HandoverEvidenceFixture::close($closing));
+        $this->assertNull($grant->fresh()->writer_slot);
+        $this->assertSame('completed', Execution::query()->findOrFail($run['id'])->status);
+        $this->assertCount(1, $this->posts); $this->assertSame(1, $this->dnsWrites);
     }
 }

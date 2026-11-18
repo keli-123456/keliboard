@@ -13,6 +13,7 @@ use App\Models\User;
 use App\Services\ServerMachine\Cloud\CloudException;
 use App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate;
 use App\Services\ServerMachine\Cloud\MachineFailoverHandover;
+use App\Services\ServerMachine\Cloud\MachineFailoverHandoverEvidence;
 use App\Services\ServerMachine\Cloud\MachineFailoverServiceRegistry;
 use App\Services\ServerMachine\Cloud\MachineFailoverWorkflow;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -22,6 +23,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Tests\Support\HandoverEvidenceFixture;
 
 class MachineFailoverHandoverTest extends MachineFailoverShadowTest
 {
@@ -35,9 +37,11 @@ class MachineFailoverHandoverTest extends MachineFailoverShadowTest
         parent::setUp();
         foreach (['2026_11_07_180000_create_machine_failover_native_journal.php',
             '2026_06_12_000002_create_v2_server_machine_release_table.php',
-            '2026_07_14_000001_add_binary_sha256_to_server_machine_release.php', self::MIGRATION] as $file) {
+            '2026_07_14_000001_add_binary_sha256_to_server_machine_release.php', self::MIGRATION,
+            '2026_11_18_010000_add_machine_failover_handover_receipts.php'] as $file) {
             (require base_path('database/migrations/' . $file))->up();
         }
+        HandoverEvidenceFixture::trust();
         $this->handover = app(MachineFailoverHandover::class);
         $this->registry = app(MachineFailoverServiceRegistry::class);
         $this->release = ServerMachineRelease::query()->create(['component' => 'kelinode-rs', 'version' => 'fixture-v1',
@@ -56,7 +60,8 @@ class MachineFailoverHandoverTest extends MachineFailoverShadowTest
 
     private function issue(array $overrides = []): string
     {
-        return $this->handover->issue($this->scope($overrides), $this->admin->id);
+        $scope = $this->scope($overrides);
+        return $this->handover->issue($scope, $this->admin->id, HandoverEvidenceFixture::stop($scope, $this->admin->id));
     }
 
     private function start(string $id, array $overrides = []): void
@@ -97,6 +102,8 @@ class MachineFailoverHandoverTest extends MachineFailoverShadowTest
         $this->assertSame($run->id, $grant->execution_id);
         $this->assertSame($this->clock + 600, $grant->expires_at);
         $this->assertArrayNotHasKey('evidence_sha256', $grant->toArray());
+        $this->assertArrayNotHasKey('stop_receipt', $grant->toArray());
+        $this->assertSame('fixture-old-writer', $grant->stop_receipt['issuer']);
         $this->assertArrayNotHasKey('release', $grant->toArray());
         $this->assertStringNotContainsString('synthetic-secret', json_encode(DB::table(Grant::TABLE)->get(), JSON_THROW_ON_ERROR));
         foreach (['start', 'queue', 'advance', 'candidate_cleanup', 'dns_write'] as $operation) {
@@ -322,6 +329,70 @@ class MachineFailoverHandoverTest extends MachineFailoverShadowTest
         $run = $this->runFor($id);
         $this->denied('handover_execution_pending', fn () => $this->handover->bindExecution($id, $run->id));
         $this->assertNull(Grant::query()->findOrFail($id)->execution_id);
+    }
+
+    public function test_handover_bare_digest_or_untrusted_authority_cannot_issue(): void
+    {
+        $scope = $this->scope(); $admin = $this->admin->id;
+        $proof = HandoverEvidenceFixture::stop($scope, $admin);
+        $this->denied('handover_evidence_required', fn () => $this->handover->issue($scope, $admin));
+        app()->forgetInstance(MachineFailoverHandoverEvidence::class);
+        $this->denied('handover_authority_unavailable', fn () => $this->handover->issue($scope, $admin, $proof));
+        $this->assertSame(0, Grant::query()->count());
+        Http::assertNothingSent(); Bus::assertNothingDispatched();
+    }
+
+    public static function unconfirmedOldWriter(): array
+    {
+        return ['only turned off scheduler' => ['fence_state', 'scheduler_disabled'], 'queued task' => ['queued', 1],
+            'active request' => ['in_flight', 1], 'unknown result' => ['unresolved', 1], 'unexpected executor' => ['writer', 'other'],
+            'invalid baseline' => ['baseline_sha256', 'not-a-digest']];
+    }
+
+    #[DataProvider('unconfirmedOldWriter')]
+    public function test_handover_signed_old_writer_evidence_must_show_fenced_and_drained(string $field, mixed $value): void
+    {
+        $scope = $this->scope(); $admin = $this->admin->id;
+        $proof = HandoverEvidenceFixture::stop($scope, $admin, [$field => $value]);
+        $this->denied('handover_stop_unconfirmed', fn () => $this->handover->issue($scope, $admin, $proof));
+        $this->assertSame(0, Grant::query()->count());
+    }
+
+    public function test_handover_old_writer_evidence_refuses_drift_tampering_and_staleness(): void
+    {
+        $scope = $this->scope(); $admin = $this->admin->id;
+        $proof = HandoverEvidenceFixture::stop($scope, $admin);
+        $other = array_replace($scope, ['expires_at' => $scope['expires_at'] + 1]);
+        $this->denied('handover_evidence_scope_changed', fn () => $this->handover->issue($other, $admin, $proof));
+        $this->denied('handover_evidence_scope_changed', fn () => $this->handover->issue($scope, $admin, HandoverEvidenceFixture::stop($scope, $admin + 1)));
+        $tampered = $proof; $tampered['body']['fence_id'] = 'tampered-fence-id';
+        $this->denied('handover_evidence_invalid', fn () => $this->handover->issue($scope, $admin, $tampered));
+        $this->tick(61);
+        $this->denied('handover_evidence_expired', fn () => $this->handover->issue($scope, $admin, $proof));
+        $this->assertSame(0, Grant::query()->count());
+    }
+
+    public function test_handover_legacy_grant_without_verified_stop_receipt_cannot_start(): void
+    {
+        $id = $this->issue();
+        Grant::query()->whereKey($id)->update(['stop_receipt' => null]);
+        $this->denied('handover_evidence_required', fn () => $this->start($id));
+    }
+
+    public function test_handover_receipt_schema_fails_closed_and_cannot_drop_signed_audit(): void
+    {
+        $migration = require base_path('database/migrations/2026_11_18_010000_add_machine_failover_handover_receipts.php');
+        $migration->down();
+        $this->denied('handover_migration_required', fn () => $this->issue());
+        $migration->up();
+        $id = $this->issue();
+        try {
+            $migration->down();
+            $this->fail('Expected retained stop evidence.');
+        } catch (\RuntimeException $error) {
+            $this->assertSame('Failover handover receipts must be retained.', $error->getMessage());
+        }
+        $this->assertSame('fixture-old-writer', Grant::query()->findOrFail($id)->stop_receipt['issuer']);
     }
 
     public function test_migration_downgrade_refuses_to_remove_grant_history(): void

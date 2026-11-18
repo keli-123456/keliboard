@@ -6,9 +6,10 @@ require dirname(__DIR__) . '/bootstrap.php';
 use Tests\Support\NativeFailoverConcurrentFixture as Fixture;
 
 try {
-    if ($argc !== 4 || !in_array($argv[3], ['once', 'loop', 'recover', 'stops', 'stop', 'legacy'], true)
+    if ($argc !== 4 || !in_array($argv[3], ['once', 'loop', 'recover', 'stops', 'stop', 'legacy', 'handover'], true)
         || !preg_match('/^w[a-f0-9]{12}$/D', $argv[2])) throw new RuntimeException('Invalid fixture worker arguments.');
     Fixture::attach($argv[1], $argv[2]);
+    if ($argv[3] === 'handover') { Fixture::handoverAction(); exit(0); }
     if ($argv[3] === 'stop') {
         \Illuminate\Support\Facades\DB::listen(function ($query) {
             if (str_starts_with(strtolower($query->sql), 'select') && str_contains($query->sql, 'v2_machine_failover_runtime_event') && str_contains($query->sql, 'request_key'))

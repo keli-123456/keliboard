@@ -76,7 +76,8 @@ final class MachineFailoverHandoverRecovery
         [$run, $attempt, $member, $task] = $this->original($executionId, $attemptId, $admin);
         $dns = DnsRun::query()->useWritePdo()->find($dnsRunId);
         $runtime = MachineDnsSetRuntime::query()->useWritePdo()->find($dnsRunId);
-        if (!$dns || !$runtime || $runtime->mode !== 'native' || !$runtime->stop_requested_at
+        if (!$dns || !$runtime || $runtime->mode !== 'native' || !$runtime->finished_at
+            || (!$runtime->stop_requested_at && $dns->status !== 'completed')
             || $runtime->lease_hash !== null || $runtime->lease_until !== null
             || $dns->service_id !== $run->service_id || $dns->service_revision !== $run->service_revision || $dns->admin_id !== $run->admin_id
             || ($attempt->payload['dns_set_runs'][$dns->set_id] ?? null) !== $dns->id

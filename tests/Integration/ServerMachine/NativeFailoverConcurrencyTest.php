@@ -23,6 +23,8 @@ use Tests\Support\NativeFailoverConcurrentFixture as Fixture;
 
 final class NativeFailoverConcurrencyTest extends TestCase
 {
+    use \Tests\Support\TestsHandoverClosureConcurrency;
+
     private Fixture $fixture;
     private array $run;
     private array $workers = [];
@@ -40,6 +42,9 @@ final class NativeFailoverConcurrencyTest extends TestCase
             'failed_queue_jobs' => $this->eventCount('job_failed'), 'member_reasons' => Member::query()->whereNotNull('reason')->pluck('reason')->all(),
             'runtime_reason' => Runtime::query()->find($this->run['id'])->reason,
             'record_sets' => Fixture::control('record_sets') === true, 'forced_expiries' => (int) Fixture::control('forced_expiries'),
+            'registry_lock_expired' => Fixture::control('forced_registry_expiry') === true,
+            'handover_issued' => $this->eventCount('handover_issued'), 'handover_closed' => $this->eventCount('handover_closed'),
+            'handover_denials' => DB::table('native_fixture_event')->where('kind', 'handover_denied')->orderBy('id')->pluck('reference')->all(),
             'address_proofs' => \Illuminate\Support\Facades\Schema::hasTable('v2_machine_native_address_proof')
                 ? Proof::query()->selectRaw('family, state, COUNT(*) AS total')->groupBy('family', 'state')->get()->toArray() : [],
             'dns_children' => \Illuminate\Support\Facades\Schema::hasTable('v2_machine_failover_dns_run')
@@ -64,9 +69,10 @@ final class NativeFailoverConcurrencyTest extends TestCase
         for ($i = 0; $i < 12 && $this->runStatus() === 'running'; $i++) $this->workOnce();
         $this->assertNotSame('running', $this->runStatus(), $this->errors());
     }
-    private function spawn(string $mode = 'once'): string
+    private function spawn(string $mode = 'once', ?array $handover = null): string
     {
         $id = 'w' . bin2hex(random_bytes(6));
+        if ($mode === 'handover') Fixture::control('handover-action:' . $id, $handover, true);
         $process = proc_open([PHP_BINARY, dirname(__DIR__, 2) . '/Fixtures/native_failover_worker.php', Fixture::$owner, $id, $mode],
             [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, dirname(__DIR__, 3));
         $this->assertIsResource($process); fclose($pipes[0]); stream_set_blocking($pipes[1], false); stream_set_blocking($pipes[2], false);

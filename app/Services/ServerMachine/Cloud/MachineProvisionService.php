@@ -229,7 +229,7 @@ class MachineProvisionService
                     try {
                         $phase = 'create';
                         $snapshot = $provider->create($account, $payload['request'], $task->dispatched_at);
-                        $this->acceptSnapshot($task, $snapshot);
+                        if (!$this->acceptSnapshot($task, $snapshot)) return;
                         if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
                         $health->resolveIntent($account, $task->id);
                     } catch (CloudException $error) {
@@ -244,13 +244,13 @@ class MachineProvisionService
                     $snapshot = $provider->reconcile($account, $payload['request'], $task->dispatched_at);
                     if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
                     if (!$snapshot) { $this->move($task, 'outcome_unknown', 'outcome_uncertain'); $this->wait($task); return; }
-                    $this->acceptSnapshot($task, $snapshot);
+                    if (!$this->acceptSnapshot($task, $snapshot)) return;
                     $health->resolveIntent($account, $task->id);
                 }
                 if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
                 $phase = 'readback';
                 $snapshot = $provider->instance($account, $task->external_id);
-                $this->acceptSnapshot($task, $snapshot);
+                if (!$this->acceptSnapshot($task, $snapshot)) return;
                 if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
                 $phase = 'initialization';
                 if ($task->bootstrap_state === 'failed') { $this->move($task, 'needs_review', 'initialization_failed'); return; }
@@ -341,14 +341,17 @@ class MachineProvisionService
         return ['queued' => $rows->count()];
     }
 
-    private function acceptSnapshot(Task $task, array $snapshot): void
+    private function acceptSnapshot(Task $task, array $snapshot): bool
     {
-        DB::transaction(function () use ($task, $snapshot) {
+        $recorded = app(MachineFailoverHandover::class)->withProviderReceipt($task, function () use ($task, $snapshot) {
             $row = Task::query()->whereKey($task->id)->lockForUpdate()->firstOrFail();
             if ($row->external_id !== null && ($row->external_id !== $snapshot['external_id'] || $row->provider_created_at !== $snapshot['provider_created_at'])) throw new CloudException('identity_changed');
             $row->fill(['external_id' => $snapshot['external_id'], 'provider_created_at' => $snapshot['provider_created_at'], 'public_ips' => $snapshot['public_ips']])->save();
+            return true;
         });
+        if (!$recorded) return false;
         $task->refresh();
+        return true;
     }
     private function awaitingProviderVisibility(Task $task, CloudException $error, string $phase): bool
     {

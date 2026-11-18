@@ -24,7 +24,7 @@ trait TestsCandidateRetry
     private $onCleanupRead = null;
     private $onBeforeCleanupDelete = null;
 
-    private function retryFixture(int $attempts = 3, int $parallel = 1): array
+    private function retryFixture(int $attempts = 3, int $parallel = 1, bool $handover = false): array
     {
         $this->nodeReadiness = true;
         config(['machine_failover.allow_candidate_retry' => true,
@@ -48,7 +48,9 @@ trait TestsCandidateRetry
             $this->candidateAbsent = true;
         });
         app()->instance(MachineCandidateCleanupClient::class, $client);
-        $run = $this->advance($this->start(parallel: $parallel, attempts: $attempts));
+        if ($handover) { $this->runtimeSchema(); config(['machine_failover.runner_enabled' => true]); }
+        $run = $this->start(parallel: $parallel, attempts: $attempts, handover: $handover);
+        $run = $handover ? $this->tick($run) : $this->advance($run);
         config(['machine_failover.allow_rotation' => false]);
         $this->assertSame('waiting_initialization', $run['members'][0]['phase'], json_encode($run));
         $task = $this->task();
@@ -57,7 +59,7 @@ trait TestsCandidateRetry
         return $run;
     }
 
-    private function candidateSample(array $run, int $at, string $kind = 'failed'): array
+    private function candidateSample(array $run, int $at, string $kind = 'failed', bool $viaRunner = false): array
     {
         $task = $this->task(); $f = $this->fixtures[0];
         $this->report($f, $task, $task->public_ips[0], $kind === 'healthy', $at);
@@ -77,7 +79,7 @@ trait TestsCandidateRetry
             };
             unset($row); Cache::put($key, $rows, 300);
         }
-        return $this->advance($run);
+        return $viaRunner ? $this->tick($run) : $this->advance($run);
     }
 
     private function cleanupStarted(int $attempts = 3): array

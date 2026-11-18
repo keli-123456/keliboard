@@ -38,6 +38,16 @@ class MachineCandidateRetry
         return isset($attempt->payload[self::KEY]['delete_dispatched_at']);
     }
 
+    public function originalDelete(Attempt $attempt, Task $task): array
+    {
+        $journal = $attempt->payload[self::KEY] ?? [];
+        if (!$task->dispatched_at || !$task->external_id || !is_int($journal['delete_dispatched_at'] ?? null)
+            || $journal['delete_dispatched_at'] < $task->dispatched_at || !in_array($journal['state'] ?? null, ['confirming', 'confirmed'], true)
+            || !MachineIntentJson::same($journal['identity'] ?? null, $this->identity($task)))
+            throw new CloudException('candidate_cleanup_identity_changed');
+        return $journal['state'] === 'confirmed' || $attempt->status === 'cleaned' ? $this->confirmed($attempt, $task) : $journal;
+    }
+
     public function advance(Attempt $attempt, Task $task, Member $member, Execution $run, Policy $policy): ?string
     {
         if (!isset($member->payload[self::KEY])) return null;

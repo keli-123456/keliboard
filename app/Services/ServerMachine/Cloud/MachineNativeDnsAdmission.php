@@ -178,7 +178,7 @@ class MachineNativeDnsAdmission
             if ($planner->plan($snapshot, $addresses, $records)['actions'] !== []) throw new CloudException('native_dns_source_unverified');
             $addresses[$context['member_id']] = $context['addresses'];
             $plan = $planner->plan($snapshot, $addresses, $records, 'replace', $context['member_id']);
-            $key = hash('sha256', 'native-dns-set:' . $attempt->id . ':' . $set['id']);
+            $key = self::requestKey($attempt->id, $set['id']);
             $id = (string) Str::uuid();
             foreach ($plan['actions'] as $i => &$a) $a += ['id' => hash('sha256', $id . ':' . $i), 'state' => 'prepared', 'known_id' => null, 'requests' => []];
             unset($a);
@@ -213,6 +213,11 @@ class MachineNativeDnsAdmission
             if (!empty($otherAttempt?->payload['dns_set_runs'])) throw new CloudException('dns_set_busy');
         }
         if (DnsRun::query()->where('service_id', $parent->service_id)->where('status', 'running')->whereNotIn('id', array_values($links))->exists()) throw new CloudException('dns_set_busy');
+    }
+
+    public static function requestKey(string $attempt, int $set): string
+    {
+        return hash('sha256', 'native-dns-set:' . $attempt . ':' . $set);
     }
     public function guard(DnsRun $dns, bool $dispatch, bool $remote = false): void
     {

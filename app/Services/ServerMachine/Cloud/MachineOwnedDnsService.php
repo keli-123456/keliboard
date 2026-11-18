@@ -145,9 +145,11 @@ class MachineOwnedDnsService
                         if ($kind === 'create') {
                             $created = $this->provider->createOwnedA($credential, $record->zone, $record->hostname, $transition->to_ip, $record->marker);
                             $this->assertOne($record, [$created]);
-                            $record = DB::transaction(function () use ($record, $created) {
+                            $acknowledged = app(MachineFailoverHandover::class)->withProviderReceipt($task, function () use ($record, $created) {
                                 $row = $this->current($record, true); $row->record_id = $created['id']; $row->save(); return $row;
                             });
+                            if (!$acknowledged) return $transition->fresh()->toArray();
+                            $record = $acknowledged;
                         } elseif ($kind === 'patch') {
                             $binding = new MachineDnsBinding(['zone' => $record->zone, 'hostname' => $record->hostname, 'type' => 'A', 'record_id' => $record->record_id]);
                             $this->provider->update($credential, $binding, $current, $transition->to_ip);
@@ -155,13 +157,14 @@ class MachineOwnedDnsService
                         return $this->reconcile($transition, $record, $instance, $policy, $admin);
                     } catch (\Throwable $error) {
                         $reason = $error instanceof CloudException || $error instanceof DnsException ? $error->getMessage() : 'dns_outcome_unknown';
-                        $this->review($transition, $record, $reason, $error);
+                        $this->review($task, $transition, $record, $reason, $error);
                         return $transition->fresh()->toArray();
                     }
                 } catch (DnsRequestFailure $error) {
                     if (!$error->retryable) throw $error;
-                    Transition::query()->whereKey($transition->id)->where('state', 'prepared')->whereNull('dispatched_at')
-                        ->update(['reason' => $error->getMessage(), 'next_check_at' => time() + $error->retryAfterSeconds]);
+                    app(MachineFailoverHandover::class)->withProviderReceipt($task, fn () => Transition::query()->whereKey($transition->id)
+                        ->where('state', 'prepared')->whereNull('dispatched_at')
+                        ->update(['reason' => $error->getMessage(), 'next_check_at' => time() + $error->retryAfterSeconds]));
                     return $transition->fresh()->toArray();
                 }
             });
@@ -183,15 +186,18 @@ class MachineOwnedDnsService
 
     private function reconcile(Transition $transition, OwnedDns $record, Instance $instance, $policy, int $admin): array
     {
+        $task = MachineProvisionTask::query()->findOrFail($instance->task_id);
         if ($transition->readback_attempts >= self::READBACK_LIMIT) {
-            $this->review($transition, $record, 'dns_readback_exhausted');
+            $this->review($task, $transition, $record, 'dns_readback_exhausted');
             return $transition->fresh()->toArray();
         }
-        $transition = DB::transaction(function () use ($transition) {
+        $checked = app(MachineFailoverHandover::class)->withProviderReceipt($task, function () use ($transition) {
             $row = $this->current($transition, true);
             $row->fill(['readback_attempts' => $row->readback_attempts + 1, 'last_checked_at' => time(), 'next_check_at' => null])->save();
             return $row;
         });
+        if (!$checked) return $transition->fresh()->toArray();
+        $transition = $checked;
         try {
             $credential = $this->credential($record->credential_id, $record->credential_revision);
             $remote = $this->oneOwned($record, $credential);
@@ -229,7 +235,7 @@ class MachineOwnedDnsService
             });
         } catch (\Throwable $error) {
             $reason = $error instanceof CloudException || $error instanceof DnsException ? $error->getMessage() : 'dns_outcome_unknown';
-            $this->review($transition, $record, $reason, $error);
+            $this->review($task, $transition, $record, $reason, $error);
         }
         return $transition->fresh()->toArray();
     }
@@ -251,14 +257,16 @@ class MachineOwnedDnsService
         return $row;
     }
 
-    private function review(Transition $transition, OwnedDns $record, string $reason, ?\Throwable $error = null): void
+    private function review(MachineProvisionTask $task, Transition $transition, OwnedDns $record, string $reason, ?\Throwable $error = null): void
     {
         $retry = $reason === 'dns_outcome_unknown' || $error instanceof DnsRequestFailure && $error->retryable;
         if ($retry && $transition->readback_attempts >= self::READBACK_LIMIT) { $retry = false; $reason = 'dns_readback_exhausted'; }
         $next = $retry ? time() + ($error instanceof DnsRequestFailure ? $error->retryAfterSeconds : 20) : null;
-        Transition::query()->whereKey($transition->id)->where('dispatched_at', $transition->dispatched_at)->whereIn('state', ['dispatching', 'needs_review'])
-            ->update(['state' => 'needs_review', 'reason' => $reason, 'next_check_at' => $next]);
-        OwnedDns::query()->whereKey($record->id)->where('revision', $transition->dns_revision)->update(['status' => 'needs_review']);
+        app(MachineFailoverHandover::class)->withProviderReceipt($task, function () use ($transition, $record, $reason, $next) {
+            Transition::query()->whereKey($transition->id)->where('dispatched_at', $transition->dispatched_at)->whereIn('state', ['dispatching', 'needs_review'])
+                ->update(['state' => 'needs_review', 'reason' => $reason, 'next_check_at' => $next]);
+            OwnedDns::query()->whereKey($record->id)->where('revision', $transition->dns_revision)->update(['status' => 'needs_review']);
+        });
     }
 
     private function assertOne(OwnedDns $record, array $rows): array
