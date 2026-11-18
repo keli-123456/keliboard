@@ -1,4 +1,4 @@
-name: Native Failover Isolated Acceptance
+name: usdo1 Temporary Kernel and Native Acceptance
 
 on:
   workflow_dispatch:
@@ -7,75 +7,67 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-failover-isolated-${{ github.ref }}
+  group: usdo1-isolated-board-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  concurrency:
-    name: Native failover (${{ matrix.isolation }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        isolation: ["REPEATABLE READ", "READ COMMITTED"]
-    services:
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_DATABASE: keli_acceptance_native_failover
-          MYSQL_USER: keli_native_fixture
-          MYSQL_PASSWORD: ephemeral-native-ci-only
-          MYSQL_ROOT_PASSWORD: ephemeral-native-root-only
-        ports:
-          - 127.0.0.1::3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=24
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 127.0.0.1::6379
-        options: >-
-          --health-cmd="redis-cli ping"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=12
-    env:
-      KELI_NATIVE_ACCEPTANCE: "1"
-      KELI_NATIVE_HOST: "127.0.0.1"
-      KELI_NATIVE_DATABASE: keli_acceptance_native_failover
-      KELI_NATIVE_USER: keli_native_fixture
-      KELI_NATIVE_PASSWORD: ephemeral-native-ci-only
-      KELI_NATIVE_ISOLATION: ${{ matrix.isolation }}
+  isolated:
+    if: github.ref == 'refs/heads/acceptance/usdo1-isolated-linux-20261118'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 14
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: "8.2"
-          extensions: pdo_mysql, pdo_sqlite, redis, pcntl, posix, mbstring, openssl
+          php-version: '8.3'
+          extensions: pdo_sqlite, sqlite3, mbstring, curl, fileinfo, openssl, zip
           tools: composer:v2
           coverage: none
-      - name: Install test dependencies without application startup
-        run: composer install --no-interaction --no-progress --prefer-dist --no-scripts
-      - name: Run synthetic cloud and DNS with real queue, locks and InnoDB
-        env:
-          KELI_NATIVE_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
-          KELI_NATIVE_REDIS_PORT: ${{ job.services.redis.ports[6379] }}
+      - name: Install locked test dependencies and kernel tools
         run: |
+          set -euo pipefail
+          composer install --no-interaction --no-progress --prefer-dist --no-scripts --no-plugins
+          sudo -n apt-get update -qq
+          sudo -n apt-get install -y --no-install-recommends nftables iproute2 iputils-ping
+      - name: Test native task, stop, and independent rollback without network
+        run: |
+          set -euo pipefail
           mkdir -p artifacts
-          vendor/bin/phpunit -c phpunit-native-failover.xml --stop-on-error --stop-on-failure --log-junit artifacts/native-failover.xml
-      - name: Preserve aggregate acceptance evidence
-        if: always()
-        uses: actions/upload-artifact@v4
+          sudo -n unshare --net -- bash -euc '
+            ip link set lo up
+            test -z "$(ip route show default)"
+            exec env -i PATH="$PATH" APP_ENV=testing DB_CONNECTION=sqlite DB_DATABASE=:memory: CACHE_DRIVER=array "$@"
+          ' bash "$(command -v php)" vendor/bin/phpunit --do-not-cache-result --stop-on-failure --stop-on-error --log-junit artifacts/native.xml \
+            --filter 'MachineUsdo1(Round|ExistingA)Test|MachineDnsRecordSet(Planner|Wire)Test|test_usdo1_bound_native|test_parent_stop_fences_native' tests/Unit/Services
+          python3 -B -m unittest discover -s tools/machine-acceptance -p test_usdo1_fault_lease.py
+      - name: Kill isolated controller and observe real kernel expiry
+        run: |
+          set -euo pipefail
+          sudo -n "$(command -v python3)" -B tools/machine-acceptance/usdo1_linux_lease_check.py | tee artifacts/lease.json
+      - name: Seal redacted evidence
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          lease = json.loads(Path('artifacts/lease.json').read_text())
+          assert all(lease[key] is True for key in ('isolated_linux', 'controller_killed', 'icmp_recovered', 'non_target_unaffected'))
+          assert 0 < lease['seconds_since_loss'] <= 90
+          suite = ET.parse('artifacts/native.xml')
+          cases = list(suite.iter('testcase'))
+          assert len(cases) >= 20 and not any(case.find(tag) is not None for case in cases for tag in ('error', 'failure', 'skipped'))
+          proof = {'schema': 1, 'kind': 'board-usdo1-linux', 'git_sha': os.environ['GITHUB_SHA'],
+                   'run_id': os.environ['GITHUB_RUN_ID'], 'attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+                   'linux_kernel': os.uname().release, 'cloud_and_dns_simulated': True,
+                   'php_passed': len(cases), 'lease_model_passed': 7, 'lease': lease}
+          Path('artifacts/board-attestation.json').write_text(json.dumps(proof, indent=2) + '\n')
+          PY
+      - uses: actions/upload-artifact@v4
         with:
-          name: native-failover-${{ strategy.job-index }}
-          path: |
-            artifacts/native-failover.xml
-            artifacts/native-failover-summary.jsonl
-          if-no-files-found: ignore
+          name: usdo1-board-linux-evidence
+          path: artifacts/board-attestation.json
+          if-no-files-found: error
           retention-days: 7
