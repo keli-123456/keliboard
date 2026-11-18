@@ -58,6 +58,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
     use \Tests\Support\TestsMemberInitialization;
     use \Tests\Support\TestsProviderVisibility;
     use \Tests\Support\TestsHandoverDispatch;
+    use \Tests\Support\TestsUsdo1NativeBindings;
     private ?int $memberAttemptLimit = null;
     private User $admin;
     private ServerMachineRelease $release;
@@ -113,7 +114,8 @@ class MachineFailoverNativeBridgeTest extends TestCase
 
     protected function tearDown(): void { Carbon::setTestNow(); parent::tearDown(); }
 
-    private function fixture(int $n, string $provider = 'linode', bool $initiallyUnreachable = false, int $sampleAge = 2): array
+    private function fixture(int $n, string $provider = 'linode', bool $initiallyUnreachable = false, int $sampleAge = 2,
+        bool $usdo1 = false): array
     {
         [$region, $size, $image] = match ($provider) {
             'digitalocean' => ['sgp1', 's-1vcpu-1gb', 'debian-12-x64'], 'vultr' => ['40', 'vc2-1c-1gb', '2136'],
@@ -125,7 +127,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
         DB::table('v2_server')->insert(['id' => $n, 'machine_id' => $machine->id, 'enabled' => true, 'type' => 'hysteria', 'port' => 8443, 'server_port' => 8443]);
         $group = MachineCloudGroup::query()->create(['name' => 'Fixture pool ' . $n, 'name_key' => hash('sha256', 'pool' . $n), 'revision' => 1]);
         $accounts = [];
-        foreach (['a', 'b'] as $letter) {
+        foreach ($usdo1 ? ['a'] : ['a', 'b'] as $letter) {
             $account = Account::query()->create(['name' => 'Fixture ' . $n . $letter, 'provider' => $provider, 'group_id' => $group->id,
                 'group_revision' => 1, 'revision' => 1, 'credentials' => ['api_token' => 'synthetic-token-' . $n . $letter]]);
             app(MachineCloudCredentialHealth::class)->verify($account->id, 1, $this->admin->id); $accounts[] = $account;
@@ -137,7 +139,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $credential = MachineDnsCredential::query()->create(['name' => 'Synthetic DNS ' . $n, 'provider' => 'cloudflare', 'revision' => 1, 'credentials' => ['api_token' => 'synthetic-dns-' . $n]]);
         $saved = app(MachineFailoverPolicyService::class)->save(['name' => 'Fixture ' . $n, 'machine_id' => $machine->id, 'provider' => $provider,
             'credential_group_id' => $group->id, 'catalog_fingerprint' => $fingerprint, 'region' => $region, 'size' => $size,
-            'image' => $image, 'failure_threshold' => 2, 'stale_after_seconds' => 300, 'cooldown_seconds' => 300,
+            'image' => $image, 'failure_threshold' => $usdo1 ? 3 : 2, 'stale_after_seconds' => 300, 'cooldown_seconds' => 300,
             'monthly_limit_usd' => 100, 'daily_limit' => 2, 'dns_credential_id' => $credential->id, 'dns_hostname' => 'fixture' . $n . '.example.test',
             'isolation_confirmed' => true], $this->admin->id);
         $policy = Policy::query()->findOrFail($saved['id']); $policy->forceFill(['created_at' => time() - 60])->save();
@@ -160,7 +162,9 @@ class MachineFailoverNativeBridgeTest extends TestCase
             'proxied' => false, 'ttl' => 60, 'comment' => $dns->marker, 'locked' => false];
         $fixture = compact('machine', 'policy', 'accounts', 'source', 'sourceIp', 'dns');
         config(['machine_failover.observe_enabled' => true]);
-        foreach ([-$sampleAge - 10 => !$initiallyUnreachable, -$sampleAge - 5 => false, -$sampleAge => false] as $delta => $healthy) $this->sourceReport($fixture, $healthy, time() + $delta);
+        $samples = $usdo1 ? [-$sampleAge - 15 => !$initiallyUnreachable, -$sampleAge - 10 => false, -$sampleAge - 5 => false, -$sampleAge => false]
+            : [-$sampleAge - 10 => !$initiallyUnreachable, -$sampleAge - 5 => false, -$sampleAge => false];
+        foreach ($samples as $delta => $healthy) $this->sourceReport($fixture, $healthy, time() + $delta);
         Carbon::setTestNow();
         return $fixture;
     }
@@ -624,7 +628,8 @@ class MachineFailoverNativeBridgeTest extends TestCase
 
     public static function jsonProviders(): array { return [['digitalocean'], ['vultr']]; }
 
-    private function startSets(array $types = ['A', 'AAAA'], string $dnsProvider = 'cloudflare', int $setCount = 1, bool $legacyDns = true, bool $handover = false): array
+    private function startSets(array $types = ['A', 'AAAA'], string $dnsProvider = 'cloudflare', int $setCount = 1, bool $legacyDns = true,
+        bool $handover = false, ?\Closure $usdo1 = null): array
     {
         foreach (['2026_11_09_180000_create_machine_failover_dns_sets.php', '2026_11_09_200000_create_machine_dns_set_runtime.php',
             '2026_11_10_010000_create_machine_native_address_proofs.php'] as $file) (require base_path('database/migrations/' . $file))->up();
@@ -643,8 +648,9 @@ class MachineFailoverNativeBridgeTest extends TestCase
             MachineOwnedInstance::query()->where('task_id', $task->id)->update(['resource_id' => $resource->id]);
         }
         $service = app(MachineFailoverServiceRegistry::class)->save(['name' => 'Native sets fixture', 'max_parallel' => count($this->fixtures),
-            'attempt_limit' => 4, 'monthly_cap_usd' => 400, 'members' => array_map(fn ($f) => ['policy_id' => $f['policy']->id,
-                'policy_revision' => $f['policy']->revision, 'name' => $f['machine']->name, 'priority' => $f['machine']->id, 'enabled' => true], $this->fixtures)], $this->admin->id);
+            'attempt_limit' => $usdo1 ? 1 : 4, 'monthly_cap_usd' => 400, 'members' => array_map(fn ($f) => ['policy_id' => $f['policy']->id,
+                'policy_revision' => $f['policy']->revision, 'name' => $f['machine']->name, 'priority' => $f['machine']->id, 'enabled' => true]
+                + ($usdo1 ? ['attempt_limit' => 1] : []), $this->fixtures)], $this->admin->id);
         $credential = $dnsProvider === 'cloudflare' ? MachineDnsCredential::query()->first() : MachineDnsCredential::query()->create([
             'name' => 'Aliyun fixture', 'provider' => 'aliyun', 'revision' => 1, 'credentials' => ['access_key_id' => 'synthetic', 'access_key_secret' => 'synthetic']]);
         $input = ['service_id' => $service['id'], 'service_revision' => 1,
@@ -652,8 +658,14 @@ class MachineFailoverNativeBridgeTest extends TestCase
             'zone_name' => 'example.test', 'hostname' => 'native-sets.example.test', 'ttl' => $dnsProvider === 'cloudflare' ? 60 : 600,
             'members' => array_map(fn ($m) => ['member_id' => $m['id'], 'types' => $types, 'lines' => $dnsProvider === 'cloudflare'
                 ? ['default'] : ['default', 'telecom', 'unicom']], $service['members'])];
+        if ($usdo1) {
+            $input['zone'] = $input['zone_name'] = \Keli\Acceptance\Usdo1ExistingA::ZONE;
+            foreach ($input['members'] as &$member) $member['lines'] = ['default'];
+            unset($member);
+        }
         for ($i = 0; $i < $setCount; $i++) {
-            $input['service_revision'] = 1 + $i; $input['hostname'] = 'native-sets' . ($i ? '-' . $i : '') . '.example.test';
+            $input['service_revision'] = 1 + $i;
+            $input['hostname'] = $usdo1 ? \Keli\Acceptance\Usdo1ExistingA::NAME : 'native-sets' . ($i ? '-' . $i : '') . '.example.test';
             $view = app(\App\Services\ServerMachine\Cloud\MachineFailoverDnsRegistry::class)->save($input, $this->admin->id);
         }
         foreach ($view['sets'] as $set) foreach (\App\Models\MachineFailoverDnsSlot::query()->where('set_id', $set['id'])->get() as $slot) {
@@ -662,8 +674,9 @@ class MachineFailoverNativeBridgeTest extends TestCase
             $id = $dnsProvider === 'cloudflare' ? hash('md5', (string) $slot['id']) : (string) (5000 + $slot['id']);
             $this->records[$id] = $dnsProvider === 'cloudflare' ? ['id' => $id, 'type' => $slot['type'], 'content' => $ip, 'name' => $set['hostname'],
                 'ttl' => 60, 'proxied' => false, 'locked' => false, 'comment' => $slot['marker']] : ['RecordId' => $id, 'Type' => $slot['type'], 'Value' => $ip,
-                    'RR' => substr($set['hostname'], 0, -strlen('.example.test')), 'DomainName' => 'example.test', 'Line' => $slot['line'], 'TTL' => 600, 'Remark' => $slot['marker'], 'Status' => 'ENABLE', 'Locked' => false];
+                    'RR' => substr($set['hostname'], 0, -strlen('.' . $input['zone_name'])), 'DomainName' => $input['zone_name'], 'Line' => $slot['line'], 'TTL' => 600, 'Remark' => $slot['marker'], 'Status' => 'ENABLE', 'Locked' => false];
         }
+        if ($usdo1) return $usdo1($service, $view);
         return app(MachineFailoverNativeBridge::class)->start($service['id'], $view['service_revision'], array_map(fn ($f) => MachineFailoverPlan::query()
             ->where('policy_id', $f['policy']->id)->latest('id')->value('id'), $this->fixtures), $this->release->id, str_repeat('d', 32), $this->admin->id,
             handoverGrantId: $handover ? $this->issueHandover($service['id'], $view['service_revision']) : null);
