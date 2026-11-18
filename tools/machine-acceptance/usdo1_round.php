@@ -27,10 +27,11 @@ final class Usdo1Round
     private bool $busy = false;
 
     public function __construct(private array $scope, private \Closure $port, private \Closure $load,
-        private \Closure $save, private \Closure $clock)
+        private \Closure $save, private \Closure $clock, private ?\Closure $boundDns = null)
     {
         self::need(app()->runningUnitTests() && app('db')->connection()->getDriverName() === 'sqlite'
             && app('db')->connection()->getDatabaseName() === ':memory:', 'offline_environment_required');
+        self::need(($scope['bound_native_dns'] ?? false) === ($boundDns !== null), 'dns_binding_invalid');
         $rollback = $scope['rollback'] ?? [];
         $baseline = $scope['baseline'] ?? [];
         self::need(is_string($scope['run_id'] ?? null) && preg_match('/^keli-accept-[a-z0-9-]{8,70}$/D', $scope['run_id']) === 1
@@ -246,6 +247,13 @@ final class Usdo1Round
         $dns = $this->dns();
         $record = $dns->adopt();
         $address = $this->state['roles']['candidate']['pin']['ipv4'];
+        if ($this->boundDns !== null) {
+            $this->persist();
+            if (($this->boundDns)('publish', $dns) !== true) return;
+            self::need($dns->candidateRecord()['Value'] === $address, 'candidate_unconfirmed');
+            $this->state['phase'] = 'confirm-cutover';
+            return;
+        }
         $plan = (new MachineDnsRecordSetPlanner)->plan(['set' => $this->dnsSet, 'members' => [['id' => 1, 'enabled' => true]],
             'slots' => [['id' => 1, 'member_id' => 1, 'marker' => $this->scope['marker'], 'type' => 'A', 'line' => 'default']]],
             [1 => ['A' => $address]], [$record], 'replace', 1);
@@ -341,7 +349,7 @@ final class Usdo1Round
             'stop-and-drain' => $this->drained(),
             'settle-intent' => $this->drained() && $this->settled($details['intent'], $details['observation']),
             'restore-source', 'restore-candidate', 'unclaim-baseline', 'unclaim-restored' => $this->state['phase'] === 'rollback'
-                && $this->drained() && $this->rollbackTargetReady(),
+                && $this->boundDns === null && $this->drained() && $this->rollbackTargetReady(),
             'external-rollback-readback' => $this->externalDns($details['baseline']),
             default => false,
         };
@@ -397,21 +405,32 @@ final class Usdo1Round
     private function rollback(): void
     {
         self::need($this->drained() && $this->rollbackTargetReady(), 'rollback_unverified');
-        if (isset($this->state['roles']['source']['pin'])) $this->dns()->rollback();
+        if (isset($this->state['roles']['source']['pin']) && ($this->load)('dns') !== null) {
+            if ($this->boundDns !== null) {
+                if (($this->boundDns)('restore', null) !== true) return;
+            } else $this->dns()->rollback();
+        }
         else self::need($this->baselineUntouched(), 'baseline_changed');
         $this->state['phase'] = 'cleanup';
     }
 
-    private function cleanupAllowed(): void
+    private function cleanupAllowed(): bool
     {
         self::need($this->drained() && $this->rollbackTargetReady(), 'rollback_unverified');
-        if (isset($this->state['roles']['source']['pin']) && ($this->load)('dns') !== null) $this->dns()->confirmDnsClearForCleanup();
-        else self::need($this->baselineUntouched() && $this->externalDns($this->scope['baseline']), 'baseline_changed');
+        if (isset($this->state['roles']['source']['pin']) && ($this->load)('dns') !== null) {
+            if ($this->boundDns !== null && ($this->boundDns)('clear-for-cleanup', null) !== true) return false;
+            if ($this->boundDns === null) $this->dns()->confirmDnsClearForCleanup();
+            else self::need($this->externalDns($this->scope['baseline']), 'baseline_changed');
+        } else self::need($this->baselineUntouched() && $this->externalDns($this->scope['baseline']), 'baseline_changed');
+        return true;
     }
 
     private function cleanup(): void
     {
-        $this->cleanupAllowed();
+        if (!$this->cleanupAllowed()) {
+            $this->resetAbsenceReads();
+            return;
+        }
         // Resolve every paid intent before deleting anything, including a lost candidate create response.
         foreach (array_keys($this->state['roles']) as $role) if ($this->readProvision($role)['status'] === 'pending') {
             $this->resetAbsenceReads();
@@ -442,10 +461,9 @@ final class Usdo1Round
         if ($receipt['status'] === 'absent') {
             $resource['first_absent_at'] = $prior ?? $this->now();
             $resource['confirmed'] = $this->now() - $resource['first_absent_at'] >= 10;
-        } elseif (!$resource['delete_sent']) {
+        } elseif (!$resource['delete_sent'] && $this->cleanupAllowed()) {
             $resource['delete_sent'] = true;
             $this->persist();
-            $this->cleanupAllowed();
             $this->call('delete-resource', ['role' => $role, 'pin' => $pin]);
         }
     }
