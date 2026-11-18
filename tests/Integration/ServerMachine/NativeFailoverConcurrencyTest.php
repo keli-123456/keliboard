@@ -7,13 +7,17 @@ use App\Models\MachineDnsTransition;
 use App\Models\MachineFailoverAttempt as Attempt;
 use App\Models\MachineFailoverExecution as Execution;
 use App\Models\MachineFailoverExecutionMember as Member;
+use App\Models\MachineFailoverHandoverGrant as Grant;
 use App\Models\MachineFailoverRuntime as Runtime;
 use App\Models\MachineProvisionTask as Task;
 use App\Models\MachineNativeAddressProof as Proof;
 use App\Models\MachineFailoverDnsRun as DnsRun;
 use App\Models\MachineDnsSetRuntime as DnsRuntime;
+use App\Services\ServerMachine\Cloud\MachineFailoverHandover;
+use App\Services\ServerMachine\Cloud\MachineFailoverHandoverRecovery;
 use App\Services\ServerMachine\Cloud\MachineFailoverRunner;
 use Illuminate\Support\Facades\DB;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Tests\Support\NativeFailoverConcurrentFixture as Fixture;
 
@@ -30,7 +34,7 @@ final class NativeFailoverConcurrencyTest extends TestCase
         if (!isset($this->run)) return;
         Fixture::control('exit', true, true); Fixture::control('release', true, true);
         foreach (array_keys($this->workers) as $id) $this->join((string) $id, true);
-        $summary = ['case' => $this->name(), 'isolation' => getenv('KELI_NATIVE_ISOLATION'), 'workers' => count($this->workers),
+        $summary = ['case' => $this->name(), 'data_set' => $this->dataName(), 'isolation' => getenv('KELI_NATIVE_ISOLATION'), 'workers' => count($this->workers),
             'killed_workers' => $this->killed, 'mock_creates' => $this->eventCount('create'), 'mock_dns_writes' => $this->eventCount('dns_write'),
             'worker_errors' => $this->eventCount('worker_error'), 'exhausted_jobs' => $this->eventCount('queue_exhausted'),
             'failed_queue_jobs' => $this->eventCount('job_failed'), 'member_reasons' => Member::query()->whereNotNull('reason')->pluck('reason')->all(),
@@ -104,6 +108,88 @@ final class NativeFailoverConcurrencyTest extends TestCase
     }
     private function workOnce(): void { $this->fixture->due($this->run['id']); $this->join($this->spawn()); $this->cleanWorkers(); }
     private function runStatus(): string { return (string) Execution::query()->findOrFail($this->run['id'])->status; }
+
+    private function revokeHandover(): void
+    {
+        $grant = Grant::query()->where('execution_id', $this->run['id'])->sole();
+        app(MachineFailoverHandover::class)->revoke($grant->id, $grant->admin_id);
+    }
+
+    public function test_handover_revocation_during_cloud_preflight_fences_a_separate_queue_worker(): void
+    {
+        $this->run = $this->fixture->seed(handover: true);
+        Fixture::control('fault', 'preflight', true);
+        $worker = $this->spawn(); $this->barrier('preflight');
+        $this->revokeHandover();
+        Fixture::control('release', true, true); $this->join($worker);
+        $this->join($this->spawn('recover')); $this->cleanWorkers();
+        $this->assertSame('stopped', $this->runStatus());
+        $this->assertSame('handover_revoked', Runtime::query()->findOrFail($this->run['id'])->reason);
+        $this->assertNull(Task::query()->findOrFail(Attempt::query()->sole()->task_id)->dispatched_at);
+        $this->assertSame(0, $this->eventCount('create')); $this->assertSame(0, $this->eventCount('dns_write'));
+    }
+
+    public function test_handover_revocation_after_create_and_worker_death_only_allows_original_readback(): void
+    {
+        $this->run = $this->fixture->seed(handover: true);
+        Fixture::control('fault', 'create_after', true);
+        $worker = $this->spawn(); $this->barrier('create_after');
+        $attempt = Attempt::query()->sole(); $task = Task::query()->findOrFail($attempt->task_id);
+        $this->assertNotNull($task->dispatched_at); $this->assertNull($task->external_id);
+        $this->revokeHandover(); $this->kill($worker);
+        $this->fixture->expire($this->run['id']); $this->join($this->spawn('recover')); $this->cleanWorkers();
+        $this->assertSame('stopped', $this->runStatus());
+        $this->assertSame('needs_review', $task->fresh()->status);
+        $original = $task->fresh()->getRawOriginal();
+        $recovery = app(MachineFailoverHandoverRecovery::class);
+        $observed = $recovery->cloud($this->run['id'], $attempt->id, $task->admin_id);
+        $this->assertSame('matched_original', $observed['result']);
+        $this->assertSame($observed, $recovery->cloud($this->run['id'], $attempt->id, $task->admin_id));
+        $this->assertSame($original, $task->fresh()->getRawOriginal());
+        $this->assertSame(1, $this->eventCount('create')); $this->assertSame(0, $this->eventCount('dns_write'));
+        $this->assertSame(1, Grant::query()->sole()->writer_slot);
+    }
+
+    public static function handoverDnsBarriers(): array { return ['before dispatch' => [false], 'after dispatch' => [true]]; }
+
+    #[DataProvider('handoverDnsBarriers')]
+    public function test_handover_revocation_fences_dual_stack_workers_and_never_replays_a_patch(bool $written): void
+    {
+        $this->run = $this->fixture->seed(recordSets: true, handover: true);
+        $this->workOnce(); $this->fixture->initialized(); $this->workOnce();
+        $this->assertSame('awaiting_dns', Member::query()->sole()->phase, $this->errors());
+        $phase = $written ? 'dns_after' : 'dns_after_intent';
+        Fixture::control('fault', $phase, true);
+        $this->fixture->due($this->run['id']); $worker = $this->spawn(); $this->barrier($phase);
+        $this->revokeHandover();
+        if ($written) {
+            $this->kill($worker); $this->fixture->expire($this->run['id']);
+        } else {
+            Fixture::control('release', true, true); $this->join($worker);
+        }
+        $this->join($this->spawn('recover')); $this->cleanWorkers();
+        $this->assertSame('stopped', $this->runStatus());
+        $dns = DnsRun::query()->sole(); $attempt = Attempt::query()->sole();
+        $runtime = DnsRuntime::query()->findOrFail($dns->id);
+        $this->assertNotNull($runtime->stop_requested_at);
+        $this->assertNull($runtime->lease_hash); $this->assertNull($runtime->lease_until);
+        $this->assertSame(0, $dns->cursor);
+        // A worker encountering revoked authorization before journaling records a terminal block.
+        $this->assertSame($written ? 'needs_review' : 'blocked', $dns->status);
+        $this->assertSame($written ? 'native_stop_requested' : 'handover_revoked', $dns->reason);
+        $actions = $dns->payload['plan']['actions'];
+        $this->assertSame($written ? ['dispatched', 'prepared'] : ['prepared', 'prepared'], array_column($actions, 'state'));
+        if (!$written) foreach ($actions as $action) $this->assertSame([], $action['requests'] ?? []);
+        if ($written) {
+            Fixture::control('release', true, true);
+            $observed = app(MachineFailoverHandoverRecovery::class)->dnsSet($this->run['id'], $attempt->id, $dns->id, $dns->admin_id);
+            $this->assertSame('matched_original', $observed['result']);
+            $this->assertSame($dns->getRawOriginal(), $dns->fresh()->getRawOriginal());
+        }
+        $this->assertSame($written ? 1 : 0, $this->eventCount('dns_write')); $this->assertSame(1, $this->eventCount('create'));
+        $this->assertSame(0, DB::table('native_fixture_event')->where('kind', 'dns_write')->where('reference', 'AAAA')->count());
+        $this->assertNull(\App\Models\MachineOwnedInstance::query()->where('task_id', $attempt->task_id)->value('active_policy_id'));
+    }
 
     public function test_two_real_workers_complete_two_members_with_one_paid_intent_per_member(): void
     {

@@ -119,10 +119,7 @@ class MachineDnsRecordSetExecution
             if (!$e->retryable) throw $e;
             $this->wait($run, $p, $token, $generation, $e->retryAfterSeconds); return;
         }
-        $matches = $a['kind'] === 'delete' ? [] : array_values(array_filter($records, fn ($r) => $r['marker'] === $a['after']['marker']));
-        $id = $a['before']['id'] ?? $a['known_id'] ?? ($matches[0]['id'] ?? null);
-        $match = $a['kind'] === 'delete' ? !array_filter($records, fn ($r) => $r['id'] === $a['before']['id'])
-            : count($matches) === 1 && $matches[0]['id'] === $id && $this->planner->same($matches[0], $a['after']);
+        [$match, $id] = $this->matchReadback($a, $records);
         if (!$match) {
             if ($stopping || $a['readback_attempts'] >= self::READBACK_LIMIT) throw new CloudException('dns_original_intent_only');
             $this->wait($run, $p, $token, $generation, 20); return;
@@ -235,6 +232,38 @@ class MachineDnsRecordSetExecution
     {
         if ($run->status !== 'completed' || $run->cursor !== count($run->payload['plan']['actions'])) throw new CloudException('native_dns_receipt_required');
         $this->verifySet($run->payload, $records);
+    }
+
+    /** Observe only the verified prefix and the single original in-flight action. */
+    public function stoppedReadback(Run $run, array $records): string
+    {
+        $p = $run->payload; $base = $p['initial']; $pending = null;
+        if ($run->cursor < 0 || $run->cursor > count($p['plan']['actions'])) throw new CloudException('dns_journal_changed');
+        foreach ($p['plan']['actions'] as $index => $action) {
+            $this->assertActionJournal($action, $p['snapshot']['set']);
+            if ($index < $run->cursor) {
+                if ($action['state'] !== 'verified') throw new CloudException('dns_journal_changed');
+                $base = $this->applied($base, $action, $action['before']['id'] ?? $action['known_id']);
+            } elseif ($index === $run->cursor) {
+                $pending = $action;
+            } elseif ($action['state'] !== 'prepared') throw new CloudException('dns_journal_changed');
+        }
+        if (!$pending || $pending['state'] === 'prepared') return $this->equal($base, $records) ? 'verified_prefix' : 'unconfirmed';
+        if ($pending['kind'] === 'create' && $p['snapshot']['set']['provider'] === 'aliyun'
+            && (!$pending['known_id'] || $pending['state'] === 'awaiting_claim')) return 'unconfirmed';
+        if (!in_array($pending['state'], ['dispatched', 'claim_dispatched', 'awaiting_readback'], true))
+            throw new CloudException('dns_journal_changed');
+        [$match, $id] = $this->matchReadback($pending, $records);
+        return $match && $this->equal($this->applied($base, $pending, $id), $records) ? 'matched_original' : 'unconfirmed';
+    }
+
+    private function matchReadback(array $action, array $records): array
+    {
+        $matches = $action['kind'] === 'delete' ? [] : array_values(array_filter($records, fn ($row) => $row['marker'] === $action['after']['marker']));
+        $id = $action['before']['id'] ?? $action['known_id'] ?? ($matches[0]['id'] ?? null);
+        $match = $action['kind'] === 'delete' ? !array_filter($records, fn ($row) => $row['id'] === $id)
+            : count($matches) === 1 && $matches[0]['id'] === $id && $this->planner->same($matches[0], $action['after']);
+        return [$match, $id];
     }
     private function equal(array $a, array $b): bool
     {

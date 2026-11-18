@@ -97,7 +97,7 @@ final class NativeFailoverConcurrentFixture
         $redis->close();
     }
 
-    public function seed(int $members = 1, ?callable $beforeStart = null, bool $recordSets = false): array
+    public function seed(int $members = 1, ?callable $beforeStart = null, bool $recordSets = false, bool $handover = false): array
     {
         self::$owner = bin2hex(random_bytes(16)); self::$worker = 'parent';
         $this->seed = new class('test_runner_defaults_off_and_configuration_alone_cannot_open_the_hard_execution_gate') extends MachineFailoverNativeBridgeTest {
@@ -110,8 +110,10 @@ final class NativeFailoverConcurrentFixture
             if ($members > 1) { $fixtures = $this->property('fixtures'); $fixtures[] = $this->invoke('fixture', [2]); $this->property('fixtures', $fixtures, true); }
             self::transport(); self::queue(); config(['machine_failover.runner_enabled' => true]);
             self::control('record_sets', $recordSets, true);
+            if ($handover) { $this->property('nodeReadiness', true, true); self::control('handover', true, true); }
             if ($beforeStart) $beforeStart();
-            $run = $recordSets ? $this->invoke('startSets') : $this->invoke('start', [400, $members]);
+            $run = $recordSets ? $this->invoke('startSets', [['A', 'AAAA'], 'cloudflare', 1, true, $handover])
+                : $this->invoke('start', [400, $members, 4, $handover]);
             foreach ($this->property('records') as $id => $row) DB::table('native_fixture_dns')->insert(['id' => $id, 'value' => json_encode($row, JSON_THROW_ON_ERROR)]);
             foreach (DB::select('SELECT ENGINE AS engine FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()') as $row)
                 if ($row->engine !== 'InnoDB') throw new \RuntimeException('InnoDB tables required.');
@@ -141,16 +143,19 @@ final class NativeFailoverConcurrentFixture
         app()->instance(\App\Services\ServerMachine\Cloud\MachineFailoverBudget::class, $budget);
         $policies = \App\Models\MachineFailoverPolicy::query()->pluck('id')->all();
         app()->instance(MachineFailoverExecutionGate::class, new class extends MachineFailoverExecutionGate { public function assertAllowed(string $operation): void {} });
+        self::queue();
+        $handover = self::control('handover') === true;
         config(['machine_failover.observe_enabled' => true, 'machine_failover.runner_enabled' => true, 'machine_failover.allow_replacement' => true,
             'app.key' => str_repeat('n', 32),
             'machine_failover.allow_rotation' => true, 'machine_failover.allowed_rotation_policy_ids' => \App\Models\MachineFailoverPolicy::query()->pluck('id')->all(),
             'machine_failover.allowed_replacement_policy_ids' => $policies, 'machine_provision.allow_live' => true,
             'machine_provision.allowed_test_machine_ids' => \App\Models\ServerMachine::query()->pluck('id')->all(),
-            'machine_failover.workflow' => 'protocol_verification_v1',
+            'machine_failover.workflow' => $handover ? 'agent_readiness_v1' : 'protocol_verification_v1',
+            'machine_acceptance.allow_readiness' => $handover,
             'machine_acceptance.allow_verification' => true, 'machine_acceptance.allow_dns' => true, 'machine_acceptance.allowed_policy_ids' => $policies,
             'machine_acceptance.verifier_url' => 'https://verifier.example.test/v1/verify', 'machine_acceptance.verifier_key' => str_repeat('k', 32),
             'machine_acceptance.verifier_profiles' => array_fill_keys($policies, 'fixture-profile')]);
-        self::queue(); self::transport();
+        self::transport();
     }
 
     public static function queue(): void

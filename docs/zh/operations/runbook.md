@@ -8,6 +8,7 @@
 - `ws-server` / realtime 排障
 - 节点接入排障
 - [支付方式收款目标与开放时段](payment-collection.md)
+- [故障转移生产接管与回退](machine-failover-handover.md)
 
 如果你需要首次部署，请先看：
 

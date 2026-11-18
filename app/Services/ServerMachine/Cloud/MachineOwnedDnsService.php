@@ -201,6 +201,8 @@ class MachineOwnedDnsService
             $this->acceptance->gate($policy->id, 'allow_dns');
             if ($record->revision !== $transition->dns_revision) throw new CloudException('dns_ownership_changed');
             DB::transaction(function () use ($transition, $record, $instance, $policy, $remote, $admin) {
+                $task = MachineProvisionTask::query()->findOrFail($instance->task_id);
+                if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertDnsTransition($task, $transition);
                 $record = $this->current($record, true); $transition = $this->current($transition, true);
                 $currentInstance = Instance::query()->whereKey($instance->id)->lockForUpdate()->firstOrFail();
                 $this->acceptance->scope($instance, $policy->fresh(), $transition->policy_revision, $admin);
@@ -218,7 +220,6 @@ class MachineOwnedDnsService
                 $record->fill(['status' => 'live', 'record_id' => $remote['id'], 'active_instance_id' => $instance->id,
                     'ip' => $transition->to_ip, 'revision' => $record->revision + 1])->save();
                 MachineCloudResource::query()->whereKey($instance->resource_id)->update(['dns_hold' => false]);
-                $task = MachineProvisionTask::query()->findOrFail($instance->task_id);
                 $task->fill(['status' => 'accepted', 'evidence' => array_replace($task->evidence ?? [], ['forwarding_verified' => !$basic,
                     'readiness_verified' => $basic,
                     'dns_changed' => true, 'acceptance_instance_id' => $instance->id, 'dns_transition_id' => $transition->id])])->save();

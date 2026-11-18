@@ -57,6 +57,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
     use \Tests\Support\TestsMemberCli;
     use \Tests\Support\TestsMemberInitialization;
     use \Tests\Support\TestsProviderVisibility;
+    use \Tests\Support\TestsHandoverDispatch;
     private ?int $memberAttemptLimit = null;
     private User $admin;
     private ServerMachineRelease $release;
@@ -200,7 +201,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
             'machine_acceptance.verifier_profiles' => array_fill_keys(array_map(fn ($f) => $f['policy']->id, $this->fixtures), 'fixture-profile')]);
     }
 
-    private function start(int $cap = 400, int $parallel = 1, int $attempts = 4): array
+    private function start(int $cap = 400, int $parallel = 1, int $attempts = 4, bool $handover = false): array
     {
         $this->enable();
         $service = app(MachineFailoverServiceRegistry::class)->save(['name' => 'Native fixture', 'max_parallel' => $parallel,
@@ -208,7 +209,8 @@ class MachineFailoverNativeBridgeTest extends TestCase
                 'policy_revision' => $f['policy']->revision, 'name' => $f['machine']->name, 'priority' => $f['machine']->id, 'enabled' => true]
                 + ($this->memberAttemptLimit === null ? [] : ['attempt_limit' => $this->memberAttemptLimit]), $this->fixtures)], $this->admin->id);
         return app(MachineFailoverNativeBridge::class)->start($service['id'], 1, array_map(fn ($f) => MachineFailoverPlan::query()
-            ->where('policy_id', $f['policy']->id)->latest('id')->value('id'), $this->fixtures), $this->release->id, str_repeat('d', 32), $this->admin->id);
+            ->where('policy_id', $f['policy']->id)->latest('id')->value('id'), $this->fixtures), $this->release->id, str_repeat('d', 32), $this->admin->id,
+            handoverGrantId: $handover ? $this->issueHandover($service['id'], 1) : null);
     }
 
     private function advance(array $run): array { return app(MachineFailoverNativeBridge::class)->advance($run['id'], $this->admin->id); }
@@ -622,7 +624,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
 
     public static function jsonProviders(): array { return [['digitalocean'], ['vultr']]; }
 
-    private function startSets(array $types = ['A', 'AAAA'], string $dnsProvider = 'cloudflare', int $setCount = 1, bool $legacyDns = true): array
+    private function startSets(array $types = ['A', 'AAAA'], string $dnsProvider = 'cloudflare', int $setCount = 1, bool $legacyDns = true, bool $handover = false): array
     {
         foreach (['2026_11_09_180000_create_machine_failover_dns_sets.php', '2026_11_09_200000_create_machine_dns_set_runtime.php',
             '2026_11_10_010000_create_machine_native_address_proofs.php'] as $file) (require base_path('database/migrations/' . $file))->up();
@@ -663,7 +665,8 @@ class MachineFailoverNativeBridgeTest extends TestCase
                     'RR' => substr($set['hostname'], 0, -strlen('.example.test')), 'DomainName' => 'example.test', 'Line' => $slot['line'], 'TTL' => 600, 'Remark' => $slot['marker'], 'Status' => 'ENABLE', 'Locked' => false];
         }
         return app(MachineFailoverNativeBridge::class)->start($service['id'], $view['service_revision'], array_map(fn ($f) => MachineFailoverPlan::query()
-            ->where('policy_id', $f['policy']->id)->latest('id')->value('id'), $this->fixtures), $this->release->id, str_repeat('d', 32), $this->admin->id);
+            ->where('policy_id', $f['policy']->id)->latest('id')->value('id'), $this->fixtures), $this->release->id, str_repeat('d', 32), $this->admin->id,
+            handoverGrantId: $handover ? $this->issueHandover($service['id'], $view['service_revision']) : null);
     }
     private function finishSets(array $run): array
     {

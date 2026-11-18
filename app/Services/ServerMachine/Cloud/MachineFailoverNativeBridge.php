@@ -7,6 +7,7 @@ use App\Models\MachineFailoverExecution as Execution;
 use App\Models\MachineFailoverExecutionMember as Member;
 use App\Models\MachineFailoverPlan as Plan;
 use App\Models\MachineFailoverPolicy as Policy;
+use App\Models\MachineFailoverRuntime as Runtime;
 use App\Models\MachineOwnedDns;
 use App\Models\MachineOwnedInstance;
 use App\Models\MachineProvisionTask as Task;
@@ -32,15 +33,18 @@ class MachineFailoverNativeBridge
             && app(MachineOwnedDnsService::class)->available();
     }
 
-    public function start(int $service, int $revision, array $planIds, int $releaseId, string $request, int $admin, ?array $admission = null): array
+    public function start(int $service, int $revision, array $planIds, int $releaseId, string $request, int $admin, ?array $admission = null,
+        ?string $handoverGrantId = null): array
     {
         $this->gate->assertAllowed('start'); $this->registry->actor($admin);
+        if ($handoverGrantId !== null && ($admission !== null || config('machine_failover.runner_enabled') !== true
+            || !app(MachineFailoverRunner::class)->available())) throw new CloudException('handover_scope_invalid');
         if (!$this->available()) throw new CloudException('migration_required');
         if (!preg_match('/^[a-f0-9]{32}$/D', $request) || !array_is_list($planIds) || !$planIds || count($planIds) > 10
             || count(array_unique($planIds, SORT_REGULAR)) !== count($planIds)) throw new CloudException('invalid_native_intent');
         foreach ($planIds as $id) if (!is_int($id) || $id < 1) throw new CloudException('invalid_native_intent');
         sort($planIds);
-        $result = $this->registry->locked(fn () => DB::transaction(function () use ($service, $revision, $planIds, $releaseId, $request, $admin, $admission) {
+        $result = $this->registry->locked(fn () => DB::transaction(function () use ($service, $revision, $planIds, $releaseId, $request, $admin, $admission, $handoverGrantId) {
             $this->gate->assertAllowed('start'); $this->registry->actor($admin);
             $snapshot = $this->registry->snapshot($service, $revision);
             $release = $this->release($releaseId);
@@ -50,12 +54,20 @@ class MachineFailoverNativeBridge
             $intentData = [$service, $revision, $planIds, $release];
             if ($workflow === MachineFailoverWorkflow::READINESS) $intentData[] = ['workflow' => $workflow];
             if ($admission !== null) $intentData[] = $admission;
+            if ($handoverGrantId !== null) $intentData[] = ['handover_grant_id' => $handoverGrantId];
             $intent = $admission === null ? $this->hash($intentData) : hash('sha256', MachineIntentJson::encode($intentData));
             if ($old) {
                 if (!hash_equals($old->intent_hash, $intent)) throw new CloudException('request_conflict');
                 if ($admission !== null) app(MachineFailoverAdmission::class)->assertRun($old);
+                if ($handoverGrantId !== null) {
+                    // Keep the runtime-first lock order used by DNS completion and the dispatcher.
+                    Runtime::query()->whereKey($old->id)->lockForUpdate()->first();
+                    app(MachineFailoverHandover::class)->assertNewWork($old->id);
+                }
                 return $this->report($old->id, $admin);
             }
+            $handoverExpiry = $handoverGrantId === null ? null
+                : app(MachineFailoverHandover::class)->assertStart($handoverGrantId, $service, $revision, $releaseId, $admin);
             if (Execution::query()->where('service_id', $service)->where('status', 'running')->exists()) throw new CloudException('run_active');
             $sources = [];
             if (!empty($snapshot['dns_sets'])) {
@@ -95,8 +107,11 @@ class MachineFailoverNativeBridge
                 'admin_id' => $admin, 'request_key' => $key, 'intent_hash' => $intent, 'context_hash' => $this->registry->fingerprint($snapshot),
                 'payload' => ['snapshot' => $snapshot, 'release' => $release]
                     + ($workflow === MachineFailoverWorkflow::READINESS ? ['workflow' => $workflow] : []) + ($sources ? ['dns_sources' => $sources] : [])
-                    + ($admission === null ? [] : ['admission' => $admission]), 'deadline_at' => time() + 1200]);
+                    + ($admission === null ? [] : ['admission' => $admission])
+                    + ($handoverGrantId === null ? [] : ['handover_grant_id' => $handoverGrantId]),
+                'deadline_at' => min(time() + 1200, $handoverExpiry ?? PHP_INT_MAX)]);
             foreach ($rows as $row) Member::query()->create($row + ['execution_id' => $run->id]);
+            if ($handoverGrantId !== null) app(MachineFailoverHandover::class)->bindExecution($handoverGrantId, $run->id);
             return $this->report($run->id, $admin);
         }));
         app(\App\Services\ServerMachine\MachineOperationNotifier::class)->failoverRun($result['id']);
