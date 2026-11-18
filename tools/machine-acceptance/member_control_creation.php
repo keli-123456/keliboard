@@ -67,7 +67,7 @@ final class MemberControlCreation
         }
         $now = ($this->clock)();
         self::need(is_int($now) && $now >= $this->state['last_at'], 'clock_rollback');
-        if ($operation === 'control-create')
+        if (in_array($operation, ['control-create', 'control-connection'], true))
             self::need(!$this->state['stopped'] && $now < $this->scope['deadline_at'] - 1200, 'stopped_or_expired');
         $this->state['last_at'] = $now;
         $this->persist();
@@ -143,9 +143,34 @@ final class MemberControlCreation
                     filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false)) > 0];
     }
 
+    /** Resolve the existing creation identity, never POST or enable provisioning. */
+    public function connection(): array
+    {
+        $this->enter('control-connection');
+        self::need($this->state['pin'] !== null && $this->state['dispatched_at'] !== null
+            && !isset($this->state['rejection']), 'connection_not_created');
+        $request = json_decode(Crypt::decryptString($this->state['request_ciphertext']), true, 512, JSON_THROW_ON_ERROR);
+        $row = app(MachineProvisionProviders::class)->client($this->account)
+            ->reconcile($this->account, $request, $this->state['dispatched_at']);
+        self::need($row !== null, 'connection_unresolved');
+        $receipt = $this->receipt($row, $request);
+        $ips = array_values(array_filter($row['public_ips'], static fn ($ip) =>
+            filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false));
+        self::need($receipt['ready'] && count($ips) === 1, 'connection_not_ready');
+        $connection = ['control_sha256' => MemberProviderBindings::digest($receipt['pin']),
+            'host' => $ips[0], 'port' => 22];
+        $previous = ($this->load)('control-connection');
+        self::need($previous === null || $previous === $connection, 'connection_changed');
+        ($this->save)('control-connection', $connection);
+        self::need(($this->load)('control-connection') === $connection, 'journal_unconfirmed');
+        // Recheck stop/deadline after provider IO, before exposing an install target.
+        $this->enter('control-connection');
+        return $receipt + ['connection' => $connection];
+    }
+
     public function dispatch(string $operation, array $request): array
     {
-        self::need(in_array($operation, ['control-create', 'control-readback'], true)
+        self::need(in_array($operation, ['control-create', 'control-readback', 'control-connection'], true)
             && ($request['run_id'] ?? null) === $this->scope['run_id']
             && ($request['bundle_sha256'] ?? null) === $this->scope['bundle_sha256']
             && ($request['stage'] ?? null) === 'control-create'
@@ -155,7 +180,11 @@ final class MemberControlCreation
         self::need($prior === null || $prior === $request, 'request_changed');
         ($this->save)('control-bound-request', $request);
         self::need(($this->load)('control-bound-request') === $request, 'journal_unconfirmed');
-        $value = $operation === 'control-create' ? $this->advance() : $this->readback(true);
+        $value = match ($operation) {
+            'control-create' => $this->advance(),
+            'control-readback' => $this->readback(true),
+            'control-connection' => $this->connection(),
+        };
         return $value + ['request_sha256' => MemberProviderBindings::digest($request)];
     }
 }

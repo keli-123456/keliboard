@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "status": "isolated_component_passed",
+  "recorded_date": "2026-11-18",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "main_base_commit": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "live_ready": false,
+  "execution_authorized": false,
+  "main_branch_committed_or_pushed": false,
+  "production_accessed": false,
+  "cloud_instances_created": 0,
+  "cloud_ssh_dns_effects": "simulated",
+  "persistent_automatic_switches_changed": false,
+  "r34_executed": false,
+  "historical_live_round_reexecuted": false,
+  "tanzhen_accessed": false,
+  "successful_run": {
+    "id": 44135644618,
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44135644618",
+    "commit": "6e73a5f3fb7b0a17a04aebac21ebde5ade9a0089",
+    "mode": "host_port_only",
+    "conclusion": "success",
+    "artifact_id": 14352396466,
+    "python_tests": 222,
+    "python_skipped": 1,
+    "php_tests": [
+      {
+        "suite": "dns_and_application",
+        "tests": 137,
+        "assertions": 923
+      },
+      {
+        "suite": "native_cli",
+        "tests": 53,
+        "assertions": 20401
+      },
+      {
+        "suite": "source_initialization",
+        "tests": 17,
+        "assertions": 196
+      }
+    ],
+    "verified": [
+      "Actual operator-local MemberOperatorCreation, MemberControlTransport and MemberControlCreation reuse LinodeProvisionClient before the controller application exists",
+      "Explicit scope, encrypted-request key, bootstrap and credentials use private machine-bound creation permission separate from cleanup permission",
+      "Actual MemberInitialization consumes the provider-generated control pin; no synthetic completed control-create receipt",
+      "One POST then readback reaches ready; lost acknowledgement is reconciled against the original encrypted request without another POST",
+      "Uncertain empty provider inventory remains unresolved; stopped, expired, changed-material or changed-scope creation is denied",
+      "Unchanged standalone CLI readback runs with intentionally invalid application/database environment and no application bootstrap",
+      "Actual complete application and locked vendor installation, 160 MySQL migrations, 157 tables, real Redis and UID 65534 service smoke",
+      "Actual systemd/nginx/PHP/TLS starts and stops through installation and execution interfaces",
+      "Actual assembly cleanup removes five private pins before controller deletion; lost DELETE acknowledgement dispatches only once",
+      "Controller fixture is physically deleted and operator cleanup resumes without SSH or controller files, with two absent reads ten real seconds apart",
+      "Intentional evidence-export failure is preserved and prevents acceptance confirmation while resource cleanup still completes",
+      "Service containers and owned fixture removed; test namespace has no external IPv4 or IPv6 routes"
+    ],
+    "artifact_sha256": {
+      "application-linux-summary.json": "94ede9e2a7d0c71c540964de7451436880118b02873f1f53225ec6f2a1034b19",
+      "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cli-phpunit.log": "7e38a0472c103c596aead96dc6c2de445db58888c6eb128400ced3b45a2e42a7",
+      "dns-phpunit.log": "8fd91bf329b979b6ad99294fef3612e9b46e03e5e29f97bed9cfdc0d7972655d",
+      "python.log": "51f78e2bad702c01f14b16ba7ba0aecbd6a18deefc7ce32b1b865853b940892a",
+      "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+      "source-phpunit.log": "df1ecb3854fedc2a5041bcc701025e900f65078dc0db2030a208d2c033ede40c"
+    }
+  },
+  "limitations": [
+    "This is control creation through installation and independent cleanup, not the complete R35 entry",
+    "Cloud HTTP and SSH are simulated; control-DNS predecessor is still synthetic in this recorded run",
+    "Source/candidate retry and B isolation were not executed by this component; older native evidence is not counted as same-entry coverage",
+    "Actual standalone CLI is tested for no-database readback; provider success uses the same production handler through a CI-only HTTP boundary fixture",
+    "Node archive and credentials are synthetic, TLS self-signed; real OS bootstrap and certificate acquisition remain unverified",
+    "Successful partial-setup evidence export and complete stage failure/stop/expiry/crash composition remain pending",
+    "No final real-node/vendor freeze, live preflight or fresh execution authorization is established"
+  ]
+}

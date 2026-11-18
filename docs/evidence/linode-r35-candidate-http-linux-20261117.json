@@ -1,0 +1,143 @@
+{
+  "schema": 1,
+  "status": "component_passed_not_live_ready",
+  "date": "2026-11-17",
+  "purpose": "R35 actual native candidate creation and HTTP/TLS callback handoff; bounded native-grant waiting",
+  "main_base": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "tested_commit": "26ebd394e7ad10eab9d5bdc44eb8a30c28989de0",
+  "linux_run": 44046785962,
+  "prior_failures": [
+    {
+      "id": 44043917342,
+      "sha": "8dc9877dd62a9d5f977c38f6d6b649da0a7ff4d5",
+      "status": "failed",
+      "artifact": 14310618734,
+      "reason": "candidate fixture read account_id at wrong initialization scope level; source plan account_id required",
+      "cleanup": true
+    },
+    {
+      "id": 44046261177,
+      "sha": "01c7bd0a1bd09ec75cd345912a3ae3074b33fbc8",
+      "artifact": 14310489967,
+      "status": "failed",
+      "reason": "adding controller to mock inventory exposed missing required status field; corrected running snapshot, no app validation relaxed",
+      "cleanup": true
+    }
+  ],
+  "changes": [
+    "Actual native start/advance produces candidate task and immutable lineage; mock provider only supplies constrained response.",
+    "Full application fixture exports private callback pins to loopback TLS client only; no fabricated task insertion.",
+    "Fixture inventory includes controller and complete provider status; account selection comes from source plan.",
+    "Safe provider first diagnostic retained without raw exception text or credentials; original exception preserved on diagnostic storage failure.",
+    "Native-grant explicit waiting is bounded by original initialization window and stable request; lost reply requires stopped reconciliation.",
+    "New polling tests cover restart, cached completion, expiry, stop, and lost grant reply."
+  ],
+  "local": {
+    "python": {
+      "tests": 119,
+      "passed": 109,
+      "linux_skipped": 10
+    },
+    "php_component": {
+      "tests": 12,
+      "assertions": 859
+    },
+    "php_adjacent": {
+      "tests": 48,
+      "assertions": 404
+    },
+    "php_full": {
+      "tests": 422,
+      "assertions": 16655,
+      "seconds": 345.382,
+      "peak_memory_mb": 176
+    }
+  },
+  "boundaries": {
+    "production_access": false,
+    "main_commit_or_push": false,
+    "cloud_created": 0,
+    "real_ssh": false,
+    "real_dns": false,
+    "tanzhen_access": false,
+    "automatic_switches_changed": false,
+    "live_ready": false
+  },
+  "remaining": [
+    "Concrete host installation/TLS-ready ports and final whole-round composition.",
+    "Native cleanup handoff after candidate creation and changed DNS.",
+    "Actual A1 exact deletion/two absence reads/300s cooldown/A2 retry/B isolation in full MySQL Redis application.",
+    "Native elapsed expiry and creation-phase crash boundary coverage.",
+    "Final unarmed LF pack with actual pinned node binary and locked vendor provenance.",
+    "Fresh scoped live authorization and current read-only preflight."
+  ],
+  "linux": {
+    "run": 44046785962,
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44046785962",
+    "artifact": 14312562596,
+    "status": "passed",
+    "python_tests": 129,
+    "php_tests": {
+      "setup_catalog_dns": {
+        "tests": 100,
+        "assertions": 683
+      },
+      "source": {
+        "tests": 17,
+        "assertions": 196
+      },
+      "native_cli": {
+        "tests": 12,
+        "assertions": 859
+      }
+    },
+    "full_application_vendor": true,
+    "mysql": "8.4",
+    "redis": "7",
+    "http_tls": true,
+    "service_uid": 65534,
+    "external_ipv4_routes": false,
+    "external_ipv6_routes": false,
+    "actual_native_tasks": 3,
+    "actual_candidate_attempts": 1,
+    "candidate_cloud_post": "simulated",
+    "three_distinct_candidate_receive_times": true,
+    "report_payloads": "synthetic client input, not executed node binary",
+    "callback_statuses": [
+      200,
+      200,
+      409
+    ],
+    "bad_installation_token_node_denied": true,
+    "missing_public_capability_denied": true,
+    "missing_node_report_not_ready": true,
+    "stop_denies_callback_report_and_advance": true,
+    "duplicate_start_step_no_extra_create": true,
+    "b_and_dns_unchanged": true,
+    "no_jobs_in_redis_queues_delayed_reserved_or_failed_jobs": true,
+    "setup_to_native_real_cooldown_seconds": 300,
+    "second_cooldown_wait_seconds": 305,
+    "native_readiness_dns_advance": false,
+    "native_candidate_cleanup_handoff": false,
+    "fixed_fixture_removed": true,
+    "containers_removed": true,
+    "cloud_created": 0
+  },
+  "artifact_hashes": {
+    "application-linux-summary.json": "a002b78ea705c1e90caaed13ddde98937555adff835ccd564025d6020fd83cb6",
+    "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cli-phpunit.log": "e7b00238be6f8a494eea54c5662971580ee851375576864c3b2339b65e9291b6",
+    "dns-phpunit.log": "6be3d34c66711fc7bfff165c782e65091cb280655ada912e8f7b630c11366229",
+    "python.log": "66170072345e69e0bf51f62e0a5ecd1f6ef65bf86d2cf819f2054976d8c88718",
+    "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+    "source-phpunit.log": "ec5dda4813323f49a2b6ce0970cf50e3cf1e8d4ba56329c1c4e00a176c6da2ca"
+  },
+  "limitations": [
+    "This is a candidate HTTP handoff component, not whole-round success or live cloud acceptance.",
+    "Provider creation/SSH/DNS side effects remain simulated. Candidate task rows are created by actual native services.",
+    "Three received fresh HTTP reports are verified; final native readiness, A1 cleanup/retry/A2 and DNS cutover are not claimed.",
+    "Component teardown removes its disposable services/files; exact native candidate/final cloud cleanup remains a separate pending integration.",
+    "Previous source-only cleanup and SIGKILL coverage remains in its separate evidence record, not attributed to this shortened candidate branch."
+  ]
+}

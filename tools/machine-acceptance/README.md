@@ -1,5 +1,18 @@
 # Isolated Forwarding Verifier
 
+## R35 Review Status 2026-11-18
+
+The [current preparation review](../../docs/machine-r35-preparation-review-20261118.md)
+collects the connected full-application results and the fresh, unapproved live
+scope. It supersedes historical pending-work lists below only where linked
+evidence establishes completion. The
+[freeze and boundary audit](../../docs/evidence/linode-r35-final-freeze-20261118.json)
+pins the main Git baseline, explicit tested overlay, locked vendor and actual
+Linux node archive. It is an unarmed review artifact, not a node release or
+permission to execute R35 again. Controlled ICMP injection/restoration is not
+bound by this entry; the new draft excludes it rather than treating empty fault
+lists as recovery evidence. Real cloud/SSH/DNS acceptance remains outstanding.
+
 This is a disabled-by-default worker, not the IP-blocking detector. Independent
 failover primarily consumes the existing source-attributed mainland IPv4 ICMP
 reports: any configured target reachable is healthy; complete consecutive failed
@@ -1200,6 +1213,506 @@ requirements are recorded in `docs/machine-r35-cli-binding-20261116.md`.
 without authorization, credentials or a node release. It does not yet constitute
 a complete live round. See [R35 transport preparation](../../docs/machine-r35-transport-offline-20261116.md)
 for the remaining bootstrap, auxiliary teardown and Linux preflight gates.
+
+### R35 setup-to-native authorization
+
+`member_native_grant.php` derives a root-only native capability from the actual
+registered A/B sources, claimed test DNS and current source-failure plan. It
+inherits the original setup window, retains uncertain issuance, and publishes a
+bounded callback derivative. Readback cannot mint a replacement or extend time.
+Saved provider selections recheck current catalog options after cache expiry;
+editor fingerprint checks and provider/credential failures remain enforced.
+
+The [Linux component record](../../docs/evidence/linode-r35-native-grant-catalog-linux-20261117.json)
+uses the full application, isolated MySQL/Redis, real HTTP/TLS and service UID,
+with cloud/SSH/DNS side effects simulated. It verifies real cooldown, immutable
+grant readback, partial-publication denial, stop revocation and setup cleanup.
+The [candidate HTTP component](../../docs/evidence/linode-r35-candidate-http-linux-20261117.json)
+also covers actual native task creation, TLS callbacks/reports, missing-capability
+and wrong-identity denial, duplicate receipt handling and stop revocation. Its
+provider operations and client telemetry are simulated; it does not verify DNS
+cutover or node execution. Native-grant waiting keeps the original request/window;
+an unknown reply still requires stopped reconciliation, not a new issuance.
+The [native task cleanup component](../../docs/evidence/linode-r35-native-cleanup-linux-20261117.json)
+binds the unchanged grant to host receipts and reuses the fixed CLI's durable
+controller. It verifies actual SIGKILL after a simulated candidate deletion,
+host restart without another DELETE, two absence reads at least ten seconds
+apart, retained task history and first errors. That component covers post-stop
+task teardown, not DNS/private cleanup or an A1-to-A2 retry result.
+The [concurrent stop component](../../docs/evidence/linode-r35-native-stop-linux-20261117.json)
+checks the exact stop request before revoking callback admission, even while the
+native RPC lock is busy. Acknowledgement still waits for admitted callbacks and
+the RPC to drain; bad request identities cannot revoke the grant.
+The [native DNS cleanup component](../../docs/evidence/linode-r35-native-dns-cleanup-linux-20261117.json)
+adds a stopped-only recovery RPC over the unchanged native grant and setup journal.
+Original create receipts stay immutable. A candidate address is eligible only
+with the exact authenticated A2 publication and dispatched wire journal, never
+from an arbitrary observed value. Selected cleanup pins persist across restart;
+delete reply loss cannot trigger another deletion. Linux verifies initial-record
+teardown, peer cleanup after reply loss and two absence reads ten seconds apart.
+A2 cutover pin validation is covered by application unit tests; full Linux A2
+cutover cleanup, private-material removal and controller-last teardown are not
+claimed by this component.
+The [stopped evidence export component](../../docs/evidence/linode-r35-native-evidence-export-linux-20261117.json)
+adds a read-only recovery RPC and content-addressed native/host snapshots. It
+exports bounded diagnostic projections, not payloads, credentials or raw errors.
+The actual Linux CLI and host archive verify immutable copies, restart readback
+and a retained artifact after controller-fixture deletion. An export is not a
+resource-cleanup receipt. Unresolved lineage is reported explicitly; unresolved
+candidate task diagnostics and concrete private teardown still need integration.
+Evidence failure must fail acceptance, but must not strand billable resources;
+the existing mandatory cleanup-on-failure policy remains unchanged.
+Native A1/A2 whole-round cleanup, host installation composition and the final
+unarmed real-binary package are still pending. These component results do not
+authorize or establish live acceptance.
+
+The [full native retry component](../../docs/evidence/linode-r35-native-retry-flow-linux-20261117.json)
+now verifies actual application A1 cleanup, two absence reads 14 seconds apart,
+a real 300-second cooldown and A2 creation at 305 seconds, then one A2 DNS update.
+B's task, owned instance, provider identity, DNS and execution count stay unchanged.
+The fixture uses real MySQL/Redis, root RPC and service-user HTTP/TLS; cloud/SSH/DNS
+side effects and telemetry remain simulated. The source collector now runs during
+prepared-role handoff and cooldown, registration comparisons tolerate JSON object
+key order without accepting type changes, and initialized limits remain A=2/B=1.
+A subsequent locally tested change exports lineage-checked candidate first errors
+even without a cloud ID, while exact-ID cleanup remains blocked. That diagnostic
+addition is not part of this Linux run. Full post-cutover auxiliary/private and
+controller-last teardown, host composition and the final unarmed package remain
+pending; the active goal is not complete.
+
+The [post-cutover cleanup component](../../docs/evidence/linode-r35-post-cutover-cleanup-linux-20261117.json)
+now covers native A2 DNS receipt selection, all four task resources, three DNS
+records, source/DNS DELETE reply loss, restart without another DELETE, and retained
+stopped evidence. The host persists the authenticated DNS completion before
+delegating private cleanup; original source-IP setup pins are not reused after
+cutover. B is untouched during execution, then explicitly cleaned after stop.
+The unresolved-candidate diagnostic regression also passed on Linux. Private
+cleanup remains an explicit pending delegate in this run. The next local change
+adds exact-file teardown for credentials, bootstrap/native authority and .env,
+with real operation locks, stop checks and durable absence receipts; it requires
+its own Linux result. Neither record establishes full host/controller teardown
+or live readiness.
+
+The [private cleanup and certificate regression record](../../docs/evidence/linode-r35-private-cleanup-linux-20261117.json)
+adds actual cold Python file teardown after native task/DNS cleanup, using root
+operation locks, exact file hashes, stopped authorities and durable receipts.
+The Linux full-application run removes credentials, bootstrap/native authority
+and .env, recovers a lost deletion reply and verifies absence without restarting
+the removed application configuration. A runtime-only import regression exposed
+and fixed a missing worker.py dependency. A separate short Linux run covers the
+later host-owned certificate TXT retention fix, unconfirmed deletion and lost
+reply recovery; that fix is not part of the preceding full-application run.
+Cloud/SSH/DNS effects and telemetry remain synthetic. Private journals/database
+and the fixture are removed by CI's finalizer, not by a claimed controller-last
+host operation. Concrete whole-entry host installation/TLS/setup composition,
+controller-last cleanup, final real-node/vendor freeze and renewed live scope
+remain pending. Main is not committed or pushed; the goal is still active.
+
+The [host setup and installation record](../../docs/evidence/linode-r35-host-setup-installation-linux-20261117.json)
+adds concrete source/DNS/grant RPC ports, stopped exact-resource snapshots and
+byte-preserving native grant export. The fixed application installation CLI
+passed isolated Linux/MySQL/Redis tests, including a non-root service smoke check
+and a shared installation/stop lock. Migration intent is single-dispatch; a lost
+reply permits readback, not another migration. A preceding complete-flow attempt
+was correctly rejected when the temporary CI confused its SSH key path with its
+TLS key. The follow-up passed A1 cleanup, real cooldown, A2 cutover and native
+resource cleanup, then rejected a relative native-grant path in the stopped
+snapshot. The PHP receipt now uses its exact absolute path; relative paths,
+traversal, unowned files and changed hashes remain denied. The rerun passed with
+14 seconds between absence reads, 308 seconds before A2 dispatch, and four exact
+private-file removals after native resource cleanup, including lost-reply recovery.
+This still does not establish a complete host installer: the isolated HTTP entry
+now has scoped agent discovery/configuration/user/report admission, with local
+parser tests and passing real isolated HTTP/TLS coverage. Pinned installer/release delivery
+now has run/task/machine/version/hash checks in the same isolated entry, with
+kernel token authentication and a shared lock retained through streamed responses;
+its HTTP check passed with synthetic archive bytes, including denied identity,
+token, version, package-tamper and post-stop requests. No real node startup is
+claimed. Controller installation/TLS composition, independent
+controller-last cleanup, the final real-node freeze and fresh live scope remain
+pending. No production or provider access is authorized by these records.
+
+Early setup failure no longer requires a PHP entry that has never been installed:
+under the exclusive round journal lock, the setup port seals future bootstrap
+dispatch and can prove no setup authority was sent from the original journals.
+Any prior dispatch marker, uncertain reply or unjournaled native grant blocks
+that proof. Stop intent also denies further source/DNS/grant operations when
+remote stop fails. Installation resources remain the installation port's
+responsibility; empty setup receipts do not establish private-file or controller
+cleanup. This bounded regression passed 111 Python tests and 15 PHP tests in a
+Linux namespace with no external routes; cloud, SSH and DNS were simulated.
+
+The [cold publication record](../../docs/evidence/linode-r35-cold-host-publication-linux-20261117.json)
+tracks the actual pre-application Python entry. `installation_call` keeps strict
+SSH identity and a matching upload intent; the cold command verifies the complete
+archive hash before loading runtime modules. Publication, environment setup and
+the two private inputs are one-shot operations with scoped durable intents.
+Stopped/uncertain operations permit journal readback, not a second installation.
+This component passed a real root Linux subprocess test. OS package bootstrap,
+TLS daemon startup, full setup-port composition and controller-last teardown are
+still separate pending requirements; it does not start services or issue grants.
+The follow-up full-application fixture now uses the cold command for upload,
+publication, environment and private files before actual MySQL/Redis migration
+and HTTP/TLS checks. This passed; the node bytes, cloud, SSH and DNS remain
+synthetic. A later bounded Linux regression also rejects preexisting private
+files before recording intent, environment drift before credential publication,
+and malformed stop/result records. Mid-file termination recovery and whole-host
+installation are not established by these component checks.
+
+### Scoped HTTP/TLS Lifecycle
+
+The [HTTP service record](../../docs/evidence/linode-r35-http-service-linux-20261118.json)
+tracks the next component: a fixed-path, once-only transient systemd service
+running non-root PHP behind nginx. Its start requires the original application
+and upload bindings, a real application/database/cache smoke test, pinned TLS
+material and a successful TLS callback check. Explicit stop, supervisor SIGKILL
+and actual deadline expiry passed Linux tests with both listeners closed and an
+empty cgroup. Secret teardown refuses to proceed while this service can run.
+
+The full application test now uses this nginx/systemd service rather than the
+test-only TLS proxy. MySQL/Redis and callback authentication are real; cloud,
+SSH, DNS, certificate issuance and node bytes remain fixtures. The lifecycle
+tests use a synthetic denial-only router separately from the full-application
+test. The CI-only network namespace override is not a live RPC option.
+
+This does not complete whole-host assembly. OS/bootstrap readiness, certificate
+acquisition, the installation setup port, controller-last cleanup and full-round
+failure/stop/crash checks still need composition and verification. Two failed
+systemd readback runs remain recorded; neither is counted as a pass. This round
+does not rerun the native 300-second A1/A2 workflow or establish live readiness.
+
+References: [systemd-run](https://www.freedesktop.org/software/systemd/man/latest/systemd-run.html),
+[nginx command-line options](https://nginx.org/en/docs/switches.html).
+
+### Concrete Installation Port
+
+The [installation-port record](../../docs/evidence/linode-r35-installation-port-linux-20261118.json)
+supersedes the pending installation-port item above. `MemberHostSetup` now calls
+the fixed upload/cold-publication, application migration, non-root smoke,
+private-import and HTTP/TLS interfaces through `StrictControllerTransport`.
+It accepts an explicit scope/material-bound import permit and pinned TLS inputs;
+construction grants no execution permission. Installation stages keep original
+intents, refuse unknown-result replay, and retain the first safe diagnostic.
+
+The component passed with the full application, locked vendor, real MySQL/Redis,
+UID 65534 and actual systemd/nginx/PHP/TLS. Execution reconciliation stopped the
+service and removed five exact private files; reconstructing the port after
+`.env` removal did not repeat setup. A separate route-free Linux regression
+interrupted actual configuration before the public application receipt and
+verified cold-journal-bound environment cleanup. Cold and PHP writer locks must
+drain; absent application state never substitutes for an untracked authority.
+
+Control creation and DNS predecessors remain explicit fixtures in this test.
+OS/bootstrap readiness, certificate acquisition, whole-entry A1/A2 and B-isolation
+composition, controller-last cleanup and the final real-node freeze are still
+pending. Earlier native retry evidence is not counted as this whole-host run.
+Neither record authorizes a deployment, new host, live DNS write or switch change.
+
+### Independent Operator Cleanup
+
+The [operator cleanup record](../../docs/evidence/linode-r35-operator-cleanup-linux-20261118.json)
+adds a concrete controller-last cleanup component. The local PHP entry uses the
+existing exact provider adapter without booting the application or a database.
+It only accepts inspect/delete for pre-pinned resources, with explicit private
+scope, credentials and a cleanup-only permit bound to the operator machine.
+It cannot create an instance, enable a switch, publish or retarget DNS records,
+or grant itself access; exact owned-record deletion is an explicit cleanup action.
+The installed entry and PHP executable must belong to the executing identity;
+neither a foreign-owned checkout nor a symlink is silently adopted.
+
+The full-application isolated test now invokes actual assembly cleanup after
+stopping installation. Five private files are removed before the simulated
+controller deletion. That deletion loses its acknowledgement and the controller
+fixture is physically removed; a reconstructed operator still confirms absence
+twice at least ten real seconds apart, without another DELETE or SSH call.
+Deliberately failed evidence export does not retain resources, but does prevent
+acceptance from passing. Both first-error records remain available.
+
+This test uses real MySQL/Redis, non-root application permissions and actual
+systemd/nginx/PHP/TLS; provider HTTP, SSH, creation and DNS are simulated. The
+provider success path uses the production handler with a CI-only HTTP fake; the
+unchanged CLI also passes its independent initialization/rejection test. It is
+not the complete host entry or a new A1/A2 run. Concrete partial-setup evidence
+export, remaining host prerequisites and same-entry native retry still need
+composition. Two earlier fixture failures remain recorded, not counted as passes.
+
+### Operator Control Creation
+
+The [operator creation record](../../docs/evidence/linode-r35-operator-creation-linux-20261118.json)
+adds the separate pre-controller creation entry and transport. It reuses the
+existing Linode creation/reconciliation adapter, with explicit private inputs
+and machine-bound permission. Cleanup permission cannot authorize creation.
+The original request is encrypted before dispatch; an uncertain response keeps
+that request and permits readback, not another POST. Stop, expiry and changed
+inputs remain fail-closed. Shared private filesystem locking is reused without
+combining creation and cleanup permissions.
+
+The Linux component now advances actual `MemberInitialization` from control
+creation through installation and private import. Its control pin comes from
+the actual adapter over simulated provider HTTP, rather than a completed-stage
+fixture. MySQL/Redis, non-root permissions and HTTP/TLS are real. Controller-last
+cleanup still completes after its lost deletion acknowledgement and physical
+fixture removal, with two absent reads ten real seconds apart.
+
+The recorded run still substitutes the control-DNS predecessor and does not run
+sources or A1/A2. It therefore does not establish whole-entry or live readiness.
+Node bytes and TLS issuance remain fixtures; OS prerequisites, successful
+partial evidence export, complete failure/recovery composition and final
+real-node freeze remain pending. No production access or automatic gate is
+authorized by this record.
+
+### Control Connection Readback
+
+`MemberControlCreation.connection()` resolves the original encrypted request
+through the existing provider reconciliation adapter. It requires the same
+control pin, running state and exactly one public IPv4, and seals that endpoint
+separately from the immutable cleanup pin. Missing, changed, ambiguous, stopped
+or expired identities cannot become an installation destination. The operation
+never POSTs and the operator process keeps `machine_provision.allow_live` false.
+
+`MemberControlTransport.strict_transport()` verifies the full reply and the
+already registered control pin, then constructs the existing strict SSH
+transport from that endpoint. Approved identity and known-hosts files are still
+explicit inputs; no key scanning, password fallback or host-key bypass is added.
+Local tests cover changed/unknown addresses, nonpublic IPv4, IPv6, wrong ports,
+extra private fields, original-request preservation, stop and expiry.
+
+The [isolated Linux record](../../docs/evidence/linode-r35-control-connection-linux-20261118.json)
+contains 145 Python tests without skips and PHP provider/control/operator suites
+of 15/16/8 tests. An initial Linux failure exposed the missing private-store key;
+only that fixed creation-mode key was added. Actual 0600 permissions, immutable
+replay and denial from the cleanup namespace are regression-tested. The failed
+attempt remains recorded rather than reclassified.
+
+This is a connection primitive, not yet the complete deferred host assembly.
+The whole-round CI fixture still supplies a fixed simulated SSH destination.
+Constructing installation/source/DNS ports after connection resolution, OS
+bootstrap readiness and approved TLS provisioning remain explicit prerequisites.
+Neither this helper nor its tests authorize production access or a live round.
+
+### Control DNS Composition
+
+The [control/DNS composition record](../../docs/evidence/linode-r35-control-dns-composition-linux-20261118.json)
+supersedes the synthetic control-DNS predecessor in the preceding component.
+One actual initialization driver now advances control creation, cold installation,
+application migration, private import, source configuration/setup authorization,
+control DNS initialization and HTTP/TLS readiness. Stage receipts come from the
+actual interfaces. Only provider HTTP and SSH side effects are simulated.
+
+The same test stops setup, removes the exact owned DNS record, removes private
+material and deletes the controller last. After the simulated deletion loses its
+acknowledgement and controller files disappear, independent cleanup still proves
+absence twice ten real seconds apart. The intentionally failed evidence exporter
+remains a failed acceptance condition even though resource teardown succeeds.
+
+Three failed attempts remain recorded. The CI HTTP fixture used an obsolete hex
+remark expectation; safe boundary diagnostics identified it and the fixture now
+reuses the existing compressed Aliyun encoding contract. The actual DNS adapter
+and full identity checks were not relaxed. Linux regression passed 222 Python
+tests (one separately gated skip) and three PHP suites of 137, 53 and 17 tests.
+
+This prefix does not run source/candidate creation or native A1/A2 retries. Whole
+entry composition, successful partial evidence export, stage failure/stop/expiry/
+crash combinations, host prerequisites and final real-node/vendor freeze remain
+pending. The goal is active; neither this record nor the temporary CI branch
+authorizes live execution or a main-branch push.
+
+### Composed Initialization And Retry
+
+The [composed-chain record](../../docs/evidence/linode-r35-composed-retry-linux-20261118.json)
+now joins the actual cold control/DNS prefix to dual-source setup and the native
+A1/A2 retry path. All ten initialization-stage receipts come from their actual
+interfaces. The HTTP fixture adopts only the existing simulated provider state;
+it does not replace the control identity, create application tasks or fabricate
+completed initialization receipts. The callback fixture exports dispatched tasks
+only, and the provider fixture no longer hardcodes a control resource ID.
+
+Real MySQL/Redis, non-root HTTP/TLS, setup/native grants and actual service code
+registered both sources with three fresh synthetic HTTP observations. Source
+creation was 304 seconds apart. A1 failed three times, was deleted once and had
+two absent reads 12 seconds apart. A2 was created 306 seconds after confirmed
+cleanup, then only edge-a changed; B's task, provider identity and DNS were
+unchanged. No clock or task history was reset.
+
+The same chain uses `MemberRoundAssembly` cleanup, including native post-cutover
+DNS receipts, source/DNS reply-loss recovery, stopped evidence export and removal
+of six private files. The controller is deleted last; physical fixture removal
+does not prevent two independent absent reads ten seconds apart. The CI fixture
+and dedicated containers are removed. Two failed context-handoff attempts are
+also retained, including safe diagnostics and confirmed cleanup.
+
+This is not live acceptance or completion of the goal. System package readiness
+and certificate acquisition are still prerequisites, node bytes and telemetry
+are synthetic, and the final standalone operator command needs the complete
+stage-failure/stop/expiry/crash matrix. Successful pre-native evidence export and
+the unarmed real-node/vendor freeze also remain pending. Temporary workflow and
+continuation scripts are not a main-branch release. Raw helper-local legacy flags
+remain unchanged in the artifact; the evidence record explains their scope.
+
+## Pre-Native Stopped Evidence
+
+The setup RPC now exports evidence after revocation even when no native grant
+exists. `MemberSetupEvidenceArchive` binds the setup identity, bundle, time
+window and configuration digest, retains immutable local snapshots, and checks
+the first/latest pointers by reading them back. It uses a separate namespace
+from native evidence. The hashed body preserves pending RPC uncertainty and
+safe first-error class/file/line; no credential, exception message or raw task
+payload is exported. Source observations and retained DNS receipt summaries
+are not cloud absence or cleanup-completion receipts.
+
+Run `44152930645` (`423c62aa`) validates this path in the complete isolated Linux
+application with real MySQL/Redis, non-root HTTP/TLS and the fixed setup CLI.
+The same initialization reaches callback-ready, then native issuance before
+source registration is refused. Export before stop is also refused. After
+revocation, repeated exports retain the first error and pending mutation, have
+the same hash and leave provider fixture bytes unchanged. The actual assembly
+then removes the test DNS record and five private files, deletes the control
+fixture last and proves absence twice ten seconds apart. The local evidence
+still verifies after controller removal.
+
+The record `docs/evidence/linode-r35-setup-evidence-linux-20261118.json` includes
+228 Python tests (one skip), PHP suites of 137/53/20 tests, artifact hashes and
+two preceding failed CI runs. The diagnostic run located an overly broad test
+comparison that included legitimate control GETs during stopped reconciliation;
+the final comparison covers the export calls themselves without erasing that
+read history or weakening cleanup. Both failed runs cleaned their CI resources.
+
+This closes the pre-native export gap mentioned in the preceding record, not
+the whole goal. Export still needs an intact setup authority and initialized
+application. Source-drift handling is covered by component tests, not the full
+partial-source failure matrix. OS/certificate acquisition, the final operator
+entry with all-stage stop/expiry/crash coverage and the unarmed real-node freeze
+remain pending. There was no real cloud creation, production access or live DNS
+change; no main-branch commit/push or deployment was performed.
+
+## Outer-Driver Crash Recovery
+
+The [outer crash record](../../docs/evidence/linode-r35-outer-crash-linux-20261118.json)
+extends the stopped-prefix check to actual `MemberRound`, filesystem journals
+and the exclusive Linux lock. Run `44155366915` kills a child with `SIGKILL`
+after the real callback-ready receipt is saved but before the outer operation
+is acknowledged. A fresh driver reads the retained pending request and enters
+reconciliation, with no second provider POST, installation or native dispatch.
+
+Actual assembly cleanup then removes the owned test record and five private
+files. A lost controller DELETE reply is reconciled after its fixture disappears;
+two absent reads are 11 real seconds apart and require no further SSH. Closed
+replay is a no-op. The host retains `round_uncertain_dispatch`, while cleanup
+retains its separate reply-loss error. Resources are clean, but acceptance is
+false. Remote setup evidence has no fabricated server error: this crash was
+on the host, and the local outer journal preserves it.
+
+This uses the complete application, real MySQL/Redis, non-root HTTP/TLS and
+actual fixed endpoints. Cloud/SSH/DNS effects and node bytes remain fixtures.
+Recovery reconstructs the driver in the surviving coordinator, not an OS host.
+The record does not establish whole normal-loop, all-stage failure/expiry,
+standalone operator, host prerequisite or real-node freeze readiness. The
+temporary CI workflow and helper are not merged or published. The goal remains
+active; production and persistent switches were not accessed or changed.
+
+## Complete Outer-Loop Success
+
+The [whole-loop record](../../docs/evidence/linode-r35-outer-whole-linux-20261118.json)
+extends the earlier composed retry to the actual durable `MemberRound` driver.
+It owns all ten initialization stages, native retry, stopped reconciliation and
+the final assembly cleanup. Full application/MySQL/Redis/HTTP/TLS and non-root
+permissions are real; only cloud/SSH/DNS effects and node telemetry are fixtures.
+
+A1 retains its three-failure threshold, one deletion and two absence reads twelve
+seconds apart. A2 is created 306 seconds after confirmed absence, respecting the
+300-second cooldown. B remains unchanged. The source serial-create gap is 305
+seconds. After the single edge-a update, all three owned DNS records and six
+private files are removed; the controller is deleted last with two absence reads
+ten seconds apart. The closed disk journal has no first error or pending request,
+both cleanup/acceptance flags are true, and closed replay has no effects.
+
+The earlier failed CI assertion remains recorded as a failure: it incorrectly
+required all diagnostic flags to be true, including retry exhaustion. The fix
+checks only the five required success branches; the production acceptance policy
+was not weakened. Both expected-false diagnostics and missing required branches
+have permanent regression coverage.
+
+This does not authorize a live run. Actual node execution, OS bootstrap and TLS
+issuance are not covered, the destination remains a fixed simulated SSH address,
+and additional full-application failure/stop/recovery boundaries remain. The
+later control-connection primitive is not part of this passing commit.
+
+## Deferred Control Setup
+
+The [connected whole-loop record](../../docs/evidence/linode-r35-connected-whole-linux-20261118.json)
+supersedes the fixed-destination limitation of the preceding whole-loop run.
+`MemberConnectedSetup` resolves the original control receipt through the actual
+provider adapter before constructing the existing installation/source/DNS ports.
+The endpoint and reviewed SSH/TLS/settings material are sealed before dispatch.
+Stopped recovery uses that seal, never a new discovery or creation permission;
+confirmed snapshots remain usable after controller deletion without more SSH.
+
+Run `44167633308` passes the real durable outer loop and complete isolated
+application, MySQL/Redis and non-root HTTP/TLS. A1 absence reads are thirteen
+seconds apart and A2 is created 302 seconds after confirmed cleanup. B remains
+unchanged. Three DNS records and six private files are removed before the
+controller, with independent paired absence reads ten seconds apart. The closed
+outer journal has no pending request or first error; exported evidence is hashed
+and read back. Cloud/SSH/DNS effects and telemetry remain simulated.
+
+The preceding failed run is retained. Its CI callback was replaced on only one
+transport object, so reconstructed transports still used the prefix-only fixture.
+The fixture now supplies the same byte boundary to reconstruction; production
+scope checks were not weakened.
+
+`run_connected_round` additionally constructs control and deferred setup inside
+the existing whole-round journal lock. Its native and cleanup bindings, approved
+host keys, OS readiness and TLS material remain explicit inputs. Its separate
+wiring tests are not a claim that a standalone operator configuration or every
+full-app failure boundary has passed. Final real-node/vendor freeze and fresh
+unexecuted live scope/preflight remain pending. There is no main-branch push,
+deployment, real cloud creation or persistent switch change.
+
+The [connected stop record](../../docs/evidence/linode-r35-connected-stop-linux-20261118.json)
+adds explicit outer-driver stop after callback readiness and before source work.
+No source task or native grant is created. The host preserves
+`round_stop_requested`, while actual stopped setup evidence correctly contains
+no fabricated server exception. Five private files and the control DNS record
+are removed first. Lost controller DELETE acknowledgement is independently
+reconciled without replay; paired absence reads are ten real seconds apart.
+The journal closes with resources cleaned but acceptance false. This is an
+explicit stop request, not a SIGTERM or elapsed native-grant-expiry test.
+
+The [entry regression record](../../docs/evidence/linode-r35-connected-entry-linux-20261118.json)
+adds 158 passing Linux Python tests and PHP suites of 15/16/8 tests without
+external routes. It covers the public lock-scoped constructor, installation
+reply-loss matrix and expiry during control readback. A prior owner-check
+failure remains recorded: the unit fixture now hashes a current-owner copy of
+the endpoint at its fake process boundary. Runtime ownership checks remain
+unchanged. This component job is not a further full-application run or live
+acceptance. The goal stays active until the remaining binding/expiry/crash audit,
+unarmed runtime freeze and fresh live proposal are complete.
+
+## Connected Cleanup Inputs
+
+The [connected runtime record](../../docs/evidence/linode-r35-connected-runtime-linux-20261118.json)
+checks the original native grant/endpoint and stopped evidence/private cleanup
+bindings in the full outer loop (44174516240) and early stop (44175121221).
+Both journals close with confirmed cleanup; early stop correctly does not count
+as acceptance. Provider side effects and telemetry remain simulated.
+
+`run_connected_round` can now receive `evidence_directory` and `cleanup_inputs`.
+The latter requires a pre-existing private `cleanup-parent.json`, provider
+credentials, and the operator machine identity. `MemberPreparedProvider` checks
+these before the round can run, then narrows them to stopped exact resource pins
+without giving creation/update rights. Existing files must match byte for byte;
+partial preparation resumes without overwriting changed material. This newer
+binding has local regression coverage; the linked record predates it. The
+[partial-source cleanup run](../../docs/evidence/linode-r35-partial-source-cleanup-linux-20261118.json)
+also verifies actual RPC cleanup after A registration and before B creation,
+including prepared provider material. The subsequent
+[prepared cleanup run](../../docs/evidence/linode-r35-prepared-cleanup-linux-20261118.json)
+verifies the full native retry sequence with original-credential binding and
+stopped cleanup preparation. A1 absence reads are thirteen seconds apart, and A2
+dispatch follows confirmed cleanup by 302 seconds. Public-entry tests also check
+the complete creation-scope file rather than only the initialization fields. Injected
+fault restoration is not covered by empty-fault fixtures. No armed package or
+new live authorization is issued by these helpers.
 
 ## Protocol Interoperability
 

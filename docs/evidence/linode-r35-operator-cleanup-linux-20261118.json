@@ -1,0 +1,99 @@
+{
+  "schema": 1,
+  "status": "isolated_component_passed",
+  "recorded_date": "2026-11-18",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "main_base_commit": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "live_ready": false,
+  "execution_authorized": false,
+  "main_branch_committed_or_pushed": false,
+  "production_accessed": false,
+  "cloud_instances_created": 0,
+  "cloud_ssh_dns_effects": "simulated",
+  "persistent_automatic_switches_changed": false,
+  "r34_executed": false,
+  "historical_live_round_reexecuted": false,
+  "tanzhen_accessed": false,
+  "successful_run": {
+    "id": 44131767523,
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44131767523",
+    "commit": "05e3bcd3a6d9155a447150d27630abd55530cb15",
+    "mode": "host_port_only",
+    "conclusion": "success",
+    "artifact_id": 14350826205,
+    "python_tests": 219,
+    "python_skipped": 1,
+    "skip_reason": "Separate explicit cold subprocess fixture; the actual cold command is also exercised by the full application installation port.",
+    "php_tests": [
+      {"suite": "dns_and_application", "tests": 120, "assertions": 795},
+      {"suite": "native_cli", "tests": 53, "assertions": 20401},
+      {"suite": "source_initialization", "tests": 17, "assertions": 196}
+    ],
+    "verified": [
+      "Actual MemberHostSetup and MemberExecutionSetup installation using complete application and locked vendor",
+      "Dedicated real MySQL/Redis, 160 migrations and 157 tables, non-root UID 65534, actual systemd/nginx/PHP/TLS",
+      "Actual MemberRoundAssembly cleanup removes five exact private-file pins before any controller provider operation",
+      "Actual standalone MemberOperatorProvider reuses MemberProviderBindings without application bootstrap, environment or database",
+      "Operator inputs are existing explicit 0600 scope, credentials and cleanup-only machine-bound permit under a 0700 directory",
+      "Exact-pin ownership, baseline exclusion, file drift, flock, symlink and foreign-owner rejection",
+      "Actual fixed PHP CLI constructs the scoped provider and rejects create operations with an invalid application/database environment",
+      "Provider HTTP boundary simulates successful deletion with a lost acknowledgement; exactly one DELETE dispatch is counted",
+      "Controller fixture files are physically removed immediately after simulated deletion, with HTTP cgroup already empty",
+      "Reconstructed cleanup completes without controller files, environment or further SSH calls",
+      "Two exact absent readbacks use a real ten-second interval; errors are not counted as absence",
+      "Deliberate evidence-export failure is retained and does not prevent resource cleanup; acceptance remains unconfirmed",
+      "Operator and provider first-error journals survive response loss without private exception text",
+      "No external IPv4/IPv6 routes; owned fixture, temporary materials and service containers are removed"
+    ],
+    "artifact_sha256": {
+      "application-linux-summary.json": "ca3155a151295d4f3d9c53935819ee0d979b81e37261840368b06629592a6576",
+      "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cli-phpunit.log": "e66e5e63df9af88ff8f0cdf2347bf093e3b1c1c71e3b5440a646de5918a54c67",
+      "dns-phpunit.log": "c6316697709a8690cae051bee4050bf6638aaad0a7981a31ad1c1fa9a59b58ee",
+      "python.log": "3b95d3cd3ace746bf82c8cb6e267bf067d879ab34657e15aafe2d95091cd72d7",
+      "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+      "source-phpunit.log": "9a6e89362bc6b04aa5c198f97fb5346d22ea347100acd82df91fd705d549fe0f"
+    }
+  },
+  "failed_runs_retained": [
+    {
+      "id": 44130355702,
+      "commit": "97115bacc9aac2c76cd763201e0fe81f834ce374",
+      "artifact_id": 14348499395,
+      "reason": "Root test execution rejected the runner-owned checkout entry; corrected fixture installation ownership without weakening runtime checks.",
+      "cleanup_confirmed": true,
+      "artifact_sha256": {
+        "application-linux-summary.json": "ce041902019c58ae3cc2ba21cfc666e07caea23d6bc4c5e0cff38ef01965b1e4",
+        "application-linux.log": "ef302f16adf166069177fd712f33100921b6f11f28c3c489e8dcd7b8d397bab4",
+        "python.log": "04dbac2956d6514bed766a024f5d639cdeae5f6a39a24919f99d4f13d3aba8c9",
+        "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+      }
+    },
+    {
+      "id": 44131227650,
+      "commit": "95fb599019c156bb18bfa513f7026887142a304d",
+      "artifact_id": 14349253724,
+      "reason": "Laravel recorded response pairs excluded a thrown fake connection error; corrected the test to count at the DELETE dispatch boundary.",
+      "cleanup_confirmed": true,
+      "artifact_sha256": {
+        "application-linux-summary.json": "cea930236f0e4df5033f35a6c3d97fb8b45f5438cb3b896c637b9d44ae93d213",
+        "application-linux.log": "8157132107762f0e653a6412f35df66a113756495cf71cd046f5bf48fb676a4b",
+        "dns-phpunit.log": "bbb2d03b6da18cb35e4884a77840c999a5daf100fc9fbcf517cb5a699cd7e6b8",
+        "python.log": "240d936109bba76de259fd4ce87651f712f6d2ccbbceb792d80f527d991bf423",
+        "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+      }
+    }
+  ],
+  "local_regression": {"platform": "Windows", "python_tests": 58, "skipped": 1, "status": "passed"},
+  "limitations": [
+    "This is the installation plus controller-last cleanup component, not the complete whole-host entry or a live acceptance pass",
+    "Control creation and control-DNS predecessor receipts are synthetic; source/candidate retry does not execute in this composed test",
+    "The successful provider cleanup uses the production PHP handler and adapter through a CI-only entry that fakes only provider HTTP; the unchanged fixed entry is tested for construction and rejection, not live API access",
+    "The intentionally failing evidence exporter tests teardown independence; partial-setup evidence export still needs a concrete successful binding",
+    "Node bytes and credentials are synthetic; TLS is self-signed; actual OS bootstrap and certificate acquisition are not exercised",
+    "Full same-entry A1 cleanup, actual 300-second cooldown, A2 retry and B isolation still require composition with these host components",
+    "Whole-entry stage failure, stop, expiry and crash combinations are not all established by this component test",
+    "No final real-node/vendor LF freeze or fresh live execution authorization is established"
+  ]
+}

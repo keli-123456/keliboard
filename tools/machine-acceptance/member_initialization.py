@@ -14,11 +14,12 @@ from member_transport import require, reason
 
 
 STAGES = ('control-create', 'control-install', 'runtime-install', 'private-import',
-          'sources-initialize', 'dns-initialize',
+          'control-dns', 'callback-ready', 'sources-initialize', 'dns-initialize',
           'native-grant', 'native-ready')
 # Source initialization is a durable, idempotent service state machine, not a
-# repeated raw create call. Each role owns its own persisted native queue intent.
-POLLING = {'control-create', 'sources-initialize', 'native-ready'}
+# repeated raw create call. Native grant polling only follows an explicit waiting
+# receipt; an unknown grant result still requires stopped reconciliation.
+POLLING = {'control-create', 'sources-initialize', 'native-grant', 'native-ready'}
 
 
 class MemberInitialization:
@@ -43,9 +44,10 @@ class MemberInitialization:
         for name in (*[s.replace('-', '_') for s in STAGES], 'reconcile', 'cleanup_scope'):
             require(callable(getattr(interfaces, name, None)), 'transport_initialization_interface_missing')
         self.state = copy.deepcopy(load('initialization')) or {
-            'binding': digest(scope), 'index': 0, 'receipts': {}, 'intents': {}, 'pending': None,
+            'binding': digest(scope), 'stages': list(STAGES), 'index': 0, 'receipts': {}, 'intents': {}, 'pending': None,
             'last_at': scope['started_at'], 'stopped': False, 'first_error': None}
         require(self.state.get('binding') == digest(scope), 'transport_initialization_scope_changed')
+        require(self.state.get('stages') == list(STAGES), 'transport_initialization_topology_changed')
 
     def persist(self):
         self.save('initialization', copy.deepcopy(self.state))

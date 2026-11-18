@@ -1,0 +1,106 @@
+{
+  "schema": 1,
+  "date": "2026-11-17",
+  "status": "cold_publication_and_full_application_components_passed",
+  "main_base": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "implementation": [
+    "Fixed cold Python command through the existing strict SSH transport; no caller-supplied executable or filesystem destination.",
+    "Approved upload intent and archive SHA256 are checked before importing any package code. Only regular bounded Python runtime files enter a private temporary loader directory.",
+    "Actual runtime publication, unprivileged application environment configuration and exact credentials/bootstrap-authority file publication reuse existing installation primitives.",
+    "Scope, host identity, deadline, dispatch intents and first safe error survive restart. Uncertain publication is read back, never replayed or overwritten.",
+    "Stop is visible before lock acquisition; in-flight publication cannot acknowledge success after stop. This seals publication, not a substitute for setup/native grant revocation.",
+    "Readback distinguishes completed and uncertain operations and checks exact private-file hashes. It is not a claim that OS packages, daemons, TLS or the entire host installation are ready."
+  ],
+  "linux_component": {
+    "run": 44116153139,
+    "commit": "0876282bd2e0718a4660444357b153c186e4af66",
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44116153139",
+    "artifact": 14343506072,
+    "status": "passed",
+    "python": {"tests": 121, "seconds": 2.146, "skipped": 0},
+    "php": {"tests": 15, "assertions": 66},
+    "actual": [
+      "Fresh isolated Python child publishes a hash-locked synthetic runtime, configures UID/GID65534 environment permissions and writes private files.",
+      "Partial private write, failure after environment publication, expiry, stop during publication, refusal to replay, safe first-error preservation and archive tamper denial.",
+      "Fixed fixture and temporary loader directories removed; no external network routes."
+    ],
+    "simulated": ["Cloud, SSH and DNS", "Node archive bytes and application fixture"],
+    "artifact_sha256": {
+      "cleanup-summary.json": "407668554ab7f22c90b8b92c3688ef2e016733406d8dc317c4f6f5dc1adc226e",
+      "cleanup-python.log": "87423f756ee9a1600dc5c51595c08d30cbefd5095a0ae61ec9cea687a49ed319",
+      "cleanup-php.log": "7aae3417580580ff40b21b7fa11378248e7fd25716ad450aff09e81ec736e312"
+    }
+  },
+  "full_application_followup": {
+    "run": 44116859581,
+    "commit": "cd321125c98023f0ca23d2562f12d89409416b4c",
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44116859581",
+    "artifact": 14343347659,
+    "status": "passed",
+    "scope": "Cold upload/publication/configuration before full application MySQL/Redis migration and real isolated HTTP/TLS; private files also use the cold entry. Cloud, SSH, DNS and node bytes remain simulated.",
+    "python": {"tests": 190, "seconds": 6.129, "skipped": 1},
+    "adjacent_php": {"tests": 112, "assertions": 755},
+    "native_php": {"tests": 53, "assertions": 20401},
+    "source_php": {"tests": 17, "assertions": 196},
+    "actual_upload_bytes_and_fresh_python_child": true,
+    "actual_runtime_environment_and_private_files": true,
+    "actual_migration_mysql_redis_and_uid65534": true,
+    "actual_http_kernel_and_tls": true,
+    "installer_archive_bytes_and_stop_denials_verified": true,
+    "containers_and_fixed_fixture_removed": true,
+    "external_routes": false,
+    "whole_host_installer_verified": false,
+    "artifact_sha256": {
+      "application-linux-summary.json": "273bf35bd0740ee7c0104064f0d419cf352bde6fda7ff69ae466193f3082fdf6",
+      "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "python.log": "be2dfb89d512e21f7b9505fb838e149559f21826b1105e8be401041d10c9430e",
+      "dns-phpunit.log": "34033728fb204a1e5ea85f4d8f979045baf6c7c81753baaf564903a94bfaac80",
+      "cli-phpunit.log": "5d45ed6c0a7fa042bc3a8f86b771fc07a7376008330b7cd75dec40622300f633",
+      "source-phpunit.log": "c9d461164520d3eb1cc4fa6a31639a753dc2f9bef4e339612ca31d1e82d2a0d6",
+      "native-entry-linux.log": "9beda3b3eee537b9317a3f5d1750dbbd68c3784b0477760016dd8956f1e59c79",
+      "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+    }
+  },
+  "boundary_followup": {
+    "run": 44117337001,
+    "commit": "a79afb2ba2fba78f87a90b310117240fd0d7dc69",
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44117337001",
+    "artifact": 14343772139,
+    "status": "passed",
+    "python": {"tests": 125, "seconds": 3.436, "skipped": 0},
+    "php": {"tests": 15, "assertions": 66},
+    "checks": [
+      "Unowned preexisting private file is not adopted even when the content hash matches.",
+      "Environment drift is rejected before credentials are written or a private-file intent is created.",
+      "Malformed stop and result records cannot become a successful readback.",
+      "Missing or mismatched upload intent prevents remote code loading."
+    ],
+    "artifact_sha256": {
+      "cleanup-summary.json": "407668554ab7f22c90b8b92c3688ef2e016733406d8dc317c4f6f5dc1adc226e",
+      "cleanup-python.log": "38c8b4ebb8d7ccf2aaa9d70d94b47e3dbdef1ef97ac3150cfbeba99aef79ee51",
+      "cleanup-php.log": "d1a1a123689310814e4f6fd13b36499b2d9c3f0e59d861dac96605948eeee6c0"
+    }
+  },
+  "local": {
+    "adjacent_tests": {"tests": 97, "seconds": 1.834, "skipped_linux": 5},
+    "latest_targeted_tests": {"tests": 12, "seconds": 0.053, "skipped_linux": 6}
+  },
+  "boundaries": {
+    "production_access": false,
+    "cloud_instances_created": 0,
+    "live_dns_writes": false,
+    "deployment": false,
+    "main_committed_or_pushed": false,
+    "automatic_switches_changed": false,
+    "tanzhen_accessed": false,
+    "r34_executed": false
+  },
+  "remaining": [
+    "Bind OS/bootstrap readiness, cold publication, application initialization, TLS service startup and stopped reconciliation into the actual installation setup port of run_execution_round.",
+    "Complete independent controller-last cleanup and full-entry stage-failure/stop/expiry/crash coverage with the concrete installation port.",
+    "Cover mid-file write termination and exact ownership recovery; current private publication tests fail before the second file or after a complete write, not midway through a credential write.",
+    "Freeze the final unarmed LF runtime with pinned real node/vendor files and prepare a fresh live scope and readonly preflight for user approval."
+  ],
+  "goal_complete": false
+}

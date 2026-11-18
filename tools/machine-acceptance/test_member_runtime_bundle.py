@@ -43,6 +43,11 @@ class RuntimeBundleTests(MemberBundleTests):
         out = self.root / 'unpacked'; runtime.unpack(args[-1], out, result['archive_sha256'])
         self.assertTrue((out / 'app/vendor/autoload.php').is_file())
         self.assertTrue((out / 'node/kelinode').is_file())
+        self.assertEqual((out / 'node/release.tar.gz').read_bytes(), args[2].read_bytes())
+        release = json.loads((out / 'node/release.json').read_bytes())
+        self.assertEqual(release['sha256'], runtime.NODE_ARCHIVE_SHA)
+        self.assertEqual(release['binary_sha256'], runtime.NODE_SHA)
+        self.assertEqual(release['platform'], 'linux-x86_64')
         for name in runtime.RUNTIME:
             self.assertEqual((out / 'runtime' / name).read_bytes(),
                              (out / 'app/tools/machine-acceptance' / name).read_bytes())

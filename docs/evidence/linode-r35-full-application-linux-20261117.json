@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "date": "2026-11-17",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "scope": "isolated_full_application_installation_and_callback_component",
+  "status": "passed",
+  "goal_complete": false,
+  "live_ready": false,
+  "execution_authorized": false,
+  "baseline_main_commit": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "tested_commit": "56c3a2af1cda608e6684d4a0d0fd70f73c58cdf3",
+  "workflow_run_id": 44000485776,
+  "workflow_url": "https://github.com/keli-123456/keliboard/actions/runs/44000485776",
+  "trigger": "workflow_dispatch",
+  "python_regression": {
+    "linux_passed": 105,
+    "linux_skipped": 0,
+    "windows_targeted_passed": 24
+  },
+  "actual_services": {
+    "application": "full committed Laravel application plus explicit reviewed runtime overlay",
+    "application_files": 14052,
+    "kernel": "App\\Http\\Kernel",
+    "composer_lock_sha256": "1a7bc62c308529c9edd7f495ca544e93c53933d39570f4eb43fe92c6365f64e1",
+    "mysql": "8.4, disposable database, loopback only",
+    "redis": "7-alpine, disposable database, loopback only",
+    "service_uid": 65534,
+    "migration_count": 160,
+    "table_count": 157,
+    "tls": "loopback TLS proxy, explicit test certificate trust and hostname verification",
+    "http": "real application routes and middleware, not the minimal TestCase application",
+    "callback_statuses": [401, 200, 200, 409],
+    "duplicate_callback_step_count": 1,
+    "sibling_bootstrap_unchanged": true
+  },
+  "verified_boundaries": [
+    "Exclusive verified publication into fixed app/runtime/node directories",
+    "Partial publication readback without extraction or install replay",
+    "Unexpected application files and immutable hash or permission drift rejected",
+    "Private settings restricted to loopback databases and a dedicated queue prefix",
+    "Service user can write only designated data directories, not code, environment or executable cache",
+    "Six configuration and path overrides rejected before external service access",
+    "Real migration implementation persists an intent before database initialization",
+    "Initialization accepts only an empty disposable database",
+    "Migration receipt contains schema fingerprint and binding hashes, not SQL or credentials",
+    "Repeated initialization, missing completion receipt and non-root initialization readback rejected",
+    "Existing schema rejection preserves the first safe exception class and file-line diagnostic",
+    "Private migration journals explicitly chmod 0600 and refresh file status before readback"
+  ],
+  "limitations": [
+    "Cloud platform, real SSH and DNS side effects remain mocked or uncalled",
+    "The node ELF in this component fixture is synthetic and is never executed",
+    "The callback fixture enables only its process-local test callback permission and suppresses queued work",
+    "This is not a completed native grant or live HTTP authorization implementation",
+    "Complete concrete setup-port composition, dual-source seeding, DNS initialization, scoped grants and stop/recovery integration remain required",
+    "No final provenance-verified node runtime package or renewed live preflight was produced"
+  ],
+  "cleanup": {
+    "disposable_service_containers_and_volumes_removed": true,
+    "fixed_application_fixture_removed": true,
+    "temporary_source_and_runtime_files_removed": true,
+    "hosted_runner_parent_permissions_restored": true,
+    "external_ipv4_routes": false,
+    "external_ipv6_routes": false
+  },
+  "evidence_sha256": {
+    "application-linux-summary.json": "e21c70dc38f9fd118a572168d56550826d47dbbf3be74daa6c613e0601360623",
+    "python.log": "3082b8731c297154547915d4893fcf135a33491e12d56eff72fa02011c996ecc",
+    "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+  },
+  "restrictions": {
+    "main_merged_or_pushed": false,
+    "image_published": false,
+    "cloud_instances_created": 0,
+    "production_bridge_used": false,
+    "production_database_connected": false,
+    "production_or_tanzhen_changed": false,
+    "persistent_automatic_switches_changed": false,
+    "r34_or_historical_live_round_executed": false,
+    "unrelated_dirty_files_checked": 108,
+    "unrelated_dirty_files_changed": 0
+  }
+}

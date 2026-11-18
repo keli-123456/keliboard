@@ -33,9 +33,9 @@ class MachineMemberProviderBindingsTest extends TestCase
             'Remark' => $this->dns['marker'], 'TTL' => 600];
     }
 
-    private function bindings(array $baseline = [], ?\Closure $guard = null): Bindings
+    private function bindings(array $baseline = [], ?\Closure $guard = null, array $additional = []): Bindings
     {
-        return new Bindings(['run_id' => Bindings::RUN, 'pins' => array_map(Bindings::digest(...), [$this->control, $this->dns]),
+        return new Bindings(['run_id' => Bindings::RUN, 'pins' => array_map(Bindings::digest(...), [$this->control, $this->dns, ...$additional]),
             'baseline_ids' => $baseline], ['api_token' => 'synthetic-only'],
             ['access_key_id' => 'synthetic-only', 'access_key_secret' => 'synthetic-only'], $guard ?? fn () => null,
             fn ($key) => $this->journal[$key] ?? null, function ($key, $value): void {
@@ -55,6 +55,57 @@ class MachineMemberProviderBindingsTest extends TestCase
         $again = $this->bindings()->dispatch('control-delete', $this->control);
         $this->assertTrue($again['reconciliation_required']); $this->assertFalse($again['dispatched']);
         $this->assertCount(1, Http::recorded(fn ($r) => $r->method() === 'DELETE'));
+    }
+
+    public function test_dns_selection_accepts_only_prebound_values_and_delete_rechecks_the_selected_pin(): void
+    {
+        $next = array_replace($this->dns, ['value' => '9.9.9.11']);
+        $this->dnsRow['Value'] = $next['value'];
+        Http::fake(fn ($r) => Http::response($r['Action'] === 'DeleteDomainRecord' ? ['RecordId' => '5001'] : $this->dnsRow));
+        $provider = $this->bindings(additional: [$next]);
+        $this->assertSame($next, $provider->resolveDnsPin([$this->dns, $next]));
+        $this->dnsRow['Value'] = '8.8.8.99';
+        try { $provider->dispatch('dns-delete', $next); $this->fail(); }
+        catch (\RuntimeException $error) { $this->assertSame('member_provider_dns_identity_changed', $error->getMessage()); }
+        $this->assertSame([], $this->journal);
+        Http::assertSentCount(2);
+    }
+
+    public function test_dns_selection_rejects_unknown_value_or_changed_marker_and_never_adopts_it(): void
+    {
+        $next = array_replace($this->dns, ['value' => '9.9.9.11']);
+        Http::fake(fn () => Http::response($this->dnsRow));
+        $provider = $this->bindings(additional: [$next]);
+        foreach ([['Value', '8.8.8.99'], ['Remark', 'foreign']] as [$field, $value]) {
+            $old = $this->dnsRow; $this->dnsRow[$field] = $value;
+            try { $provider->resolveDnsPin([$this->dns, $next]); $this->fail(); }
+            catch (\RuntimeException $error) { $this->assertSame('member_provider_dns_identity_changed', $error->getMessage()); }
+            $this->dnsRow = $old;
+        }
+        $this->assertSame([], $this->journal);
+        Http::assertSentCount(2);
+    }
+
+    public function test_dns_selection_requires_scoped_pins_for_one_exact_record_before_reading(): void
+    {
+        Http::fake();
+        $next = array_replace($this->dns, ['value' => '9.9.9.11']);
+        try { $this->bindings()->resolveDnsPin([$this->dns, $next]); $this->fail(); }
+        catch (\RuntimeException $error) { $this->assertSame('member_provider_pin_changed', $error->getMessage()); }
+        $other = array_replace($next, ['record_id' => '5002']);
+        try { $this->bindings(additional: [$other])->resolveDnsPin([$this->dns, $other]); $this->fail(); }
+        catch (\RuntimeException $error) { $this->assertSame('member_provider_dns_pins_invalid', $error->getMessage()); }
+        Http::assertNothingSent();
+    }
+
+    public function test_control_address_requires_exact_owned_single_public_ipv4(): void
+    {
+        $this->cloudRow['ipv4'] = ['10.0.0.1', '9.9.9.10'];
+        Http::fake(fn () => Http::response($this->cloudRow));
+        $this->assertSame('9.9.9.10', $this->bindings()->controlAddress($this->control));
+        $this->cloudRow['ipv4'][] = '8.8.8.8';
+        $this->expectExceptionMessage('member_provider_control_address_unconfirmed');
+        $this->bindings()->controlAddress($this->control);
     }
 
     public function test_dns_uses_real_aliyun_signed_exact_id_and_compact_marker_reader(): void

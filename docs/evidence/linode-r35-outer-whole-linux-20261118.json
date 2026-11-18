@@ -1,0 +1,180 @@
+{
+  "schema": 1,
+  "status": "isolated_actual_outer_whole_round_passed",
+  "recorded_date": "2026-11-18",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "main_base_commit": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "live_ready": false,
+  "execution_authorized": false,
+  "goal_complete": false,
+  "main_branch_committed_or_pushed": false,
+  "production_accessed": false,
+  "cloud_instances_created": 0,
+  "cloud_ssh_dns_effects": "simulated",
+  "persistent_automatic_switches_changed": false,
+  "r34_executed": false,
+  "historical_live_round_reexecuted": false,
+  "tanzhen_accessed": false,
+  "successful_run": {
+    "id": 44160522634,
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44160522634",
+    "commit": "3fb9d3ee0edabea7b404fe6ef1dfea8abde903a8",
+    "mode": "outer_whole",
+    "conclusion": "success",
+    "artifact_id": 14365056571,
+    "python_tests": 230,
+    "python_skipped": 1,
+    "php_suites": [
+      {
+        "tests": 137,
+        "assertions": 924
+      },
+      {
+        "tests": 20,
+        "assertions": 267
+      },
+      {
+        "tests": 53,
+        "assertions": 20401
+      }
+    ],
+    "verified": [
+      "Actual MemberRound owns all ten initialization stages, actual native A1/A2 transitions, stopped reconciliation and final assembly cleanup, using disk DriverJournal and exclusive round lock",
+      "Full application and locked vendor, 160 MySQL migrations, 157 tables, Redis, UID65534, systemd/nginx/PHP/TLS; stage receipts are not fabricated",
+      "Source A/B each register three fresh synthetic HTTP/TLS reports; actual source serial create gap is 305 seconds",
+      "A1 reaches the configured three complete failures, receives exactly one DELETE and two exact absence reads twelve seconds apart",
+      "Actual configured cooldown is 300 seconds; A2 dispatch occurs 306 seconds after confirmed A1 absence, without clock changes or early creation",
+      "A2 completes admission and one edge-a DNS update; B task, provider identity and DNS remain unchanged through retry",
+      "Actual stopped application evidence exported, independently hashed locally and retained after controller removal",
+      "Three owned DNS records and six private files are cleaned before deleting the controller; all four source/candidate roles have paired absence reads at least ten seconds apart",
+      "Independent operator deletes controller exactly once, physically removes fixture, then performs two absence reads ten seconds apart without further SSH",
+      "Closed outer journal has no pending request or first error, resources_cleaned and acceptance_passed true; replay after closure is a no-op",
+      "Disposable services and fixture removed; no external IPv4/IPv6 routes"
+    ],
+    "bundle_sha256": "0c65cc654711f9562d488112e262ab5d0f6228db9edf70799415c9f9251c087d",
+    "composer_lock_sha256": "1a7bc62c308529c9edd7f495ca544e93c53933d39570f4eb43fe92c6365f64e1",
+    "application_files": 14166,
+    "stopped_evidence_content_sha256": "c54339dfab851fb64003fd7930cba2b807151720c446928a23cba3250e0b77e2",
+    "artifact_files": [
+      {
+        "file": "application-linux-summary.json",
+        "sha256": "cdb27458264f8f34175f0e73f913698b977bdd9420f19a0878ed496fb53c94b4"
+      },
+      {
+        "file": "application-linux.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "file": "cli-phpunit.log",
+        "sha256": "00a1a9c4c226d74ed050d665fe80ee37528c0f68536689289c7d2717df75cf17"
+      },
+      {
+        "file": "dns-phpunit.log",
+        "sha256": "0b8804ab88ac6e0ae5f2ed095e8e06502e1933e250e972425cb95dd0c3d1e617"
+      },
+      {
+        "file": "native-retry-evidence.json",
+        "sha256": "3c855ebfc19cd820213bbff6a3275181d0f58115c84d1cc482107ee0a1abd4be"
+      },
+      {
+        "file": "native-retry-transitions.json",
+        "sha256": "294c20e876865f635e24184296da2c1da1da39c0d6f071f155e46e0a4b6753f4"
+      },
+      {
+        "file": "outer-round-state.json",
+        "sha256": "6169f38f7165766629af3f1a398eff957581a514777dedb12f249a2921e3b186"
+      },
+      {
+        "file": "python.log",
+        "sha256": "922bb673416d5d051ebc7af559eaee0aea0fcbae7d445c5ed1d64cead5ebd0bd"
+      },
+      {
+        "file": "service-cleanup.json",
+        "sha256": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+      },
+      {
+        "file": "source-phpunit.log",
+        "sha256": "255602ba423656a447a63e77d6bbb5e2e2d548d33c997af308060619ac997ffa"
+      },
+      {
+        "file": "whole-initialization-transitions.json",
+        "sha256": "7f83865202650fdf7cbb1fb59a835c06976f409c4d347df5efb14cad620be40a"
+      },
+      {
+        "file": "whole-stopped-evidence.json",
+        "sha256": "3af58247101edcc451579b4f39da5fdb9257752294d15c0c850682e8d28694ba"
+      }
+    ]
+  },
+  "prior_failed_attempt": {
+    "id": 44156266210,
+    "commit": "706dddc263f18ad8a76d8b56e374c2d84db0e50a",
+    "artifact_id": 14361429522,
+    "conclusion": "failure",
+    "reason": "CI incorrectly required every diagnostic branch to be true. retry_exhausted and native final_cleanup are false on this success path because final cleanup is owned by the host.",
+    "fix": "CI now checks the five required success branches explicitly and preserves outer state before assertions. Production MemberRound acceptance policy was unchanged. Permanent positive and negative branch tests added.",
+    "not_reclassified_as_success": true,
+    "fixture_and_containers_removed": true,
+    "artifact_files": [
+      {
+        "sha256": "3441fac199df8c0de679d6a6c0421e42a6842101b3d7ff113fc19c1e1fa41ad6",
+        "file": "application-linux-summary.json"
+      },
+      {
+        "sha256": "4f72dfb5e1cba452f3aede6ab572106f7b651daf7d4b6b5558f8a02857cb4f4d",
+        "file": "application-linux.log"
+      },
+      {
+        "sha256": "4fbb00dda4b06245aa30170bcfacee46f4c3a82a85ec0308560336ae30a1adda",
+        "file": "cli-phpunit.log"
+      },
+      {
+        "sha256": "61a0170e31bbc5330f3a70cd0e5301f0f0919f1f15797a842d364a46ab598968",
+        "file": "dns-phpunit.log"
+      },
+      {
+        "sha256": "591004aed4b8b99da526e8d8accb5de1103a4ec8ebed9c628467e17842e83a33",
+        "file": "native-retry-evidence.json"
+      },
+      {
+        "sha256": "ff2188859501ad5f8ba164684778c6ecf9cae787f9b52bbc3c7683bf9bb870d0",
+        "file": "native-retry-transitions.json"
+      },
+      {
+        "sha256": "93e65879623f9d8e75327ffdea428abbe53ee264e7e28c9c45090b4072b21b2b",
+        "file": "python.log"
+      },
+      {
+        "sha256": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+        "file": "service-cleanup.json"
+      },
+      {
+        "sha256": "829791835769cc042891601866d0906c21a0707f0b03b30db8a8ed7bbbad53e8",
+        "file": "source-phpunit.log"
+      },
+      {
+        "sha256": "b7ab691f7c3bac57b1fef533db9363528364eed65b6769ec24b17ffd9627b973",
+        "file": "whole-initialization-transitions.json"
+      },
+      {
+        "sha256": "a7826c25ae12743b69c10ab8234baf94355b6eae25b6b82704f924f709a8d188",
+        "file": "whole-stopped-evidence.json"
+      }
+    ]
+  },
+  "evidence_scope_notes": [
+    "Cloud resources, external provider HTTP, SSH transport and DNS effects are simulated; no live machine or DNS validation is claimed",
+    "Synthetic node ELF is never executed, telemetry is synthetic and TLS certificate is a self-signed fixture",
+    "native_retry_flow.final_native_teardown_not_covered describes the native component; final teardown in this run is explicitly owned and verified by the outer host assembly",
+    "candidate_callback_http_full_application_tested false is a legacy top-level marker; actual initialization/retry HTTP/TLS is separately recorded, not a claim to all candidate callback API paths",
+    "Temporary workflow and CI-specific scripts are not main-branch changes",
+    "The later read-only control connection patch is not part of this run commit and needs its own validation"
+  ],
+  "remaining": [
+    "Deferred actual control-endpoint-to-host assembly instead of fixed CI destination, including reviewed OS/bootstrap readiness and certificate provisioning",
+    "Complete full-application stage failure, stop, expiry and additional crash boundaries beyond the recorded prefix SIGKILL case",
+    "Final unarmed LF runtime freeze with pinned real node and locked vendor, after remaining implementation and regressions",
+    "Fresh unexecuted live scope, readonly preflight and cleanup proposal requiring user confirmation"
+  ]
+}

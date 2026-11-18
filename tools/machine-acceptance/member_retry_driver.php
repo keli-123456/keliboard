@@ -143,6 +143,10 @@ final class MemberRetryDriver
     {
         $this->assertB();
         $attempts = $this->validateRun();
+        // No periodic collector runs in the isolated CLI. Keep the original
+        // source episode fresh even while native retry cooldown forbids creation.
+        $this->action('observe_sources', ['roles' => ['source-a'], 'fault_allowed_roles' => ['source-a']]);
+        $this->assertB();
         if ($attempts->count() === 1 && $attempts[0]->status === 'cleaned') {
             $proof = $this->proof($attempts[0]);
             $this->state['branches']['native_cleanup'] = true;

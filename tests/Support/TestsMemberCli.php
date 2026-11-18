@@ -60,6 +60,236 @@ trait TestsMemberCli
         foreach (Authority::closed() as $k => $v) $this->assertSame($v, config($k), $k);
     }
 
+    public function test_member_native_dns_cleanup_is_recovery_only_and_does_not_grant_dns_write_authority(): void
+    {
+        [$authority] = $this->cliFixture();
+        try { $authority->allow('round-dns-cleanup'); $this->fail(); }
+        catch (\RuntimeException $error) { $this->assertSame('member_cli_final_cleanup_required', $error->getMessage()); }
+        $this->memberTransportJournal['round-stop'] = ['stopped' => true];
+        $this->retryClock->at = $this->cliScope['deadline_at'] + 1;
+        $authority->within('round-dns-cleanup', 'control', function (): void {
+            $this->cliAssertClosed();
+            foreach (['dns_write', 'dns_set_write', 'queue', 'native_task'] as $operation) {
+                try { app(Gate::class)->assertAllowed($operation); $this->fail(); }
+                catch (\RuntimeException $error) { $this->assertSame('member_cli_native_operation_denied', $error->getMessage()); }
+            }
+        });
+        $this->cliAssertClosed();
+    }
+
+    private function memberCallbackFixture(): array
+    {
+        require_once base_path('tools/machine-acceptance/member_candidate_callbacks.php');
+        [$authority, $bridge] = $this->cliFixture();
+        foreach ([-12, -7, -2] as $offset) foreach ($this->fixtures as $index => $f) {
+            $this->report($f, $f['source']->fresh(), $f['sourceIp'], $index === 1, time() + $offset);
+            $bridge->dispatch($this->cliRequest('source-observe', $index === 0 ? 'source-a' : 'source-b'));
+        }
+        foreach (['source-a', 'source-b'] as $role) $bridge->dispatch($this->cliRequest('source-register', $role));
+        $authority->within('round-step', 'control', fn () => $this->sourceReport($this->fixtures[0], false, time() - 1));
+        $this->cliScope['driver']['plan_id'] = \App\Models\MachineFailoverPlan::query()
+            ->where('policy_id', $this->fixtures[0]['policy']->id)->latest('id')->value('id');
+        [, $bridge] = $this->cliBindings();
+        foreach (['source-a', 'source-b', 'setup_cooldown', 'native', 'waiting_initialization'] as $phase) {
+            $result = $bridge->dispatch($this->cliRequest('round-step'))['result'];
+            $this->assertSame($phase, $result['native_phase']);
+        }
+        return $this->memberCallbackProjection();
+    }
+
+    public function test_member_evidence_requires_stop_preserves_task_errors_and_never_exports_raw_payloads(): void
+    {
+        [$authority, $bridge] = $this->cliFixture();
+        try { $bridge->dispatch($this->cliRequest('round-evidence')); $this->fail(); }
+        catch (\RuntimeException $error) { $this->assertSame('member_cli_final_cleanup_required', $error->getMessage()); }
+        $task = $this->fixtures[0]['source']->fresh();
+        $safe = \App\Services\ServerMachine\Cloud\MachineProvisionDiagnostic::project(new \RuntimeException('secret-task-message'), 'reports');
+        $task->evidence = ['task_diagnostic' => $safe, 'raw' => 'secret-task-body']; $task->save();
+        $this->memberTransportJournal['round-driver'] = ['first_error' => 'secret-driver-message',
+            'first_diagnostic' => ['class' => 'RuntimeException', 'site' => 'member_retry_driver', 'line' => 99,
+                'native_reason' => 'secret-reason', 'stack' => 'secret-stack'],
+            'branches' => ['b_unchanged' => true, 'unknown' => 'secret-branch']];
+        $bridge->dispatch($this->cliRequest('round-stop'));
+        $this->retryClock->at = $this->cliScope['deadline_at'] + 10;
+        $before = $task->fresh()->getRawOriginal();
+        $reply = $bridge->dispatch($this->cliRequest('round-evidence'))['result'];
+        $this->assertSame(hash('sha256', $reply['content']), $reply['sha256']);
+        $body = json_decode($reply['content'], true, 32, JSON_THROW_ON_ERROR);
+        $this->assertTrue($body['reconciled']); $this->assertTrue($body['stopped']);
+        $this->assertTrue($body['cleanup_complete_not_asserted']);
+        $this->assertTrue($body['driver']['first_error_present']);
+        $this->assertSame(['class' => 'RuntimeException', 'file' => 'member_retry_driver.php', 'line' => 99], $body['driver']['first_diagnostic']);
+        $this->assertEquals($safe, $body['tasks']['source-a']['first_diagnostic']);
+        $this->assertTrue($body['tasks']['source-a']['first_error_present']);
+        $this->assertStringNotContainsString('secret-', $reply['content']);
+        foreach (['payload', 'credentials', 'callback_hash', 'installation_id'] as $key) $this->assertStringNotContainsString('"' . $key . '"', $reply['content']);
+        $this->assertSame($reply, $bridge->dispatch($this->cliRequest('round-evidence'))['result']);
+        $this->assertSame($reply, $this->memberTransportJournal['evidence-' . $reply['sha256']]);
+        $this->assertSame($before, $task->fresh()->getRawOriginal());
+        $this->assertSame(0, $this->dnsWrites); $this->assertCount(0, $this->posts); $this->cliAssertClosed();
+    }
+
+    public function test_member_evidence_reports_drift_without_adopting_it_or_losing_prior_snapshot(): void
+    {
+        [, $bridge] = $this->cliFixture();
+        $bridge->dispatch($this->cliRequest('round-stop'));
+        $first = $bridge->dispatch($this->cliRequest('round-evidence'))['result'];
+        $task = $this->fixtures[0]['source']->fresh(); $task->external_id = '999999'; $task->save();
+        $second = $bridge->dispatch($this->cliRequest('round-evidence'))['result'];
+        $body = json_decode($second['content'], true, 32, JSON_THROW_ON_ERROR);
+        $this->assertFalse($body['reconciled']); $this->assertFalse($body['tasks']['source-a']['binding_current']);
+        $this->assertArrayNotHasKey('status', $body['tasks']['source-a']);
+        $this->assertStringNotContainsString('999999', $second['content']);
+        $this->assertNotSame($first['sha256'], $second['sha256']);
+        $this->assertSame($first, $this->memberTransportJournal['evidence-' . $first['sha256']]);
+        $this->assertSame(0, $this->dnsWrites); $this->assertCount(0, $this->posts); $this->cliAssertClosed();
+    }
+
+    public function test_member_evidence_rejects_false_readback_and_projects_only_known_diagnostic_fields(): void
+    {
+        [$authority] = $this->cliFixture();
+        $this->memberTransportJournal['round-stop'] = ['stopped' => true];
+        $bridge = new Bridge($this->cliScope, $authority, fn ($k) => $this->memberTransportJournal[$k] ?? null,
+            static fn () => null, fn () => $this->retryClock->at);
+        try { $bridge->dispatch($this->cliRequest('round-evidence')); $this->fail(); }
+        catch (\RuntimeException $error) { $this->assertSame('member_round_evidence_readback_failed', $error->getMessage()); }
+        $this->assertSame(['class' => 'other', 'file' => null, 'line' => null], Bridge::safeDiagnostic([
+            'class' => 'private-token', 'file' => '/secret/member_retry_driver.php', 'line' => 100, 'message' => 'secret']));
+        $this->cliAssertClosed();
+    }
+
+    public function test_member_evidence_keeps_candidate_first_error_when_create_identity_is_unresolved(): void
+    {
+        $this->memberCallbackFixture(); [, $bridge] = $this->cliBindings();
+        $task = $this->task();
+        $safe = \App\Services\ServerMachine\Cloud\MachineProvisionDiagnostic::project(
+            new \RuntimeException('secret-create-response'), 'create');
+        $task->external_id = null; $task->provider_created_at = null;
+        $task->evidence = ['task_diagnostic' => $safe, 'raw' => 'secret-create-body']; $task->save();
+        $this->assertNotNull($task->dispatched_at);
+        $bridge->dispatch($this->cliRequest('round-stop'));
+        $before = $task->fresh()->getRawOriginal();
+        $reply = $bridge->dispatch($this->cliRequest('round-evidence'))['result'];
+        $body = json_decode($reply['content'], true, 32, JSON_THROW_ON_ERROR);
+        $this->assertArrayHasKey('candidate-a1', $body['tasks']);
+        $candidate = $body['tasks']['candidate-a1'];
+        $this->assertFalse($body['reconciled']);
+        $this->assertTrue($candidate['binding_current']);
+        $this->assertFalse($candidate['external_identity_available']);
+        $this->assertTrue($candidate['first_error_present']);
+        $this->assertEquals($safe, $candidate['first_diagnostic']);
+        $this->assertStringNotContainsString('secret-', $reply['content']);
+        foreach (['round-status' => 'control', 'task-delete' => 'candidate-a1'] as $operation => $role) {
+            try { $bridge->dispatch($this->cliRequest($operation, $role)); $this->fail(); }
+            catch (\RuntimeException $error) { $this->assertSame('member_round_candidate_readback_required', $error->getMessage()); }
+        }
+        $this->assertSame($before, $task->fresh()->getRawOriginal());
+        $this->assertCount(1, $this->posts); $this->assertSame(0, $this->dnsWrites); $this->cliAssertClosed();
+    }
+
+    public function test_member_evidence_does_not_adopt_candidate_with_changed_lineage(): void
+    {
+        $this->memberCallbackFixture(); [, $bridge] = $this->cliBindings();
+        $task = $this->task(); $task->installation_id = 'unrelated-installation';
+        $task->evidence = ['task_diagnostic' => ['message' => 'secret-other-task']]; $task->save();
+        $bridge->dispatch($this->cliRequest('round-stop'));
+        $reply = $bridge->dispatch($this->cliRequest('round-evidence'))['result'];
+        $body = json_decode($reply['content'], true, 32, JSON_THROW_ON_ERROR);
+        $this->assertFalse($body['reconciled']); $this->assertArrayNotHasKey('candidate-a1', $body['tasks']);
+        $this->assertStringNotContainsString('secret-', $reply['content']);
+        $this->assertCount(1, $this->posts); $this->assertSame(0, $this->dnsWrites); $this->cliAssertClosed();
+    }
+
+    private function memberCallbackProjection(): array
+    {
+        require_once base_path('tools/machine-acceptance/member_candidate_callbacks.php');
+        $s = $this->cliScope; $d = $s['driver'];
+        $setup = ['run_id' => Authority::RUN, 'started_at' => $s['started_at'], 'deadline_at' => $s['deadline_at'],
+            'bundle_sha256' => $s['bundle_sha256'], 'machine_id_sha256' => $s['controller_machine_id_sha256'],
+            'control' => $s['control'], 'binding' => [
+                'scope' => array_intersect_key($d, array_flip(['admin_id', 'account_id', 'release_id', 'baseline_ids']))
+                    + ['account_revision' => $s['sources']['source-a']['account_revision']],
+                'configuration' => ['service_id' => $d['service_id'], 'service_revision' => $d['service_revision'],
+                    'sources' => array_map(static fn ($p) => array_intersect_key($p, array_flip(['machine_id', 'policy_id'])), $s['sources'])]]];
+        return [$setup, \Keli\Acceptance\MemberCandidateCallbacks::project($s, str_repeat('e', 64), $setup, str_repeat('f', 64))];
+    }
+
+    public function test_member_candidate_callbacks_use_native_lineage_with_no_create_dns_or_rotation_permission(): void
+    {
+        [, $cap] = $this->memberCallbackFixture(); $task = $this->task();
+        $type = \Keli\Acceptance\MemberCandidateCallbacks::class;
+        $this->assertSame('source-a', $type::role($cap, $task));
+        $before = config('queue'); $original = app(Gate::class);
+        config(['machine_provision.allow_live' => true]);
+        try {
+            $this->assertTrue($type::within($cap, $task, function (): void {
+                $this->assertFalse(config('machine_failover.allow_replacement'));
+                $this->assertFalse(config('machine_failover.allow_rotation'));
+                $this->assertFalse(config('machine_acceptance.allow_dns'));
+            }, function () use ($task) {
+                foreach (['start', 'advance', 'queue', 'rotate', 'dns_write', 'dns_readback', 'candidate_retry'] as $operation) {
+                    try { app(Gate::class)->assertAllowed($operation); $this->fail('Unexpected callback permission'); }
+                    catch (\RuntimeException $error) { $this->assertSame('member_candidate_callback_operation_denied', $error->getMessage()); }
+                }
+                // Same dispatcher isolation used by the HTTP capability, no worker is started.
+                $contract = \Illuminate\Contracts\Bus\Dispatcher::class; $bus = app($contract);
+                app()->instance($contract, new \Illuminate\Bus\Dispatcher(app(), static fn () => new \Illuminate\Queue\NullQueue()));
+                try { return app(\App\Services\ServerMachine\Cloud\MachineProvisionService::class)
+                    ->callback($task->id, $task->installation_id, $this->callbackSecret($task), 'succeeded'); }
+                finally { app()->instance($contract, $bus); }
+            }));
+        } finally { config(Authority::closed()); }
+        $this->assertSame('succeeded', $task->fresh()->bootstrap_state);
+        $this->assertCount(1, $this->posts); $this->assertSame(0, $this->dnsWrites);
+        $this->assertSame($original, app(Gate::class)); $this->assertSame($before, config('queue')); $this->cliAssertClosed();
+    }
+
+    public function test_member_candidate_callbacks_reject_other_members_lineage_drift_and_cleaned_attempts(): void
+    {
+        [, $cap] = $this->memberCallbackFixture(); $task = $this->task();
+        $type = \Keli\Acceptance\MemberCandidateCallbacks::class;
+        foreach (['policy_a', 'plan_id', 'service_id', 'admin_id', 'release_id'] as $key) {
+            $changed = $cap; $changed['driver'][$key]++;
+            try { $type::role($changed, $task); $this->fail('Unbound callback accepted'); }
+            catch (\RuntimeException $error) { $this->assertStringStartsWith('member_candidate_callback_', $error->getMessage()); }
+        }
+        try { $type::role($cap, $this->fixtures[1]['source']->fresh()); $this->fail('B allowed as candidate'); }
+        catch (\RuntimeException $error) { $this->assertSame('member_candidate_callback_task_outside_grant', $error->getMessage()); }
+        $attempt = \App\Models\MachineFailoverAttempt::query()->findOrFail($task->payload['coordinated_attempt']);
+        foreach (['cleaned', 'released', 'cancelled', 'failed'] as $status) {
+            $attempt->status = $status; $attempt->save();
+            try { $type::role($cap, $task); $this->fail('Retired candidate allowed'); }
+            catch (\RuntimeException $error) { $this->assertSame('member_candidate_callback_candidate_inactive', $error->getMessage()); }
+        }
+        $this->assertCount(1, $this->posts); $this->assertSame(0, $this->dnsWrites); $this->cliAssertClosed();
+    }
+
+    public function test_member_candidate_grant_inherits_original_window_and_preserves_root_scope(): void
+    {
+        [$setup, $cap] = $this->memberCallbackFixture(); $type = \Keli\Acceptance\MemberCandidateCallbacks::class;
+        $this->assertSame($setup['deadline_at'], $cap['deadline_at']);
+        $this->assertSame($setup['started_at'], $cap['started_at']);
+        foreach (['started_at', 'deadline_at'] as $key) {
+            $s = $this->cliScope; $s[$key]++;
+            try { $type::project($s, str_repeat('e', 64), $setup, str_repeat('f', 64)); $this->fail('Extended window'); }
+            catch (\RuntimeException $error) { $this->assertSame('member_candidate_callback_window_or_bundle_changed', $error->getMessage()); }
+        }
+        $task = $this->task(); $ran = false;
+        try {
+            $type::within($cap, $task, static fn () => throw new \RuntimeException('revoked'), function () use (&$ran) { $ran = true; });
+            $this->fail('Revoked guard accepted');
+        } catch (\RuntimeException $error) { $this->assertSame('revoked', $error->getMessage()); }
+        $this->assertFalse($ran); $this->cliAssertClosed();
+        $gate = app(Gate::class); $native = app(\App\Services\ServerMachine\Cloud\MachineFailoverNativeBridge::class);
+        app()->instance(\App\Services\ServerMachine\Cloud\MachineFailoverNativeBridge::class, $native);
+        try {
+            $type::within($cap, $task, static fn () => null, static fn () => throw new \RuntimeException('handler_failed'));
+            $this->fail('Callback exception lost');
+        } catch (\RuntimeException $error) { $this->assertSame('handler_failed', $error->getMessage()); }
+        $this->assertSame($gate, app(Gate::class));
+        $this->assertSame($native, app(\App\Services\ServerMachine\Cloud\MachineFailoverNativeBridge::class));
+    }
+
     public function test_member_cli_temporarily_scopes_permissions_and_restores_on_exception(): void
     {
         [$authority] = $this->cliFixture();
@@ -80,6 +310,35 @@ trait TestsMemberCli
         $this->assertSame($queues, config('queue'));
         try { (new Gate())->assertAllowed('advance'); $this->fail(); }
         catch (\Throwable $e) { $this->assertSame('orchestration_disabled', $e->getMessage()); }
+        $this->assertSame([], $this->posts);
+    }
+
+    public function test_member_cli_restores_transient_and_shared_binding_lifetimes(): void
+    {
+        [$authority] = $this->cliFixture();
+        $busContract = \Illuminate\Contracts\Bus\Dispatcher::class;
+        foreach ([false, true] as $shared) foreach ([false, true] as $throw) {
+            app()->bind(Gate::class, fn () => new Gate(), $shared);
+            app()->bind($busContract, fn () => new \Illuminate\Bus\Dispatcher(app()), $shared);
+            $gate = app(Gate::class); $bus = app($busContract);
+            try {
+                $this->assertSame('completed', $authority->within('round-status', 'control', function () use ($throw) {
+                    if ($throw) throw new \RuntimeException('fixture_lifetime_failure');
+                    return 'completed';
+                }));
+                $this->assertFalse($throw);
+            } catch (\RuntimeException $error) {
+                $this->assertTrue($throw);
+                $this->assertSame('fixture_lifetime_failure', $error->getMessage());
+            }
+            foreach ([Gate::class => $gate, $busContract => $bus] as $type => $original) {
+                $this->assertSame($shared, app()->isShared($type));
+                $this->assertSame(get_class($original), get_class(app($type)));
+                if ($shared) $this->assertSame($original, app($type));
+                else $this->assertNotSame($original, app($type));
+            }
+            $this->cliAssertClosed();
+        }
         $this->assertSame([], $this->posts);
     }
 
@@ -115,6 +374,22 @@ trait TestsMemberCli
         }
         $this->assertTrue($bridge->dispatch($this->cliRequest('round-ready'))['result']['ready']);
         $this->cliAssertClosed(); $this->assertSame([], $this->posts);
+    }
+
+    public function test_member_cli_stop_preflight_requires_exact_request_without_mutating_journal(): void
+    {
+        [$authority] = $this->cliFixture();
+        $before = $this->memberTransportJournal;
+        $request = $this->cliRequest('round-stop');
+        Bridge::authorizeRequest($request, $authority);
+        foreach ([['grant_id' => str_repeat('e', 32)], ['grant_sha256' => str_repeat('e', 64)],
+            ['bundle_sha256' => str_repeat('e', 64)], ['role' => 'source-a'], ['sequence' => -1],
+            ['request_id' => 'invalid'], ['confirmed' => true]] as $patch) {
+            try { Bridge::authorizeRequest(array_replace($request, $patch), $authority); $this->fail('Unbound stop request'); }
+            catch (\RuntimeException $error) { $this->assertMatchesRegularExpression('/^member_(cli|round)_/', $error->getMessage()); }
+        }
+        $this->assertSame($before, $this->memberTransportJournal);
+        $this->assertSame([], $this->posts); $this->cliAssertClosed();
     }
 
     public function test_member_cli_expired_or_stopped_round_can_only_read_and_clean_exact_roles(): void
@@ -183,6 +458,46 @@ trait TestsMemberCli
         $this->assertSame([], $this->posts); $this->assertSame(0, $this->dnsWrites); $this->cliAssertClosed();
     }
 
+    public function test_member_cli_recollects_source_during_prepared_role_handoff_without_observing_b(): void
+    {
+        [, $bridge] = $this->cliFixture(); $calls = [];
+        $observer = \Mockery::mock(\App\Services\ServerMachine\Cloud\MachineFailoverObserver::class);
+        $observer->shouldReceive('observe')->andReturnUsing(function ($id) use (&$calls): array { $calls[] = $id; return []; });
+        app()->instance(\App\Services\ServerMachine\Cloud\MachineFailoverObserver::class, $observer);
+        $this->assertSame('source-a', $bridge->dispatch($this->cliRequest('round-step'))['result']['native_phase']);
+        $this->assertSame('source-a', $bridge->dispatch($this->cliRequest('round-step'))['result']['native_phase']);
+        $this->assertSame(array_fill(0, 2, $this->fixtures[0]['policy']->id), $calls);
+        $this->assertSame([], $this->posts); $this->cliAssertClosed();
+    }
+
+    public function test_member_cli_collects_new_source_report_before_candidate_step_without_observing_b(): void
+    {
+        [$authority, $bridge] = $this->cliFixture();
+        foreach ([-12, -7, -2] as $offset) foreach ($this->fixtures as $index => $f) {
+            $this->report($f, $f['source']->fresh(), $f['sourceIp'], $index === 1, time() + $offset);
+            $bridge->dispatch($this->cliRequest('source-observe', $index === 0 ? 'source-a' : 'source-b'));
+        }
+        foreach (['source-a', 'source-b'] as $role) $bridge->dispatch($this->cliRequest('source-register', $role));
+        $authority->within('round-step', 'control', fn () => $this->sourceReport($this->fixtures[0], false, time() - 1));
+        $this->cliScope['driver']['plan_id'] = \App\Models\MachineFailoverPlan::where('policy_id', $this->fixtures[0]['policy']->id)
+            ->latest('id')->value('id');
+        [, $bridge] = $this->cliBindings();
+        foreach (['source-a', 'source-b', 'setup_cooldown', 'native'] as $phase) {
+            $state = $bridge->dispatch($this->cliRequest('round-step'))['result'];
+            $this->assertSame($phase, $state['native_phase'], json_encode($this->memberTransportJournal['round-driver']));
+        }
+        $observations = \App\Models\MachineFailoverObservation::where('policy_id', $this->fixtures[1]['policy']->id)->count();
+        sleep(5);
+        $at = time(); $f = $this->fixtures[0];
+        $this->report($f, $f['source']->fresh(), $f['sourceIp'], false, $at);
+        $result = $bridge->dispatch($this->cliRequest('round-step'))['result'];
+        $this->assertSame($at, \App\Models\MachineFailoverObservation::where('policy_id', $f['policy']->id)->latest('id')->value('checked_at'));
+        $this->assertSame('waiting_initialization', $result['native_phase'], json_encode($result));
+        $this->assertNull($result['first_error']);
+        $this->assertSame($observations, \App\Models\MachineFailoverObservation::where('policy_id', $this->fixtures[1]['policy']->id)->count());
+        $this->cliAssertClosed();
+    }
+
     public function test_member_cli_native_a1_cleanup_cooldown_a2_dns_and_exact_final_teardown(): void
     {
         [$authority, $bridge] = $this->cliFixture();
@@ -206,6 +521,8 @@ trait TestsMemberCli
         foreach (['source-a', 'source-b', 'setup_cooldown', 'native', 'waiting_initialization'] as $phase)
             $this->assertSame($phase, $step()['native_phase']);
         $first = $this->task(); $originalRequest = $first->payload['request'];
+        [, $callbackCap] = $this->memberCallbackProjection();
+        $this->assertSame('source-a', \Keli\Acceptance\MemberCandidateCallbacks::role($callbackCap, $first));
         $authority->within('round-step', 'control', fn () => app(\App\Services\ServerMachine\Cloud\MachineProvisionService::class)
             ->callback($first->id, $first->installation_id, $this->callbackSecret($first), 'succeeded'));
         $first->refresh()->fill(['dispatched_at' => time() - 30, 'status' => 'waiting_ipv4_probe', 'next_check_at' => time() + 60])->save();
@@ -224,6 +541,9 @@ trait TestsMemberCli
         $this->assertSame('waiting_initialization', $step()['native_phase']);
         $this->assertCount(2, $this->posts);
         $task = $this->task();
+        $this->assertSame('source-a', \Keli\Acceptance\MemberCandidateCallbacks::role($callbackCap, $task));
+        try { \Keli\Acceptance\MemberCandidateCallbacks::role($callbackCap, $first->fresh()); $this->fail('Cleaned A1 admitted'); }
+        catch (\RuntimeException $error) { $this->assertSame('member_candidate_callback_member_changed', $error->getMessage()); }
         $authority->within('round-step', 'control', fn () => app(\App\Services\ServerMachine\Cloud\MachineProvisionService::class)
             ->callback($task->id, $task->installation_id, $this->callbackSecret($task), 'succeeded'));
         $task->refresh()->fill(['dispatched_at' => time() - 2, 'next_check_at' => 0])->save();

@@ -1,0 +1,123 @@
+{
+  "schema": 1,
+  "status": "component_and_full_application_http_passed",
+  "goal_complete": false,
+  "live_ready": false,
+  "main_head_unchanged": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "successful_ci": {
+    "run_id": 44121597707,
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44121597707",
+    "commit": "f09c683a1b6b87a697cc36b22b62899db756a804",
+    "artifact_id": 14346226195,
+    "conclusion": "success",
+    "mode": "agent_http_only",
+    "python": {"tests": 203, "skipped": 1, "seconds": 25.393},
+    "skipped_case": "Explicit standalone cold-loader fixture; this run separately executes the actual cold loader in the full-application fixture.",
+    "php_adjacent": {"tests": 112, "assertions": 755},
+    "php_native": {"tests": 53, "assertions": 20401},
+    "php_source": {"tests": 17, "assertions": 196}
+  },
+  "retained_failures": [
+    {
+      "run_id": 44120097920,
+      "commit": "da5b303b1b371753cae306ff079c564249a00980",
+      "artifact_id": 14345181651,
+      "reason": "systemd unit-state readback rejected before service start",
+      "summary_export": "interrupted by the subsequent cleanup readback error; original traceback retained",
+      "containers_and_fixed_fixture_removed": true
+    },
+    {
+      "run_id": 44121046401,
+      "commit": "86ef6387193a3e4294ea5e9d58e76e2dea7a9fd0",
+      "artifact_id": 14345506400,
+      "reason": "same unit-state readback rejection in the real lifecycle fixture; adding --all alone was insufficient",
+      "failure_summary_retained": true,
+      "fixed_fixture_removed": true
+    }
+  ],
+  "implementation": {
+    "endpoint": "StrictControllerTransport.http_call -> member_http_service.execute",
+    "scoped_transient_unit": true,
+    "persistent_service_installation": false,
+    "start_intent_before_mutation": true,
+    "ambiguous_start_never_replayed": true,
+    "strict_ssh_identity_retained": true,
+    "only_fixed_paths_and_ports": [443, 7001],
+    "php_uid_gid": [65534, 65534],
+    "cpu_quota_percent": 75,
+    "memory_max_bytes": 805306368,
+    "tasks_max": 64,
+    "deadline_reserves_cleanup_seconds": 1200,
+    "stop_marker_before_lock": true,
+    "foreign_units_never_stopped": true,
+    "manager_unavailable_is_not_absence": true,
+    "explicit_unloaded_unit_may_omit_service_properties": true,
+    "private_cleanup_requires_confirmed_stop_and_empty_cgroup": true
+  },
+  "real_linux_lifecycle": {
+    "systemd_nginx_php": true,
+    "test_router": "synthetic denial-only router; application smoke injected only in these three lifecycle cases",
+    "explicit_stop_closes_443_and_7001": true,
+    "supervisor_sigkill_cgroup_cleanup": true,
+    "real_twenty_second_deadline_without_client_stop": true,
+    "restart_after_stop_refused": true,
+    "test_namespace_override": "Only the test adapter adds NetworkNamespacePath for the disposable MySQL container's route-free namespace.",
+    "pid_namespace": "Uses the disposable CI VM's actual systemd manager, not a nested non-systemd PID 1. Network isolation remains in force."
+  },
+  "real_full_application": {
+    "complete_application_and_locked_vendor": true,
+    "cold_package_publication_and_private_import": true,
+    "mysql_migrations": 160,
+    "mysql_tables": 157,
+    "redis_locks_and_cache": true,
+    "service_user_application_smoke": true,
+    "actual_published_supervisor_entry": true,
+    "tls_through_nginx_not_test_proxy": true,
+    "callback_statuses": [401, 200, 200, 409],
+    "agent_api_identity_and_authorization_checks": true,
+    "release_archive_exact_bytes_and_tamper_rejection": true,
+    "stop_cgroup_and_listeners_empty": true,
+    "containers_and_fixed_fixture_removed": true,
+    "external_ipv4_ipv6_routes": false,
+    "cold_publication_summary_note": "The inherited cold-publication flag os_packages_and_tls_daemons_not_installed describes that component only. This CI job installs nginx in the disposable runner and the new service component starts a scoped transient TLS daemon."
+  },
+  "simulated": [
+    "cloud provider and DNS requests",
+    "SSH transport (fixed command checked, local execution adapter)",
+    "credential values",
+    "node archive bytes; no node binary process executed",
+    "certificate issuance (fresh self-signed fixture, no ACME or public DNS)"
+  ],
+  "not_established": [
+    "fresh-host OS package and firewall bootstrap",
+    "public certificate acquisition and live host readiness",
+    "installation port composition into run_execution_round",
+    "whole-host stage failure, stop, expiry and crash recovery including controller-last deletion",
+    "mid-file private write interruption ownership recovery",
+    "A1 cleanup, full real 300-second cooldown and A2 retry in this HTTP-only run; earlier separate native evidence remains separate",
+    "final unarmed LF package with the real pinned node binary and new reviewable live scope"
+  ],
+  "boundaries": {
+    "main_commit_or_push": false,
+    "production_or_credential_bridge_access": false,
+    "cloud_creation": false,
+    "dns_writes": false,
+    "deployment_or_image_release": false,
+    "automatic_switch_changes": false,
+    "business_or_queue_changes": false,
+    "r34_or_previous_live_round_execution": false,
+    "tanzhen_access": false,
+    "unrelated_baseline_files_unchanged": 107
+  },
+  "artifact_sha256": {
+    "application-linux-summary.json": "ace0a093bea290975603b1338e99a748ac5306f0500e40293d5a2a00b767b084",
+    "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "python.log": "5144e2d2b0d7ee0679f09b862cb68cd5b3cdacbd50d85d486e2bdbed6c4967a3",
+    "dns-phpunit.log": "f4a358fc28a871888c08608064355adb3e65d5172755f397c4194d4945378dba",
+    "cli-phpunit.log": "54442ed3a1677823ba43ac2c2565c7d4c59b5b977ed3344fe397cd92dd614baf",
+    "source-phpunit.log": "63b624f9e475afcba75bb9be7b5286e1809cc1b720e0e48e74f1b87c2383c992",
+    "native-entry-linux.log": "deafd050c3d4f6d27343c04a24fff5c1c89fffa8636f13362e7121c834924437",
+    "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+  }
+}

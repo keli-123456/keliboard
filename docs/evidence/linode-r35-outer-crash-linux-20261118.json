@@ -1,0 +1,97 @@
+{
+  "schema": 1,
+  "status": "isolated_outer_prefix_sigkill_recovery_passed",
+  "recorded_date": "2026-11-18",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "main_base_commit": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "live_ready": false,
+  "execution_authorized": false,
+  "goal_complete": false,
+  "main_branch_committed_or_pushed": false,
+  "production_accessed": false,
+  "cloud_instances_created": 0,
+  "cloud_ssh_dns_effects": "simulated",
+  "persistent_automatic_switches_changed": false,
+  "r34_executed": false,
+  "historical_live_round_reexecuted": false,
+  "tanzhen_accessed": false,
+  "successful_run": {
+    "id": 44155366915,
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44155366915",
+    "commit": "c2d8b6404b4d3fa4a34d737716a40bd34663a60a",
+    "mode": "outer_crash",
+    "conclusion": "success",
+    "artifact_id": 14361026970,
+    "python_tests": 228,
+    "python_skipped": 1,
+    "verified": [
+      "Actual MemberRound owns cold control creation, installation, import, control DNS and callback-ready, using DriverJournal files and round_journal flock",
+      "Actual full application, locked vendor, MySQL migrations, Redis, UID65534, systemd/nginx/PHP and self-signed TLS; only infrastructure HTTP/SSH effects are simulated",
+      "A forked Linux process is killed by real SIGKILL after actual callback-ready receipt is persisted but before the outer dispatch acknowledgement is persisted",
+      "Disk retains both the completed inner receipt and outer original pending bootstrap request; a new driver instance reads the disk journal and routes directly to stopped reconciliation",
+      "Exactly one simulated provider control POST; no repeated installation/create, no source/candidate task or native dispatch",
+      "Actual stopped setup evidence export remains verifiable after deleting controller files; server first_error_present is false because this failure is on the host, not a fabricated remote exception",
+      "Host first_error round_uncertain_dispatch and original pending sequence7 remain in closed state; independent cleanup first error cleanup_operator_unconfirmed from lost DELETE acknowledgement is retained",
+      "Exact owned DNS record and five private files are removed before the controller; its fixture is physically removed after DELETE",
+      "Independent exact absence reads are 11 real seconds apart; DELETE occurs once and subsequent cleanup requires no SSH",
+      "Closed driver replay is a no-op, resources_cleaned true and acceptance_passed false",
+      "Disposable MySQL/Redis containers, volumes and fixed fixture are removed; no IPv4/IPv6 external routes"
+    ],
+    "bundle_sha256": "139b5a098941f5a0eb67384f9589dcb1400667b03efe7d680d8aae1cb5c70144",
+    "composer_lock_sha256": "1a7bc62c308529c9edd7f495ca544e93c53933d39570f4eb43fe92c6365f64e1",
+    "application_files": 14166,
+    "stopped_evidence_content_sha256": "5f4f27e8fa941c627c8a5429e27f7f5cb67a63b0da01062292fbacaf6fbac460",
+    "artifact_files": [
+      {
+        "file": "application-linux-summary.json",
+        "sha256": "38255b5d0592b70246c6855251f34ea4c0895d70a622f43fa4d349e97dfb60a9"
+      },
+      {
+        "file": "application-linux.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "file": "cli-phpunit.log",
+        "sha256": "83d9f1855188c38220687410040b712d056ffdbc89c5742c566a8b803a664f3a"
+      },
+      {
+        "file": "dns-phpunit.log",
+        "sha256": "50865def55eed622bca26b32af08fc29f0aff5baf5bdf91301de475799db3db1"
+      },
+      {
+        "file": "outer-round-state.json",
+        "sha256": "280726a9dda32d1d4f62d0a7efd86a139fdabad0374a3a70bad14490a9293538"
+      },
+      {
+        "file": "python.log",
+        "sha256": "d9168f7a6185f1792d3810617ad34ad48dacc98ddc7dbf756f962427e4d771a7"
+      },
+      {
+        "file": "service-cleanup.json",
+        "sha256": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+      },
+      {
+        "file": "setup-stopped-evidence.json",
+        "sha256": "e270c9e3843a188e5e51f542c9190eda2564091bf23fa8cd2127bb9a9f483db9"
+      },
+      {
+        "file": "source-phpunit.log",
+        "sha256": "ed4804c09651e6ecb94b5704891dab6778d84fdeb4153152871ada5b444c9e85"
+      }
+    ]
+  },
+  "evidence_scope_notes": [
+    "Fork is used to inject a real SIGKILL; recovery creates a fresh driver over disk state in the surviving coordinator, not a fresh OS/SSH host",
+    "Raw setup_evidence_export first_error_preserved/pending_mutation_retained refer to host outer state in this case; the hashed remote setup evidence has no server error or uncertain RPC",
+    "No partial source registration, A1/A2 native work or live cloud acceptance is claimed by this run",
+    "Temporary workflow, fixture helper, HTTP fakes and synthetic node bytes are not production implementation or main-branch changes"
+  ],
+  "remaining": [
+    "Complete normal outer-loop native A1/A2 success and cleanup evidence",
+    "Full-application stage failure, stop, expiry and additional crash boundaries",
+    "Concrete standalone operator binding with OS/bootstrap readiness and certificate acquisition",
+    "Final unarmed LF freeze using verified real Linux node archive and locked vendor",
+    "Fresh unexecuted live scope, current readonly preflight list and cleanup proposal for user confirmation"
+  ]
+}

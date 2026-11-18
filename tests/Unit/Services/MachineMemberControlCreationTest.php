@@ -206,4 +206,68 @@ class MachineMemberControlCreationTest extends TestCase
         $this->assertStringNotContainsString('private detail', json_encode($this->journal));
         $this->assertCount(1, Http::recorded(fn ($r) => $r->method() === 'POST'));
     }
+
+    public function test_connection_readback_is_identity_bound_and_does_not_enable_creation(): void
+    {
+        $this->fake(); $created = $this->control()->advance();
+        $ciphertext = $this->journal['control-creation']['request_ciphertext'];
+        config(['machine_provision.allow_live' => false]);
+        $reply = $this->control()->connection();
+        $this->assertSame($created['pin'], $reply['pin']);
+        $this->assertSame(['control_sha256' => Provider::digest($created['pin']), 'host' => '45.79.1.10', 'port' => 22], $reply['connection']);
+        $this->assertSame($reply, $this->control()->connection());
+        $this->assertSame($ciphertext, $this->journal['control-creation']['request_ciphertext']);
+        $this->assertFalse(config('machine_provision.allow_live'));
+        $this->assertCount(1, Http::recorded(fn ($r) => $r->method() !== 'GET'));
+        $this->assertStringNotContainsString('root_pass', json_encode($reply));
+    }
+
+    public function test_connection_never_adopts_changed_address_or_identity(): void
+    {
+        $this->fake(); $this->control()->advance(); $initial = $this->control()->connection();
+        $this->row['ipv4'] = ['45.79.1.11'];
+        try { $this->control()->connection(); $this->fail(); }
+        catch (\RuntimeException $error) { $this->assertSame('member_control_connection_changed', $error->getMessage()); }
+        $this->assertSame($initial['connection'], $this->journal['control-connection']);
+        $this->row['ipv4'] = ['45.79.1.10'];
+        $this->row['created'] = gmdate('Y-m-d\TH:i:s', $this->now + 1);
+        $this->expectExceptionMessage('member_control_identity_changed'); $this->control()->connection();
+    }
+
+    public function test_connection_requires_exactly_one_public_ipv4_and_running_state(): void
+    {
+        $this->fake(); $this->control()->advance();
+        foreach ([['ipv4' => []], ['ipv4' => ['127.0.0.1']], ['ipv4' => ['10.0.0.1']],
+            ['ipv4' => ['45.79.1.10', '45.79.1.11']], ['ipv4' => ['45.79.1.10'], 'status' => 'booting']] as $change) {
+            $this->row = array_replace($this->row, $change);
+            try { $this->control()->connection(); $this->fail(); }
+            catch (\RuntimeException $error) { $this->assertSame('member_control_connection_not_ready', $error->getMessage()); }
+            $this->assertArrayNotHasKey('control-connection', $this->journal);
+        }
+        $this->assertCount(1, Http::recorded(fn ($r) => $r->method() !== 'GET'));
+    }
+
+    public function test_connection_before_create_or_after_stop_or_expiry_has_no_cloud_io(): void
+    {
+        $this->fake();
+        try { $this->control()->connection(); $this->fail(); }
+        catch (\RuntimeException $error) { $this->assertSame('member_control_connection_not_created', $error->getMessage()); }
+        Http::assertNothingSent(); $this->control()->advance(); $this->control()->readback(true);
+        $count = count(Http::recorded());
+        try { $this->control()->connection(); $this->fail(); }
+        catch (\RuntimeException $error) { $this->assertSame('member_control_stopped_or_expired', $error->getMessage()); }
+        $this->now = $this->scope['deadline_at'];
+        try { $this->control()->connection(); $this->fail(); }
+        catch (\RuntimeException $error) { $this->assertSame('member_control_stopped_or_expired', $error->getMessage()); }
+        $this->assertCount($count, Http::recorded());
+    }
+
+    public function test_connection_incomplete_provider_read_is_not_a_guess_or_create_retry(): void
+    {
+        $this->fake(false, true); $this->control()->advance();
+        try { $this->control()->connection(); $this->fail(); }
+        catch (\RuntimeException $error) { $this->assertSame('member_control_connection_unresolved', $error->getMessage()); }
+        $this->assertArrayNotHasKey('control-connection', $this->journal);
+        $this->assertCount(1, Http::recorded(fn ($r) => $r->method() !== 'GET'));
+    }
 }

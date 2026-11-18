@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "status": "isolated_connected_outer_stop_passed",
+  "recorded_date": "2026-11-18",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "main_base_commit": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "live_ready": false,
+  "execution_authorized": false,
+  "goal_complete": false,
+  "main_branch_committed_or_pushed": false,
+  "production_accessed": false,
+  "cloud_instances_created": 0,
+  "persistent_automatic_switches_changed": false,
+  "r34_executed": false,
+  "historical_live_round_reexecuted": false,
+  "tanzhen_accessed": false,
+  "successful_run": {
+    "id": 44167637843,
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44167637843",
+    "commit": "50493153cbd517297a01fde97e3c62af97c2a1fd",
+    "mode": "outer_stop",
+    "conclusion": "success",
+    "artifact_id": 14366329918,
+    "python": {
+      "tests": 243,
+      "skipped": 1
+    },
+    "php": [
+      {
+        "tests": 144,
+        "assertions": 987
+      },
+      {
+        "tests": 53,
+        "assertions": 20401
+      },
+      {
+        "tests": 20,
+        "assertions": 267
+      }
+    ],
+    "verified": [
+      "Actual deferred control endpoint resolution and concrete setup reach callback-ready through the real disk-journal outer driver.",
+      "Full application/MySQL/Redis, 160 migrations, 157 tables, UID65534 and systemd/nginx/PHP/self-signed TLS are real; provider HTTP, SSH and DNS side effects are simulated.",
+      "Explicit MemberRound.step(stop=True) after callback readiness prevents source creation, native grant issuance and native dispatch; one control POST total.",
+      "Outer host preserves round_stop_requested and no pending mutation. Remote setup evidence does not invent a server error: stop is recorded by the host.",
+      "Actual stopped setup exporter preserves local immutable evidence, repeated digest and provider state, and remains verifiable after the controller fixture is removed.",
+      "One owned DNS record and five private files are removed before the controller. Simulated DELETE acknowledgement loss is reconciled independently without replay; absence confirmed twice ten real seconds apart.",
+      "Outer journal closes with resources_cleaned true and acceptance_passed false, and closed replay has no effects. Separate cleanup_operator_unconfirmed error remains retained.",
+      "Dedicated fixture and containers are removed; no external routes."
+    ],
+    "bundle_sha256": "c22c3e2cee2832c68fed23e4b5e4e6eb4c0bb175d6e9605a3c9e28a8131570c7",
+    "composer_lock_sha256": "1a7bc62c308529c9edd7f495ca544e93c53933d39570f4eb43fe92c6365f64e1",
+    "stopped_evidence_content_sha256": "e37a41e1630e3ade3b8414fe45aeefb3615fc8e6eb4f9317aa3c47b64aeb80f9",
+    "artifact_files": [
+      {
+        "file": "application-linux-summary.json",
+        "sha256": "5fd3308ddbac35a4391c310f1fcff5684ea167836dedd25919023de49e7e689e"
+      },
+      {
+        "file": "application-linux.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "file": "cli-phpunit.log",
+        "sha256": "c34e49d924939118843b5b1bb4e8c504c4a2f19696f24116fc7619b6adf1c9cd"
+      },
+      {
+        "file": "dns-phpunit.log",
+        "sha256": "b855bef13814ef67dcc5bf541e2dacdb8327fdfd7011baa1559cc8695e294615"
+      },
+      {
+        "file": "outer-round-state.json",
+        "sha256": "bbfe86e53f4aead39250ffaf56f378ffcb81a572d1257ccf96d8ced14ebea183"
+      },
+      {
+        "file": "python.log",
+        "sha256": "c6e6a2998ac00a09076a7b910a47b663f53c31129fb2f35c7b3b8941194221fa"
+      },
+      {
+        "file": "service-cleanup.json",
+        "sha256": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+      },
+      {
+        "file": "setup-stopped-evidence.json",
+        "sha256": "a36db7451eaf7094ffe41fad8d79b98314877057f2581520c4184b17dcda1d88"
+      },
+      {
+        "file": "source-phpunit.log",
+        "sha256": "ed6356b3560d4ceea61c738ffddee60d82f5ee111942af535e67bd63f53f22a4"
+      }
+    ]
+  },
+  "limitations": [
+    "This case explicitly requests driver stop; it is not an OS SIGTERM injection or an elapsed deadline test.",
+    "No source or native task exists in this prefix. Native stop concurrency and SIGKILL are covered by separately recorded cases, not attributed to this case.",
+    "Cloud, SSH, DNS and telemetry remain simulated; synthetic node binary is not executed and OS bootstrap/certificate issuance are not covered.",
+    "The additive run_connected_round helper and latest installation failure matrix are separately tested; this passing commit predates them.",
+    "Goal remains active pending remaining input-wiring/boundary audit, final unarmed real-node/vendor freeze and new unexecuted live proposal."
+  ]
+}

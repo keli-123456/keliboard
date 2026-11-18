@@ -8,22 +8,25 @@ class MachineCloudCatalog
 {
     public function read(int $group, string $provider, bool $refresh = false): array
     {
-        return app(MachineCloudGroupService::class)->withGroup($group, function () use ($group, $provider, $refresh) {
-            $pool = app(MachineFailoverCredentials::class)->pool($group, $provider);
-            $key = 'machine-cloud:catalog:' . $pool['fingerprint'];
-            $cached = Cache::get($key);
-            if (!$refresh && is_array($cached) && ($cached['expires_at'] ?? 0) > time()) return $cached;
-            Cache::forget($key);
-            $account = MachineCloudAccount::query()->findOrFail($pool['accounts']->first()->id);
-            $client = match ($provider) { 'linode' => app(LinodeClient::class), 'digitalocean' => app(DigitalOceanClient::class), 'vultr' => app(VultrClient::class) };
-            $options = $client->catalog($account);
-            if (app(MachineFailoverCredentials::class)->pool($group, $provider)['fingerprint'] !== $pool['fingerprint']) throw new CloudException('credential_group_changed');
-            $result = ['provider' => $provider, 'credential_group_id' => $group, 'pool_fingerprint' => $pool['fingerprint'],
-                'source_account_id' => $account->id, 'checked_at' => time(), 'expires_at' => time() + 600,
-                'creation_provider_supported' => $provider === 'linode', 'inventory_guaranteed' => false] + $options;
-            $result['fingerprint'] = hash('sha256', json_encode($result, JSON_THROW_ON_ERROR));
-            Cache::put($key, $result, 600); return $result;
-        });
+        return app(MachineCloudGroupService::class)->withGroup($group, fn () => $this->snapshot($group, $provider, $refresh));
+    }
+
+    private function snapshot(int $group, string $provider, bool $refresh = false): array
+    {
+        $pool = app(MachineFailoverCredentials::class)->pool($group, $provider);
+        $key = 'machine-cloud:catalog:' . $pool['fingerprint'];
+        $cached = Cache::get($key);
+        if (!$refresh && is_array($cached) && ($cached['expires_at'] ?? 0) > time()) return $cached;
+        Cache::forget($key);
+        $account = MachineCloudAccount::query()->findOrFail($pool['accounts']->first()->id);
+        $client = match ($provider) { 'linode' => app(LinodeClient::class), 'digitalocean' => app(DigitalOceanClient::class), 'vultr' => app(VultrClient::class) };
+        $options = $client->catalog($account);
+        if (app(MachineFailoverCredentials::class)->pool($group, $provider)['fingerprint'] !== $pool['fingerprint']) throw new CloudException('credential_group_changed');
+        $result = ['provider' => $provider, 'credential_group_id' => $group, 'pool_fingerprint' => $pool['fingerprint'],
+            'source_account_id' => $account->id, 'checked_at' => time(), 'expires_at' => time() + 600,
+            'creation_provider_supported' => $provider === 'linode', 'inventory_guaranteed' => false] + $options;
+        $result['fingerprint'] = hash('sha256', json_encode($result, JSON_THROW_ON_ERROR));
+        Cache::put($key, $result, 600); return $result;
     }
 
     public function validate(array $input): array
@@ -31,6 +34,22 @@ class MachineCloudCatalog
         $pool = app(MachineFailoverCredentials::class)->pool($input['credential_group_id'], $input['provider']);
         $catalog = Cache::get('machine-cloud:catalog:' . $pool['fingerprint']);
         if (!is_array($catalog) || ($catalog['expires_at'] ?? 0) <= time() || ($catalog['fingerprint'] ?? null) !== $input['catalog_fingerprint']) throw new CloudException('catalog_expired');
+        return $this->template($input, $catalog);
+    }
+
+    public function validateSavedTemplate(\App\Models\MachineFailoverPolicy $policy): array
+    {
+        if (!$policy->exists || $policy->credential_group_id === null) throw new CloudException('config_changed');
+        // The selection is persisted, but the editor's ten-minute snapshot is not
+        // a permanent execution lease. Recheck current provider options without editing the policy.
+        // Observer/provision callers already hold the group lock. The immutable pool
+        // fingerprint and post-read check fence a concurrent edit without nesting it.
+        $catalog = $this->snapshot($policy->credential_group_id, $policy->provider);
+        return $this->template($policy->only(['region', 'size', 'image']), $catalog);
+    }
+
+    private function template(array $input, array $catalog): array
+    {
         $regions = array_column($catalog['regions'], null, 'id'); $sizes = array_column($catalog['sizes'], null, 'id'); $images = array_column($catalog['images'], null, 'id');
         $size = $sizes[$input['size']] ?? null; $image = $images[$input['image']] ?? null;
         if (!isset($regions[$input['region']]) || !$size || !$image || !in_array($input['region'], $size['regions'], true)

@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "status": "component_passed_not_live_ready",
+  "date": "2026-11-17",
+  "purpose": "Revoke native callback admission before RPC lock drain, with no premature stop acknowledgement",
+  "main_base": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "tested_commit": "b3bd56a3502519f53f53b76066e5bdc856d1c608",
+  "linux_run": 44058176147,
+  "linux_url": "https://github.com/keli-123456/keliboard/actions/runs/44058176147",
+  "artifact": 14316908808,
+  "changes": [
+    "Share exact RPC envelope and grant validation between pre-lock admission and locked dispatch.",
+    "The fixed CLI parses the bounded request and checks configuration before provider boot.",
+    "An authorized stop revokes callback admission before trying the native journal lock; busy or in-flight operations still prevent a successful acknowledgement.",
+    "Invalid stop identities, extra fields and non-control roles cannot revoke admission.",
+    "Existing lock permissions, grant/hash/environment protections, expired recovery and immutable stop handling remain enforced."
+  ],
+  "local": {
+    "python": {"tests": 61, "passed": 50, "linux_skipped": 11},
+    "php_cli": {"tests": 10, "assertions": 743},
+    "php_native_bridge": {"tests": 402, "assertions": 16575, "seconds": 349.049, "peak_memory_mb": 176}
+  },
+  "linux": {
+    "status": "passed",
+    "python_tests": 133,
+    "cold_fixed_cli_tests": 11,
+    "php_cli": {"tests": 13, "assertions": 886},
+    "php_setup_catalog_dns": {"tests": 100, "assertions": 683},
+    "php_source": {"tests": 17, "assertions": 196},
+    "full_application_vendor_mysql_redis": true,
+    "tls_http_service_uid": 65534,
+    "actual_fixed_cli_stop": true,
+    "actual_candidate_callback_authority_held_in_separate_process": true,
+    "actual_native_rpc_lock_held_simultaneously": true,
+    "invalid_stop_does_not_revoke": true,
+    "public_stop_precedes_rpc_lock": true,
+    "new_http_callbacks_and_reports_denied": true,
+    "no_success_while_callback_or_rpc_lock_held": true,
+    "sigterm_releases_callback_lock": true,
+    "successful_stop_after_drain_is_idempotent": true,
+    "runtime_grant_and_callback_capability_bytes_unchanged": true,
+    "post_stop_native_cleanup_regression_passed": true,
+    "real_sigkill_delete_recovery_and_separated_absence_reads": true,
+    "task_history_and_first_error_retained": true,
+    "fixed_fixture_removed": true,
+    "containers_removed": true,
+    "external_ipv4_or_ipv6_routes": false
+  },
+  "artifact_hashes": {
+    "application-linux-summary.json": "2bf2e452aa0774aefc81fe49ee4d836817f0b109b5406d2113a5d8bd05d4621e",
+    "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cli-phpunit.log": "8a494c341a08cfec50a0aac4c6db06a08a6450c4eba58619201fce36f21821a4",
+    "dns-phpunit.log": "13245396306d1b67ec00ba350ddbf50a723297dbaeab3eeae08ecc1d85454563",
+    "native-entry-linux.log": "9cbbd2b9ff0cf67c9e9c3ad021c9f0cdf4385a5a4a28f27a5348052b60a65cfe",
+    "python.log": "fba9f067b49ceffb22d381a461b3491eca860c890b5d69159112f852dd651ce3",
+    "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+    "source-phpunit.log": "e5d87d467258fba476d48b6d4211b70b9d486b579042eed5d40003dd809a5d89"
+  },
+  "boundaries": {
+    "production_access": false,
+    "main_commit_or_push": false,
+    "cloud_instances_created": 0,
+    "cloud_ssh_dns": "simulated",
+    "tanzhen_access": false,
+    "automatic_switches_changed": false,
+    "r34_executed": false,
+    "live_ready": false
+  },
+  "limitations": [
+    "The in-flight callback is held through the real application callback capability in a CLI subprocess, not a suspended HTTP request. Subsequent HTTP callback/report rejection is exercised over TLS.",
+    "Node bytes and telemetry are synthetic; no actual node binary or cloud machine runs.",
+    "DNS/private final cleanup, A1 failure/300-second retry/A2 whole-round orchestration and concrete host installation composition remain separate pending work.",
+    "This component and the prior task cleanup record do not establish live readiness or authorize a new real-machine run."
+  ]
+}

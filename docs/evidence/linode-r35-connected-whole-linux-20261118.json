@@ -1,0 +1,168 @@
+{
+  "schema": 1,
+  "status": "isolated_deferred_connection_whole_round_passed",
+  "recorded_date": "2026-11-18",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "main_base_commit": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "live_ready": false,
+  "execution_authorized": false,
+  "goal_complete": false,
+  "main_branch_committed_or_pushed": false,
+  "production_accessed": false,
+  "cloud_instances_created": 0,
+  "persistent_automatic_switches_changed": false,
+  "r34_executed": false,
+  "historical_live_round_reexecuted": false,
+  "tanzhen_accessed": false,
+  "implementation": [
+    "MemberConnectedSetup constructs existing installation, remote setup and execution ports only after original control creation identity is persisted and actual readback resolves its endpoint.",
+    "The exact endpoint, control pin, SSH key hashes, TLS/settings/import material and scope are bound in the host journal before any upload; resumed cleanup uses the sealed address without a new creation permission or provider discovery.",
+    "Construction has no network effects. Unknown prior effects, lost binding, changed material, stopped/expired stages and rollback fail closed; local-only empty cleanup requires absence of every known remote dispatch marker.",
+    "Repeated stopped cleanup can reuse confirmed snapshots after controller deletion without new SSH. OS package readiness, approved host keys and TLS material are explicit prerequisites, not acquired by this class."
+  ],
+  "successful_run": {
+    "id": 44167633308,
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44167633308",
+    "commit": "50493153cbd517297a01fde97e3c62af97c2a1fd",
+    "mode": "outer_whole",
+    "conclusion": "success",
+    "artifact_id": 14366279746,
+    "python": {
+      "tests": 243,
+      "skipped": 1
+    },
+    "php": [
+      {
+        "tests": 144,
+        "assertions": 987
+      },
+      {
+        "tests": 53,
+        "assertions": 20401
+      },
+      {
+        "tests": 20,
+        "assertions": 267
+      }
+    ],
+    "verified": [
+      "Actual outer driver, disk journal and exclusive lock own all ten initialization stages, actual native retry and controller-last cleanup.",
+      "Setup constructs no placeholder SSH host. The endpoint comes from the exact control provider readback, with strict existing SSH verification and immutable key/material binding.",
+      "Full application and locked vendor, real MySQL/Redis, 160 migrations, 157 tables, UID65534, systemd/nginx/PHP and self-signed TLS run in the disconnected Linux fixture.",
+      "Source A/B each register three fresh synthetic HTTP/TLS reports. Source creation gap is 301 real seconds.",
+      "A1 retains three complete failures and exactly one deletion; two absence reads are thirteen seconds apart. A2 dispatch follows confirmed cleanup by 302 real seconds, exceeding the unchanged 300-second cooldown.",
+      "One edge-a DNS update occurs; B task, identity and DNS remain unchanged.",
+      "Three owned DNS records and six private files are removed before controller deletion. Independent cleanup deletes the control fixture once and confirms absence twice ten seconds apart without further SSH.",
+      "Outer journal is closed, first error and pending request are null, resources_cleaned and isolated acceptance are true, closed replay is a no-op.",
+      "Stopped application evidence is locally read back and its content hash independently verified. Dedicated containers and fixture are removed; no external routes."
+    ],
+    "bundle_sha256": "31d2d50309ee948d23eb2e0f8ed1630447059f20a87e33d295895d501db58797",
+    "composer_lock_sha256": "1a7bc62c308529c9edd7f495ca544e93c53933d39570f4eb43fe92c6365f64e1",
+    "application_files": 14169,
+    "stopped_evidence_content_sha256": "3a8952beac38d8af7892cb660bb7bfce03d8d0330b41785c0c671608dac6883f",
+    "artifact_files": [
+      {
+        "file": "application-linux-summary.json",
+        "sha256": "4ce9d6206c79ed36707f06381d5e254a7fe6ee99ffc86e8af635623a36cee5c7"
+      },
+      {
+        "file": "application-linux.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "file": "cli-phpunit.log",
+        "sha256": "d2fa1f0efecf7e2988ec3500c54124b2d5600637459aafc80ff6361e437ce14f"
+      },
+      {
+        "file": "dns-phpunit.log",
+        "sha256": "544056c6d1c055c8eeb53a670936ba98f01d5de92a997d1e377b91a8a85e968a"
+      },
+      {
+        "file": "native-retry-evidence.json",
+        "sha256": "485e12c5ff2ff1f40554d9f0466e8d393ae8ae120735907cb76032523ce99941"
+      },
+      {
+        "file": "native-retry-transitions.json",
+        "sha256": "ad0e177a949e9f827a6ab56b01372d92befc78ca8a503ea8d4e3119ca0acbcfd"
+      },
+      {
+        "file": "outer-round-state.json",
+        "sha256": "6aa66cb26e98e192d11d8c677430c6d39bc95ecdd3f7287507a27eae83783434"
+      },
+      {
+        "file": "python.log",
+        "sha256": "02b7277c7179bb51a44b67c72f85c2fabbd5ed86bda0ffb494303ba0834443db"
+      },
+      {
+        "file": "service-cleanup.json",
+        "sha256": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+      },
+      {
+        "file": "source-phpunit.log",
+        "sha256": "48ab6d3bd95b5348c2d039c96af465dcc8db3a0a01b38557ade2ee53244e8dc8"
+      },
+      {
+        "file": "whole-initialization-transitions.json",
+        "sha256": "5d0bc8bf9824e3d1de5229b5094300caa110fe0324ca92e367228726c9974e0a"
+      },
+      {
+        "file": "whole-stopped-evidence.json",
+        "sha256": "64148e9054010e02e841e688c0fc7adf9b9a2c891a1beed6a481101b69ccb320"
+      }
+    ]
+  },
+  "prior_failed_attempt": {
+    "id": 44166364631,
+    "commit": "ab1df920434a4fb991360aac032ec1e4e41e9da4",
+    "artifact_id": 14364559643,
+    "conclusion": "failure",
+    "reason": "CI switched only one transport.execute object from the installation fixture to the full-app fixture. Concrete deferred assembly reconstructed later transports from the original callback, resulting in fixture_setup_scope at source advance.",
+    "fix": "The CI helper propagates its changed byte-boundary callback to the deferred setup factory. Production checks and scope validation were not relaxed.",
+    "not_reclassified_as_success": true,
+    "fixture_and_containers_removed": true,
+    "artifact_files": [
+      {
+        "file": "application-linux-summary.json",
+        "sha256": "e170a97f52b9d5509394139d3a51f7ad7686144ff6a6a9690e239c0b50047ce3"
+      },
+      {
+        "file": "application-linux.log",
+        "sha256": "e4a0389e56128950118f5d83a3870ab3c664576a7e20e708f662f9c5e5c4216a"
+      },
+      {
+        "file": "cli-phpunit.log",
+        "sha256": "ad2229395f05881cfa81c273931358a44702fb76cc627c8c484eac390c108109"
+      },
+      {
+        "file": "dns-phpunit.log",
+        "sha256": "61c1dee6a5828ade608a5ee4fa1ec209fa2ea03e89e334295b652afc2ddb6bc8"
+      },
+      {
+        "file": "python.log",
+        "sha256": "9e32b7faad1dbf53fd3883e9a6a5de3dd83fcd8f963f40f71e991c6ffc147a5a"
+      },
+      {
+        "file": "service-cleanup.json",
+        "sha256": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+      },
+      {
+        "file": "source-phpunit.log",
+        "sha256": "947628b4ab57e341ed83340ff66be0d841ce281959af89f1c720eb6ab5bd4c99"
+      }
+    ]
+  },
+  "limitations": [
+    "Provider HTTP, SSH and DNS side effects remain simulated. No real cloud, production credential bridge, production database or live DNS was accessed.",
+    "Node ELF and agent/Ping payloads are synthetic and the binary is not executed; this does not establish real installation, WAN reachability or live cutover.",
+    "The additive run_connected_round entry at a8b14576 was not part of this full run; its separate lock/constructor regressions must not be reported as another whole-app pass.",
+    "Legacy helper-local markers remain in original artifacts. Final native teardown is owned and proved by the outer host, not the earlier retry-only helper.",
+    "The temporary workflow and CI-specific scripts are not main-branch changes."
+  ],
+  "remaining": [
+    "Verify connected stop and latest entry-wiring Linux runs and retain their exact evidence scopes.",
+    "Audit remaining concrete native/cleanup input wiring and complete-app timeout/creation-crash boundaries without claiming an exhaustive all-stage cross-product.",
+    "Freeze final unarmed LF runtime with pinned real node and locked vendor after implementation and regression gates.",
+    "Prepare a fresh unexecuted live proposal, explicit OS/TLS prerequisites, minimum read-only preflight and cleanup checklist for user confirmation; historic authorization is not reused."
+  ]
+}

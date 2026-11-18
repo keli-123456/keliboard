@@ -17,22 +17,55 @@ import staging
 
 RUNTIME = ('member_retry_driver.php', 'member_source_registry.php', 'member_controller_bridge.php',
            'member_transport_entry.php', 'member_transport.py', 'driver_journal.py', 'member_bundle.py',
-           'member_cli_authority.php', 'member_round_bridge.php', 'member_cli.py',
-           'member_auxiliary.py', 'member_round.py', 'member_runtime_bundle.py', 'application_bundle.py', 'staging.py',
+           'member_cli_authority.php', 'member_round_bridge.php', 'member_native_controller.php', 'member_cli.py', 'member_evidence.py',
+           'member_auxiliary.py', 'member_round.py', 'member_runtime_bundle.py', 'application_bundle.py', 'staging.py', 'worker.py',
            'member_initialization.py', 'member_auxiliary_bindings.py', 'member_source_initialization.php',
            'member_provider_bindings.php', 'aliyun_cleanup.php', 'member_control_creation.php',
-           'member_setup_bindings.py', 'member_assembly.py', 'member_execution.py', 'member_installation.py')
+           'member_operator_store.php', 'member_operator_provider.php', 'member_operator_entry.php', 'member_operator_transport.py', 'member_prepared_provider.py',
+           'member_operator_creation.php', 'member_operator_creation_entry.php', 'member_control_transport.py',
+           'member_setup_bindings.py', 'member_connected_setup.py', 'member_connected_runtime.py', 'member_assembly.py', 'member_execution.py', 'member_remote_setup.py', 'member_host_setup.py', 'member_installation.py',
+           'member_environment.py', 'member_application.py', 'member_host_installation.py', 'member_install_bootstrap.py', 'member_http_service.py', 'member_application_bootstrap.php', 'member_application_entry.php', 'member_private_cleanup.py',
+           'member_dns_initialization.php', 'member_native_dns_receipt.php', 'member_source_configuration.php',
+           'member_prerequisite_import.php', 'member_import_entry.php', 'member_bootstrap_controller.php',
+           'member_setup_authority.php', 'member_candidate_callbacks.php', 'member_native_grant.php', 'member_setup_dns.php', 'member_callback_entry.php', 'member_callback_request.php', 'member_setup_controller.php', 'member_setup_entry.php')
 TESTS = ('tools/machine-acceptance/test_member_transport.py', 'tools/machine-acceptance/test_member_bundle.py',
          'tests/Support/TestsMemberTransport.php', 'tools/machine-acceptance/test_member_round.py',
          'tools/machine-acceptance/test_member_runtime_bundle.py', 'tools/machine-acceptance/test_member_linux.py',
          'tests/Support/TestsMemberCli.php', 'tools/machine-acceptance/test_member_cli.py',
+         'tools/machine-acceptance/test_member_evidence.py',
          'tests/Support/TestsMemberInitialization.php', 'tools/machine-acceptance/test_member_initialization.py',
          'tests/Unit/Services/MachineMemberProviderBindingsTest.php',
+         'tests/Unit/Services/MachineMemberOperatorProviderTest.php',
+         'tests/Unit/Services/MachineMemberOperatorCreationTest.php',
+         'tools/machine-acceptance/test_member_control_transport.py',
+         'tools/machine-acceptance/test_member_operator_transport.py',
+         'tools/machine-acceptance/test_member_prepared_provider.py',
          'tests/Unit/Services/MachineMemberControlCreationTest.php',
          'tools/machine-acceptance/test_member_assembly.py', 'tools/machine-acceptance/test_member_assembly_linux.py',
          'tools/machine-acceptance/test_member_execution.py',
-         'tools/machine-acceptance/test_member_installation_linux.py')
-FILES = tuple('tools/machine-acceptance/' + name for name in RUNTIME) + TESTS
+         'tools/machine-acceptance/test_member_remote_setup.py',
+         'tools/machine-acceptance/test_member_host_setup.py',
+         'tools/machine-acceptance/test_member_connected_setup.py',
+         'tools/machine-acceptance/test_member_connected_runtime.py',
+         'tools/machine-acceptance/test_member_installation_linux.py',
+         'tools/machine-acceptance/test_member_host_installation.py',
+         'tools/machine-acceptance/test_member_http_service.py',
+         'tools/machine-acceptance/test_member_private_cleanup.py',
+         'tools/machine-acceptance/test_member_environment.py',
+         'tests/Unit/Services/MachineMemberDnsInitializationTest.php',
+         'tests/Unit/Services/MachineMemberSourceConfigurationTest.php',
+         'tests/Unit/Services/MachineMemberPrerequisiteImportTest.php',
+         'tests/Unit/Services/MachineMemberBootstrapControllerTest.php',
+         'tests/Unit/Services/MachineMemberSetupAuthorityTest.php',
+         'tests/Unit/Services/MachineMemberApplicationInstallTest.php',
+         'tests/Unit/Services/MachineMemberCallbackRequestTest.php',
+         'tests/Unit/Services/MachineProviderGroupsTest.php')
+FILES = tuple('tools/machine-acceptance/' + name for name in RUNTIME) + TESTS + (
+    'tests/Support/TestsMemberRetryDriver.php',
+    'app/Services/ServerMachine/Cloud/MachineNativeDnsAdmission.php',
+    'app/Services/ServerMachine/Dns/MachineDnsRecordSetExecution.php',
+    'app/Services/ServerMachine/Cloud/MachineCloudCatalog.php',
+    'app/Services/ServerMachine/Cloud/MachineFailoverPolicyService.php')
 
 
 def require(value, reason):
@@ -118,7 +151,8 @@ def verify(path):
                     and b'\r' not in raw, 'bundle_file_changed')
         entry = archive.extractfile('tests/Unit/Services/MachineFailoverNativeBridgeTest.php').read()
         require(hashlib.sha256(entry).hexdigest() == manifest['test_entry_sha256'], 'bundle_test_entry_changed')
-        require(not any(Path(name).name in ('authorization.json', 'member-runtime-scope.json') for name in archive.getnames()),
+        require(not any(Path(name).name in ('authorization.json', 'member-runtime-scope.json',
+                    'member-setup-grant.json', 'member-setup-stop.json', 'member-setup-issuance.json') for name in archive.getnames()),
                 'bundle_authority_refused')
     return manifest
 

@@ -4,7 +4,7 @@ import re
 
 from member_auxiliary import MemberAuxiliary, digest
 from member_cli import RUN
-from member_initialization import STAGES
+from member_initialization import POLLING, STAGES
 from member_transport import require
 
 
@@ -16,7 +16,7 @@ class MemberExecutionSetup:
     Native grants must be revoked before any final resource snapshot is collected.
     """
     OWNERS = {'control-install': 'installation', 'runtime-install': 'installation',
-              'private-import': 'installation', 'sources-initialize': 'sources',
+              'private-import': 'installation', 'control-dns': 'dns', 'callback-ready': 'installation', 'sources-initialize': 'sources',
               'dns-initialize': 'dns', 'native-grant': 'authority', 'native-ready': 'authority'}
 
     def __init__(self, *, scope, installation, sources, dns, authority, load, save, guard):
@@ -49,7 +49,7 @@ class MemberExecutionSetup:
             require(prior.get('reply') is not None, 'transport_execution_readback_required')
             if prior['reply'].get('completed') is True:
                 return copy.deepcopy(prior['reply'])
-            require(stage in ('sources-initialize', 'native-ready'), 'transport_execution_replay_refused')
+            require(stage in POLLING, 'transport_execution_replay_refused')
         self.guard(stage)
         self.persist(key, {'request': request, 'reply': None})
         # Only the projected reply is journaled. Raw API logs or secret data never are.
@@ -57,7 +57,7 @@ class MemberExecutionSetup:
         require(isinstance(reply, dict) and reply.get('request_sha256') == digest(request),
                 'transport_execution_reply_changed')
         if reply.get('waiting') is True:
-            require(stage in ('sources-initialize', 'native-ready')
+            require(stage in POLLING
                     and reply == {'request_sha256': digest(request), 'waiting': True},
                     'transport_execution_wait_invalid')
         else:
@@ -89,7 +89,12 @@ class MemberExecutionSetup:
         return {'request_sha256': digest(request), 'resolved': True}
 
     def collect_scope(self):
-        pieces = {name: port.snapshot() for name, port in self.ports.items()}
+        return self.scope_from_snapshots({name: port.snapshot() for name, port in self.ports.items()})
+
+    @staticmethod
+    def scope_from_snapshots(pieces):
+        require(isinstance(pieces, dict) and set(pieces) == {'installation', 'sources', 'dns', 'authority'},
+                'cleanup_execution_snapshot_invalid')
         roles, auxiliary = {}, dict(run_id=RUN, control=None, records=[], faults=[], private_files=[], requests=[])
         allowed = {'installation': {'private_files', 'requests'}, 'sources': {'roles', 'faults', 'requests'},
                    'dns': {'records', 'requests'}, 'authority': {'private_files', 'requests'}}

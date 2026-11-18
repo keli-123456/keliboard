@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "recorded_at_beijing": "2026-11-18",
+  "main_base_commit": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "tested_temporary_commit": "16aa04881fadd5366b610f99b310337605db2168",
+  "run_id": 44180980471,
+  "url": "https://github.com/keli-123456/keliboard/actions/runs/44180980471",
+  "artifact_id": 14371962990,
+  "conclusion": "success",
+  "summary_sha256": "7182a12a4eba0423801e12f04cc04b3c15322c73349744eaaa2c32434a455ea3",
+  "evidence_content_sha256": "914b20f0da1c50aa8a610505c982a6b5280c0fbbe4c4861864e1c4766beb4aa9",
+  "scenario": "stop after source A has registered and sent three fresh TLS reports, before source B creation or native grant",
+  "actually_exercised": {
+    "complete_application_mysql_redis_http_tls": true,
+    "service_uid": 65534,
+    "source_task_and_installation_callback": true,
+    "telemetry_payloads_synthetic": true,
+    "actual_partial_source_inspect_delete_rpc": true,
+    "source_exact_absence_gap_seconds": 10,
+    "source_deleted_before_controller": true,
+    "b_not_created": true,
+    "native_grant_absent": true,
+    "prepared_cleanup_material_from_explicit_parent_approval": true,
+    "provider_ownership_checked_by_actual_php_adapter": true,
+    "controller_delete_acknowledgement_lost": true,
+    "controller_delete_calls": 1,
+    "controller_exact_absence_gap_seconds": 10,
+    "dns_records_removed": 1,
+    "private_files_removed": 5,
+    "first_error": "round_stop_requested",
+    "evidence_readback_after_controller_removal": true,
+    "closed_replay_noop": true,
+    "resources_cleaned": true,
+    "acceptance_passed": false
+  },
+  "tests": {
+    "python": {"tests": 263, "skipped": 1},
+    "dns_php": {"tests": 144, "assertions": 993},
+    "source_php": {"tests": 21, "assertions": 288},
+    "native_php": {"tests": 53, "assertions": 20401}
+  },
+  "retained_failed_attempt": {
+    "run_id": 44179720586,
+    "commit": "c6362f8ca9648737471d59d59835600278281641",
+    "artifact_id": 14373120033,
+    "reason": "The CI HTTP provider whitelist omitted DELETE from the new source-delete-a/b host RPC path. Actual runtime consequently retained the source as unconfirmed and refused to close cleanup.",
+    "correction": "The fixture now matches the exact source-delete operation and source resource ID. Production identity, authority and deletion checks were not weakened.",
+    "isolated_service_cleanup_confirmed": true
+  },
+  "limitations": [
+    "All cloud, SSH and provider DNS side effects are simulated; there were no real cloud resources or real Ping measurements.",
+    "Only source A was created in this partial-initialization scenario; this is not the A1/A2 retry success scenario.",
+    "Later full creation-scope loading and original-credential binding changes are not covered by this commit.",
+    "Fault lists were empty; injected ICMP restoration is not verified.",
+    "The node binary is a non-executed fixture in this CI run."
+  ],
+  "production_access": false,
+  "deployment": false,
+  "live_ready": false,
+  "automatic_switches_changed": false,
+  "r34_or_historical_live_round_executed": false,
+  "tanzhen_accessed": false
+}

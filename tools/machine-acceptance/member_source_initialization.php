@@ -8,6 +8,10 @@ use App\Services\ServerMachine\Cloud\MachineProvisionService;
 use App\Services\ServerMachine\Cloud\MachineIntentJson;
 use App\Services\ServerMachine\Cloud\MachineIsolatedAcceptance;
 use App\Services\ServerMachine\Cloud\ProvisionPlan;
+use App\Services\ServerMachine\Cloud\MachineCandidateCleanupClient;
+use App\Services\ServerMachine\Cloud\MachineProvisionProviders;
+use App\Models\MachineCloudAccount;
+use Illuminate\Support\Facades\Cache;
 
 /** Setup service calls before a complete native grant exists. No setting or queue configuration writes. */
 final class MemberSourceInitialization
@@ -151,6 +155,70 @@ final class MemberSourceInitialization
             });
     }
 
+    /** Read exact retained receipts, including incomplete bootstrap, without advancing tasks. */
+    public function resourcePins(): array
+    {
+        $pins = [];
+        foreach ($this->scope['sources'] as $role => $source) {
+            $intent = $this->intent($role); $task = $this->existing($role);
+            if ($task === null) {
+                self::need($intent === null, 'queue_readback_required');
+                continue;
+            }
+            self::need($intent !== null, 'queue_intent_missing');
+            if (!$task->dispatched_at) {
+                self::need(!$task->external_id && !$task->provider_created_at && empty($task->public_ips), 'task_changed');
+                continue;
+            }
+            self::need(is_string($task->external_id) && preg_match('/^[1-9][0-9]{0,15}$/D', $task->external_id) === 1
+                && $task->provider_created_at && !empty($task->public_ips), 'create_receipt_unknown');
+            $pins[$role] = ['task_id' => $task->id, 'external_id' => $task->external_id];
+        }
+        foreach (['task_id', 'external_id'] as $field)
+            self::need(count(array_unique(array_column($pins, $field))) === count($pins), 'roles_collide');
+        return $pins;
+    }
+
+    /** Stopped, local observations only. Unknown creation is never an absence receipt. */
+    public function evidence(): array
+    {
+        return $this->within('source-cleanup', 'source-a', function (): array {
+            $roles = []; $resolved = true; $externalIds = [];
+            foreach (array_keys($this->scope['sources']) as $role) {
+                try {
+                    $intent = $this->intent($role); $task = $this->existing($role);
+                    self::need($task === null || $intent !== null, 'queue_intent_missing');
+                    self::need($task !== null || $intent === null, 'queue_readback_required');
+                    $pin = null;
+                    if ($task !== null) {
+                        self::need(is_string($task->id)
+                            && preg_match('/^[a-f0-9-]{36}$/D', $task->id) === 1, 'task_changed');
+                        if (!$task->dispatched_at) {
+                            self::need(!$task->external_id && !$task->provider_created_at && empty($task->public_ips), 'task_changed');
+                        } else {
+                            self::need(is_string($task->external_id)
+                                && preg_match('/^[1-9][0-9]{0,15}$/D', $task->external_id) === 1
+                                && $task->provider_created_at && !empty($task->public_ips), 'create_receipt_unknown');
+                            $pin = ['task_id' => $task->id, 'external_id' => $task->external_id];
+                            self::need(!in_array($task->external_id, $externalIds, true), 'roles_collide');
+                            $externalIds[] = $task->external_id;
+                        }
+                    }
+                    $roles[$role] = ['resolved' => true, 'task_id' => $task?->id,
+                        'classification' => $task === null ? 'no_queue_intent' : ($pin === null ? 'not_dispatched' : 'retained_create_receipt'),
+                        'resource' => $pin, 'diagnostic' => null];
+                } catch (\Throwable $error) {
+                    $resolved = false;
+                    $roles[$role] = ['resolved' => false, 'task_id' => null, 'classification' => 'unresolved',
+                        'resource' => null, 'diagnostic' => MemberRoundBridge::safeDiagnostic([
+                            'class' => (new \ReflectionClass($error))->getShortName(),
+                            'file' => basename($error->getFile()), 'line' => $error->getLine()])];
+                }
+            }
+            return ['resolved' => $resolved, 'roles' => $roles, 'cloud_absence_not_asserted' => true];
+        });
+    }
+
     public function registeredScope(array $base): array
     {
         return $this->within('sources-pin', 'control', function () use ($base): array {
@@ -198,8 +266,12 @@ final class MemberSourceInitialization
                 self::need($this->intent($role) !== null, 'queue_intent_missing');
                 self::need(!in_array($task->status, ['failed', 'cancelled', 'outcome_unknown', 'needs_review'], true), 'source_failed');
                 if (!$task->external_id || $task->bootstrap_state !== 'succeeded'
-                    || !in_array($task->status, ['waiting_ipv4_probe', 'awaiting_acceptance', 'accepted'], true))
+                    || !in_array($task->status, ['waiting_ipv4_probe', 'awaiting_acceptance', 'accepted'], true)) {
+                    if ($task->next_check_at > time())
+                        return ['ready' => false, 'waiting' => true, 'role' => $role, 'reason' => 'native_wait',
+                            'retry_at' => $task->next_check_at];
                     return ['action' => 'process', 'role' => $role];
+                }
                 $pins = [];
                 foreach ($this->scope['sources'] as $peerRole => $peer) {
                     $peerTask = $this->existing($peerRole);
@@ -234,5 +306,96 @@ final class MemberSourceInitialization
             'external_id' => $task->external_id, 'status' => $task->status,
             'bootstrap_state' => $task->bootstrap_state, 'native_label' => $task->payload['request']['label'],
             'health_or_forwarding_claimed' => false];
+    }
+
+    /** Recovery never queues/processes a task or manufactures a provisioning receipt. */
+    public function cleanup(string $role, bool $delete = true): array
+    {
+        $this->requestId($role);
+        return $this->within('source-cleanup', $role, function () use ($role, $delete): array {
+            $accountId = $this->scope['sources'][$role]['plan']['account_id'];
+            return Cache::lock('machine-cloud:account:' . $accountId, 120)->block(2, function () use ($role, $delete): array {
+                $intent = $this->intent($role); $task = $this->existing($role);
+                if ($task === null) {
+                    self::need($intent === null, 'queue_readback_required');
+                    self::need(!Task::query()->where('machine_id', $this->scope['sources'][$role]['plan']['machine_id'])->exists(), 'unowned_task');
+                    return ['complete' => true, 'classification' => 'never_queued'];
+                }
+                self::need($intent !== null, 'queue_intent_missing');
+                if (!$task->dispatched_at) {
+                    self::need(!$task->external_id && !$task->provider_created_at && empty($task->public_ips), 'task_changed');
+                    return ['complete' => true, 'classification' => 'never_dispatched', 'task_id' => $task->id];
+                }
+                $key = 'cleanup-' . $role;
+                $pin = ['task_id' => $task->id, 'installation_id' => $task->installation_id,
+                    'account_id' => $task->account_id, 'account_revision' => $task->account_revision,
+                    'dispatched_at' => $task->dispatched_at, 'marker' => $task->marker,
+                    'payload_sha256' => MemberProviderBindings::digest($task->payload)];
+                $state = ($this->load)($key);
+                self::need($state === null || ($state['pin'] ?? null) === $pin, 'cleanup_identity_changed');
+                if ($state === null) $state = ['pin' => $pin, 'receipt' => null, 'delete_intent' => false, 'absence_at' => null, 'read_pending' => false];
+                try {
+                    if ($state['receipt'] === null) {
+                        if ($task->external_id && $task->provider_created_at && $task->public_ips) {
+                            $receipt = $task->only(['external_id', 'provider_created_at', 'public_ips']);
+                        } else {
+                            $account = MachineCloudAccount::query()->findOrFail($task->account_id);
+                            self::need($account->revision === $task->account_revision, 'account_changed');
+                            $provider = app(MachineProvisionProviders::class)->client($account, $task->payload['plan']);
+                            $remote = $provider->reconcile($account, $task->payload['request'], $task->dispatched_at);
+                            // An empty inventory cannot prove that an uncertain POST created nothing.
+                            if ($remote === null) return ['complete' => false, 'classification' => 'create_receipt_unknown'];
+                            $receipt = array_intersect_key($remote, array_flip(['external_id', 'provider_created_at', 'public_ips']));
+                        }
+                        self::need(isset($receipt['external_id']) && !in_array($receipt['external_id'], $this->scope['baseline_ids'], true), 'cleanup_outside_scope');
+                        foreach (['external_id', 'provider_created_at', 'public_ips'] as $field)
+                            self::need(empty($task->{$field}) || $task->{$field} === ($receipt[$field] ?? null), 'cleanup_identity_changed');
+                        $state['receipt'] = $receipt;
+                        $this->cleanupSave($key, $state);
+                    }
+                    foreach (['external_id', 'provider_created_at', 'public_ips'] as $field)
+                        self::need(empty($task->{$field}) || $task->{$field} === ($state['receipt'][$field] ?? null), 'cleanup_identity_changed');
+                    // Keep recovered cloud identity in the cleanup journal, not the task:
+                    // a readback is not a successful create/bootstrap/registration receipt.
+                    $bound = clone $task; $bound->forceFill($state['receipt']);
+                    $client = app(MachineCandidateCleanupClient::class);
+                    if ($state['read_pending']) $state['absence_at'] = null;
+                    $state['read_pending'] = true;
+                    $this->cleanupSave($key, $state);
+                    $remote = $client->inspect($bound); $now = time();
+                    $state['read_pending'] = false;
+                    if ($remote === null) {
+                        $first = $state['absence_at'];
+                        if (!is_int($first) || $now < $first) $state['absence_at'] = $now;
+                        $this->cleanupSave($key, $state);
+                        return ['complete' => is_int($first) && $now >= $first + 10,
+                            'classification' => 'exact_absence', 'task_id' => $task->id, 'external_id' => $bound->external_id,
+                            'retry_at' => $state['absence_at'] + 10];
+                    }
+                    $state['absence_at'] = null;
+                    $this->cleanupSave($key, $state);
+                    if (!$delete) return ['complete' => false, 'classification' => 'present',
+                        'task_id' => $task->id, 'external_id' => $bound->external_id];
+                    if ($state['delete_intent']) return ['complete' => false, 'classification' => 'delete_readback_required'];
+                    $client->delete($bound, function () use ($key, &$state, $role, $task): void {
+                        self::need($this->existing($role)?->getAttributes() === $task->getAttributes(), 'cleanup_identity_changed');
+                        $state['delete_intent'] = true;
+                        $this->cleanupSave($key, $state);
+                    });
+                    return ['complete' => false, 'classification' => 'delete_dispatched'];
+                } catch (\Throwable $error) {
+                    // An intervening read failure breaks the consecutive-absence proof.
+                    $state['absence_at'] = null;
+                    try { $this->cleanupSave($key, $state); } catch (\Throwable) { }
+                    throw $error;
+                }
+            });
+        });
+    }
+
+    private function cleanupSave(string $key, array $state): void
+    {
+        ($this->save)($key, $state);
+        self::need(($this->load)($key) === $state, 'cleanup_journal_unconfirmed');
     }
 }

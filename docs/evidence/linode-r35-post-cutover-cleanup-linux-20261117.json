@@ -1,0 +1,122 @@
+{
+  "schema": 1,
+  "status": "component_passed_not_live_ready",
+  "date": "2026-11-17",
+  "purpose": "Post-A2-cutover native task and DNS teardown with durable host handoff and retained first-error evidence",
+  "main_base": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "tested_commit": "484f3dfc4dcf07ba20f8b864763bbda8e8a52d62",
+  "linux_run": 44084843593,
+  "linux_url": "https://github.com/keli-123456/keliboard/actions/runs/44084843593",
+  "artifact": 14330153204,
+  "changes": [
+    "Route final host auxiliary DNS cleanup through authenticated native publication receipts after A2 cutover. Do not reuse source-IP setup snapshots.",
+    "Persist and read back the exact native DNS completion binding before private teardown. Restart can reuse that confirmation after .env is removed.",
+    "Retain lineage-checked diagnostics for dispatched candidates without external identity; status/deletion still require an exact ID.",
+    "Inject source DELETE and Aliyun DELETE reply loss; reconstruct the actual bound host transport and inspect exact resources without repeat deletion."
+  ],
+  "linux": {
+    "real_components": [
+      "Full application and vendor",
+      "Dedicated MySQL and Redis with no outside routes",
+      "Root native/setup RPC controllers and unchanged grants",
+      "HTTP/TLS callbacks and reports under UID65534",
+      "Host durable journals and stopped evidence archive"
+    ],
+    "simulated_components": [
+      "Cloud create/delete/read side effects",
+      "SSH byte boundary",
+      "Aliyun DNS API and telemetry"
+    ],
+    "node_binary_executed": false,
+    "python": {
+      "tests": 141,
+      "seconds": 4.2
+    },
+    "native_component": {
+      "tests": 53,
+      "assertions": 20401
+    },
+    "adjacent_php": {
+      "tests": 103,
+      "assertions": 694
+    },
+    "source_php": {
+      "tests": 17,
+      "assertions": 196
+    },
+    "cold_entry_python": {
+      "tests": 11
+    },
+    "native_retry": {
+      "tasks": 4,
+      "attempts": 2,
+      "first_error": null,
+      "a1_failure_count": 3,
+      "required_failures": 3,
+      "a1_absence_times": [
+        1794919894,
+        1794919907
+      ],
+      "confirmed_at": 1794919907,
+      "retry_at": 1794920207,
+      "a2_dispatched_at": 1794920214,
+      "real_cooldown_seconds": 300,
+      "dns_updates": 1,
+      "b_unchanged_during_retry_and_cutover": true
+    },
+    "post_cutover": {
+      "source_candidate_exact_deletes_total": 4,
+      "dns_exact_deletes_total": 3,
+      "no_repeat_delete": true,
+      "task_history_unchanged": true,
+      "attempt_history_unchanged": true,
+      "absence_spacing_minimum_seconds": 10,
+      "b_removed_only_after_stop": true,
+      "reply_loss_reconciled": true,
+      "original_dns_create_receipts_retained": true,
+      "setup_first_error": "ConnectionException",
+      "driver_first_error": null,
+      "native_dns_confirmation_before_private_delegate": true,
+      "host_archive_restart_readback": true,
+      "private_delegate_explicitly_pending": true,
+      "controller_delete_not_claimed": true
+    },
+    "inner_evidence_sha256": "6a0cdac0b9e2bf2c233a45d2f13dde8a265271159f97c1c89cb98b9da53a03df",
+    "inner_hash_verified_after_download": true,
+    "service_containers_removed": true,
+    "fixed_fixture_removed": true,
+    "external_ipv4_routes": false,
+    "external_ipv6_routes": false
+  },
+  "artifact_sha256": {
+    "application-linux-summary.json": "93388e00a764ef0d601723503cf15d9dcbd295a527074f25014496d376cd7187",
+    "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cli-phpunit.log": "9b5a397f759befd2c82e516f95835ba3ea66ae21f6663bdf7a48e2be3522a224",
+    "dns-phpunit.log": "219634ea3b6d032550885890abbe1af245b9f97936c3135f9b1d37a742207630",
+    "native-entry-linux.log": "3258066068e1ef059ed27f00559b5a74f6212b46190339a196851c76efab91a8",
+    "native-retry-evidence.json": "fbe2c6ebd07483be42832a25da084243fc031159a8a6855e0a95b21b033ebafd",
+    "native-retry-teardown-evidence.json": "283c43f85a8cf5f637f912c3ac58b07a2170a222142e66f94b987a5ece5b5835",
+    "native-retry-transitions.json": "b5cb22d3fbff5ad0d5c802a6afe4b4c86470b0fbc90dadfbf926e24b8b77d460",
+    "python.log": "cec01083860e34a3909733c1cb370554172de475ef36113a6c9eaa3cd7d7baa6",
+    "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+    "source-phpunit.log": "d3d115b5f66436b6c429c440bf60ce639bcc18c390cf7e3d4b64ef7e4973cb27"
+  },
+  "boundaries": {
+    "production_reads_or_writes": false,
+    "production_credentials": false,
+    "cloud_instances_created": 0,
+    "live_dns_writes": false,
+    "main_committed_or_pushed": false,
+    "automatic_switches_changed": false,
+    "r34_executed": false,
+    "historical_live_round_reopened": false
+  },
+  "remaining": [
+    "The subsequent private-file implementation is not included in this tested commit; its Linux run is separate.",
+    "Private journals/database disposition and controller-last teardown still require concrete host composition.",
+    "Complete installation/TLS ports and stage failure/expiry/create-crash coverage remain to be assembled.",
+    "Final unarmed real-node/vendor freeze and a fresh live scope/preflight/cleanup proposal remain pending.",
+    "The active goal is not complete; this component does not authorize live execution."
+  ]
+}

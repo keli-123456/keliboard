@@ -1,0 +1,98 @@
+{
+  "schema": 1,
+  "status": "isolated_component_passed",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "recorded_date": "2026-11-18",
+  "main_base_commit": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "live_ready": false,
+  "execution_authorized": false,
+  "main_branch_committed_or_pushed": false,
+  "production_accessed": false,
+  "cloud_instances_created": 0,
+  "cloud_ssh_dns_effects": "simulated",
+  "persistent_automatic_switches_changed": false,
+  "r34_executed": false,
+  "historical_live_round_reexecuted": false,
+  "tanzhen_accessed": false,
+  "runs": [
+    {
+      "id": 44125925183,
+      "url": "https://github.com/keli-123456/keliboard/actions/runs/44125925183",
+      "commit": "d868f73b4fbf798148cb25f89accc6688d3fd1a4",
+      "mode": "host_port_only",
+      "conclusion": "success",
+      "artifact_id": 14347826434,
+      "python_tests": 214,
+      "python_skipped": 1,
+      "skip_reason": "Separate explicit cold-entry subprocess fixture; actual cold command also executes in the full application port test.",
+      "php_tests": [
+        {"suite": "dns_and_application", "tests": 112, "assertions": 755},
+        {"suite": "native_cli", "tests": 53, "assertions": 20401},
+        {"suite": "source_initialization", "tests": 17, "assertions": 196}
+      ],
+      "verified": [
+        "MemberExecutionSetup invokes MemberHostSetup for all four installation stages",
+        "Actual strict transport commands execute locally through the simulated SSH boundary",
+        "Cold upload, runtime publication and environment configuration execute in fresh Linux subprocesses",
+        "Complete application and locked vendor: 160 migrations, 157 tables, actual dedicated MySQL and Redis",
+        "Actual non-root service UID 65534 checks writable-state and read-only executable paths",
+        "Explicit synthetic import permit bound to application machine identity, bundle and deadline",
+        "Actual private prerequisite import; no provider creation or DNS writes",
+        "Actual scoped systemd/nginx/PHP/TLS start and readback, with real application smoke checks",
+        "Execution reconciliation seals authority before stopping HTTP and cold installation",
+        "Five exact private-file pins removed and read back absent, including environment and TLS key",
+        "Port reconstruction after private teardown does not reexecute setup or require removed application secrets",
+        "Stopped execution rejects stage replay; HTTP ports close and cgroup is empty",
+        "No external IPv4 or IPv6 routes; owned fixture and service containers removed"
+      ],
+      "artifact_sha256": {
+        "application-linux-summary.json": "aa3b6a4d4ae305fdf2f39ee7011bd56190e958ef11e6a6c41ee0a45256d7f77a",
+        "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "python.log": "e1a589eb052d506119f387877a853cc810ab49f2aa09e6e4800d40b4c6498535",
+        "dns-phpunit.log": "0dddeb8f06293d081870ec5b877bd2f909433dec252134fb69e9561b8df81df2",
+        "cli-phpunit.log": "40e837d28155a9117f0ae5690fb80d21df78dd9e3b1e4f8b38a8a7db8b55f9ae",
+        "source-phpunit.log": "114d17df230759a434172476d9d31e87736d9a02b800cd81051ce3770b0c1e8e",
+        "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+      }
+    },
+    {
+      "id": 44126546818,
+      "url": "https://github.com/keli-123456/keliboard/actions/runs/44126546818",
+      "commit": "e9d743a565126fa5cdb41973fcc3c98a23b99ba0",
+      "mode": "cleanup_regression",
+      "conclusion": "success",
+      "artifact_id": 14348315794,
+      "python_tests": 137,
+      "python_skipped": 0,
+      "php_tests": 15,
+      "php_assertions": 66,
+      "verified": [
+        "Actual configure interrupted before application.json while preserving the already written environment",
+        "Cold stop and exact environment removal without an application receipt or PHP import lock",
+        "Cold writer and existing PHP writer locks must be drained before removal",
+        "An existing incomplete import directory is not accepted as absence",
+        "Changed machine, scope, stop, SSH binding or untracked grant prevents cleanup",
+        "Ten simulated installation suboperation acknowledgement losses preserve first error and refuse replay",
+        "Explicit import permission, predecessor, expiry and material drift checks",
+        "Real cold loader subprocess fixture runs with no external network routes"
+      ],
+      "artifact_sha256": {
+        "cleanup-summary.json": "407668554ab7f22c90b8b92c3688ef2e016733406d8dc317c4f6f5dc1adc226e",
+        "cleanup-python.log": "20c49ef4ff0b3576592c91459f39bcf50a6d0d507d30edbfd248ce42db1d5258",
+        "cleanup-php.log": "7aae3417580580ff40b21b7fa11378248e7fd25716ad450aff09e81ec736e312"
+      }
+    }
+  ],
+  "limitations": [
+    "This is an installation-port component test, not the entire MemberRoundAssembly host campaign",
+    "Control creation and control-DNS predecessor receipts are explicit synthetic fixtures",
+    "SSH host material, cloud credentials and node bytes are synthetic; no node process is installed or executed",
+    "TLS uses a fresh self-signed fixture; actual certificate acquisition is not exercised",
+    "OS/bootstrap readiness and package installation are prerequisites, not performed by MemberHostSetup",
+    "A1 cleanup, real 300-second cooldown, A2 retry and B isolation have prior separate evidence, not this composed run",
+    "Controller-last provider cleanup and every whole-entry failure/stop/crash path still require composition",
+    "Termination inside a partial private-file write still fails closed; it is not proved recoverable",
+    "No final real-node/vendor package freeze or fresh live execution authorization is established"
+  ]
+}

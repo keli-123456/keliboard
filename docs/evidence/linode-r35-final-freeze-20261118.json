@@ -1,0 +1,114 @@
+{
+  "schema": 1,
+  "status": "local_and_isolated_preparation_delivered_not_live_ready",
+  "recorded_date": "2026-11-18",
+  "main_base_commit": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "compared_linux_commit": "0d358b04c867575666bd30988a7fc0a0ea3506c7",
+  "application": {
+    "local_path": "C:/Users/Administrator/Documents/keli/.codex-audit/r35-final-unarmed-20261118/application.tar.gz",
+    "sha256": "a3ded04620f2d8834e558729e25b47865c0d13623627f7fc53f875837e6b0e13",
+    "bytes": 11810308,
+    "explicit_overlay_files": 105,
+    "overlay_matches_tested_commit": true,
+    "shells_lf_verified": 13,
+    "other_files_equal_main_baseline": true
+  },
+  "runtime": {
+    "local_path": "C:/Users/Administrator/Documents/keli/.codex-audit/r35-final-unarmed-20261118/runtime.tar.gz",
+    "sha256": "7277014db926b6f3a4402cb04c3959773884649634253e4ffe7910bf44cb8eb7",
+    "bytes": 49900277,
+    "files": 14151,
+    "per_file_manifest": "runtime-manifest.json in archive",
+    "dependency_packages": 157,
+    "composer_lock_sha256": "1a7bc62c308529c9edd7f495ca544e93c53933d39570f4eb43fe92c6365f64e1",
+    "dependencies_match_lock_version_and_reference": true,
+    "execution_authorized": false,
+    "live_ready": false
+  },
+  "node": {
+    "component": "kelinode-rs",
+    "version": "v0.1.387",
+    "source_commit": "3c707fc89b16e2895727c24251b6076252d5cab0",
+    "input_archive_sha256": "e9012da846fc6b5404ea842bf2e8cf19e1883eac8f2f2d517a961940c018e689",
+    "binary_sha256": "654a8344d22bc3373b114345d49d5f6a2804be98e6f51bc2ce85e309fbda0be0",
+    "format": "ELF64 little-endian x86-64",
+    "new_compilation": false,
+    "binary_executed_in_this_full_application_suite": false
+  },
+  "verification": {
+    "local_python": {
+      "tests": 330,
+      "skipped": 73,
+      "failures": 0
+    },
+    "python_files_compile_checked": 53,
+    "php_syntax_files_checked": 52,
+    "php_syntax_failures": 0,
+    "unchanged_unrelated_files": 107,
+    "main_head_unchanged": true,
+    "main_index_empty": true,
+    "temporary_ci_workflow_or_helper_in_archive": false,
+    "original_baseline_workflows_preserved": true,
+    "private_authority_or_credentials_included": false
+  },
+  "evidence": [
+    {
+      "record": "linode-r35-prepared-cleanup-linux-20261118.json",
+      "run": 44181642713,
+      "scope": "Full connected outer round, complete app and real isolated services; A1 exact absence 13s, A2 after 302s, B unchanged, controller last; provider effects and telemetry simulated."
+    },
+    {
+      "record": "linode-r35-partial-source-cleanup-linux-20261118.json",
+      "run": 44180980471,
+      "scope": "Stop after A registration, before B/native grant; exact source cleanup RPC, prepared provider material and independent controller cleanup."
+    },
+    {
+      "record": "linode-r35-native-stop-linux-20261117.json",
+      "run": 44058176147,
+      "scope": "Real Linux contention, SIGTERM lock release and native stop/recovery component."
+    },
+    {
+      "record": "linode-r35-outer-crash-linux-20261118.json",
+      "run": 44155366915,
+      "scope": "Actual SIGKILL after callback receipt, outer disk recovery and original request/first-error retention; no mutation replay."
+    },
+    {
+      "record": "linode-r35-prerequisite-import-linux-20261117.json",
+      "run": 44025605870,
+      "scope": "Real elapsed import authority expiry, not elapsed full native lease."
+    },
+    {
+      "record": "linode-r35-connected-entry-linux-20261118.json",
+      "run": 44172359452,
+      "scope": "Public constructor and expiry/reply-loss component regressions; whole-round coordinator invokes same concrete ports separately."
+    }
+  ],
+  "preparation_boundary": {
+    "review_document": "../machine-r35-preparation-review-20261118.md",
+    "historical_r35_authorization_expired": true,
+    "frozen_package_identifiers": "historical R35; unarmed review only",
+    "fresh_draft_id": "keli-accept-20261118-r36-f192cd78",
+    "fresh_draft_authorized": false,
+    "controlled_fault_injection_and_restoration_binding": false,
+    "fresh_draft_injection_allowed": false,
+    "remaining_before_any_live_dispatch": [
+      "User review of fresh non-injecting scope, or separately implement and validate controlled fault binding before proposing an injectable scope.",
+      "New run-ID/domain binding regression and refreeze; do not modify/reexecute historical frozen rounds.",
+      "Separately authorized current credential/inventory/capability/DNS ownership preflight.",
+      "Explicit operator approvals, strict verified SSH host keys, valid publicly trusted TLS material and disposable OS readiness.",
+      "Actual cloud/SSH/node/public-DNS acceptance and cleanup remain unproved. Healthy source/A1 ends the reduced experiment without claiming retry coverage."
+    ]
+  },
+  "prior_local_audit_failure": "The first audit incorrectly rejected an original baseline workflow by filename. Both frozen archives were preserved; the corrected check compares every non-overlay file byte-for-byte with the immutable main baseline.",
+  "boundaries": {
+    "production_access": false,
+    "real_cloud_creates": 0,
+    "real_ssh_or_dns_calls": false,
+    "main_commit_or_push": false,
+    "deployment": false,
+    "image_or_node_release": false,
+    "persistent_switch_changes": false,
+    "r34_or_old_live_round": false,
+    "tanzhen_access": false
+  }
+}

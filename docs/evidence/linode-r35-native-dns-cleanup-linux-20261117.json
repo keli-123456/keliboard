@@ -1,0 +1,111 @@
+{
+  "schema": 1,
+  "status": "component_passed_not_live_ready",
+  "date": "2026-11-17",
+  "purpose": "Stopped native DNS cleanup with immutable original receipts and authenticated A2 publication pins",
+  "main_base": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "tested_commit": "8f57c4ba19b2ee1d80fbcd249c7a07bb6dc9b1b2",
+  "linux_run": 44063717454,
+  "linux_url": "https://github.com/keli-123456/keliboard/actions/runs/44063717454",
+  "artifact": 14319244296,
+  "changes": [
+    "Add stopped-only round-dns-cleanup RPC; elapsed expiry permits recovery but never re-enables creation, DNS publication or rotation.",
+    "Use the existing setup journal and provider cleanup implementation without widening source-only setup mutation authority.",
+    "Retain initial DNS creation receipts. A2 alternatives require exact native execution/member/task lineage, authenticated publication binding, original record ID/marker, and the recorded provider wire request.",
+    "Prepared publication does not authorize the candidate address. Foreign values, altered markers, identity drift and uncertain ownership remain unresolved.",
+    "Persist an immutable selected cleanup pin and receipt digest before deletion. Repeat reads and resumed cleanup retain the same pin.",
+    "Reuse core publication authentication and action-journal validation without granting mutation or requiring fresh health after stop.",
+    "Extend protected runtime/application hashes and the unarmed bundle overlay for the cleanup dependencies."
+  ],
+  "local": {
+    "phpFocused": {
+      "tests": 36,
+      "assertions": 16447,
+      "seconds": 84.49
+    },
+    "providers": {
+      "tests": 15,
+      "assertions": 66
+    },
+    "python": {
+      "tests": 63,
+      "seconds": 21.917
+    },
+    "noProduction": true,
+    "phpFull": {
+      "tests": 406,
+      "assertions": 25043,
+      "seconds": 393.827,
+      "memory_mb": 178
+    },
+    "phpDnsAdjacent": {
+      "tests": 61,
+      "assertions": 157
+    }
+  },
+  "linux": {
+    "status": "passed",
+    "python_tests": 134,
+    "cold_fixed_cli_tests": 11,
+    "php_cli_and_native_dns": {
+      "tests": 17,
+      "assertions": 9362
+    },
+    "php_setup_catalog_dns": {
+      "tests": 103,
+      "assertions": 694
+    },
+    "php_source": {
+      "tests": 17,
+      "assertions": 196
+    },
+    "full_application_vendor_mysql_redis": true,
+    "tls_http_service_uid": 65534,
+    "actual_shared_root_rpc_and_setup_journal": true,
+    "actual_host_bound_transport": true,
+    "no_native_dns_cutover_in_this_component": true,
+    "exact_signed_provider_deletes_simulated": 3,
+    "original_dns_create_receipts_preserved": true,
+    "host_restart_retains_selected_pins": true,
+    "lost_delete_ack_reconciled_without_repeat": true,
+    "other_owned_records_still_cleaned_after_first_error": true,
+    "setup_first_error_retained": true,
+    "two_absence_reads_at_least_ten_seconds_apart": true,
+    "task_history_retained": true,
+    "native_task_sigkill_and_lost_ack_regression_passed": true,
+    "concurrent_stop_regression_passed": true,
+    "persistent_gates_changed": false,
+    "node_fixture_synthetic_not_executed": true,
+    "fixed_fixture_removed": true,
+    "containers_removed": true,
+    "external_ipv4_or_ipv6_routes": false
+  },
+  "artifact_hashes": {
+    "application-linux-summary.json": "3538af798efa3d62847d931a71b392cd9781395c8ab950184e40d0b518054339",
+    "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cli-phpunit.log": "1850b9582d169b51e1aee2d1965ec4946b97978c3b23a3d9fdb38e8807c5cfc5",
+    "dns-phpunit.log": "6ff8054b93314faa800ce94480a2264f889db2e38198f5b87b1ba0e5788dd05b",
+    "native-entry-linux.log": "16cf87c3ef11e45c7c739756b1e7d1a26727333cfdadf0047cc40efa5fd50de0",
+    "python.log": "28e0c6b43613d14c1cd9d5a83f2fdf973f57c3e9f382692598e8232ebd9b6ad0",
+    "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+    "source-phpunit.log": "e4780c47cc632f91508fc0d976b16097dce0792a0bc544d62af66535cfeb5771"
+  },
+  "boundaries": {
+    "production_access": false,
+    "main_commit_or_push": false,
+    "cloud_instances_created": 0,
+    "cloud_ssh_dns": "simulated",
+    "tanzhen_access": false,
+    "automatic_switches_changed": false,
+    "r34_executed": false,
+    "live_ready": false
+  },
+  "limitations": [
+    "The signed A2 cutover receipt is exercised through actual application services in SQLite unit tests with simulated provider responses. Linux full-application DNS teardown in this run only covers initial records, not an A2 cutover.",
+    "The Linux candidate reports and node bytes are synthetic; no actual node binary or cloud instance runs.",
+    "Private-material removal, controller-last teardown, complete host installation composition, native create-phase crash/elapsed expiry and assembled A1-to-A2 retry remain pending.",
+    "The recorded native_rpc_last_error is the intentionally injected source-delete reply loss, not an unhandled failure.",
+    "This component does not establish live readiness, complete the active goal or authorize a new real-machine run."
+  ]
+}

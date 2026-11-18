@@ -1,0 +1,129 @@
+{
+  "schema": 1,
+  "status": "component_passed_not_live_ready",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "scope": {
+    "full_application_and_locked_vendor": true,
+    "real_isolated_mysql_redis_http_tls_and_service_uid": true,
+    "cloud_ssh_dns": "simulated",
+    "node_binary_fixture": "synthetic_not_executed",
+    "candidate_callback_http_full_application_tested": false
+  },
+  "diagnostic_runs": [
+    {
+      "ci_run": 44034829364,
+      "tested_commit": "0169ecc9acb247de6bb69b746812e7c61d53170e",
+      "artifact_id": 14307173011,
+      "status": "failed",
+      "reason": "source_plan_blocked",
+      "cleanup_confirmed": true
+    },
+    {
+      "ci_run": 44036719147,
+      "tested_commit": "c3f9c65437dc0e73e05c64a7e5f7d5466614be8c",
+      "artifact_id": 14307797568,
+      "status": "failed",
+      "reason": "catalog_expired",
+      "cleanup_confirmed": true
+    },
+    {
+      "ci_run": 44038635575,
+      "tested_commit": "682dfc7ed419af57bd3a836e64415e6df230f36f",
+      "artifact_id": 14309002398,
+      "status": "failed",
+      "reason": "test_expected_native_readback_omitted_uncertainty_fields",
+      "native_grant_issued": true,
+      "cleanup_confirmed": true
+    }
+  ],
+  "changes": [
+    "Root-only native grant derives from actual initialized sources, DNS readback and current threshold-reaching observer evidence.",
+    "The native grant inherits the original setup deadline; readback cannot extend the deadline or reissue a different grant.",
+    "Candidate callback capability is a non-secret, bounded derivative; incomplete publication denies execution while preserving recovery readback.",
+    "Saved-policy runtime selection refreshes expired provider catalog without editing the policy or weakening editor snapshot checks.",
+    "Runtime catalog reads use a before/after credential-pool fingerprint check and do not recursively acquire the callers group lock.",
+    "Unavailable or removed provider options, provider permission failures and credential changes remain blocking."
+  ],
+  "local_verification": {
+    "provider_groups_and_native_bridge": {
+      "tests": 428,
+      "assertions": 16816,
+      "seconds": 348.835,
+      "peak_memory_mb": 178,
+      "php_memory_limit": "512M"
+    },
+    "policy_observer_replacement_and_isolated_acceptance": {
+      "tests": 152,
+      "assertions": 1251
+    },
+    "setup_authority": {
+      "tests": 9,
+      "assertions": 52
+    },
+    "python_bundle_runtime_transport": {
+      "tests": 49
+    },
+    "earlier_full_run": "incomplete_at_local_PHP_default_128MiB_limit_not_counted_as_pass"
+  },
+  "linux_verification": {
+    "ci_run": 44039507614,
+    "ci_url": "https://github.com/keli-123456/keliboard/actions/runs/44039507614",
+    "tested_commit": "2bb20b9f5e1edb0be614e7aeca04943b27d2a7f4",
+    "artifact_id": 14310255259,
+    "status": "passed",
+    "python_tests": 124,
+    "setup_catalog_dns_tests": 100,
+    "setup_catalog_dns_assertions": 683,
+    "native_cli_callback_component_tests": 12,
+    "native_cli_callback_component_assertions": 859,
+    "source_initialization_tests": 17,
+    "source_initialization_assertions": 196,
+    "composer_lock_sha256": "1a7bc62c308529c9edd7f495ca544e93c53933d39570f4eb43fe92c6365f64e1"
+  },
+  "verified": {
+    "actual_observer_and_native_cli": true,
+    "three_failure_samples_from_actual_http_synthetic_client_reports": true,
+    "second_cooldown_real_wait_seconds": 305,
+    "source_b_not_observed": true,
+    "original_window_inherited": true,
+    "lost_ack_readback_same_grant": true,
+    "no_provider_writes_or_candidate_tasks_during_grant": true,
+    "expired_editor_catalog_refreshed_without_policy_rewrite": true,
+    "private_grant_service_user_denied": true,
+    "bounded_public_candidate_derivative": true,
+    "incomplete_callback_publication_blocks_execution_preserves_recovery": true,
+    "stop_revokes_native_and_callback_authorities": true,
+    "setup_source_and_dns_cleanup_sigkill_regression": true,
+    "real_absence_read_spacing_at_least_seconds": 10,
+    "isolated_queues_empty": true,
+    "containers_and_fixed_fixture_removed": true,
+    "external_ipv4_or_ipv6_routes": false
+  },
+  "artifact_sha256": {
+    "application-linux-summary.json": "d460768861389b75935eca29e4b1e3d3129d5eb8f6e2d39b4454b4a28d4fd692",
+    "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cli-phpunit.log": "8223d7a66edf58cd6c1052dfdf99d89172a04b7c41136f88723310bc64591de6",
+    "dns-phpunit.log": "9d051c584e0545c29218ad9d4c338e4aafca6c056b3bd8c9944d12e450d9b06a",
+    "python.log": "ec874790729ee41e88e7c8e1df7d57ac1e2ae9927db88a082077b30aa80ba4e6",
+    "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+    "source-phpunit.log": "7d3ad3865f37081c7973268121010293c7c56d1020767a8ce3d0194ebb147790"
+  },
+  "remaining": [
+    "Candidate HTTP/TLS callbacks and reports against the full application after actual native task creation with simulated providers.",
+    "Explicit handoff of source-only setup cleanup to native candidates and changed DNS ownership.",
+    "Assembled A1 exact cleanup, real 300-second retry cooldown, A2 retry and B isolation.",
+    "Concrete installation/TLS-ready host ports and complete round composition.",
+    "Native expiry and creation-phase crash boundaries.",
+    "Final unarmed LF runtime with pinned real node binary, locked vendor provenance and renewed live preflight/cleanup checklist."
+  ],
+  "boundaries": {
+    "cloud_instances_created": 0,
+    "production_database_or_credentials_accessed": false,
+    "main_committed_or_pushed": false,
+    "deployment_or_image_release": false,
+    "persistent_automatic_switches_changed": false,
+    "tanzhen_accessed": false,
+    "r34_or_old_live_round_executed": false,
+    "live_ready": false
+  }
+}

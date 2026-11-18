@@ -1,0 +1,338 @@
+<?php
+declare(strict_types=1);
+
+namespace Keli\Acceptance;
+
+use App\Models\MachineProvisionTask as Task;
+use App\Services\ServerMachine\Cloud\MachineIntentJson;
+
+/** Actual source setup command binding. Caller closes the handle after one RPC. */
+final class MemberSetupController
+{
+    public const SOURCE_RECOVERY = ['source-inspect-a', 'source-inspect-b', 'source-delete-a', 'source-delete-b'];
+    private const DIRECTORY = '/opt/keli-isolated/private/member-setup-journal';
+    private $lock = null;
+    private MemberSourceInitialization $sources;
+    private array $binding;
+
+    public function __construct(private MemberSetupAuthority $authority, bool $recovery = false)
+    {
+        MemberApplicationBootstrap::initialized();
+        $this->binding = $authority->sourceBinding();
+        $directory = self::DIRECTORY;
+        if (!file_exists($directory) && !is_link($directory)) {
+            $authority->allow($recovery ? 'source-cleanup' : 'sources-advance', $recovery ? 'source-a' : 'control');
+            self::need(mkdir($directory, 0700), 'journal_unavailable');
+        }
+        clearstatcache(true, $directory);
+        $stat = lstat($directory);
+        self::need(realpath($directory) === $directory && is_dir($directory), 'journal_directory_path');
+        self::need($stat['uid'] === 0, 'journal_directory_owner');
+        self::need(($stat['mode'] & 0777) === 0700, 'journal_directory_mode');
+        self::need(!is_link($directory . '/lock'), 'lock_invalid');
+        $lock = fopen($directory . '/lock', 'c+b');
+        self::need($lock !== false, 'lock_invalid');
+        try {
+            $stat = fstat($lock);
+            self::need($stat['uid'] === 0 && $stat['nlink'] === 1 && chmod($directory . '/lock', 0600), 'lock_invalid');
+            self::need(flock($lock, LOCK_EX | LOCK_NB), 'busy');
+            $this->lock = $lock;
+            $pin = $authority->identity();
+            $old = $this->load('binding');
+            if ($old === null) {
+                self::need(array_diff(scandir($directory), ['.', '..', 'lock']) === [], 'unowned_journal');
+                $this->save('binding', $pin);
+            } else self::need($old === $pin, 'binding_changed');
+            $this->sources = new MemberSourceInitialization($this->binding['configuration']['initialization_scope'],
+                $authority->within(...), $this->load(...), $this->save(...));
+        } catch (\Throwable $error) {
+            flock($lock, LOCK_UN); fclose($lock); $this->lock = null; throw $error;
+        }
+    }
+
+    private static function need(bool $ok, string $reason): void
+    {
+        if (!$ok) throw new \RuntimeException('member_setup_controller_' . $reason);
+    }
+
+    private function path(string $key): string
+    {
+        self::need(is_resource($this->lock) && preg_match('/^(binding|first-error|rpc-mutation|rpc-cleanup|rpc-[a-f0-9]{32}|source-[ab]|source-queue-source-[ab]|initialized-source-[ab]|cleanup-source-[ab]|dns-scope-(control|edges)|(evidence|dns-initialize|dns-cleanup|dns-native-pin|provider-delete)-[a-f0-9]{64})$/D', $key) === 1,
+            'journal_key');
+        return self::DIRECTORY . '/' . $key . '.json';
+    }
+
+    private function load(string $key): ?array
+    {
+        $path = $this->path($key); clearstatcache(true, $path); $stat = @lstat($path);
+        if (!$stat) return null;
+        self::need(realpath($path) === $path && is_file($path), 'journal_file_path');
+        self::need($stat['uid'] === 0 && $stat['nlink'] === 1, 'journal_file_owner');
+        self::need(($stat['mode'] & 0777) === 0600, 'journal_file_mode');
+        self::need($stat['size'] <= 65536, 'journal_file_size');
+        $value = json_decode(file_get_contents($path), true, 32, JSON_THROW_ON_ERROR);
+        self::need(is_array($value), 'journal_invalid');
+        return $value;
+    }
+
+    private function save(string $key, array $value): void
+    {
+        $path = $this->path($key); $old = $this->load($key);
+        if (($key === 'binding' || str_starts_with($key, 'source-queue-') || str_starts_with($key, 'initialized-')
+            || str_starts_with($key, 'dns-scope-') || str_starts_with($key, 'dns-native-pin-')
+            || str_starts_with($key, 'evidence-')) && $old !== null) {
+            self::need(MemberProviderBindings::digest($old) === MemberProviderBindings::digest($value), 'intent_changed');
+            return;
+        }
+        if ($key === 'first-error' && $old !== null) return;
+        $temp = self::DIRECTORY . '/.' . bin2hex(random_bytes(12));
+        $mask = umask(0077);
+        try { $stream = fopen($temp, 'x+b'); } finally { umask($mask); }
+        self::need($stream !== false, 'journal_unavailable');
+        try {
+            // Default ACLs can override the creation umask. Narrow only this new file.
+            self::need(chmod($temp, 0600) && (fstat($stream)['mode'] & 0777) === 0600, 'journal_file_mode');
+            $raw = json_encode($value, JSON_THROW_ON_ERROR);
+            self::need(strlen($raw) <= 65536 && fwrite($stream, $raw) === strlen($raw)
+                && fflush($stream) && fsync($stream), 'journal_unavailable');
+        } finally { fclose($stream); }
+        self::need(rename($temp, $path), 'journal_unavailable');
+        self::need(MemberProviderBindings::digest($this->load($key)) === MemberProviderBindings::digest($value), 'journal_unconfirmed');
+    }
+
+    public function evidence(): array
+    {
+        self::need(is_resource($this->lock), 'closed');
+        $this->authority->allow('dns-cleanup', 'control');
+        return ['available' => true, 'first_error_present' => $this->load('first-error') !== null,
+            'first_diagnostic' => MemberRoundBridge::safeDiagnostic($this->load('first-error'))];
+    }
+
+    private function exportEvidence(): array
+    {
+        $summary = $this->evidence(); // Requires revocation, including after expiry.
+        try { $sources = $this->sources->evidence(); }
+        catch (\Throwable $error) {
+            $sources = ['resolved' => false, 'cloud_absence_not_asserted' => true,
+                'roles' => array_fill_keys(['source-a', 'source-b'], ['resolved' => false,
+                    'task_id' => null, 'classification' => 'unresolved', 'resource' => null,
+                    'diagnostic' => MemberRoundBridge::safeDiagnostic(['class' => (new \ReflectionClass($error))->getShortName(),
+                        'file' => basename($error->getFile()), 'line' => $error->getLine()])])];
+        }
+        try {
+            $records = $this->dns()->resourcePins();
+            $dns = ['resolved' => true, 'retained_record_count' => count($records),
+                'retained_records_sha256' => MemberProviderBindings::digest($records), 'diagnostic' => null];
+        } catch (\Throwable $error) {
+            $dns = ['resolved' => false, 'retained_record_count' => null, 'retained_records_sha256' => null,
+                'diagnostic' => MemberRoundBridge::safeDiagnostic(['class' => (new \ReflectionClass($error))->getShortName(),
+                    'file' => basename($error->getFile()), 'line' => $error->getLine()])];
+        }
+        $uncertain = [];
+        foreach (['uncertain_request' => 'rpc-mutation', 'uncertain_cleanup' => 'rpc-cleanup'] as $key => $ledger) {
+            $item = $this->load($ledger);
+            if ($item !== null) self::need(count($item) === 3 && is_int($item['sequence'] ?? null) && $item['sequence'] >= 0
+                && is_string($item['request_id'] ?? null) && preg_match('/^[a-f0-9]{32}$/D', $item['request_id']) === 1
+                && is_bool($item['completed'] ?? null), 'rpc_ledger_invalid');
+            $uncertain[$key] = $item && !$item['completed'] ? $item : null;
+        }
+        $body = ['schema' => 1, 'kind' => 'member-setup-evidence', 'run_id' => MemberCliAuthority::RUN]
+            + $this->authority->identity() + $this->authority->windowBinding() + $uncertain
+            + ['bundle_sha256' => MemberApplicationBootstrap::receipt()['bundle_sha256'],
+                'configuration_sha256' => MemberProviderBindings::digest($this->binding['configuration']),
+                'stopped' => true, 'sources' => $sources, 'dns' => $dns,
+                'first_error_present' => $summary['first_error_present'], 'first_diagnostic' => $summary['first_diagnostic'],
+                'cleanup_complete_not_asserted' => true];
+        $raw = MachineIntentJson::encode($body);
+        $value = ['schema' => 1, 'sha256' => hash('sha256', $raw), 'content' => $raw];
+        $key = 'evidence-' . $value['sha256'];
+        $this->save($key, $value);
+        self::need($this->load($key) === $value, 'evidence_readback_changed');
+        return $value;
+    }
+
+    public function dispatch(array $request): array
+    {
+        self::need(is_resource($this->lock) && array_keys($request) === ['operation']
+            && in_array($request['operation'], array_merge(self::SOURCE_RECOVERY, ['advance', 'status', 'resources', 'evidence-export', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read', 'native-export']), true), 'request_invalid');
+        try {
+            if (in_array($request['operation'], self::SOURCE_RECOVERY, true)) {
+                $role = 'source-' . substr($request['operation'], -1);
+                return $this->sources->cleanup($role, str_starts_with($request['operation'], 'source-delete-'));
+            }
+            if ($request['operation'] === 'evidence-export') return $this->exportEvidence();
+            if ($request['operation'] === 'resources') {
+                $this->authority->allow('source-cleanup', 'source-a');
+                $files = [];
+                $path = MemberCliAuthority::ROOT . '/private/member-runtime-scope.json';
+                if (file_exists($path) || is_link($path)) {
+                    [$scope, $hash] = MemberCliAuthority::readGrant();
+                    $window = $this->authority->windowBinding();
+                    self::need($scope['run_id'] === MemberCliAuthority::RUN
+                        && $scope['bundle_sha256'] === MemberApplicationBootstrap::receipt()['bundle_sha256']
+                        && $scope['started_at'] === $window['started_at'] && $scope['deadline_at'] === $window['deadline_at'], 'native_scope_changed');
+                    $files[] = ['run_id' => MemberCliAuthority::RUN, 'path' => $path, 'sha256' => $hash];
+                }
+                return ['resolved' => true, 'roles' => (object) $this->sources->resourcePins(),
+                    'records' => $this->dns()->resourcePins(), 'private_files' => $files];
+            }
+            if (str_starts_with($request['operation'], 'native-')) {
+                self::need($this->load('first-error') === null, 'prior_failure');
+                $native = new MemberNativeGrant($this->authority, function (): array {
+                    $sources = $this->sources->registeredScope($this->binding['scope'])['sources'];
+                    foreach ($sources as $role => $pin) {
+                        self::need($this->load('initialized-' . $role) === ['task_id' => $pin['task_id'],
+                            'scope_sha256' => MemberProviderBindings::digest($this->binding['configuration']['initialization_scope'])]
+                            && Task::query()->findOrFail($pin['task_id'])->status === 'accepted', 'sources_not_registered');
+                    }
+                    return $sources;
+                }, fn () => $this->dns()->readback());
+                return match ($request['operation']) {
+                    'native-issue' => $native->issue(), 'native-export' => $native->export(), default => $native->readback(),
+                };
+            }
+            if (str_starts_with($request['operation'], 'dns-')) {
+                if ($request['operation'] === 'dns-readback') return $this->dns()->readback();
+                self::need($this->load('first-error') === null, 'prior_failure');
+                return $this->dns()->advance($request['operation'] === 'dns-edges');
+            }
+            if ($request['operation'] === 'cleanup') {
+                $this->authority->stop();
+                $result = ['complete' => true, 'sources' => []];
+                foreach (['source-a', 'source-b'] as $role) {
+                    try { $reply = $this->sources->cleanup($role); }
+                    catch (\Throwable $error) {
+                        $diagnostic = ['class' => (new \ReflectionClass($error))->getShortName(),
+                            'file' => basename($error->getFile()), 'line' => $error->getLine()];
+                        try { $this->save('first-error', $diagnostic); } catch (\Throwable) { }
+                        $reply = ['complete' => false, 'classification' => 'cleanup_unconfirmed', 'diagnostic' => $diagnostic];
+                    }
+                    $result['sources'][$role] = $reply;
+                    $result['complete'] = $result['complete'] && $reply['complete'];
+                }
+                try { $result['dns'] = $this->dns()->cleanup(); }
+                catch (\Throwable $error) {
+                    $result['dns'] = ['complete' => false, 'diagnostic' => ['class' => (new \ReflectionClass($error))->getShortName(),
+                        'file' => basename($error->getFile()), 'line' => $error->getLine()]];
+                }
+                foreach ([$result['dns'], ...array_values($result['dns']['records'] ?? [])] as $item) {
+                    if (isset($item['diagnostic'])) {
+                        try { $this->save('first-error', $item['diagnostic']); } catch (\Throwable) { }
+                    }
+                }
+                $result['complete'] = $result['complete'] && $result['dns']['complete'];
+                return $result;
+            }
+            if ($request['operation'] === 'advance') {
+                self::need($this->load('first-error') === null, 'prior_failure');
+                return $this->sources->advance($this->binding['scope']);
+            }
+            return $this->authority->within('source-readback', 'source-a', function (): array {
+                $sources = [];
+                foreach ($this->binding['configuration']['sources'] as $role => $pin) {
+                    $task = Task::query()->where('machine_id', $pin['machine_id'])->first();
+                    $sources[$role] = ['queued' => $task !== null, 'status' => $task?->status,
+                        'registered' => $this->load('initialized-' . $role) !== null,
+                        'fresh_reports' => count($this->load($role)['samples'] ?? []),
+                        'next_check_at' => $task?->next_check_at];
+                }
+                return ['sources' => $sources, 'first_error' => $this->load('first-error'), 'health_or_forwarding_claimed' => false];
+            });
+        } catch (\Throwable $error) {
+            if (in_array($request['operation'], ['advance', 'dns-control', 'dns-edges', 'native-issue'], true)) {
+                try { $this->save('first-error', ['class' => (new \ReflectionClass($error))->getShortName(),
+                    'file' => basename($error->getFile()), 'line' => $error->getLine()]); }
+                catch (\Throwable) { /* Preserve the initiating error. */ }
+            }
+            throw $error;
+        }
+    }
+
+    public function nativeDnsCleanup(array $scope, MemberCliAuthority $native): array
+    {
+        self::need(is_resource($this->lock), 'closed');
+        $result = $this->dns()->nativeCleanup($scope, $native);
+        foreach ($result['records'] as $item) if (isset($item['diagnostic'])) {
+            try { $this->save('first-error', $item['diagnostic']); } catch (\Throwable) { }
+        }
+        return $result;
+    }
+
+    public static function validateRequest(array $request): void
+    {
+        $keys = ['schema', 'run_id', 'grant_id', 'grant_sha256', 'deadline_at', 'request_id', 'sequence', 'operation'];
+        self::need(count($request) === count($keys) && !array_diff(array_keys($request), $keys)
+            && ($request['schema'] ?? null) === 1 && ($request['run_id'] ?? null) === MemberCliAuthority::RUN
+            && is_int($request['deadline_at'] ?? null) && $request['deadline_at'] > 0
+            && is_int($request['sequence'] ?? null) && $request['sequence'] >= 0
+            && in_array($request['operation'] ?? null, array_merge(self::SOURCE_RECOVERY, ['advance', 'status', 'resources', 'evidence-export', 'stop', 'cleanup', 'dns-control', 'dns-edges', 'dns-readback', 'native-issue', 'native-read', 'native-export']), true), 'request_invalid');
+        foreach (['grant_id' => 32, 'grant_sha256' => 64, 'request_id' => 32] as $key => $length)
+            self::need(is_string($request[$key] ?? null)
+                && preg_match('/^[a-f0-9]{' . $length . '}$/D', $request[$key]) === 1, 'request_invalid');
+    }
+
+    public function rpc(array $request): array
+    {
+        self::validateRequest($request);
+        foreach ($this->authority->identity() as $key => $value)
+            self::need($request[$key] === $value, 'request_binding_changed');
+        self::need($request['operation'] !== 'stop', 'request_invalid');
+        $sourceRecovery = in_array($request['operation'], self::SOURCE_RECOVERY, true);
+        $cleanup = $request['operation'] === 'cleanup' || str_starts_with($request['operation'], 'source-delete-');
+        $dns = str_starts_with($request['operation'], 'dns-');
+        $native = str_starts_with($request['operation'], 'native-');
+        $mutating = $cleanup || in_array($request['operation'], ['advance', 'dns-control', 'dns-edges', 'native-issue'], true);
+        if ($cleanup) $this->authority->stop();
+        $this->authority->allow($native ? 'sources-observe' : ($dns ? $request['operation'] : ($cleanup || $sourceRecovery ? 'source-cleanup' : ($mutating ? 'sources-advance' : 'source-readback'))),
+            $sourceRecovery ? 'source-' . substr($request['operation'], -1) : ($native || $dns || $mutating && !$cleanup ? 'control' : 'source-a'));
+        $key = 'rpc-' . $request['request_id'];
+        $mutationKey = $cleanup ? 'rpc-cleanup' : 'rpc-mutation';
+        if ($mutating) {
+            $prior = $this->load($key);
+            if ($prior !== null) {
+                self::need($prior['request'] === $request, 'request_reused');
+                self::need($cleanup || isset($prior['reply']), 'uncertain_request_readback_required');
+                if (isset($prior['reply'])) return $prior['reply'];
+            }
+            $latest = $this->load($mutationKey);
+            self::need($cleanup || !$latest || ($latest['completed'] ?? false), 'uncertain_request_readback_required');
+            foreach (['rpc-mutation', 'rpc-cleanup'] as $ledger) {
+                $item = $this->load($ledger);
+                self::need(!$item || $request['sequence'] > $item['sequence']
+                    || ($cleanup && $prior !== null && $request['sequence'] === $item['sequence']
+                        && $request['request_id'] === $item['request_id']), 'request_sequence_reused');
+            }
+            $this->save($mutationKey, ['sequence' => $request['sequence'], 'request_id' => $request['request_id'], 'completed' => false]);
+            $this->save($key, ['request' => $request]);
+        }
+        $result = $this->dispatch(['operation' => $request['operation']]);
+        if (!$mutating) {
+            $latest = $this->load('rpc-mutation');
+            $result['uncertain_request'] = $latest && !$latest['completed'] ? $latest : null;
+            $cleanupLatest = $this->load('rpc-cleanup');
+            $result['uncertain_cleanup'] = $cleanupLatest && !$cleanupLatest['completed'] ? $cleanupLatest : null;
+        }
+        $reply = $request + ['ok' => true, 'result' => $result];
+        if ($mutating) {
+            $this->save($key, ['request' => $request, 'reply' => $reply]);
+            $this->save($mutationKey, ['sequence' => $request['sequence'], 'request_id' => $request['request_id'], 'completed' => true]);
+        }
+        return $reply;
+    }
+
+    public function close(): void
+    {
+        if (is_resource($this->lock)) { flock($this->lock, LOCK_UN); fclose($this->lock); }
+        $this->lock = null;
+    }
+
+    private function dns(): MemberSetupDns
+    {
+        return new MemberSetupDns($this->authority, function (): array {
+            foreach (['source-a', 'source-b'] as $role) self::need($this->load('initialized-' . $role) !== null, 'sources_not_registered');
+            return $this->sources->registeredScope($this->binding['scope'])['sources'];
+        }, $this->load(...), $this->save(...));
+    }
+
+    public function __destruct() { $this->close(); }
+}

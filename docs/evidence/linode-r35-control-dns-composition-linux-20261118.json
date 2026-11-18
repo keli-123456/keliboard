@@ -1,0 +1,139 @@
+{
+  "schema": 1,
+  "status": "isolated_component_passed",
+  "recorded_date": "2026-11-18",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "main_base_commit": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "live_ready": false,
+  "execution_authorized": false,
+  "main_branch_committed_or_pushed": false,
+  "production_accessed": false,
+  "cloud_instances_created": 0,
+  "cloud_ssh_dns_effects": "simulated",
+  "persistent_automatic_switches_changed": false,
+  "r34_executed": false,
+  "historical_live_round_reexecuted": false,
+  "tanzhen_accessed": false,
+  "successful_run": {
+    "id": 44139432028,
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44139432028",
+    "commit": "79222c2e76c8519a39ff679497c77a150082bed3",
+    "mode": "host_port_only",
+    "conclusion": "success",
+    "artifact_id": 14353153357,
+    "python_tests": 222,
+    "python_skipped": 1,
+    "php_tests": [
+      {
+        "suite": "dns_and_application",
+        "tests": 137,
+        "assertions": 923
+      },
+      {
+        "suite": "native_cli",
+        "tests": 53,
+        "assertions": 20401
+      },
+      {
+        "suite": "source_initialization",
+        "tests": 17,
+        "assertions": 196
+      }
+    ],
+    "verified": [
+      "Actual MemberInitialization progresses from control-create through callback-ready with actual stage receipts, without synthetic control or DNS predecessor receipts",
+      "Operator-local original request uses the existing Linode adapter; one create POST and subsequent readback determine readiness",
+      "Full application and locked vendor, real dedicated MySQL/Redis, 160 migrations and 157 tables, actual non-root UID 65534 smoke",
+      "MemberRemoteSetup invokes actual MemberBootstrapController configure/setup-issue and MemberSetupController dns-control over the strict transport contract",
+      "Actual DnsProviderClient and MemberDnsInitialization perform one AddDomainRecord, ownership claim, inventory and exact readback through simulated HTTP",
+      "Aliyun compressed wire remark remains below 50 characters and decodes to the complete original canonical ownership marker",
+      "Actual systemd/nginx/PHP/TLS is started and stopped, with stopped replay denied",
+      "Exact owned DNS record is deleted before private-file teardown and controller deletion",
+      "Five private-file pins removed; one controller DELETE loses its acknowledgement; controller fixture physically removed",
+      "Cleanup reconstructed without controller files or SSH confirms absence twice ten real seconds apart",
+      "Intentional partial-evidence export failure remains recorded and prevents acceptance confirmation without blocking resource cleanup",
+      "Containers, owned fixture and temporary materials removed; no external IPv4 or IPv6 routes"
+    ],
+    "artifact_sha256": {
+      "application-linux-summary.json": "e6492159e56b7dbd676018b4266b4c3458b41a48872aa5b9d69ba5fc5f2ec3a9",
+      "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cli-phpunit.log": "6a52f355ab18381ab0a9b28144de5b60dbe5312cebd8d2a5ab9a5d0c16cb5b43",
+      "dns-phpunit.log": "653ed6c1a56de4e54ff100f7fce91f9d84362615cc7748a5085a72d1fae6c592",
+      "python.log": "1f57ec08fe2f672882fe8f7e07dfe2343d99e0e2be02ae2fa5c5b18042a57279",
+      "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+      "source-phpunit.log": "d66ab9eab47681cc002483e732a134bfef595d6276b1013f80ebb19690e64128"
+    }
+  },
+  "failed_runs_retained": [
+    {
+      "id": 44136759197,
+      "commit": "c5c6f1ed9c5089761a1664faf59eb1b1fff78cd9",
+      "artifact_id": 14352033400,
+      "status": "failed",
+      "cleanup_confirmed": true,
+      "reason": "Setup DNS RPC failed; outer transport retained uncertainty. Safe boundary diagnostic added for the next isolated run; not counted as a pass.",
+      "artifact_sha256": {
+        "application-linux-summary.json": "06111299e08d728127e27df2e826cf1608497e6478b3293c7d2bfbfc0f46ae70",
+        "application-linux.log": "2e372d6511f44668ce27b3e8ca365ac8d7f2aebe5301af49421ae80b46de4b9f",
+        "cli-phpunit.log": "a88b8679a3bb717f8f848ef0c620246642a8f9c35834a0ff2c6b32621cf25054",
+        "dns-phpunit.log": "b898533e7b989791d018efe0d2a789c342c72213aa04dad8e9a29cb3f421a3b2",
+        "python.log": "17eedc6a120e1e52d3c6183563e3f76a4a1b1a623c9305cd571042ffffd4e0dd",
+        "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+        "source-phpunit.log": "a3bfe1a303b531a572afe916b0ee8482713f0af7af2f1585336498d062cc6370"
+      }
+    },
+    {
+      "id": 44137750608,
+      "commit": "811e292360cfcdb524f43e0b8dfddf9b7ca42f3c",
+      "artifact_id": 14352717867,
+      "status": "failed",
+      "cleanup_confirmed": true,
+      "reason": "Safe diagnostic identified DnsRequestFailure in DnsProviderClient.php:247; HTTP-boundary cause still pending, not counted as a pass.",
+      "artifact_sha256": {
+        "application-linux-summary.json": "d2c5dcc319e37cdae44dcef469830d2fb141d376e253243acdc7f637f93dd024",
+        "application-linux.log": "ba605b8af9f12907d005bee63986c436693720953e580c9235aad95fc3f4c57e",
+        "cli-phpunit.log": "e4a6c41daa4fc882b22e3cae05cbffd9646e96b1bcae3d4722d2bac2a0b2869d",
+        "dns-phpunit.log": "aa45075248cec917390c262528d373d220fe5daf8b59ec8e265b6b40c1c98928",
+        "python.log": "5337db17e9c4cd442ce652410e1f28bb61cc694889ea262707d1dda589fea781",
+        "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+        "source-phpunit.log": "2b472132f47a6ad263d39272508700a8b181c7b644e86b2c7502beaf21108e86"
+      }
+    },
+    {
+      "id": 44138601232,
+      "commit": "82a5b8714b62c424782d3965fdb804eb5fb360ce",
+      "artifact_id": 14352179530,
+      "status": "failed",
+      "cleanup_confirmed": true,
+      "reason": "CI DNS fixture rejected the application's compressed Aliyun marker at r35-setup-provider-fixture.php:46; the original request and application protections were correct. The fixture now reuses the existing canonical/wire encoding contract.",
+      "artifact_sha256": {
+        "application-linux-summary.json": "504bad4af257efc6be42f990f5674a87d32b6b855c6999cce6481bfe833a445a",
+        "application-linux.log": "8a4c4c8521abff6acc7ece3f32413c62c951638403917a653b040dbcffd130ae",
+        "cli-phpunit.log": "2cb929b75affb995b4ac2434fa6fdae244742c075d85a9c90d5fbcc5ab204520",
+        "dns-phpunit.log": "03f154a25df70ddbb213d430e558ae44a257af71dde8445d0b513066d9f25f76",
+        "python.log": "0b8596d82f8241b75e7a9a6f994b48de792cb32516d851368074060c2f42755f",
+        "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+        "source-phpunit.log": "4c41a2ab94977f81183e79fe93a9fae7ebafbab559227d80eec79e2c7b50d426"
+      }
+    }
+  ],
+  "diagnosis": "The first three DNS composition attempts failed because the new CI HTTP fake required the obsolete hex remark rather than the existing compressed Aliyun wire format. Safe RPC and HTTP-boundary first-cause diagnostics established the exact failure. Only the temporary fixture changed; application encoding and ownership checks were retained.",
+  "local_regression": {
+    "platform": "Windows",
+    "python_tests": 50,
+    "python_skipped": 1,
+    "php_tests": 39,
+    "php_assertions": 198,
+    "status": "passed"
+  },
+  "limitations": [
+    "This is one initialization prefix plus stopped cleanup, not the complete whole-host R35 entry",
+    "Sources A/B, native grant, A1 cleanup and actual 300-second cooldown/A2 retry/B isolation do not execute in this component; earlier separate-flow evidence is not counted as same-entry coverage",
+    "Provider and SSH effects remain simulated; fixture wrappers call actual bootstrap/setup/controller services and fake outgoing HTTP, not completed stages",
+    "Node bytes and credentials are synthetic and TLS is self-signed; real node runtime, OS bootstrap and certificate acquisition remain separate requirements",
+    "Partial-setup evidence export is intentionally failed here; a successful concrete exporter and all stage failure/stop/expiry/crash combinations are not established",
+    "No final real-node/vendor LF freeze, current live preflight or new live execution authorization is established",
+    "Temporary workflow and CI-only wrapper scripts have not been copied into the main worktree"
+  ]
+}

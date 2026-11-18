@@ -11,13 +11,14 @@ from member_cli import BoundControllerTransport, MemberControllerPort, RUN
 from member_round import MemberRound
 from member_transport import TransportError, REMOTE_ENTRY
 from member_auxiliary import digest
+from member_evidence import MemberEvidenceArchive
 from test_member_round import RoundFixture
 
 
 class MemberCliTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
-        self.directory = Path(self.tmp.name)
+        self.directory = Path(self.tmp.name).resolve()
         self.f = RoundFixture()
         self.f.scope = json.loads(json.dumps(self.f.scope).replace(self.f.scope['run_id'], RUN))
         self.f.pins = {digest(p): True for p in [self.f.scope['control'], *self.f.scope['records'], *self.f.scope['private_files']]}
@@ -33,6 +34,7 @@ class MemberCliTests(unittest.TestCase):
         self.requests, self.commands = [], []
         self.fail_operation, self.changed, self.unknown = None, None, False
         self.stopped = False
+        self.native_dns = dict(complete=True, records={r: {'complete': True} for r in ('control', 'edge-a', 'edge-b')})
         self.trans = self.make_transport()
         self.port = MemberControllerPort(self.trans)
         for name in ('socket.socket', 'subprocess.Popen'):
@@ -54,6 +56,13 @@ class MemberCliTests(unittest.TestCase):
         if op == 'round-ready': result = {'ready': True}
         elif op == 'round-stop': self.stopped = True; result = {'stopped': True}
         elif op == 'round-status': result = dict(run_id=RUN, resolved=not self.unknown, stopped=self.stopped, roles=self.f.roles)
+        elif op == 'round-dns-cleanup': result = copy.deepcopy(self.native_dns)
+        elif op == 'round-evidence':
+            body = dict(schema=1, **self.trans.identity_binding, scope_sha256='f' * 64, stopped=self.stopped,
+                reconciled=not self.unknown, reconcile_diagnostic=None, tasks={}, driver={}, setup={},
+                cleanup_complete_not_asserted=True)
+            content = json.dumps(body, sort_keys=True, separators=(',', ':'))
+            result = dict(schema=1, sha256=hashlib.sha256(content.encode()).hexdigest(), content=content)
         elif op == 'round-step':
             result = dict(phase='finished', branches=dict.fromkeys(('native_cleanup', 'cooldown', 'retry', 'b_unchanged', 'dns_cutover'), True))
         elif op in ('task-delete', 'task-inspect'): result = self.f.task(op, r['role'])
@@ -108,6 +117,88 @@ class MemberCliTests(unittest.TestCase):
         self.trans.call('task-delete', 'source-a')
         with self.assertRaisesRegex(TransportError, 'reconcile_required'): self.trans.call('task-delete', 'source-a')
 
+    def test_native_dns_cleanup_requires_stop_and_can_reconcile_after_lost_reply_and_expiry(self):
+        with self.assertRaisesRegex(TransportError, 'cleanup_requires_stop'):
+            self.trans.call('round-dns-cleanup')
+        self.assertEqual([], self.requests)
+        self.trans.call('round-stop')
+        self.fail_operation = 'round-dns-cleanup'
+        with self.assertRaises(TransportError): self.trans.call('round-dns-cleanup')
+        self.assertEqual('round-dns-cleanup', self.f.journal['bound-uncertain']['operation'])
+        self.fail_operation = None
+        self.f.now = self.g['deadline_at'] + 1
+        self.trans = self.make_transport()
+        self.trans.call('round-dns-cleanup')
+        self.assertEqual(2, [r['operation'] for r in self.requests].count('round-dns-cleanup'))
+        with self.assertRaisesRegex(TransportError, 'role_invalid'):
+            self.trans.call('round-dns-cleanup', 'source-a')
+        with self.assertRaisesRegex(TransportError, 'expired_or_stopped'):
+            self.trans.call('round-step')
+
+    def test_native_auxiliary_waits_for_exact_dns_receipt_before_private_material(self):
+        events = []
+        auxiliary = self.port.native_auxiliary(lambda op: events.append(op) or {'private_materials_removed': True})
+        self.trans.call('round-stop')
+        self.native_dns['complete'] = False
+        self.native_dns['records']['edge-a'] = {'complete': False, 'diagnostic': {'class': 'ConnectionException'}}
+        self.assertEqual({'pending': True}, auxiliary('dns-and-private-cleanup'))
+        self.assertEqual([], events)
+        with self.assertRaisesRegex(TransportError, 'native_dns_unconfirmed'):
+            auxiliary('control-delete-or-inspect')
+        self.native_dns['complete'] = True
+        self.native_dns['records']['edge-a'] = {'complete': True}
+        auxiliary('dns-and-private-cleanup')
+        self.assertEqual(['dns-and-private-cleanup'], events)
+        count = len(self.requests)
+        # Removing the controller environment must not require another PHP DNS RPC.
+        self.trans = self.make_transport()
+        restarted = MemberControllerPort(self.trans).native_auxiliary(lambda op: events.append(op) or {})
+        self.fail_operation = 'round-dns-cleanup'
+        restarted('dns-and-private-cleanup'); restarted('control-delete-or-inspect')
+        self.assertEqual(count, len(self.requests))
+
+    def test_native_auxiliary_does_not_accept_missing_mixed_or_nonboolean_dns_results(self):
+        self.trans.call('round-stop')
+        valid = copy.deepcopy(self.native_dns)
+        for change in ('missing', 'extra', 'aggregate', 'number', 'extra_success_data'):
+            self.native_dns = copy.deepcopy(valid)
+            if change == 'missing': del self.native_dns['records']['edge-b']
+            if change == 'extra': self.native_dns['records']['foreign'] = {'complete': True}
+            if change == 'aggregate': self.native_dns['records']['edge-a']['complete'] = False
+            if change == 'number': self.native_dns['records']['edge-a']['complete'] = 1
+            if change == 'extra_success_data': self.native_dns['records']['edge-a']['diagnostic'] = {'message': 'secret'}
+            with self.subTest(change=change):
+                auxiliary = self.port.native_auxiliary(lambda _: self.fail('private cleanup was reached'))
+                with self.assertRaisesRegex(TransportError, 'native_dns_unconfirmed'):
+                    auxiliary('dns-and-private-cleanup')
+                self.assertNotIn('native-dns-cleanup-confirmed', self.f.journal)
+
+    def test_native_auxiliary_recovers_lost_dns_ack_but_rejects_changed_durable_binding(self):
+        self.trans.call('round-stop')
+        auxiliary = self.port.native_auxiliary(lambda _: {})
+        self.fail_operation = 'round-dns-cleanup'
+        with self.assertRaises(TransportError): auxiliary('dns-and-private-cleanup')
+        self.assertNotIn('native-dns-cleanup-confirmed', self.f.journal)
+        self.fail_operation = None
+        auxiliary('dns-and-private-cleanup')
+        self.f.journal['native-dns-cleanup-confirmed']['complete'] = 1
+        with self.assertRaisesRegex(TransportError, 'native_dns_receipt_changed'):
+            auxiliary('dns-and-private-cleanup')
+        self.f.journal['native-dns-cleanup-confirmed']['complete'] = True
+        self.f.journal['native-dns-cleanup-confirmed']['identity']['grant_id'] = 'e' * 32
+        with self.assertRaisesRegex(TransportError, 'native_dns_receipt_changed'):
+            auxiliary('dns-and-private-cleanup')
+
+    def test_native_auxiliary_failed_local_readback_blocks_private_removal(self):
+        self.trans.call('round-stop')
+        auxiliary = self.port.native_auxiliary(lambda _: self.fail('private cleanup was reached'))
+        original = self.trans.save
+        def save(key, value):
+            if key != 'native-dns-cleanup-confirmed': original(key, value)
+        self.trans.save = save
+        with self.assertRaisesRegex(TransportError, 'native_dns_readback_failed'):
+            auxiliary('dns-and-private-cleanup')
+
     def test_changed_grant_host_material_and_response_fail_closed(self):
         self.known.write_bytes(b'different host key')
         with self.assertRaisesRegex(TransportError, 'ssh_material_changed'): self.trans.call('round-ready')
@@ -118,6 +209,59 @@ class MemberCliTests(unittest.TestCase):
         self.changed = None
         with self.assertRaisesRegex(TransportError, 'reconcile_required'): self.trans.call('round-step')
         self.trans.call('round-stop'); self.trans.call('round-status')
+
+    def test_evidence_export_requires_stop_reads_local_copy_and_retains_earlier_snapshot(self):
+        archive = MemberEvidenceArchive(self.trans, self.directory)
+        with self.assertRaisesRegex(TransportError, 'cleanup_requires_stop'): archive.capture()
+        self.assertEqual([], self.requests)
+        self.trans.call('round-stop')
+        first = archive.capture()
+        self.assertTrue(archive.verify(first)['reconciled'])
+        self.unknown = True
+        self.f.now = self.g['deadline_at'] + 1
+        archive = MemberEvidenceArchive(self.make_transport(), self.directory)
+        second = archive.capture()
+        self.assertNotEqual(first['sha256'], second['sha256'])
+        self.assertTrue(archive.verify(first)['reconciled'])
+        self.assertFalse(archive.verify(second)['reconciled'])
+        self.assertEqual(first, archive.journal.load('evidence-first.json'))
+        self.assertEqual(second, archive.journal.load('evidence-latest.json'))
+        self.assertEqual(second, archive.capture())
+        self.assertNotIn('bound-uncertain', self.f.journal)
+        self.assertEqual({'round-stop', 'round-evidence'}, {r['operation'] for r in self.requests})
+
+    def test_evidence_corrupt_local_copy_or_failed_write_never_reports_verified(self):
+        self.trans.call('round-stop')
+        archive = MemberEvidenceArchive(self.trans, self.directory)
+        with patch.object(archive.journal, 'save', side_effect=PermissionError('private/path')):
+            with self.assertRaises(PermissionError): archive.capture()
+        self.assertFalse((self.directory / 'evidence-latest.json').exists())
+        receipt = archive.capture()
+        path = self.directory / ('evidence-' + receipt['sha256'] + '.json')
+        path.write_text('{}', encoding='utf-8')
+        with self.assertRaisesRegex(TransportError, 'local_copy_changed'): archive.capture()
+        with self.assertRaisesRegex(TransportError, 'local_copy_changed'): archive.verify(receipt)
+
+    def test_evidence_rejects_wrong_scope_digest_duplicate_json_or_cleanup_claim(self):
+        self.trans.call('round-stop')
+        archive = MemberEvidenceArchive(self.trans, self.directory)
+        original = self.trans.call('round-evidence')
+        for field, value in [('grant_id', '0' * 32), ('run_id', 'another-run'), ('stopped', False),
+                             ('cleanup_complete_not_asserted', False), ('schema', True)]:
+            changed = copy.deepcopy(original)
+            body = json.loads(changed['content']); body[field] = value
+            changed['content'] = json.dumps(body); changed['sha256'] = hashlib.sha256(changed['content'].encode()).hexdigest()
+            with patch.object(self.trans, 'call', return_value=changed):
+                with self.assertRaisesRegex(TransportError, 'binding_changed'): archive.capture()
+        changed = dict(original, sha256='0' * 64)
+        with patch.object(self.trans, 'call', return_value=changed):
+            with self.assertRaisesRegex(TransportError, 'digest_changed'): archive.capture()
+        changed = dict(original, content=original['content'][:-1] + ',"schema":1}')
+        changed['sha256'] = hashlib.sha256(changed['content'].encode()).hexdigest()
+        from driver_journal import Rejected
+        with patch.object(self.trans, 'call', return_value=changed):
+            with self.assertRaisesRegex(Rejected, 'duplicate_journal_key'): archive.capture()
+        self.assertFalse((self.directory / 'evidence-latest.json').exists())
 
     def test_mutated_authority_file_and_arbitrary_operations_are_rejected(self):
         with self.assertRaisesRegex(TransportError, 'operation_invalid'): self.trans.call('create', 'candidate-a1')
@@ -148,6 +292,48 @@ class MemberCliTests(unittest.TestCase):
         state = d.step()
         self.assertEqual(state['first_error'], 'round_operation_failed')
         self.assertNotIn('private/token', str(self.f.journal))
+
+    def setup_issued_grant(self):
+        bootstrap = dict(run_id=RUN, host=self.g.pop('controller_ipv4'),
+            identity_sha256=self.g.pop('identity_sha256'), known_hosts_sha256=self.g.pop('known_hosts_sha256'))
+        self.grant.write_text(json.dumps(self.g), encoding='utf-8')
+        self.f.save('bootstrap-binding', bootstrap)
+        self.f.save('setup-binding', dict(run_id=RUN, host=bootstrap['host'], grant_id='d' * 32,
+            grant_sha256='e' * 64, deadline_at=self.g['deadline_at']))
+        identity = dict(run_id=RUN, grant_id=self.g['grant_id'], bundle_sha256=self.g['bundle_sha256'],
+            grant_sha256=hashlib.sha256(self.grant.read_bytes()).hexdigest())
+        self.f.save('setup-native-grant', dict(ready=True, identity=identity,
+            deadline_at=self.g['deadline_at'], cloud_or_dns_writes=False))
+
+    def test_setup_issued_grant_binds_original_remote_hash_without_rewriting_it(self):
+        self.setup_issued_grant(); before = self.grant.read_bytes()
+        transport = self.make_transport()
+        transport.call('round-ready')
+        self.assertEqual(before, self.grant.read_bytes())
+        self.assertEqual(hashlib.sha256(before).hexdigest(), self.requests[-1]['grant_sha256'])
+        self.assertNotIn('identity_sha256', self.g)
+        self.make_transport().call('round-status')
+
+    def test_setup_issued_grant_requires_complete_immutable_bootstrap_and_native_receipts(self):
+        self.setup_issued_grant(); valid = copy.deepcopy(self.f.journal)
+        for key in ('bootstrap-binding', 'setup-binding', 'setup-native-grant'):
+            self.f.journal = copy.deepcopy(valid); self.f.journal.pop(key)
+            with self.assertRaises(TransportError): self.make_transport()
+        for key, field, value in [('bootstrap-binding', 'host', '192.0.2.9'),
+                                 ('setup-binding', 'deadline_at', 8200),
+                                 ('setup-native-grant', 'identity', {})]:
+            self.f.journal = copy.deepcopy(valid); self.f.journal[key][field] = value
+            with self.assertRaises(TransportError): self.make_transport()
+        self.f.journal = copy.deepcopy(valid); transport = self.make_transport()
+        self.f.journal['setup-binding']['grant_id'] = 'f' * 32
+        with self.assertRaisesRegex(TransportError, 'setup_binding_changed'): transport.call('round-ready')
+        self.assertEqual([], self.requests)
+
+    def test_setup_issued_grant_rejects_changed_ssh_files_before_dispatch(self):
+        self.setup_issued_grant(); transport = self.make_transport()
+        self.key.write_bytes(b'changed')
+        with self.assertRaisesRegex(TransportError, 'ssh_material_changed'): transport.call('round-status')
+        self.assertEqual([], self.requests)
 
 
 if __name__ == '__main__': unittest.main()

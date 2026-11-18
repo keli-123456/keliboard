@@ -1,0 +1,231 @@
+{
+  "schema": 1,
+  "status": "isolated_composed_chain_passed",
+  "recorded_date": "2026-11-18",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "main_base_commit": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "live_ready": false,
+  "execution_authorized": false,
+  "goal_complete": false,
+  "main_branch_committed_or_pushed": false,
+  "production_accessed": false,
+  "cloud_instances_created": 0,
+  "cloud_ssh_dns_effects": "simulated",
+  "persistent_automatic_switches_changed": false,
+  "r34_executed": false,
+  "historical_live_round_reexecuted": false,
+  "tanzhen_accessed": false,
+  "successful_run": {
+    "id": 44143911184,
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44143911184",
+    "commit": "74219d02928a0a02df56948012cc738527c8f945",
+    "mode": "whole_entry",
+    "conclusion": "success",
+    "artifact_id": 14356987824,
+    "python_tests": 222,
+    "python_skipped": 1,
+    "php_suites": [
+      {
+        "suite": "dns_and_application",
+        "tests": 137,
+        "assertions": 923
+      },
+      {
+        "suite": "native_cli",
+        "tests": 53,
+        "assertions": 20401
+      },
+      {
+        "suite": "source_initialization",
+        "tests": 17,
+        "assertions": 196
+      }
+    ],
+    "verified": [
+      "Same MemberInitialization advances all ten stages from actual local control creation through native-ready; no completed-stage receipt is fabricated",
+      "Actual cold application publication, locked vendor, 160 MySQL migrations/157 tables, Redis, service UID65534, systemd/nginx/PHP and self-signed TLS",
+      "Simulated provider state transfers from the actual control/DNS prefix to the broader HTTP fixture, retaining original control identity and DNS creation/claim state; no setup-issue fixture or precreated source task",
+      "Actual source tasks consume real callback and machine/node HTTP routes with synthetic client payloads; A/B each require three fresh observations",
+      "Source task creation timestamps are 304 seconds apart; no history reset or clock modification",
+      "Original setup authority exports the native grant; strict bound transport invokes the real native retry state machine",
+      "A1 reports three failures at threshold three, exactly one DELETE is issued, and exact absent read timestamps are 12 seconds apart",
+      "Retry not before confirmed_at plus300; A2 creation is 306 seconds after A1 absence confirmation",
+      "A2 completes and changes only edge-a through the actual DNS adapter over simulated HTTP; B task, identity, provider row and DNS remain unchanged during retry",
+      "Four source/candidate task rows remain audited; two native candidate attempts; one control plus four source/candidate provider creates are simulated",
+      "Actual MemberRoundAssembly cleanup resolves native DNS publication rather than reusing the stale source DNS value",
+      "Source DELETE reply loss and DNS reply loss are reconciled; original task history is checked by the native cleanup fixture and first error remains",
+      "All source/candidate provider rows and three DNS rows are absent before private material and control cleanup",
+      "Stopped native evidence is exported from the actual application, atomically captured and verified before removing six private-file pins",
+      "Control DELETE acknowledgement is lost, its fixture files are physically removed, and independent operator cleanup proves absence twice ten seconds apart without further SSH",
+      "Owned CI fixture and dedicated containers are removed; no external IPv4/IPv6 routes"
+    ],
+    "measurements": {
+      "source_creation_gap_seconds": 304,
+      "a1_failure_count": 3,
+      "a1_failure_threshold": 3,
+      "a1_absent_at": [
+        1794939556,
+        1794939568
+      ],
+      "a1_confirmed_at": 1794939568,
+      "a1_retry_at": 1794939868,
+      "a2_created_at": 1794939874,
+      "native_task_count": 4,
+      "candidate_attempts": 2,
+      "dns_updates": 1,
+      "dns_deletes": 3,
+      "private_files_removed": 6,
+      "control_delete_calls": 1,
+      "control_absence_gap_seconds": 10
+    },
+    "bundle_sha256": "b6ef05c4f0bed81462dae7bf41dcadf5ea89fc555b7ab4a54cec6455eeb91d2d",
+    "application_files": 14164,
+    "composer_lock_sha256": "1a7bc62c308529c9edd7f495ca544e93c53933d39570f4eb43fe92c6365f64e1",
+    "stopped_evidence_content_sha256": "6e39404b0d8287b842c5566afbcb66c4662dc4bf9d234cb185ae283ed78524da",
+    "artifact_files": [
+      {
+        "file": "application-linux-summary.json",
+        "sha256": "2b8d9d17a7eb44c62b1a2645f0ad6801bc11d3207efbf3c79a85b7af19db44ce"
+      },
+      {
+        "file": "application-linux.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "file": "cli-phpunit.log",
+        "sha256": "93291ffadeb7d7b3d6034b3a2e1936443e8e465436027cc7b8f23be77f515baf"
+      },
+      {
+        "file": "dns-phpunit.log",
+        "sha256": "5f2431c1b7ba25a4799fb9e91273b4b4ea20514811e111abcb2f49e443417432"
+      },
+      {
+        "file": "native-retry-evidence.json",
+        "sha256": "2c21ad4c65a3cfca340e0d2ddde07b94045904ddaf8f0c103f36d9992e30da9a"
+      },
+      {
+        "file": "native-retry-transitions.json",
+        "sha256": "3373bcbd07a29b9ee2c6a7ed7ecee9d29dfb4fbc962cca03ea6a5cd1527de97f"
+      },
+      {
+        "file": "python.log",
+        "sha256": "607eaded1133a6450619f80d8d6a3162742cc1ed468d6a2384719fcdc5e5f55d"
+      },
+      {
+        "file": "service-cleanup.json",
+        "sha256": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+      },
+      {
+        "file": "source-phpunit.log",
+        "sha256": "815f3734ccbe6c42ac19782028a30e9f00f583dfe19d3f1ead31c7c364ae80b6"
+      },
+      {
+        "file": "whole-initialization-transitions.json",
+        "sha256": "c70da882a05a6f76e500cd978e2658eff7b3645d476ec5e022d31d37f91cdc24"
+      },
+      {
+        "file": "whole-stopped-evidence.json",
+        "sha256": "527abfb3c10cb0c55bde6e8a1f9f5d446f25253d6854d9b5ecb32395d7861c16"
+      }
+    ]
+  },
+  "failed_attempts": [
+    {
+      "id": 44142216683,
+      "commit": "b4451e05912d6486a5b4e1d5e1e864ed1f8319c9",
+      "artifact_id": 14355920237,
+      "conclusion": "failure",
+      "stage": "prefix provider-context handoff",
+      "reported_failure": "JSONDecodeError",
+      "notes": "New CI context compared the wrong configuration structure and did not catch exceptions outside Laravel's global handler. The raw first run alone does not prove its inner exception. It is retained as failed.",
+      "cleanup_confirmed": true,
+      "artifact_files": [
+        {
+          "file": "application-linux-summary.json",
+          "sha256": "cc12c9dd22ce62cfe977afb807886e6aa667aba89473f242d57505b142bc9a77"
+        },
+        {
+          "file": "application-linux.log",
+          "sha256": "08588a157dab175dc839c66bf3ff1d59bc44b70f3282644ddb8acb69386d2d77"
+        },
+        {
+          "file": "cli-phpunit.log",
+          "sha256": "ba2095cd47c1a8a4e11a806c5541902c5cfb75a9717767ff7973a033594bfbff"
+        },
+        {
+          "file": "dns-phpunit.log",
+          "sha256": "e8cc4232276016ed3b5295037323e90c4b28578935f65768da8119cb754e730c"
+        },
+        {
+          "file": "python.log",
+          "sha256": "23fea1250ce19b99d713db6a67fa9d0b0ee71e32417af3925513135333b69219"
+        },
+        {
+          "file": "service-cleanup.json",
+          "sha256": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+        },
+        {
+          "file": "source-phpunit.log",
+          "sha256": "63b624f9e475afcba75bb9be7b5286e1809cc1b720e0e48e74f1b87c2383c992"
+        }
+      ]
+    },
+    {
+      "id": 44142941316,
+      "commit": "d3a8b89d9bff963df583569a9fda2359f7bbeed6",
+      "artifact_id": 14354993151,
+      "conclusion": "failure",
+      "stage": "prefix provider-context handoff",
+      "reported_failure": "fixture_prefix_identity_changed",
+      "notes": "Safe class/file/line retained. The CI comparison required PHP associative-key order equality across canonical grant serialization; the corrected comparison uses the existing canonical digest contract, with separate mismatch fields.",
+      "cleanup_confirmed": true,
+      "artifact_files": [
+        {
+          "file": "application-linux-summary.json",
+          "sha256": "159f3db8053d5db692fc558a41ecbe2c4edebec2f4dd9d095f7ed5e59571c596"
+        },
+        {
+          "file": "application-linux.log",
+          "sha256": "030a259f301c90f65d63663a0bd37c76af242f0403de53f5eb984e785d692896"
+        },
+        {
+          "file": "cli-phpunit.log",
+          "sha256": "97fe0c9d6a01bc764b3d372e70d8adc8cc7eceef14406619cc78b2569ccdbd44"
+        },
+        {
+          "file": "dns-phpunit.log",
+          "sha256": "bdf4bd04651450e68368ba51e10fe0ba7321176cf52bcbdb9dc859f99f4008e3"
+        },
+        {
+          "file": "python.log",
+          "sha256": "20aedbeec9f3733d22dafc924e4eac10860778d80771cecacdf13bfb38bd2892"
+        },
+        {
+          "file": "service-cleanup.json",
+          "sha256": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+        },
+        {
+          "file": "source-phpunit.log",
+          "sha256": "11ff74e25d5aa66cd1aa2a57ad90933513c62d9e7a7fc970071f43f9a061c04b"
+        }
+      ]
+    }
+  ],
+  "reusable_test_changes": [
+    "Provider fixture reads the control ID from the actual bound provider row, rather than hardcoding100000",
+    "Callback fixture exports only actually dispatched tasks; queued tasks receive no fabricated callback pin"
+  ],
+  "limitations": [
+    "Only the composition scenario in the temporary manual CI branch ran. Main was not committed or pushed",
+    "The CI continuation drives the actual initialization, native RPC and assembly cleanup; it is not yet proof of the final standalone operator command and its full durable restart matrix",
+    "Node ELF bytes and agent telemetry are synthetic; no actual node process, public ICMP, cloud instance, SSH connection or DNS propagation was tested",
+    "System packages were prepared by CI and TLS was self-signed; OS bootstrap readiness and certificate acquisition still need concrete assembly and verification",
+    "Creation/cleanup permits and credentials were synthetic, isolated and process-local; no production bridge was accessed",
+    "Partial pre-native evidence export is still unverified; successful stopped evidence here requires an issued native grant",
+    "This does not cover every stage failure, stop/expiry, process crash or partial private-file termination across the complete chain",
+    "Raw summary retains helper-local flags candidate_callback_http_full_application_tested=false and final_native_teardown_not_covered=true from narrower helpers. The new whole-initialization and assembly-cleanup results are separate scopes; raw artifacts are retained unchanged",
+    "Raw whole_host_entry=true refers only to this assembled test chain, not OS/certificate readiness, a standalone deployment or live acceptance",
+    "Final unarmed LF freeze using real pinned node/vendor bytes and a fresh unexecuted live proposal/preflight/cleanup checklist remain pending"
+  ]
+}

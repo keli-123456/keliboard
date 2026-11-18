@@ -1,0 +1,193 @@
+{
+  "schema": 1,
+  "status": "isolated_pre_native_stopped_evidence_passed",
+  "recorded_date": "2026-11-18",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "main_base_commit": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "live_ready": false,
+  "execution_authorized": false,
+  "goal_complete": false,
+  "main_branch_committed_or_pushed": false,
+  "production_accessed": false,
+  "cloud_instances_created": 0,
+  "cloud_ssh_dns_effects": "simulated",
+  "persistent_automatic_switches_changed": false,
+  "r34_executed": false,
+  "historical_live_round_reexecuted": false,
+  "tanzhen_accessed": false,
+  "successful_run": {
+    "id": 44152930645,
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44152930645",
+    "commit": "423c62aa296df0b3346c2f3d1be2da037231ddd1",
+    "mode": "setup_evidence",
+    "conclusion": "success",
+    "artifact_id": 14359902284,
+    "python_tests": 228,
+    "python_skipped": 1,
+    "php_suites": [
+      {
+        "suite": "dns_and_application",
+        "tests": 137,
+        "assertions": 924
+      },
+      {
+        "suite": "native_cli",
+        "tests": 53,
+        "assertions": 20401
+      },
+      {
+        "suite": "source_initialization_and_evidence",
+        "tests": 20,
+        "assertions": 267
+      }
+    ],
+    "verified": [
+      "Real cold application prefix reaches callback-ready through MemberInitialization and existing actual local provider, installation, setup and DNS bindings; HTTP provider effects are simulated",
+      "Full application and locked vendor, 160 real MySQL migrations/157 tables, Redis, service UID65534, systemd/nginx/PHP and self-signed TLS",
+      "Fixed member_setup_entry.php rejects evidence-export before stop and does not create a setup first-error for that read-only rejection",
+      "Actual native-issue request before source registration fails; no native grant or source/candidate resource is created",
+      "Existing execution reconciliation revokes setup authority; export uses the fixed root-only entry, not a synthetic stage receipt or provider stub",
+      "Safe source-initialization class/file/line is retained as the original first error; pending mutation is included inside the hashed envelope and matched against RPC metadata",
+      "Setup identity, bundle, execution window and configuration digest match the retained host receipts",
+      "Both sources report no_queue_intent, one retained owned DNS record is summarized; neither cloud absence nor cleanup completion is asserted by the evidence",
+      "Two consecutive actual exports have the same content digest and do not change provider fixture bytes during either export",
+      "Controller export is root-owned mode0600; immutable host copy and first/latest pointers are verified before private-file deletion",
+      "Actual MemberRoundAssembly cleanup removes the owned DNS record and five private files before controller cleanup",
+      "Controller DELETE acknowledgement loss is recovered, controller fixture is physically removed, and two exact absence reads are ten seconds apart without further SSH",
+      "Host evidence is independently read back after controller removal; stopped execution cannot resume",
+      "Dedicated containers, anonymous volumes and fixed CI fixture are removed; no external IPv4/IPv6 routes"
+    ],
+    "bundle_sha256": "4c5a4bcf0cb5148af722e8db9a460af95fea35b0a9ae7ae2511f20346ffa5851",
+    "composer_lock_sha256": "1a7bc62c308529c9edd7f495ca544e93c53933d39570f4eb43fe92c6365f64e1",
+    "application_files": 14165,
+    "stopped_evidence_content_sha256": "254226b5949a6cf34746282a464640883fc16f76ffdd203428aed42412b16185",
+    "artifact_files": [
+      {
+        "file": "application-linux-summary.json",
+        "sha256": "b36df02c183a6933d7a6f2c116c25c48da1b974614965c3bf2fc0106fc38dcfa"
+      },
+      {
+        "file": "application-linux.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "file": "cli-phpunit.log",
+        "sha256": "bd70b3e791e60089215bd13ae8203d81bc23e5f58b66092924438adc06e2393d"
+      },
+      {
+        "file": "dns-phpunit.log",
+        "sha256": "cb0e57b7ce5405e933456c4a8c3fd13541b86572d0733d1156757fde32c7ea4f"
+      },
+      {
+        "file": "python.log",
+        "sha256": "e6d06f8cd3b7bf1ecfd34fce675b8193a63976e33054f411a73f97d9869edf20"
+      },
+      {
+        "file": "service-cleanup.json",
+        "sha256": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+      },
+      {
+        "file": "setup-stopped-evidence.json",
+        "sha256": "a23d65e279c6704889e190a8353665db02cb33f6659d6bc9081412b9a755822f"
+      },
+      {
+        "file": "source-phpunit.log",
+        "sha256": "400773cef4691a41e5f6510ca1768c9d7ee33eb2e606b344a27c5c956dc3304f"
+      }
+    ]
+  },
+  "failed_runs_retained": [
+    {
+      "id": 44150880056,
+      "sha": "aa48a2391a6a7000518d7563a62af55a237f2d0a",
+      "artifact_id": 14358462958,
+      "reason": "evidence_saved_and_read_back false; exact export reason not retained",
+      "containers_removed": true,
+      "fixed_fixture_removed": true,
+      "artifact_files": [
+        {
+          "file": "application-linux-summary.json",
+          "sha256": "d98d2b4c4697e91d5b50bcbec0e2e75cb87158fbfcde07488b5b68e9003777fe"
+        },
+        {
+          "file": "application-linux.log",
+          "sha256": "ca9cd0071d6797a749876512d7cf6c3834841ab2ab2550335c722e1a490501aa"
+        },
+        {
+          "file": "cli-phpunit.log",
+          "sha256": "540776218a1c05550de604ee0960007d590d05ac48894d83ae386d9e2771be1d"
+        },
+        {
+          "file": "dns-phpunit.log",
+          "sha256": "29fde58b1ff90e596a734f49b047f99ea75f20e126baf84868b521eb174f2bbf"
+        },
+        {
+          "file": "python.log",
+          "sha256": "4bd14f96840f0ccfd2ce9107aabe0d588249d20333dc0b77677b4711bb043151"
+        },
+        {
+          "file": "service-cleanup.json",
+          "sha256": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+        },
+        {
+          "file": "source-phpunit.log",
+          "sha256": "2b472132f47a6ad263d39272508700a8b181c7b644e86b2c7502beaf21108e86"
+        }
+      ]
+    },
+    {
+      "id": 44151908444,
+      "sha": "771abfd2d964c3bbebb72e3e0b98ba82b9915fb1",
+      "artifact_id": 14359127699,
+      "reason": "over-wide provider fixture equality included legitimate control GET during stopped reconciliation; export itself captured and validated",
+      "file": "r35-application-linux-ci.py",
+      "line": 449,
+      "containers_removed": true,
+      "fixed_fixture_removed": true,
+      "artifact_files": [
+        {
+          "file": "application-linux-summary.json",
+          "sha256": "f4f1321e77a624fdfe76349054d16abfc9d9c3563dc2fe8ae436ffe07e4d3b92"
+        },
+        {
+          "file": "application-linux.log",
+          "sha256": "d16680bf786a542d11ca58ff24201aa87e3b67b30c0b0fb8d944488d994050b1"
+        },
+        {
+          "file": "cli-phpunit.log",
+          "sha256": "585ce293cfd5ee92a06806652a7ac32692d0f2b73d42b5ab150be4880ccf0fe2"
+        },
+        {
+          "file": "dns-phpunit.log",
+          "sha256": "8f47a8c2ea558961237e876f0689f4c3178e865b15921a93702b289b97b48750"
+        },
+        {
+          "file": "python.log",
+          "sha256": "5e439ed9e06b6e970c1d12cab7b624d3a7f87ba449057c49be869444b20830ac"
+        },
+        {
+          "file": "service-cleanup.json",
+          "sha256": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+        },
+        {
+          "file": "source-phpunit.log",
+          "sha256": "e42e220d1a49ed84087f312df5edaf7b72efb549b173c97917a6888b099ccc24"
+        }
+      ]
+    }
+  ],
+  "regression_scope": [
+    "PHP in-memory service tests cover stopped-only observations, absent/undispatched tasks, unknown create identity, missing intent/task, changed task and duplicate provider IDs; no provider request, task update, gate change or journal mutation",
+    "Host archive tests reject scope/hash/schema/cleanup-claim changes, preserve uncertain operations and prior snapshots, and fail closed on local write failure or corruption",
+    "Native evidence archive tests still pass after sharing immutable storage/readback with a separately named setup archive"
+  ],
+  "limitations": [
+    "This successful case stops after callback-ready, before either source task; it does not rerun the A1/A2 chain, which has separate composed evidence",
+    "Source/identity drift cases are SQLite component regressions; the complete-application test here proves the no-source early-failure case, not the entire partial-source crash matrix",
+    "Export requires a valid initialized application and setup authority; failure before setup issuance or an unreadable/changed authority is not covered by this export",
+    "No real OS package bootstrap, ACME issuance, node binary execution, cloud creation or DNS mutation; TLS and node/telemetry fixtures remain synthetic",
+    "Standalone complete operator entry and all-stage failure/stop/expiry/crash testing, unarmed real-node/vendor freeze and fresh unexecuted live proposal remain pending",
+    "Temporary workflow, filters and CI-only runner changes are not main-branch or deployment changes"
+  ]
+}

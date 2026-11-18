@@ -1,0 +1,101 @@
+{
+  "schema": 1,
+  "date": "2026-11-17",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "scope": "fresh_A_record_initialization_and_partial_claim_cleanup_component",
+  "status": "passed",
+  "goal_complete": false,
+  "live_ready": false,
+  "execution_authorized": false,
+  "baseline_main_commit": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "tested_commit": "a12e8aa1f8cb32dab7b6bc99484e7ae8395853b9",
+  "workflow_run_id": 44003634228,
+  "workflow_url": "https://github.com/keli-123456/keliboard/actions/runs/44003634228",
+  "trigger": "workflow_dispatch",
+  "regression": {
+    "linux_python_passed": 105,
+    "linux_python_skipped": 0,
+    "php_tests_passed": 48,
+    "php_assertions": 248,
+    "windows_python_run": 122,
+    "windows_python_skipped": 10,
+    "windows_note": "Includes existing local test files; Linux used only the reviewed temporary-branch source. Counts are not equivalent coverage claims."
+  },
+  "actual_services": {
+    "application": "full Laravel application, real vendor and migrations",
+    "application_files": 14057,
+    "composer_lock_sha256": "1a7bc62c308529c9edd7f495ca544e93c53933d39570f4eb43fe92c6365f64e1",
+    "mysql": "8.4, disposable database, loopback only",
+    "redis": "7-alpine, disposable database, loopback only",
+    "credential_storage": "synthetic credential encrypted by the actual Eloquent cast in MySQL",
+    "journal": "root-only files retained across separate PHP CLI processes",
+    "provider_implementation": "existing DnsProviderClient and Aliyun signing; HTTP side effects simulated",
+    "callback": "real application HTTP kernel behind loopback TLS, non-root service user"
+  },
+  "verified": {
+    "simulated_create_calls": 3,
+    "simulated_claim_calls": 3,
+    "simulated_delete_calls": 3,
+    "claim_ack_loss_reconciled_without_replay": true,
+    "blank_remark_cleanup_requires_exact_create_ack": true,
+    "lost_create_ack_does_not_retry_or_adopt_same_name": true,
+    "name_appearing_after_first_inventory_blocks_creation": true,
+    "completed_record_with_removed_or_foreign_marker_not_deleted": true,
+    "missing_or_mismatched_create_ack_not_deleted": true,
+    "stopped_initialization_denied": true,
+    "cleanup_allowed_after_stop": true,
+    "two_independent_absence_reads_at_least_ten_seconds_apart": true,
+    "persistent_gates_unchanged": true,
+    "tls_callback_statuses": [401, 200, 200, 409],
+    "duplicate_callback_step_count": 1,
+    "sibling_bootstrap_unchanged": true,
+    "migration_count": 160,
+    "table_count": 157
+  },
+  "prior_fixture_failure": {
+    "workflow_run_id": 44003168264,
+    "tested_commit": "d6b543ea9641040a792b929e566b7edadf3737cb",
+    "cause": "Redis numeric cache readback is a string; the Python fixture expected an integer",
+    "fix": "Validate integer or digit-only string and bounded value before exporting a normalized counter",
+    "confirmed_redis_read_type": "string",
+    "cleanup_confirmed": true
+  },
+  "limitations_and_next_gates": [
+    "This proves a component, not a complete R35 round or a real cloud/DNS operation",
+    "Concrete initial setup authorization, data seeding and dual-source registration still require composition and full-application verification",
+    "Control DNS and certificate/TLS setup must be available before sources need their callbacks; edge record initialization follows source identity",
+    "Certificate TXT creation and provider-backed issuance are not covered by this A-record initializer",
+    "The DNS fixture uses an explicitly test-only gate, not proof of the production isolated CLI grant issuer or revocation",
+    "The initializer requires its caller to hold the exclusive controller journal lock",
+    "Lost create acknowledgement remains unresolved and blocks adoption or a second create",
+    "The node ELF used for installation component tests is synthetic and was not executed",
+    "A final provenance-verified node runtime freeze, complete lifecycle test and new live approval/preflight remain outstanding"
+  ],
+  "cleanup": {
+    "service_containers_and_anonymous_volumes_removed": true,
+    "fixed_application_fixture_removed": true,
+    "temporary_runtime_and_source_files_removed": true,
+    "hosted_runner_parent_permissions_restored": true,
+    "external_ipv4_routes": false,
+    "external_ipv6_routes": false
+  },
+  "evidence_sha256": {
+    "application-linux-summary.json": "67289a6db4dfe895afb468a994a2eaea00b862093d15c628908579f6521efd20",
+    "python.log": "f788c287c95e82a8454d27edf9a0b67beeb49361113f4a40e5c019e9ded29c22",
+    "dns-phpunit.log": "1df9b11cf71fd94877d578ce0cd311f2b9fbf9bbcff894d307555b06a0ea5045",
+    "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6"
+  },
+  "restrictions": {
+    "main_merged_or_pushed": false,
+    "image_published": false,
+    "cloud_instances_created": 0,
+    "production_bridge_used": false,
+    "production_database_connected": false,
+    "production_or_tanzhen_changed": false,
+    "persistent_automatic_switches_changed": false,
+    "r34_or_historical_live_round_executed": false,
+    "unrelated_dirty_files_checked": 108,
+    "unrelated_dirty_files_changed": 0
+  }
+}

@@ -92,7 +92,14 @@ class MemberRoundAssembly:
         scope = self.cleanup_scope(combined)
         if combined['native'] is not None:
             self.native_port(self.initialization.state['receipts']['native-grant'])
-        bindings = MemberAuxiliaryBindings(scope=scope['auxiliary'], provider=self.provider,
+        auxiliary_scope = copy.deepcopy(scope['auxiliary'])
+        if self.native is not None:
+            # Native DNS may now hold A2. Only the original signed publication
+            # journal can resolve that pin; never reuse a mutable setup snapshot.
+            # Certificate validation TXT records remain host-owned.
+            auxiliary_scope['records'] = [pin for pin in auxiliary_scope['records']
+                                          if pin['type'] == 'TXT']
+        bindings = MemberAuxiliaryBindings(scope=auxiliary_scope, provider=self.provider,
             controller=self.controller, reconcile=self.reconcile, export=self.export,
             load=self.load, save=self.save)
 
@@ -100,8 +107,10 @@ class MemberRoundAssembly:
             self.guard('cleanup-' + operation)
             return bindings(operation, pin)
 
-        auxiliary = MemberAuxiliary(scope=scope['auxiliary'], io=io, load=self.load,
+        auxiliary = MemberAuxiliary(scope=auxiliary_scope, io=io, load=self.load,
                                     save=self.save, clock=self.clock)
+        if self.native is not None:
+            auxiliary = self.native.native_auxiliary(auxiliary)
         # Validate the complete ledger before persisting it or sending a delete.
         def call(operation, role):
             self.guard('cleanup-' + operation)
@@ -148,4 +157,52 @@ def run_execution_round(directory, *, setup_ports, **bindings):
         setup = MemberExecutionSetup(scope=bindings['scope'], load=load, save=save,
                                      guard=bindings['guard'], **setup_ports)
         assembly = MemberRoundAssembly(setup=setup, load=load, save=save, **bindings)
+        return run(assembly.round())
+
+
+def run_connected_round(directory, *, control_inputs, setup_inputs, evidence_directory=None,
+                        cleanup_inputs=None, **bindings):
+    """Bind the concrete deferred setup under the existing whole-round lock.
+
+    No host placeholder, permit or default provider is supplied. The caller's
+    reviewed native/cleanup bindings and pre-existing private inputs are still
+    required; importing this entry never connects or enables execution.
+    """
+    from member_connected_setup import MemberConnectedSetup
+    from member_control_transport import MemberControlTransport
+    from pathlib import Path
+    from staging import read_json
+    control_keys = {'directory', 'php', 'guard'}
+    setup_keys = {'archive', 'identity_file', 'known_hosts', 'grant_file', 'settings',
+                  'service', 'credentials', 'import_permit', 'tls_files', 'ssh_guard'}
+    require(isinstance(control_inputs, dict) and control_keys <= set(control_inputs)
+            <= control_keys | {'execute'} and isinstance(setup_inputs, dict)
+            and setup_keys <= set(setup_inputs) <= setup_keys | {'execute'}
+            and not {'setup', 'control', 'load', 'save'}.intersection(bindings),
+            'transport_connected_entry_bindings')
+    with round_journal(directory, RUN) as (load, save):
+        creation_scope = read_json(Path(control_inputs['directory']).absolute() / 'creation-scope.json')[0]
+        require(set(creation_scope) == {'run_id', 'task_id', 'account_id', 'bundle_sha256', 'bootstrap_sha256',
+                'started_at', 'deadline_at', 'baseline_ids', 'plan'}
+                and all(creation_scope.get(k) == v for k, v in bindings['scope'].items()),
+                'transport_connected_creation_scope')
+        control = MemberControlTransport(scope=creation_scope, load=load, save=save, **control_inputs)
+        setup = MemberConnectedSetup(scope=bindings['scope'], control=control, load=load, save=save,
+            guard=bindings['guard'], clock=bindings.get('clock', time.time), **setup_inputs)
+        if evidence_directory is not None:
+            from member_connected_runtime import MemberConnectedRuntime
+            require(not {'native_transport', 'controller', 'task_call', 'reconcile', 'export'}.intersection(bindings),
+                    'transport_connected_runtime_override')
+            runtime = MemberConnectedRuntime(setup, evidence_directory)
+            bindings.update(native_transport=runtime.native_transport, controller=runtime,
+                task_call=runtime.task_call, reconcile=runtime.reconcile, export=runtime.export)
+            if cleanup_inputs is not None:
+                from member_prepared_provider import MemberPreparedProvider
+                require(isinstance(cleanup_inputs, dict) and {'directory_path', 'php', 'guard'} <= set(cleanup_inputs)
+                        <= {'directory_path', 'php', 'guard', 'machine_file', 'execute'} and 'provider' not in bindings,
+                        'transport_connected_cleanup_override')
+                bindings['provider'] = MemberPreparedProvider(runtime=runtime, **cleanup_inputs)
+        else:
+            require(cleanup_inputs is None, 'transport_connected_cleanup_requires_runtime')
+        assembly = MemberRoundAssembly(setup=setup, control=control, load=load, save=save, **bindings)
         return run(assembly.round())

@@ -1,0 +1,108 @@
+{
+  "schema": 1,
+  "status": "component_passed_not_live_ready",
+  "date": "2026-11-17",
+  "purpose": "Stopped native diagnostic export and immutable host evidence readback",
+  "main_base": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "tested_commit": "ad532ccb3c749e4a0f4bf8033a9583c2b71fbb4f",
+  "linux_run": 44069035123,
+  "linux_url": "https://github.com/keli-123456/keliboard/actions/runs/44069035123",
+  "changes": [
+    "Add a stopped-only round-evidence recovery operation. Expired authority permits evidence recovery, never creation, publication or rotation.",
+    "Project only exact task identities/statuses, existing sanitized task diagnostics, native branch booleans and sanitized first errors. Raw payloads, credentials, exception messages and stacks are not exported.",
+    "Invalid reconciliation is recorded as unresolved without adopting changed source or candidate identity. Export does not assert resource cleanup or acceptance success.",
+    "Persist content-addressed immutable native snapshots, then verify and persist host copies through DriverJournal with exclusive creation, hash checks and bounded no-link readback. Retain earlier snapshots and validate restart reads.",
+    "Use the actual fixed Linux CLI for evidence export; only SSH byte transport is substituted. Retain the sanitized artifact after the controller fixture has been removed."
+  ],
+  "local": {
+    "phpTests": 68,
+    "assertions": 19444,
+    "seconds": 82.464,
+    "pythonTests": 121,
+    "pythonSkipped": 10,
+    "temporaryCommit": "b7f2e93b",
+    "mainUnchanged": true,
+    "phpFull": {
+      "tests": 409,
+      "assertions": 25126,
+      "seconds": 376.646,
+      "memoryMb": 178
+    },
+    "phpAdjacent": {
+      "tests": 11,
+      "assertions": 114
+    }
+  },
+  "cancelled_predecessor": {
+    "id": 44068185679,
+    "testedSha": "b7f2e93b81f1409b50acffec9226496b7d77a038",
+    "conclusion": "cancelled",
+    "cleanupStep": "success",
+    "reason": "Known CI-only unbound fixture_root variable; fixed to host work directory and retained safe artifact, no production/cloud affected"
+  },
+  "boundaries": {
+    "production_access": false,
+    "main_commit_or_push": false,
+    "cloud_instances_created": 0,
+    "cloud_ssh_dns": "simulated",
+    "tanzhen_access": false,
+    "automatic_switches_changed": false,
+    "r34_executed": false,
+    "live_ready": false
+  },
+  "limitations": [
+    "This component does not bind complete host installation, private-material removal or controller-last cloud teardown.",
+    "The full Linux A1 failure, native cleanup, real 300-second retry cooldown, A2, B isolation and actual DNS-cutover composition remain pending. Current component cleans A1 and initial DNS records only.",
+    "The current Linux node bytes and telemetry are synthetic. Historical Runtime-R4 has a same-hash real-node result, but it is not this component or new R35 node execution.",
+    "Evidence export failure must fail acceptance; mandatory resource cleanup still proceeds, rather than leaving billable resources indefinitely.",
+    "No new live authorization is created, and the active goal is not complete.",
+    "When exact candidate resource identity is unresolved, this export currently reports reconciliation failure and retains source-only diagnostic projections. Separate read-only candidate task diagnostic recovery remains to be added without weakening exact-ID cleanup."
+  ],
+  "artifact": 14323325601,
+  "linux": {
+    "status": "passed",
+    "python_tests": 137,
+    "cold_fixed_cli_tests": 11,
+    "php_cli_and_native_dns": {
+      "tests": 17,
+      "assertions": 9362
+    },
+    "php_setup_catalog_dns": {
+      "tests": 103,
+      "assertions": 694
+    },
+    "php_source": {
+      "tests": 17,
+      "assertions": 196
+    },
+    "full_application_vendor_mysql_redis": true,
+    "tls_http_service_uid": 65534,
+    "actual_fixed_evidence_cli": true,
+    "host_ssh_byte_transport_simulated": true,
+    "cloud_or_dns_requests_during_export": 0,
+    "immutable_host_copy_and_readback": true,
+    "restart_same_digest": true,
+    "files_mode_0600": true,
+    "first_error_and_task_history_retained": true,
+    "credentials_and_payloads_excluded": true,
+    "artifact_readback_after_controller_fixture_removed": true,
+    "evidence_digest": "99bb7273a641774f6e5a7fd3325a82ee99f4bc808b4450ca77c45e0fcc85cc06",
+    "artifact_digest_independently_verified": true,
+    "fixed_fixture_removed": true,
+    "containers_removed": true,
+    "external_ipv4_or_ipv6_routes": false,
+    "node_fixture_synthetic_not_executed": true
+  },
+  "artifact_hashes": {
+    "application-linux-summary.json": "3529e75ab13eb64dbe6a34313f065cb4b378d1d8a645b67593d071c482acf742",
+    "application-linux.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cli-phpunit.log": "99afb7a00098cac49a12455e548b7a9547acbac213af41d1445fbcc273813321",
+    "dns-phpunit.log": "92339fe6f837df132ee6b6dffe4c03d5d2b5c182afbf93525986026db700b0c6",
+    "native-entry-linux.log": "c76b28d4a615e9ade526631002055e818ea81634f1cdd3efb3aa4a76643ffc05",
+    "native-evidence.json": "71aa720312bcc1f9502f57b26df5c2bcd2a606ec66a1e81a785e1727dd626711",
+    "python.log": "0533436dccf650756a0be69b31cdd1dec272abfa07331fea446a073abf341a40",
+    "service-cleanup.json": "d46eabcfa632d6b2b714ec526f9f957fe5a91100843d66754a1ce50578290af6",
+    "source-phpunit.log": "5c3272042353d58ef8685fc2c859057e98a74258812ad5e32c8b32703d88abb9"
+  }
+}

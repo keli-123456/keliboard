@@ -1,0 +1,105 @@
+{
+  "schema": 1,
+  "status": "isolated_connected_entry_regressions_passed",
+  "recorded_date": "2026-11-18",
+  "run_id": "keli-accept-20261116-r35-f4940b41",
+  "main_base_commit": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "main_branch_committed_or_pushed": false,
+  "live_ready": false,
+  "execution_authorized": false,
+  "goal_complete": false,
+  "production_accessed": false,
+  "cloud_instances_created": 0,
+  "persistent_automatic_switches_changed": false,
+  "r34_executed": false,
+  "tanzhen_accessed": false,
+  "successful_run": {
+    "id": 44172359452,
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44172359452",
+    "commit": "b8f272203dd787f7a2c1f3f1356f7622ceea6c9c",
+    "mode": "cleanup_regression",
+    "artifact_id": 14368227360,
+    "conclusion": "success",
+    "python": {
+      "tests": 158,
+      "skipped": 0
+    },
+    "php": [
+      {
+        "tests": 15,
+        "assertions": 66
+      },
+      {
+        "tests": 16,
+        "assertions": 77
+      },
+      {
+        "tests": 8,
+        "assertions": 114
+      }
+    ],
+    "environment": "Disconnected Linux network/PID namespace; cloud/SSH/DNS and subprocess side-effect boundaries simulated. No MySQL/Redis service containers or full-app round in this component run.",
+    "verified": [
+      "run_connected_round constructs actual MemberControlTransport and MemberConnectedSetup inside the same existing whole-round lock; rejects caller host/scope overrides and has no default live transport or authority.",
+      "Deferred setup retains exact provider/control/SSH/material bindings through reconstruction. Lost binding, unknown effect, changed keys and stopped/expired stages fail closed.",
+      "Every installation suboperation reply-loss case retains its first error and prevents replay after reconstruction; recovery after expiration uses the sealed address with no new provider connection read.",
+      "Expiration while resolving the control connection permits no upload or installation. Binding-journal failure and crash between binding and dispatch leave only provably local/no-remote effects.",
+      "Existing assembly, original intent readback, source/DNS cleanup, independent controller-last cleanup, provider scope, permission and once-only creation regressions pass."
+    ],
+    "artifact_files": [
+      {
+        "file": "cleanup-php.log",
+        "sha256": "7aae3417580580ff40b21b7fa11378248e7fd25716ad450aff09e81ec736e312"
+      },
+      {
+        "file": "cleanup-python.log",
+        "sha256": "7bc4d9cf474d64ebb7bc5df16c95dd3216f5c175da6e9a9f6068785ba365d5ad"
+      },
+      {
+        "file": "cleanup-summary.json",
+        "sha256": "407668554ab7f22c90b8b92c3688ef2e016733406d8dc317c4f6f5dc1adc226e"
+      },
+      {
+        "file": "connection-control-php.log",
+        "sha256": "487c3f6791c00d156586f74682401d3c283b3747b979615d782c02af11e733af"
+      },
+      {
+        "file": "connection-operator-php.log",
+        "sha256": "21b60edc558d3789e7dfdd432c3cdcfce95cdacd96ed87af30fb986780e12160"
+      }
+    ]
+  },
+  "prior_failed_attempt": {
+    "id": 44171493077,
+    "commit": "a8b145769470b872dd685b7feb8221caa41b9a98",
+    "artifact_id": 14368531389,
+    "conclusion": "failure",
+    "reason": "Quick CI executes as root while checkout files are runner-owned. New connected tests hashed the actual checkout entry and correctly hit staging_owner_mismatch before their simulated process boundary.",
+    "fix": "The unit fixture now uses a current-owner temporary byte-for-byte copy of the endpoint for its fake process boundary. Runtime owner validation is unchanged. The full-app Linux job separately installs and exercises its actual owned entry.",
+    "not_reclassified_as_success": true,
+    "files": [
+      {
+        "file": "cleanup-python.log",
+        "sha256": "e76303030e783a33c3b8335a7383eea97bcf0d13aa51b76b09b567fcaf021ed0"
+      }
+    ]
+  },
+  "local_regression": {
+    "focused_tests": 133,
+    "skipped": 1,
+    "result": "passed",
+    "additional_connected_tests": 13,
+    "additional_result": "passed",
+    "vendor_packages": 157,
+    "installed_versions_and_references_match_lock": true,
+    "node_archive_sha256": "e9012da846fc6b5404ea842bf2e8cf19e1883eac8f2f2d517a961940c018e689",
+    "final_runtime_frozen": false
+  },
+  "limitations": [
+    "The lock-construction helper test replaces only the round body to inspect wiring; it is not itself a complete standalone CLI execution test.",
+    "Connected full-app success/stop are separately recorded at commit 50493153. This latest component commit adds the public entry and failure matrix, not another full-app run.",
+    "Elapsed native authority expiry, additional provider-creation crash boundaries, explicit operator input assembly and final package/proposal review remain to be completed or precisely audited before marking the goal complete.",
+    "No production, real cloud/DNS or persistent settings were accessed; only the temporary acceptance branch was pushed with skip-ci messages and manual test workflows."
+  ]
+}

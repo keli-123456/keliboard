@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from member_assembly import MemberRoundAssembly, run_assembled_round
-from member_auxiliary import digest
+from member_auxiliary import MemberAuxiliary, digest
 from member_cli import BoundControllerTransport, RUN
 from member_initialization import STAGES
 from member_transport import TransportError
@@ -89,6 +89,21 @@ class AssemblyTests(unittest.TestCase):
         elif op == 'round-status':
             result = dict(run_id=RUN, stopped=self.stopped, resolved=True,
                           roles={r: self.f.roles[r] for r in self.f.created_roles})
+        elif op == 'round-dns-cleanup':
+            self.assertTrue(self.stopped)
+            scope = dict(run_id=RUN, control=None, faults=[], private_files=[], requests=[],
+                         records=copy.deepcopy([pin for pin in self.f.original_scope['records'] if pin['type'] == 'A']))
+            dns = MemberAuxiliary(scope=scope, io=self.f.io,
+                load=lambda key: self.f.journal.get('native-dns-fixture-' + key),
+                save=lambda key, value: self.f.save('native-dns-fixture-' + key, value), clock=lambda: self.f.now)
+            records = {}
+            for pin in scope['records']:
+                role = next(r for r in ('control', 'edge-a', 'edge-b') if pin['name'].startswith(r + '-'))
+                try: complete = dns.absent('dns', pin)
+                except Exception: complete = False
+                records[role] = dict(complete=complete)
+            dns.persist()
+            result = dict(complete=all(r['complete'] for r in records.values()), records=records)
         else:
             self.assertIn(op, ('task-inspect', 'task-delete'))
             result = self.f.task(op, request['role'])
@@ -143,6 +158,8 @@ class AssemblyTests(unittest.TestCase):
         self.assertLess(ops.index('round-stop'), ops.index('setup-reconcile'))
         self.assertLess(ops.index('private-remove'), ops.index('control-delete'))
         self.assertEqual(ops.count('control-create'), 1); self.assertEqual(ops.count('control-delete'), 1)
+        self.assertIn('round-dns-cleanup', ops)
+        self.assertLess(ops.index('round-dns-cleanup'), ops.index('private-remove'))
         self.assertEqual(self.f.journal['assembly-cleanup-scope']['auxiliary']['records'][1]['value'], '192.0.2.55')
 
     def test_failure_before_or_after_each_stage_cleans_only_created_resources(self):
@@ -155,6 +172,64 @@ class AssemblyTests(unittest.TestCase):
                     self.assertTrue(state['resources_cleaned']); self.assertFalse(state['acceptance_passed'])
                     self.assertFalse(any(self.f.pins.values())); self.assertFalse(self.f.present)
                     self.assertNotIn('private-error-token', str(self.f.journal))
+
+    def certificate_pin(self):
+        pin = dict(run_id=RUN, record_id='5999', name='_acme-challenge.control-' + RUN + '.dnscloudcloud.top',
+                   type='TXT', line='default', value='synthetic-certificate-proof', marker='fixture-owner')
+        self.f.original_scope['records'].append(pin)
+        return pin
+
+    def test_native_address_cleanup_keeps_certificate_txt_for_host_teardown(self):
+        pin = self.certificate_pin()
+        state = self.finish(self.assembly().round())
+        self.assertTrue(state['resources_cleaned'])
+        self.assertFalse(self.f.pins[digest(pin)])
+        txt_deletes = [i for i, (op, receipt, _) in enumerate(self.f.events)
+                       if op == 'dns-delete' and receipt == pin]
+        self.assertEqual(1, len(txt_deletes))
+        private = next(i for i, e in enumerate(self.f.events) if e[0] == 'private-remove')
+        self.assertLess(txt_deletes[0], private)
+
+    def test_unconfirmed_certificate_delete_retains_private_files_and_controller(self):
+        pin = self.certificate_pin()
+        original = self.f.io
+        def uncertain(operation, receipt):
+            if operation == 'dns-delete' and receipt == pin:
+                self.f.events.append((operation, copy.deepcopy(receipt), self.f.now))
+                raise TimeoutError('private-provider-error')
+            return original(operation, receipt)
+        self.f.io = uncertain
+        driver = self.assembly().round()
+        for _ in range(40): driver.step(); self.f.now += 10
+        self.assertFalse(driver.state['resources_cleaned'])
+        self.assertTrue(self.f.pins[digest(pin)])
+        self.assertNotIn('private-remove', [e[0] for e in self.f.events])
+        self.assertNotIn('control-delete', [e[0] for e in self.f.events])
+        self.assertEqual(1, sum(op == 'dns-delete' and receipt == pin for op, receipt, _ in self.f.events))
+        self.assertNotIn('private-provider-error', str(self.f.journal))
+
+    def test_certificate_delete_reply_loss_recovers_by_readback_without_redelete(self):
+        pin = self.certificate_pin()
+        original = self.f.io
+        def lose_reply(operation, receipt):
+            result = original(operation, receipt)
+            if operation == 'dns-delete' and receipt == pin:
+                raise TimeoutError('private-provider-error')
+            return result
+        self.f.io = lose_reply
+        driver = self.assembly().round()
+        for _ in range(40):
+            driver.step(); self.f.now += 10
+            if self.f.journal.get('auxiliary', {}).get('first_error'):
+                break
+        self.assertFalse(self.f.pins[digest(pin)])
+        self.f.io = original
+        state = self.finish(self.assembly().round())
+        self.assertTrue(state['resources_cleaned'])
+        self.assertEqual(1, sum(op == 'dns-delete' and receipt == pin for op, receipt, _ in self.f.events))
+        reads = self.f.journal['auxiliary']['reads']['dns:' + digest(pin)]
+        self.assertEqual(2, len(reads)); self.assertGreaterEqual(reads[1] - reads[0], 10)
+        self.assertNotIn('private-provider-error', str(self.f.journal))
 
     def test_partial_source_a_without_b_or_grant_is_cleaned_by_pinned_setup_channel(self):
         self.f.fail = ('sources-initialize', 'partial')

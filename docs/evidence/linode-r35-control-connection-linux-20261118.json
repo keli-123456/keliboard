@@ -1,0 +1,131 @@
+{
+  "schema": 1,
+  "status": "isolated_control_connection_component_passed",
+  "recorded_date": "2026-11-18",
+  "main_base_commit": "f192cd78ff33e0742de84c2ec7199a21ad53da6b",
+  "temporary_branch": "acceptance/r35-application-linux-20261117",
+  "live_ready": false,
+  "execution_authorized": false,
+  "goal_complete": false,
+  "production_accessed": false,
+  "cloud_instances_created": 0,
+  "cloud_ssh_dns_effects": "simulated",
+  "persistent_automatic_switches_changed": false,
+  "main_branch_committed_or_pushed": false,
+  "successful_run": {
+    "id": 44164744446,
+    "url": "https://github.com/keli-123456/keliboard/actions/runs/44164744446",
+    "commit": "185e70d33bec8943118b4b284eede07cca29aaee",
+    "conclusion": "success",
+    "artifact_id": 14365106970,
+    "mode": "cleanup_regression",
+    "python_tests": 145,
+    "python_skipped": 0,
+    "php_suites": [
+      {
+        "name": "provider",
+        "tests": 15,
+        "assertions": 66
+      },
+      {
+        "name": "control_creation",
+        "tests": 16,
+        "assertions": 77
+      },
+      {
+        "name": "operator_creation",
+        "tests": 8,
+        "assertions": 114
+      }
+    ],
+    "artifact_files": [
+      {
+        "file": "cleanup-php.log",
+        "sha256": "7aae3417580580ff40b21b7fa11378248e7fd25716ad450aff09e81ec736e312"
+      },
+      {
+        "file": "cleanup-python.log",
+        "sha256": "eed69fc74e19ca0c44cc1b941836bc85dba9f21c0830f223f40c36451f8fbfc0"
+      },
+      {
+        "file": "cleanup-summary.json",
+        "sha256": "407668554ab7f22c90b8b92c3688ef2e016733406d8dc317c4f6f5dc1adc226e"
+      },
+      {
+        "file": "connection-control-php.log",
+        "sha256": "487c3f6791c00d156586f74682401d3c283b3747b979615d782c02af11e733af"
+      },
+      {
+        "file": "connection-operator-php.log",
+        "sha256": "f43ddab00dbde2bd6125be583a82e24b0efd9787b202219d082e948b7441e564"
+      }
+    ],
+    "verified": [
+      "Actual existing Linode reconciliation adapter resolves original encrypted request and exact control pin with only GET after creation",
+      "Exactly one running public IPv4 and fixed port22, endpoint persisted separately from cleanup identity; missing, changed, ambiguous or nonpublic endpoint denied",
+      "Read operation keeps process-local allow_live false, preserves original encrypted create request and never repeats POST",
+      "Stop, deadline, unknown creation and denied material remain fail-closed",
+      "Python validates original creation request digest, registered identity, reply schema and endpoint before constructing existing strict SSH transport",
+      "StrictHostKeyChecking, BatchMode, IdentitiesOnly and UpdateHostKeys=no are preserved; no keyscan, credential output or real SSH",
+      "Real Linux private store uses immutable 0600 connection journal in creation mode only; cleanup mode cannot read/adopt it",
+      "Linux component runs without external routes, no MySQL/Redis/container/full-round or real cloud prerequisites in this component job"
+    ]
+  },
+  "prior_failed_attempt": {
+    "id": 44162376583,
+    "commit": "47c03218ffcd1ad2f60f20f22dd651aac98dba0b",
+    "artifact_id": 14365690421,
+    "conclusion": "failure",
+    "reason": "New control-connection journal was not included in the closed creation-mode store key allowlist; actual Linux operator rejected it with member_operator_journal_key.",
+    "fix": "Added only the fixed control-connection key in creation mode. Immutability and cleanup namespace remain unchanged; added actual private store regression.",
+    "not_reclassified_as_success": true,
+    "artifact_files": [
+      {
+        "file": "cleanup-php.log",
+        "sha256": "7aae3417580580ff40b21b7fa11378248e7fd25716ad450aff09e81ec736e312"
+      },
+      {
+        "file": "cleanup-python.log",
+        "sha256": "e12637cbbb7d1142d27587ff4393fa746cfbebd719cf9e9f2fba17868037f158"
+      },
+      {
+        "file": "connection-control-php.log",
+        "sha256": "487c3f6791c00d156586f74682401d3c283b3747b979615d782c02af11e733af"
+      },
+      {
+        "file": "connection-operator-php.log",
+        "sha256": "09e5cbb6dc68e68aa39a7822a2742436c9aa6c986490f9fe97428eb93352cc68"
+      }
+    ]
+  },
+  "local_checks": {
+    "phpNative": {
+      "tests": 423,
+      "assertions": 26476,
+      "status": "passed"
+    },
+    "phpControl": {
+      "tests": 16,
+      "assertions": 77,
+      "status": "passed"
+    },
+    "pythonFocused": {
+      "tests": 19,
+      "skipped": 0,
+      "status": "passed"
+    },
+    "pythonExtended": {
+      "tests": 212,
+      "skipped": 20,
+      "status": "passed"
+    },
+    "untouchedFiles": 107,
+    "overlayFiles": 99,
+    "mainHead": "f192cd78ff33e0742de84c2ec7199a21ad53da6b"
+  },
+  "remaining": [
+    "Compose this connection primitive into deferred actual host setup after control identity exists; whole-round CI still uses a fixed simulated destination",
+    "OS/bootstrap readiness, approved host-key and TLS material remain explicit prerequisites",
+    "Continue full-application failure/stop/crash coverage then freeze final unarmed real-node runtime and prepare a fresh unexecuted live proposal"
+  ]
+}

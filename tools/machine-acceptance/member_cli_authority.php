@@ -12,9 +12,9 @@ final class MemberCliAuthority
 {
     public const ROOT = '/opt/keli-isolated';
     public const RUN = 'keli-accept-20261116-r35-f4940b41';
-    public const RPC = ['round-ready', 'round-step', 'round-status', 'round-stop',
+    public const RPC = ['round-ready', 'round-step', 'round-status', 'round-stop', 'round-dns-cleanup', 'round-evidence',
         'source-observe', 'source-register', 'task-inspect', 'task-delete'];
-    private const RECOVERY = ['round-status', 'round-stop', 'task-inspect', 'task-delete'];
+    private const RECOVERY = ['round-status', 'round-stop', 'round-dns-cleanup', 'round-evidence', 'task-inspect', 'task-delete'];
     private const NATIVE = ['start', 'advance', 'context', 'queue', 'native_task', 'candidate_cleanup', 'candidate_retry',
         'node_readiness', 'native_address_verify', 'native_address_read', 'native_dns_admission', 'native_dns_prepare',
         'native_dns_binding', 'native_dns_complete', 'dns_readback', 'dns_write', 'dns_set_read', 'dns_set_write',
@@ -166,6 +166,17 @@ final class MemberCliAuthority
             'grant_sha256' => $this->grantHash, 'bundle_sha256' => $this->scope['bundle_sha256']];
     }
 
+    public function stopCallbacks(): void
+    {
+        if ($this->simulation) return;
+        $path = self::ROOT . '/member-setup-grant.json';
+        if (file_exists($path) || is_link($path)) {
+            foreach (['member_application_bootstrap.php', 'member_provider_bindings.php', 'member_setup_authority.php'] as $file)
+                require_once __DIR__ . '/' . $file;
+            MemberSetupAuthority::revoke();
+        }
+    }
+
     public function assertDriver(array $driver): void
     {
         $this->assertEnvironment();
@@ -182,8 +193,10 @@ final class MemberCliAuthority
         $now = ($this->clock)();
         self::need(is_int($now) && $now >= $this->scope['started_at'], 'clock_invalid');
         if (!in_array($operation, self::RECOVERY, true))
-            self::need($now < $this->scope['deadline_at'] - 1200 && !($this->stopped)(), 'execution_expired_or_stopped');
-        if ($operation === 'task-delete') self::need(($this->stopped)(), 'final_cleanup_required');
+            self::need($now < $this->scope['deadline_at'] - 1200 && !($this->stopped)()
+                && ($this->simulation || (!file_exists(self::ROOT . '/member-setup-stop.json')
+                    && !is_link(self::ROOT . '/member-setup-stop.json'))), 'execution_expired_or_stopped');
+        if (in_array($operation, ['task-delete', 'round-dns-cleanup', 'round-evidence'], true)) self::need(($this->stopped)(), 'final_cleanup_required');
     }
 
     public function native(string $operation): void
@@ -232,8 +245,10 @@ final class MemberCliAuthority
     {
         self::need(!$this->active, 'nested_authority_denied');
         $this->allow($operation, $role);
+        $gateShared = app()->isShared(MachineFailoverExecutionGate::class);
         $oldGate = app(MachineFailoverExecutionGate::class);
         $busContract = \Illuminate\Contracts\Bus\Dispatcher::class;
+        $busShared = app()->isShared($busContract);
         $oldBus = app($busContract);
         $before = []; foreach (self::closed() as $key => $_) $before[$key] = config($key);
         $this->expected = $before;
@@ -261,8 +276,10 @@ final class MemberCliAuthority
             return $callback();
         } finally {
             config($before);
-            app()->instance($busContract, $oldBus);
-            app()->instance(MachineFailoverExecutionGate::class, $oldGate);
+            if ($busShared) app()->instance($busContract, $oldBus);
+            else app()->forgetInstance($busContract);
+            if ($gateShared) app()->instance(MachineFailoverExecutionGate::class, $oldGate);
+            else app()->forgetInstance(MachineFailoverExecutionGate::class);
             $this->active = false; $this->operation = ''; $this->expected = [];
         }
     }
