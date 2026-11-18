@@ -36,6 +36,19 @@ preserving TTLs and cache keys; do not copy queue/Horizon keys or delete the sou
 database. Queue protection already works before this migration and is sufficient
 to prevent the destructive upgrade race.
 
+## Statistics job retries
+
+The three `stat` jobs commit their sorted batch upserts and delivery receipt in
+the same database transaction. A rollback retries the whole job; a delivery
+with an already committed receipt does not increment traffic again. Receipt
+records in `v2_stat_job_receipt` are not cache entries and must be retained.
+
+For a future rollout, apply the new receipt migration before starting the new
+workers and let all old in-flight writers finish before switching. The migration
+checks the statistics keys and requires InnoDB on MySQL/MariaDB. Do not bulk
+replay failures from before this version: there is no receipt to prove which
+increments the old code had already committed.
+
 ## Validation boundary
 
 Consumer records are runtime heartbeats, not proof of email inbox delivery.
