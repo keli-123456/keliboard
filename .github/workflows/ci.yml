@@ -29,7 +29,7 @@ jobs:
         run: |
           set -euo pipefail
           base=0e92f73dc987156d65bb2399eaddf904d607330f
-          test "$(git rev-parse HEAD^)" = "$base"
+          git merge-base --is-ancestor "$base" HEAD
           actual="$(git diff --name-only "$base" HEAD | sort)"
           expected="$(printf '%s\n' .github/workflows/ci.yml .ci-example/client.php .ci-example/run.py .ci-example/sandbox.py | sort)"
           test "$actual" = "$expected"

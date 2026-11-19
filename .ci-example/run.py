@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import traceback
 
 
 SOURCE = "0e92f73dc987156d65bb2399eaddf904d607330f"
@@ -212,9 +213,19 @@ StandardError=null
 StandardOutput=null
 StandardError=null
 """)
+        self.stage = "register_units"
         system("daemon-reload")
+        self.stage = "start_socket"
         system("start", self.names[0])
-        s = SOCKET.lstat()
+        self.stage = "inspect_socket_inode"
+        info = properties(self.names[0], "ActiveState", "SubState", "Listen", "Result")
+        self.proof["socket_diagnostics"] = {
+            "pid_one_systemd": Path("/proc/1/comm").read_text().strip() == "systemd",
+            "active": info.get("ActiveState") == "active", "listening": info.get("SubState") == "listening",
+            "listen_target_matches": str(SOCKET) in info.get("Listen", ""),
+            "socket_directory_present": SOCKET.parent.is_dir(), "manager_clean": info.get("Result") == "success",
+        }
+        s = eventually(lambda: SOCKET.lstat() if SOCKET.exists() else None, 2, "socket_inode_missing")
         need(stat.S_ISSOCK(s.st_mode) and stat.S_IMODE(s.st_mode) == 0o660 and s.st_uid == 0
              and s.st_gid == grp.getgrnam(self.socket_group).gr_gid, "unexpected_socket_mode")
         denied = self.as_user(self.other, "/usr/bin/python3", "-B", self.area / "sandbox.py", "deny")
@@ -305,8 +316,11 @@ StandardError=null
             info = properties(name, "MainPID")
             if info.get("MainPID", "0").isdigit() and int(info["MainPID"]) > 0:
                 pid = int(info["MainPID"])
-                if (Path("/proc", str(pid), "cmdline").read_bytes().split(b"\0")[-2:] == [os.fsencode(self.worker_path), b""]):
-                    return name, pid
+                try:
+                    if (Path("/proc", str(pid), "cmdline").read_bytes().split(b"\0")[-2:] == [os.fsencode(self.worker_path), b""]):
+                        return name, pid
+                except FileNotFoundError:
+                    continue
         return None
 
     def hard_timeout(self):
@@ -405,6 +419,9 @@ def main():
     except Exception as error:
         report["failed_stage"] = lab.stage
         report["error"] = str(error) if isinstance(error, Rejected) else type(error).__name__
+        frames = [frame for frame in traceback.extract_tb(error.__traceback__) if Path(frame.filename).name == "run.py"]
+        if frames:
+            report["fixture_line"] = frames[-1].lineno
     try:
         report["cleaned"] = lab.cleanup()
     except Exception as error:
