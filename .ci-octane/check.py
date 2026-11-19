@@ -213,6 +213,8 @@ class Check:
 
     def http(self,path):
         r=self.compose('exec','-T','web','php','/fixture/http.php',path,check=False,timeout=10)
+        if r.returncode:
+            self.proof['http_probe_last_exit']=r.returncode
         return None if r.returncode else json.loads(r.stdout)
 
     def processes(self,meta):
@@ -311,7 +313,8 @@ class Check:
     def diagnostics(self):
         if not self.base.is_file():
             return {}
-        logs=self.compose('logs','--tail','35','web',check=False).stdout.decode(errors='replace')
+        proc=self.compose('logs','--tail','35','web',check=False)
+        logs=(proc.stdout+proc.stderr).decode(errors='replace')
         tags={'missing_app_key':'MissingAppKeyException','bad_vendor':'Composer detected issues','failed_php_module':'Unable to load dynamic library',
               'bad_permissions':'Permission denied','no_octane':'octane:start" is not defined','artisan_ready':'Server running','fixture_fatal':'Fatal error',
               'cannot_make_directory':'Failed to create directory','invalid_php_cli':'PHP Fatal error'}
@@ -320,6 +323,11 @@ class Check:
         error=re.search(r'\b([A-Za-z][A-Za-z0-9_\\]{0,100}(?:Exception|Error))\b',logs)
         if error:
             findings['exception_class']=error[1]
+        rows=self.compose('ps','-a','--format','json','web',check=False).stdout.decode().strip()
+        parsed=json.loads(rows) if rows.startswith('[') else [json.loads(v) for v in rows.splitlines() if v]
+        findings['fixture_web_states']=[{k:s[k] for k in ('State','ExitCode') if k in s} for s in parsed]
+        findings['fixture_log_tail']=[re.sub(r'\x1b\[[0-9;]*m','',line)[:200] for line in logs.splitlines()
+                                      if line.strip() and not re.search('password|token|secret|credential',line,re.I)][-12:]
         return findings
 
     def cleanup(self):
