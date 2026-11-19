@@ -357,6 +357,8 @@ class Assembly(Lab):
         self.advance("seal_verified_worker_root")
         need(self.rootfs.fingerprint()==self.proof["sealed_root_sha256"],"root_changed_during_acceptance")
         self.proof["sealed_immutable_sha256"]=self.rootfs.fingerprint(MOUNT_SCAFFOLD)
+        self.proof["sealed_expanded_bytes"]=sum(p.stat().st_size for p in self.rootfs.path.rglob("*") if p.is_file())
+        need(0<self.proof["sealed_expanded_bytes"]<320*1024*1024,"sealed_expanded_size_invalid")
         def portable(info):
             p = Path(info.name)
             mode = stat.S_IMODE(info.mode)
@@ -372,7 +374,8 @@ class Assembly(Lab):
         with tarfile.open(path,"x:gz",compresslevel=6) as archive:
             for entry in sorted(self.rootfs.path.iterdir()):
                 archive.add(entry,arcname=entry.name,filter=portable)
-        need(0<path.stat().st_size<60*1024*1024,"sealed_payload_size_invalid")
+        self.proof["sealed_archive_bytes"]=path.stat().st_size
+        need(0<self.proof["sealed_archive_bytes"]<120*1024*1024,"sealed_payload_size_invalid")
         with path.open("rb") as blob:
             self.proof["sealed_payload"]={"name":PAYLOAD,"sha256":sha256(blob.read()).hexdigest(),"bytes":path.stat().st_size}
         path.chmod(0o644)
