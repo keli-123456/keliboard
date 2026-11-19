@@ -19,7 +19,7 @@ import traceback
 
 BASE = '984af21185a71879425a9796aadc22ef8f745d62'
 TARGET = '0e92f73dc987156d65bb2399eaddf904d607330f'
-BRANCH = 'audit/failover-example-octane-linux-20261119-0e92f73d'
+BRANCH = 'audit/failover-example-v2board-linux-20261120-0e92f73d'
 UID = GID = 1000
 SOCKET_GID = 43103
 SOCKET_DIR = Path('/run/keli-failover-example')
@@ -27,7 +27,7 @@ SOCKET = SOCKET_DIR/'worker.sock'
 ADMIN = 'public/assets/admin-xboard/'
 ROUTE = '/api/v2/fixture-admin/server/machine/cloud/failover/example'
 FILES = ('app/Http/Routes/V2/AdminRoute.php', 'app/Http/Controllers/V2/Admin/Server/MachineCloudController.php',
-         'app/Http/Controllers/V2/Admin/Server/MachineFailoverExampleController.php', 'config/failover_example.php',
+         'app/Http/Controllers/V2/Admin/Server/MachineFailoverExampleController.php', 'config/failover_example.php', 'config/v2board.php',
          *(ADMIN+p for p in ('index.html','build-manifest.json','assets/index.js','assets/index.css')))
 GROUP = ('horizon','ws-server')
 
@@ -109,7 +109,7 @@ class Check:
         self.project = f'keli-octane-{number}-{attempt}'
         self.root = Path('/run',self.project)
         self.image = 'keli-octane-fixture:'+number+'-'+attempt
-        self.base,self.render,self.deny = (self.root/name for name in ('base.json','candidate.json','without-group.json'))
+        self.base,self.render,self.deny,self.missing = (self.root/name for name in ('base.json','candidate.json','without-group.json','missing-v2board.json'))
         self.old,self.candidate,self.fixture = (self.root/name for name in ('old','candidate','fixture'))
         self.proof,self.files = {},{}
         self.made=self.bind_dir=False
@@ -144,6 +144,15 @@ class Check:
         self.made=True
         self.export(self.old,BASE,'cac50ff')
         self.export(self.candidate,TARGET,'c718b74')
+        self.original = self.old/'config/v2board.php'
+        self.placeholder = self.candidate/'config/v2board.php'
+        with self.original.open('x',encoding='ascii') as f:
+            f.write("<?php return ['keli_ci_mount' => 'original-only'];\n")
+        with self.placeholder.open('x',encoding='ascii') as f:
+            f.write("<?php throw new RuntimeException('fixture_original_config_mount_missing');\n")
+        self.original_sha,self.placeholder_sha = sha(self.original),sha(self.placeholder)
+        for revision in (BASE,TARGET):
+            self.files[revision]['config/v2board.php']=self.original_sha
         need(sha(self.old/'composer.lock')==sha(self.candidate/'composer.lock'),'shared_dependencies_changed')
         exported=self.temp/'octane-old-source'
         need(sha(exported/'composer.lock')==sha(self.old/'composer.lock') and not (exported/'.env').exists(),'vendor_export_not_based_on_old_release')
@@ -163,13 +172,15 @@ class Check:
         need(stat.S_IMODE(SOCKET.lstat().st_mode)==0o660 and SOCKET.lstat().st_gid==SOCKET_GID,'wrong_fixture_socket_mode')
         template=(self.repo/'.ci-octane/web-only.compose.yaml.in').read_text()
         self.proof['overlay_sha256']=sha256(template.encode()).hexdigest()
-        for k,v in {'RELEASE':self.candidate,'WEB_UID':UID,'WEB_GID':GID,'SOCKET_GID':SOCKET_GID}.items():
+        for k,v in {'RELEASE':self.candidate,'V2BOARD_FILE':self.original,'WEB_UID':UID,'WEB_GID':GID,'SOCKET_GID':SOCKET_GID}.items():
             template=template.replace('@'+k+'@',str(v))
         candidate=json.loads(template)
         need(set(candidate['services'])=={'web'},'overlay_changed_non_web_service')
         data(self.render,candidate)
         candidate['services']['web'].pop('group_add')
         data(self.deny,candidate)
+        candidate['services']['web']['volumes']=[mount for mount in candidate['services']['web']['volumes'] if mount['target']!='/www/config/v2board.php']
+        data(self.missing,candidate)
         paths=('CONFIG','ROUTES','PACKAGES','SERVICES','EVENTS')
         default={'image':self.image,'pull_policy':'never','network_mode':'none','read_only':True,'cap_drop':['ALL'],
                  'security_opt':['no-new-privileges:true'],'working_dir':'/www',
@@ -181,7 +192,7 @@ class Check:
                      'LOG_CHANNEL':'stderr',**{'APP_'+k+'_CACHE':'/state/cache/'+k.lower()+'.php' for k in paths}}}
         command=['octane:start','--server=swoole','--host=127.0.0.1','--port=7001','--workers=2','--task-workers=1','--max-requests=128']
         data(self.base,{'services':{
-             'web':{**default,'user':'0:0','entrypoint':['php','/fixture/artisan'],'command':command},
+             'web':{**default,'user':'0:0','entrypoint':['/bin/sh','/fixture/start.sh'],'command':command},
              **{name:{**default,'user':f'{UID}:{GID}','entrypoint':['php','/fixture/witness.php']} for name in GROUP}}})
 
     def compose(self,*args,override=None,timeout=30,check=True):
@@ -201,8 +212,9 @@ class Check:
         for role in GROUP:
             actual=self.metadata(role)
             content=eventually(lambda:self.witness_read(role),6,'no_persistent_witness')
-            need(content['files']==self.files[BASE] and content['socket_absent'] is True,'other_service_saw_candidate')
-            need(not any(m['Destination'] in ('/www/app','/www/config','/www/public/assets/admin-xboard',str(SOCKET_DIR))
+            need(content['files']==self.files[BASE] and content['socket_absent'] is True and content['old_cache_visible'] is True,
+                 'other_service_saw_candidate_or_new_cache')
+            need(not any(m['Destination'] in ('/www/app','/www/config','/www/config/v2board.php','/www/public/assets/admin-xboard',str(SOCKET_DIR))
                          for m in actual['Mounts']),'candidate_mounted_to_other_service')
             result[role]={'id':actual['Id'],'pid':actual['State']['Pid'],'started':actual['State']['StartedAt'],'tick':content['tick']}
         return result
@@ -255,18 +267,24 @@ class Check:
              and (SOCKET_GID in body['groups'])==(mode=='allow') and body['grant_supplied'] is False,'web_process_credentials_wrong')
         mounts={m['Destination']:m for m in actual['Mounts']}
         required={'/www/app':self.candidate/'app','/www/config':self.candidate/'config',
+                  '/www/config/v2board.php':self.original,
                   '/www/public/assets/admin-xboard':self.candidate/ADMIN.rstrip('/'),str(SOCKET_DIR):SOCKET_DIR}
         if candidate:
             need(all(k in mounts and mounts[k]['Type']=='bind' and mounts[k]['Source']==str(v) and mounts[k]['RW'] is False for k,v in required.items())
                  and all(body['mounts'].get(k)=='ro' for k in required) and body['mounts'].get('/www/bootstrap/cache')=='rw'
                  and '/www/bootstrap/cache' in (actual['HostConfig']['Tmpfs'] or {}) and not body['cache_anchor_present']
                  and body['config_cache_path']=='/www/bootstrap/cache/config.php','web_mounts_or_cache_not_isolated')
+            inside=Path('/proc',str(actual['State']['Pid']),'root','www/config/v2board.php')
+            need(inside.samefile(self.original),'mounted_config_is_not_the_original_file')
         else:
             need(not set(required)&set(mounts) and not (set(required)&set(body['mounts']))
                  and body['cache_anchor_present'] and body['socket_mode'] is None,'rollback_mount_still_present')
         revision = TARGET if candidate else BASE
         need(body['files']==self.files[revision] and body['candidate_controller_loaded'] is candidate,
              'running_web_release_or_autoloader_mismatch')
+        need(body['config_path']=='/www/config' and body['original_config_loaded'] is True
+             and body['loaded_from_cache'] is candidate and body['example_config_closed'] is candidate,
+             'real_laravel_cache_did_not_load_both_configs')
         n=self.server.accepted
         closed=self.http(ROUTE)
         need(closed and closed['code']==404 and self.server.accepted==n,'closed_entry_touched_socket')
@@ -285,7 +303,8 @@ class Check:
             need(asset and asset['code']==200 and asset['sha256']==file,'octane_sent_wrong_admin_asset')
         self.proof['runtime']={'php':body['php'],'swoole':body['swoole'],'octane_workers_checked':len(workers)}
         return {'revision':revision,'web_nonroot':candidate,'supplementary_group':mode=='allow','closed_http_status':404,
-                'candidate_mounts_read_only':candidate,'old_cache_hidden':candidate,'http_assets_match':True}
+                'candidate_mounts_read_only':candidate,'old_cache_hidden':candidate,'http_assets_match':True,
+                'original_config_loaded':True,'original_config_separately_read_only':candidate,'private_cache_loaded_both':candidate}
 
     def retained(self,old,current):
         return all({k:v for k,v in old[role].items() if k!='tick'}=={k:v for k,v in current[role].items() if k!='tick'}
@@ -297,6 +316,12 @@ class Check:
         self.compose('up','-d','--no-deps','--pull','never',*GROUP,timeout=60)
         old=self.witness()
         self.proof['baseline']=self.web('old')
+        self.step('missing_original_config_mount_refused')
+        result=self.compose('run','--rm','--no-deps','--entrypoint','php','web','/fixture/artisan','config:cache','--no-interaction',
+                            override=self.missing,check=False,timeout=35)
+        need(result.returncode!=0 and b'fixture_original_config_mount_missing' in result.stdout+result.stderr,
+             'missing_mount_failure_not_proven')
+        self.proof['missing_original_mount_rejected']=True
         self.step('ungrouped_octane_denied')
         self.proof['negative_control']=self.web('deny')
         self.step('grouped_octane_web_only_candidate')
@@ -308,8 +333,10 @@ class Check:
         self.proof['rollback']=self.web('old')
         after=self.witness()
         need(self.retained(active,after) and all(after[k]['tick']>old[k]['tick'] for k in GROUP)
-             and sha(self.old/'bootstrap/cache/shared-anchor')==self.anchor,'rollback_or_shared_tree_changed')
+             and sha(self.old/'bootstrap/cache/shared-anchor')==self.anchor
+             and sha(self.original)==self.original_sha and sha(self.placeholder)==self.placeholder_sha,'rollback_or_shared_tree_changed')
         self.proof.update(horizon_ws_unchanged_through_rollback=True,old_shared_cache_unchanged=True,
+                          original_config_and_placeholder_unchanged=True,
                           socket_acl_verified_in_http_worker=True,candidate_loads_from_unchanged_old_vendor=True,
                           only_acl_fixture_connections=self.server.accepted==self.server.valid==1)
         need(self.proof['only_acl_fixture_connections'],'unexpected_socket_calls')

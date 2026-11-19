@@ -16,7 +16,7 @@ $router->get('/_ci_octane_identity', static function (Request $request) {
     $read = [];
     foreach (file('/proc/self/mountinfo', FILE_IGNORE_NEW_LINES) as $line) {
         $items = explode(' ', $line);
-        if (in_array($items[4], [$parent, '/www/app', '/www/config', '/www/public/assets/admin-xboard', '/www/bootstrap/cache'], true)) {
+        if (in_array($items[4], [$parent, '/www/app', '/www/config', '/www/config/v2board.php', '/www/public/assets/admin-xboard', '/www/bootstrap/cache'], true)) {
             $read[$items[4]] = in_array('ro', explode(',', $items[5]), true) ? 'ro' : 'rw';
         }
     }
@@ -45,14 +45,16 @@ $router->get('/_ci_octane_identity', static function (Request $request) {
         'candidate_controller_loaded' => $candidateLoaded,
         'socket_mode' => @filetype($file) === 'socket' ? fileperms($file) & 0777 : null, 'acl' => $acl,
         'mounts' => $read, 'files' => mountedFiles(), 'cache_anchor_present' => is_file('/www/bootstrap/cache/shared-anchor'),
-        'config_cache_path' => app()->getCachedConfigPath(), 'grant_supplied' => (bool) getenv('FAILOVER_EXAMPLE_GRANT_ID')]);
+        'config_cache_path' => app()->getCachedConfigPath(), 'loaded_from_cache' => app('config_loaded_from_cache'),
+        'config_path' => app()->configPath(), 'original_config_loaded' => config('v2board.keli_ci_mount') === 'original-only',
+        'example_config_closed' => config('failover_example') === array_fill_keys(['id','admin','opens','expires'], null),
+        'grant_supplied' => (bool) getenv('FAILOVER_EXAMPLE_GRANT_ID')]);
 });
 
 // Only exercise the real controller's no-grant GET. No mutation routes are registered.
 if (class_exists(MachineFailoverExampleController::class)) {
     $router->get('/api/v2/fixture-admin/server/machine/cloud/failover/example', static function (Request $request) {
         $request->setUserResolver(static fn () => (new User())->forceFill(['id' => 42, 'is_admin' => true, 'banned' => false]));
-        config(['failover_example' => require '/www/config/failover_example.php']);
         return app(MachineFailoverExampleController::class)->status($request, app(WorkerSocket::class));
     });
 }
