@@ -43,6 +43,8 @@ class Assembly(Lab):
         self.state_owned = self.grant_owned = False
         self.project = self.prefix.replace("keli-example-linux-", "keli-example-final-")
         self.image = None
+        self.rootfs_owned = False
+        self.rootfs_path = Path("/opt", self.project + "-rootfs")
         self.compose_initialized = False
         self.web_args = []
         self.templates = {name:(workspace / ".ci-example/templates" / name).read_text() for name in TEMPLATES}
@@ -57,7 +59,9 @@ class Assembly(Lab):
         self.web_gid = pwd.getpwnam(self.panel).pw_gid
         self.web_socket_gid = grp.getgrnam(self.socket_group).gr_gid
         need(self.web_socket_gid not in (0,self.uid,self.gid,self.web_gid), "invalid_dedicated_group")
-        self.rootfs = RuntimeTree(self.area / "rootfs",self.php,self.uid,self.gid,self.web_uid,self.web_gid,self.web_socket_gid)
+        need(not self.rootfs_path.exists() and not self.rootfs_path.is_symlink(),"executable_root_path_occupied")
+        self.rootfs_owned = True
+        self.rootfs = RuntimeTree(self.rootfs_path,self.php,self.uid,self.gid,self.web_uid,self.web_gid,self.web_socket_gid)
         self.image = self.rootfs.disposable_web_image(self.area / "web-root.tar")
         shutil.copytree(self.area / "candidate",self.rootfs.path / "app",dirs_exist_ok=True)
         self.proof["sealed_root_sha256"] = self.rootfs.fingerprint()
@@ -317,6 +321,11 @@ class Assembly(Lab):
         try:
             base=super().cleanup()
         finally:
+            if self.rootfs_owned and self.rootfs_path.is_dir():
+                need(self.rootfs_path.parent==Path("/opt") and self.rootfs_path.name==self.project+"-rootfs"
+                     and self.rootfs_path.resolve()==self.rootfs_path,"unsafe_runtime_root_cleanup")
+                shutil.rmtree(self.rootfs_path)
+                ok=ok and not self.rootfs_path.exists()
             for path,owned,expected in ((STATE,self.state_owned,"/var/lib/keli-failover-example"),
                                         (GRANT_DIR,self.grant_owned,"/etc/keli-failover-example")):
                 if owned:

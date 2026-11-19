@@ -55,9 +55,17 @@ class RuntimeTree:
         nss = Path("/lib/x86_64-linux-gnu/libnss_files.so.2")
         if nss.is_file():
             self.copy_elf(nss, str(nss))
-        result = json.loads(call("chroot", path, "/usr/bin/php", "-r",
-            "echo json_encode(['version'=>PHP_VERSION,'sqlite'=>in_array('sqlite',PDO::getAvailableDrivers(),true),'modules'=>"
-            "array_map('extension_loaded',['sockets','pcntl','posix','mbstring','openssl'])]);").stdout)
+        smoke = call("chroot", path, "/usr/bin/php", "-r",
+            "echo json_encode(['version'=>PHP_VERSION,'sqlite'=>class_exists('PDO')&&in_array('sqlite',PDO::getAvailableDrivers(),true),'modules'=>"
+            "array_map('extension_loaded',['sockets','pcntl','posix','mbstring','openssl'])]);", check=False)
+        if smoke.returncode:
+            why = smoke.stderr.decode(errors="replace").lower()
+            code = ("chroot_binary_permission_denied" if "permission denied" in why else
+                    "chroot_loader_or_binary_missing" if "no such file" in why else
+                    "chroot_library_missing" if "loading shared libraries" in why else
+                    "chroot_capability_unavailable" if "operation not permitted" in why else "chroot_php_nonzero")
+            need(False, code)
+        result = json.loads(smoke.stdout)
         need(result == {"version":version,"sqlite":True,"modules":[True]*5}, "sealed_php_modules_missing")
         self.version = version
 
