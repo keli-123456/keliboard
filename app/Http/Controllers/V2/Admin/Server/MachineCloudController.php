@@ -18,7 +18,10 @@ class MachineCloudController extends Controller
         } catch (LockTimeoutException) { return response()->json(['message' => 'busy'], 409); }
         catch (CloudException $error) { return response()->json(['message' => $error->getMessage()], 422); }
     }
-    public function fetch(Request $request, MachineCloudService $service) { return $this->run($request, $service, fn () => $service->overview(), false); }
+    public function fetch(Request $request, MachineCloudService $service)
+    {
+        return $this->run($request, $service, fn () => ['failover_preview_only' => true] + $service->overview(), false);
+    }
     public function account(Request $request, MachineCloudService $service)
     {
         $input = $request->validate(['id' => 'sometimes|integer|min:1', 'expected_revision' => 'required_with:id|integer|min:1',

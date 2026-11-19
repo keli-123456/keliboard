@@ -74,6 +74,30 @@ class MachineFailoverServicesTest extends TestCase
             'members' => array_map(fn ($row) => ['policy_id' => $row['id'], 'policy_revision' => $row['revision'], 'name' => $row['name'],
                 'priority' => $row['id'], 'enabled' => true], $this->policies)];
     }
+    public function test_service_money_is_optional_and_old_values_are_not_erased_on_edit(): void
+    {
+        $this->registry->drop($this->service['id'], 1, $this->admin->id);
+        $input = $this->input(); unset($input['monthly_cap_usd']);
+        $row = $this->registry->save($input, $this->admin->id); $this->assertSame(0.0, $row['monthly_cap_usd']);
+        Service::query()->whereKey($row['id'])->update(['monthly_cap_usd' => 48]);
+        $row = $this->registry->save($input + ['id' => $row['id'], 'expected_revision' => 1], $this->admin->id);
+        $this->assertSame(48.0, $row['monthly_cap_usd']); $this->assertFalse($row['execution_enabled']); $this->untouched();
+    }
+
+    public function test_simulation_pins_readiness_and_protocol_diagnostics_as_separate_contracts(): void
+    {
+        $start = $this->start(); $this->assertSame('agent_readiness_v1', $start['workflow']);
+        config(['machine_failover.workflow' => 'protocol_verification_v1']);
+        $this->assertSame($start['id'], $this->start()['id']);
+        $result = $this->simulation->advance($start['id'], $this->admin->id);
+        $this->assertSame('completed', $result['status']);
+        $this->assertNotContains('forwarding', array_column($result['actions'], 'kind'));
+        $specialist = $this->simulation->advance($this->start('forwarding_failed', 1, str_repeat('b', 32))['id'], $this->admin->id);
+        $this->assertSame('protocol_verification_v1', $specialist['workflow']);
+        $this->assertSame('failed', $specialist['status']);
+        $this->assertContains('forwarding', array_column($specialist['actions'], 'kind')); $this->untouched();
+    }
+
     private function start(string $scenario = 'replace', ?int $target = 1, string $key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'): array
     {
         return $this->simulation->start($this->service['id'], $this->service['revision'], $scenario, $target, $key, $this->admin->id);
@@ -131,14 +155,14 @@ class MachineFailoverServicesTest extends TestCase
     {
         Service::query()->whereKey($this->service['id'])->update(['attempt_limit' => 1]);
         $run = $this->simulation->advance($this->start('credential_auth_rotate')['id'], $this->admin->id);
-        $this->assertSame('failed', $run['status']); $this->assertSame(1, $run['attempts']); $this->assertSame(100.0, $run['reserved_usd']);
+        $this->assertSame('failed', $run['status']); $this->assertSame(1, $run['attempts']); $this->assertSame(0.0, $run['reserved_usd']);
         $this->assertSame('rotation_budget_exhausted', $run['members'][0]['credential_attempts'][0]['reason']); $this->untouched();
     }
 
     public static function outcomes(): array
     {
         return [['healthy', 'completed', 'healthy', 0], ['replace', 'completed', 'completed', 1], ['one_target_reachable', 'completed', 'healthy', 0],
-            ['no_baseline', 'failed', 'blocked', 0], ['unknown_probe', 'failed', 'blocked', 0], ['stale_probe', 'failed', 'blocked', 0],
+            ['no_baseline', 'completed', 'completed', 1], ['unknown_probe', 'failed', 'blocked', 0], ['stale_probe', 'failed', 'blocked', 0],
             ['recover_before_create', 'completed', 'recovered', 0], ['recover_after_create', 'completed', 'retained', 1],
             ['create_rejected', 'failed', 'failed', 1], ['create_unknown_found', 'completed', 'completed', 1], ['create_ambiguous', 'needs_review', 'needs_review', 1],
             ['initialization_timeout', 'failed', 'failed', 1], ['reports_mismatch', 'failed', 'failed', 1], ['ipv4_unreachable', 'failed', 'failed', 1],
@@ -156,7 +180,7 @@ class MachineFailoverServicesTest extends TestCase
         $this->assertSame(0, Action::query()->where('member_id', 2)->count());
         $this->assertSame($result['id'], $this->start($scenario)['id']);
         $this->assertSame($result, $this->simulation->advance($result['id'], $this->admin->id));
-        if ($scenario === 'replace') $this->assertSame(['create', 'initialize', 'reports', 'ipv4', 'forwarding', 'prepare_dns', 'switch_dns', 'verify_dns'], array_column($result['actions'], 'kind'));
+        if (in_array($scenario, ['replace', 'no_baseline'], true)) $this->assertSame(['create', 'initialize', 'reports', 'ipv4', 'prepare_dns', 'switch_dns', 'verify_dns'], array_column($result['actions'], 'kind'));
         foreach (['synthetic-cloud-secret', 'synthetic-dns-secret', 'synthetic-machine-secret', 'receipt', 'context_hash', 'root_pass'] as $secret) $this->assertStringNotContainsString($secret, json_encode($result));
         $this->untouched();
     }
@@ -168,11 +192,11 @@ class MachineFailoverServicesTest extends TestCase
             $run = $this->simulation->advance($run['id'], $this->admin->id, 1);
             $this->assertLessThanOrEqual(1, RunMember::query()->whereIn('phase', array_keys(MachineFailoverStateMachine::ACTIONS))->count());
         }
-        $this->assertSame('completed', $run['status']); $this->assertSame(2, $run['attempts']); $this->assertSame(200.0, $run['reserved_usd']);
+        $this->assertSame('completed', $run['status']); $this->assertSame(2, $run['attempts']); $this->assertSame(0.0, $run['reserved_usd']);
         $this->assertSame(['completed', 'completed'], array_column($run['members'], 'phase')); $this->untouched();
     }
 
-    public static function budgetCases(): array { return [['attempt_limit', 1, 'service_attempt_limit'], ['monthly_cap_usd', 100, 'service_budget_limit']]; }
+    public static function budgetCases(): array { return [['attempt_limit', 1, 'service_attempt_limit']]; }
     #[DataProvider('budgetCases')]
     public function test_service_caps_do_not_multiply_per_member(string $field, int $value, string $reason): void
     {
@@ -189,7 +213,7 @@ class MachineFailoverServicesTest extends TestCase
         Service::query()->whereKey($this->service['id'])->update(['monthly_cap_usd' => 0.3]);
         $result = $this->simulation->advance($this->start('replace', null)['id'], $this->admin->id);
         $this->assertSame('completed', $result['status']); $this->assertSame(2, $result['attempts']);
-        $this->assertSame(0.3, $result['reserved_usd']); $this->untouched();
+        $this->assertSame(0.0, $result['reserved_usd']); $this->untouched();
     }
 
     public function test_unknown_create_and_dns_intents_are_reconciled_without_replaying_writes(): void
@@ -215,10 +239,16 @@ class MachineFailoverServicesTest extends TestCase
         $this->assertSame(1, Action::query()->where('kind', 'reconcile_create')->count()); $this->untouched();
     }
 
-    public function test_lost_dns_dispatch_receipt_cannot_repeat_dns_write(): void
+    public static function workflowContracts(): array { return [['agent_readiness_v1'], ['protocol_verification_v1']]; }
+    #[DataProvider('workflowContracts')]
+    public function test_lost_dns_dispatch_receipt_cannot_repeat_dns_write(string $workflow): void
     {
-        $start = $this->start(); $this->simulation->advance($start['id'], $this->admin->id, 10);
-        $row = RunMember::query()->where('run_id', $start['id'])->where('member_id', 1)->firstOrFail();
+        config(['machine_failover.workflow' => $workflow]); $start = $this->start();
+        for ($tick = 0; $tick < 12; $tick++) {
+            $this->simulation->advance($start['id'], $this->admin->id, 1);
+            $row = RunMember::query()->where('run_id', $start['id'])->where('member_id', 1)->firstOrFail();
+            if ($row->phase === 'checking_dns') break;
+        }
         $this->assertSame('checking_dns', $row->phase);
         $payload = $row->payload; $payload['state']['phase'] = 'switching_dns'; $payload['state']['dns_dispatched'] = false;
         $row->fill(['phase' => 'switching_dns', 'payload' => $payload])->save();
@@ -320,6 +350,7 @@ class MachineFailoverServicesTest extends TestCase
 
     public function test_receipt_identity_cleanup_and_timing_are_not_bypassed_by_a_success_label(): void
     {
+        config(['machine_failover.workflow' => 'protocol_verification_v1']);
         $driver = new class extends MachineFailoverSimulationDriver {
             public function execute(string $kind, array $context, array $state, string $scenario, string $operation, int $now): array {
                 $fact = parent::execute($kind, $context, $state, $scenario, $operation, $now);

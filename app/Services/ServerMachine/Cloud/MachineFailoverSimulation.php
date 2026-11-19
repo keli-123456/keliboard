@@ -21,26 +21,33 @@ class MachineFailoverSimulation
         if (!in_array($scenario, MachineFailoverSimulationDriver::SCENARIOS, true) || !preg_match('/^[a-f0-9]{32}$/D', $request)) throw new CloudException('invalid_simulation');
         return $this->registry->locked(fn () => DB::transaction(function () use ($service, $revision, $scenario, $target, $request, $admin) {
             $this->registry->actor($admin); $key = hash('sha256', $admin . ':' . $request);
-            $intent = hash('sha256', json_encode([$service, $revision, $scenario, $target], JSON_THROW_ON_ERROR));
-            if ($prior = Run::query()->where('request_key', $key)->first()) {
+            $prior = Run::query()->where('request_key', $key)->first();
+            $workflow = $prior ? ($prior->payload['workflow'] ?? MachineFailoverWorkflow::PROTOCOL)
+                : ($scenario === 'forwarding_failed' ? MachineFailoverWorkflow::PROTOCOL : MachineFailoverWorkflow::configured());
+            $intentData = [$service, $revision, $scenario, $target];
+            if ($workflow === MachineFailoverWorkflow::READINESS) $intentData[] = ['workflow' => $workflow];
+            $intent = hash('sha256', json_encode($intentData, JSON_THROW_ON_ERROR));
+            if ($prior) {
                 if (!hash_equals($prior->intent_hash, $intent)) throw new CloudException('request_conflict');
                 return $this->report($prior->id, $admin);
             }
             $snapshot = $this->registry->snapshot($service, $revision);
+            if (!empty($snapshot['dns_sets'])) throw new CloudException('dns_set_rehearsal_required');
             if ($target !== null && !in_array($target, array_column($snapshot['members'], 'id'), true)) throw new CloudException('member_missing');
             if (Run::query()->where('service_id', $service)->where('status', 'running')->exists()) throw new CloudException('run_active');
             if (Run::query()->count() >= 500 || Run::query()->where('service_id', $service)->count() >= 100) throw new CloudException('simulation_limit');
             $id = (string) Str::uuid(); $hash = $this->registry->fingerprint($snapshot);
             $run = Run::query()->create(['id' => $id, 'service_id' => $service, 'service_revision' => $revision, 'admin_id' => $admin,
                 'request_key' => $key, 'intent_hash' => $intent, 'context_hash' => $hash, 'mode' => 'simulation', 'status' => 'running',
-                'payload' => ['snapshot' => $snapshot, 'scenario' => $scenario, 'target' => $target]]);
+                'payload' => ['snapshot' => $snapshot, 'scenario' => $scenario, 'target' => $target]
+                    + ($workflow === MachineFailoverWorkflow::READINESS ? ['workflow' => $workflow] : [])]);
             foreach ($snapshot['members'] as $index => $member) {
                 $seed = hash('sha256', $id . ':' . $member['id']);
                 $context = $member['policy'] + ['member_id' => $member['id'], 'provider' => $member['provider'], 'context_hash' => hash('sha256', $hash . ':' . $member['id']),
                     'source_installation_id' => substr(hash('sha256', 'source:' . $seed), 0, 32), 'source_ip' => '192.0.2.' . ($index + 1),
                     'candidate_id' => 'sim-' . substr($seed, 0, 24), 'candidate_installation_id' => substr($seed, 0, 32), 'candidate_ip' => '198.51.100.' . ($index + 1),
                     'binary_sha256' => hash('sha256', 'synthetic-binary:' . $seed), 'configuration_sha256' => hash('sha256', json_encode($member['policy'], JSON_THROW_ON_ERROR)),
-                    'echo_sha256' => hash('sha256', 'synthetic-echo:' . $seed), 'dns_exists' => $member['dns_exists']];
+                    'echo_sha256' => hash('sha256', 'synthetic-echo:' . $seed), 'dns_exists' => $member['dns_exists'], 'workflow' => $workflow];
                 RunMember::query()->create(['run_id' => $run->id, 'member_id' => $member['id'], 'phase' => 'observing',
                     'payload' => ['context' => $context, 'name' => $member['name'], 'policy_id' => $member['policy_id'],
                         'state' => $this->machine->initial(), 'events' => [], 'round' => 0]]);
@@ -93,11 +100,9 @@ class MachineFailoverSimulation
                 $reason = RunMember::query()->where('run_id', $run->id)->where('phase', 'needs_review')->exists() ? 'service_review_required'
                     : (!$context['isolation_confirmed'] ? 'isolation_confirmation_required'
                     : (!$context['dns_exists'] || !$context['dns_hostname'] ? 'dns_not_configured'
-                    : ($context['monthly_limit_usd'] <= 0 || $limits['monthly_cap_usd'] <= 0 ? 'budget_required'
-                    : ($run->attempts >= $limits['attempt_limit'] ? 'service_attempt_limit'
-                    : (round($run->reserved_usd + $context['monthly_limit_usd'], 2) > $limits['monthly_cap_usd'] ? 'service_budget_limit' : null)))));
+                    : ($run->attempts >= $limits['attempt_limit'] ? 'service_attempt_limit' : null)));
                 DB::transaction(function () use ($reason, $run, $context, $row, $payload, $state, $now) {
-                    if ($reason === null) { $run->attempts++; $run->reserved_usd = round($run->reserved_usd + $context['monthly_limit_usd'], 2); $run->save(); }
+                    if ($reason === null) { $run->attempts++; $run->save(); }
                     $next = $this->machine->reserve($state, $reason === null, $reason);
                     $this->saveMember($row, $payload, $next, $now);
                 });
@@ -119,13 +124,15 @@ class MachineFailoverSimulation
                 $fact = $action->receipt;
                 if (!$fact) {
                     $limits = $run->payload['snapshot']['service'];
-                    $remaining = min(1 + $limits['attempt_limit'] - $run->attempts, (int) floor(($limits['monthly_cap_usd'] - $run->reserved_usd + $context['monthly_limit_usd'] + .0001) / max(.01, $context['monthly_limit_usd'])));
+                    $remaining = 1 + $limits['attempt_limit'] - $run->attempts;
+                    $memberConfig = collect($run->payload['snapshot']['members'])->firstWhere('id', $row->member_id);
+                    $remaining = min($remaining, $memberConfig['attempt_limit'] ?? $limits['attempt_limit']);
                     try { $fact = $this->driver->execute($kind, $context + ['credential_attempt_limit' => max(1, min(3, $remaining))], $state, $scenario, $action->id, $now); }
                     catch (\Throwable) { $fact = $this->unknown($context, $action->id, $now); }
                     $extra = $kind === 'create' ? max(0, count(is_array($fact['credential_attempts'] ?? null) ? $fact['credential_attempts'] : []) - 1) : 0;
                     if ($extra >= max(1, $remaining)) { $fact = $this->unknown($context, $action->id, $now); $extra = 0; }
                     DB::transaction(function () use ($action, $fact, $extra, $run, $context) {
-                        if ($extra) { $run->attempts += $extra; $run->reserved_usd = round($run->reserved_usd + $extra * $context['monthly_limit_usd'], 2); $run->save(); }
+                        if ($extra) { $run->attempts += $extra; $run->save(); }
                         $action->fill(['receipt' => $fact, 'status' => ($fact['status'] ?? null) === 'ok' ? 'confirmed' : 'uncertain'])->save();
                     });
                 }
@@ -197,6 +204,7 @@ class MachineFailoverSimulation
                     array_slice($attempts->get($row->member_id)?->receipt['credential_attempts'] ?? [], 0, 3))];
         })->all();
         return $run->toArray() + ['simulation_only' => true, 'evidence_origin' => 'synthetic', 'execution_enabled' => false, 'dns_cutover' => false,
+            'workflow' => $run->payload['workflow'] ?? MachineFailoverWorkflow::PROTOCOL,
             'business_verified' => false, 'scenario' => $run->payload['scenario'], 'members' => $members,
             'actions' => Action::query()->where('run_id', $id)->orderBy('virtual_at')->orderBy('id')->limit(200)->get(['id', 'member_id', 'kind', 'status', 'virtual_at'])->toArray()];
     }
