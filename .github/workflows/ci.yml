@@ -1,136 +1,54 @@
-name: CI
+name: Failover Example Linux Acceptance
 
 on:
   push:
-  pull_request:
-    types: [opened, synchronize, reopened]
+    branches: [audit/failover-example-linux-20261119-0e92f73d]
 
 permissions:
   contents: read
 
 jobs:
-  unit-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: "8.2"
-          tools: composer:v2
-          coverage: none
-
-      - name: Validate composer manifests
-        run: composer validate --strict
-
-      - name: Verify composer platform pin
-        run: php scripts/verify-composer-platform.php
-
-      - name: Verify PHP security baseline
-        run: |
-          php scripts/verify-php-security.tests.php
-          php scripts/verify-php-security.php
-
-      - name: Verify admin asset versions
-        run: php scripts/verify-admin-xboard-assets.php
-
-      - name: Test isolated machine installer dependency handling
-        run: |
-          bash scripts/test-machine-install-apt.sh
-          bash scripts/test-machine-install-ping.sh
-
-      - name: Run release preflight guards
-        shell: pwsh
-        run: |
-          ./scripts/release-preflight.ps1 `
-            -ReleaseVersion v0.0.0-preflight `
-            -SkipTagCheck `
-            -SkipAdminRepo `
-            -SkipKelinodeRepo
-
-      - name: Test full-stack release manifest guards
-        run: php scripts/verify-release-manifest.tests.php
-
-      - name: Test deployment gates and receipts
-        run: |
-          php scripts/release-smoke.tests.php
-          php scripts/verify-deployment-receipt.tests.php
-          php scripts/deploy-release.tests.php
-          php scripts/deploy-release.integration.tests.php
-          php scripts/update.integration.tests.php
-
-      - name: Verify full-stack release contract
-        shell: pwsh
-        run: ./scripts/release-full-stack.tests.ps1
-
-      - name: Verify lock platform compatibility
-        run: composer check-platform-reqs --lock --no-interaction
-
-      - name: Install dependencies
-        run: composer install --no-interaction --no-progress --prefer-dist
-
-      - name: Verify installed platform requirements
-        run: composer check-platform-reqs --no-interaction
-
-      - name: Run unit tests
-        run: vendor/bin/phpunit --testsuite Unit --colors=always
-
-  giftcard-mysql-acceptance:
-    name: Gift card MySQL (${{ matrix.isolation }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        isolation: ["REPEATABLE READ", "READ COMMITTED"]
-    services:
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_DATABASE: keli_acceptance_giftcard
-          MYSQL_USER: keli_acceptance
-          MYSQL_PASSWORD: ephemeral-ci-fixture-only
-          MYSQL_ROOT_PASSWORD: ephemeral-ci-root-only
-        ports:
-          - 127.0.0.1::3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=24
-    env:
-      KELI_GIFTCARD_MYSQL_ACCEPTANCE: "1"
-      KELI_GIFTCARD_DB_HOST: "127.0.0.1"
-      KELI_GIFTCARD_DB_NAME: keli_acceptance_giftcard
-      KELI_GIFTCARD_DB_USER: keli_acceptance
-      KELI_GIFTCARD_DB_PASSWORD: ephemeral-ci-fixture-only
-      KELI_GIFTCARD_ISOLATION: ${{ matrix.isolation }}
+  isolated:
+    name: Isolated Unix socket and rollback
+    if: github.repository == 'keli-123456/keliboard' && github.event_name == 'push' && github.ref_name == 'audit/failover-example-linux-20261119-0e92f73d'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: "8.2"
-          extensions: pdo_mysql, pdo_sqlite, mbstring, openssl
-          tools: composer:v2
+          php-version: '8.3'
+          extensions: pdo_sqlite, sqlite3, mbstring, openssl, zip, curl
           coverage: none
-      - name: Install test dependencies without application startup
-        run: composer install --no-interaction --no-progress --prefer-dist --no-scripts
-      - name: Verify packaged plugin loading
-        run: php scripts/verify-plugin-layout.php
-      - name: Exercise real concurrent redemptions against the disposable database
-        env:
-          KELI_GIFTCARD_DB_PORT: ${{ job.services.mysql.ports[3306] }}
+          tools: composer:v2
+      - name: Verify candidate pin and install locked dependencies
+        shell: bash
         run: |
-          mkdir -p artifacts
-          vendor/bin/phpunit -c phpunit-mysql.xml --log-junit artifacts/giftcard-mysql.xml
-      - name: Preserve acceptance results
+          set -euo pipefail
+          base=0e92f73dc987156d65bb2399eaddf904d607330f
+          test "$(git rev-parse HEAD^)" = "$base"
+          actual="$(git diff --name-only "$base" HEAD | sort)"
+          expected="$(printf '%s\n' .github/workflows/ci.yml .ci-example/client.php .ci-example/run.py .ci-example/sandbox.py | sort)"
+          test "$actual" = "$expected"
+          test ! -e .env
+          composer install --no-interaction --no-plugins --no-scripts --prefer-dist --no-progress
+      - name: Run actual Linux socket and supervisor isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          ulimit -c 0
+          sudo -n env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 HOME=/root \
+            GITHUB_ACTIONS=true GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_REF_NAME="$GITHUB_REF_NAME" \
+            GITHUB_SHA="$GITHUB_SHA" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+            /usr/bin/python3 -B .ci-example/run.py "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "$(readlink -f "$(command -v php)")"
+      - name: Upload only the aggregate
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: giftcard-mysql-${{ strategy.job-index }}
-          path: artifacts/giftcard-mysql.xml
-          if-no-files-found: ignore
+          name: failover-example-linux-0e92f73d
+          path: ${{ runner.temp }}/failover-example-result.json
+          if-no-files-found: error
           retention-days: 7
