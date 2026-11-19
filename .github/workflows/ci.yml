@@ -35,7 +35,9 @@ jobs:
           test -z "$(git diff --name-only "$target" HEAD -- . ':!.ci-octane' ':!.github/workflows/ci.yml')"
           test -z "$(git diff --name-only "$base" "$target" -- . ':!app' ':!config' ':!public/assets/admin-xboard' ':!tests' ':!tools/failover-example')"
           test ! -e .env
-          composer install --no-dev --no-scripts --no-plugins --prefer-dist --no-interaction --no-progress
+          mkdir "$RUNNER_TEMP/octane-old-source"
+          git -c core.autocrlf=false -c core.eol=lf archive "$base" | tar -xf - -C "$RUNNER_TEMP/octane-old-source"
+          composer --working-dir="$RUNNER_TEMP/octane-old-source" install --no-dev --no-scripts --no-plugins --prefer-dist --no-interaction --no-progress
       - name: Build local Swoole fixture from the pinned application base
         shell: bash
         run: |

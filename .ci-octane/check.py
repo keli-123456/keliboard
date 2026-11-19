@@ -145,7 +145,9 @@ class Check:
         self.export(self.old,BASE,'cac50ff')
         self.export(self.candidate,TARGET,'c718b74')
         need(sha(self.old/'composer.lock')==sha(self.candidate/'composer.lock'),'shared_dependencies_changed')
-        vendor=self.repo/'vendor'
+        exported=self.temp/'octane-old-source'
+        need(sha(exported/'composer.lock')==sha(self.old/'composer.lock') and not (exported/'.env').exists(),'vendor_export_not_based_on_old_release')
+        vendor=exported/'vendor'
         need((vendor/'laravel/octane/bin/swoole-server').is_file() and not (vendor/'phpunit').exists(),'unexpected_composer_install')
         # This shared path is mounted read-only in all three disposable containers.
         shutil.copytree(vendor,self.old/'vendor')
@@ -263,7 +265,8 @@ class Check:
             need(not set(required)&set(mounts) and not (set(required)&set(body['mounts']))
                  and body['cache_anchor_present'] and body['socket_mode'] is None,'rollback_mount_still_present')
         revision = TARGET if candidate else BASE
-        need(body['files']==self.files[revision],'running_web_release_mismatch')
+        need(body['files']==self.files[revision] and body['candidate_controller_loaded'] is candidate,
+             'running_web_release_or_autoloader_mismatch')
         n=self.server.accepted
         closed=self.http(ROUTE)
         need(closed and closed['code']==404 and self.server.accepted==n,'closed_entry_touched_socket')
@@ -307,7 +310,8 @@ class Check:
         need(self.retained(active,after) and all(after[k]['tick']>old[k]['tick'] for k in GROUP)
              and sha(self.old/'bootstrap/cache/shared-anchor')==self.anchor,'rollback_or_shared_tree_changed')
         self.proof.update(horizon_ws_unchanged_through_rollback=True,old_shared_cache_unchanged=True,
-                          socket_acl_verified_in_http_worker=True,only_acl_fixture_connections=self.server.accepted==self.server.valid==1)
+                          socket_acl_verified_in_http_worker=True,candidate_loads_from_unchanged_old_vendor=True,
+                          only_acl_fixture_connections=self.server.accepted==self.server.valid==1)
         need(self.proof['only_acl_fixture_connections'],'unexpected_socket_calls')
 
     def diagnostics(self):

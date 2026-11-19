@@ -36,9 +36,13 @@ $router->get('/_ci_octane_identity', static function (Request $request) {
         }
     }
     $reflection = new ReflectionClass(AdminRoute::class);
+    $candidateLoaded = class_exists(MachineFailoverExampleController::class, false)
+        && (new ReflectionClass(MachineFailoverExampleController::class))->getFileName() ===
+            '/www/app/Http/Controllers/V2/Admin/Server/MachineFailoverExampleController.php';
     return response()->json(['pid' => getmypid(), 'uid' => posix_geteuid(), 'gid' => posix_getegid(), 'groups' => posix_getgroups(),
         'cap_eff' => $cap[1] ?? null, 'swoole' => phpversion('swoole'), 'php' => PHP_VERSION, 'octane' => (bool) env('LARAVEL_OCTANE'),
         'admin_loaded_from_release' => $reflection->getFileName() === '/www/app/Http/Routes/V2/AdminRoute.php',
+        'candidate_controller_loaded' => $candidateLoaded,
         'socket_mode' => @filetype($file) === 'socket' ? fileperms($file) & 0777 : null, 'acl' => $acl,
         'mounts' => $read, 'files' => mountedFiles(), 'cache_anchor_present' => is_file('/www/bootstrap/cache/shared-anchor'),
         'config_cache_path' => app()->getCachedConfigPath(), 'grant_supplied' => (bool) getenv('FAILOVER_EXAMPLE_GRANT_ID')]);
