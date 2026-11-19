@@ -68,6 +68,15 @@ class Assembly(Lab):
         self.rootfs = RuntimeTree(self.rootfs_path,self.php,self.uid,self.gid,self.web_uid,self.web_gid,self.web_socket_gid)
         self.image = self.rootfs.disposable_web_image(self.area / "web-root.tar")
         shutil.copytree(self.area / "candidate",self.rootfs.path / "app",dirs_exist_ok=True)
+        for path in self.rootfs.path.rglob("*"):
+            info=path.lstat()
+            rel=path.relative_to(self.rootfs.path)
+            need(not set(rel.parts)&{".git",".env","auth.json"},"reserved_file_in_worker_tree")
+            need(stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode),"nonregular_file_in_worker_tree")
+            if rel.as_posix() not in {"tmp","var/tmp"}:
+                mode=stat.S_IMODE(info.st_mode)
+                if mode & 0o7022:
+                    path.chmod(mode & ~0o7022)
         self.proof["sealed_root_sha256"] = self.rootfs.fingerprint()
         self.proof["runtime_php_version"] = self.rootfs.version
         self.proof["runtime_omits_live_environment_and_dev_vendor"] = not any((self.rootfs.path / "app" / p).exists()
@@ -350,9 +359,10 @@ class Assembly(Lab):
         self.proof["sealed_immutable_sha256"]=self.rootfs.fingerprint(MOUNT_SCAFFOLD)
         def portable(info):
             p = Path(info.name)
-            need(not p.is_absolute() and not set(p.parts)&{"..",".git",".env","auth.json"}
-                 and (info.isdir() or info.isfile()) and (not (info.mode & 0o7022)
-                 or (info.isdir() and info.name in {"tmp","var/tmp"} and info.mode==0o1777)),"unsafe_archive_member")
+            need(not p.is_absolute() and not set(p.parts)&{"..",".git",".env","auth.json"},"unsafe_archive_member_name")
+            need(info.isdir() or info.isfile(),"unsafe_archive_member_type")
+            need(not (info.mode & 0o7022) or (info.isdir() and info.name in {"tmp","var/tmp"} and info.mode==0o1777),
+                 "unsafe_archive_member_mode")
             info.uid=info.gid=0
             info.uname=info.gname="root"
             return info
