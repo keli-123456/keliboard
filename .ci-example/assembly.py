@@ -12,6 +12,7 @@ import socket
 import stat
 import subprocess
 import sys
+import tarfile
 import time
 import traceback
 
@@ -19,7 +20,8 @@ from rootfs import RuntimeTree
 from run import Lab, Rejected, ROLLBACK, REPO, SOCKET, SOURCE, call, eventually, need, properties, system
 
 
-BRANCH = "audit/failover-example-assembly-linux-20261119-0e92f73d"
+BRANCH = "audit/failover-example-seal-linux-20261119-0e92f73d"
+PAYLOAD = "example-executor-rootfs-0e92f73d.tar.gz"
 TEMPLATES = ("keli-failover-example.socket.in", "keli-failover-example@.service.in", "web-socket.compose.yaml.in")
 STATE = Path("/var/lib/keli-failover-example")
 GRANT_DIR = Path("/etc/keli-failover-example")
@@ -341,6 +343,26 @@ class Assembly(Lab):
         self.proof.update(revocation_prevented_activation=True,socket_removed_no_fallback=True,
                           actual_web_restored_old_release_without_mount=True,verified_receipt_preserved=True)
 
+    def seal(self):
+        self.advance("seal_verified_worker_root")
+        need(self.rootfs.fingerprint()==self.proof["sealed_root_sha256"],"root_changed_during_acceptance")
+        def portable(info):
+            p = Path(info.name)
+            need(not p.is_absolute() and not set(p.parts)&{"..",".git",".env","auth.json"}
+                 and (info.isdir() or info.isfile()) and (not (info.mode & 0o7022)
+                 or (info.isdir() and info.name in {"tmp","var/tmp"} and info.mode==0o1777)),"unsafe_archive_member")
+            info.uid=info.gid=0
+            info.uname=info.gname="root"
+            return info
+        path=self.temp/PAYLOAD
+        with tarfile.open(path,"x:gz",compresslevel=6) as archive:
+            for entry in sorted(self.rootfs.path.iterdir()):
+                archive.add(entry,arcname=entry.name,filter=portable)
+        need(0<path.stat().st_size<60*1024*1024,"sealed_payload_size_invalid")
+        with path.open("rb") as blob:
+            self.proof["sealed_payload"]={"name":PAYLOAD,"sha256":sha256(blob.read()).hexdigest(),"bytes":path.stat().st_size}
+        path.chmod(0o644)
+
     def cleanup(self):
         ok=True
         if self.compose_initialized:
@@ -379,7 +401,7 @@ def main():
     report={"source_commit":SOURCE,"rollback_commit":ROLLBACK,"ci_commit":os.environ["GITHUB_SHA"],"checks":lab.proof,
             "synthetic_only":True,"production_connections":0,"real_cloud_creates":0,"real_dns_writes":0,"image_published":False,"ok":False}
     try:
-        lab.prepare(); lab.start(); lab.run_stages(); lab.hard_timeout(); lab.rollback()
+        lab.prepare(); lab.start(); lab.run_stages(); lab.hard_timeout(); lab.rollback(); lab.seal()
         report["ok"]=True
     except Exception as error:
         frames=[f for f in traceback.extract_tb(error.__traceback__) if Path(f.filename).name in {"assembly.py","run.py","rootfs.py"}]

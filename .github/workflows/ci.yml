@@ -1,8 +1,8 @@
-name: Failover Example Final Assembly Linux
+name: Failover Example Sealed Worker Linux
 
 on:
   push:
-    branches: [audit/failover-example-assembly-linux-20261119-0e92f73d]
+    branches: [audit/failover-example-seal-linux-20261119-0e92f73d]
 
 permissions:
   contents: read
@@ -10,7 +10,7 @@ permissions:
 jobs:
   isolated:
     name: Real Web socket mount and isolated Linux worker
-    if: github.repository == 'keli-123456/keliboard' && github.event_name == 'push' && github.ref_name == 'audit/failover-example-assembly-linux-20261119-0e92f73d'
+    if: github.repository == 'keli-123456/keliboard' && github.event_name == 'push' && github.ref_name == 'audit/failover-example-seal-linux-20261119-0e92f73d'
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
@@ -52,3 +52,11 @@ jobs:
           path: ${{ runner.temp }}/failover-example-final-result.json
           if-no-files-found: error
           retention-days: 7
+      - name: Retain only the tested isolated runtime archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: failover-example-sealed-worker-0e92f73d
+          path: ${{ runner.temp }}/example-executor-rootfs-0e92f73d.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
