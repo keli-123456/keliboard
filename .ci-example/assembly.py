@@ -390,6 +390,10 @@ class Assembly(Lab):
             target=self.rootfs.path/name
             if name not in before and after.get(name,[None])[0]=="dir" and not any(target.iterdir()):
                 after.pop(name)
+        # systemd's base-filesystem table creates /bin -> usr/bin inside RootDirectory.
+        if "bin" not in before and after.get("bin")==["link",0o777,"usr/bin"]:
+            after.pop("bin")
+            self.proof["systemd_internal_bin_link_verified"]=True
         if before!=after:
             changes=(n for n in sorted(before.keys()|after.keys()) if before.get(n)!=after.get(n))
             self.proof["immutable_difference_paths"]=[n for n in changes if re.fullmatch(r"[a-zA-Z0-9_./-]{1,100}",n)][:12]
