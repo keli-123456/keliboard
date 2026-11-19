@@ -356,6 +356,7 @@ class Assembly(Lab):
     def seal(self):
         self.advance("seal_verified_worker_root")
         need(self.rootfs.fingerprint()==self.proof["sealed_root_sha256"],"root_changed_during_acceptance")
+        self.sealed_inventory=self.rootfs.inventory(MOUNT_SCAFFOLD)
         self.proof["sealed_immutable_sha256"]=self.rootfs.fingerprint(MOUNT_SCAFFOLD)
         self.proof["sealed_expanded_bytes"]=sum(p.stat().st_size for p in self.rootfs.path.rglob("*") if p.is_file())
         need(0<self.proof["sealed_expanded_bytes"]<320*1024*1024,"sealed_expanded_size_invalid")
@@ -379,6 +380,21 @@ class Assembly(Lab):
         with path.open("rb") as blob:
             self.proof["sealed_payload"]={"name":PAYLOAD,"sha256":sha256(blob.read()).hexdigest(),"bytes":path.stat().st_size}
         path.chmod(0o644)
+
+    def verify_sealed_files(self):
+        self.advance("verify_sealed_files_after_activation")
+        before=self.sealed_inventory
+        after=self.rootfs.inventory(MOUNT_SCAFFOLD)
+        # ProtectHome may create its empty mount targets in the staged root.
+        for name in ("home","root"):
+            target=self.rootfs.path/name
+            if name not in before and after.get(name,[None])[0]=="dir" and not any(target.iterdir()):
+                after.pop(name)
+        if before!=after:
+            changes=(n for n in sorted(before.keys()|after.keys()) if before.get(n)!=after.get(n))
+            self.proof["immutable_difference_paths"]=[n for n in changes if re.fullmatch(r"[a-zA-Z0-9_./-]{1,100}",n)][:12]
+        need(before==after,"runtime_immutable_files_changed")
+        self.proof["immutable_files_preserved_after_acceptance"]=True
 
     def cleanup(self):
         ok=True
@@ -419,8 +435,7 @@ def main():
             "synthetic_only":True,"production_connections":0,"real_cloud_creates":0,"real_dns_writes":0,"image_published":False,"ok":False}
     try:
         lab.prepare(); lab.seal(); lab.start(); lab.run_stages(); lab.hard_timeout(); lab.rollback()
-        need(lab.rootfs.fingerprint(MOUNT_SCAFFOLD)==lab.proof["sealed_immutable_sha256"],"runtime_immutable_files_changed")
-        lab.proof["immutable_files_preserved_after_acceptance"]=True
+        lab.verify_sealed_files()
         report["ok"]=True
     except Exception as error:
         frames=[f for f in traceback.extract_tb(error.__traceback__) if Path(f.filename).name in {"assembly.py","run.py","rootfs.py"}]

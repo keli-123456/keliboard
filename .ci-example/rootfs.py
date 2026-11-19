@@ -102,15 +102,21 @@ class RuntimeTree:
                 path = Path(hit[1])
                 self.copy(path, str(path))
 
-    def fingerprint(self, ignore=()):
-        digest = sha256()
+    def inventory(self, ignore=()):
+        paths = {}
         for p in sorted(self.path.rglob("*")):
             rel = p.relative_to(self.path)
             if any(rel == i or i in rel.parents for i in ignore):
                 continue
             kind = "link" if p.is_symlink() else "file" if p.is_file() else "dir"
             value = str(p.readlink()) if kind == "link" else sha256(p.read_bytes()).hexdigest() if kind == "file" else ""
-            digest.update(json.dumps([rel.as_posix(),kind,p.lstat().st_mode & 0o7777,value]).encode()+b"\n")
+            paths[rel.as_posix()] = [kind,p.lstat().st_mode & 0o7777,value]
+        return paths
+
+    def fingerprint(self, ignore=()):
+        digest = sha256()
+        for name,info in self.inventory(ignore).items():
+            digest.update(json.dumps([name,*info]).encode()+b"\n")
         return digest.hexdigest()
 
     def disposable_web_image(self, tar_path):
