@@ -22,6 +22,7 @@ from run import Lab, Rejected, ROLLBACK, REPO, SOCKET, SOURCE, call, eventually,
 
 BRANCH = "audit/failover-example-seal-linux-20261119-0e92f73d"
 PAYLOAD = "example-executor-rootfs-0e92f73d.tar.gz"
+MOUNT_SCAFFOLD = tuple(map(Path,("dev","proc","run","state","sys","tmp","var/tmp")))
 TEMPLATES = ("keli-failover-example.socket.in", "keli-failover-example@.service.in", "web-socket.compose.yaml.in")
 STATE = Path("/var/lib/keli-failover-example")
 GRANT_DIR = Path("/etc/keli-failover-example")
@@ -346,6 +347,7 @@ class Assembly(Lab):
     def seal(self):
         self.advance("seal_verified_worker_root")
         need(self.rootfs.fingerprint()==self.proof["sealed_root_sha256"],"root_changed_during_acceptance")
+        self.proof["sealed_immutable_sha256"]=self.rootfs.fingerprint(MOUNT_SCAFFOLD)
         def portable(info):
             p = Path(info.name)
             need(not p.is_absolute() and not set(p.parts)&{"..",".git",".env","auth.json"}
@@ -401,7 +403,9 @@ def main():
     report={"source_commit":SOURCE,"rollback_commit":ROLLBACK,"ci_commit":os.environ["GITHUB_SHA"],"checks":lab.proof,
             "synthetic_only":True,"production_connections":0,"real_cloud_creates":0,"real_dns_writes":0,"image_published":False,"ok":False}
     try:
-        lab.prepare(); lab.start(); lab.run_stages(); lab.hard_timeout(); lab.rollback(); lab.seal()
+        lab.prepare(); lab.seal(); lab.start(); lab.run_stages(); lab.hard_timeout(); lab.rollback()
+        need(lab.rootfs.fingerprint(MOUNT_SCAFFOLD)==lab.proof["sealed_immutable_sha256"],"runtime_immutable_files_changed")
+        lab.proof["immutable_files_preserved_after_acceptance"]=True
         report["ok"]=True
     except Exception as error:
         frames=[f for f in traceback.extract_tb(error.__traceback__) if Path(f.filename).name in {"assembly.py","run.py","rootfs.py"}]
