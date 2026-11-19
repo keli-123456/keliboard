@@ -4,6 +4,7 @@ namespace App\Http\Controllers\V2\Admin\Server;
 use App\Http\Controllers\Controller;
 use App\Services\ServerMachine\Cloud\CloudException;
 use App\Services\ServerMachine\Cloud\MachineCloudService;
+use App\Services\ServerMachine\ExampleRehearsal\Grant;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Http\Request;
 
@@ -20,7 +21,8 @@ class MachineCloudController extends Controller
     }
     public function fetch(Request $request, MachineCloudService $service)
     {
-        return $this->run($request, $service, fn () => ['failover_preview_only' => true] + $service->overview(), false);
+        return $this->run($request, $service, fn () => ['failover_preview_only' => true,
+            'failover_example_available' => Grant::forUser($request->user()) !== null] + $service->overview(), false);
     }
     public function account(Request $request, MachineCloudService $service)
     {

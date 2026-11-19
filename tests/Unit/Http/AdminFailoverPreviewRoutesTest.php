@@ -32,9 +32,9 @@ class AdminFailoverPreviewRoutesTest extends TestCase
             $routes[$route->methods()[0]][] = substr($route->uri(), strlen($prefix));
         }
         $this->assertEqualsCanonicalizing([
-            'GET' => ['', '/history', '/replacements', '/services', '/services/run', '/services/shadow',
+            'GET' => ['', '/example', '/history', '/replacements', '/services', '/services/run', '/services/shadow',
                 '/services/dns', '/services/dns/run', '/services/native', '/services/native/run', '/services/native/history'],
-            'POST' => ['/rehearse', '/services/simulate', '/services/advance', '/services/cancel',
+            'POST' => ['/example', '/rehearse', '/services/simulate', '/services/advance', '/services/cancel',
                 '/services/dns/simulate', '/services/dns/advance', '/services/dns/stop', '/services/dns/propagation'],
         ], $routes);
     }
@@ -47,6 +47,7 @@ class AdminFailoverPreviewRoutesTest extends TestCase
         $request->setUserResolver(fn () => (object) ['is_admin' => true]);
         $payload = (new MachineCloudController())->fetch($request, app(MachineCloudService::class))->getData(true)['data'];
         $this->assertTrue($payload['failover_preview_only']);
+        $this->assertFalse($payload['failover_example_available']);
         $this->assertFalse($payload['available']);
 
         $request->setUserResolver(fn () => (object) ['is_admin' => false]);

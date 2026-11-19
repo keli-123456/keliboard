@@ -159,6 +159,9 @@ class AdminRoute
                 $router->post('/cloud/account/health/verify', [\App\Http\Controllers\V2\Admin\Server\MachineCredentialHealthController::class, 'verify']);
                 // This release exposes cached reads and synthetic runs only.
                 $router->get('/cloud/failover', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'fetch']);
+                $router->get('/cloud/failover/example', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverExampleController::class, 'status']);
+                $router->post('/cloud/failover/example', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverExampleController::class, 'operate'])
+                    ->withoutMiddleware('log');
                 $router->get('/cloud/failover/services', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'fetch']);
                 $router->post('/cloud/failover/services/simulate', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'simulate']);
                 $router->get('/cloud/failover/services/run', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'report']);
