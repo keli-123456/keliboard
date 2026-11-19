@@ -228,13 +228,14 @@ StandardError=null
         s = eventually(lambda: SOCKET.lstat() if SOCKET.exists() else None, 2, "socket_inode_missing")
         need(stat.S_ISSOCK(s.st_mode) and stat.S_IMODE(s.st_mode) == 0o660 and s.st_uid == 0
              and s.st_gid == grp.getgrnam(self.socket_group).gr_gid, "unexpected_socket_mode")
+        self.stage = "unrelated_uid_socket_denial"
         denied = self.as_user(self.other, "/usr/bin/python3", "-B", self.area / "sandbox.py", "deny")
         need(denied == {"permission_denied": True}, "unrelated_user_reached_socket")
         self.proof["socket_mode_0660_and_unrelated_user_denied"] = True
 
     def as_user(self, user, *args, env=None, start=False):
         clean = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"} | (self.env if env is None else env)
-        command = ["runuser", "--user", user, "--", *args]
+        command = ["/usr/sbin/runuser", "--user", user, "--", *args]
         if start:
             return subprocess.Popen(command, env=clean, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         result = call(*command, env=clean, check=False)
