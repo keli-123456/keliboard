@@ -275,16 +275,22 @@ class Assembly(Lab):
             proc=Path("/proc",str(pid))
             values=dict(line.split(":",1) for line in (proc/"status").read_text().splitlines() if ":" in line)
             mounts=[line.split() for line in (proc/"mountinfo").read_text().splitlines()]
-            checks={"root_directory":os.readlink(proc/"root")==str(self.rootfs.path),
+            process_root=proc/"root"
+            # systemd can chroot through an intermediate bind mount; compare the actual inodes.
+            checks={"root_directory":process_root.samefile(self.rootfs.path) and not process_root.samefile("/"),
+                    "worker_hash_matches":sha256((process_root/"app/tools/failover-example/worker.php").read_bytes()).hexdigest()
+                                          == self.proof["worker_sha256"],
                     "dedicated_uid":[int(v) for v in values["Uid"].split()]==[self.uid]*4,
                     "dedicated_gid":[int(v) for v in values["Gid"].split()]==[self.gid]*4,
+                    "no_extra_privileged_groups":set(map(int,values["Groups"].split())) <= {self.gid},
                     "no_effective_capabilities":int(values["CapEff"],16)==0,
                     "no_new_privileges":values["NoNewPrivs"].strip()=="1",
                     "seccomp_filter":values["Seccomp"].strip()=="2",
                     "private_network_namespace":os.readlink(proc/"ns/net")!=os.readlink("/proc/self/ns/net"),
                     "root_read_only":any(m[4]=="/" and "ro" in m[5].split(",") for m in mounts),
-                    "private_state_writable":any(m[4]=="/state" and "rw" in m[5].split(",") for m in mounts),
-                    "no_socket_path_inside_root":not (proc/"root/run/keli-failover-example/worker.sock").exists()}
+                    "private_state_writable":(process_root/"state").samefile(self.state)
+                          and any(m[4]=="/state" and "rw" in m[5].split(",") for m in mounts),
+                    "no_socket_path_inside_root":not (process_root/"run/keli-failover-example/worker.sock").exists()}
             self.proof["actual_worker_isolation_checks"]=checks
             need(all(checks.values()),"actual_worker_isolation_or_mount_differs")
             self.proof["actual_worker_chroot_uid_netns_and_mounts_verified"]=True
