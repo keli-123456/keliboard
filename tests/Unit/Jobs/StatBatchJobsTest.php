@@ -269,6 +269,34 @@ final class StatBatchJobsTest extends TestCase
         $this->migration()->down();
     }
 
+    public function test_write_lane_migration_restores_missing_seed_without_recreating_the_table(): void
+    {
+        $migration = $this->laneMigration();
+        $migration->up();
+        $lanes = DB::table('v2_stat_write_lane');
+        $this->assertTrue(Schema::hasIndex('v2_stat_write_lane', ['stat_table'], 'primary'));
+        $this->assertSame(['v2_stat_user', 'v2_stat_user_node_day'], $lanes->orderBy('stat_table')->pluck('stat_table')->all());
+
+        $this->assertSame(1, DB::table('v2_stat_write_lane')->where('stat_table', 'v2_stat_user')->delete());
+        $migration->up();
+        $migration->up();
+        $this->assertSame(['v2_stat_user', 'v2_stat_user_node_day'], $lanes->pluck('stat_table')->all());
+
+        $migration->down();
+        $this->assertFalse(Schema::hasTable('v2_stat_write_lane'));
+        $this->assertTrue(Schema::hasTable(StatBatchWriter::RECEIPTS));
+    }
+
+    public function test_write_lane_migration_rejects_a_table_without_the_lock_key(): void
+    {
+        Schema::create('v2_stat_write_lane', function (Blueprint $table): void {
+            $table->string('stat_table', 64);
+        });
+
+        $this->expectExceptionMessage('Statistics write lanes require a primary key.');
+        $this->laneMigration()->up();
+    }
+
     public function test_grammar_keeps_additive_updates_and_current_keys_across_databases(): void
     {
         $noPdo = fn () => throw new RuntimeException('SQL compilation must not connect to a database.');
@@ -302,6 +330,11 @@ final class StatBatchJobsTest extends TestCase
     private function migration(): object
     {
         return require base_path('database/migrations/2026_11_19_000001_create_stat_job_receipts.php');
+    }
+
+    private function laneMigration(): object
+    {
+        return require base_path('database/migrations/2026_11_19_000002_create_stat_write_lanes.php');
     }
 
     private function reverseBatch(): array

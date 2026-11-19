@@ -18,7 +18,10 @@ final class StatBatchWriter
 {
     public const RECEIPTS = 'v2_stat_job_receipt';
 
+    private const WRITE_LANES = 'v2_stat_write_lane';
+    private const MULTI_ROW_TABLES = ['v2_stat_user', 'v2_stat_user_node_day'];
     private const BATCH_SIZE = 100;
+    private const MYSQL_BATCH_SIZE = 1000;
     private const ATTEMPTS = 3;
 
     private const KEYS = [
@@ -73,13 +76,16 @@ final class StatBatchWriter
 
         $db = DB::connection();
         $updates = $this->additiveUpdates($db, $table);
-        $batches = array_chunk($ordered, self::BATCH_SIZE);
+        $mysql = in_array($db->getDriverName(), ['mysql', 'mariadb'], true);
+        // Keep a standard traffic delivery in one MySQL statement, shortening the lock window.
+        $batches = array_chunk($ordered, $mysql ? self::MYSQL_BATCH_SIZE : self::BATCH_SIZE);
+        $usesLane = $mysql && in_array($table, self::MULTI_ROW_TABLES, true);
         $detector = new ConcurrencyErrorDetector();
         $outerTransaction = $db->transactionLevel() !== 0;
 
         for ($attempt = 1; ; $attempt++) {
             try {
-                $db->transaction(function () use ($db, $deliveryId, $hash, $table, $key, $batches, $updates): void {
+                $db->transaction(function () use ($db, $deliveryId, $hash, $table, $key, $batches, $updates, $usesLane): void {
                     $receipt = ['delivery_id' => $deliveryId, 'content_hash' => $hash, 'applied_at' => time()];
                     // The receipt and every increment commit together, even when a commit acknowledgement is lost.
                     if ($db->table(self::RECEIPTS)->insertOrIgnore($receipt) !== 1) {
@@ -90,6 +96,15 @@ final class StatBatchWriter
                         }
 
                         return;
+                    }
+
+                    if ($usesLane) {
+                        // Ordered natural keys alone do not avoid InnoDB's secondary-index lock cycles.
+                        $lane = $db->table(self::WRITE_LANES)->where('stat_table', $table)
+                            ->lockForUpdate()->value('stat_table');
+                        if ($lane !== $table) {
+                            throw new RuntimeException('Statistics write lane is not initialized.');
+                        }
                     }
 
                     foreach ($batches as $batch) {
