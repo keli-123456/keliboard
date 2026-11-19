@@ -1,0 +1,9 @@
+<?php
+
+declare(strict_types=1);
+
+if (PHP_SAPI !== 'cli' || getenv('KELI_OCTANE_FIXTURE') !== 'isolated-ci' || file_exists('/www/.env')) exit(3);
+foreach (['/state/cache', '/state/logs'] as $path) if (!is_dir($path) && !mkdir($path, 0700)) exit(4);
+require '/www/vendor/autoload.php';
+$app = require __DIR__ . '/bootstrap/app.php';
+exit($app->handleCommand(new Symfony\Component\Console\Input\ArgvInput()));

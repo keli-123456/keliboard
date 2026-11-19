@@ -1,0 +1,22 @@
+{
+  "services": {
+    "web": {
+      "user": "@WEB_UID@:@WEB_GID@",
+      "group_add": ["@SOCKET_GID@"],
+      "tmpfs": ["/www/bootstrap/cache:uid=@WEB_UID@,gid=@WEB_GID@,mode=0750,nosuid,nodev,noexec,size=4m"],
+      "environment": {
+        "APP_CONFIG_CACHE": "/www/bootstrap/cache/config.php",
+        "APP_ROUTES_CACHE": "/www/bootstrap/cache/routes-v7.php",
+        "APP_PACKAGES_CACHE": "/www/bootstrap/cache/packages.php",
+        "APP_SERVICES_CACHE": "/www/bootstrap/cache/services.php",
+        "APP_EVENTS_CACHE": "/www/bootstrap/cache/events.php"
+      },
+      "volumes": [
+        {"type":"bind","source":"@RELEASE@/app","target":"/www/app","read_only":true,"bind":{"create_host_path":false}},
+        {"type":"bind","source":"@RELEASE@/config","target":"/www/config","read_only":true,"bind":{"create_host_path":false}},
+        {"type":"bind","source":"@RELEASE@/public/assets/admin-xboard","target":"/www/public/assets/admin-xboard","read_only":true,"bind":{"create_host_path":false}},
+        {"type":"bind","source":"/run/keli-failover-example","target":"/run/keli-failover-example","read_only":true,"bind":{"create_host_path":false}}
+      ]
+    }
+  }
+}
