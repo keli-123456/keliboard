@@ -55,9 +55,15 @@ class RuntimeTree:
         nss = Path("/lib/x86_64-linux-gnu/libnss_files.so.2")
         if nss.is_file():
             self.copy_elf(nss, str(nss))
+        # Distro PHP can use the system timezone database rather than a bundled copy.
+        for tz in ("UTC", "Etc/UTC", "zone.tab", "zone1970.tab", "tzdata.zi", "iso3166.tab"):
+            data_path = Path("/usr/share/zoneinfo", tz)
+            if data_path.is_file():
+                self.copy(data_path, str(data_path))
         smoke = call("chroot", path, "/usr/bin/php", "-r",
             "echo json_encode(['version'=>PHP_VERSION,'sqlite'=>class_exists('PDO')&&in_array('sqlite',PDO::getAvailableDrivers(),true),'modules'=>"
-            "array_map('extension_loaded',['sockets','pcntl','posix','mbstring','openssl'])]);", check=False)
+            "array_map('extension_loaded',['sockets','pcntl','posix','mbstring','openssl']),"
+            "'utc'=>(new DateTimeImmutable('@0'))->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d')]);", check=False)
         if smoke.returncode:
             why = smoke.stderr.decode(errors="replace").lower()
             code = ("chroot_binary_permission_denied" if "permission denied" in why else
@@ -66,7 +72,7 @@ class RuntimeTree:
                     "chroot_capability_unavailable" if "operation not permitted" in why else "chroot_php_nonzero")
             need(False, code)
         result = json.loads(smoke.stdout)
-        need(result == {"version":version,"sqlite":True,"modules":[True]*5}, "sealed_php_modules_missing")
+        need(result == {"version":version,"sqlite":True,"modules":[True]*5,"utc":"1970-01-01"}, "sealed_php_modules_missing")
         self.version = version
 
     def target(self, absolute):

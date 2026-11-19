@@ -39,7 +39,7 @@ class Assembly(Lab):
         super().__init__(workspace,temp,php)
         self.worker = "keli-example-runner"
         self.socket_group = "keli-example-web"
-        self.names += (self.prefix + "-probe.service",)
+        self.names += (self.prefix + "-probe.service", self.prefix + "-diagnostic.service")
         self.state_owned = self.grant_owned = False
         self.project = self.prefix.replace("keli-example-linux-", "keli-example-final-")
         self.image = None
@@ -117,7 +117,7 @@ class Assembly(Lab):
         self.write_unit(0,self.templates[TEMPLATES[0]])
         worker = self.templates[TEMPLATES[1]].replace("@ROOTFS@",str(self.rootfs.path))
         self.write_unit(1,worker)
-        for n, mode in ((2,"stubborn"),(3,"isolation")):
+        for n, mode in ((2,"stubborn"),(3,"isolation"),(4,"v2_diagnostic")):
             variant = worker.replace("/app/tools/failover-example/worker.php","/state/ci-probe.php "+mode)
             for field in ("StandardInput","StandardOutput"):
                 variant = variant.replace(field+"=socket",field+"=null")
@@ -229,6 +229,15 @@ class Assembly(Lab):
         need(self.request()["phase"]=="ready","expected_ready")
         self.request("dns",409)
         v2 = self.request("v2")
+        if v2.get("phase") != "v2_passed":
+            self.proof["v2_failure"] = {k:v2.get(k) for k in ("phase","reason")}
+            try:
+                system("start",self.names[4])
+                record=self.state/"v2-diagnostic.json"
+                eventually(record.is_file,10,"v2_diagnostic_not_written")
+                self.proof["v2_ci_diagnostic"]=json.loads(record.read_text())
+            except (Rejected, ValueError):
+                self.proof["v2_ci_diagnostic_unavailable"]=True
         need(v2["phase"]=="v2_passed" and v2["live_operations"]==0 and v2["v2"]=={"failure_rounds":3,"candidate_creates":1,"b_unchanged":True},
              "wrong_v2_result")
         n = self.accepted()
@@ -316,8 +325,8 @@ class Assembly(Lab):
         if self.image and ok:
             ok=call("docker","image","rm",self.image,check=False,timeout=20).returncode==0
         if self.unit_files:
-            system("stop",self.names[3],check=False)
-            system("reset-failed",self.names[3],check=False)
+            system("stop",*self.names[3:],check=False)
+            system("reset-failed",*self.names[3:],check=False)
         try:
             base=super().cleanup()
         finally:

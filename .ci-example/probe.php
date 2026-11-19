@@ -11,6 +11,34 @@ if (($argv[1] ?? '') === 'stubborn') {
     sleep(90);
     exit(3);
 }
+if (($argv[1] ?? '') === 'v2_diagnostic') {
+    $stage = 'autoload';
+    try {
+        require '/app/vendor/autoload.php';
+        $stage = 'fixture_creation';
+        $grant = \App\Services\ServerMachine\ExampleRehearsal\Grant::parse([
+            'id' => getenv('FAILOVER_EXAMPLE_GRANT_ID'), 'admin' => getenv('FAILOVER_EXAMPLE_ADMIN_ID'),
+            'opens' => getenv('FAILOVER_EXAMPLE_OPENS_AT'), 'expires' => getenv('FAILOVER_EXAMPLE_EXPIRES_AT'),
+        ]);
+        $db = '/state/ci-diagnostic.sqlite3';
+        $f = fopen($db, 'xb');
+        if (!is_resource($f)) throw new RuntimeException('diagnostic_state_not_new');
+        fclose($f);
+        $fixture = new \App\Services\ServerMachine\ExampleRehearsal\Fixture('/app', $db, $grant);
+        $dbFacade = \Illuminate\Support\Facades\DB::class;
+        $stage = 'seed';
+        $dbFacade::transaction(fn () => $fixture->seed($grant, static fn () => null));
+        $stage = 'v2_checks';
+        $dbFacade::transaction(fn () => $fixture->v2($fixture->state($grant), str_repeat('c',32), static fn () => null));
+        $out = ['ok' => true];
+    } catch (Throwable $error) {
+        $code = $error->getMessage();
+        $out = ['ok' => false, 'stage' => $stage, 'class' => get_class($error), 'file' => basename($error->getFile()),
+            'line' => $error->getLine(), 'code' => preg_match('/\A[a-z_]{1,80}\z/D', $code) === 1 ? $code : null];
+    }
+    file_put_contents('/state/v2-diagnostic.json', json_encode($out, JSON_THROW_ON_ERROR));
+    exit(0);
+}
 if (($argv[1] ?? '') !== 'isolation') exit(2);
 
 function blockedIp(int $family): bool
