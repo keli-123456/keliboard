@@ -1,16 +1,16 @@
-name: Failover Example Linux Acceptance
+name: Failover Example Final Assembly Linux
 
 on:
   push:
-    branches: [audit/failover-example-linux-20261119-0e92f73d]
+    branches: [audit/failover-example-assembly-linux-20261119-0e92f73d]
 
 permissions:
   contents: read
 
 jobs:
   isolated:
-    name: Isolated Unix socket and rollback
-    if: github.repository == 'keli-123456/keliboard' && github.event_name == 'push' && github.ref_name == 'audit/failover-example-linux-20261119-0e92f73d'
+    name: Real Web socket mount and isolated Linux worker
+    if: github.repository == 'keli-123456/keliboard' && github.event_name == 'push' && github.ref_name == 'audit/failover-example-assembly-linux-20261119-0e92f73d'
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
@@ -20,8 +20,8 @@ jobs:
           persist-credentials: false
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.3'
-          extensions: pdo_sqlite, sqlite3, mbstring, openssl, zip, curl
+          php-version: '8.2'
+          extensions: pdo_sqlite, sqlite3, mbstring, openssl, zip, curl, sockets, pcntl, posix
           coverage: none
           tools: composer:v2
       - name: Verify candidate pin and install locked dependencies
@@ -31,11 +31,11 @@ jobs:
           base=0e92f73dc987156d65bb2399eaddf904d607330f
           git merge-base --is-ancestor "$base" HEAD
           actual="$(git diff --name-only "$base" HEAD | sort)"
-          expected="$(printf '%s\n' .github/workflows/ci.yml .ci-example/client.php .ci-example/run.py .ci-example/sandbox.py | sort)"
+          expected="$(printf '%s\n' .github/workflows/ci.yml .ci-example/{client.php,run.py,sandbox.py,assembly.py,rootfs.py,web.php,probe.php} .ci-example/templates/{keli-failover-example.socket.in,keli-failover-example@.service.in,web-socket.compose.yaml.in} | sort)"
           test "$actual" = "$expected"
           test ! -e .env
-          composer install --no-interaction --no-plugins --no-scripts --prefer-dist --no-progress
-      - name: Run actual Linux socket and supervisor isolation
+          composer install --no-dev --no-interaction --no-plugins --no-scripts --prefer-dist --no-progress
+      - name: Verify exact assembly in isolated Linux and disposable Compose project
         shell: bash
         run: |
           set -euo pipefail
@@ -43,12 +43,12 @@ jobs:
           sudo -n env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 HOME=/root \
             GITHUB_ACTIONS=true GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_REF_NAME="$GITHUB_REF_NAME" \
             GITHUB_SHA="$GITHUB_SHA" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
-            /usr/bin/python3 -B .ci-example/run.py "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "$(readlink -f "$(command -v php)")"
+            /usr/bin/python3 -B .ci-example/assembly.py "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "$(readlink -f "$(command -v php)")"
       - name: Upload only the aggregate
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: failover-example-linux-0e92f73d
-          path: ${{ runner.temp }}/failover-example-result.json
+          name: failover-example-final-assembly-0e92f73d
+          path: ${{ runner.temp }}/failover-example-final-result.json
           if-no-files-found: error
           retention-days: 7

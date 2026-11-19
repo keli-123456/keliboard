@@ -1,0 +1,14 @@
+# Review only. Provision the checked parent directory and membership separately.
+[Unit]
+Description=Keli example rehearsal socket
+AssertPathIsDirectory=/run/keli-failover-example
+
+[Socket]
+ListenStream=/run/keli-failover-example/worker.sock
+SocketUser=root
+SocketGroup=keli-example-web
+SocketMode=0660
+DirectoryMode=0750
+Accept=yes
+RemoveOnStop=yes
+MaxConnections=4

@@ -1,0 +1,38 @@
+# Review only. ROOTFS is a sealed release artifact, not the live application tree.
+[Unit]
+Description=Keli example rehearsal worker request
+
+[Service]
+Type=exec
+User=keli-example-runner
+Group=keli-example-runner
+RootDirectory=@ROOTFS@
+WorkingDirectory=/state
+BindPaths=/var/lib/keli-failover-example:/state:norbind
+ReadWritePaths=+/state
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+PrivateDevices=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+UMask=0077
+EnvironmentFile=/etc/keli-failover-example/grant.env
+ExecStart=/usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 FAILOVER_EXAMPLE_STATE_DIR=/state FAILOVER_EXAMPLE_GRANT_ID=${FAILOVER_EXAMPLE_GRANT_ID} FAILOVER_EXAMPLE_ADMIN_ID=${FAILOVER_EXAMPLE_ADMIN_ID} FAILOVER_EXAMPLE_OPENS_AT=${FAILOVER_EXAMPLE_OPENS_AT} FAILOVER_EXAMPLE_EXPIRES_AT=${FAILOVER_EXAMPLE_EXPIRES_AT} /usr/bin/php -d display_errors=0 -d log_errors=0 -d allow_url_fopen=0 -d ffi.enable=0 /app/tools/failover-example/worker.php
+StandardInput=socket
+StandardOutput=socket
+StandardError=null
+TasksMax=8
+MemoryMax=256M
+LimitCORE=0
+TimeoutStartSec=4s
+RuntimeMaxSec=13s
+TimeoutStopSec=1s
+KillMode=control-group
+SendSIGKILL=yes
+Restart=no

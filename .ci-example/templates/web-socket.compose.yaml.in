@@ -1,0 +1,16 @@
+{
+  "services": {
+    "web": {
+      "group_add": ["@WEB_SOCKET_GID@"],
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/run/keli-failover-example",
+          "target": "/run/keli-failover-example",
+          "read_only": true,
+          "bind": {"create_host_path": false}
+        }
+      ]
+    }
+  }
+}
