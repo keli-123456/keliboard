@@ -10,6 +10,7 @@ import re
 import shutil
 import socket
 import stat
+import subprocess
 import sys
 import time
 import traceback
@@ -264,22 +265,38 @@ class Assembly(Lab):
 
     def hard_timeout(self):
         self.advance("actual_final_worker_hard_timeout")
-        process = self.as_user(self.panel,"/usr/bin/python3","-B",self.area/"sandbox.py","hold",start=True)
+        user = pwd.getpwnam(self.panel)
+        process = subprocess.Popen(["/usr/bin/python3","-B",self.area/"sandbox.py","hold"],
+                                   user=user.pw_uid, group=user.pw_gid, extra_groups=os.getgrouplist(self.panel,user.pw_gid),
+                                   env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8"}, start_new_session=True,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         try:
             instance,pid = eventually(self.active_worker,6,"held_worker_not_seen")
             proc=Path("/proc",str(pid))
             values=dict(line.split(":",1) for line in (proc/"status").read_text().splitlines() if ":" in line)
             mounts=[line.split() for line in (proc/"mountinfo").read_text().splitlines()]
-            need(os.readlink(proc/"root")==str(self.rootfs.path) and [int(v) for v in values["Uid"].split()]==[self.uid]*4
-                 and int(values["CapEff"],16)==0 and values["NoNewPrivs"].strip()=="1" and values["Seccomp"].strip()=="2"
-                 and os.readlink(proc/"ns/net")!=os.readlink("/proc/self/ns/net")
-                 and any(m[4]=="/" and "ro" in m[5].split(",") for m in mounts)
-                 and any(m[4]=="/state" and "rw" in m[5].split(",") for m in mounts)
-                 and not (proc/"root/run/keli-failover-example/worker.sock").exists(),"actual_worker_isolation_or_mount_differs")
+            checks={"root_directory":os.readlink(proc/"root")==str(self.rootfs.path),
+                    "dedicated_uid":[int(v) for v in values["Uid"].split()]==[self.uid]*4,
+                    "dedicated_gid":[int(v) for v in values["Gid"].split()]==[self.gid]*4,
+                    "no_effective_capabilities":int(values["CapEff"],16)==0,
+                    "no_new_privileges":values["NoNewPrivs"].strip()=="1",
+                    "seccomp_filter":values["Seccomp"].strip()=="2",
+                    "private_network_namespace":os.readlink(proc/"ns/net")!=os.readlink("/proc/self/ns/net"),
+                    "root_read_only":any(m[4]=="/" and "ro" in m[5].split(",") for m in mounts),
+                    "private_state_writable":any(m[4]=="/state" and "rw" in m[5].split(",") for m in mounts),
+                    "no_socket_path_inside_root":not (proc/"root/run/keli-failover-example/worker.sock").exists()}
+            self.proof["actual_worker_isolation_checks"]=checks
+            need(all(checks.values()),"actual_worker_isolation_or_mount_differs")
             self.proof["actual_worker_chroot_uid_netns_and_mounts_verified"]=True
             raw,_ = process.communicate(timeout=18)
             result=json.loads(raw)
-            props=properties(instance,"Result","MainPID","ExecMainStatus")
+            def exited():
+                info=properties(instance,"Result","MainPID","ExecMainStatus")
+                return info if info.get("MainPID")=="0" else None
+            props=eventually(exited,3,"timed_out_worker_pid_remained")
+            self.proof["actual_worker_timeout_observed"]={"elapsed_ms":result["elapsed_ms"],
+                    "closed_without_report":result["closed_without_report"],"result":props.get("Result"),
+                    "exit_signal":props.get("ExecMainStatus")}
             need(process.returncode==0 and result["closed_without_report"] and 12_000<=result["elapsed_ms"]<16_000
                  and props["Result"]=="timeout" and props["MainPID"]=="0" and props["ExecMainStatus"] in {"15","9"},
                  "blocked_worker_not_reaped")
@@ -287,13 +304,15 @@ class Assembly(Lab):
         finally:
             if process.poll() is None:
                 process.kill()
-                process.communicate(timeout=5)
+                process.wait()
+            process.stdout.close()
         t0=time.monotonic()
         system("start",self.names[2])
         eventually((self.state/"stubborn-ready").is_file,3,"sigterm_fixture_not_ready")
         eventually(lambda:properties(self.names[2],"ActiveState").get("ActiveState")=="failed",16,"sigkill_not_seen")
         d=properties(self.names[2],"MainPID","Result","ExecMainStatus")
         ms=round((time.monotonic()-t0)*1000)
+        self.proof["same_template_kill_observed"]={"elapsed_ms":ms,"result":d.get("Result"),"exit_signal":d.get("ExecMainStatus")}
         need(d=={"MainPID":"0","Result":"timeout","ExecMainStatus":"9"} and 13_700<=ms<16_500,"final_supervisor_kill_failed")
         self.proof["same_template_sigkill_ms"]=ms
 
