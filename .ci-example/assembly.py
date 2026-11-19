@@ -359,10 +359,12 @@ class Assembly(Lab):
         self.proof["sealed_immutable_sha256"]=self.rootfs.fingerprint(MOUNT_SCAFFOLD)
         def portable(info):
             p = Path(info.name)
+            mode = stat.S_IMODE(info.mode)
             need(not p.is_absolute() and not set(p.parts)&{"..",".git",".env","auth.json"},"unsafe_archive_member_name")
             need(info.isdir() or info.isfile(),"unsafe_archive_member_type")
-            need(not (info.mode & 0o7022) or (info.isdir() and info.name in {"tmp","var/tmp"} and info.mode==0o1777),
+            need(not (mode & 0o7022) or (info.isdir() and info.name in {"tmp","var/tmp"} and mode==0o1777),
                  "unsafe_archive_member_mode")
+            info.mode=mode
             info.uid=info.gid=0
             info.uname=info.gname="root"
             return info
