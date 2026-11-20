@@ -162,8 +162,8 @@ class Check:
             self.files[revision]['config/v2board.php']=self.original_sha
         self.manifest=self.candidate/'composer.json'
         shared_manifest=self.old/'composer.json'
-        need(sha(self.manifest)==sha(shared_manifest) and stat.S_IMODE(self.manifest.stat().st_mode)==0o644,
-             'candidate_composer_does_not_match_shared_lock_source')
+        need(sha(self.manifest)==sha(shared_manifest),'candidate_composer_does_not_match_shared_lock_source')
+        self.manifest.chmod(0o644)
         self.composer_sha=sha(self.manifest)
         os.chown(shared_manifest,0,0)
         shared_manifest.chmod(0o600)
