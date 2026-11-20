@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-$allowed = ['/_ci_octane_identity', '/_ci_octane_identity?local_test=1',
+$allowed = ['/_ci_octane_identity', '/_ci_octane_identity?local_test=1', '/_ci_octane_identity?write_fixture_log=1',
     '/api/v2/fixture-admin/server/machine/cloud/failover/example', '/assets/admin-xboard/index.html'];
 $path = $argv[1] ?? '';
 if (!in_array($path, $allowed, true) && !preg_match('#^/assets/admin-xboard/assets/index\.(js|css)\?v=[0-9a-f]{12}$#D', $path)) exit(3);

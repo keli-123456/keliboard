@@ -15,6 +15,8 @@
         {"type":"bind","source":"@RELEASE@/app","target":"/www/app","read_only":true,"bind":{"create_host_path":false}},
         {"type":"bind","source":"@RELEASE@/config","target":"/www/config","read_only":true,"bind":{"create_host_path":false}},
         {"type":"bind","source":"@V2BOARD_FILE@","target":"/www/config/v2board.php","read_only":true,"bind":{"create_host_path":false}},
+        {"type":"bind","source":"@RELEASE@/composer.json","target":"/www/composer.json","read_only":true,"bind":{"create_host_path":false}},
+        {"type":"bind","source":"@WEB_LOG_DIR@","target":"/www/storage/logs","read_only":false,"bind":{"create_host_path":false}},
         {"type":"bind","source":"@RELEASE@/public/assets/admin-xboard","target":"/www/public/assets/admin-xboard","read_only":true,"bind":{"create_host_path":false}},
         {"type":"bind","source":"/run/keli-failover-example","target":"/run/keli-failover-example","read_only":true,"bind":{"create_host_path":false}}
       ]

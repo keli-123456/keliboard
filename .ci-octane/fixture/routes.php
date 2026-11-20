@@ -7,6 +7,7 @@ use App\Http\Routes\V2\AdminRoute;
 use App\Models\User;
 use App\Services\ServerMachine\ExampleRehearsal\WorkerSocket;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 require_once __DIR__ . '/helpers.php';
 $router = app('router');
@@ -16,7 +17,8 @@ $router->get('/_ci_octane_identity', static function (Request $request) {
     $read = [];
     foreach (file('/proc/self/mountinfo', FILE_IGNORE_NEW_LINES) as $line) {
         $items = explode(' ', $line);
-        if (in_array($items[4], [$parent, '/www/app', '/www/config', '/www/config/v2board.php', '/www/public/assets/admin-xboard', '/www/bootstrap/cache'], true)) {
+        if (in_array($items[4], [$parent, '/www/app', '/www/config', '/www/config/v2board.php', '/www/composer.json',
+            '/www/storage/logs', '/www/public/assets/admin-xboard', '/www/bootstrap/cache'], true)) {
             $read[$items[4]] = in_array('ro', explode(',', $items[5]), true) ? 'ro' : 'rw';
         }
     }
@@ -39,6 +41,12 @@ $router->get('/_ci_octane_identity', static function (Request $request) {
     $candidateLoaded = class_exists(MachineFailoverExampleController::class, false)
         && (new ReflectionClass(MachineFailoverExampleController::class))->getFileName() ===
             '/www/app/Http/Controllers/V2/Admin/Server/MachineFailoverExampleController.php';
+    $dailyLogged = false;
+    if ($request->query('write_fixture_log') === '1') {
+        abort_unless(app()->storagePath() === '/www/storage', 409);
+        Log::channel('daily')->info('keli_web_only_daily_log_proof');
+        $dailyLogged = true;
+    }
     return response()->json(['pid' => getmypid(), 'uid' => posix_geteuid(), 'gid' => posix_getegid(), 'groups' => posix_getgroups(),
         'cap_eff' => $cap[1] ?? null, 'swoole' => phpversion('swoole'), 'php' => PHP_VERSION, 'octane' => (bool) env('LARAVEL_OCTANE'),
         'admin_loaded_from_release' => $reflection->getFileName() === '/www/app/Http/Routes/V2/AdminRoute.php',
@@ -48,6 +56,10 @@ $router->get('/_ci_octane_identity', static function (Request $request) {
         'config_cache_path' => app()->getCachedConfigPath(), 'loaded_from_cache' => app('config_loaded_from_cache'),
         'config_path' => app()->configPath(), 'original_config_loaded' => config('v2board.keli_ci_mount') === 'original-only',
         'example_config_closed' => config('failover_example') === array_fill_keys(['id','admin','opens','expires'], null),
+        'composer_readable' => is_readable('/www/composer.json'), 'composer_sha256' => hash_file('sha256','/www/composer.json'),
+        'packages_file_created' => is_file(app()->getCachedPackagesPath()),
+        'storage_path' => app()->storagePath(), 'daily_log_path' => config('logging.channels.daily.path'),
+        'daily_logged' => $dailyLogged,
         'grant_supplied' => (bool) getenv('FAILOVER_EXAMPLE_GRANT_ID')]);
 });
 

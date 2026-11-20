@@ -1,16 +1,16 @@
-name: Failover Example Preserve Local V2Board Config
+name: Failover Example Non-root Web Runtime
 
 on:
   push:
-    branches: [audit/failover-example-v2board-linux-20261120-0e92f73d]
+    branches: [audit/failover-example-web-runtime-linux-20261120-0e92f73d]
 
 permissions:
   contents: read
 
 jobs:
   real-octane:
-    name: Real Octane original config bind, independent cache and rollback
-    if: github.repository == 'keli-123456/keliboard' && github.event_name == 'push' && github.ref_name == 'audit/failover-example-v2board-linux-20261120-0e92f73d'
+    name: Real Octane with locked Composer, separate state and logs
+    if: github.repository == 'keli-123456/keliboard' && github.event_name == 'push' && github.ref_name == 'audit/failover-example-web-runtime-linux-20261120-0e92f73d'
     runs-on: ubuntu-24.04
     timeout-minutes: 16
     steps:
@@ -60,7 +60,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: failover-example-v2board-preserved-0e92f73d
+          name: failover-example-web-runtime-0e92f73d
           path: ${{ runner.temp }}/octane-web-only-evidence.json
           if-no-files-found: warn
           retention-days: 7

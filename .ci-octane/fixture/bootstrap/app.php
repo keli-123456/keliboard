@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Bootstrap\LoadConfiguration;
+use Illuminate\Foundation\PackageManifest;
+use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\ServiceProvider;
 use Laravel\Octane\OctaneServiceProvider;
 
@@ -14,8 +16,16 @@ $app = Application::configure(dirname(__DIR__))
     ->withExceptions()
     ->create();
 $app->usePublicPath('/www/public');
-$app->useStoragePath('/state');
+$candidate = getenv('APP_CONFIG_CACHE') === '/www/bootstrap/cache/config.php';
+$app->useStoragePath($candidate ? '/www/storage' : '/state');
 $app->useConfigPath('/www/config');
+$app->singleton(PackageManifest::class, static fn (Application $a) => new class(
+    new Filesystem(), '/www', $a->getCachedPackagesPath()
+) extends PackageManifest {
+    // Exercise the real package index from /www while keeping business providers offline.
+    public function aliases() { parent::aliases(); return []; }
+    public function providers() { parent::providers(); return []; }
+});
 $app->afterBootstrapping(LoadConfiguration::class, static function (Application $app): void {
     // Load the mounted files normally, without enabling any application providers or scheduler.
     $app['config']->set([
