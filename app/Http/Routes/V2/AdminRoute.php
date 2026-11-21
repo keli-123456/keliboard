@@ -40,6 +40,7 @@ use App\Http\Controllers\V2\Admin\RetentionAnalyticsController;
 use App\Http\Controllers\V2\Admin\AiDiagnosticController;
 use App\Http\Controllers\V2\Admin\AiCenterController;
 use App\Http\Controllers\V2\Admin\InviteMonitorController;
+use App\Http\Controllers\V2\Admin\SessionController;
 use Illuminate\Contracts\Routing\Registrar;
 
 class AdminRoute
@@ -54,6 +55,8 @@ class AdminRoute
             'prefix' => admin_setting('secure_path', admin_setting('frontend_admin_path', hash('crc32b', config('app.key')))),
             'middleware' => ['admin', 'log'],
         ], function ($router) {
+            $router->post('/auth/logout', [SessionController::class, 'logout']);
+
             // Config
             $router->group([
                 'prefix' => 'config'

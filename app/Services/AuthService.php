@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\User;
+use App\Services\Auth\AdminSessionPolicy;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\PersonalAccessToken;
 
@@ -17,12 +18,9 @@ class AuthService
 
     public function generateAuthData(): array
     {
-        // Create a new Sanctum token with device info
-        $token = $this->user->createToken(
-            Str::random(20), // token name (device identifier)
-            ['*'], // abilities
-            now()->addYear() // expiration
-        );
+        $token = $this->user->is_admin
+            ? AdminSessionPolicy::issue($this->user)
+            : $this->user->createToken(Str::random(20), ['*'], now()->addYear());
 
         // Format token: remove ID prefix and add Bearer
         $tokenParts = explode('|', $token->plainTextToken);
@@ -67,7 +65,9 @@ class AuthService
 
         $tokenable = $accessToken->tokenable;
 
-        return $tokenable instanceof User ? $tokenable : null;
+        return $tokenable instanceof User && AdminSessionPolicy::allows($accessToken, $tokenable)
+            ? $tokenable
+            : null;
     }
 
     private static function tokenIsValid(PersonalAccessToken $accessToken): bool
