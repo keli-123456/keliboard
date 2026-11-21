@@ -20,6 +20,7 @@ use App\Services\ServerMachine\MachineRiskComparison;
 use App\Services\ServerMachine\MachineRiskCredentialActions;
 use App\Services\ServerMachine\MachineRiskNodeSync;
 use App\Services\ServerMachine\MachineRiskEventService;
+use App\Services\ServerMachine\MachineRiskOverlap;
 use App\Services\ServerMachine\MachineRiskSettings;
 use App\Services\ServerMachine\MachineRiskInvestigationService;
 use App\Services\ServerMachine\MachineRiskUuidReview;
@@ -578,6 +579,108 @@ final class MachineRiskTest extends TestCase
         Bus::assertDispatched(RecordMachineRiskEventJob::class, fn ($job) => $job->recoveredAt !== null);
     }
 
+    public function test_policy_switch_keeps_a_fresh_baseline_and_does_not_reopen_a_continuing_failure(): void
+    {
+        $service = app(MachineRiskEventService::class);
+        $at = time() - 25;
+        $this->enable();
+        $this->report($at, ['reachable', 'unreachable'], 0);
+        $this->enable(['notify_admin' => true]);
+        $this->report($at + 5, ['unreachable', 'unreachable'], 1);
+        Bus::assertNothingDispatched();
+        $this->report($at + 10, ['unreachable', 'unreachable'], 2);
+        $episode = Bus::dispatched(RecordMachineRiskEventJob::class)->sole()->episode;
+        $this->assertSame($at, $episode['last_reachable_at']);
+        $this->assertSame($at + 5, MachineRiskOverlap::onset($episode));
+        $this->assertSame(app(MachineRiskSettings::class)->snapshot()['revision'], $episode['policy_revision']);
+        $event = $service->persist($episode);
+        $this->assertNotNull($event);
+
+        $this->enable();
+        $this->report($at + 15, ['unreachable', 'unreachable'], 2);
+        Bus::assertDispatchedTimes(RecordMachineRiskEventJob::class, 1);
+        $this->assertNull($service->persist($episode));
+        $this->report($at + 20, ['reachable', 'unreachable'], 0);
+        Bus::assertDispatchedTimes(RecordMachineRiskEventJob::class, 2);
+        $recovery = Bus::dispatched(RecordMachineRiskEventJob::class)->last();
+        $this->assertSame($episode, $recovery->episode);
+        $this->assertSame($at + 20, $recovery->recoveredAt);
+        $this->assertSame($event->id, $service->persist($recovery->episode, $recovery->recoveredAt)?->id);
+        $this->assertSame('recovered', $event->fresh()->status);
+        $this->assertSame(1, MachineRiskEvent::query()->count());
+    }
+
+    public function test_policy_switch_cannot_backfill_an_old_episode_that_was_never_persisted(): void
+    {
+        $this->enable();
+        $old = $this->episode();
+        $this->enable();
+        $this->report(time() + 1, ['unreachable', 'unreachable'], 2);
+        Bus::assertDispatchedTimes(RecordMachineRiskEventJob::class, 1);
+        $this->report(time() + 2, ['reachable', 'unreachable'], 0);
+        $recovery = Bus::dispatched(RecordMachineRiskEventJob::class)->last();
+        $this->assertSame($old, $recovery->episode);
+        $this->assertNotNull($recovery->recoveredAt);
+        $this->assertNull(app(MachineRiskEventService::class)->persist($old, $recovery->recoveredAt));
+        $this->assertSame(0, MachineRiskEvent::query()->count());
+    }
+
+    public function test_rollout_adopts_a_long_running_legacy_episode_and_only_records_its_recovery(): void
+    {
+        $this->enable();
+        $service = app(MachineRiskEventService::class);
+        $old = $this->episode();
+        $event = $service->persist($old);
+        $at = time();
+        $old['last_reachable_at'] = $at - 2410;
+        $old['first_failure_at'] = $at - 2405;
+        $old['detected_at'] = $old['probe']['checked_at'] = $at - 2400;
+        $scope = $old['authority_hash'] . ':' . $old['probe_revision'];
+        $old['episode_key'] = hash('sha256', $scope . ':' . $old['detected_at']);
+        $event->forceFill(array_intersect_key($old, array_flip(['episode_key', 'detected_at', 'first_failure_at', 'last_reachable_at'])))->save();
+        Cache::forget('machine_risk:edge:v2:' . $scope);
+        Cache::put('machine_risk:edge:' . $scope . ':' . $old['policy_revision'], [
+            'last_checked_at' => $at - 5, 'failure_rounds' => 2, 'episode' => $old, 'last_event_at' => $old['detected_at'],
+        ], 600);
+
+        $this->enable();
+        $this->report($at, ['unreachable', 'unreachable'], 2);
+        Bus::assertDispatchedTimes(RecordMachineRiskEventJob::class, 1);
+        $this->report($at + 1, ['reachable', 'unreachable'], 0);
+        $job = Bus::dispatched(RecordMachineRiskEventJob::class)->last();
+        $this->assertSame($old, $job->episode);
+        $this->assertSame($event->id, $service->persist($job->episode, $job->recoveredAt)?->id);
+        $this->assertSame('recovered', $event->fresh()->status);
+        $this->assertSame(1, MachineRiskEvent::query()->count());
+    }
+
+    public function test_only_legacy_baselines_from_the_same_scope_and_within_five_minutes_can_carry_over(): void
+    {
+        $at = time() - 10;
+        $this->enable();
+        $risk = app(MachineRiskEventService::class);
+        $policy = app(MachineRiskSettings::class)->snapshot()['revision'];
+        $probeRevision = app(MachineEntryProbe::class)->configuration()['revision'];
+        $machines = [];
+        foreach ([300, 301, 5, 5] as $case => $age) {
+            $machine = ServerMachine::query()->create(['name' => 'Synthetic server', 'token' => 'private-machine-token',
+                'is_active' => true, 'load_status' => []]);
+            $machines[] = $machine;
+            $revision = $case === 2 ? str_repeat('a', 64) : $probeRevision;
+            $authority = $case === 3 ? str_repeat('b', 64) : $risk->authority($machine);
+            $legacy = 'machine_risk:edge:' . $authority . ':' . $revision . ':' . $policy;
+            Cache::put($legacy, ['last_checked_at' => $at - $age, 'last_reachable_at' => $at - $age, 'failure_rounds' => 0], 600);
+        }
+        $this->enable();
+        foreach ($machines as $machine) {
+            $this->machine = $machine;
+            $this->report($at, ['unreachable', 'unreachable'], 2);
+        }
+        Bus::assertDispatchedTimes(RecordMachineRiskEventJob::class, 4);
+        $baselines = Bus::dispatched(RecordMachineRiskEventJob::class)->map(fn ($job) => $job->episode['last_reachable_at'])->all();
+        $this->assertSame([$at - 300, null, null, null], $baselines);
+    }
+
     public function test_tool_errors_partial_stale_or_wrong_revision_reports_do_not_create_incidents(): void
     {
         $this->enable();
@@ -896,6 +999,8 @@ final class MachineRiskTest extends TestCase
     public function test_policy_reporter_and_probe_changes_cancel_waiting_intents_instead_of_reauthorizing(): void
     {
         foreach (['policy', 'reporter', 'probe'] as $change) {
+            $this->machine = ServerMachine::query()->create(['name' => 'Synthetic server', 'token' => 'private-machine-token',
+                'is_active' => true, 'load_status' => []]);
             $this->enable(['hourly_budget' => 1]); $event = $this->event(); $analysis = $this->analysis(); $this->fullBudget(); $analysis->request($event);
             if ($change === 'policy') $this->enable(['hourly_budget' => 1]);
             elseif ($change === 'reporter') $this->machine->forceFill(['token' => 'new-token'])->save();

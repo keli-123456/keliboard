@@ -23,17 +23,24 @@ class MachineRiskEventService
     /** Cache-only edge detection on the existing report path. No model/SQL writes. */
     public function observe(ServerMachine $machine): void
     {
-        if (!app(MachineRiskSettings::class)->enabled() || !$machine->is_active || !config('app.key')) return;
+        if (!$machine->is_active || !config('app.key')) return;
+        try { $policy = app(MachineRiskSettings::class)->snapshot(); }
+        catch (\Throwable) { return; }
+        if ($policy['settings']['enabled'] !== true) return;
         $snapshot = app(MachineTelemetryService::class)->snapshot($machine);
         $probe = $snapshot['entry_probe'];
         if (!is_int($probe['checked_at'] ?? null) || ($probe['valid_until'] ?? 0) < time()) return;
         $config = app(MachineEntryProbe::class)->configuration();
         $revision = $config['revision'];
-        $policyRevision = app(MachineRiskSettings::class)->snapshot()['revision'];
+        $policyRevision = $policy['revision'];
         $authority = $this->authority($machine);
-        $key = 'machine_risk:edge:' . $authority . ':' . $revision . ':' . $policyRevision;
-        Cache::lock($key . ':lock', 3)->get(function () use ($key, $probe, $revision, $policyRevision, $authority, $machine, $config): void {
-            $state = Cache::get($key, []); $at = $probe['checked_at'];
+        $scope = $authority . ':' . $revision;
+        $key = 'machine_risk:edge:v2:' . $scope;
+        Cache::lock($key . ':lock', 3)->get(function () use ($key, $scope, $probe, $revision, $policyRevision, $authority, $machine, $config): void {
+            // Probe continuity is independent of the policy that authorizes an event.
+            $legacy = 'machine_risk:edge:' . $scope . ':';
+            $state = Cache::get($key) ?? Cache::get($legacy . $policyRevision) ?? Cache::get($legacy . ($policyRevision - 1), []);
+            $at = $probe['checked_at'];
             if ($at <= ($state['last_checked_at'] ?? 0)) return;
             if ($at - ($state['last_checked_at'] ?? $at) > $config['interval_seconds'] * 2 + 30) {
                 $state['failure_rounds'] = 0; unset($state['first_failure_at']);
@@ -49,9 +56,12 @@ class MachineRiskEventService
                 $state['failure_rounds'] = min(2, ($state['failure_rounds'] ?? 0) + 1);
                 $confirmed = ($probe['consecutive_failures'] ?? $state['failure_rounds']) >= 2;
                 if ($confirmed && !isset($state['episode']) && $at - (int) ($state['last_event_at'] ?? 0) >= 300) {
+                    $lastReachable = $state['last_reachable_at'] ?? null;
+                    if (!is_int($lastReachable) || $lastReachable >= $state['first_failure_at']
+                        || $state['first_failure_at'] - $lastReachable > MachineRiskOverlap::MAX_BASELINE_AGE) $lastReachable = null;
                     $episode = ['machine_id' => (int) $machine->id, 'authority_hash' => $authority, 'probe_revision' => $revision, 'policy_revision' => $policyRevision,
                         'detected_at' => $at, 'first_failure_at' => $state['first_failure_at'],
-                        'last_reachable_at' => $state['last_reachable_at'] ?? null,
+                        'last_reachable_at' => $lastReachable,
                         'probe' => array_intersect_key($probe, array_flip(['status', 'checked_at', 'configured_targets', 'reachable_targets', 'unreachable_targets', 'unknown_targets', 'consecutive_failures']))];
                     $episode['episode_key'] = hash('sha256', $authority . ':' . $revision . ':' . $at);
                     RecordMachineRiskEventJob::dispatch($episode);
@@ -71,13 +81,23 @@ class MachineRiskEventService
         $policy = app(MachineRiskSettings::class);
         try { $snapshot = $policy->snapshot(); }
         catch (\Throwable) { return null; }
-        if ($snapshot['settings']['enabled'] !== true || ($episode['policy_revision'] ?? null) !== $snapshot['revision']
-            || $episode['detected_at'] < time() - 1800 || $episode['detected_at'] > time() + 30) return null;
+        $now = time();
+        $revision = $episode['policy_revision'] ?? null;
+        $current = $revision === $snapshot['revision'];
+        $fresh = $episode['detected_at'] >= $now - 1800;
+        if ($snapshot['settings']['enabled'] !== true || !is_int($revision) || $revision < 1 || $revision > $snapshot['revision']
+            || $episode['detected_at'] > $now + 30
+            || ($recoveredAt === null && (!$current || !$fresh))
+            || ($recoveredAt !== null && ($recoveredAt < max($episode['detected_at'], $now - 1800) || $recoveredAt > $now + 30))) return null;
         $machine = ServerMachine::query()->find($episode['machine_id']);
         if (!$machine || !$machine->is_active || !hash_equals($this->authority($machine), $episode['authority_hash'])) return null;
         if ($episode['probe_revision'] !== app(MachineEntryProbe::class)->configuration()['revision']) return null;
-        $event = MachineRiskEvent::query()->where('episode_key', $episode['episode_key'])->first();
+        $event = MachineRiskEvent::query()->where('episode_key', $episode['episode_key'])
+            ->where('machine_id', $machine->id)->where('authority_hash', $episode['authority_hash'])
+            ->where('probe_revision', $episode['probe_revision'])->first();
         if (!$event) {
+            // An old episode can recover, but it cannot be created or evaluated again.
+            if (!$current || !$fresh) return null;
             $evidence = $this->evidence($machine, $episode, $snapshot['settings']['overlap']['window_minutes'] * 60);
             $action = $snapshot['settings']['overlap']['action'];
             if ($action !== 'review' && $recoveredAt === null && MachineRiskOverlap::hasActionCandidate($evidence['priority_review'] ?? [])) {
@@ -104,7 +124,7 @@ class MachineRiskEventService
         }
         if ($recoveredAt !== null && $recoveredAt >= $event->detected_at && $event->recovered_at === null) {
             $event->forceFill(['status' => 'recovered', 'recovered_at' => $recoveredAt])->save();
-            app(MachineRiskInvestigationService::class)->recordRecovery($event, $recoveredAt);
+            if ($current) app(MachineRiskInvestigationService::class)->recordRecovery($event, $recoveredAt);
         }
         return $event;
     }

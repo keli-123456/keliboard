@@ -9,7 +9,7 @@ final class MachineRiskOverlap
 {
     public const HISTORY = 7 * 86400;
     public const REVIEW_MINIMUM = 2;
-    private const MAX_BASELINE_AGE = 300;
+    public const MAX_BASELINE_AGE = 300;
     private const MIN_WAVE_GAP = 900;
     private const EXAMPLES = 3;
 
