@@ -1,0 +1,88 @@
+name: Subscription Rate Limit Redis Isolation
+
+on:
+  push:
+    branches:
+      - 'audit/risk-redis-linux-20261121-09dfdb9b'
+
+permissions:
+  contents: read
+
+jobs:
+  redis-concurrency:
+    name: Isolated real Redis concurrency
+    if: github.repository == 'keli-123456/keliboard' && github.event_name == 'push' && github.ref_name == 'audit/risk-redis-linux-20261121-09dfdb9b'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify the candidate and workflow-only changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='09dfdb9b97d5d4cf04b190c1d71b4945e4d3b2d5'
+          test "$(git rev-parse HEAD^)" = "$target"
+          test -z "$(git diff --name-only "$target" HEAD -- . ':!.github/workflows/ci.yml' ':!.github/workflows/risk-redis-acceptance.yml')"
+          test ! -e .env
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: redis, pcntl, posix, mbstring, curl, zip, pdo_sqlite
+          tools: composer:v2
+          coverage: none
+      - name: Install locked dependencies and unpack Redis without starting a service
+        shell: bash
+        run: |
+          set -euo pipefail
+          composer install --prefer-dist --no-interaction --no-progress --no-scripts --no-plugins
+          test ! -e .env
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libjemalloc2 liblzf1
+          mkdir "$RUNNER_TEMP/risk-redis-packages" "$RUNNER_TEMP/risk-redis"
+          cd "$RUNNER_TEMP/risk-redis-packages"
+          apt-get download redis-server redis-tools
+          for package in ./*.deb; do dpkg-deb -x "$package" "$RUNNER_TEMP/risk-redis"; done
+          "$RUNNER_TEMP/risk-redis/usr/bin/redis-server" --version
+          php -r 'exit(PHP_VERSION_ID >= 80200 && PHP_VERSION_ID < 80300 && extension_loaded("redis") && function_exists("pcntl_fork") ? 0 : 1);'
+      - name: Run three rounds of 12 workers against a private Unix socket
+        shell: bash
+        run: |
+          set -euo pipefail
+          ulimit -c 0
+          test ! -e .env
+          parent_net="$(readlink /proc/self/ns/net)"
+          sandbox="$(mktemp -d "$RUNNER_TEMP/risk-redis-tmp.XXXXXX")"
+          mkdir "$RUNNER_TEMP/risk-redis-evidence"
+          timeout --signal=TERM --kill-after=5s 100s \
+            sudo /usr/bin/unshare --net --pid --fork --mount-proc --kill-child=SIGKILL \
+            /usr/bin/setpriv --reuid "$(id -u)" --regid "$(id -g)" --clear-groups \
+              --inh-caps=-all --ambient-caps=-all --bounding-set=-all --no-new-privs \
+            /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+              HOME="$sandbox" TMPDIR="$sandbox" PARENT_NET="$parent_net" \
+              KELI_RATE_LIMIT_REDIS_SERVER="$RUNNER_TEMP/risk-redis/usr/bin/redis-server" \
+              EVIDENCE="$RUNNER_TEMP/risk-redis-evidence" PHP_BIN="$(command -v php)" \
+            /usr/bin/bash -ceu '
+              umask 077
+              test "$(id -u)" -ne 0
+              test -n "$PARENT_NET"
+              test "$(readlink /proc/self/ns/net)" != "$PARENT_NET"
+              for round in 1 2 3; do
+                "$PHP_BIN" vendor/bin/phpunit --do-not-cache-result --colors=never \
+                  --fail-on-skipped --fail-on-empty-test-suite --fail-on-warning --fail-on-risky \
+                  --log-junit "$EVIDENCE/round-$round.xml" \
+                  tests/Integration/SubscriptionControl/SubscriptionRateLimiterRedisTest.php
+              done
+              test -z "$(find "$TMPDIR" -mindepth 1 -name "risk-limit-*" -print -quit)"
+            '
+          rmdir "$sandbox"
+      - name: Retain test-only results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: subscription-redis-concurrency
+          path: ${{ runner.temp }}/risk-redis-evidence/round-*.xml
+          if-no-files-found: error
+          retention-days: 7

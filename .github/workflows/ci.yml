@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches-ignore:
+      - 'audit/risk-redis-linux-20261121-09dfdb9b'
   pull_request:
     types: [opened, synchronize, reopened]
 
