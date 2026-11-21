@@ -7,5 +7,9 @@ tools/machine-acceptance/cli_diagnostics.php text eol=lf
 *.css linguist-vendored
 *.scss linguist-vendored
 *.js linguist-vendored
+public/assets/admin-xboard/index.html text eol=lf
+public/assets/admin-xboard/build-manifest.json text eol=lf
+public/assets/admin-xboard/assets/index.js text eol=lf
+public/assets/admin-xboard/assets/index.css text eol=lf
 CHANGELOG.md export-ignore
 storage/app/geoip/*.mmdb filter=lfs diff=lfs merge=lfs -text
