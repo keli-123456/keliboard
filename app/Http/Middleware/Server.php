@@ -39,11 +39,22 @@ class Server
 
         $request->merge(['node_type' => $auth['normalized_node_type']]);
         $request->attributes->set('node_info', $auth['server']);
-        $request->attributes->set('node_report_source', \App\Services\Node\NodeReportSource::resolve(
+        $source = \App\Services\Node\NodeReportSource::resolve(
             $request, isset($auth['machine']) ? (int) $auth['machine']->id : null
-        ));
+        );
+        $request->attributes->set('node_report_source', $source);
         if ($auth['server'] && $request->isMethod('POST')) {
             abort_unless(app(\App\Services\Node\NodeInstanceRegistry::class)->record($auth['server'], $request), 429, 'Too many active node reporting instances.');
+            $proof = $request->headers->all('X-Keli-Core-Activity');
+            if ($auth['is_v2node'] && isset($auth['machine'], $source['installation_id']) && count($proof) === 1) {
+                try {
+                    $request->attributes->set('core_online_proof', app(\App\Services\ServerMachine\MachineRiskNodeSync::class)->capture(
+                        $auth['machine'], $source['installation_id'], (int) $auth['server']->id, $proof[0], time()
+                    ));
+                } catch (\Throwable) {
+                    // A risk observation must not interfere with regular node reporting.
+                }
+            }
         }
         return $next($request);
     }

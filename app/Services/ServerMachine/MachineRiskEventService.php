@@ -69,14 +69,20 @@ class MachineRiskEventService
     public function persist(array $episode, ?int $recoveredAt = null): ?MachineRiskEvent
     {
         $policy = app(MachineRiskSettings::class);
-        if (!$policy->enabled() || ($episode['policy_revision'] ?? null) !== $policy->snapshot()['revision']
+        try { $snapshot = $policy->snapshot(); }
+        catch (\Throwable) { return null; }
+        if ($snapshot['settings']['enabled'] !== true || ($episode['policy_revision'] ?? null) !== $snapshot['revision']
             || $episode['detected_at'] < time() - 1800 || $episode['detected_at'] > time() + 30) return null;
         $machine = ServerMachine::query()->find($episode['machine_id']);
         if (!$machine || !$machine->is_active || !hash_equals($this->authority($machine), $episode['authority_hash'])) return null;
         if ($episode['probe_revision'] !== app(MachineEntryProbe::class)->configuration()['revision']) return null;
         $event = MachineRiskEvent::query()->where('episode_key', $episode['episode_key'])->first();
         if (!$event) {
-            $evidence = $this->evidence($machine, $episode);
+            $evidence = $this->evidence($machine, $episode, $snapshot['settings']['overlap']['window_minutes'] * 60);
+            $action = $snapshot['settings']['overlap']['action'];
+            if ($action !== 'review' && $recoveredAt === null && MachineRiskOverlap::hasActionCandidate($evidence['priority_review'] ?? [])) {
+                $evidence['credential_action'] = ['action' => $action, 'state' => 'pending', 'at' => time(), 'ref' => null];
+            }
             $event = DB::transaction(function () use ($episode, $machine, $recoveredAt, $evidence): MachineRiskEvent {
                 $event = MachineRiskEvent::query()->firstOrCreate(['episode_key' => $episode['episode_key']], [
                 'machine_id' => $machine->id, 'authority_hash' => $episode['authority_hash'], 'probe_revision' => $episode['probe_revision'],
@@ -89,6 +95,7 @@ class MachineRiskEventService
                 return $event;
             });
             if ($event->wasRecentlyCreated) {
+                app(MachineRiskCredentialActions::class)->onIncident($event, $episode['policy_revision']);
                 app(MachineRiskInvestigationService::class)->notify($event, 'opened');
                 if ($recoveredAt === null && app(MachineRiskSettings::class)->settings()['auto_ai']) {
                     app(MachineRiskAnalysis::class)->request($event, true);
@@ -102,12 +109,13 @@ class MachineRiskEventService
         return $event;
     }
 
-    private function evidence(ServerMachine $machine, array $episode): array
+    private function evidence(ServerMachine $machine, array $episode, int $failureWindow): array
     {
-        $activity = app(MachineRiskActivity::class)->forMachine((int) $machine->id, $episode['detected_at']);
+        $failureAt = MachineRiskOverlap::onset($episode);
+        $activity = app(MachineRiskActivity::class)->forMachine((int) $machine->id, $episode['detected_at'], failureAt: $failureAt, failureWindow: $failureWindow);
         $candidates = $activity['users']; unset($activity['users']);
         $nodes = $activity['nodes']; unset($activity['nodes']);
-        uasort($candidates, fn ($a, $b) => $b['last_at'] <=> $a['last_at']);
+        uasort($candidates, fn ($a, $b) => !empty($b['failure_window_by_node']) <=> !empty($a['failure_window_by_node']) ?: $b['last_at'] <=> $a['last_at']);
         $users = [];
         $accounts = User::query()->whereIn('id', array_slice(array_keys($candidates), 0, 128))
             ->get(['id', 'site_id', 'group_id', 'is_admin', 'is_staff', 'token', 'uuid'])->keyBy('id');
@@ -120,10 +128,15 @@ class MachineRiskEventService
             if ($authorized === []) continue;
             $eligible++;
             if (count($users) >= 20) continue;
+            $failureSamples = array_intersect_key($row['failure_window_by_node'] ?? [], array_fill_keys($authorized, true));
+            usort($failureSamples, fn ($a, $b) => $b['at'] <=> $a['at']);
+            $failureSample = $failureSamples[0] ?? [];
             $ref = substr(hash_hmac('sha256', $episode['episode_key'] . ':' . $user->id, (string) config('app.key')), 0, 16);
             $users[] = ['ref' => $ref, 'user_id' => (int) $user->id, 'site_id' => (int) ($user->site_id ?? 0),
                 'identity_epoch' => app(MachineRiskComparison::class)->identity($user),
-                'activity' => array_diff_key($row, ['node_ids' => true]),
+                'activity' => array_diff_key($row, ['node_ids' => true, 'failure_window_by_node' => true]),
+                'failure_window_at' => $failureSample['at'] ?? null,
+                'failure_window_node_sync' => $failureSample['node_sync'] ?? null,
                 'within_5_seconds' => $row['last_at'] >= $episode['detected_at'] - 5,
                 'within_5_minutes' => $row['last_at'] >= $episode['detected_at'] - 300,
                 'subscription' => $this->subscription($user, array_values($authorized), $episode['detected_at'])];
@@ -133,10 +146,13 @@ class MachineRiskEventService
         $activity['users_capped'] = $eligible > count($users);
         try { $comparison = app(MachineRiskComparison::class)->capture($machine, $episode, $users); }
         catch (\Throwable) { $comparison = ['schema' => 1, 'state' => 'unavailable', 'users' => [], 'absence_is_evidence' => false]; }
+        $priorityReview = $comparison['priority_review'] ?? null;
+        unset($comparison['priority_review']);
         return ['mode' => 'observe_only', 'kind' => 'outbound_probe_failure', 'probe' => $episode['probe'],
             'collection_context' => ['schema' => 1, 'policy_revision' => $episode['policy_revision']],
             'activity' => $activity, 'users' => $users,
             'comparison' => $comparison,
+            'priority_review' => $priorityReview,
             'subscription_generation' => app(SubscriptionRenderEvidence::class)->forMachine((int) $machine->id, $episode['detected_at'], $episode['episode_key']),
             'entry_security' => app(MachineEntryProtection::class)->snapshot((array) $machine->load_status, time()),
             'limits' => ['outbound_icmp_is_not_independent_censorship_proof', 'connection_start_times_not_collected',
@@ -193,6 +209,7 @@ class MachineRiskEventService
     public function advance(): array
     {
         if (!app(MachineRiskSettings::class)->available()) return ['recovered' => 0];
+        app(MachineRiskCredentialActions::class)->reconcilePending();
         app(SubscriptionRenderEvidence::class)->prune();
         $timedOut = MachineRiskEvent::query()->whereIn('ai_status', ['pending', 'analyzing'])->where('ai_requested_at', '<', time() - 300)->limit(100)->get();
         foreach ($timedOut as $event) {

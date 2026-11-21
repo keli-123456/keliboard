@@ -20,6 +20,7 @@ use Plugin\SubscriptionControl\Services\SubscriptionControlEventStore;
 use Plugin\SubscriptionControl\Services\SubscriptionIpIntelligenceService;
 use Plugin\SubscriptionControl\Services\ManagedNodeRouteService;
 use Plugin\SubscriptionControl\Services\SubscriptionRiskAnalyzer;
+use Plugin\SubscriptionControl\Services\SubscriptionRateLimiter;
 use Plugin\SubscriptionControl\Services\SubscriptionRiskResponsePolicy;
 use Plugin\SubscriptionControl\Services\SubscriptionTrustedEgressResolver;
 
@@ -423,28 +424,8 @@ class Plugin extends AbstractPlugin
      */
     private function checkRateLimit(int $userId): bool
     {
-        $requests = $this->getConfig('rate_limit_requests', 10);
-        $window = $this->getConfig('rate_limit_window', 86400);
-        
-        $cacheKey = "subscription_control:rate_limit:{$userId}";
-        
-        // 使用滑动窗口算法
-        $timestamps = Cache::get($cacheKey, []);
-        $now = time();
-        
-        // 清理过期的时间戳
-        $timestamps = array_filter($timestamps, function($ts) use ($now, $window) {
-            return ($now - $ts) < $window;
-        });
-        
-        if (count($timestamps) >= $requests) {
-            return false;
-        }
-        
-        $timestamps[] = $now;
-        Cache::put($cacheKey, $timestamps, $window);
-        
-        return true;
+        return app(SubscriptionRateLimiter::class)->admit($userId, (int) $this->getConfig('rate_limit_requests', 10),
+            (int) $this->getConfig('rate_limit_window', 86400));
     }
 
     /**
@@ -771,13 +752,14 @@ class Plugin extends AbstractPlugin
                 'client_ip' => $ip,
                 'user_agent' => $userAgent,
             ]);
+            $epoch = \App\Services\SubscriptionControlCaseReviewService::observedCredentialEpoch($user, $code, $meta);
 
             if ($action === 'observe') {
-                $this->recordRiskEvent($code, $reason, (int) $user->id, $user, $meta);
+                $this->recordRiskEvent($code, $reason, (int) $user->id, $user, $meta, $epoch);
                 continue;
             }
 
-            $this->interceptRiskDecision($code, $reason, $action === 'throttle' ? 429 : 403, $user, $meta);
+            $this->interceptRiskDecision($code, $reason, $action === 'throttle' ? 429 : 403, $user, $meta, $epoch);
         }
 
         return $servers;
@@ -884,16 +866,16 @@ class Plugin extends AbstractPlugin
         return SubscriptionRiskResponsePolicy::forEvent($code, $action);
     }
 
-    private function interceptRiskDecision(string $code, string $reason, int $status, User $user, array $meta = []): never
+    private function interceptRiskDecision(string $code, string $reason, int $status, User $user, array $meta = [], ?string $epoch = null): never
     {
         $meta['http_status'] = $status;
-        $this->recordRiskEvent($code, $reason, (int) $user->id, $user, $meta);
+        $this->recordRiskEvent($code, $reason, (int) $user->id, $user, $meta, $epoch);
         $headers = ['Content-Type' => 'text/plain; charset=UTF-8', 'Cache-Control' => 'no-store'];
         if ($status === 429) $headers['Retry-After'] = '60';
         $this->intercept(response($this->buildBlockMessage($code, $reason, $meta), $status, $headers));
     }
 
-    private function recordRiskEvent(string $code, string $reason, int $userId = null, ?User $user = null, array $meta = []): void
+    private function recordRiskEvent(string $code, string $reason, int $userId = null, ?User $user = null, array $meta = [], ?string $epoch = null): void
     {
         $action = $this->normalizeRiskAction((string) ($meta['action'] ?? 'reset_token_uuid'), $code);
         $meta['action'] = $action;
@@ -960,7 +942,7 @@ class Plugin extends AbstractPlugin
             }
         }
 
-        $this->appendRecentEvent($userId, $user?->email, $code, $reason, $meta, $notificationResult);
+        $this->appendRecentEvent($userId, $user?->email, $code, $reason, $meta, $notificationResult, $epoch);
     }
 
     private function buildBlockMessage(string $code, string $reason, array $meta = []): string
@@ -1176,7 +1158,7 @@ class Plugin extends AbstractPlugin
         };
     }
 
-    private function appendRecentEvent(?int $userId, ?string $email, string $code, string $reason, array $meta = [], array $notificationResult = []): void
+    private function appendRecentEvent(?int $userId, ?string $email, string $code, string $reason, array $meta = [], array $notificationResult = [], ?string $epoch = null): void
     {
         $events = Cache::get(self::RECENT_EVENTS_KEY, []);
         if (!is_array($events)) {
@@ -1235,7 +1217,7 @@ class Plugin extends AbstractPlugin
         }
 
         Cache::put(self::RECENT_EVENTS_KEY, $events, 60 * 60 * 24 * 3);
-        (new SubscriptionControlEventStore())->append($event, $this->eventRetentionDays());
+        (new SubscriptionControlEventStore())->append($event, $this->eventRetentionDays(), $epoch);
     }
 
     private function eventRetentionDays(): int

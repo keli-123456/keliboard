@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Services;
 
+use App\Models\SubscriptionControlCaseReview;
+use App\Models\User;
+use App\Services\ServerMachine\MachineRiskComparison;
 use App\Services\SubscriptionControlCaseReviewService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
@@ -23,6 +26,10 @@ final class SubscriptionControlCaseReviewServiceTest extends TestCase
         Schema::create('v2_user', function (Blueprint $table): void {
             $table->increments('id');
             $table->string('email')->nullable();
+            $table->string('token')->nullable();
+            $table->string('uuid')->nullable();
+            $table->unsignedInteger('group_id')->nullable();
+            $table->unsignedInteger('site_id')->nullable();
         });
         Schema::create('v2_subscription_control_event', function (Blueprint $table): void {
             $table->increments('id');
@@ -49,6 +56,59 @@ final class SubscriptionControlCaseReviewServiceTest extends TestCase
             $table->unsignedInteger('created_at');
             $table->unsignedInteger('updated_at');
         });
+    }
+
+    public function test_credential_proof_is_bound_to_the_event_viewed_and_the_current_credential_epoch(): void
+    {
+        config(['app.key' => 'synthetic-review-test-key']);
+        $migration = require base_path('database/migrations/2026_11_20_000002_add_subscription_control_event_credential_epoch.php');
+        $migration->up();
+        DB::table('v2_user')->insert(['id' => 10, 'token' => 'old-test-token', 'uuid' => 'old-test-uuid', 'site_id' => 1]);
+        $user = User::query()->findOrFail(10);
+        $service = new SubscriptionControlCaseReviewService();
+        $item = fn (): array => $service->attachOverview(['items' => [['user_id' => 10]]])['items'][0];
+        $epoch = app(MachineRiskComparison::class)->identity($user);
+        $oldEvent = $this->event(10, time() - 60);
+        DB::table('v2_subscription_control_event')->insert($oldEvent);
+        $this->assertArrayNotHasKey('credential_review_evidence', $item());
+        $this->assertNull($service::observedCredentialEpoch($user, 'subscription_leak_guard', ['signal_families' => ['client']]));
+        $this->assertSame($epoch, $service::observedCredentialEpoch($user, 'subscription_leak_guard', ['signal_families' => ['client', 'network']]));
+        $eventId = DB::table('v2_subscription_control_event')->insertGetId($oldEvent + ['credential_epoch' => $epoch]);
+        $seen = $item()['credential_review_evidence'];
+        $this->assertSame($eventId, $seen['id']);
+        $this->assertStringNotContainsString($epoch, json_encode($seen, JSON_THROW_ON_ERROR));
+
+        DB::table('v2_user')->where('id', 10)->update(['token' => 'new-test-token', 'uuid' => 'new-test-uuid']);
+        $this->assertArrayNotHasKey('credential_review_evidence', $item());
+        $this->assertRejectedProof($service, $seen['proof']);
+        $this->assertSame(0, SubscriptionControlCaseReview::query()->count());
+
+        $historical = $service->review(10, 'confirmed_leak', 'Confirm old incident only', 1, ['last_trigger_at' => time()]);
+        $this->assertArrayNotHasKey('confirmed_credential_epoch', SubscriptionControlCaseReview::query()->findOrFail($historical['id'])->evidence_snapshot);
+        $newEpoch = app(MachineRiskComparison::class)->identity($user->fresh());
+        $newId = DB::table('v2_subscription_control_event')->insertGetId($this->event(10, time()) + ['credential_epoch' => $newEpoch]);
+        $newProof = $item()['credential_review_evidence']['proof'];
+        $saved = $service->review(10, 'confirmed_leak', 'Reviewed new evidence', 1, ['credential_review_proof' => $newProof]);
+        $snapshot = SubscriptionControlCaseReview::query()->findOrFail($saved['id'])->evidence_snapshot;
+        $this->assertSame($newEpoch, $snapshot['confirmed_credential_epoch']);
+        $this->assertSame($newId, $snapshot['confirmed_credential_event']['id']);
+        $this->assertRejectedProof($service, $newProof);
+        $modified = $item()['credential_review_evidence']['proof'];
+        DB::table('v2_subscription_control_event')->where('id', $newId)->update(['action' => 'observe']);
+        $this->assertRejectedProof($service, $modified);
+        $migration->down();
+        $this->assertArrayNotHasKey('credential_review_evidence', $item());
+        $this->assertSame(2, SubscriptionControlCaseReview::query()->count());
+    }
+
+    private function assertRejectedProof(SubscriptionControlCaseReviewService $service, string $proof): void
+    {
+        try {
+            $service->review(10, 'confirmed_leak', 'Verify a stale view', 1, ['credential_review_proof' => $proof]);
+            $this->fail('A stale credential proof was accepted');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('case_evidence_changed', $e->getMessage());
+        }
     }
 
     public function test_manual_review_is_saved_and_new_events_reopen_the_case(): void

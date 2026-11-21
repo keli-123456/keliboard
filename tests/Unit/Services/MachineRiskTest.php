@@ -11,15 +11,23 @@ use App\Models\MachineRiskEvent;
 use App\Models\MachineRiskInvestigation;
 use App\Models\Server;
 use App\Models\ServerMachine;
+use App\Models\SubscriptionControlCaseReview;
 use App\Models\User;
 use App\Services\ServerMachine\MachineEntryProbe;
 use App\Services\ServerMachine\MachineRiskActivity;
 use App\Services\ServerMachine\MachineRiskAnalysis;
+use App\Services\ServerMachine\MachineRiskComparison;
+use App\Services\ServerMachine\MachineRiskCredentialActions;
+use App\Services\ServerMachine\MachineRiskNodeSync;
 use App\Services\ServerMachine\MachineRiskEventService;
 use App\Services\ServerMachine\MachineRiskSettings;
 use App\Services\ServerMachine\MachineRiskInvestigationService;
+use App\Services\ServerMachine\MachineRiskUuidReview;
 use App\Services\SubscriptionAiBehaviorService;
 use App\Services\TicketAiProviderClient;
+use App\Services\NodeRealtime\NodeRealtimePublisher;
+use App\Services\UserSyncService;
+use Illuminate\Database\DatabaseTransactionsManager;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Bus;
@@ -138,6 +146,392 @@ final class MachineRiskTest extends TestCase
         MachineRiskInvestigation::query()->whereKey($event->id)->update(['next_check_at' => time() - 1]);
     }
 
+    private function uuidReviewSource(MachineRiskEvent $template, User $user, string $ref): MachineRiskEvent
+    {
+        $source = $this->copyEvent($template);
+        $source->forceFill(['status' => 'recovered', 'detected_at' => time() - 3600, 'evidence' => [
+            'kind' => 'outbound_probe_failure',
+            'users' => [['ref' => $ref, 'user_id' => $user->id, 'site_id' => (int) $user->site_id,
+                'identity_epoch' => app(MachineRiskComparison::class)->identity($user)]],
+            'priority_review' => ['kind' => 'cross_machine_presence', 'state' => 'matched',
+                'accounts' => [['ref' => $ref, 'needs_review' => true, 'matched' => false]]],
+        ]])->save();
+        return $source;
+    }
+
+    private function reviewRejection(string $message, callable $operation): void
+    {
+        try { $operation(); $this->fail('Credential review should have been rejected'); }
+        catch (\RuntimeException $error) { $this->assertSame($message, $error->getMessage()); }
+    }
+
+    private function directUuidFixture(): array
+    {
+        (require base_path('database/migrations/2026_11_20_000001_create_machine_risk_credential_actions.php'))->up();
+        (require base_path('database/migrations/2026_08_16_000001_create_subscription_control_case_reviews.php'))->up();
+        (require base_path('database/migrations/2025_12_30_000001_create_user_sync_tables.php'))->up();
+        DB::connection()->setTransactionManager(new DatabaseTransactionsManager());
+        $publish = new class extends NodeRealtimePublisher {
+            public array $notices = [];
+            public bool $fail = false;
+            public function __construct() {}
+            public function invalidateUsersForGroups(array $groupIds, string $reason = 'users.updated', array $payload = []): void
+            {
+                if ($this->fail) throw new \RuntimeException('synthetic callback failure after database commit');
+                $this->notices[] = [$groupIds, $reason, $payload];
+            }
+        };
+        app()->instance(NodeRealtimePublisher::class, $publish);
+        $policy = app(MachineRiskSettings::class);
+        $settings = array_replace(MachineRiskSettings::DEFAULTS, ['enabled' => true,
+            'overlap' => array_replace(MachineRiskSettings::OVERLAP_DEFAULTS, ['action' => 'reset_both'])]);
+        $policy->save($settings, $policy->snapshot()['revision'], 1, true, true);
+        $user = $this->user(['uuid' => '7fb18642-a326-4e55-bc01-0ed830a9e5be', 'plan_id' => 1, 'transfer_enable' => 100]);
+        $ref = str_repeat('3', 16);
+        $event = $this->uuidReviewSource($this->event(), $user, $ref);
+        return [$policy, $settings, $user, $event, $ref, $publish];
+    }
+
+    private function uuidDigest(string $challenge, User $user): string
+    {
+        return hash('sha256', 'node-uuid-review:v1|' . $challenge . '|' . $user->uuid);
+    }
+
+    public function test_explicit_verified_uuid_reset_is_immediate_atomic_and_not_replayed(): void
+    {
+        [, , $user, $event, $ref, $publish] = $this->directUuidFixture();
+        $service = app(MachineRiskUuidReview::class);
+        $this->assertFalse(Schema::hasTable('v2_subscription_control_event'));
+        $this->assertSame('recovered', $event->status);
+        ['challenge' => $challenge, 'action' => $action] = $service->challenge($event->id, $ref, 11);
+        $this->assertSame('reset_both', $action);
+        $oldClient = $service->confirm($event->id, $ref, 11, $challenge, $this->uuidDigest($challenge, $user), 'IR-42');
+        $this->assertNull($oldClient['credential_action']);
+        $this->assertSame($user->uuid, $user->fresh()->uuid);
+        $this->assertSame(0, DB::table('v2_machine_risk_credential_action')->count());
+
+        $challenge = $service->challenge($event->id, $ref, 11)['challenge'];
+        $digest = $this->uuidDigest($challenge, $user);
+        $saved = $service->confirm($event->id, $ref, 11, $challenge, $digest, 'IR-42', $action);
+        $receipt = $saved['credential_action'];
+        $this->assertSame('applied', $receipt['state']);
+        $this->assertSame('verified_uuid_review', $receipt['trigger']);
+        $this->assertSame($receipt, $event->fresh()->evidence['credential_action']);
+        $updated = $user->fresh();
+        $this->assertNotSame($user->uuid, $updated->uuid);
+        $this->assertNotSame($user->token, $updated->token);
+        $this->assertFalse($updated->banned);
+        $this->assertSame($updated->uuid, DB::table('user_sync_states')->where('user_id', $user->id)->value('uuid'));
+        $delta = DB::table('user_sync_events')->where('id', $receipt['sync_revision'])->first();
+        $this->assertSame($user->uuid, $delta->old_uuid);
+        $this->assertSame($updated->uuid, $delta->uuid);
+        $this->assertSame([[[1], 'user.delta', ['revision' => $receipt['sync_revision']]]], $publish->notices);
+
+        $this->reviewRejection('case_evidence_changed', fn () =>
+            $service->confirm($event->id, $ref, 11, $challenge, $digest, 'IR-42', $action));
+        app(MachineRiskCredentialActions::class)->reconcilePending();
+        $ledger = DB::table('v2_machine_risk_credential_action');
+        $this->assertSame(1, $ledger->count());
+        $this->assertSame($saved['review_id'], (int) $ledger->value('leak_review_id'));
+        $this->assertSame(1, DB::table('user_sync_events')->count());
+        $this->assertSame($updated->token, $user->fresh()->token);
+    }
+
+    public function test_uuid_reset_respects_policy_revision_and_shared_rotation_limits(): void
+    {
+        [$policy, $settings, $user, $event, $ref, $publish] = $this->directUuidFixture();
+        $service = app(MachineRiskUuidReview::class);
+        $issue = fn () => $service->challenge($event->id, $ref, 11)['challenge'];
+        $submit = fn (string $challenge) => $service->confirm($event->id, $ref, 11, $challenge, $this->uuidDigest($challenge, $user), 'IR-42', 'reset_both');
+        $stale = $issue();
+        $policy->save(array_replace($settings, ['hourly_budget' => 3]), $policy->snapshot()['revision'], 1, true, true);
+        $this->reviewRejection('case_evidence_changed', fn () => $submit($stale));
+        $this->assertSame(0, SubscriptionControlCaseReview::query()->count());
+
+        $ledger = DB::table('v2_machine_risk_credential_action');
+        $seed = ['site_id' => 2, 'policy_revision' => $policy->snapshot()['revision'], 'leak_review_id' => 1,
+            'action' => 'reset_uuid', 'pre_epoch' => str_repeat('a', 64), 'post_epoch' => str_repeat('b', 64)];
+        $ledger->insert($seed + ['user_id' => $user->id, 'event_id' => 10000, 'rotated_at' => time() - 20]);
+        $this->assertSame('reset_cooldown', $submit($issue())['credential_action']['state']);
+        DB::table('v2_machine_risk_credential_action')->where('event_id', 10000)->update(['rotated_at' => time() - 600]);
+        $ledger->insert($seed + ['user_id' => 222, 'event_id' => 10001, 'rotated_at' => time() - 600]);
+        $ledger->insert($seed + ['user_id' => 333, 'event_id' => 10002, 'rotated_at' => time() - 600]);
+        $this->assertSame('daily_limit', $submit($issue())['credential_action']['state']);
+        $this->assertSame(MachineRiskCredentialActions::DAILY_LIMIT, $ledger->count());
+        $this->assertSame($user->uuid, $user->fresh()->uuid);
+        $this->assertSame($user->token, $user->fresh()->token);
+        $this->assertSame([], $publish->notices);
+
+        $stale = $issue();
+        $policy->save(MachineRiskSettings::DEFAULTS, $policy->snapshot()['revision'], 1, true, true);
+        $this->reviewRejection('case_evidence_changed', fn () => $submit($stale));
+        $this->assertNull($service->challenge($event->id, $ref, 11)['action']);
+    }
+
+    public function test_uuid_sync_error_rolls_back_review_reset_and_delta_without_exposing_error_bindings(): void
+    {
+        [, , $user, $event, $ref, $publish] = $this->directUuidFixture();
+        $service = app(MachineRiskUuidReview::class);
+        app()->instance(UserSyncService::class, new class extends UserSyncService {
+            public function syncUser(User $user, string $reason = 'user_sync'): void
+            {
+                parent::syncUser($user, $reason);
+                if ($reason === 'node_risk_reset') throw new \RuntimeException('private fixture credential binding');
+            }
+        });
+        $challenge = $service->challenge($event->id, $ref, 11)['challenge'];
+        $request = Request::create('/risk/node-events/1/uuid-review', 'POST', ['ref' => $ref, 'challenge' => $challenge,
+            'digest' => $this->uuidDigest($challenge, $user), 'reference' => 'IR-42', 'confirmed' => true, 'apply_action' => 'reset_both']);
+        $request->setUserResolver(fn () => (object) ['id' => 11, 'is_admin' => true]);
+        $response = (new MachineRiskController())->confirmUuidReview($request, $event->id, $service);
+        $this->assertSame(503, $response->getStatusCode());
+        $this->assertSame('credential_review_write_failed', $response->getData(true)['message']);
+        $this->assertSame($user->uuid, $user->fresh()->uuid);
+        $this->assertSame($user->token, $user->fresh()->token);
+        $this->assertSame(0, SubscriptionControlCaseReview::query()->count());
+        $this->assertSame(0, DB::table('user_sync_states')->count());
+        $this->assertSame(0, DB::table('user_sync_events')->count());
+        $this->assertSame(0, DB::table('v2_machine_risk_credential_action')->count());
+        $this->assertSame([], $publish->notices);
+    }
+
+    public function test_uuid_only_reset_keeps_link_and_returns_committed_receipt_if_notification_fails(): void
+    {
+        [$policy, $settings, $user, $event, $ref, $publish] = $this->directUuidFixture();
+        $settings['overlap']['action'] = 'reset_uuid';
+        $policy->save($settings, $policy->snapshot()['revision'], 1, true, true);
+        $service = app(MachineRiskUuidReview::class);
+        ['challenge' => $challenge, 'action' => $action] = $service->challenge($event->id, $ref, 11);
+        $this->assertSame('reset_uuid', $action);
+        $digest = $this->uuidDigest($challenge, $user);
+        $this->reviewRejection('case_evidence_changed', fn () =>
+            $service->confirm($event->id, $ref, 11, $challenge, $digest, 'IR-42', 'reset_both'));
+        $publish->fail = true;
+        $ack = $service->confirm($event->id, $ref, 11, $challenge, $digest, 'IR-42', $action);
+        $this->assertTrue($ack['notification_unconfirmed']);
+        $this->assertSame('applied', $ack['credential_action']['state']);
+        $this->assertSame($user->token, $user->fresh()->token);
+        $this->assertNotSame($user->uuid, $user->fresh()->uuid);
+        $this->assertSame(1, DB::table('v2_machine_risk_credential_action')->count());
+    }
+
+    public function test_node_uuid_review_rejects_wrong_credential_stale_view_and_other_reviewer_without_writes(): void
+    {
+        (require base_path('database/migrations/2026_08_16_000001_create_subscription_control_case_reviews.php'))->up();
+        $this->enable();
+        $uuid = '7fb18642-a326-4e55-bc01-0ed830a9e5be';
+        $ref = str_repeat('1', 16);
+        $user = $this->user(['uuid' => $uuid, 'plan_id' => 1]);
+        $event = $this->uuidReviewSource($this->event(), $user, $ref);
+        $service = app(MachineRiskUuidReview::class);
+        $challenge = $service->challenge($event->id, $ref, 11)['challenge'];
+        $digest = hash('sha256', 'node-uuid-review:v1|' . $challenge . '|' . $uuid);
+
+        $this->reviewRejection('node_uuid_not_matched', fn () =>
+            $service->confirm($event->id, $ref, 11, $challenge, str_repeat('0', 64), 'IR-42'));
+        $this->reviewRejection('case_evidence_changed', fn () =>
+            $service->confirm($event->id, $ref, 12, $challenge, $digest, 'IR-42'));
+        $this->reviewRejection('case_evidence_changed', fn () =>
+            $service->confirm($event->id, $ref, 11, $challenge, $digest, $uuid));
+        $expired = preg_replace('/^[0-9]+/', (string) (time() - 1), $challenge);
+        $this->reviewRejection('case_evidence_changed', fn () =>
+            $service->confirm($event->id, $ref, 11, $expired, $digest, 'IR-42'));
+        $event->forceFill(['review_verdict' => 'uncertain', 'reviewed_at' => time()])->save();
+        $this->reviewRejection('case_evidence_changed', fn () =>
+            $service->confirm($event->id, $ref, 11, $challenge, $digest, 'IR-42'));
+
+        $freshChallenge = $service->challenge($event->id, $ref, 11)['challenge'];
+        $freshDigest = hash('sha256', 'node-uuid-review:v1|' . $freshChallenge . '|' . $uuid);
+        $user->forceFill(['uuid' => str_repeat('e', 32)])->save();
+        $this->reviewRejection('case_evidence_changed', fn () =>
+            $service->confirm($event->id, $ref, 11, $freshChallenge, $freshDigest, 'IR-42'));
+        $this->assertSame(0, SubscriptionControlCaseReview::query()->count());
+        $this->assertSame($user->token, $user->fresh()->token);
+    }
+
+    public function test_node_uuid_review_can_authorize_a_later_qualified_event_without_subscription_anomalies(): void
+    {
+        (require base_path('database/migrations/2026_11_20_000001_create_machine_risk_credential_actions.php'))->up();
+        (require base_path('database/migrations/2026_08_16_000001_create_subscription_control_case_reviews.php'))->up();
+        $this->assertFalse(Schema::hasTable('v2_subscription_control_event'));
+        $policy = app(MachineRiskSettings::class);
+        $settings = array_replace(MachineRiskSettings::DEFAULTS, ['enabled' => true,
+            'overlap' => array_replace(MachineRiskSettings::OVERLAP_DEFAULTS, ['action' => 'reset_subscription'])]);
+        $policy->save($settings, $policy->snapshot()['revision'], 1, true, true);
+        $uuid = 'f73f1e62-3bbc-462c-9f73-2dad3649be4a';
+        $ref = str_repeat('2', 16);
+        $user = $this->user(['uuid' => $uuid, 'plan_id' => 1, 'transfer_enable' => 100]);
+        $event = $this->event();
+        $source = $this->uuidReviewSource($event, $user, $ref);
+        $service = app(MachineRiskUuidReview::class);
+        $save = function () use ($service, $source, $ref, $uuid): array {
+            ['challenge' => $challenge, 'action' => $action] = $service->challenge($source->id, $ref, 11);
+            $this->assertNull($action);
+            $digest = hash('sha256', 'node-uuid-review:v1|' . $challenge . '|' . $uuid);
+            $result = $service->confirm($source->id, $ref, 11, $challenge, $digest, 'IR-42');
+            $this->reviewRejection('case_evidence_changed', fn () =>
+                $service->confirm($source->id, $ref, 11, $challenge, $digest, 'IR-42'));
+            $audit = json_encode(SubscriptionControlCaseReview::query()->findOrFail($result['review_id'])->evidence_snapshot, JSON_THROW_ON_ERROR);
+            foreach ([$uuid, $challenge, $digest] as $secret) $this->assertStringNotContainsString($secret, $audit);
+            return $result;
+        };
+        $confirmed = $save();
+        $this->assertSame($user->token, $user->fresh()->token);
+        $this->assertSame($uuid, $user->fresh()->uuid);
+        $this->assertSame(0, DB::table('v2_machine_risk_credential_action')->count());
+
+        $coverage = ['action_coverage' => true, 'capped' => false, 'users_capped' => false];
+        $prior = [$this->copyEvent($event), $this->copyEvent($event)];
+        foreach ($prior as $row) $row->forceFill(['evidence' => ['activity' => $coverage]])->save();
+        $evidence = $event->evidence;
+        $evidence['activity'] = $coverage;
+        $evidence['comparison']['prior_events_capped'] = false;
+        $evidence['users'] = $source->evidence['users'];
+        $evidence['priority_review'] = ['kind' => 'cross_machine_presence', 'state' => 'matched', 'accounts' => [[
+            'ref' => $ref, 'matched' => true, 'occurrences' => [['event_id' => null], ['event_id' => $prior[0]->id], ['event_id' => $prior[1]->id]],
+        ]]];
+        $evidence['credential_action'] = ['action' => 'reset_subscription', 'state' => 'pending'];
+        $actions = app(MachineRiskCredentialActions::class);
+        $historical = $this->copyEvent($event);
+        // A queued incident with the same second as the review must not become authorized.
+        $historical->forceFill(['evidence' => $evidence, 'detected_at' => $confirmed['reviewed_at']])->save();
+        $actions->reconcilePending();
+        $this->assertSame('leak_review_required', $historical->fresh()->evidence['credential_action']['state']);
+
+        sleep(1);
+        $source->forceFill(['review_verdict' => 'false_positive', 'reviewed_at' => time()])->save();
+        $revoked = $this->copyEvent($event);
+        $revoked->forceFill(['evidence' => $evidence, 'detected_at' => time()])->save();
+        $actions->reconcilePending();
+        $this->assertSame('leak_review_required', $revoked->fresh()->evidence['credential_action']['state']);
+        $this->assertSame($user->token, $user->fresh()->token);
+
+        $source->forceFill(['review_verdict' => 'uncertain', 'reviewed_at' => time()])->save();
+        $confirmed = $save();
+        sleep(1);
+        $new = $this->copyEvent($event);
+        $new->forceFill(['evidence' => $evidence, 'detected_at' => $confirmed['reviewed_at'] + 1])->save();
+        $this->report($confirmed['reviewed_at'] + 1, ['unreachable', 'unreachable']);
+        $actions->reconcilePending();
+        $this->assertSame('applied', $new->fresh()->evidence['credential_action']['state']);
+        $this->assertNotSame($user->token, $user->fresh()->token);
+        $this->assertSame($uuid, $user->fresh()->uuid);
+        $this->assertSame($confirmed['review_id'], (int) DB::table('v2_machine_risk_credential_action')->value('leak_review_id'));
+    }
+
+    public function test_receipt_belongs_to_the_authenticated_online_sample_not_the_installation_cache(): void
+    {
+        $this->enable();
+        $now = time(); $installation = str_repeat('a', 32); $service = app(MachineRiskNodeSync::class);
+        $source = 'machine:' . $this->machine->id . ':' . $installation;
+        $run = str_repeat('c', 32);
+        $header = 'v1.' . $run . '.' . ($now - 12) . '.42.' . $this->node->id . '.11';
+        $proof = $service->capture($this->machine, $installation, (int) $this->node->id, $header, $now);
+        $this->assertNotNull($proof);
+        $this->assertEquals(['revision' => 42, 'sampled_at' => $now - 12, 'run_id' => $run, 'users' => [11]],
+            $service->forActivity($this->machine->id, $source, $this->node->id, $now, $proof));
+        Cache::put('machine_risk:node_sync:v1:' . $this->machine->id . ':' . $installation, $proof, 300);
+        $this->assertNull($service->forActivity($this->machine->id, $source, $this->node->id, $now + 1, null));
+        $this->assertNull($service->capture($this->machine, $installation, $this->node->id, $header . ',11', $now));
+        $this->assertNull($service->capture($this->machine, $installation, $this->node->id + 1, $header, $now));
+        $this->assertNull($service->forActivity($this->machine->id, $source, $this->node->id, $now + 120, $proof));
+        $this->assertNull($service->forActivity($this->machine->id, 'machine:' . $this->machine->id . ':' . str_repeat('b', 32), $this->node->id, $now, $proof));
+        $activity = app(MachineRiskActivity::class);
+        $activity->record($this->node->type, $this->node->id, ['users' => [11 => 1, 12 => 1], 'core_online_proof' => $proof],
+            $now - 2, $this->machine->id, true, $source);
+        $sampled = $activity->forMachine($this->machine->id, $now, failureAt: $now);
+        $this->assertSame($run, $sampled['users'][11]['failure_window_by_node'][$this->node->id]['node_sync']['run_id']);
+        $this->assertNull($sampled['users'][12]['failure_window_by_node'][$this->node->id]['node_sync']);
+        $this->machine->forceFill(['token' => 'synthetic-new-machine-token'])->save();
+        $this->assertNull($service->forActivity($this->machine->id, $source, $this->node->id, $now, $proof));
+    }
+
+    public function test_pending_actions_stop_on_capped_coverage_or_missing_confirmation_and_reconcile_with_no_duplicate(): void
+    {
+        (require base_path('database/migrations/2026_11_20_000001_create_machine_risk_credential_actions.php'))->up();
+        (require base_path('database/migrations/2026_08_16_000001_create_subscription_control_case_reviews.php'))->up();
+        $policy = app(MachineRiskSettings::class);
+        $settings = array_replace(MachineRiskSettings::DEFAULTS, ['enabled' => true,
+            'overlap' => array_replace(MachineRiskSettings::OVERLAP_DEFAULTS, ['action' => 'reset_subscription'])]);
+        $policy->save($settings, $policy->snapshot()['revision'], 1, true, true);
+        $user = $this->user(['plan_id' => 1, 'transfer_enable' => 100]);
+        $epoch = app(MachineRiskComparison::class)->identity($user);
+        $event = $this->event();
+        $coverage = ['action_coverage' => true, 'capped' => false, 'users_capped' => false];
+        $prior = [$this->copyEvent($event), $this->copyEvent($event)];
+        foreach ($prior as $seen) $seen->forceFill(['evidence' => ['activity' => $coverage]])->save();
+        $evidence = $event->evidence;
+        $evidence['comparison']['prior_events_capped'] = false;
+        $evidence['users'] = [['ref' => 'synthetic-ref', 'user_id' => $user->id, 'site_id' => 2, 'identity_epoch' => $epoch]];
+        $evidence['priority_review'] = ['kind' => 'cross_machine_presence', 'state' => 'matched', 'accounts' => [[
+            'ref' => 'synthetic-ref', 'matched' => true, 'occurrences' => [['event_id' => null], ['event_id' => $prior[0]->id], ['event_id' => $prior[1]->id]],
+        ]]];
+        $evidence['credential_action'] = ['action' => 'reset_subscription', 'state' => 'pending'];
+        $service = app(MachineRiskCredentialActions::class);
+        $attempt = $this->copyEvent($event);
+        $attempt->forceFill(['evidence' => array_replace($evidence, ['activity' => array_replace($coverage, ['users_capped' => true])])])->save();
+        $service->reconcilePending();
+        $this->assertSame('incomplete_coverage', $attempt->fresh()->evidence['credential_action']['state']);
+        $evidence['activity'] = $coverage;
+        $unconfirmed = $this->copyEvent($event);
+        $unconfirmed->forceFill(['evidence' => $evidence])->save();
+        $service->reconcilePending();
+        $this->assertSame('leak_review_required', $unconfirmed->fresh()->evidence['credential_action']['state']);
+        $this->assertSame($user->token, $user->fresh()->token);
+
+        SubscriptionControlCaseReview::query()->create(['user_id' => $user->id, 'status' => 'confirmed_leak', 'admin_id' => 1,
+            'reviewed_at' => $event->detected_at, 'note' => 'Synthetic independent evidence', 'evidence_snapshot' => ['confirmed_credential_epoch' => $epoch,
+                'confirmed_credential_event' => ['id' => 101, 'created_at' => $event->detected_at - 30]]]);
+        $event->forceFill(['evidence' => $evidence])->save();
+        $service->reconcilePending();
+        $this->assertSame('applied', $event->fresh()->evidence['credential_action']['state']);
+        $rotated = $user->fresh();
+        $this->assertNotSame($user->token, $rotated->token);
+        $this->assertSame($user->uuid, $rotated->uuid);
+        $service->reconcilePending();
+        $service->onIncident($event, $policy->snapshot()['revision']);
+        $this->assertSame($rotated->token, $user->fresh()->token);
+        $this->assertSame(1, DB::table('v2_machine_risk_credential_action')->count());
+
+        // Exercise an earlier UUID reset receipt and the repeat threshold on the current credential epoch.
+        $ledger = DB::table('v2_machine_risk_credential_action')->first();
+        DB::table('v2_machine_risk_credential_action')->where('id', $ledger->id)
+            ->update(['action' => 'reset_uuid', 'user_sync_revision' => 42, 'rotated_at' => $event->detected_at - 3600]);
+        $postEpoch = app(MachineRiskComparison::class)->identity($rotated);
+        SubscriptionControlCaseReview::query()->create(['user_id' => $user->id, 'status' => 'confirmed_leak', 'admin_id' => 1,
+            'reviewed_at' => $event->detected_at, 'note' => 'Synthetic repeat evidence', 'evidence_snapshot' => ['confirmed_credential_epoch' => $postEpoch,
+                'confirmed_credential_event' => ['id' => 102, 'created_at' => $event->detected_at - 30]]]);
+        $evidence['users'][0]['identity_epoch'] = $postEpoch;
+        $evidence['priority_review']['repeated'] = 'after_reset';
+        $candidate = &$evidence['priority_review']['accounts'][0];
+        $candidate['after_reset'] = true;
+        $candidate['reset_receipt_id'] = (int) $ledger->id;
+        foreach ($candidate['occurrences'] as $index => &$hit) {
+            $hit['active_at'] = $event->detected_at - 15 - 900 * $index;
+            $hit['first_failure_at'] = $hit['active_at'] + 5;
+            $hit['node_sync'] = ['revision' => 42, 'at' => $hit['active_at'] - 5, 'core_at' => $hit['active_at'] - 6];
+        }
+        unset($hit);
+        $repeat = $this->copyEvent($event);
+        $repeat->forceFill(['evidence' => $evidence])->save();
+        $service->reconcilePending();
+        $this->assertSame('node_sync_unconfirmed', $repeat->fresh()->evidence['credential_action']['state']);
+        $this->assertSame($rotated->token, $user->fresh()->token);
+        $this->assertSame($repeat->id, $service->repeatedAccounts()[0]['repeat_event_id']);
+
+        foreach ($candidate['occurrences'] as &$hit) {
+            $hit['node_sync'] = ['revision' => 42, 'sampled_at' => $hit['active_at'] - 1, 'run_id' => str_repeat('c', 32)];
+        }
+        unset($hit, $candidate);
+        $confirmed = $this->copyEvent($event);
+        $confirmed->forceFill(['evidence' => $evidence])->save();
+        $service->reconcilePending();
+        $this->assertSame('applied', $confirmed->fresh()->evidence['credential_action']['state']);
+        $this->assertSame(2, DB::table('v2_machine_risk_credential_action')->count());
+        $service->reviewRepeat($repeat->id, 'false_positive');
+        $this->assertSame('false_positive', $service->repeatedAccounts()[0]['repeat_verdict']);
+    }
+
     public function test_defaults_are_off_and_activation_is_revisioned_and_explicit(): void
     {
         $policy = app(MachineRiskSettings::class);
@@ -238,7 +632,8 @@ final class MachineRiskTest extends TestCase
         (new \App\Jobs\UpdateAliveDataJob([$user->id => ['192.0.2.103']], 'hysteria', $this->node->id, $at - 1))->handle();
         $this->assertSame($value, Cache::get($key));
         app()->instance(MachineRiskActivity::class, new class extends MachineRiskActivity {
-            public function record(string $nodeType, int $nodeId, array $sample, float $reportedAt, ?int $sourceMachineId = null, bool $identified = false): void { throw new \RuntimeException('Synthetic cache outage'); }
+            public function record(string $nodeType, int $nodeId, array $sample, float $reportedAt, ?int $sourceMachineId = null,
+                bool $identified = false, ?string $sourceKey = null): void { throw new \RuntimeException('Synthetic cache outage'); }
         });
         (new \App\Jobs\UpdateAliveDataJob([], 'hysteria', $this->node->id, $at + 1))->handle();
         $this->assertSame(0, $user->fresh()->online_count);
@@ -430,7 +825,7 @@ final class MachineRiskTest extends TestCase
     {
         $this->bindTestRouter(); (new \App\Http\Routes\V2\AdminRoute())->map(app('router'));
         $routes = array_filter(iterator_to_array(app('router')->getRoutes()), fn ($route) => str_contains($route->uri(), '/risk/node-events'));
-        $this->assertCount(5, $routes);
+        $this->assertCount(7, $routes);
         foreach ($routes as $route) $this->assertContains('admin', $route->gatherMiddleware());
     }
 
