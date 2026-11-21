@@ -17,14 +17,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 3
           persist-credentials: false
       - name: Verify the candidate and workflow-only changes
         shell: bash
         run: |
           set -euo pipefail
           target='09dfdb9b97d5d4cf04b190c1d71b4945e4d3b2d5'
-          test "$(git rev-parse HEAD^)" = "$target"
+          git merge-base --is-ancestor "$target" HEAD
           test -z "$(git diff --name-only "$target" HEAD -- . ':!.github/workflows/ci.yml' ':!.github/workflows/risk-redis-acceptance.yml')"
           test ! -e .env
       - uses: shivammathur/setup-php@v2
@@ -45,7 +45,11 @@ jobs:
           cd "$RUNNER_TEMP/risk-redis-packages"
           apt-get download redis-server redis-tools
           for package in ./*.deb; do dpkg-deb -x "$package" "$RUNNER_TEMP/risk-redis"; done
-          "$RUNNER_TEMP/risk-redis/usr/bin/redis-server" --version
+          packaged="$RUNNER_TEMP/risk-redis/usr/bin/redis-server"
+          printf 'Packaged Redis entry resolves to %s\n' "$(basename "$(readlink -f "$packaged")")"
+          # The test resolves the path, so preserve the Redis server's argv[0].
+          install -D -m 0755 "$packaged" "$RUNNER_TEMP/risk-redis-bin/redis-server"
+          "$RUNNER_TEMP/risk-redis-bin/redis-server" --version
           php -r 'exit(PHP_VERSION_ID >= 80200 && PHP_VERSION_ID < 80300 && extension_loaded("redis") && function_exists("pcntl_fork") ? 0 : 1);'
       - name: Run three rounds of 12 workers against a private Unix socket
         shell: bash
@@ -62,7 +66,7 @@ jobs:
               --inh-caps=-all --ambient-caps=-all --bounding-set=-all --no-new-privs \
             /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
               HOME="$sandbox" TMPDIR="$sandbox" PARENT_NET="$parent_net" \
-              KELI_RATE_LIMIT_REDIS_SERVER="$RUNNER_TEMP/risk-redis/usr/bin/redis-server" \
+              KELI_RATE_LIMIT_REDIS_SERVER="$RUNNER_TEMP/risk-redis-bin/redis-server" \
               EVIDENCE="$RUNNER_TEMP/risk-redis-evidence" PHP_BIN="$(command -v php)" \
             /usr/bin/bash -ceu '
               umask 077
