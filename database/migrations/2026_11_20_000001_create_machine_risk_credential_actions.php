@@ -1,11 +1,17 @@
 <?php
 
+use App\Support\RiskMigrationLock;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration {
     public function up(): void
+    {
+        RiskMigrationLock::run(fn () => $this->createReceipts());
+    }
+
+    private function createReceipts(): void
     {
         if (Schema::hasTable('v2_machine_risk_credential_action')) return;
         Schema::create('v2_machine_risk_credential_action', function (Blueprint $table): void {
