@@ -30,7 +30,7 @@ final class SubscriptionControlEventStore
         'updated_at',
     ];
 
-    public function append(array $event, int $retentionDays = 3): void
+    public function append(array $event, int $retentionDays = 3, ?string $credentialEpoch = null): void
     {
         if (!$this->available()) {
             return;
@@ -39,11 +39,15 @@ final class SubscriptionControlEventStore
         try {
             $now = time();
             $createdAt = $this->intOrNull($event['created_at'] ?? null) ?? $now;
-            DB::table(self::TABLE)->insert($this->normalizeForInsert($event, $createdAt, $now));
+            $row = $this->normalizeForInsert($event, $createdAt, $now);
+            if ($credentialEpoch !== null && Schema::hasColumn(self::TABLE, 'credential_epoch')) {
+                $row['credential_epoch'] = $credentialEpoch;
+            }
+            DB::table(self::TABLE)->insert($row);
             $this->prune($retentionDays);
         } catch (\Throwable $e) {
             Log::warning('[SubscriptionControl] 风控事件落库失败', [
-                'error' => $e->getMessage(),
+                'error_type' => get_class($e),
             ]);
         }
     }
@@ -156,7 +160,7 @@ final class SubscriptionControlEventStore
     {
         $event = $row;
         $event['id'] = (string) ($row['event_id'] ?? $row['id'] ?? '');
-        unset($event['event_id']);
+        unset($event['event_id'], $event['credential_epoch']);
 
         foreach (self::JSON_FIELDS as $field) {
             $event[$field] = $this->decodeJsonField($row[$field] ?? null);

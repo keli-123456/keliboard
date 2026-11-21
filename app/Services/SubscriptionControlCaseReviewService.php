@@ -3,6 +3,8 @@
 namespace App\Services;
 
 use App\Models\SubscriptionControlCaseReview;
+use App\Models\User;
+use App\Services\ServerMachine\MachineRiskComparison;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -13,6 +15,9 @@ final class SubscriptionControlCaseReviewService
     private const REVIEW_TABLE = 'v2_subscription_control_case_review';
     private const EVENT_TABLE = 'v2_subscription_control_event';
     private const USER_TABLE = 'v2_user';
+    private const PROOF_TTL = 900;
+    private const EVIDENCE_MAX_AGE = 7 * 86400;
+    private const CREDENTIAL_EVENT_CODES = ['subscription_leak_guard', 'source_batch_pull'];
     private const BLOCKING_ACTIONS = ['block', 'empty', 'throttle', 'reset_token', 'reset_token_uuid'];
     private const CALIBRATION_VERSION = '1.0.0';
     private const MIN_CALIBRATION_SAMPLES = 5;
@@ -61,17 +66,29 @@ final class SubscriptionControlCaseReviewService
         ) ?: null;
         $now = time();
 
-        $review = SubscriptionControlCaseReview::query()->create([
-            'user_id' => $userId,
-            'status' => $status,
-            'note' => mb_substr(trim((string) ($note ?? '')), 0, 1000) ?: null,
-            'evidence_snapshot' => $snapshot,
-            'suspicion_score' => $score,
-            'evidence_fingerprint' => hash('sha256', json_encode($snapshot, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)),
-            'baseline_last_trigger_at' => $lastTriggerAt,
-            'reviewed_at' => $now,
-            'admin_id' => $adminId > 0 ? $adminId : null,
-        ]);
+        $proof = $status === SubscriptionControlCaseReview::STATUS_CONFIRMED_LEAK ? ($modelSnapshot['credential_review_proof'] ?? null) : null;
+        $review = DB::transaction(function () use ($userId, $status, $note, $adminId, $snapshot, $score, $lastTriggerAt, $now, $proof): SubscriptionControlCaseReview {
+            $user = User::query()->lockForUpdate()->find($userId);
+            if (!$user) throw new RuntimeException('user_not_found');
+            if ($proof !== null) {
+                $evidence = $this->verifyCredentialEvidence($user, $proof, time());
+                if ($adminId > 0 && trim((string) $note) !== '') {
+                    $snapshot['confirmed_credential_epoch'] = $evidence->credential_epoch;
+                    $snapshot['confirmed_credential_event'] = $this->describeCredentialEvidence($evidence);
+                }
+            }
+            return SubscriptionControlCaseReview::query()->create([
+                'user_id' => $userId,
+                'status' => $status,
+                'note' => mb_substr(trim((string) ($note ?? '')), 0, 1000) ?: null,
+                'evidence_snapshot' => $snapshot,
+                'suspicion_score' => $score,
+                'evidence_fingerprint' => hash('sha256', json_encode($snapshot, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)),
+                'baseline_last_trigger_at' => $lastTriggerAt,
+                'reviewed_at' => $now,
+                'admin_id' => $adminId > 0 ? $adminId : null,
+            ]);
+        });
 
         return $this->serialize($review, ['new_event_count' => 0, 'last_new_event_at' => null]);
     }
@@ -93,6 +110,10 @@ final class SubscriptionControlCaseReviewService
         $latest = $this->latestReviewsForUsers($userIds);
         $newEvents = $this->newEventMetrics($latest->values());
         $historyCounts = $this->historyCounts($userIds);
+        $users = $userIds !== [] && $this->credentialEvidenceAvailable()
+            ? User::query()->whereIn('id', $userIds)->get()->keyBy('id')
+            : collect();
+        $now = time();
 
         foreach ($items as $index => $item) {
             $userId = (int) ($item['user_id'] ?? 0);
@@ -100,11 +121,72 @@ final class SubscriptionControlCaseReviewService
             $items[$index]['case_review'] = $review
                 ? $this->serialize($review, $newEvents[(int) $review->id] ?? [], $historyCounts[$userId] ?? 1)
                 : null;
+            $user = $users->get($userId);
+            if ($user && ($event = $this->credentialEvent($user, $now))) {
+                $expires = $now + self::PROOF_TTL;
+                $items[$index]['credential_review_evidence'] = $this->describeCredentialEvidence($event) + [
+                    'proof' => $this->credentialProof($event, (int) ($review?->id ?? 0), $expires),
+                ];
+            }
         }
 
         $overview['items'] = $items;
         $overview['case_review_summary'] = $this->summary();
         return $overview;
+    }
+
+    /** Only called for decisions on the authenticated subscription request, before any reset. */
+    public static function observedCredentialEpoch(User $user, string $code, array $meta): ?string
+    {
+        if (!config('app.key') || trim((string) $user->token) === '' || trim((string) $user->uuid) === ''
+            || !in_array($code, self::CREDENTIAL_EVENT_CODES, true)
+            || ($code === 'subscription_leak_guard' && count(array_unique((array) ($meta['signal_families'] ?? []))) < 2)) {
+            return null;
+        }
+        return app(MachineRiskComparison::class)->identity($user);
+    }
+
+    private function credentialEvidenceAvailable(): bool
+    {
+        return (bool) config('app.key') && Schema::hasColumn(self::EVENT_TABLE, 'credential_epoch');
+    }
+
+    private function credentialEvent(User $user, int $now, ?int $id = null): ?object
+    {
+        if (trim((string) $user->token) === '' || trim((string) $user->uuid) === '') return null;
+        return DB::table(self::EVENT_TABLE)->where('user_id', $user->id)
+            ->where('credential_epoch', app(MachineRiskComparison::class)->identity($user))
+            ->whereIn('code', self::CREDENTIAL_EVENT_CODES)
+            ->whereBetween('created_at', [$now - self::EVIDENCE_MAX_AGE, $now])
+            ->when($id !== null, fn ($query) => $query->where('id', $id))
+            ->orderByDesc('id')->first(['id', 'user_id', 'code', 'action', 'created_at', 'credential_epoch']);
+    }
+
+    private function describeCredentialEvidence(object $event): array
+    {
+        return ['id' => (int) $event->id, 'code' => $event->code, 'action' => $event->action, 'created_at' => (int) $event->created_at];
+    }
+
+    private function credentialProof(object $event, int $lastReviewId, int $expires): string
+    {
+        $prefix = $expires . '.' . $event->id;
+        $payload = json_encode(['subscription-case-review:v1', $event->user_id, $event->credential_epoch,
+            $this->describeCredentialEvidence($event), $lastReviewId, $expires], JSON_THROW_ON_ERROR);
+        return $prefix . '.' . hash_hmac('sha256', $payload, (string) config('app.key'));
+    }
+
+    private function verifyCredentialEvidence(User $user, mixed $proof, int $now): object
+    {
+        if (!is_string($proof) || !preg_match('/^([1-9][0-9]{0,17})\.([1-9][0-9]{0,17})\.[a-f0-9]{64}$/D', $proof, $parts)
+            || (int) $parts[1] <= $now || (int) $parts[1] > $now + self::PROOF_TTL || !$this->credentialEvidenceAvailable()
+            || !($event = $this->credentialEvent($user, $now, (int) $parts[2]))) {
+            throw new RuntimeException('case_evidence_changed');
+        }
+        $latest = SubscriptionControlCaseReview::query()->where('user_id', $user->id)->orderByDesc('id')->lockForUpdate()->first(['id']);
+        if (!hash_equals($this->credentialProof($event, (int) ($latest?->id ?? 0), (int) $parts[1]), $proof)) {
+            throw new RuntimeException('case_evidence_changed');
+        }
+        return $event;
     }
 
     /** @param array<string, mixed> $overview @return array<string, mixed> */

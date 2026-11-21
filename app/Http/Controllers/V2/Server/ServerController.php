@@ -85,7 +85,8 @@ class ServerController extends Controller
         $alive = $request->input('alive');
         if (is_array($alive)) {
             app(\App\Services\Node\NodeInstanceRegistry::class)->record($node, $request, ['online_users' => count($alive), 'last_online_at' => time()]);
-            UpdateAliveDataJob::dispatch($alive, $nodeType, $node->id, null, $source['key'], $source['machine_id'], $nodeId);
+            UpdateAliveDataJob::dispatch($alive, $nodeType, $node->id, null, $source['key'], $source['machine_id'], $nodeId,
+                $request->attributes->get('core_online_proof'));
             Cache::put(CacheKey::get('SERVER_' . strtoupper($nodeType) . '_LAST_PUSH_AT', $nodeId), time(), 3600);
         }
 

@@ -24,6 +24,7 @@ class UpdateAliveDataJob implements ShouldQueue
   private ?string $sourceKey = null;
   private ?int $sourceMachineId = null;
   private ?int $cacheNodeId = null;
+  private ?array $coreOnlineProof = null;
 
   public function __construct(
     private readonly array $data,
@@ -32,12 +33,14 @@ class UpdateAliveDataJob implements ShouldQueue
     ?float $reportedAt = null,
     ?string $sourceKey = null,
     ?int $sourceMachineId = null,
-    ?int $cacheNodeId = null
+    ?int $cacheNodeId = null,
+    ?array $coreOnlineProof = null
   ) {
     $this->reportedAt = $reportedAt ?? microtime(true);
     $this->sourceKey = \App\Services\Node\NodeReportSource::validKey($sourceKey);
     $this->sourceMachineId = $sourceMachineId !== null && $sourceMachineId > 0 ? $sourceMachineId : null;
     $this->cacheNodeId = $cacheNodeId;
+    $this->coreOnlineProof = $coreOnlineProof;
     $this->onQueue('online_sync');
   }
 
@@ -63,7 +66,9 @@ class UpdateAliveDataJob implements ShouldQueue
         });
       if ($riskSample !== null) {
         try {
-          app(\App\Services\ServerMachine\MachineRiskActivity::class)->record($this->nodeType, $this->nodeId, $riskSample, $snapshotVersion, $this->sourceMachineId, $this->sourceKey !== null);
+          $riskSample['core_online_proof'] = $this->coreOnlineProof;
+          app(\App\Services\ServerMachine\MachineRiskActivity::class)->record($this->nodeType, $this->nodeId, $riskSample, $snapshotVersion,
+            $this->sourceMachineId, $this->sourceKey !== null, $this->sourceKey);
         } catch (\Throwable $error) {
           Log::warning('Machine risk activity unavailable', ['error_type' => get_class($error)]);
         }

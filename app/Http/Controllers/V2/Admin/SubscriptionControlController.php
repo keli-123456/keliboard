@@ -200,6 +200,7 @@ class SubscriptionControlController extends Controller
             'post_reset_retrigger_count' => ['nullable', 'integer', 'min:0', 'max:100000'],
             'last_trigger_at' => ['nullable', 'integer', 'min:0'],
             'model_version' => ['nullable', 'string', 'max:32'],
+            'credential_review_proof' => ['nullable', 'string', 'max:110'],
         ]);
 
         try {
@@ -221,7 +222,7 @@ class SubscriptionControlController extends Controller
             'message' => $code,
             'data' => null,
             'error' => $code,
-        ], 422);
+        ], $code === 'case_evidence_changed' ? 409 : 422);
     }
 
     private function recentEventsFromCache(int $limit, string $email = ''): array

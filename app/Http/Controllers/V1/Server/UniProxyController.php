@@ -261,7 +261,8 @@ class UniProxyController extends Controller
         }
         $source = \App\Services\Node\NodeReportSource::from($request);
         app(\App\Services\Node\NodeInstanceRegistry::class)->record($node, $request, ['online_users' => count($data), 'last_online_at' => time()]);
-        UpdateAliveDataJob::dispatch($data, $node->type, $node->id, null, $source['key'], $source['machine_id'], $this->getNodeCacheServerId($node));
+        UpdateAliveDataJob::dispatch($data, $node->type, $node->id, null, $source['key'], $source['machine_id'], $this->getNodeCacheServerId($node),
+            $request->attributes->get('core_online_proof'));
         return response()->json(['data' => true]);
     }
 

@@ -503,6 +503,8 @@ class AdminRoute
                 $router->get('/node-events/{id}', [MachineRiskController::class, 'detail'])->whereNumber('id');
                 $router->post('/node-events/{id}/analyze', [MachineRiskController::class, 'analyze'])->whereNumber('id');
                 $router->post('/node-events/{id}/review', [MachineRiskController::class, 'review'])->whereNumber('id');
+                $router->post('/node-events/{id}/uuid-review/challenge', [MachineRiskController::class, 'uuidReviewChallenge'])->whereNumber('id');
+                $router->post('/node-events/{id}/uuid-review', [MachineRiskController::class, 'confirmUuidReview'])->whereNumber('id');
                 $router->get('/subscription-control/overview', [SubscriptionControlController::class, 'overview']);
                 $router->get('/subscription-control/source-ip-blocks', [SubscriptionControlController::class, 'sourceIpBlocks']);
                 $router->post('/subscription-control/source-ip-blocks/unblock', [SubscriptionControlController::class, 'unblockSourceIp']);

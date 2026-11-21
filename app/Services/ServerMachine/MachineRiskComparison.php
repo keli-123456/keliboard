@@ -141,14 +141,15 @@ class MachineRiskComparison
             }
         }
         $prior = MachineRiskEvent::query()->where('probe_revision', $probeRevision)
-            ->where('detected_at', '>=', $at - 7 * 86400)->where('detected_at', '<', $at)
+            ->where('detected_at', '>=', $at - MachineRiskOverlap::HISTORY)->where('detected_at', '<', $at)
             ->where('created_at', '<=', $at)
-            ->orderByDesc('detected_at')->orderByDesc('id')->limit(self::PRIOR_EVENTS + 1)->get(['machine_id', 'detected_at', 'recovered_at', 'evidence']);
-        $history = []; $scoped = 0; $unscoped = 0;
+            ->orderByDesc('detected_at')->orderByDesc('id')->limit(self::PRIOR_EVENTS + 1)
+            ->get(['id', 'machine_id', 'detected_at', 'first_failure_at', 'last_reachable_at', 'recovered_at', 'review_verdict', 'reviewed_at', 'evidence']);
+        $history = []; $scoped = []; $unscoped = 0;
         foreach ($prior->take(self::PRIOR_EVENTS) as $event) {
             $evidence = $event->evidence;
             if (($evidence['collection_context']['policy_revision'] ?? null) !== $revision) { $unscoped++; continue; }
-            $scoped++;
+            $scoped[] = $event;
             foreach ((array) ($evidence['users'] ?? []) as $row) {
                 $epoch = $row['identity_epoch'] ?? null;
                 if (!is_string($epoch) || !preg_match('/^[a-f0-9]{64}$/D', $epoch)) continue;
@@ -169,11 +170,16 @@ class MachineRiskComparison
                 'prior_incidents' => ['events' => $h['events'], 'machines' => count($h['machines']), 'recovered_events' => $h['recovered_events']],
                 'account_misuse_proven' => false];
         }
+        try {
+            $resets = app(MachineRiskCredentialActions::class)->receiptsFor($users);
+            $priority = app(MachineRiskOverlap::class)->capture($episode, $users, $scoped, $policy['settings']['overlap'], $resets);
+        }
+        catch (\Throwable) { $priority = null; }
         return ['schema' => 1, 'state' => 'sampled', 'collected_at' => time(), 'event_cutoff' => $at,
             'healthy_controls_max_age_seconds' => self::CONTROL_SECONDS, 'control_activity_window_seconds' => 120,
-            'prior_events_inspected' => min($prior->count(), self::PRIOR_EVENTS), 'prior_events_scoped' => $scoped,
+            'prior_events_inspected' => min($prior->count(), self::PRIOR_EVENTS), 'prior_events_scoped' => count($scoped),
             'prior_events_unscoped' => $unscoped, 'prior_events_capped' => $prior->count() > self::PRIOR_EVENTS,
             'coverage_capped' => $capped, 'individual_ip_attribution' => false, 'credential_epoch_is_connection_auth_proof' => false, 'absence_is_evidence' => false,
-            'representative_sample' => false, 'users' => $items];
+            'representative_sample' => false, 'users' => $items, 'priority_review' => $priority];
     }
 }
