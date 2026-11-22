@@ -468,6 +468,56 @@ class MachineFailoverPolicyTest extends TestCase
         Http::assertNotSent(fn ($request) => $request->method() !== 'GET'); Bus::assertNothingDispatched();
     }
 
+    public function test_service_first_source_member_is_saved_with_the_service_revision(): void
+    {
+        [$resource] = $this->existingSource(); $this->providerSource();
+        (require base_path('database/migrations/2026_11_07_140000_create_machine_failover_services.php'))->up();
+        $registry = app(MachineFailoverServiceRegistry::class);
+        $service = $registry->save(['name' => 'us1do service'], $this->admin->id);
+        $this->assertSame([], $service['members']);
+        $this->assertSame(1, $service['max_parallel']); $this->assertSame(2, $service['attempt_limit']);
+        $this->code('enabled_member_required', fn () => $registry->snapshot($service['id'], 1));
+        Http::assertNothingSent();
+        $draft = $this->input(['dns_credential_id' => null, 'dns_hostname' => '', 'isolation_confirmed' => false]);
+        $input = ['service_id' => $service['id'], 'expected_revision' => 1, 'policy' => $draft];
+        $this->code('invalid_members', fn () => $registry->addSourceMember($input, $this->admin->id));
+        $input['policy']['existing_source_proof'] = app(MachineFailoverExistingSource::class)->inspect($this->machine->id)['proof'];
+        $before = $resource->fresh()->getRawOriginal();
+        $saved = $registry->addSourceMember($input, $this->admin->id);
+        $this->assertSame(2, $saved['revision']); $this->assertCount(1, $saved['members']);
+        $this->assertSame($this->machine->id, $saved['members'][0]['machine_id']);
+        $this->assertTrue(MachineFailoverExistingSource::isDraft(Policy::query()->findOrFail($saved['members'][0]['policy_id'])));
+        $this->assertSame($before, $resource->fresh()->getRawOriginal());
+        $this->assertFalse($saved['execution_enabled']); $this->assertFalse($saved['dns_cutover']);
+        $this->code('config_changed', fn () => $registry->addSourceMember($input, $this->admin->id));
+        $this->assertSame(1, Policy::query()->count());
+        $this->assertSame(0, DB::table('v2_machine_cloud_task')->count());
+        $this->assertSame(0, DB::table('v2_machine_dns_log')->count());
+        Http::assertNotSent(fn ($request) => $request->method() !== 'GET'); Bus::assertNothingDispatched();
+    }
+
+    public function test_service_first_source_member_rolls_back_policy_when_service_revision_changes_during_cloud_read(): void
+    {
+        $this->existingSource();
+        (require base_path('database/migrations/2026_11_07_140000_create_machine_failover_services.php'))->up();
+        $registry = app(MachineFailoverServiceRegistry::class);
+        $service = $registry->save(['name' => 'Concurrent service'], $this->admin->id);
+        $calls = 0;
+        Http::fake(function () use ($service, &$calls) {
+            if (++$calls === 2) DB::table('v2_machine_failover_service')->where('id', $service['id'])->update(['revision' => 2]);
+            return Http::response(['id' => 123, 'status' => 'running', 'region' => 'sg-sin-2',
+                'type' => 'g6-standard-4', 'created' => '2026-01-01T00:00:00', 'ipv4' => ['8.8.4.4']]);
+        });
+        $proof = app(MachineFailoverExistingSource::class)->inspect($this->machine->id)['proof'];
+        $this->code('config_changed', fn () => $registry->addSourceMember(['service_id' => $service['id'], 'expected_revision' => 1,
+            'policy' => $this->input(['existing_source_proof' => $proof, 'dns_credential_id' => null, 'dns_hostname' => '', 'isolation_confirmed' => false])], $this->admin->id));
+        $this->assertSame(2, $calls);
+        $this->assertSame(0, Policy::query()->count());
+        $this->assertSame(0, DB::table('v2_machine_failover_member')->count());
+        $this->assertSame(2, (int) DB::table('v2_machine_failover_service')->value('revision'));
+        Bus::assertNothingDispatched();
+    }
+
     public static function sourceConflicts(): array
     {
         return ['second Agent' => ['second', 'source_agent_unverified'],

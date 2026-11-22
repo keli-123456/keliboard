@@ -29,7 +29,7 @@ class MachineFailoverServiceRegistry
     public function overview(): array
     {
         $result = ['available' => $this->available(), 'simulation_only' => true, 'execution_enabled' => false, 'dns_cutover' => false,
-            'services' => [], 'policies' => [], 'scenarios' => MachineFailoverSimulationDriver::SCENARIOS];
+            'services' => [], 'policies' => [], 'scenarios' => MachineFailoverSimulationDriver::SCENARIOS, 'service_first_available' => true];
         $result['shadow_available'] = app(MachineFailoverShadow::class)->available();
         $result['member_limits_available'] = Schema::hasColumn('v2_machine_failover_member', 'attempt_limit');
         $result['budget_available'] = app(MachineFailoverBudget::class)->available();
@@ -58,13 +58,14 @@ class MachineFailoverServiceRegistry
         $this->actor($admin);
         if (!$this->available()) throw new CloudException('migration_required');
         if (array_diff(array_keys($input), ['id', 'expected_revision', 'name', 'max_parallel', 'attempt_limit', 'monthly_cap_usd', 'members'])) throw new CloudException('invalid_service');
+        if (!array_key_exists('id', $input)) $input += ['max_parallel' => 1, 'attempt_limit' => 2, 'members' => []];
         $name = $this->name($input['name'] ?? null);
         foreach (['max_parallel' => [1, 10], 'attempt_limit' => [1, 100]] as $key => [$min, $max]) {
             if (!is_int($input[$key] ?? null) || $input[$key] < $min || $input[$key] > $max) throw new CloudException('invalid_service');
         }
         $cap = $input['monthly_cap_usd'] ?? 0;
         if (!is_numeric($cap) || !is_finite((float) $cap) || $cap < 0 || $cap > 10000 || round((float) $cap, 2) !== (float) $cap) throw new CloudException('invalid_budget');
-        if (!is_array($input['members'] ?? null) || !array_is_list($input['members']) || count($input['members']) < 1 || count($input['members']) > 10) throw new CloudException('invalid_members');
+        if (!is_array($input['members'] ?? null) || !array_is_list($input['members']) || count($input['members']) > 10) throw new CloudException('invalid_members');
         if (isset($input['id']) && (!is_int($input['id']) || $input['id'] < 1 || !is_int($input['expected_revision'] ?? null))) throw new CloudException('config_changed');
         return $this->locked(fn () => DB::transaction(function () use ($input, $admin, $name, $cap) {
             $this->actor($admin); $service = isset($input['id']) ? Service::query()->findOrFail($input['id']) : new Service();
@@ -105,6 +106,42 @@ class MachineFailoverServiceRegistry
             foreach ($values as $row) Member::query()->updateOrCreate(['service_id' => $service->id, 'policy_id' => $row['policy_id']], $row);
             return $this->present($service->fresh());
         }));
+    }
+
+    public function addSourceMember(array $input, int $admin): array
+    {
+        $this->actor($admin);
+        if (!$this->available()) throw new CloudException('migration_required');
+        if (array_diff(array_keys($input), ['service_id', 'expected_revision', 'policy'])
+            || !is_int($input['service_id'] ?? null) || $input['service_id'] < 1
+            || !is_int($input['expected_revision'] ?? null) || $input['expected_revision'] < 1
+            || !is_array($input['policy'] ?? null)
+            || array_intersect(array_keys($input['policy']), ['id', 'expected_revision'])
+            || !is_string($input['policy']['existing_source_proof'] ?? null)) throw new CloudException('invalid_members');
+        $id = $input['service_id']; $revision = $input['expected_revision'];
+        $this->memberTarget($id, $revision);
+        // Policy saving already holds the writer lock and rechecks source identity in its transaction.
+        return app(MachineFailoverPolicyService::class)->save($input['policy'], $admin, function (Policy $policy) use ($id, $revision, $admin) {
+            $service = $this->memberTarget($id, $revision);
+            if (!MachineFailoverExistingSource::isDraft($policy)) throw new CloudException('existing_source_draft_only');
+            if (Member::query()->where('machine_id', $policy->machine_id)->exists()) throw new CloudException('member_in_use');
+            $priority = (int) Member::query()->where('service_id', $id)->max('priority');
+            Member::query()->create(['service_id' => $id, 'policy_id' => $policy->id, 'policy_revision' => $policy->revision,
+                'machine_id' => $policy->machine_id, 'name' => $policy->name, 'priority' => min(100, $priority + 1), 'enabled' => true]);
+            $service->fill(['revision' => $service->revision + 1, 'updated_by' => $admin])->save();
+            return $this->present($service);
+        });
+    }
+
+    private function memberTarget(int $id, int $revision): Service
+    {
+        $service = Service::query()->find($id);
+        if (!$service || $service->revision !== $revision) throw new CloudException('config_changed');
+        if (Run::query()->where('service_id', $id)->where('status', 'running')->exists() || $this->nativeHistory($id, true)) {
+            throw new CloudException('run_active');
+        }
+        if (Member::query()->where('service_id', $id)->count() >= 10) throw new CloudException('invalid_members');
+        return $service;
     }
     public function drop(int $id, int $revision, int $admin): void
     {

@@ -26,6 +26,10 @@ class MachineFailoverServiceController extends Controller
     {
         return $this->run($request, fn ($admin) => $service->save($request->all(), $admin));
     }
+    public function addSourceMember(Request $request, MachineFailoverServiceRegistry $service)
+    {
+        return $this->run($request, fn ($admin) => $service->addSourceMember($request->all(), $admin));
+    }
     public function drop(Request $request, MachineFailoverServiceRegistry $service)
     {
         return $this->run($request, function ($admin) use ($request, $service) {

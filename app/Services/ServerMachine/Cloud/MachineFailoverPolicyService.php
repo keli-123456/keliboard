@@ -67,7 +67,7 @@ class MachineFailoverPolicyService
         return $result;
     }
 
-    public function save(array $input, int $admin): array
+    public function save(array $input, int $admin, ?callable $afterSave = null): array
     {
         $this->actor($admin);
         $this->requireStorage();
@@ -81,10 +81,10 @@ class MachineFailoverPolicyService
             $verified = $existing->inspect($values['machine_id'], $input['id'] ?? null);
             if (!hash_equals($verified['proof'], $proof)) throw new CloudException('source_identity_changed');
         }
-        $locked = function () use ($input, $values, $admin, $proof, $existing) {
+        $locked = function () use ($input, $values, $admin, $proof, $existing, $afterSave) {
             $hostname = $values['dns_hostname'];
-            $work = function () use ($input, $values, $admin, $proof, $existing) {
-                $credentialWork = fn () => DB::transaction(function () use ($input, $values, $admin, $proof, $existing) {
+            $work = function () use ($input, $values, $admin, $proof, $existing, $afterSave) {
+                $credentialWork = fn () => DB::transaction(function () use ($input, $values, $admin, $proof, $existing, $afterSave) {
                     $this->actor($admin);
                     $policy = isset($input['id']) ? Policy::query()->findOrFail($input['id']) : new Policy();
                     if (!$policy->exists && !array_key_exists('monthly_limit_usd', $values)) $policy->monthly_limit_usd = 0;
@@ -124,7 +124,8 @@ class MachineFailoverPolicyService
                     if ($catalog !== null) $policy->catalog_checked_at = $catalog['checked_at'];
                     if (!$policy->exists) $policy->slot = $proof === null ? 'independent:' . Str::uuid() : MachineFailoverExistingSource::slot($proof);
                     $policy->save();
-                    return $this->present($policy->fresh());
+                    $saved = $policy->fresh();
+                    return $afterSave ? $afterSave($saved) : $this->present($saved);
                 });
                 return $values['dns_credential_id'] === null ? $credentialWork()
                     : $this->lock('machine-dns:credential:' . $values['dns_credential_id'], $credentialWork);

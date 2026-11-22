@@ -163,6 +163,7 @@ class AdminRoute
                 $router->get('/cloud/failover', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'fetch']);
                 $router->get('/cloud/failover/services', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'fetch']);
                 $router->post('/cloud/failover/services/save', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'save']);
+                $router->post('/cloud/failover/services/source-member', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'addSourceMember']);
                 $router->post('/cloud/failover/services/drop', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'drop']);
                 $router->get('/cloud/failover/services/dns', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverDnsController::class, 'fetch']);
                 $router->post('/cloud/failover/services/dns/save', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverDnsController::class, 'save']);
