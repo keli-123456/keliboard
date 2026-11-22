@@ -82,6 +82,10 @@ class MachineFailoverServiceRegistry
                 if (isset($seen[$policy->id]) || isset($machines[$policy->machine_id])) throw new CloudException('duplicate_member');
                 if (Member::query()->where(fn ($query) => $query->where('policy_id', $policy->id)->orWhere('machine_id', $policy->machine_id))
                     ->when($service->exists, fn ($query) => $query->where('service_id', '!=', $service->id))->exists()) throw new CloudException('member_in_use');
+                if (MachineFailoverExistingSource::isDraft($policy)
+                    && (!$service->exists || !Member::query()->where('service_id', $service->id)->where('policy_id', $policy->id)->exists())) {
+                    app(MachineFailoverExistingSource::class)->assertDraftCurrent($policy);
+                }
                 $seen[$policy->id] = true; $machines[$policy->machine_id] = true;
                 if (array_key_exists('attempt_limit', $row)) {
                     if (!Schema::hasColumn('v2_machine_failover_member', 'attempt_limit')) throw new CloudException('migration_required');

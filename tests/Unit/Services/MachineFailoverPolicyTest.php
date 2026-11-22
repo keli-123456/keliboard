@@ -15,7 +15,9 @@ use App\Services\ServerMachine\Cloud\CloudException;
 use App\Services\ServerMachine\Cloud\LinodeClient;
 use App\Services\ServerMachine\Cloud\MachineCloudHealth;
 use App\Services\ServerMachine\Cloud\MachineCloudService;
+use App\Services\ServerMachine\Cloud\MachineFailoverExistingSource;
 use App\Services\ServerMachine\Cloud\MachineFailoverPolicyService;
+use App\Services\ServerMachine\Cloud\MachineFailoverServiceRegistry;
 use App\Services\ServerMachine\Cloud\ProvisionBootstrap;
 use App\Services\ServerMachine\Dns\DnsException;
 use App\Services\ServerMachine\Dns\DnsProviderClient;
@@ -401,6 +403,99 @@ class MachineFailoverPolicyTest extends TestCase
             'label' => 'Existing synthetic', 'region' => 'sg-sin-2', 'size' => 'g6-standard-4', 'provider_created_at' => '2026-01-01T00:00:00',
             'status' => 'running', 'public_ips' => ['8.8.4.4'], 'observed_at' => time(), 'machine_id' => $machine->id,
             'auto_boot' => true, 'armed' => true, 'manual_hold' => false]);
+    }
+
+    private function existingSource(): array
+    {
+        $installation = str_repeat('a', 32);
+        $resource = $this->resource($this->machine);
+        $resource->fill(['installation_id' => $installation, 'machine_authority' => hash('sha256', $this->machine->token),
+            'auto_boot' => false, 'armed' => false, 'provider_created_at' => '2026-01-01T00:00:00Z'])->save();
+        $this->inventory->record($this->machine, $installation, ['public_ipv4' => '8.8.4.4'], time());
+        Http::swap(new \Illuminate\Http\Client\Factory()); Http::preventStrayRequests();
+        return [$resource, $installation];
+    }
+
+    private function providerSource(array $changes = []): void
+    {
+        Http::fake(['https://api.linode.com/v4/linode/instances/123' => Http::response(array_replace([
+            'id' => 123, 'status' => 'running', 'region' => 'sg-sin-2', 'type' => 'g6-standard-4',
+            'created' => '2026-01-01T00:00:00', 'ipv4' => ['8.8.4.4'],
+        ], $changes))]);
+    }
+
+    public function test_existing_source_enrolls_as_member_without_transferring_ownership_or_dispatching(): void
+    {
+        [$resource] = $this->existingSource();
+        $this->providerSource();
+        (require base_path('database/migrations/2026_11_07_140000_create_machine_failover_services.php'))->up();
+        $before = $resource->fresh()->getRawOriginal(); $reports = $this->inventory->snapshots([$this->machine]);
+        $sources = app(MachineFailoverExistingSource::class);
+        DB::enableQueryLog();
+        $review = $sources->inspect($this->machine->id);
+        $queries = DB::getQueryLog(); DB::disableQueryLog();
+        foreach ($queries as $query) $this->assertStringStartsWith('select', strtolower(ltrim($query['query'])));
+        $this->assertSame(['machine_id', 'provider', 'region', 'size', 'proof'], array_keys($review));
+        $this->assertTrue($this->service->overview()['machines'][0]['existing_source_bound']);
+        $this->code('machine_in_use', fn () => $this->save());
+        $this->code('source_identity_changed', fn () => $this->save(['dns_credential_id' => null, 'dns_hostname' => '',
+            'isolation_confirmed' => false, 'existing_source_proof' => str_repeat('0', 64)]));
+        $input = ['existing_source_proof' => $review['proof'], 'dns_credential_id' => null, 'dns_hostname' => '', 'isolation_confirmed' => false];
+        $this->account->update(['revision' => 2]);
+        $this->code('source_identity_changed', fn () => $this->save($input));
+        $input['existing_source_proof'] = $sources->inspect($this->machine->id)['proof'];
+        $this->code('existing_source_draft_only', fn () => $this->save(array_replace($input, ['isolation_confirmed' => true])));
+        $this->code('existing_source_draft_only', fn () => $this->save(array_replace($input, ['dns_hostname' => 'new.example.test'])));
+        $row = $this->save($input);
+        $this->assertTrue($row['existing_source_draft']); $this->assertFalse($row['execution_enabled']);
+        $this->assertContains(['code' => 'existing_source_draft_only', 'status' => 'blocked'],
+            $this->service->localChecks(Policy::query()->findOrFail($row['id'])));
+        $this->code('machine_in_use', fn () => $this->save($input));
+        $this->code('source_identity_unverified', fn () => $this->save(['id' => $row['id'], 'expected_revision' => 1]));
+        $service = app(MachineFailoverServiceRegistry::class);
+        $member = ['name' => 'us1do', 'policy_id' => $row['id'], 'policy_revision' => 1, 'priority' => 1, 'enabled' => true];
+        $input = ['name' => 'us1do failover', 'max_parallel' => 1, 'attempt_limit' => 1, 'members' => [$member]];
+        DB::table('v2_machine_cloud_resource')->where('id', $resource->id)->update(['active_task_id' => 42]);
+        $this->code('machine_in_use', fn () => $service->save($input, $this->admin->id));
+        DB::table('v2_machine_cloud_resource')->where('id', $resource->id)->update(['active_task_id' => null]);
+        $saved = $service->save($input, $this->admin->id);
+        $this->assertSame($this->machine->id, $saved['members'][0]['machine_id']);
+        $this->assertFalse($saved['execution_enabled']); $this->assertFalse($saved['dns_cutover']);
+        $this->assertSame($before, $resource->fresh()->getRawOriginal());
+        $this->assertSame($reports, $this->inventory->snapshots([$this->machine]));
+        $this->assertSame(0, DB::table('v2_machine_cloud_task')->count());
+        $this->assertSame(0, DB::table('v2_machine_dns_log')->count());
+        Http::assertNotSent(fn ($request) => $request->method() !== 'GET'); Bus::assertNothingDispatched();
+    }
+
+    public static function sourceConflicts(): array
+    {
+        return ['second Agent' => ['second', 'source_agent_unverified'],
+            'stale Agent' => ['stale', 'source_agent_unverified'],
+            'different public address' => ['address', 'source_agent_unverified'],
+            'new machine authority' => ['authority', 'source_identity_unverified'],
+            'unowned node report' => ['shared', 'machine_in_use'],
+            'existing DNS binding' => ['dns', 'machine_in_use'],
+            'same instance ID but different creation time' => ['provider', 'source_identity_unverified']];
+    }
+
+    #[DataProvider('sourceConflicts')]
+    public function test_existing_source_rejects_incomplete_or_conflicting_identity(string $mode, string $code): void
+    {
+        [$resource, $installation] = $this->existingSource();
+        $this->providerSource($mode === 'provider' ? ['created' => '2026-01-02T00:00:00'] : []);
+        match ($mode) {
+            'second' => $this->inventory->record($this->machine, str_repeat('b', 32), ['public_ipv4' => '8.8.4.4'], time()),
+            'stale' => $this->inventory->record($this->machine, $installation, ['public_ipv4' => '8.8.4.4'], time() - 181),
+            'address' => $this->inventory->record($this->machine, $installation, ['public_ipv4' => '8.8.8.8'], time()),
+            'authority' => $resource->update(['machine_authority' => str_repeat('0', 64)]),
+            'shared' => Cache::put('node_instances:10', [['last_seen_at' => time(), 'machine_id' => $this->machine->id]], 300),
+            'dns' => $this->binding($this->machine),
+            default => null,
+        };
+        $this->code($code, fn () => app(MachineFailoverExistingSource::class)->inspect($this->machine->id));
+        if ($mode !== 'provider') Http::assertNothingSent();
+        $this->assertSame(0, Policy::query()->count()); Bus::assertNothingDispatched();
     }
 
     private function binding(ServerMachine $machine, string $hostname = 'old.example.test', string $type = 'A'): MachineDnsBinding

@@ -48,11 +48,15 @@ class MachineFailoverPolicyService
         }
         $result['accounts'] = Account::query()->orderBy('id')->get(array_merge(['id', 'name', 'provider', 'revision'], app(MachineCloudGroupService::class)->available() ? ['group_id'] : []));
         $owners = Schema::hasTable('v2_machine_owned_instance') ? Policy::query()->whereIn('id', \App\Models\MachineOwnedInstance::query()->select('policy_id'))->get()->groupBy('machine_id') : collect();
-        $result['machines'] = ServerMachine::query()->orderBy('id')->limit(500)->get(['id', 'name', 'is_active', 'token'])->map(function ($machine) use ($owners) {
+        $machines = ServerMachine::query()->orderBy('id')->limit(500)->get(['id', 'name', 'is_active', 'token']);
+        $bound = Schema::hasColumn('v2_machine_cloud_resource', 'provider')
+            ? MachineCloudResource::query()->whereIn('machine_id', $machines->modelKeys())->distinct()->pluck('machine_id')->flip() : collect();
+        $result['machines'] = $machines->map(function ($machine) use ($owners, $bound) {
             $used = $this->machineInUse($machine);
             return ['id' => $machine->id, 'name' => $machine->name, 'is_active' => (bool) $machine->is_active,
                 'node_count' => $this->machineNodes($machine->id)->count(), 'candidate_available' => !$used,
                 'blocked_reason' => $used ? 'machine_in_use' : null,
+                'existing_source_bound' => $bound->has($machine->id),
                 'owned_policy_ids' => $owners->get($machine->id, collect())->filter(fn ($policy) => app(MachineInstanceOwnership::class)->canUse($policy))->pluck('id')->values()];
         });
         if (Schema::hasTable('v2_machine_dns_credential')) {
@@ -67,15 +71,25 @@ class MachineFailoverPolicyService
     {
         $this->actor($admin);
         $this->requireStorage();
+        $proof = $input['existing_source_proof'] ?? null;
+        unset($input['existing_source_proof']);
         $values = $this->normalize($input);
-        $locked = function () use ($input, $values, $admin) {
+        $existing = app(MachineFailoverExistingSource::class);
+        if ($proof !== null) {
+            if (!is_string($proof) || !preg_match('/^[a-f0-9]{64}$/D', $proof) || $values['isolation_confirmed']
+                || $values['dns_credential_id'] !== null || $values['dns_hostname'] !== '') throw new CloudException('existing_source_draft_only');
+            $verified = $existing->inspect($values['machine_id'], $input['id'] ?? null);
+            if (!hash_equals($verified['proof'], $proof)) throw new CloudException('source_identity_changed');
+        }
+        $locked = function () use ($input, $values, $admin, $proof, $existing) {
             $hostname = $values['dns_hostname'];
-            $work = function () use ($input, $values, $admin) {
-                $credentialWork = fn () => DB::transaction(function () use ($input, $values, $admin) {
+            $work = function () use ($input, $values, $admin, $proof, $existing) {
+                $credentialWork = fn () => DB::transaction(function () use ($input, $values, $admin, $proof, $existing) {
                     $this->actor($admin);
                     $policy = isset($input['id']) ? Policy::query()->findOrFail($input['id']) : new Policy();
                     if (!$policy->exists && !array_key_exists('monthly_limit_usd', $values)) $policy->monthly_limit_usd = 0;
                     if ($policy->exists && $policy->revision !== $input['expected_revision']) throw new CloudException('config_changed');
+                    if (MachineFailoverExistingSource::isDraft($policy) && $proof === null) throw new CloudException('source_identity_unverified');
                     if ($policy->exists && Schema::hasTable('v2_machine_owned_instance') && \App\Models\MachineOwnedInstance::query()->where('policy_id', $policy->id)->exists()) {
                         foreach (array_merge(['machine_id', 'account_id', 'region', 'size', 'image', 'dns_credential_id', 'dns_hostname'], isset($values['credential_group_id']) ? ['credential_group_id', 'provider'] : []) as $field) {
                             if ($policy->{$field} !== $values[$field]) throw new CloudException('owned_identity_locked');
@@ -96,7 +110,11 @@ class MachineFailoverPolicyService
                     if (!$grouped && !$account) throw new CloudException('credentials_required');
                     if (!$grouped && $account->provider !== 'linode') throw new CloudException('unsupported_provider');
                     if (!$machine || !$machine->is_active) throw new CloudException('invalid_policy');
-                    if ($this->machineInUse($machine, $policy->exists ? $policy : null)) throw new CloudException('machine_in_use');
+                    if ($proof !== null) $existing->assertCurrent($machine->id, $input['id'] ?? null, $proof, true);
+                    elseif ($this->machineInUse($machine, $policy->exists ? $policy : null)
+                        || Policy::query()->where('machine_id', $machine->id)->where('slot', 'like', 'existing-source:%')->exists()) {
+                        throw new CloudException('machine_in_use');
+                    }
                     if ($this->dnsConflict($values['dns_hostname'], $policy->exists ? $policy->id : null)) throw new CloudException('dns_record_conflict');
                     $credential = $values['dns_credential_id'] === null ? null : $this->credential($values['dns_credential_id']);
                     $policy->fill($values + ['machine_authority' => hash('sha256', (string) $machine->token),
@@ -104,7 +122,7 @@ class MachineFailoverPolicyService
                         'dns_scope' => $values['dns_hostname'] === '' ? null : hash('sha256', $values['dns_hostname']),
                         'updated_by' => $admin, 'revision' => $policy->exists ? $policy->revision + 1 : 1]);
                     if ($catalog !== null) $policy->catalog_checked_at = $catalog['checked_at'];
-                    if (!$policy->exists) $policy->slot = 'independent:' . Str::uuid();
+                    if (!$policy->exists) $policy->slot = $proof === null ? 'independent:' . Str::uuid() : MachineFailoverExistingSource::slot($proof);
                     $policy->save();
                     return $this->present($policy->fresh());
                 });
@@ -184,6 +202,7 @@ class MachineFailoverPolicyService
         $checks = [];
         $add = function (string $code, string $status) use (&$checks): void { $checks[] = compact('code', 'status'); };
         $add('execution_disabled', 'blocked');
+        if (MachineFailoverExistingSource::isDraft($policy)) $add('existing_source_draft_only', 'blocked');
         if (!$policy->isolation_confirmed) $add('isolation_confirmation_required', 'blocked');
         if (!$machine) $add('machine_missing', 'blocked');
         elseif (!$machine->is_active) $add('machine_inactive', 'blocked');
@@ -319,7 +338,7 @@ class MachineFailoverPolicyService
         }
         $result['identity_locked'] = Schema::hasTable('v2_machine_owned_instance') && \App\Models\MachineOwnedInstance::query()->where('policy_id', $policy->id)->exists();
         return $result + ['account_name' => $account?->name, 'provider' => $policy->credential_group_id ? $policy->provider : $account?->provider,
-            'status' => 'draft', 'execution_enabled' => false];
+            'existing_source_draft' => MachineFailoverExistingSource::isDraft($policy), 'status' => 'draft', 'execution_enabled' => false];
     }
 
     private function actor(int $id): void

@@ -47,6 +47,11 @@ class MachineFailoverNativeBridge
         $result = $this->registry->locked(fn () => DB::transaction(function () use ($service, $revision, $planIds, $releaseId, $request, $admin, $admission, $handoverGrantId) {
             $this->gate->assertAllowed('start'); $this->registry->actor($admin);
             $snapshot = $this->registry->snapshot($service, $revision);
+            foreach ($snapshot['members'] as $member) {
+                if (MachineFailoverExistingSource::isDraftSlot($member['policy']['slot'])) {
+                    throw new CloudException('existing_source_draft_only');
+                }
+            }
             $release = $this->release($releaseId);
             $key = $this->hash([$admin, $request]);
             $old = Execution::query()->where('request_key', $key)->first();

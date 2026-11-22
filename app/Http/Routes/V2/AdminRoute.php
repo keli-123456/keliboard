@@ -189,6 +189,7 @@ class AdminRoute
                 $router->post('/cloud/failover/services/advance', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'advance']);
                 $router->post('/cloud/failover/services/cancel', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'cancel']);
                 $router->get('/cloud/failover/catalog', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'catalog']);
+                $router->get('/cloud/failover/existing-source', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'existingSource']);
                 $router->get('/cloud/failover/history', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'history']);
                 $router->get('/cloud/failover/replacements', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'replacements']);
                 $router->post('/cloud/failover/save', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverController::class, 'save']);

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\V2\Admin\Server;
 
 use App\Http\Controllers\Controller;
 use App\Services\ServerMachine\Cloud\CloudException;
+use App\Services\ServerMachine\Cloud\MachineFailoverExistingSource;
 use App\Services\ServerMachine\Cloud\MachineFailoverPolicyService;
 use App\Services\ServerMachine\Cloud\MachineFailoverObserver;
 use App\Services\ServerMachine\Cloud\MachineReplacementService;
@@ -37,6 +38,14 @@ class MachineFailoverController extends Controller
     public function replacements(Request $request, MachineReplacementService $service)
     {
         return $this->run($request, fn () => $service->overview());
+    }
+
+    public function existingSource(Request $request, MachineFailoverExistingSource $sources)
+    {
+        return $this->run($request, function () use ($request, $sources) {
+            $v = $request->validate(['machine_id' => 'required|integer|min:1', 'policy_id' => 'sometimes|required|integer|min:1']);
+            return $sources->inspect((int) $v['machine_id'], isset($v['policy_id']) ? (int) $v['policy_id'] : null);
+        });
     }
 
     public function save(Request $request, MachineFailoverPolicyService $service)

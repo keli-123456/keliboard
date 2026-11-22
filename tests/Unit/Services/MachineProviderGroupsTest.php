@@ -3,6 +3,7 @@ namespace Tests\Unit\Services;
 
 use App\Models\MachineCloudAccount as Account;
 use App\Models\MachineCloudGroup as Group;
+use App\Models\MachineCloudResource as Resource;
 use App\Models\MachineFailoverPolicy as Policy;
 use App\Models\MachineProvisionTask as Task;
 use App\Models\ServerMachine;
@@ -11,9 +12,11 @@ use App\Services\ServerMachine\Cloud\CloudException;
 use App\Services\ServerMachine\Cloud\MachineCloudCatalog;
 use App\Services\ServerMachine\Cloud\MachineCloudGroupService;
 use App\Services\ServerMachine\Cloud\MachineFailoverCredentials;
+use App\Services\ServerMachine\Cloud\MachineFailoverExistingSource;
 use App\Services\ServerMachine\Cloud\MachineFailoverPolicyService;
 use App\Services\ServerMachine\Cloud\MachineProvisionService;
 use App\Services\ServerMachine\Cloud\ProvisionPlan;
+use App\Services\ServerMachine\MachineAddressInventory;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Support\Facades\Bus;
@@ -63,6 +66,10 @@ class MachineProviderGroupsTest extends TestCase
             $this->assertSame('GET', $request->method());
             if ($this->fault === 'forbidden') return Http::response([], 403);
             $path = parse_url($request->url(), PHP_URL_PATH);
+            if ($path === '/v4/linode/instances/123') {
+                return Http::response(['id' => 123, 'status' => 'running', 'region' => 'sg-sin-2', 'type' => 'g6-standard-2',
+                    'created' => '2026-01-01T00:00:00', 'ipv4' => ['8.8.4.4']]);
+            }
             $provider = str_contains($request->url(), 'api.linode.com') ? 'linode' : (str_contains($request->url(), 'api.digitalocean.com') ? 'digitalocean' : 'vultr');
             $collections = $this->rows($provider); $key = basename($path);
             $items = $collections[$key] ?? throw new \RuntimeException('Unexpected catalog URL');
@@ -103,6 +110,27 @@ class MachineProviderGroupsTest extends TestCase
         };
     }
     private function catalog(string $provider = 'linode', bool $refresh = false): array { return app(MachineCloudCatalog::class)->read($this->group->id, $provider, $refresh); }
+
+    public function test_existing_source_can_use_grouped_replacement_template_without_changing_source(): void
+    {
+        $installation = str_repeat('e', 32);
+        $resource = Resource::query()->create(['account_id' => $this->linode->id, 'provider' => 'linode',
+            'external_id' => '123', 'label' => 'us1do fixture', 'region' => 'sg-sin-2', 'size' => 'g6-standard-2',
+            'provider_created_at' => '2026-01-01T00:00:00Z', 'status' => 'running', 'observed_at' => time(),
+            'public_ips' => ['8.8.4.4'], 'machine_id' => $this->machine->id, 'installation_id' => $installation,
+            'machine_authority' => hash('sha256', $this->machine->token)]);
+        app(MachineAddressInventory::class)->record($this->machine, $installation, ['public_ipv4' => '8.8.4.4'], time());
+        $review = app(MachineFailoverExistingSource::class)->inspect($this->machine->id);
+        $input = array_replace($this->input($this->catalog()), ['isolation_confirmed' => false,
+            'dns_credential_id' => null, 'dns_hostname' => '', 'existing_source_proof' => $review['proof']]);
+        $saved = app(MachineFailoverPolicyService::class)->save($input, $this->admin->id);
+        $this->assertTrue($saved['existing_source_draft']);
+        $this->assertSame($this->group->id, $saved['credential_group_id']);
+        $this->assertSame('g6-standard-4', $saved['size']);
+        $this->assertSame('g6-standard-2', $resource->fresh()->size);
+        $this->assertSame($installation, $resource->fresh()->installation_id);
+        Http::assertNotSent(fn ($request) => $request->method() !== 'GET'); Bus::assertNothingDispatched();
+    }
     private function input(array $catalog): array
     {
         return ['name' => 'Independent group', 'provider' => $catalog['provider'], 'credential_group_id' => $this->group->id,
