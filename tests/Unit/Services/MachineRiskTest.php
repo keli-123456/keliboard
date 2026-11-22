@@ -625,6 +625,53 @@ final class MachineRiskTest extends TestCase
         $this->assertSame(0, MachineRiskEvent::query()->count());
     }
 
+    public function test_first_matching_report_materializes_a_legacy_episode_without_replaying_it(): void
+    {
+        $this->enable();
+        $episode = $this->episode();
+        $scope = $episode['authority_hash'] . ':' . $episode['probe_revision'];
+        $key = 'machine_risk:edge:v2:' . $scope;
+        $legacy = 'machine_risk:edge:' . $scope . ':' . $episode['policy_revision'];
+        $state = Cache::get($key);
+        Cache::put($legacy, $state, 600);
+        Cache::forget($key);
+
+        $at = $episode['detected_at'];
+        $this->report($at - 1, ['unreachable', 'unreachable'], 2);
+        $this->assertNull(Cache::get($key));
+        $this->report($at, ['unreachable', 'unreachable'], 2);
+        $this->assertSame($state, Cache::get($key));
+        Bus::assertDispatchedTimes(RecordMachineRiskEventJob::class, 1);
+        $this->assertSame(0, MachineRiskEvent::query()->count());
+    }
+
+    public function test_redeployment_prefers_the_newer_legacy_recovery_over_a_frozen_v2_episode(): void
+    {
+        $this->enable();
+        $at = time();
+        $this->report($at - 20, ['reachable', 'unreachable'], 0);
+        $this->report($at - 15, ['unreachable', 'unreachable'], 2);
+        $episode = Bus::dispatched(RecordMachineRiskEventJob::class)->sole()->episode;
+        $event = app(MachineRiskEventService::class)->persist($episode, $at - 10);
+        $scope = $episode['authority_hash'] . ':' . $episode['probe_revision'];
+        $key = 'machine_risk:edge:v2:' . $scope;
+        $legacy = 'machine_risk:edge:' . $scope . ':' . $episode['policy_revision'];
+        $recovery = ['last_checked_at' => $at - 10, 'last_reachable_at' => $at - 10,
+            'failure_rounds' => 0, 'last_event_at' => $at - 15];
+        $this->assertArrayHasKey('episode', Cache::get($key));
+        Cache::put($legacy, $recovery, 600);
+
+        $this->report($at - 10, ['reachable', 'unreachable'], 0);
+        $this->assertSame($recovery, Cache::get($key));
+        $this->report($at - 5, ['unreachable', 'unreachable'], 2);
+        $stable = Cache::get($key);
+        $this->report($at - 5, ['unreachable', 'unreachable'], 2);
+        $this->assertSame($stable, Cache::get($key));
+        $this->assertArrayNotHasKey('episode', $stable);
+        $this->assertSame($at - 10, $event->fresh()->recovered_at);
+        Bus::assertDispatchedTimes(RecordMachineRiskEventJob::class, 1);
+    }
+
     public function test_rollout_adopts_a_long_running_legacy_episode_and_only_records_its_recovery(): void
     {
         $this->enable();

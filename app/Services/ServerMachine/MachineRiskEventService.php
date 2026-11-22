@@ -39,9 +39,18 @@ class MachineRiskEventService
         Cache::lock($key . ':lock', 3)->get(function () use ($key, $scope, $probe, $revision, $policyRevision, $authority, $machine, $config): void {
             // Probe continuity is independent of the policy that authorizes an event.
             $legacy = 'machine_risk:edge:' . $scope . ':';
-            $state = Cache::get($key) ?? Cache::get($legacy . $policyRevision) ?? Cache::get($legacy . ($policyRevision - 1), []);
+            $priorKeys = [$legacy . $policyRevision, $legacy . ($policyRevision - 1)];
+            $keys = [$key, ...$priorKeys];
+            $states = Cache::many($keys);
+            // A compatible rollback can have advanced the legacy key after v2 stopped writing.
+            $state = MachineRiskContinuity::newest(...array_map(fn ($cacheKey) => $states[$cacheKey] ?? null, $keys));
             $at = $probe['checked_at'];
-            if ($at <= ($state['last_checked_at'] ?? 0)) return;
+            $last = $state['last_checked_at'] ?? 0;
+            if ($at <= $last) {
+                // Materialize a matching fresh report without counting or dispatching it again.
+                if ($at === $last && $state !== ($states[$key] ?? null)) Cache::put($key, $state, 21600);
+                return;
+            }
             if ($at - ($state['last_checked_at'] ?? $at) > $config['interval_seconds'] * 2 + 30) {
                 $state['failure_rounds'] = 0; unset($state['first_failure_at']);
             }
