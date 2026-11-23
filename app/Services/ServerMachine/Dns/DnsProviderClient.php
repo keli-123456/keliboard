@@ -133,7 +133,10 @@ class DnsProviderClient
         $items = [];
         foreach ($rows as $row) {
             if (!is_array($row)) throw new DnsException('provider_rejected');
-            $name = $this->domain($row[$credential->provider === 'cloudflare' ? 'name' : 'DomainName'] ?? null);
+            $rawName = $row[$credential->provider === 'cloudflare' ? 'name' : 'DomainName'] ?? null;
+            // Aliyun lists Unicode zones alongside ASCII zones. The binding and ownership paths still require ASCII.
+            if ($credential->provider === 'aliyun' && is_string($rawName) && preg_match('/[^\x00-\x7F]/u', $rawName) === 1) continue;
+            $name = $this->domain($rawName);
             $id = $credential->provider === 'cloudflare' ? ($row['id'] ?? '') : $name;
             if (!is_string($id) || ($credential->provider === 'cloudflare' && !preg_match('/^[a-f0-9]{32}$/D', $id))) throw new DnsException('provider_rejected');
             $items[] = ['id' => $id, 'name' => $name];

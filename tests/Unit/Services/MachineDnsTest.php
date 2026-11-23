@@ -197,6 +197,25 @@ class MachineDnsTest extends TestCase
         }
     }
 
+    public function test_aliyun_unicode_zone_does_not_block_ascii_choices_or_provider_pagination(): void
+    {
+        $credential = MachineDnsCredential::query()->create(['name' => 'Ali synthetic', 'provider' => 'aliyun',
+            'credentials' => ['access_key_id' => 'synthetic-id', 'access_key_secret' => 'synthetic-secret'], 'revision' => 1]);
+        $this->fake(['alidns.aliyuncs.com/*' => Http::sequence()->push(['Domains' => ['Domain' => [
+            ['DomainName' => "\u{4F8B}\u{5B50}.test", 'PunyCode' => 'xn--fsqu00a.test'],
+            ['DomainName' => 'Example.test'],
+        ]], 'TotalCount' => 51])->push(['DomainRecords' => ['Record' => [[
+            'RecordId' => '123', 'DomainName' => 'example.test', 'RR' => 'edge', 'Type' => 'A',
+            'Value' => '8.8.8.8', 'TTL' => 600, 'Status' => 'ENABLE',
+        ]]], 'TotalCount' => 1])]);
+        $result = $this->service->catalog(['credential_id' => $credential->id], false);
+        $this->assertSame(['items' => [['id' => 'example.test', 'name' => 'example.test']], 'page' => 1, 'has_more' => true], $result);
+        $records = $this->service->catalog(['credential_id' => $credential->id, 'zone' => $result['items'][0]['id'], 'type' => 'A'], true);
+        $this->assertSame('edge.example.test', $records['items'][0]['hostname']);
+        Http::assertSentCount(2);
+        Http::assertNotSent(fn ($request) => !in_array($request['Action'], ['DescribeDomains', 'DescribeDomainRecords'], true));
+    }
+
     public function test_catalog_and_preview_require_admin_before_contacting_provider(): void
     {
         $this->fake();
