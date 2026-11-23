@@ -16,7 +16,7 @@ final class ProvisionPlan
         $provider = $input['provider'] ?? 'linode';
         if (!in_array($provider, ['linode', 'digitalocean', 'vultr'], true)) throw new CloudException('unsupported_provider');
         foreach (['slot' => '/^[a-z0-9:_-]{1,80}$/D', 'region' => '/^[a-z0-9-]{1,60}$/D',
-            'size' => '/^[a-z0-9-]{1,60}$/D', 'image' => $provider === 'linode' ? '~^linode/[a-z0-9-]{1,60}$~D' : '/^[a-z0-9-]{1,80}$/D'] as $key => $pattern) {
+            'size' => '/^[a-z0-9-]{1,60}$/D', 'image' => $provider === 'linode' ? LinodeClient::PUBLIC_IMAGE_ID_PATTERN : '/^[a-z0-9-]{1,80}$/D'] as $key => $pattern) {
             if (!is_string($input[$key] ?? null) || !preg_match($pattern, $input[$key])) throw new CloudException('invalid_plan');
         }
         $keys = $input['authorized_keys'] ?? [];

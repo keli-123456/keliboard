@@ -269,7 +269,7 @@ class MachineFailoverPolicyService
         foreach ($numeric as $key => [$min, $max]) {
             if (!is_int($input[$key] ?? null) || $input[$key] < $min || $input[$key] > $max) throw new CloudException('invalid_policy');
         }
-        foreach (['region' => '/^[a-z0-9-]{1,60}$/D', 'size' => '/^[a-z0-9-]{1,60}$/D', 'image' => !$grouped || $input['provider'] === 'linode' ? '~^linode/[a-z0-9-]{1,60}$~D' : '/^[a-z0-9-]{1,80}$/D'] as $key => $pattern) {
+        foreach (['region' => '/^[a-z0-9-]{1,60}$/D', 'size' => '/^[a-z0-9-]{1,60}$/D', 'image' => !$grouped || $input['provider'] === 'linode' ? LinodeClient::PUBLIC_IMAGE_ID_PATTERN : '/^[a-z0-9-]{1,80}$/D'] as $key => $pattern) {
             if (!is_string($input[$key] ?? null) || !preg_match($pattern, $input[$key])) throw new CloudException('invalid_policy');
         }
         $budget = $input['monthly_limit_usd'] ?? 0;

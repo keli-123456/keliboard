@@ -99,7 +99,9 @@ class MachineProviderGroupsTest extends TestCase
             'linode' => ['regions' => [['id' => 'sg-sin-2', 'label' => 'Singapore', 'status' => 'ok', 'site_type' => 'core', 'capabilities' => ['Linodes', 'Metadata']],
                 ['id' => 'distributed-site', 'label' => 'Distributed', 'status' => 'ok', 'site_type' => 'distributed', 'capabilities' => ['Linodes', 'Metadata']]],
                 'types' => [['id' => 'g6-standard-4', 'class' => 'standard', 'vcpus' => 4, 'memory' => 8192, 'disk' => 163840, 'price' => ['monthly' => 48]]],
-                'images' => [['id' => 'linode/debian12', 'label' => 'Debian 12', 'is_public' => true, 'deprecated' => false, 'status' => 'available', 'capabilities' => ['cloud-init']]]],
+                'images' => [['id' => 'linode/debian12', 'label' => 'Debian 12', 'is_public' => true, 'deprecated' => false, 'status' => 'available', 'capabilities' => ['cloud-init']],
+                    ['id' => $this->fault === 'invalid_image_id' ? 'linode/ubuntu..24' : 'linode/ubuntu24.04', 'label' => 'Ubuntu 24.04 LTS',
+                        'is_public' => true, 'deprecated' => false, 'status' => 'available', 'capabilities' => ['cloud-init']]]],
             'digitalocean' => ['regions' => [['slug' => 'sgp1', 'name' => 'Singapore', 'available' => true], ['slug' => 'ams3', 'name' => 'Amsterdam', 'available' => true]],
                 'sizes' => [['slug' => 's-1vcpu-1gb', 'available' => true, 'vcpus' => 1, 'memory' => 1024, 'disk' => 25, 'price_monthly' => 6, 'regions' => ['sgp1']]],
                 'images' => [['slug' => 'debian-12-x64', 'name' => 'Debian 12', 'public' => true, 'status' => 'available', 'type' => 'base', 'regions' => ['sgp1'], 'min_disk_size' => 10],
@@ -180,6 +182,24 @@ class MachineProviderGroupsTest extends TestCase
         $this->assertFalse($result['executed']); Http::assertSentCount(3);
         $this->assertSame(0, Task::query()->count()); Bus::assertNothingDispatched();
         $this->assertFalse(config('machine_provision.allow_live')); $this->assertFalse(config('machine_acceptance.allow_dns')); $this->assertFalse(config('machine_failover.allow_replacement'));
+    }
+
+    public function test_linode_versioned_image_ids_do_not_hide_debian_and_can_be_saved_as_catalog_options(): void
+    {
+        $catalog = $this->catalog();
+        $this->assertSame(['linode/debian12', 'linode/ubuntu24.04'], array_column($catalog['images'], 'id'));
+        $saved = app(MachineFailoverPolicyService::class)->save(array_replace($this->input($catalog), ['image' => 'linode/ubuntu24.04']), $this->admin->id);
+        $this->assertSame('linode/ubuntu24.04', $saved['image']);
+        $this->assertFalse($saved['execution_enabled']);
+        $this->assertNotContains($saved['image'], config('machine_provision.supported_images'));
+        Http::assertSentCount(3); Bus::assertNothingDispatched();
+    }
+
+    public function test_linode_catalog_still_rejects_malformed_image_ids(): void
+    {
+        $this->fault = 'invalid_image_id';
+        $this->code('provider_invalid', fn () => $this->catalog());
+        Http::assertSentCount(3); Bus::assertNothingDispatched();
     }
 
     public function test_region_size_and_image_are_validated_against_the_same_provider_snapshot(): void

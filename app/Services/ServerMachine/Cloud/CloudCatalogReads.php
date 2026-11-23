@@ -114,7 +114,7 @@ trait CloudCatalogReads
     private function catalogId(mixed $id, bool $image = false): string
     {
         if (is_int($id)) $id = (string) $id;
-        if (!is_string($id) || !preg_match($image ? '~^linode/[a-z0-9-]{1,60}$~D' : '/^[a-z0-9-]{1,80}$/D', $id)) throw new CloudException('provider_invalid');
+        if (!is_string($id) || !preg_match($image ? LinodeClient::PUBLIC_IMAGE_ID_PATTERN : '/^[a-z0-9-]{1,80}$/D', $id)) throw new CloudException('provider_invalid');
         return $id;
     }
     private function catalogLabel(mixed $label): string

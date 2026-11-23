@@ -8,6 +8,9 @@ use Illuminate\Support\Facades\Http;
 class LinodeClient implements CloudClient
 {
     use CloudCatalogReads;
+
+    public const PUBLIC_IMAGE_ID_PATTERN = '~\Alinode/(?=[a-z0-9.-]{1,60}\z)[a-z0-9-]+(?:\.[a-z0-9-]+)*\z~';
+
     public function inventory(MachineCloudAccount $account, int $page): array
     {
         $data = $this->request($account, 'GET', '/linode/instances', ['page' => $page, 'page_size' => 100]);
