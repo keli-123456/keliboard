@@ -14,6 +14,7 @@ use App\Services\ServerMachine\Cloud\MachineCloudGroupService;
 use App\Services\ServerMachine\Cloud\MachineFailoverCredentials;
 use App\Services\ServerMachine\Cloud\MachineFailoverExistingSource;
 use App\Services\ServerMachine\Cloud\MachineFailoverPolicyService;
+use App\Services\ServerMachine\Cloud\MachineFailoverServiceRegistry;
 use App\Services\ServerMachine\Cloud\MachineProvisionService;
 use App\Services\ServerMachine\Cloud\ProvisionPlan;
 use App\Services\ServerMachine\MachineAddressInventory;
@@ -98,7 +99,8 @@ class MachineProviderGroupsTest extends TestCase
         return match ($provider) {
             'linode' => ['regions' => [['id' => 'sg-sin-2', 'label' => 'Singapore', 'status' => 'ok', 'site_type' => 'core', 'capabilities' => ['Linodes', 'Metadata']],
                 ['id' => 'distributed-site', 'label' => 'Distributed', 'status' => 'ok', 'site_type' => 'distributed', 'capabilities' => ['Linodes', 'Metadata']]],
-                'types' => [['id' => 'g6-standard-4', 'class' => 'standard', 'vcpus' => 4, 'memory' => 8192, 'disk' => 163840, 'price' => ['monthly' => 48]]],
+                'types' => [['id' => 'g6-standard-4', 'class' => 'standard', 'vcpus' => 4, 'memory' => 8192, 'disk' => 163840, 'price' => ['monthly' => 48]],
+                    ['id' => 'g6-standard-2', 'class' => 'standard', 'vcpus' => 2, 'memory' => 4096, 'disk' => 81920]],
                 'images' => [['id' => 'linode/debian12', 'label' => 'Debian 12', 'is_public' => true, 'deprecated' => false, 'status' => 'available', 'capabilities' => ['cloud-init']],
                     ['id' => $this->fault === 'invalid_image_id' ? 'linode/ubuntu..24' : 'linode/ubuntu24.04', 'label' => 'Ubuntu 24.04 LTS',
                         'is_public' => true, 'deprecated' => false, 'status' => 'available', 'capabilities' => ['cloud-init']]]],
@@ -113,7 +115,7 @@ class MachineProviderGroupsTest extends TestCase
     }
     private function catalog(string $provider = 'linode', bool $refresh = false): array { return app(MachineCloudCatalog::class)->read($this->group->id, $provider, $refresh); }
 
-    public function test_existing_source_can_use_grouped_replacement_template_without_changing_source(): void
+    private function enrolledSource(): Resource
     {
         $installation = str_repeat('e', 32);
         $resource = Resource::query()->create(['account_id' => $this->linode->id, 'provider' => 'linode',
@@ -122,6 +124,11 @@ class MachineProviderGroupsTest extends TestCase
             'public_ips' => ['8.8.4.4'], 'machine_id' => $this->machine->id, 'installation_id' => $installation,
             'machine_authority' => hash('sha256', $this->machine->token)]);
         app(MachineAddressInventory::class)->record($this->machine, $installation, ['public_ipv4' => '8.8.4.4'], time());
+        return $resource;
+    }
+    public function test_existing_source_can_use_grouped_replacement_template_without_changing_source(): void
+    {
+        $resource = $this->enrolledSource();
         $review = app(MachineFailoverExistingSource::class)->inspect($this->machine->id);
         $input = array_replace($this->input($this->catalog()), ['isolation_confirmed' => false,
             'dns_credential_id' => null, 'dns_hostname' => '', 'existing_source_proof' => $review['proof']]);
@@ -130,7 +137,44 @@ class MachineProviderGroupsTest extends TestCase
         $this->assertSame($this->group->id, $saved['credential_group_id']);
         $this->assertSame('g6-standard-4', $saved['size']);
         $this->assertSame('g6-standard-2', $resource->fresh()->size);
-        $this->assertSame($installation, $resource->fresh()->installation_id);
+        $this->assertSame(str_repeat('e', 32), $resource->fresh()->installation_id);
+        Http::assertNotSent(fn ($request) => $request->method() !== 'GET'); Bus::assertNothingDispatched();
+    }
+
+    public function test_service_detail_reuses_source_policy_and_updates_template_atomically(): void
+    {
+        $resource = $this->enrolledSource(); $bound = $resource->fresh()->getRawOriginal();
+        (require base_path('database/migrations/2026_11_07_140000_create_machine_failover_services.php'))->up();
+        $sources = app(MachineFailoverExistingSource::class); $policies = app(MachineFailoverPolicyService::class);
+        $registry = app(MachineFailoverServiceRegistry::class);
+        $input = array_replace($this->input($this->catalog()), ['name' => 'Legacy source', 'size' => 'g6-standard-2', 'failure_threshold' => 4,
+            'isolation_confirmed' => false, 'dns_credential_id' => null, 'dns_hostname' => '', 'existing_source_proof' => $sources->inspect($this->machine->id)['proof']]);
+        $original = $policies->save($input, $this->admin->id);
+        $target = $registry->save(['name' => 'Source service'], $this->admin->id);
+        $request = ['service_id' => $target['id'], 'expected_revision' => 1, 'policy' => $input + ['id' => $original['id'], 'expected_revision' => 1]];
+        $this->code('template_unsupported', fn () => $registry->addSourceMember($request, $this->admin->id));
+        $this->assertSame(1, Policy::query()->findOrFail($original['id'])->revision);
+        $this->assertSame([], $registry->overview()['services'][0]['members']);
+        $request['policy']['size'] = 'g6-standard-4';
+        $stale = $request; $stale['policy']['expected_revision'] = 2;
+        $this->code('config_changed', fn () => $registry->addSourceMember($stale, $this->admin->id));
+        $result = $registry->addSourceMember($request, $this->admin->id);
+        $this->assertSame(2, $result['revision']); $this->assertCount(1, $result['members']);
+        $this->assertSame($original['id'], $result['members'][0]['policy_id']);
+        $this->assertSame(2, $result['members'][0]['policy_revision']);
+        $this->assertTrue($result['members'][0]['policy_current']);
+        $saved = Policy::query()->findOrFail($original['id']);
+        $this->assertSame(1, Policy::query()->count()); $this->assertSame($original['slot'], $saved->slot);
+        $this->assertSame('Legacy source', $saved->name); $this->assertSame(4, $saved->failure_threshold);
+        $this->assertSame('g6-standard-4', $saved->size); $this->assertSame($bound, $resource->fresh()->getRawOriginal());
+        $other = $registry->save(['name' => 'Other service'], $this->admin->id);
+        $request['service_id'] = $other['id']; $request['policy']['expected_revision'] = 2;
+        $this->code('member_in_use', fn () => $registry->addSourceMember($request, $this->admin->id));
+        $this->assertSame(2, $saved->fresh()->revision);
+        $overview = $policies->overview();
+        $this->assertSame(['linode' => $overview['options']], $overview['replacement_templates']);
+        $this->assertFalse($result['execution_enabled']); $this->assertFalse($result['dns_cutover']);
+        $this->assertSame(0, Task::query()->count());
         Http::assertNotSent(fn ($request) => $request->method() !== 'GET'); Bus::assertNothingDispatched();
     }
     private function input(array $catalog): array

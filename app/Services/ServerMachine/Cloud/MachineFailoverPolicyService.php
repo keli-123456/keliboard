@@ -38,6 +38,11 @@ class MachineFailoverPolicyService
         $pool = app(MachineFailoverCredentials::class);
         $result['provider_groups_available'] = $pool->available();
         $result['provisioning_providers'] = MachineProvisionProviders::SUPPORTED;
+        $result['replacement_templates'] = [];
+        foreach (MachineProvisionProviders::SUPPORTED as $provider) {
+            $options = MachineProvisionProviders::templateOptions($provider);
+            if (!in_array([], $options, true)) $result['replacement_templates'][$provider] = $options;
+        }
         $result['credential_groups'] = [];
         if ($pool->available()) {
             $result['supported_providers'] = ['linode', 'digitalocean', 'vultr'];
@@ -103,7 +108,7 @@ class MachineFailoverPolicyService
                         if (Policy::query()->where('machine_id', $values['machine_id'])->when($policy->exists, fn ($query) => $query->where('id', '!=', $policy->id))->exists()) throw new CloudException('machine_in_use');
                         $same = $policy->exists;
                         foreach (['provider', 'credential_group_id', 'region', 'size', 'image', 'catalog_fingerprint'] as $field) $same = $same && $policy->{$field} === $values[$field];
-                        if (!$same) $catalog = app(MachineCloudCatalog::class)->validate($values);
+                        if (!$same || $afterSave !== null) $catalog = app(MachineCloudCatalog::class)->validate($values);
                     }
                     $account = $grouped ? null : Account::query()->find($values['account_id'], ['id', 'name', 'provider', 'revision']);
                     $machine = ServerMachine::query()->find($values['machine_id']);

@@ -27,12 +27,21 @@ class MachineProvisionProviders
     {
         if ($account->provider !== $expected) throw new CloudException('provider_mismatch');
     }
+    public static function templateOptions(string $provider): array
+    {
+        $prefix = $provider === 'linode' ? 'machine_provision.supported_' : 'machine_provision.providers.' . $provider . '.';
+        $result = [];
+        foreach (['regions', 'sizes', 'images'] as $key) {
+            $options = in_array($provider, self::SUPPORTED, true) ? config($prefix . $key, []) : [];
+            $result[$key] = is_array($options) && array_is_list($options) ? $options : [];
+        }
+        return $result;
+    }
     public static function templateSupported(string $provider, string $region, string $size, string $image): bool
     {
-        if (!in_array($provider, self::SUPPORTED, true)) return false;
-        $prefix = $provider === 'linode' ? 'machine_provision.supported_' : 'machine_provision.providers.' . $provider . '.';
+        $options = self::templateOptions($provider);
         foreach (['regions' => $region, 'sizes' => $size, 'images' => $image] as $key => $value)
-            if (!in_array($value, config($prefix . $key, []), true)) return false;
+            if (!in_array($value, $options[$key], true)) return false;
         return true;
     }
     public static function requestIdentity(string $provider, array $request): array

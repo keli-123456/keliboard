@@ -116,15 +116,23 @@ class MachineFailoverServiceRegistry
             || !is_int($input['service_id'] ?? null) || $input['service_id'] < 1
             || !is_int($input['expected_revision'] ?? null) || $input['expected_revision'] < 1
             || !is_array($input['policy'] ?? null)
-            || array_intersect(array_keys($input['policy']), ['id', 'expected_revision'])
             || !is_string($input['policy']['existing_source_proof'] ?? null)) throw new CloudException('invalid_members');
+        $draft = $input['policy'];
+        if (array_key_exists('id', $draft) || array_key_exists('expected_revision', $draft)) {
+            if (!is_int($draft['id'] ?? null) || $draft['id'] < 1 || !is_int($draft['expected_revision'] ?? null)
+                || $draft['expected_revision'] < 1) throw new CloudException('invalid_members');
+        }
         $id = $input['service_id']; $revision = $input['expected_revision'];
         $this->memberTarget($id, $revision);
         // Policy saving already holds the writer lock and rechecks source identity in its transaction.
-        return app(MachineFailoverPolicyService::class)->save($input['policy'], $admin, function (Policy $policy) use ($id, $revision, $admin) {
+        return app(MachineFailoverPolicyService::class)->save($draft, $admin, function (Policy $policy) use ($id, $revision, $admin) {
             $service = $this->memberTarget($id, $revision);
             if (!MachineFailoverExistingSource::isDraft($policy)) throw new CloudException('existing_source_draft_only');
-            if (Member::query()->where('machine_id', $policy->machine_id)->exists()) throw new CloudException('member_in_use');
+            if (Member::query()->where('machine_id', $policy->machine_id)->orWhere('policy_id', $policy->id)->exists()) throw new CloudException('member_in_use');
+            $provider = app(MachineFailoverCredentials::class)->provider($policy);
+            if ($provider === null || !MachineProvisionProviders::templateSupported($provider, $policy->region, $policy->size, $policy->image)) {
+                throw new CloudException('template_unsupported');
+            }
             $priority = (int) Member::query()->where('service_id', $id)->max('priority');
             Member::query()->create(['service_id' => $id, 'policy_id' => $policy->id, 'policy_revision' => $policy->revision,
                 'machine_id' => $policy->machine_id, 'name' => $policy->name, 'priority' => min(100, $priority + 1), 'enabled' => true]);
