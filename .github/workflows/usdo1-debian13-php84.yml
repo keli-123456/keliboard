@@ -1,0 +1,50 @@
+name: Isolated service 123 Debian 13 and PHP 8.4
+
+on:
+  push:
+    branches: [audit/usdo1-debian13-php84-20261124]
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare a disposable Debian 13 runtime
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$(mktemp -d "$RUNNER_TEMP/usdo1-php84.XXXXXX")"
+          git archive "$GITHUB_SHA" | tar -x -C "$src"
+          test ! -e "$src/.env"
+          # Use the tracked tree, including tests normally excluded from the production image.
+          rm -- "$src/.dockerignore"
+          docker build --pull -f "$src/.github/ci/usdo1-php84.Dockerfile" -t usdo1-php84:ci "$src"
+      - name: Verify platform, regressions and closed HTTPS callback with no external network
+        timeout-minutes: 4
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --network none --cap-drop NET_RAW --cap-drop NET_ADMIN \
+            --security-opt no-new-privileges --memory 1536m usdo1-php84:ci bash -euc '
+            . /etc/os-release
+            test "$VERSION_ID" = 13
+            printf "OS: %s\n" "$PRETTY_NAME"
+            php -r "exit(PHP_MAJOR_VERSION === 8 && PHP_MINOR_VERSION === 4 ? 0 : 1);"
+            php --version
+            php-fpm8.4 --version
+            nginx -v
+            composer --version
+            test ! -e .env
+            composer validate --strict --no-check-publish --no-check-all
+            composer check-platform-reqs
+            php -d memory_limit=768M vendor/bin/phpunit --do-not-cache-result --fail-on-skipped --fail-on-warning \
+              --display-deprecations --filter "test_usdo1_|MachineUsdo1LaunchTest|MachineUsdo1ExistingATest|MachineUsdo1ProductionEntryTest|MachineProvisionTest::test_(default_phase|preview|queue_is_encrypted|bootstrap_origin|only_configured_panel|cloud_init|create_sends_only|authenticated_receipt|receipts_need|public_receipt_route)"
+            python3 -B .github/ci/usdo1-php84-smoke.py
+          '
