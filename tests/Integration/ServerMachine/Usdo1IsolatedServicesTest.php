@@ -10,6 +10,7 @@ use App\Models\MachineProvisionTask as Task;
 use App\Models\User;
 use App\Services\ServerMachine\Cloud\MachineFailoverQueue;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Tests\Support\NativeFailoverConcurrentFixture as Fixture;
 use Tests\Unit\Services\MachineFailoverNativeBridgeTest;
@@ -142,7 +143,8 @@ final class Usdo1IsolatedServicesTest extends MachineFailoverNativeBridgeTest
         self::assertSame('stopped', $package->stop($grant)['status']);
         $proof += $call('revoked');
         self::assertTrue($proof['revoked_rejected']);
-        self::assertCount(1, $this->posts);
+        self::assertCount(1, Http::recorded(fn ($request) => $request->method() === 'POST'
+            && rtrim($request->url(), '?') === 'https://api.linode.com/v4/linode/instances'));
         foreach (['admin_operations',MachineFailoverQueue::NAME] as $name) {
             self::assertSame(0, (int) app('redis')->connection()->llen('queues:' . $name));
         }
