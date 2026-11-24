@@ -73,6 +73,12 @@ final class MachineFailoverExistingSource
         $this->assertCurrent($policy->machine_id, $policy->id, substr($policy->slot, strlen(self::PREFIX)), true);
     }
 
+    public function dnsInspectionAddresses(Policy $policy): array
+    {
+        [, , , , $ips] = $this->evidence($policy->machine_id, $policy->id);
+        return $ips;
+    }
+
     private function evidence(int $machineId, ?int $policyId, bool $lock = false): array
     {
         if (!Schema::hasColumn('v2_machine_cloud_resource', 'provider') || !Schema::hasTable('v2_machine_failover_policy')) {
@@ -125,7 +131,7 @@ final class MachineFailoverExistingSource
             $resource->provider, $resource->external_id, $resource->provider_created_at, $resource->region,
             $resource->size, $installation, $ips], JSON_THROW_ON_ERROR), (string) $machine->token);
         if ($policy && $policy->slot !== self::slot($proof)) throw new CloudException('source_identity_changed');
-        return [$resource, $account, $ips[0], $proof];
+        return [$resource, $account, $ips[0], $proof, $ips];
     }
 
     private function assertNodeScope(int $machineId, string $installation, int $now): void

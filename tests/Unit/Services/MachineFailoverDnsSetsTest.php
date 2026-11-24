@@ -2,6 +2,7 @@
 namespace Tests\Unit\Services;
 
 use App\Models\MachineCloudAccount;
+use App\Models\MachineCloudResource;
 use App\Models\MachineDnsCredential;
 use App\Models\MachineDnsSetRuntime as Runtime;
 use App\Models\MachineDnsSetFixture as Fixture;
@@ -9,18 +10,22 @@ use App\Models\MachineFailoverDnsRun as Run;
 use App\Models\MachineFailoverDnsSet as DnsSet;
 use App\Models\MachineFailoverDnsSlot as Slot;
 use App\Models\MachineFailoverMember as Member;
+use App\Models\MachineFailoverPolicy as Policy;
 use App\Models\MachineFailoverService as Service;
 use App\Models\ServerMachine;
 use App\Models\User;
 use App\Services\ServerMachine\Cloud\CloudException;
+use App\Services\ServerMachine\Cloud\MachineFailoverDnsInspection;
 use App\Services\ServerMachine\Cloud\MachineFailoverDnsRegistry;
 use App\Services\ServerMachine\Cloud\MachineFailoverDnsSimulation;
+use App\Services\ServerMachine\Cloud\MachineFailoverExistingSource;
 use App\Services\ServerMachine\Cloud\MachineFailoverPolicyService;
 use App\Services\ServerMachine\Cloud\MachineFailoverServiceRegistry;
 use App\Services\ServerMachine\Dns\MachineDnsRecordSetPlanner;
 use App\Services\ServerMachine\Dns\MachineDnsRecordSetProvider;
 use App\Services\ServerMachine\Dns\MachineDnsRecordSetExecution as Engine;
 use App\Services\ServerMachine\Dns\MachineDnsRecordSetSimulationTransport as Driver;
+use App\Services\ServerMachine\MachineAddressInventory;
 use Illuminate\Support\Carbon;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Encryption\Encrypter;
@@ -103,6 +108,118 @@ class MachineFailoverDnsSetsTest extends TestCase
         Http::assertNothingSent(); Bus::assertNothingDispatched();
         foreach (['cloud_task', 'provision_task', 'owned_instance', 'owned_dns', 'dns_transition', 'dns_binding'] as $table) $this->assertSame(0, DB::table('v2_machine_' . $table)->count());
         $this->assertFalse(config('machine_provision.allow_live')); $this->assertFalse(config('machine_failover.allow_rotation')); $this->assertFalse(config('machine_acceptance.allow_dns'));
+    }
+
+    private function reportedSource(array $ips = ['8.8.4.4']): array
+    {
+        $policy = Policy::query()->findOrFail($this->service['members'][0]['policy_id']);
+        $machine = ServerMachine::query()->findOrFail($policy->machine_id);
+        $account = MachineCloudAccount::query()->findOrFail($policy->account_id);
+        $installation = str_repeat('e', 32);
+        $resource = MachineCloudResource::query()->create(['account_id' => $account->id, 'provider' => 'linode', 'external_id' => '123', 'label' => 'Isolated',
+            'region' => 'sg-sin-2', 'size' => 'g6-standard-4', 'provider_created_at' => '2026-01-01T00:00:00Z', 'status' => 'running',
+            'public_ips' => $ips, 'observed_at' => time(), 'machine_id' => $machine->id, 'installation_id' => $installation,
+            'machine_authority' => hash('sha256', $machine->token)]);
+        sort($ips, SORT_STRING);
+        $proof = hash_hmac('sha256', json_encode([$machine->id, $resource->id, $account->id, $account->revision, $resource->provider,
+            $resource->external_id, $resource->provider_created_at, $resource->region, $resource->size, $installation, $ips], JSON_THROW_ON_ERROR), $machine->token);
+        $policy->fill(['slot' => MachineFailoverExistingSource::slot($proof)])->save();
+        app(MachineAddressInventory::class)->record($machine, $installation, ['local' => $ips], time());
+        return [$machine, $installation];
+    }
+
+    private function inspect(array $view): array
+    {
+        $set = $view['sets'][0];
+        return app(MachineFailoverDnsInspection::class)->inspect($view['service_id'], $view['service_revision'], $set['id'], $set['revision'], $this->admin->id);
+    }
+
+    private function cloudflareInventory(array $rows): array
+    {
+        return ['success' => true, 'result' => $rows, 'result_info' => ['page' => 1, 'per_page' => 50, 'total_count' => count($rows), 'total_pages' => $rows ? 1 : 0]];
+    }
+
+    public function test_read_only_inspection_pins_scope_and_never_adopts_an_unmarked_address(): void
+    {
+        $view = $this->configure(); [$machine, $installation] = $this->reportedSource();
+        $set = $view['sets'][0]; $slot = Slot::query()->findOrFail($set['slots'][0]['id']);
+        $recordId = str_repeat('b', 32);
+        $record = ['id' => $recordId, 'name' => $set['hostname'], 'type' => 'A', 'content' => '8.8.4.4', 'ttl' => 60, 'proxied' => false, 'comment' => $slot->marker];
+        Http::swap(new \Illuminate\Http\Client\Factory()); Http::preventStrayRequests();
+        Http::fake(function ($request) use (&$record, $set) {
+            $this->assertSame('GET', $request->method());
+            $this->assertSame('api.cloudflare.com', parse_url($request->url(), PHP_URL_HOST));
+            $this->assertSame('/client/v4/zones/' . $set['zone'] . '/dns_records', parse_url($request->url(), PHP_URL_PATH));
+            $this->assertStringContainsString('name.exact=shared.example.test', $request->url());
+            $this->assertTrue($request->hasHeader('Authorization', 'Bearer synthetic-dns-secret'));
+            return Http::response($this->cloudflareInventory([$record]));
+        });
+        DB::enableQueryLog();
+        try {
+            $report = $this->inspect($view);
+            foreach (DB::getQueryLog() as $query) $this->assertMatchesRegularExpression('/^(select|pragma)\b/i', $query['query']);
+        } finally { DB::disableQueryLog(); }
+        $this->assertTrue($report['read_only']); $this->assertSame(0, $report['dns_writes']); $this->assertSame(0, $report['cloud_writes']);
+        $this->assertSame($set['credential_id'], $report['credential_id']); $this->assertSame($set['id'], $report['set_id']);
+        $this->assertSame('match', $report['rows'][0]['state']);
+        $this->assertSame('8.8.4.4', $report['rows'][0]['expected_ip']);
+        $this->assertTrue($report['rows'][0]['panel_marker']);
+        $this->assertNull($report['rows'][1]['expected_ip']);
+        foreach ([$slot->marker, $recordId, 'synthetic-dns-secret', 'synthetic-machine-secret'] as $secret) {
+            $this->assertStringNotContainsString($secret, json_encode($report));
+        }
+        unset($record['comment']);
+        $row = $this->inspect($view)['rows'][0];
+        $this->assertSame(['unconfirmed', 'ownership_unconfirmed', false], [$row['state'], $row['reason'], $row['panel_marker']]);
+        $record['comment'] = $slot->marker;
+        app(MachineAddressInventory::class)->record($machine, $installation, ['public_ipv4' => '8.8.4.4'], time() - 181);
+        $row = $this->inspect($view)['rows'][0];
+        $this->assertSame(['unconfirmed', 'address_unconfirmed', null], [$row['state'], $row['reason'], $row['expected_ip']]);
+        Http::assertSentCount(3); Bus::assertNothingDispatched(); $this->assertSame(0, Run::query()->count());
+    }
+
+    public function test_read_only_inspection_reads_aliyun_remarks_for_the_same_line_and_family(): void
+    {
+        $view = $this->configure('aliyun', ['default', 'telecom']); $this->reportedSource(['8.8.4.4', '2606:4700::1001']);
+        $slot = Slot::query()->where('member_id', $this->service['members'][0]['id'])->where('type', 'AAAA')->where('line', 'telecom')->firstOrFail();
+        $record = ['RecordId' => '900000000000000000001', 'DomainName' => 'example.test', 'RR' => 'shared', 'Type' => 'AAAA',
+            'Value' => '2606:4700:0:0::1001', 'TTL' => 600, 'Line' => 'telecom', 'Status' => 'Enable'];
+        $actions = [];
+        Http::swap(new \Illuminate\Http\Client\Factory()); Http::preventStrayRequests();
+        Http::fake(function ($request) use ($slot, $record, &$actions) {
+            $this->assertSame('https://alidns.aliyuncs.com/', $request->url());
+            $this->assertSame('POST', $request->method()); $actions[] = $request['Action'];
+            if ($request['Action'] === 'DescribeSubDomainRecords') {
+                $this->assertSame('shared.example.test', $request['SubDomain']);
+                $this->assertSame('example.test', $request['DomainName']);
+                return Http::response(['TotalCount' => 1, 'PageNumber' => 1, 'PageSize' => 50, 'DomainRecords' => ['Record' => [$record]]]);
+            }
+            $this->assertSame('DescribeDomainRecordInfo', $request['Action']);
+            $this->assertSame($record['RecordId'], $request['RecordId']);
+            return Http::response($record + ['Remark' => MachineDnsRecordSetProvider::aliyunMarker($slot->marker)]);
+        });
+        $rows = array_column($this->inspect($view)['rows'], null, 'slot_id');
+        $this->assertSame(['2606:4700::1001'], $rows[$slot->id]['observed_ips']); $this->assertSame('match', $rows[$slot->id]['state']);
+        $this->assertSame(['missing_record'], array_values(array_unique(array_column(array_diff_key($rows, [$slot->id => true]), 'reason'))));
+        $this->assertSame(['DescribeSubDomainRecords', 'DescribeDomainRecordInfo'], $actions); Bus::assertNothingDispatched();
+    }
+
+    public function test_read_only_inspection_rejects_unscoped_or_changed_configuration(): void
+    {
+        $view = $this->configure(); $set = $view['sets'][0]; $reader = app(MachineFailoverDnsInspection::class);
+        $this->code('config_changed', fn () => $reader->inspect($view['service_id'], $view['service_revision'], $set['id'] + 1, $set['revision'], $this->admin->id));
+        $this->code('config_changed', fn () => $reader->inspect($view['service_id'], $view['service_revision'], $set['id'], $set['revision'] + 1, $this->admin->id));
+        $this->code('permission_revoked', fn () => $reader->inspect($view['service_id'], $view['service_revision'], $set['id'], $set['revision'], $this->admin->id + 1));
+        $this->cf->update(['revision' => 2]);
+        $this->code('dns_credential_changed', fn () => $this->inspect($view));
+        Http::assertNothingSent();
+        $this->cf->update(['revision' => 1]);
+        Http::swap(new \Illuminate\Http\Client\Factory()); Http::preventStrayRequests();
+        Http::fake(function () use ($set) {
+            DnsSet::query()->whereKey($set['id'])->update(['revision' => $set['revision'] + 1]);
+            return Http::response($this->cloudflareInventory([]));
+        });
+        $this->code('config_changed', fn () => $this->inspect($view)); Http::assertSentCount(1); Bus::assertNothingDispatched();
     }
 
     public static function scenarios(): array

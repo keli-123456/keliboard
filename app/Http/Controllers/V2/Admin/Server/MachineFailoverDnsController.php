@@ -3,6 +3,7 @@ namespace App\Http\Controllers\V2\Admin\Server;
 
 use App\Http\Controllers\Controller;
 use App\Services\ServerMachine\Cloud\CloudException;
+use App\Services\ServerMachine\Cloud\MachineFailoverDnsInspection;
 use App\Services\ServerMachine\Cloud\MachineFailoverDnsRegistry;
 use App\Services\ServerMachine\Cloud\MachineFailoverDnsSimulation;
 use Illuminate\Contracts\Cache\LockTimeoutException;
@@ -30,6 +31,14 @@ class MachineFailoverDnsController extends Controller
     {
         return $this->run($request, ['id', 'expected_revision', 'service_id', 'service_revision', 'credential_id', 'credential_revision', 'zone', 'zone_name', 'hostname', 'ttl', 'members'],
             fn ($admin) => $service->save($request->all(), $admin));
+    }
+    public function inspect(Request $request, MachineFailoverDnsInspection $service)
+    {
+        return $this->run($request, ['service_id', 'service_revision', 'set_id', 'set_revision'], function ($admin) use ($request, $service) {
+            $v = $request->validate(['service_id' => 'required|integer|min:1', 'service_revision' => 'required|integer|min:1',
+                'set_id' => 'required|integer|min:1', 'set_revision' => 'required|integer|min:1']);
+            return $service->inspect((int) $v['service_id'], (int) $v['service_revision'], (int) $v['set_id'], (int) $v['set_revision'], $admin);
+        });
     }
     public function drop(Request $request, MachineFailoverDnsRegistry $service)
     {

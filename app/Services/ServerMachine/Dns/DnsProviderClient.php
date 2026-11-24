@@ -12,12 +12,25 @@ class DnsProviderClient
     public function recordSetInventory(MachineDnsCredential $credential, array $set): array
     {
         app(\App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate::class)->assertAllowed('dns_set_read');
+        return $this->readRecordSet($credential, $set);
+    }
+
+    public function inspectRecordSet(MachineDnsCredential $credential, array $set): array
+    {
+        return $this->readRecordSet($credential, $set, microtime(true) + 10);
+    }
+
+    private function readRecordSet(MachineDnsCredential $credential, array $set, ?float $deadline = null): array
+    {
         $this->recordSetScope($credential, $set);
         $contract = app(MachineDnsRecordSetProvider::class); $pages = [];
         for ($page = 1; $page <= 3; $page++) {
+            $this->assertRecordSetReadTime($deadline);
             $json = $credential->provider === 'cloudflare'
                 ? $this->cloudflareRequest($credential, 'GET', '/zones/' . $set['zone'] . '/dns_records', [], ['name.exact' => $set['hostname'], 'page' => $page, 'per_page' => 50])
                 : $this->aliyun($credential, 'DescribeSubDomainRecords', ['SubDomain' => $set['hostname'], 'DomainName' => $set['zone'], 'PageNumber' => $page, 'PageSize' => 50], true);
+            $count = $credential->provider === 'cloudflare' ? ($json['result_info']['total_count'] ?? null) : ($json['TotalCount'] ?? null);
+            if (!is_int($count) || $count < 0 || $count > 150) throw new DnsException('dns_inventory_incomplete');
             if ($credential->provider === 'aliyun') {
                 $rows = $json['DomainRecords']['Record'] ?? null;
                 if (!is_array($rows) || !array_is_list($rows) || count($rows) > 50) throw new DnsException('dns_inventory_incomplete');
@@ -25,6 +38,7 @@ class DnsProviderClient
                     // A list response may omit remarks. Confirm the exact record before treating one as blank.
                     $contract->record($set, $row);
                     if (array_key_exists('Remark', $row)) continue;
+                    $this->assertRecordSetReadTime($deadline);
                     $info = $this->aliyun($credential, 'DescribeDomainRecordInfo', ['RecordId' => $row['RecordId']], true);
                     foreach (['RecordId', 'DomainName', 'RR', 'Type', 'Value', 'TTL', 'Line', 'Status'] as $field) {
                         if (!array_key_exists($field, $info) || $info[$field] !== $row[$field]) throw new DnsException('dns_ownership_changed');
@@ -34,11 +48,16 @@ class DnsProviderClient
                     $json['DomainRecords']['Record'][$index]['Remark'] = array_key_exists('Remark', $info) ? $info['Remark'] : '';
                 }
             }
-            $pages[] = $json; $count = $credential->provider === 'cloudflare' ? ($json['result_info']['total_count'] ?? null) : ($json['TotalCount'] ?? null);
-            if (!is_int($count) || $count < 0 || $count > 150) throw new DnsException('dns_inventory_incomplete');
+            $this->assertRecordSetReadTime($deadline);
+            $pages[] = $json;
             if ($page * 50 >= $count) return $contract->inventory($set, $pages);
         }
         throw new DnsException('dns_inventory_incomplete');
+    }
+
+    private function assertRecordSetReadTime(?float $deadline): void
+    {
+        if ($deadline !== null && microtime(true) >= $deadline) throw new DnsException('dns_inventory_incomplete');
     }
 
     public function recordSetWrite(MachineDnsCredential $credential, array $set, array $action, ?string $knownId = null): string
