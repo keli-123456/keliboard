@@ -4,6 +4,7 @@ namespace App\Services\ServerMachine\Cloud;
 use App\Jobs\MachineProvisionJob;
 use App\Models\MachineCloudAccount;
 use App\Models\MachineCloudResource;
+use App\Models\MachineFailoverHandoverGrant;
 use App\Models\MachineProvisionTask as Task;
 use App\Models\MachineReplacementTask;
 use App\Models\ServerMachine;
@@ -101,11 +102,15 @@ class MachineProvisionService
             $hash = hash('sha256', json_encode($plan, JSON_THROW_ON_ERROR));
             if ($isolated !== null) $hash = hash('sha256', $hash . ':' . json_encode($isolated, JSON_THROW_ON_ERROR));
             $attempt = $attemptId === null ? null : \App\Models\MachineFailoverAttempt::query()->findOrFail($attemptId);
+            $usdo1 = app()->bound(MachineUsdo1LaunchScope::class) ? app(MachineUsdo1LaunchScope::class) : null;
+            if ($usdo1 && (!$attempt || $attempt->ordinal !== 1 || $plan['machine_id'] !== MachineUsdo1HandoverScope::MACHINE))
+                throw new CloudException('usdo1_launch_execution_changed');
             if ($attempt) {
                 app(MachineFailoverNativeBridge::class)->assertAttempt($attempt);
                 $member = \App\Models\MachineFailoverExecutionMember::query()->findOrFail($attempt->execution_member_id);
                 $execution = \App\Models\MachineFailoverExecution::query()->findOrFail($member->execution_id);
                 if ($attempt->request_id !== $requestId || !MachineIntentJson::same(ProvisionPlan::normalize($attempt->payload['plan']), $plan) || $execution->admin_id !== $admin) throw new CloudException('native_lineage_changed');
+                $usdo1?->assertExecution($execution);
                 $hash = hash('sha256', MachineIntentJson::encode($plan) . ':' . $attempt->id);
             }
             if ($replacementPlan !== null) {
@@ -114,7 +119,8 @@ class MachineProvisionService
                 $hash = hash('sha256', $hash . ':' . $replacementPlan);
             }
             if ($existing = Task::query()->where('request_key', $key)->first()) {
-                if (!hash_equals($existing->plan_hash, $hash)) throw new CloudException('request_conflict');
+                if (!hash_equals($existing->plan_hash, $hash) || ($existing->payload['usdo1_callback_origin'] ?? null) !== $usdo1?->origin)
+                    throw new CloudException('request_conflict');
                 return $this->present($existing);
             }
             $account = MachineCloudAccount::query()->findOrFail($plan['account_id']);
@@ -135,9 +141,9 @@ class MachineProvisionService
             app(MachineProvisionLimits::class)->assertAvailable($account, null, $attempt?->id);
             $id = (string) Str::uuid(); $installation = bin2hex(random_bytes(16)); $secret = bin2hex(random_bytes(32));
             $marker = 'keli-create-' . bin2hex(random_bytes(12));
-            $data = $this->bootstrap->build($machine, $plan['panel_origin'], $id, $installation, $secret);
+            $data = $this->bootstrap->build($machine, $plan['panel_origin'], $id, $installation, $secret, $usdo1);
             $request = $provider->buildRequest($plan, $id, $marker, $data);
-            $task = DB::transaction(function () use ($id, $key, $admin, $account, $machine, $plan, $hash, $installation, $secret, $marker, $request, $replacement, $isolated, $attempt) {
+            $task = DB::transaction(function () use ($id, $key, $admin, $account, $machine, $plan, $hash, $installation, $secret, $marker, $request, $replacement, $isolated, $attempt, $usdo1) {
                 $replacementId = $replacement === null ? null : MachineReplacementTask::query()->create($replacement + [
                     'task_id' => $id, 'status' => 'queued', 'notice_event' => (string) Str::uuid(),
                     'steps' => [['state' => 'queued', 'reason' => null, 'created_at' => time()]],
@@ -147,6 +153,7 @@ class MachineProvisionService
                     'machine_authority' => hash('sha256', (string) $machine->token), 'plan_hash' => $hash, 'slot' => $plan['slot'],
                     'installation_id' => $installation, 'callback_hash' => hash('sha256', $secret), 'marker' => $marker,
                     'payload' => ['plan' => $plan, 'request' => $request] + ($isolated === null ? [] : ['isolated_acceptance' => $isolated])
+                        + ($usdo1 === null ? [] : ['usdo1_callback_origin' => $usdo1->origin])
                         + ($attempt === null ? [] : ['coordinated_attempt' => $attempt->id]), 'status' => 'queued',
                     'deadline_at' => time() + max(120, min(1200, (int) config('machine_provision.timeout_seconds', 1200)))];
                 if ($replacementId !== null) $attributes['replacement_id'] = $replacementId;
@@ -296,28 +303,38 @@ class MachineProvisionService
         }));
     }
 
-    public function callback(string $id, string $installation, string $secret, string $state): bool
+    public function callback(string $id, string $installation, string $secret, string $state, ?MachineUsdo1LaunchScope $usdo1 = null): bool
     {
         if (config('machine_provision.allow_live') !== true || !$this->available() || !Str::isUuid($id)
             || !preg_match('/^[a-f0-9]{64}$/D', $secret) || !preg_match('/^[a-f0-9]{32}$/D', $installation)
             || !in_array($state, ['succeeded', 'failed'], true)) throw new CloudException('invalid_callback');
         $task = Task::query()->find($id);
-        if (!$task || !hash_equals($task->callback_hash, hash('sha256', $secret)) || !hash_equals($task->installation_id, $installation)
+        if (!$task || ($task->payload['usdo1_callback_origin'] ?? null) !== $usdo1?->origin
+            || !hash_equals($task->callback_hash, hash('sha256', $secret)) || !hash_equals($task->installation_id, $installation)
             || !$task->dispatched_at || $task->deadline_at < time()) throw new CloudException('invalid_callback');
-        return $this->locked($task->account_id, fn () => DB::transaction(function () use ($id, $installation, $secret, $state) {
+        return $this->locked($task->account_id, fn () => DB::transaction(function () use ($id, $installation, $secret, $state, $usdo1) {
             $task = Task::query()->findOrFail($id);
             if (config('machine_provision.allow_live') !== true || !hash_equals($task->callback_hash, hash('sha256', $secret))
-                || !hash_equals($task->installation_id, $installation) || !$task->dispatched_at
+                || ($task->payload['usdo1_callback_origin'] ?? null) !== $usdo1?->origin || !hash_equals($task->installation_id, $installation) || !$task->dispatched_at
                 || $task->deadline_at <= time()) throw new CloudException('invalid_callback');
             if (in_array($task->status, Task::TERMINAL, true)) return false;
             if (isset($task->payload['coordinated_attempt'])) app(MachineFailoverNativeBridge::class)->assertTask($task, false);
+            if ($usdo1) {
+                $grant = MachineFailoverHandoverGrant::query()->useWritePdo()->lockForUpdate()->find($usdo1->grant);
+                if (!$grant || $grant->service_id !== MachineUsdo1LaunchScope::SERVICE || $grant->admin_id !== $usdo1->admin
+                    || $grant->admin_id !== $task->admin_id || !$grant->execution_id || $grant->revoked_at !== null
+                    || $grant->released_at !== null || $grant->writer_slot === null
+                    || now()->timestamp >= $grant->expires_at - MachineUsdo1LaunchScope::RECOVERY_SECONDS
+                    || app(MachineFailoverRunner::class)->managed($task) !== $grant->execution_id) throw new CloudException('invalid_callback');
+            }
             if ($task->bootstrap_state !== null) {
                 if ($task->bootstrap_state !== $state) throw new CloudException('bootstrap_conflict');
                 return true;
             }
             $task->fill(['bootstrap_state' => $state, 'bootstrap_at' => time(), 'next_check_at' => 0])->save();
             DB::table('v2_machine_provision_step')->insertOrIgnore(['task_id' => $task->id, 'state' => 'bootstrap_' . $state, 'reason' => '', 'created_at' => time()]);
-            $this->dispatch($task);
+            if ($usdo1 === null) $this->dispatch($task);
+            elseif (!app(MachineFailoverRunner::class)->wakeTask($task)) throw new CloudException('invalid_callback');
             return true;
         }));
     }

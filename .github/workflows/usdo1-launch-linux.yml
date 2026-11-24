@@ -1,0 +1,88 @@
+name: Usdo1 Linux Launch Assembly
+
+on:
+  push:
+    branches: [audit/usdo1-launch-linux-20261124]
+
+permissions:
+  contents: read
+
+jobs:
+  launch:
+    if: github.ref == 'refs/heads/audit/usdo1-launch-linux-20261124'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: keli_acceptance_native_failover
+          MYSQL_USER: keli_native_fixture
+          MYSQL_PASSWORD: ephemeral-launch-ci-only
+          MYSQL_ROOT_PASSWORD: ephemeral-launch-root-only
+        ports:
+          - 127.0.0.1::3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=5s --health-timeout=4s --health-retries=24
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 127.0.0.1::6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=4s --health-retries=12
+    env:
+      KELI_USDO1_ACCEPTANCE: "1"
+      KELI_NATIVE_ACCEPTANCE: "1"
+      KELI_NATIVE_HOST: 127.0.0.1
+      KELI_NATIVE_DATABASE: keli_acceptance_native_failover
+      KELI_NATIVE_USER: keli_native_fixture
+      KELI_NATIVE_PASSWORD: ephemeral-launch-ci-only
+      KELI_NATIVE_ISOLATION: READ COMMITTED
+      KELI_NATIVE_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
+      KELI_NATIVE_REDIS_PORT: ${{ job.services.redis.ports[6379] }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install private assembly tools
+        run: |
+          sudo systemctl mask nginx.service php8.3-fpm.service
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nginx php8.3-fpm php8.3-mysql php8.3-redis php8.3-mbstring php8.3-xml socat
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: pdo_mysql, pdo_sqlite, redis, pcntl, posix, mbstring, openssl
+          tools: composer:v2
+          coverage: none
+      - name: Verify release files and install dependencies
+        run: |
+          test ! -e .env
+          composer install --no-interaction --no-progress --prefer-dist --no-scripts
+      - name: Run native and ordinary receipt regressions
+        run: |
+          mkdir -p artifacts
+          php vendor/bin/phpunit --do-not-cache-result --fail-on-skipped --fail-on-warning \
+            --filter 'test_usdo1_|MachineUsdo1LaunchTest|MachineUsdo1ExistingATest|MachineUsdo1ProductionEntryTest|MachineProvisionTest::test_(default_phase|preview|queue_is_encrypted|bootstrap_origin|only_configured_panel|cloud_init|create_sends_only|authenticated_receipt|receipts_need|public_receipt_route)' \
+            --log-junit "$RUNNER_TEMP/usdo1-native.xml"
+      - name: Exercise systemd, non-root Unix sockets and real HTTPS
+        run: |
+          php vendor/bin/phpunit --do-not-cache-result --fail-on-skipped --fail-on-warning \
+            --filter test_usdo1_real_linux_launch_assembly \
+            --log-junit "$RUNNER_TEMP/usdo1-launch.xml" tests/Integration/ServerMachine/Usdo1IsolatedServicesTest.php
+      - name: Stop only temporary systemd units
+        if: always()
+        run: python3 .github/ci/usdo1-launch-stack.py cleanup
+      - name: Freeze the reviewed execution inputs after success
+        run: python3 .github/ci/usdo1-launch-stack.py freeze
+      - uses: actions/upload-artifact@v4
+        with:
+          name: usdo1-launch-verified
+          path: |
+            artifacts/usdo1-launch-summary.json
+            artifacts/usdo1-launch-manifest.json
+            artifacts/usdo1-execution-inputs.tar.gz
+          if-no-files-found: error
+          retention-days: 14

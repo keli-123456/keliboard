@@ -23,11 +23,15 @@ use App\Services\ServerMachine\Cloud\MachineFailoverHandover;
 use App\Services\ServerMachine\Cloud\MachineFailoverServiceRegistry;
 use App\Services\ServerMachine\Cloud\MachineIntentJson as Json;
 use App\Services\ServerMachine\Cloud\MachineUsdo1HandoverScope as Scope;
+use App\Services\ServerMachine\Cloud\MachineUsdo1LaunchScope;
+use App\Services\ServerMachine\Cloud\MachineUsdo1Runtime;
+use App\Services\ServerMachine\Cloud\MachineProvisionService;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Keli\Acceptance\Usdo1IsolatedExecution;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Symfony\Component\Yaml\Yaml;
 
 require_once dirname(__DIR__, 2) . '/tools/machine-acceptance/usdo1_isolated_execution.php';
 
@@ -37,7 +41,9 @@ trait TestsUsdo1IntegratedExecution
     {
         return ['success' => ['success'], 'lost create and DNS receipts' => ['lost_receipts'],
             'operator stop' => ['stop'], 'deadline before dispatch' => ['timeout'],
-            'deadline with unknown create' => ['unknown_at_timeout'], 'competing DNS change' => ['dns_drift']];
+            'deadline with unknown create' => ['unknown_at_timeout'], 'competing DNS change' => ['dns_drift'],
+            'dedicated worker stops after verified DNS' => ['success', true],
+            'dedicated worker stops after unknown DNS receipt' => ['lost_receipts', true]];
     }
 
     protected function prepareUsdo1Package(string $mode): array
@@ -135,14 +141,71 @@ trait TestsUsdo1IntegratedExecution
         return $this->callbackSecret($task);
     }
 
+    public function test_usdo1_worker_pins_independent_callback_and_only_one_native_create(): void
+    {
+        ['package'=>$package,'grant'=>$grant,'admin'=>$admin,'run'=>$run] = $this->prepareUsdo1Package('success');
+        $launch = new MachineUsdo1LaunchScope($grant, $admin, 'https://receipt.example.test');
+        $closed = app(MachineFailoverExecutionGate::class);
+        $this->code('orchestration_disabled', fn () => app(MachineUsdo1Runtime::class)->pulse($launch));
+        app()->instance(MachineFailoverExecutionGate::class, new class extends MachineFailoverExecutionGate {
+            public function assertAllowed(string $operation): void
+            {
+                if ($operation !== 'usdo1_execution_tick') parent::assertAllowed($operation);
+            }
+        });
+        try {
+            $this->code('usdo1_transport_unconfigured', fn () => app(MachineUsdo1Runtime::class)->pulse($launch));
+        } finally {
+            app()->instance(MachineFailoverExecutionGate::class, $closed);
+        }
+        self::assertSame([], $this->posts);
+        $package->pulse($grant, $launch);
+        $task = $this->task();
+        self::assertSame($launch->origin, $task->payload['usdo1_callback_origin']);
+        $data = Yaml::parse(base64_decode($task->payload['request']['metadata']['user_data'], true));
+        self::assertStringContainsString('url = "' . $launch->origin . MachineUsdo1LaunchScope::CALLBACK_PATH . '"', $data['write_files'][2]['content']);
+        self::assertSame('https://panel.example.test', $task->payload['plan']['panel_origin']);
+        self::assertFalse(app()->bound(MachineUsdo1LaunchScope::class));
+
+        $secret = $this->callbackSecret($task);
+        $server = ['HTTPS'=>'on','HTTP_HOST'=>'receipt.example.test','REQUEST_URI'=>MachineUsdo1LaunchScope::CALLBACK_PATH,
+            'REQUEST_METHOD'=>'POST','CONTENT_TYPE'=>'application/json','HTTP_AUTHORIZATION'=>'Bearer ' . $secret];
+        $receipt = ['task_id'=>$task->id,'installation_id'=>$task->installation_id,'state'=>'succeeded'];
+        $receive = fn (array $input) => MachineUsdo1Runtime::receive($launch, $server, Json::encode($input),
+            fn ($scope, $id, $installation, $key, $state) => $package->callback($grant, $id, $installation, $key, $state, $scope));
+        $this->code('orchestration_disabled', fn () => app(MachineUsdo1Runtime::class)->callback(
+            $launch, $task->id, $task->installation_id, $secret, 'succeeded'));
+        config(['machine_provision.allow_live' => true]);
+        try {
+            $this->code('invalid_callback', fn () => app(MachineProvisionService::class)->callback(
+                $task->id, $task->installation_id, $secret, 'succeeded'));
+        } finally {
+            config(['machine_provision.allow_live' => false]);
+        }
+        self::assertSame(401, $receive(array_replace($receipt, ['installation_id'=>str_repeat('c', 32)])));
+        self::assertNull($task->fresh()->bootstrap_state);
+        self::assertSame(200, $receive($receipt));
+        self::assertSame(200, $receive($receipt));
+        self::assertSame(401, $receive(array_replace($receipt, ['state'=>'failed'])));
+        self::assertSame(1, DB::table('v2_machine_provision_step')->where('task_id',$task->id)->where('state','bootstrap_succeeded')->count());
+        self::assertSame($closed, app(MachineFailoverExecutionGate::class));
+        self::assertSame('stopped', $package->stop($grant)['status']);
+        self::assertSame(401, $receive($receipt));
+        self::assertSame('stopped', $package->pulse($grant, $launch)['status']);
+        self::assertSame('stopped', MachineFailoverRuntime::query()->findOrFail($run['execution_id'])->state);
+        self::assertCount(1, $this->posts);
+        Bus::assertNotDispatched(MachineFailoverRunJob::class); Bus::assertNotDispatched(MachineProvisionJob::class);
+    }
+
     #[DataProvider('usdo1PackageCases')]
-    public function test_usdo1_isolated_package_uses_real_native_journals_and_never_resends(string $mode): void
+    public function test_usdo1_isolated_package_uses_real_native_journals_and_never_resends(string $mode, bool $dedicated = false): void
     {
         $prepared = $this->prepareUsdo1Package($mode);
         ['package'=>$package,'make'=>$make,'source'=>$source,'baseline'=>$baseline,'grant'=>$grant,
             'run'=>$run,'plan'=>$plan,'f'=>$f,'sourceInstance'=>$sourceInstance] = $prepared;
         $record = &$prepared['record']; $writes = &$prepared['writes']; $resolver = &$prepared['resolver'];
         $id = $run['execution_id'];
+        $launch = $dedicated ? new MachineUsdo1LaunchScope($grant, $prepared['admin'], 'https://receipt.example.test') : null;
         self::assertSame($run, $package->start($grant, $plan->id));
         if ($mode === 'success') {
             $closedGate = app(MachineFailoverExecutionGate::class);
@@ -160,13 +223,13 @@ trait TestsUsdo1IntegratedExecution
                 app()->instance(MachineFailoverExecutionGate::class, $closedGate);
             }
         }
-        $pulse = function () use (&$package, $grant, $id): array {
+        $pulse = function () use (&$package, $grant, $id, $launch): array {
             MachineFailoverRuntime::query()->whereKey($id)->update(['next_check_at' => 0]);
             \App\Models\MachineProvisionTask::query()->whereIn('id', MachineFailoverAttempt::query()
                 ->whereIn('execution_member_id', MachineFailoverExecutionMember::query()->where('execution_id', $id)->select('id'))
                 ->select('task_id'))->update(['next_check_at' => 0]);
             MachineDnsSetRuntime::query()->update(['next_check_at' => 0]);
-            return $package->pulse($grant);
+            return $package->pulse($grant, $launch);
         };
         if ($mode === 'timeout') {
             Carbon::setTestNow(Carbon::createFromTimestampUTC($run['deadline_at']));
@@ -201,7 +264,7 @@ trait TestsUsdo1IntegratedExecution
         }
         $task = $this->task();
         self::assertSame('waiting_initialization', $task->status);
-        self::assertTrue($package->callback($grant, $task->id, $task->installation_id, $this->callbackSecret($task), 'succeeded'));
+        self::assertTrue($package->callback($grant, $task->id, $task->installation_id, $this->callbackSecret($task), 'succeeded', $launch));
         $task->fresh()->fill(['dispatched_at' => time() - 2, 'next_check_at' => 0])->save();
         $this->report($f, $task, $task->public_ips[0], true, time());
         if ($mode === 'dns_drift') $record['Remark'] = 'competing writer';

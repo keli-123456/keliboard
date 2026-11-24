@@ -25,6 +25,8 @@ use App\Services\ServerMachine\Cloud\MachineIntentJson as Json;
 use App\Services\ServerMachine\Cloud\MachineNativeDnsAdmission;
 use App\Services\ServerMachine\Cloud\MachineProvisionService;
 use App\Services\ServerMachine\Cloud\MachineUsdo1HandoverScope as Scope;
+use App\Services\ServerMachine\Cloud\MachineUsdo1LaunchScope;
+use App\Services\ServerMachine\Cloud\MachineUsdo1Runtime;
 use App\Services\ServerMachine\Cloud\MachineUsdo1SingleAExecution;
 use App\Services\ServerMachine\Cloud\MachineUsdo1SourceAdmission;
 use App\Services\ServerMachine\Cloud\MachineUsdo1TimedExecution as Entry;
@@ -43,11 +45,11 @@ require_once __DIR__ . '/usdo1_manual_rollback.php';
 final class Usdo1IsolatedExecution
 {
     private const SERVICE = 1;
-    private const RECOVERY_RESERVE = 2100;
+    private const RECOVERY_RESERVE = MachineUsdo1LaunchScope::RECOVERY_SECONDS;
     private const OPS = [
         'admit' => ['usdo1_source_admission'],
         'start' => ['usdo1_execution_start', 'start'],
-        'callback' => ['native_task', 'context'],
+        'callback' => ['usdo1_execution_callback', 'native_task', 'context'],
         'pulse' => ['usdo1_execution_tick', 'advance', 'context', 'queue', 'native_task', 'node_readiness',
             'native_address_verify', 'native_address_read', 'native_dns_admission', 'native_dns_prepare',
             'native_dns_binding', 'dns_write', 'dns_readback', 'dns_set_start', 'dns_set_advance', 'dns_set_transport',
@@ -111,17 +113,20 @@ final class Usdo1IsolatedExecution
         });
     }
 
-    public function pulse(string $grantId): array
+    public function pulse(string $grantId, ?MachineUsdo1LaunchScope $launch = null): array
     {
-        return $this->lock(function () use ($grantId) {
+        return $this->lock(function () use ($grantId, $launch) {
             $grant = $this->grant($grantId);
+            self::need($launch === null || ($launch->grant === $grant->id && $launch->admin === $this->admin), 'launch_scope_changed');
             $view = app(Entry::class)->status($grantId, $this->admin);
             if ($view['expired'] || $view['revoked'] || $view['stop_requested'] || $this->cutoverRead($grant)
                 || now()->timestamp >= $grant->expires_at - self::RECOVERY_RESERVE)
                 return $this->stop($grantId);
             if ($view['execution_id'] === null) throw new CloudException('usdo1_execution_not_started');
             if ($view['status'] !== 'running') return $this->stop($grantId);
-            $view = $this->within('pulse', $grant, fn () => app(MachineFailoverRunner::class)->pulseUsdo1($grantId, $this->admin));
+            $view = $this->within('pulse', $grant, fn () => $launch
+                ? app(MachineUsdo1Runtime::class)->pulse($launch)
+                : app(MachineFailoverRunner::class)->pulseUsdo1($grantId, $this->admin));
             return $this->cutoverRead($grant) || $view['status'] !== 'running' ? $this->stop($grantId) : $view;
         });
     }
@@ -132,16 +137,19 @@ final class Usdo1IsolatedExecution
         return app(Entry::class)->stop($grantId, $this->admin);
     }
 
-    public function callback(string $grantId, string $taskId, string $installation, string $secret, string $state): bool
+    public function callback(string $grantId, string $taskId, string $installation, string $secret, string $state,
+        ?MachineUsdo1LaunchScope $launch = null): bool
     {
-        return $this->lock(function () use ($grantId, $taskId, $installation, $secret, $state) {
+        return $this->lock(function () use ($grantId, $taskId, $installation, $secret, $state, $launch) {
             $grant = $this->grant($grantId);
+            self::need($launch === null || ($launch->grant === $grant->id && $launch->admin === $this->admin), 'launch_scope_changed');
             self::need($grant->execution_id !== null, 'callback_scope');
             app(Handover::class)->assertNewWork($grant->execution_id);
             [, , $task] = $this->candidate($grant);
             self::need($task?->id === $taskId && $task->installation_id === $installation, 'callback_scope');
-            return $this->within('callback', $grant, fn () => app(MachineProvisionService::class)->callback(
-                $taskId, $installation, $secret, $state));
+            return $this->within('callback', $grant, fn () => $launch
+                ? app(MachineUsdo1Runtime::class)->callback($launch, $taskId, $installation, $secret, $state)
+                : app(MachineProvisionService::class)->callback($taskId, $installation, $secret, $state));
         });
     }
 
