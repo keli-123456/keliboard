@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 use App\Services\ServerMachine\Cloud\{MachineFailoverExecutionGate, CloudException};
 use App\Support\Setting;
-use Illuminate\Foundation\Bootstrap\RegisterFacades;
+use Illuminate\Foundation\Bootstrap\LoadConfiguration;
 
 // Installed only in the disposable checkout read by FPM. Not part of the release archive.
-$app->afterBootstrapping(RegisterFacades::class, static function ($app): void {
+$app->afterBootstrapping(LoadConfiguration::class, static function ($app): void {
     if (PHP_SAPI !== 'fpm-fcgi' || PHP_OS_FAMILY !== 'Linux' || posix_geteuid() === 0
         || getenv('KELI_CI_FPM_FIXTURE') !== '1') throw new RuntimeException('fixture_boundary');
     foreach ([AF_INET, AF_INET6] as $family) {
