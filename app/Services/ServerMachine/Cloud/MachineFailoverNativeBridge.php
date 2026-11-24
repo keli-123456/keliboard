@@ -612,8 +612,10 @@ class MachineFailoverNativeBridge
 
     private function taskIdentity(Task $task): string
     {
-        return $this->hash([$task->id, $task->admin_id, $task->account_id, $task->account_revision, $task->machine_id, $task->machine_authority,
-            $task->slot, $task->installation_id, $task->callback_hash, $task->marker, $task->plan_hash, hash('sha256', MachineIntentJson::encode($task->payload['request']))]);
+        $identity = [$task->id, $task->admin_id, $task->account_id, $task->account_revision, $task->machine_id, $task->machine_authority,
+            $task->slot, $task->installation_id, $task->callback_hash, $task->marker, $task->plan_hash, hash('sha256', MachineIntentJson::encode($task->payload['request']))];
+        if (isset($task->payload['usdo1_callback_origin'])) $identity[] = $task->payload['usdo1_callback_origin'];
+        return $this->hash($identity);
     }
 
     private function receipt(Attempt $attempt, string $stage, Task $task, MachineOwnedInstance $instance, ?MachineDnsTransition $dns = null): void

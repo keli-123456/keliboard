@@ -54,9 +54,11 @@ class ProvisionBootstrap
         return $this->origin($url !== '' ? $url : trim((string) admin_setting('app_url', '')));
     }
 
-    public function build(ServerMachine $machine, string $origin, string $task, string $installation, string $secret): string
+    public function build(ServerMachine $machine, string $origin, string $task, string $installation, string $secret,
+        ?MachineUsdo1LaunchScope $usdo1 = null): string
     {
         $origin = $this->origin($origin);
+        $usdo1?->assertIndependent($origin);
         if (!Str::isUuid($task) || !preg_match('/^[a-f0-9]{32}$/D', $installation)
             || !preg_match('/^[a-f0-9]{64}$/D', $secret)) throw new CloudException('invalid_bootstrap_identity');
         $directory = '/var/lib/kelinode-provision/' . $task;
@@ -127,7 +129,7 @@ if declare -F keli_provision_stage >/dev/null; then keli_provision_stage complet
 SH;
         $script = str_replace(["\r\n", "\r"], "\n", strtr($script, ['{{DIRECTORY}}' => $directory, '{{IDENTITY}}' => $installation,
             '{{TASK}}' => $task, '{{DIAGNOSTICS}}' => $diagnostics]));
-        $callback = 'url = "' . $origin . '/api/v2/server/machine/provision/result"' . "\n"
+        $callback = 'url = "' . ($usdo1?->origin ?? $origin) . MachineUsdo1LaunchScope::CALLBACK_PATH . '"' . "\n"
             . 'header = "Authorization: Bearer ' . $secret . '"' . "\nheader = \"Content-Type: application/json\"\n";
         $files = [];
         foreach (['install.sh' => $install, 'bootstrap.sh' => $script, 'callback.conf' => $callback] as $name => $body) {
