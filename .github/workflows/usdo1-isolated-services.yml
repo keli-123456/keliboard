@@ -1,0 +1,106 @@
+name: Usdo1 Isolated Linux Services
+
+on:
+  push:
+    branches: [audit/usdo1-isolated-services-20261124]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: usdo1-isolated-services-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  services:
+    name: Service 123 (${{ matrix.isolation }})
+    if: github.ref == 'refs/heads/audit/usdo1-isolated-services-20261124'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        isolation: ["REPEATABLE READ", "READ COMMITTED"]
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: keli_acceptance_native_failover
+          MYSQL_USER: keli_native_fixture
+          MYSQL_PASSWORD: ephemeral-usdo1-ci-only
+          MYSQL_ROOT_PASSWORD: ephemeral-usdo1-root-only
+        ports:
+          - 127.0.0.1::3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=24
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 127.0.0.1::6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=12
+    env:
+      KELI_USDO1_ACCEPTANCE: "1"
+      KELI_NATIVE_ACCEPTANCE: "1"
+      KELI_NATIVE_HOST: 127.0.0.1
+      KELI_NATIVE_DATABASE: keli_acceptance_native_failover
+      KELI_NATIVE_USER: keli_native_fixture
+      KELI_NATIVE_PASSWORD: ephemeral-usdo1-ci-only
+      KELI_NATIVE_ISOLATION: ${{ matrix.isolation }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: pdo_mysql, pdo_sqlite, redis, pcntl, posix, mbstring, openssl
+          tools: composer:v2
+          coverage: none
+      - name: Install dependencies without application startup
+        run: composer install --no-interaction --no-progress --prefer-dist --no-scripts
+      - name: Verify dedicated worker and loopback services with synthetic providers
+        env:
+          KELI_NATIVE_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
+          KELI_NATIVE_REDIS_PORT: ${{ job.services.redis.ports[6379] }}
+        run: |
+          test ! -e .env
+          mkdir -p artifacts
+          php -d memory_limit=768M vendor/bin/phpunit --do-not-cache-result --stop-on-error --stop-on-failure --fail-on-skipped --fail-on-warning \
+            --filter 'test_usdo1_isolated_' --log-junit artifacts/usdo1-raw.xml \
+            tests/Integration/ServerMachine/Usdo1IsolatedServicesTest.php
+      - name: Publish only aggregate CI evidence
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, xml.etree.ElementTree as ET
+          report = pathlib.Path("artifacts/usdo1-raw.xml")
+          if report.is_file():
+              cases = list(ET.parse(report).getroot().iter("testcase"))
+              result = {
+                  "commit": os.environ["GITHUB_SHA"],
+                  "isolation": os.environ["KELI_NATIVE_ISOLATION"],
+                  "tests": len(cases),
+                  "assertions": sum(int(c.attrib.get("assertions", 0)) for c in cases),
+                  "errors": sum(c.find("error") is not None for c in cases),
+                  "failures": sum(c.find("failure") is not None for c in cases),
+                  "skipped": sum(c.find("skipped") is not None for c in cases),
+                  "process_crash_covered": any(c.attrib.get("name") == "test_usdo1_isolated_process_crash_recovers_original_create_and_fences_http_callback" for c in cases),
+                  "cloud_mocked": True,
+                  "dns_mocked": True,
+              }
+              pathlib.Path("artifacts/usdo1-summary.json").write_text(json.dumps(result) + "\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: usdo1-isolated-services-${{ strategy.job-index }}
+          path: artifacts/usdo1-summary.json
+          if-no-files-found: ignore
+          retention-days: 7

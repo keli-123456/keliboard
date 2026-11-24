@@ -59,6 +59,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
     use \Tests\Support\TestsProviderVisibility;
     use \Tests\Support\TestsHandoverDispatch;
     use \Tests\Support\TestsUsdo1NativeBindings;
+    use \Tests\Support\TestsUsdo1IntegratedExecution;
     private ?int $memberAttemptLimit = null;
     private User $admin;
     private ServerMachineRelease $release;

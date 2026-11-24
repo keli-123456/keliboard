@@ -37,9 +37,11 @@ final class MachineFailoverExistingSource
         return self::PREFIX . $proof;
     }
 
-    public function inspect(int $machineId, ?int $policyId = null): array
+    public function inspect(int $machineId, ?int $policyId = null, ?string $expectedIp = null): array
     {
-        [$resource, $account, $ip, $proof] = $this->evidence($machineId, $policyId);
+        [$resource, $account, $ip, $proof, $ips] = $this->evidence($machineId, $policyId);
+        if ($expectedIp !== null && !in_array($expectedIp, $ips, true)) throw new CloudException('source_identity_unverified');
+        $ip = $expectedIp ?? $ip;
         $client = match ($account->provider) {
             'linode' => app(LinodeClient::class),
             'digitalocean' => app(DigitalOceanClient::class),
@@ -54,6 +56,7 @@ final class MachineFailoverExistingSource
         if (($instance['external_id'] ?? null) !== $resource->external_id
             || ($instance['provider_created_at'] ?? null) !== $resource->provider_created_at
             || ($instance['region'] ?? null) !== $resource->region || ($instance['size'] ?? null) !== $resource->size
+            || ($expectedIp !== null && ($instance['label'] ?? null) !== $resource->label)
             || ($instance['status'] ?? null) !== 'running' || !in_array($ip, $instance['public_ips'] ?? [], true)) {
             throw new CloudException('source_identity_unverified');
         }
@@ -71,6 +74,13 @@ final class MachineFailoverExistingSource
     public function assertDraftCurrent(Policy $policy): void
     {
         $this->assertCurrent($policy->machine_id, $policy->id, substr($policy->slot, strlen(self::PREFIX)), true);
+    }
+
+    /** Internal evidence only; do not expose the account or installation through the draft endpoint. */
+    public function admissionEvidence(Policy $policy, bool $lock = false): array
+    {
+        [$resource, $account, , $proof, $ips, $runtime] = $this->evidence($policy->machine_id, $policy->id, $lock);
+        return [$resource, $account, $proof, $ips, $runtime];
     }
 
     public function dnsInspectionAddresses(Policy $policy): array
@@ -131,7 +141,7 @@ final class MachineFailoverExistingSource
             $resource->provider, $resource->external_id, $resource->provider_created_at, $resource->region,
             $resource->size, $installation, $ips], JSON_THROW_ON_ERROR), (string) $machine->token);
         if ($policy && $policy->slot !== self::slot($proof)) throw new CloudException('source_identity_changed');
-        return [$resource, $account, $ips[0], $proof, $ips];
+        return [$resource, $account, $ips[0], $proof, $ips, $report['runtime'] ?? []];
     }
 
     private function assertNodeScope(int $machineId, string $installation, int $now): void

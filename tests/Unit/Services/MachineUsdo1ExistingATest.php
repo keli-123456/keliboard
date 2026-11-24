@@ -3,11 +3,15 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Services;
 
+use App\Services\ServerMachine\Cloud\MachineFailoverHandoverEvidence as Evidence;
+use App\Services\ServerMachine\Cloud\MachineUsdo1HandoverScope as Scope;
 use App\Services\ServerMachine\Dns\MachineDnsRecordSetPlanner;
 use Keli\Acceptance\Usdo1ExistingA;
+use Keli\Acceptance\Usdo1ManualRollback;
 use PHPUnit\Framework\TestCase;
+use Tests\Support\HandoverEvidenceFixture as Proof;
 
-require_once dirname(__DIR__, 3) . '/tools/machine-acceptance/usdo1_existing_a.php';
+require_once dirname(__DIR__, 3) . '/tools/machine-acceptance/usdo1_manual_rollback.php';
 
 final class MachineUsdo1ExistingATest extends TestCase
 {
@@ -29,6 +33,9 @@ final class MachineUsdo1ExistingATest extends TestCase
         'Value' => self::ORIGINAL, 'TTL' => 60, 'Remark' => '', 'Status' => 'Enable', 'Locked' => false,
     ];
     private array $record;
+    private ?array $stopped = null;
+    private bool $sourceHealthy = true;
+    private bool $externalReadback = true;
 
     protected function setUp(): void
     {
@@ -36,9 +43,9 @@ final class MachineUsdo1ExistingATest extends TestCase
         $this->record = $this->original;
     }
 
-    private function driver(): Usdo1ExistingA
+    private function driver(bool $manual = false): Usdo1ExistingA
     {
-        return new Usdo1ExistingA('keli-accept-test-usdo1', $this->original, self::SOURCE, self::MARKER, self::START,
+        return new Usdo1ExistingA('keli-accept-test-usdo1', $this->original, $manual ? self::ORIGINAL : self::SOURCE, self::MARKER, self::START,
             self::START + 7200, function (string $name, string $id): array {
                 self::assertSame('usdo1.dnscloudcloud.top', $name);
                 self::assertSame('5580', $id);
@@ -66,7 +73,7 @@ final class MachineUsdo1ExistingATest extends TestCase
                 return $wire['action'] === 'UpdateDomainRecordRemark' ? ['RequestId' => 'fixture-request']
                     : ['RecordId' => '5580', 'RequestId' => 'fixture-request'];
             }, fn (string $operation): bool => !in_array($operation, $this->denied, true),
-            fn () => $this->journal, function (array $state): void { $this->journal = $state; }, fn () => $this->now);
+            fn () => $this->journal, function (array $state): void { $this->journal = $state; }, fn () => $this->now, manualBaseline: $manual);
     }
 
     private function plan(array $rows, string $ip): array
@@ -211,5 +218,104 @@ final class MachineUsdo1ExistingATest extends TestCase
         $this->journal['pending']['after']['Value'] = self::CANDIDATE;
         $this->refuses('usdo1_existing_a_journal_changed', $driver->rollback(...));
         self::assertCount(1, $this->wire);
+    }
+
+    private function manual(string $remark): Usdo1ManualRollback
+    {
+        $this->record = $this->original = array_replace($this->original, ['TTL' => 600, 'Remark' => $remark]);
+        $source = ['machine_id' => 17, 'ipv4' => self::ORIGINAL, 'external_id' => '1717',
+            'installation_id' => str_repeat('a', 32), 'created_at' => '2026-11-18T01:02:03Z'];
+        $pin = Scope::pin($source, $this->original);
+        $this->stopped = ['manual_scope_sha256' => Evidence::hash($pin), 'settled_at' => self::START,
+            'operations' => [['operation_id' => 'cloud_create:fixture', 'known_outcome' => null, 'intent_sha256' => str_repeat('5', 64)]]];
+        return new Usdo1ManualRollback('keli-accept-test-usdo1', $this->original, $source, self::MARKER, self::START, self::START + 7200,
+            new Evidence(Proof::publicKeys()), fn () => $this->stopped,
+            fn ($hostname, $recordId) => [$this->record], function (array $wire): array {
+                self::assertSame('5580', $wire['parameters']['RecordId']);
+                self::assertSame($wire, $this->journal['pending']['wire']);
+                $this->wire[] = $wire;
+                foreach (['Value', 'TTL', 'Remark'] as $field)
+                    if (array_key_exists($field, $wire['parameters'])) $this->record[$field] = $wire['parameters'][$field];
+                return ['RecordId' => '5580', 'RequestId' => 'fixture-rollback'];
+            }, fn () => $this->journal, function (array $state): void { $this->journal = $state; },
+            fn ($source) => $this->sourceHealthy && $source['machine_id'] === 17, fn () => $this->externalReadback, fn () => $this->now);
+    }
+
+    private function signedRollback(Usdo1ManualRollback $driver): array
+    {
+        $time = ['observed_at' => $this->now, 'valid_until' => $this->now + 30];
+        $close = Proof::close($driver->closureScope(), $time);
+        return [$close, Proof::manualRollback($driver->approvalScope($close), $time)];
+    }
+
+    public function testManualRollbackIsSeparatelyAuthorizedAndRestoresOnlyTheOriginal600SecondA(): void
+    {
+        $rollback = $this->manual('original manual note');
+        $driver = $this->driver(true);
+        $adopted = $driver->adopt();
+        self::assertCount(1, $this->wire, 'The claim must not rewrite a source IP which is already live.');
+        self::assertSame('UpdateDomainRecordRemark', $this->wire[0]['action']);
+        $driver->cutover($this->plan([$adopted], self::CANDIDATE)[0]);
+        self::assertSame(self::CANDIDATE, $this->record['Value']);
+        self::assertSame(600, $this->record['TTL']);
+        [$close, $approval] = $this->signedRollback($rollback);
+        $this->refuses('handover_evidence_invalid', fn () => $rollback->restore($close, $close));
+        $this->stopped['operations'][] = ['operation_id' => 'late_dns_write', 'known_outcome' => null, 'intent_sha256' => str_repeat('1', 64)];
+        $this->refuses('handover_closure_incomplete', fn () => $rollback->restore($close, $approval));
+        [$close, $approval] = $this->signedRollback($rollback);
+        $this->sourceHealthy = false;
+        $this->refuses('usdo1_existing_a_guard_refused', fn () => $rollback->restore($close, $approval));
+        self::assertCount(2, $this->wire);
+        $this->sourceHealthy = true;
+        $this->now += 31;
+        $this->refuses('handover_evidence_expired', fn () => $rollback->restore($close, $approval));
+        [$close, $approval] = $this->signedRollback($rollback);
+        $rollback->restore($close, $approval);
+        $rollback->restore($close, $approval);
+        self::assertSame($this->original, $this->record);
+        self::assertSame(['UpdateDomainRecordRemark', 'UpdateDomainRecord', 'UpdateDomainRecord', 'UpdateDomainRecordRemark'],
+            array_column($this->wire, 'action'));
+        self::assertSame([600, 600], array_column(array_column($this->wire, 'parameters'), 'TTL'));
+        self::assertSame('original manual note', $this->wire[3]['parameters']['Remark']);
+        $this->now += 599;
+        [$close] = $this->signedRollback($rollback);
+        $this->refuses('usdo1_existing_a_cache_drain_pending', fn () => $rollback->confirmClearForCleanup($close));
+        $this->now++;
+        $this->externalReadback = false;
+        $this->refuses('usdo1_existing_a_guard_refused', fn () => $rollback->confirmClearForCleanup($close));
+        $this->externalReadback = true;
+        $rollback->confirmClearForCleanup($close);
+    }
+
+    public function testManualRollbackBeforeCutoverDoesNotWriteAnAddressAndRefusesExternalDrift(): void
+    {
+        $rollback = $this->manual('');
+        $this->driver(true)->adopt();
+        [$close, $approval] = $this->signedRollback($rollback);
+        $marker = $this->record['Remark'];
+        $this->record['Remark'] = 'another-writer';
+        $this->refuses('usdo1_existing_a_snapshot_changed', fn () => $rollback->restore($close, $approval));
+        self::assertCount(1, $this->wire);
+        $this->record['Remark'] = $marker;
+        $rollback->restore($close, $approval);
+        $rollback->confirmClearForCleanup($close);
+        self::assertSame($this->original, $this->record);
+        self::assertSame(['UpdateDomainRecordRemark', 'UpdateDomainRecordRemark'], array_column($this->wire, 'action'));
+    }
+
+    public function testManualCutoverWithALostReceiptNeedsItsOwnClosureAndIsNotRetried(): void
+    {
+        $rollback = $this->manual('');
+        $driver = $this->driver(true);
+        $plan = $this->plan([$driver->adopt()], self::CANDIDATE)[0];
+        [$oldClose, $oldApproval] = $this->signedRollback($rollback);
+        $this->lostAt = 2;
+        $this->refuses('fixture_ack_lost', fn () => $driver->cutover($plan));
+        $this->refuses('handover_closure_incomplete', fn () => $rollback->restore($oldClose, $oldApproval));
+        self::assertCount(2, $this->wire);
+        [$close, $approval] = $this->signedRollback($rollback);
+        $rollback->restore($close, $approval);
+        self::assertSame($this->original, $this->record);
+        self::assertSame([self::CANDIDATE, self::ORIGINAL], array_column(array_column($this->wire, 'parameters'), 'Value'));
     }
 }

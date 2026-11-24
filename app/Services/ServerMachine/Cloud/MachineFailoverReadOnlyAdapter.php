@@ -71,7 +71,7 @@ class MachineFailoverReadOnlyAdapter
                 || (!$this->credentials->grouped($policy) && $account->revision !== $policy->account_revision)) throw new CloudException('account_changed');
             $health = $this->health->status($account, $policy->only(['region', 'size', 'image']));
             if (!$health['available'] || !$health['eligible']) $blockers[] = 'credential_health_blocked';
-            $ids = $this->health->sameAccountIds($account); $history = Task::query()->whereIn('account_id', $ids);
+            $ids = $this->health->sameAccountIds($account); $history = Task::query()->creationAttempts()->whereIn('account_id', $ids);
             $attempts = (clone $history)->where('created_at', '>=', $now - 86400)->count();
             $limits = app(MachineProvisionLimits::class);
             if ($limits->policyReached($policy)) $blockers[] = 'daily_budget';

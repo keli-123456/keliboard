@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches-ignore:
+      - audit/usdo1-isolated-services-20261124
   pull_request:
     types: [opened, synchronize, reopened]
 

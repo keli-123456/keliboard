@@ -8,7 +8,9 @@ final class MachineFailoverHandoverEvidence
 {
     public const STOP = 'old_writer_stop';
     public const MANUAL_STOP = 'manual_dns_writer_stop';
+    public const SOURCE_ADMISSION = 'usdo1_source_admission';
     public const CLOSE = 'execution_closure';
+    public const MANUAL_ROLLBACK = 'manual_dns_rollback';
     private const MAX_AGE = 300;
 
     // Use independent, trusted public keys per purpose. No production authority is configured here.
@@ -39,6 +41,22 @@ final class MachineFailoverHandoverEvidence
             || $body['queued'] !== 0 || $body['in_flight'] !== 0 || $body['unresolved'] !== 0
             || !$this->digest($body['baseline_sha256'])) throw new CloudException('handover_stop_unconfirmed');
         return $receipt + ['fence_sha256' => hash('sha256', $body['fence_id']), 'baseline_sha256' => $body['baseline_sha256']];
+    }
+
+    public function manualRollback(array $scope, array $proof, int $now): void
+    {
+        $body = $this->body($proof, ['scope_sha256', 'observed_at', 'valid_until', 'decision']);
+        $this->verify(self::MANUAL_ROLLBACK, $proof, $body, $scope, $now);
+        if ($body['decision'] !== 'restore_original_a' || $body['observed_at'] < $scope['settled_at'])
+            throw new CloudException('handover_rollback_not_authorized');
+    }
+
+    public function sourceAdmission(array $scope, array $proof, int $now): array
+    {
+        $body = $this->body($proof, ['scope_sha256', 'observed_at', 'valid_until', 'decision']);
+        $receipt = $this->verify(self::SOURCE_ADMISSION, $proof, $body, $scope, $now);
+        if ($body['decision'] !== 'admit_existing_source') throw new CloudException('usdo1_source_not_authorized');
+        return $receipt;
     }
 
     public function closed(array $scope, array $proof, int $now): array
