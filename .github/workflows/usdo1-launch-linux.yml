@@ -43,6 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 32
           persist-credentials: false
       - name: Install private assembly tools
         timeout-minutes: 4
@@ -67,6 +68,7 @@ jobs:
       - name: Verify release files and install dependencies
         run: |
           test ! -e .env
+          git cat-file -e a1c08cdc003f1c2b4da3543dc79cc0e4afa36d55^{commit}
           composer install --no-interaction --no-progress --prefer-dist --no-scripts
       - name: Run native and ordinary receipt regressions
         run: |
