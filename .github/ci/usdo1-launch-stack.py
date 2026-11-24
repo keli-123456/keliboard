@@ -154,6 +154,7 @@ pm.max_children = 1
 clear_env = yes
 catch_workers_output = yes
 security.limit_extensions = .php
+php_admin_value[opcache.enable] = 0
 """
     for k, v in env.items():
         fpm += f"env[{k}] = {v}\n"
@@ -244,6 +245,30 @@ def timeout(scope):
     return round(elapsed, 2)
 
 
+def diagnose_callback(scope, codes):
+    # Retry a rejected request in a scratch-only instrumented copy. An instrumented result never passes CI.
+    trace = RUN / "sockets/fpm-diagnostic"
+    for file in ("tools/machine-acceptance/usdo1_callback_endpoint.php",
+                 "app/Services/ServerMachine/Cloud/MachineUsdo1Runtime.php"):
+        path = RUN / "app" / file
+        text = path.read_text()
+        if "catch (\\Throwable) {" not in text:
+            continue
+        item = "catch (\\Throwable $fixtureError) {\n"
+        item += "file_put_contents('" + str(trace) + "', get_class($fixtureError).':'.basename($fixtureError->getFile()).':'.$fixtureError->getLine());"
+        write(path, text.replace("catch (\\Throwable) {", item), 0o644)
+    try:
+        curl(scope, overrides={"installation_id":"e" * 32})
+    except Exception:
+        pass
+    p = run(["sudo", "test", "-f", trace], check=False)
+    hint = run(["sudo", "cat", trace]).stdout.strip() if p.returncode == 0 else "none"
+    hint = hint.replace("\\", "_")
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,120}", hint):
+        hint = "unavailable"
+    raise RuntimeError("fixture_callback_status_" + "_".join(map(str, codes)) + ":safe_trace_" + hint)
+
+
 def cleanup():
     names = [PREFIX + u + ".service" for u in UNITS]
     run(["sudo", "systemctl", "stop", *names], check=False, limit=20)
@@ -303,17 +328,20 @@ def main():
                     ("secret", r"[a-f0-9]{64}"), ("owner", r"[a-f0-9]{32}"))), "fixture_scope_invalid")
         if action == "start":
             prepare(scope)
+            hard = timeout(scope)
             require(curl(scope, trust=False, expected=60) and curl(scope, who="other.example.test", expected=60),
                     "fixture_tls_negatives_failed")
             require(curl(scope, route=ROUTE + "?grant=other") == 404 and curl(scope, tls=False) == 400,
                     "fixture_http_scope_not_fenced")
             invalid = [curl(scope, overrides={"installation_id":"e" * 32}), curl(scope | {"secret":"0" * 64})]
-            require(invalid == [401, 401], "fixture_wrong_receipt_status_" + "_".join(map(str, invalid)))
+            if invalid != [401, 401]:
+                diagnose_callback(scope, invalid)
             valid = [curl(scope), curl(scope)]
-            require(valid == [200, 200], "fixture_valid_receipt_rejected_" + "_".join(map(str, valid)))
+            if valid != [200, 200]:
+                diagnose_callback(scope, valid)
             print(json.dumps({"https_accepted":True, "tls_hostname_and_ca_checked":True, "fpm_unix_only":True,
                               "wrong_id_or_secret_rejected":True, "non_root_proxy_and_fpm":True, "unrelated_uid_denied":True,
-                              "hard_timeout_seconds":timeout(scope)}))
+                              "hard_timeout_seconds":hard}))
         elif action == "revoked":
             require(curl(scope) == 401, "fixture_revoked_receipt_accepted")
             print('{"revoked_rejected":true}')

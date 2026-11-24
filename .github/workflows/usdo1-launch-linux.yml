@@ -48,7 +48,13 @@ jobs:
         timeout-minutes: 4
         run: |
           sudo systemctl mask nginx.service php8.3-fpm.service
-          options=(-o Acquire::Retries=0 -o Acquire::http::Timeout=12 -o Acquire::https::Timeout=12)
+          list="$RUNNER_TEMP/usdo1-ubuntu.list"
+          cat > "$list" <<'EOF'
+          deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble main universe
+          deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble-updates main universe
+          deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://security.ubuntu.com/ubuntu noble-security main universe
+          EOF
+          options=(-o "Dir::Etc::sourcelist=$list" -o Dir::Etc::sourceparts=- -o Acquire::Languages=none -o Acquire::Retries=0 -o Acquire::https::Timeout=12)
           sudo apt-get "${options[@]}" -q update
           sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get "${options[@]}" install -y -q --no-install-recommends \
             nginx php8.3-fpm php8.3-mysql php8.3-redis php8.3-mbstring php8.3-xml socat
