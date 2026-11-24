@@ -114,6 +114,55 @@ class MachineFailoverServicesTest extends TestCase
         $this->assertFalse(config('machine_failover.allow_replacement')); $this->assertFalse(config('machine_provision.allow_live')); $this->assertFalse(config('machine_acceptance.allow_dns'));
     }
 
+    public function test_service_list_projects_simulation_journal_without_native_tables(): void
+    {
+        $read = fn () => $this->registry->overview()['services'][0]['activity'];
+        $this->assertNull($read());
+        $run = $this->start();
+        $current = $read();
+        $this->assertSame('simulation', $current['mode']);
+        $this->assertSame('running', $current['status']);
+        $this->assertSame(2, $current['total']);
+        $this->simulation->advance($run['id'], $this->admin->id);
+        $closed = $read();
+        $this->assertSame(['completed', 2, 2, null], [$closed['status'], $closed['done'], $closed['total'], $closed['phase']]);
+        $this->untouched();
+    }
+
+    public function test_active_native_journal_has_priority_and_stop_state_and_never_reads_private_payloads(): void
+    {
+        foreach (['2026_11_07_180000_create_machine_failover_native_journal.php', '2026_11_07_220000_create_machine_failover_runtime.php'] as $migration)
+            (require base_path('database/migrations/' . $migration))->up();
+        $started = time() - 120;
+        $run = $this->start();
+        $native = '90000000-0000-4000-8000-000000000001';
+        DB::table('v2_machine_failover_execution')->insert(['id' => $native, 'service_id' => $this->service['id'], 'service_revision' => 1,
+            'admin_id' => $this->admin->id, 'request_key' => 'private-intent', 'context_hash' => 'private-context', 'intent_hash' => 'private-hash',
+            'payload' => 'not-decryptable', 'status' => 'running', 'deadline_at' => $started + 1800, 'created_at' => $started, 'updated_at' => $started]);
+        foreach ($this->service['members'] as $i => $member) DB::table('v2_machine_failover_execution_member')->insert([
+            'execution_id' => $native, 'member_id' => $member['id'], 'policy_id' => $member['policy_id'], 'policy_revision' => $member['policy_revision'],
+            'plan_id' => 1, 'episode_key' => 'private-episode-' . $i, 'phase' => $i === 0 ? 'waiting_agent' : 'retained',
+            'payload' => 'not-decryptable', 'created_at' => $started, 'updated_at' => $started + 30]);
+
+        DB::enableQueryLog();
+        try {
+            $row = $this->registry->overview()['services'][0];
+            foreach (DB::getQueryLog() as $query) $this->assertMatchesRegularExpression('/^(select|pragma)\b/i', $query['query']);
+        } finally { DB::disableQueryLog(); }
+        $this->assertSame($run['id'], $row['latest_run']['id']);
+        $this->assertSame(['mode' => 'native', 'status' => 'running', 'service_revision' => 1, 'phase' => 'waiting_agent',
+            'done' => 1, 'total' => 2, 'updated_at' => $started + 30], $row['activity']);
+        $this->assertStringNotContainsString('private-', json_encode($row['activity'], JSON_THROW_ON_ERROR));
+
+        DB::table('v2_machine_failover_runtime')->insert(['execution_id' => $native, 'stop_requested_at' => $started + 40,
+            'created_at' => $started, 'updated_at' => $started + 41]);
+        $stopping = $this->registry->overview()['services'][0]['activity'];
+        $this->assertSame(['stopping', null, $started + 41], [$stopping['status'], $stopping['phase'], $stopping['updated_at']]);
+        DB::table('v2_machine_failover_execution')->where('id', $native)->update(['status' => 'needs_review']);
+        $this->assertSame('simulation', $this->registry->overview()['services'][0]['activity']['mode']);
+        $this->untouched();
+    }
+
     public function test_service_members_are_unique_and_do_not_mutate_existing_policies(): void
     {
         $before = Policy::query()->get()->toArray(); $view = $this->registry->overview();

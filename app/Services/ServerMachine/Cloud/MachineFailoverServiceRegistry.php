@@ -39,7 +39,9 @@ class MachineFailoverServiceRegistry
         $result['policies'] = Policy::query()->orderBy('id')->limit(100)->get()->map(fn ($policy) => $policy->only(['id', 'name', 'revision', 'machine_id',
             'region', 'size', 'image', 'dns_hostname', 'monthly_limit_usd', 'isolation_confirmed']) + ['provider' => app(MachineFailoverCredentials::class)->provider($policy),
                 'used_service_id' => $members->get($policy->id)?->service_id])->all();
-        $result['services'] = Service::query()->orderBy('id')->limit(50)->get()->map(fn ($service) => $this->present($service))->all();
+        $services = Service::query()->orderBy('id')->limit(50)->get();
+        $activity = app(MachineFailoverServiceActivity::class)->overview($services->modelKeys());
+        $result['services'] = $services->map(fn ($service) => $this->present($service) + ['activity' => $activity[$service->id] ?? null])->all();
         return $result;
     }
     public function present(Service $service): array
