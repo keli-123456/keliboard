@@ -167,6 +167,7 @@ class AdminRoute
                 $router->post('/cloud/failover/services/drop', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverServiceController::class, 'drop']);
                 $router->get('/cloud/failover/services/dns', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverDnsController::class, 'fetch']);
                 $router->get('/cloud/failover/services/dns/inspect', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverDnsController::class, 'inspect'])->middleware('throttle:6,1,dns-set-inspection');
+                $router->get('/cloud/failover/services/dns/ttl-policy', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverDnsController::class, 'ttlPolicy'])->middleware('throttle:20,1,dns-set-ttl');
                 $router->post('/cloud/failover/services/dns/save', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverDnsController::class, 'save']);
                 $router->post('/cloud/failover/services/dns/drop', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverDnsController::class, 'drop']);
                 $router->post('/cloud/failover/services/dns/simulate', [\App\Http\Controllers\V2\Admin\Server\MachineFailoverDnsController::class, 'simulate']);

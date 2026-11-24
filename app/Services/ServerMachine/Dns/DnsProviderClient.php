@@ -9,6 +9,22 @@ use Illuminate\Support\Facades\Http;
 
 class DnsProviderClient
 {
+    public const ALIYUN_STANDARD_TTL = 600;
+
+    public function aliyunDomainMinTtl(MachineDnsCredential $credential, string $zone): ?int
+    {
+        if ($credential->provider !== 'aliyun') throw new DnsException('invalid_credential');
+        $zone = $this->domain($zone);
+        try {
+            $info = $this->aliyun($credential, 'DescribeDomainInfo', ['DomainName' => $zone, 'NeedDetailAttributes' => 'true'], true);
+        } catch (DnsException) {
+            return null;
+        }
+        $name = $info['DomainName'] ?? null; $ttl = $info['MinTtl'] ?? null;
+        return is_string($name) && strtolower(rtrim($name, '.')) === $zone
+            && is_int($ttl) && $ttl >= 1 && $ttl <= self::ALIYUN_STANDARD_TTL ? $ttl : null;
+    }
+
     public function recordSetInventory(MachineDnsCredential $credential, array $set): array
     {
         app(\App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate::class)->assertAllowed('dns_set_read');

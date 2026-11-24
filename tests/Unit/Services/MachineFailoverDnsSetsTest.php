@@ -222,6 +222,69 @@ class MachineFailoverDnsSetsTest extends TestCase
         $this->code('config_changed', fn () => $this->inspect($view)); Http::assertSentCount(1); Bus::assertNothingDispatched();
     }
 
+    public function test_aliyun_low_ttl_requires_a_fresh_verified_minimum_for_the_exact_domain_on_save(): void
+    {
+        $response = ['DomainName' => 'example.test', 'MinTtl' => 1];
+        Http::swap(new \Illuminate\Http\Client\Factory()); Http::preventStrayRequests();
+        Http::fake(function ($request) use (&$response) {
+            $this->assertSame('https://alidns.aliyuncs.com/', $request->url());
+            $this->assertSame('DescribeDomainInfo', $request['Action']);
+            $this->assertSame('example.test', $request['DomainName']);
+            $this->assertSame('true', $request['NeedDetailAttributes']);
+            return Http::response($response);
+        });
+        $policy = fn () => $this->dns->ttlPolicy($this->ali->id, 1, 'example.test', $this->admin->id);
+        $input = array_replace($this->input('aliyun'), ['ttl' => 1]);
+        $this->code('dns_credential_changed', fn () => $this->dns->ttlPolicy($this->ali->id, 2, 'example.test', $this->admin->id));
+        $this->code('permission_revoked', fn () => $this->dns->ttlPolicy($this->ali->id, 1, 'example.test', $this->admin->id + 1));
+        Http::assertNothingSent();
+        $this->assertSame(['credential_id' => $this->ali->id, 'credential_revision' => 1, 'provider' => 'aliyun', 'zone' => 'example.test',
+            'min_ttl' => 1, 'max_ttl' => 86400, 'verified' => true], $policy());
+        $response = ['DomainName' => 'foreign.test', 'MinTtl' => 1];
+        $this->code('dns_ttl_unverified', fn () => $this->dns->save($input, $this->admin->id));
+        $response = ['DomainName' => 'example.test', 'MinTtl' => 600];
+        $this->code('dns_ttl_below_minimum', fn () => $this->dns->save($input, $this->admin->id));
+        $response = ['Code' => 'Forbidden'];
+        $fallback = $policy();
+        $this->assertFalse($fallback['verified']); $this->assertSame(600, $fallback['min_ttl']);
+        $this->assertSame(0, DnsSet::query()->count());
+        $response = ['DomainName' => 'example.test', 'MinTtl' => 1];
+        $view = $this->dns->save($input, $this->admin->id);
+        $this->assertSame(1, $view['sets'][0]['ttl']);
+        $this->assertTrue($view['ttl_policy_available']);
+        $run = $this->simulation->advance($this->start($view, 'replace')['id'], $this->admin->id);
+        $this->assertSame('completed', $run['status']); $this->assertSame(0, $run['dns_writes']);
+        Http::assertSentCount(5); Bus::assertNothingDispatched();
+    }
+
+    public function test_native_low_ttl_preflight_is_read_only_and_rejects_a_downgraded_domain(): void
+    {
+        app()->instance(\App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate::class,
+            new class extends \App\Services\ServerMachine\Cloud\MachineFailoverExecutionGate {
+                public function assertAllowed(string $operation): void {}
+            });
+        $transport = app(\App\Services\ServerMachine\Dns\MachineDnsRecordSetHttpTransport::class);
+        $set = $this->input('aliyun') + ['provider' => 'aliyun'];
+        $minimum = 600;
+        Http::swap(new \Illuminate\Http\Client\Factory()); Http::preventStrayRequests();
+        Http::fake(function ($request) use (&$minimum) {
+            $this->assertSame('DescribeDomainInfo', $request['Action']); $this->assertSame('example.test', $request['DomainName']);
+            return Http::response(['DomainName' => 'example.test', 'MinTtl' => $minimum]);
+        });
+        $transport->verifyTtl($set, ['parameters' => ['TTL' => 600]]);
+        $transport->verifyTtl($set, ['parameters' => ['RecordId' => '9001']]);
+        Http::assertNothingSent();
+        $wire = ['parameters' => ['TTL' => 1]];
+        try { $transport->verifyTtl($set, $wire); $this->fail('Expected a minimum error'); }
+        catch (\App\Services\ServerMachine\Dns\DnsException $e) { $this->assertSame('dns_ttl_below_minimum', $e->getMessage()); }
+        $minimum = null;
+        try { $transport->verifyTtl($set, $wire); $this->fail('Expected an unverified policy'); }
+        catch (\App\Services\ServerMachine\Dns\DnsException $e) { $this->assertSame('dns_ttl_unverified', $e->getMessage()); }
+        $minimum = 1;
+        $transport->verifyTtl($set, $wire);
+        Http::assertSentCount(3); Bus::assertNothingDispatched();
+    }
+
     public static function scenarios(): array
     {
         $result = [];

@@ -63,6 +63,16 @@ class MachineDnsRecordSetWireTest extends TestCase
         $records = (new DnsProviderClient())->recordSetInventory($credential, $set);
         $this->assertSame('900000000000000000001', $records[0]['id']); $this->assertSame('2001:db8::1', $records[0]['content']); Http::assertSentCount(1);
     }
+    public function test_a_verified_low_ttl_is_preserved_in_the_aliyun_write_parameters(): void
+    {
+        [$credential, $set] = $this->scope(); $set['ttl'] = 1;
+        Http::fake(function ($request) {
+            $this->assertSame('AddDomainRecord', $request['Action']); $this->assertSame(1, $request['TTL']);
+            return Http::response(['RequestId' => 'synthetic-receipt', 'RecordId' => '9001']);
+        });
+        $this->assertSame('9001', (new DnsProviderClient())->recordSetWrite($credential, $set, $this->action()));
+        Http::assertSentCount(1);
+    }
     public function test_cloudflare_inventory_accepts_a_proven_empty_page_with_zero_total_pages(): void
     {
         [$credential, $set] = $this->scope('cloudflare');

@@ -86,6 +86,7 @@ class MachineDnsRecordSetExecution
         if (!$this->equal($working, $records)) throw new CloudException('dns_record_changed');
         $operation = $claim ? array_replace($a, ['kind' => 'claim']) : $a;
         $wire = $this->provider->mutation($set, $operation, $claim ? $a['known_id'] : null);
+        if ($driver === $this->http) $this->http->verifyTtl($set, $wire);
         $a['requests'][] = $wire; $a['state'] = $claim ? 'claim_dispatched' : 'dispatched';
         $a['dispatch_hash'] = $this->hash($wire); $a['readback_attempts'] = 0;
         if (!$this->save($run, $p, $token, $generation, null, null, null, true)) return;

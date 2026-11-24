@@ -18,6 +18,14 @@ class MachineDnsRecordSetHttpTransport implements MachineDnsRecordSetTransport
         $this->gate->assertAllowed('dns_set_write');
         return $this->client->recordSetWrite($this->credential($set), $set, $action, $knownId);
     }
+    public function verifyTtl(array $set, array $wire): void
+    {
+        if ($set['provider'] !== 'aliyun' || ($wire['parameters']['TTL'] ?? DnsProviderClient::ALIYUN_STANDARD_TTL) >= DnsProviderClient::ALIYUN_STANDARD_TTL) return;
+        $this->gate->assertAllowed('dns_set_write');
+        $minimum = $this->client->aliyunDomainMinTtl($this->credential($set), $set['zone']);
+        if ($minimum === null) throw new DnsException('dns_ttl_unverified');
+        if ($wire['parameters']['TTL'] < $minimum) throw new DnsException('dns_ttl_below_minimum');
+    }
     private function credential(array $set): MachineDnsCredential
     {
         $row = MachineDnsCredential::query()->find($set['credential_id']);

@@ -32,6 +32,13 @@ class MachineFailoverDnsController extends Controller
         return $this->run($request, ['id', 'expected_revision', 'service_id', 'service_revision', 'credential_id', 'credential_revision', 'zone', 'zone_name', 'hostname', 'ttl', 'members'],
             fn ($admin) => $service->save($request->all(), $admin));
     }
+    public function ttlPolicy(Request $request, MachineFailoverDnsRegistry $service)
+    {
+        return $this->run($request, ['credential_id', 'credential_revision', 'zone'], function ($admin) use ($request, $service) {
+            $v = $request->validate(['credential_id' => 'required|integer|min:1', 'credential_revision' => 'required|integer|min:1', 'zone' => 'required|string|max:253']);
+            return $service->ttlPolicy((int) $v['credential_id'], (int) $v['credential_revision'], $v['zone'], $admin);
+        })->header('Cache-Control', 'private, no-store');
+    }
     public function inspect(Request $request, MachineFailoverDnsInspection $service)
     {
         return $this->run($request, ['service_id', 'service_revision', 'set_id', 'set_revision'], function ($admin) use ($request, $service) {

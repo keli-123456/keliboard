@@ -8,6 +8,7 @@ use App\Models\MachineFailoverDnsSlot as Slot;
 use App\Models\MachineFailoverMember as Member;
 use App\Models\MachineFailoverPolicy as Policy;
 use App\Models\MachineFailoverService as Service;
+use App\Services\ServerMachine\Dns\DnsProviderClient;
 use App\Services\ServerMachine\Dns\MachineDnsRecordSetProvider;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -37,13 +38,32 @@ class MachineFailoverDnsRegistry
             'credentials' => MachineDnsCredential::query()->whereIn('provider', ['cloudflare', 'aliyun'])->orderBy('id')
                 ->limit(100)->get(['id', 'name', 'provider', 'revision'])->toArray(),
             'sets' => DnsSet::query()->where('service_id', $service)->orderBy('id')->get()->map(fn ($set) => $this->present($set))->all(),
-            'inspection_available' => true, 'propagation_available' => true, 'scenarios' => MachineFailoverDnsSimulation::SCENARIOS];
+            'inspection_available' => true, 'ttl_policy_available' => true, 'propagation_available' => true, 'scenarios' => MachineFailoverDnsSimulation::SCENARIOS];
     }
 
     public function present(DnsSet $set): array
     {
         return $set->toArray() + ['slots' => Slot::query()->where('set_id', $set->id)->orderBy('member_id')->orderBy('line')->orderBy('type')->get()->toArray(),
             'latest_run' => Run::query()->where('set_id', $set->id)->latest('created_at')->latest('id')->first()?->only(['id', 'status', 'reason', 'scenario', 'created_at'])];
+    }
+
+    public function ttlPolicy(int $credentialId, int $revision, string $zone, int $admin): array
+    {
+        $this->registry->actor($admin); $this->storage();
+        $zone = $this->domain($zone);
+        $credential = $this->aliyunCredential($credentialId, $revision);
+        $minimum = app(DnsProviderClient::class)->aliyunDomainMinTtl($credential, $zone);
+        $this->registry->actor($admin);
+        $this->aliyunCredential($credentialId, $revision);
+        return ['credential_id' => $credentialId, 'credential_revision' => $revision, 'provider' => 'aliyun', 'zone' => $zone,
+            'min_ttl' => $minimum ?? DnsProviderClient::ALIYUN_STANDARD_TTL, 'max_ttl' => 86400, 'verified' => $minimum !== null];
+    }
+
+    private function aliyunCredential(int $id, int $revision): MachineDnsCredential
+    {
+        $credential = MachineDnsCredential::query()->find($id);
+        if (!$credential || $credential->revision !== $revision || $credential->provider !== 'aliyun') throw new CloudException('dns_credential_changed');
+        return $credential;
     }
 
     public function save(array $input, int $admin): array
@@ -57,16 +77,27 @@ class MachineFailoverDnsRegistry
         if (!isset($input['id']) && isset($input['expected_revision'])) throw new CloudException('invalid_dns_set');
         $hostname = $this->domain($input['hostname'] ?? null); $zoneName = $this->domain($input['zone_name'] ?? null);
         if ($hostname !== $zoneName && !str_ends_with($hostname, '.' . $zoneName)) throw new CloudException('invalid_dns_set');
+        $ttl = $input['ttl'] ?? null;
+        if (!is_int($ttl) || $ttl < 1 || $ttl > 86400) throw new CloudException('invalid_dns_set');
+        $aliyunMinimum = DnsProviderClient::ALIYUN_STANDARD_TTL;
+        // Read the provider outside the write locks; the transaction checks the pinned credential again.
+        if ($ttl < $aliyunMinimum && is_string($input['zone'] ?? null) && strtolower(rtrim(trim($input['zone']), '.')) === $zoneName) {
+            $this->service($input['service_id'], $input['service_revision']);
+            $policy = $this->ttlPolicy($input['credential_id'], $input['credential_revision'], $zoneName, $admin);
+            if (!$policy['verified']) throw new CloudException('dns_ttl_unverified');
+            $aliyunMinimum = $policy['min_ttl'];
+            if ($ttl < $aliyunMinimum) throw new CloudException('dns_ttl_below_minimum');
+        }
         return $this->registry->locked(fn () => Cache::lock('machine-dns:hostname:' . hash('sha256', $hostname), 120)->block(2,
             fn () => Cache::lock('machine-dns:credential:' . $input['credential_id'], 120)->block(2,
-                fn () => DB::transaction(function () use ($input, $admin, $hostname, $zoneName) {
+                fn () => DB::transaction(function () use ($input, $admin, $hostname, $zoneName, $ttl, $aliyunMinimum) {
                     $this->registry->actor($admin); $service = $this->service($input['service_id'], $input['service_revision']); $this->idle($service->id);
                     $credential = MachineDnsCredential::query()->find($input['credential_id']);
                     if (!$credential || $credential->revision !== $input['credential_revision'] || !in_array($credential->provider, ['cloudflare', 'aliyun'], true))
                         throw new CloudException('dns_credential_changed');
                     $zone = $credential->provider === 'aliyun' ? $this->domain($input['zone'] ?? null) : ($input['zone'] ?? null);
                     if (!is_string($zone) || ($credential->provider === 'cloudflare' ? !preg_match('/^[a-f0-9]{32}$/D', $zone) : $zone !== $zoneName)
-                        || !is_int($input['ttl'] ?? null) || $input['ttl'] < ($credential->provider === 'cloudflare' ? 60 : 600) || $input['ttl'] > 86400)
+                        || $ttl < ($credential->provider === 'cloudflare' ? 60 : $aliyunMinimum))
                         throw new CloudException('invalid_dns_set');
                     $set = isset($input['id']) ? DnsSet::query()->findOrFail($input['id']) : new DnsSet();
                     if ($set->exists && ($set->service_id !== $service->id || $set->revision !== $input['expected_revision'])) throw new CloudException('config_changed');

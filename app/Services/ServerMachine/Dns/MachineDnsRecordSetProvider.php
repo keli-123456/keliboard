@@ -119,7 +119,7 @@ class MachineDnsRecordSetProvider
     {
         if (!in_array($set['provider'] ?? null, ['cloudflare', 'aliyun'], true)
             || !is_string($set['hostname'] ?? null) || !filter_var($set['hostname'], FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)
-            || !is_string($set['zone'] ?? null) || !is_int($set['ttl'] ?? null) || $set['ttl'] < ($set['provider'] === 'cloudflare' ? 60 : 600) || $set['ttl'] > 86400
+            || !is_string($set['zone'] ?? null) || !is_int($set['ttl'] ?? null) || $set['ttl'] < ($set['provider'] === 'cloudflare' ? 60 : 1) || $set['ttl'] > 86400
             || ($set['provider'] === 'cloudflare' ? !preg_match('/^[a-f0-9]{32}$/D', $set['zone'])
                 : !filter_var($set['zone'], FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME) || $set['hostname'] !== $set['zone'] && !str_ends_with($set['hostname'], '.' . $set['zone'])))
             throw new CloudException('invalid_dns_set');
