@@ -40,8 +40,6 @@ jobs:
       KELI_NATIVE_USER: keli_native_fixture
       KELI_NATIVE_PASSWORD: ephemeral-launch-ci-only
       KELI_NATIVE_ISOLATION: READ COMMITTED
-      KELI_NATIVE_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
-      KELI_NATIVE_REDIS_PORT: ${{ job.services.redis.ports[6379] }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,6 +66,9 @@ jobs:
             --filter 'test_usdo1_|MachineUsdo1LaunchTest|MachineUsdo1ExistingATest|MachineUsdo1ProductionEntryTest|MachineProvisionTest::test_(default_phase|preview|queue_is_encrypted|bootstrap_origin|only_configured_panel|cloud_init|create_sends_only|authenticated_receipt|receipts_need|public_receipt_route)' \
             --log-junit "$RUNNER_TEMP/usdo1-native.xml"
       - name: Exercise systemd, non-root Unix sockets and real HTTPS
+        env:
+          KELI_NATIVE_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
+          KELI_NATIVE_REDIS_PORT: ${{ job.services.redis.ports[6379] }}
         run: |
           php vendor/bin/phpunit --do-not-cache-result --fail-on-skipped --fail-on-warning \
             --filter test_usdo1_real_linux_launch_assembly \
