@@ -1,6 +1,7 @@
 """Disposable runner only: systemd/FPM/Nginx with socket-only mock fixture data paths."""
 
 import gzip
+import grp
 import hashlib
 import json
 import os
@@ -145,6 +146,8 @@ error_log = {RUN}/sockets/fpm.log
 user = {FPM}
 group = {FPM}
 listen = {sock}
+listen.owner = {FPM}
+listen.group = {GROUP}
 listen.mode = 0660
 pm = static
 pm.max_children = 1
@@ -161,7 +164,8 @@ security.limit_extensions = .php
     unit("fpm", FPM, ["/usr/sbin/php-fpm8.3", "-F", "-y", conf], net + [f"ReadWritePaths={RUN}/sockets"])
     await_socket(sock)
     st = sock.stat()
-    require(st.st_uid == pwd.getpwnam(FPM).pw_uid and stat.S_IMODE(st.st_mode) == 0o660, "fixture_fpm_socket_mode")
+    require(st.st_uid == pwd.getpwnam(FPM).pw_uid and st.st_gid == grp.getgrnam(GROUP).gr_gid
+            and stat.S_IMODE(st.st_mode) == 0o660, "fixture_fpm_socket_mode")
     require(run(["sudo", "-u", "nobody", "/usr/bin/socat", "-T", "1", "-", f"UNIX-CONNECT:{sock}"],
                 data="", check=False).returncode != 0, "unrelated_uid_could_connect")
     config = RUN / "nginx.conf"
@@ -303,8 +307,8 @@ def main():
                     "fixture_tls_negatives_failed")
             require(curl(scope, route=ROUTE + "?grant=other") == 404 and curl(scope, tls=False) == 400,
                     "fixture_http_scope_not_fenced")
-            require(curl(scope, overrides={"installation_id":"e" * 32}) == 401
-                    and curl(scope | {"secret":"0" * 64}) == 401, "fixture_wrong_receipt_accepted")
+            invalid = [curl(scope, overrides={"installation_id":"e" * 32}), curl(scope | {"secret":"0" * 64})]
+            require(invalid == [401, 401], "fixture_wrong_receipt_status_" + "_".join(map(str, invalid)))
             valid = [curl(scope), curl(scope)]
             require(valid == [200, 200], "fixture_valid_receipt_rejected_" + "_".join(map(str, valid)))
             print(json.dumps({"https_accepted":True, "tls_hostname_and_ca_checked":True, "fpm_unix_only":True,
