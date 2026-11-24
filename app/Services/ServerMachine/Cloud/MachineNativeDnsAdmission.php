@@ -231,6 +231,7 @@ class MachineNativeDnsAdmission
             || $dns->service_revision !== $context['service_revision'] || $dns->payload['target'] !== $context['member_id']) throw new CloudException('native_dns_binding_changed');
         $parent = Execution::query()->findOrFail($context['execution_id']);
         if ($dns->admin_id !== $parent->admin_id || !MachineIntentJson::same($this->workingSources($parent), $b['sources'])) throw new CloudException('native_source_identity_changed');
+        if (isset($parent->payload['handover_grant_id'])) app(MachineUsdo1SingleAExecution::class)->guard($parent, $dns, $b, $dispatch);
     }
 
     // Historical intent authentication only. This never grants mutation or fresh-health authority.

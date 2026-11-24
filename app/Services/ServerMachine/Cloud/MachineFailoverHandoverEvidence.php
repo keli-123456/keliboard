@@ -7,6 +7,7 @@ namespace App\Services\ServerMachine\Cloud;
 final class MachineFailoverHandoverEvidence
 {
     public const STOP = 'old_writer_stop';
+    public const MANUAL_STOP = 'manual_dns_writer_stop';
     public const CLOSE = 'execution_closure';
     private const MAX_AGE = 300;
 
@@ -15,10 +16,25 @@ final class MachineFailoverHandoverEvidence
 
     public function stopped(array $scope, int $admin, ?array $proof, int $now): array
     {
+        return $this->stopReceipt(self::STOP, 'tanzhen', $scope + ['operator_id' => $admin], $proof, $now);
+    }
+
+    public function stoppedManual(array $scope, int $admin, array $pin, ?array $proof, int $now): array
+    {
+        MachineUsdo1HandoverScope::validate($pin);
+        $receipt = $this->stopReceipt(self::MANUAL_STOP, 'aliyun_console', $scope + [
+            'operator_id' => $admin, 'manual_scope_sha256' => self::hash($pin),
+        ], $proof, $now);
+        if (!hash_equals($pin['baseline_sha256'], $receipt['baseline_sha256'])) throw new CloudException('handover_stop_unconfirmed');
+        return $receipt + ['manual_usdo1' => $pin];
+    }
+
+    private function stopReceipt(string $purpose, string $writer, array $scope, ?array $proof, int $now): array
+    {
         $body = $this->body($proof, ['scope_sha256', 'observed_at', 'valid_until', 'writer', 'fence_state', 'fence_id',
             'queued', 'in_flight', 'unresolved', 'baseline_sha256']);
-        $receipt = $this->verify(self::STOP, $proof, $body, $scope + ['operator_id' => $admin], $now);
-        if ($body['writer'] !== 'tanzhen' || $body['fence_state'] !== 'fenced_until_handback'
+        $receipt = $this->verify($purpose, $proof, $body, $scope, $now);
+        if ($body['writer'] !== $writer || $body['fence_state'] !== 'fenced_until_handback'
             || !is_string($body['fence_id']) || !preg_match('/^[A-Za-z0-9_-]{8,96}$/D', $body['fence_id'])
             || $body['queued'] !== 0 || $body['in_flight'] !== 0 || $body['unresolved'] !== 0
             || !$this->digest($body['baseline_sha256'])) throw new CloudException('handover_stop_unconfirmed');

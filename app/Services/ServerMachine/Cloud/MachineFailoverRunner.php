@@ -250,6 +250,14 @@ class MachineFailoverRunner
         });
         $this->settleStop($id); return $this->view(Execution::query()->findOrFail($id));
     }
+    public function settleRequestedStop(string $id, int $admin): void
+    {
+        app(MachineFailoverServiceRegistry::class)->actor($admin);
+        if (!$this->available()) throw new CloudException('runtime_migration_required');
+        if (Execution::query()->useWritePdo()->whereKey($id)->value('admin_id') !== $admin)
+            throw new CloudException('permission_revoked');
+        if (Runtime::query()->useWritePdo()->whereKey($id)->whereNotNull('stop_requested_at')->exists()) $this->settleStop($id);
+    }
     private function requestStop(string $id, string $reason, ?int $generation = null, ?string $ticket = null): void
     {
         DB::transaction(function () use ($id, $reason, $generation, $ticket) {

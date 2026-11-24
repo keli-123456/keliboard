@@ -3,11 +3,18 @@
 namespace Tests\Unit\Services;
 
 use App\Models\MachineDnsCredential;
+use App\Models\MachineCloudResource;
+use App\Models\MachineFailoverDnsRun;
+use App\Models\MachineFailoverDnsSet;
+use App\Models\MachineFailoverDnsSlot;
+use App\Models\MachineFailoverAttempt;
 use App\Models\MachineFailoverExecution as Execution;
 use App\Models\MachineFailoverExecutionMember as ExecutionMember;
 use App\Models\MachineFailoverHandoverGrant as Grant;
 use App\Models\MachineFailoverMember as Member;
 use App\Models\MachineFailoverService as Service;
+use App\Models\MachineOwnedInstance;
+use App\Models\MachineProvisionTask;
 use App\Models\ServerMachineRelease;
 use App\Models\User;
 use App\Services\ServerMachine\Cloud\CloudException;
@@ -16,6 +23,8 @@ use App\Services\ServerMachine\Cloud\MachineFailoverHandover;
 use App\Services\ServerMachine\Cloud\MachineFailoverHandoverEvidence;
 use App\Services\ServerMachine\Cloud\MachineFailoverServiceRegistry;
 use App\Services\ServerMachine\Cloud\MachineFailoverWorkflow;
+use App\Services\ServerMachine\Cloud\MachineUsdo1HandoverScope as Usdo1;
+use App\Services\ServerMachine\Cloud\MachineUsdo1SingleAExecution;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
@@ -109,6 +118,98 @@ class MachineFailoverHandoverTest extends MachineFailoverShadowTest
         foreach (['start', 'queue', 'advance', 'candidate_cleanup', 'dns_write'] as $operation) {
             $this->denied('orchestration_disabled', fn () => app(MachineFailoverExecutionGate::class)->assertAllowed($operation));
         }
+        Http::assertNothingSent(); Bus::assertNothingDispatched();
+    }
+
+    public function test_manual_usdo1_grant_checks_writer_baseline_scope_expiry_and_revocation_without_opening_gate(): void
+    {
+        (require base_path('database/migrations/2026_11_09_180000_create_machine_failover_dns_sets.php'))->up();
+        $service = $this->service['id'];
+        $old = $this->machines[0];
+        DB::table('v2_server_machine')->where('id', $old->id)->update(['id' => 17]);
+        $this->policies[0]->update(['machine_id' => 17]);
+        Member::query()->where('service_id', $service)->where('machine_id', '!=', $old->id)->update(['enabled' => false]);
+        $member = Member::query()->where('service_id', $service)->where('machine_id', $old->id)->firstOrFail();
+        $member->update(['machine_id' => 17]);
+        Service::query()->whereKey($service)->update(['max_parallel' => 1, 'attempt_limit' => 1]);
+        $dns = MachineDnsCredential::query()->create(['name' => 'Fixture Aliyun', 'provider' => 'aliyun', 'revision' => 1,
+            'credentials' => ['access_key_id' => 'fixture', 'access_key_secret' => 'fixture-ali-secret']]);
+        $set = MachineFailoverDnsSet::query()->create(['service_id' => $service, 'provider' => 'aliyun', 'zone' => Usdo1::ZONE, 'zone_name' => Usdo1::ZONE,
+            'hostname' => Usdo1::NAME, 'credential_id' => $dns->id, 'credential_revision' => 1, 'scope' => str_repeat('b', 64),
+            'ttl' => 600, 'revision' => 1, 'updated_by' => $this->admin->id]);
+        $slot = MachineFailoverDnsSlot::query()->create(['set_id' => $set->id, 'member_id' => $member->id, 'type' => 'A', 'line' => 'default',
+            'marker' => 'keli-set-' . str_repeat('d', 48)]);
+        $source = ['machine_id' => 17, 'installation_id' => str_repeat('a', 32), 'external_id' => '1717',
+            'created_at' => '2026-11-18T01:02:03Z', 'ipv4' => '192.0.1.17'];
+        $resource = MachineCloudResource::query()->create(['account_id' => $this->account->id, 'provider' => 'linode',
+            'machine_id' => 17, 'installation_id' => $source['installation_id'], 'external_id' => $source['external_id'],
+            'provider_created_at' => $source['created_at'], 'public_ips' => [$source['ipv4']], 'label' => 'local-fixture',
+            'region' => 'sg-sin-2', 'size' => 'g6-standard-4', 'status' => 'running', 'observed_at' => $this->clock]);
+        $pin = Usdo1::pin($source, ['RecordId' => '9910', 'DomainName' => Usdo1::ZONE, 'RR' => 'usdo1', 'Type' => 'A',
+            'Line' => 'default', 'Value' => $source['ipv4'], 'TTL' => 600, 'Remark' => 'fixture original', 'Status' => 'Enable', 'Locked' => false]);
+        $admin = $this->admin->id;
+        $scope = $this->scope();
+        $issue = fn (array $scope, array $proof) => $this->handover->issueManualUsdo1($scope, $admin, $pin, $proof);
+        $manualProof = fn (array $value, array $overrides = []) => HandoverEvidenceFixture::manualStop($value, $admin, $pin, $overrides);
+        $this->denied('handover_authority_unavailable', fn () => $issue($scope, HandoverEvidenceFixture::stop($scope, $admin)));
+        $this->denied('handover_authority_unavailable', fn () => $this->handover->issue($scope, $admin, $manualProof($scope)));
+        foreach (['writer' => 'tanzhen', 'baseline_sha256' => str_repeat('0', 64), 'in_flight' => 1] as $field => $value)
+            $this->denied('handover_stop_unconfirmed', fn () => $issue($scope, $manualProof($scope, [$field => $value])));
+        $bad = array_replace($scope, ['expires_at' => $this->clock + 7201]);
+        $this->denied('handover_window_invalid', fn () => $issue($bad, $manualProof($bad)));
+        $slot->update(['type' => 'AAAA']); $wrongFamily = $this->scope();
+        $this->denied('usdo1_handover_scope_changed', fn () => $issue($wrongFamily, $manualProof($wrongFamily)));
+        $slot->update(['type' => 'A']);
+        $grant = $issue($scope, $manualProof($scope));
+        $this->assertSame($pin, Grant::query()->findOrFail($grant)->stop_receipt['manual_usdo1']);
+        $this->start($grant);
+        $resource->update(['installation_id' => str_repeat('c', 32)]);
+        $this->denied('usdo1_handover_scope_changed', fn () => $this->start($grant));
+        $resource->update(['installation_id' => $source['installation_id']]);
+        $run = $this->runFor($grant);
+        $this->handover->bindExecution($grant, $run->id);
+        $this->handover->assertNewWork($run->id);
+        $candidate = '192.0.1.18';
+        $nextResource = $resource->replicate();
+        $nextResource->fill(['external_id' => '1718', 'installation_id' => str_repeat('e', 32), 'public_ips' => [$candidate]])->save();
+        $this->denied('usdo1_handover_scope_changed', fn () => $this->handover->assertNewWork($run->id));
+        $executionMember = ExecutionMember::query()->create(['execution_id' => $run->id, 'member_id' => $member->id, 'policy_id' => $member->policy_id,
+            'policy_revision' => $member->policy_revision, 'plan_id' => 17, 'episode_key' => str_repeat('d', 64), 'payload' => []]);
+        $attemptId = (string) Str::uuid();
+        $task = MachineProvisionTask::query()->where('machine_id', $old->id)->firstOrFail()->replicate();
+        $task->fill(['id' => (string) Str::uuid(), 'request_key' => str_repeat('4', 64), 'marker' => 'candidate-fixture', 'machine_id' => 17,
+            'external_id' => '1718', 'provider_created_at' => $nextResource->provider_created_at, 'installation_id' => $nextResource->installation_id,
+            'payload' => ['coordinated_attempt' => $attemptId]])->save();
+        MachineFailoverAttempt::query()->create(['id' => $attemptId, 'execution_member_id' => $executionMember->id, 'ordinal' => 1,
+            'request_id' => str_repeat('3', 32), 'task_id' => $task->id, 'account_id' => $task->account_id,
+            'account_revision' => $task->account_revision, 'reserved_cents' => 0, 'payload' => []]);
+        $executionMember->update(['attempt_id' => $attemptId]);
+        MachineOwnedInstance::query()->create(['task_id' => $task->id, 'resource_id' => $nextResource->id, 'installation_id' => $task->installation_id,
+            'policy_id' => $member->policy_id, 'policy_revision' => $member->policy_revision, 'release_id' => $this->release->id,
+            'version' => $this->release->version, 'binary_sha256' => $this->release->binary_sha256, 'ip' => $candidate, 'status' => 'ready']);
+        $this->handover->assertNewWork($run->id);
+        $record = ['hostname' => Usdo1::NAME, 'type' => 'A', 'line' => 'default', 'ttl' => 600, 'marker' => $slot->marker,
+            'locked' => false, 'proxied' => false];
+        $dns = new MachineFailoverDnsRun(['service_id' => $service, 'service_revision' => 1, 'set_id' => $set->id, 'set_revision' => 1,
+            'admin_id' => $admin, 'scenario' => 'native_replace', 'payload' => ['plan' => ['actions' => [
+                ['kind' => 'update', 'slot_id' => $slot->id, 'member_id' => $member->id,
+                    'before' => ['id' => $pin['record_id'], 'content' => $source['ipv4']] + $record, 'after' => ['content' => $candidate] + $record],
+            ]]]]);
+        $binding = ['context' => ['execution_id' => $run->id, 'families' => ['A'], 'addresses' => ['A' => $candidate]]];
+        $this->denied('orchestration_disabled', fn () => app(MachineUsdo1SingleAExecution::class)->guard($run, $dns, $binding, true));
+        $publisher = new MachineUsdo1SingleAExecution(new class extends MachineFailoverExecutionGate {
+            public function assertAllowed(string $operation): void
+            {
+                if ($operation !== 'usdo1_single_a_publish') parent::assertAllowed($operation);
+            }
+        });
+        $this->assertTrue($publisher->guard($run, $dns, $binding, true));
+        $this->tick(600);
+        $this->denied('handover_expired', fn () => $this->handover->assertNewWork($run->id));
+        $this->denied('handover_expired', fn () => $publisher->guard($run, $dns, $binding, true));
+        $this->handover->revoke($grant, $admin);
+        $this->denied('handover_revoked', fn () => $this->handover->assertNewWork($run->id));
+        $this->denied('orchestration_disabled', fn () => app(MachineFailoverExecutionGate::class)->assertAllowed('dns_write'));
         Http::assertNothingSent(); Bus::assertNothingDispatched();
     }
 

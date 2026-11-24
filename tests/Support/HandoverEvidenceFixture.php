@@ -8,7 +8,8 @@ use App\Services\ServerMachine\Cloud\MachineFailoverHandoverEvidence as Evidence
 
 final class HandoverEvidenceFixture
 {
-    private const NAMES = [Evidence::STOP => 'fixture-old-writer', Evidence::CLOSE => 'fixture-reviewer'];
+    private const NAMES = [Evidence::STOP => 'fixture-old-writer', Evidence::CLOSE => 'fixture-reviewer',
+        Evidence::MANUAL_STOP => 'fixture-manual-fence'];
     private static array $keys = [];
 
     public static function trust(): void
@@ -43,6 +44,15 @@ final class HandoverEvidenceFixture
             'outcomes' => array_map(fn ($op) => ['operation_id' => $op['operation_id'],
                 'result' => $op['known_outcome'] ?? 'confirmed_applied', 'basis' => 'independent_exact_reconciliation',
                 'evidence_sha256' => hash('sha256', 'fixture-review:' . $op['intent_sha256'])], $scope['operations'])]);
+    }
+
+    public static function manualStop(array $scope, int $admin, array $pin, array $overrides = []): array
+    {
+        $now = now()->getTimestamp();
+        return self::sign(Evidence::MANUAL_STOP, $overrides + ['scope_sha256' => Evidence::hash($scope + ['operator_id' => $admin,
+            'manual_scope_sha256' => Evidence::hash($pin)]), 'observed_at' => $now, 'valid_until' => $now + 60,
+            'writer' => 'aliyun_console', 'fence_state' => 'fenced_until_handback', 'fence_id' => 'fixture-console-fence',
+            'queued' => 0, 'in_flight' => 0, 'unresolved' => 0, 'baseline_sha256' => $pin['baseline_sha256']]);
     }
 
     private static function sign(string $purpose, array $body): array

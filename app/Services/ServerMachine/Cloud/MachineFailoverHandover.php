@@ -27,6 +27,17 @@ final class MachineFailoverHandover
 
     public function issue(array $scope, int $admin, ?array $proof = null): string
     {
+        return $this->issueGrant($scope, $admin, $proof, null);
+    }
+
+    public function issueManualUsdo1(array $scope, int $admin, array $pin, array $proof): string
+    {
+        MachineUsdo1HandoverScope::validate($pin);
+        return $this->issueGrant($scope, $admin, $proof, $pin);
+    }
+
+    private function issueGrant(array $scope, int $admin, ?array $proof, ?array $pin): string
+    {
         $this->available();
         $keys = ['service_id', 'service_revision', 'context_hash', 'release', 'evidence_sha256', 'expires_at'];
         if (count($scope) !== count($keys) || array_diff(array_keys($scope), $keys)
@@ -36,7 +47,7 @@ final class MachineFailoverHandover
             || !$this->validRelease($scope['release'])) throw new CloudException('handover_scope_invalid');
 
         try {
-            return $this->registry->locked(fn () => DB::transaction(function () use ($scope, $admin, $proof) {
+            return $this->registry->locked(fn () => DB::transaction(function () use ($scope, $admin, $proof, $pin) {
                 $this->registry->actor($admin);
                 $this->window(now()->getTimestamp(), $scope['expires_at']);
                 if (Grant::query()->useWritePdo()->where('evidence_sha256', $scope['evidence_sha256'])->exists())
@@ -45,11 +56,14 @@ final class MachineFailoverHandover
                     throw new CloudException('handover_slot_held');
 
                 $grant = new Grant($scope + ['id' => (string) Str::uuid(), 'admin_id' => $admin, 'writer_slot' => self::SLOT]);
-                $this->current($grant);
+                $snapshot = $this->current($grant);
                 $this->requireSettled($grant->service_id);
                 $grant->issued_at = now()->getTimestamp();
                 $this->window($grant->issued_at, $grant->expires_at);
-                $grant->stop_receipt = app(MachineFailoverHandoverEvidence::class)->stopped($scope, $admin, $proof, $grant->issued_at);
+                $evidence = app(MachineFailoverHandoverEvidence::class);
+                if ($pin !== null) MachineUsdo1HandoverScope::assertCurrent($pin, $snapshot);
+                $grant->stop_receipt = $pin === null ? $evidence->stopped($scope, $admin, $proof, $grant->issued_at)
+                    : $evidence->stoppedManual($scope, $admin, $pin, $proof, $grant->issued_at);
                 $grant->save();
                 return $grant->id;
             }));
@@ -175,6 +189,8 @@ final class MachineFailoverHandover
                 'runtime_revision' => $runtime->revision, 'runtime_generation' => $runtime->generation,
                 'settled_at' => max($runtime->updated_at, $journalAt, $grant->revoked_at ?? $grant->expires_at),
                 'journal_sha256' => $journal, 'operations' => $operations];
+            if (isset($grant->stop_receipt['manual_usdo1']))
+                $scope['manual_scope_sha256'] = MachineFailoverHandoverEvidence::hash($grant->stop_receipt['manual_usdo1']);
             return $work($grant, $scope);
         });
     }
@@ -267,7 +283,7 @@ final class MachineFailoverHandover
             || !$this->digest($receipt['baseline_sha256'] ?? null)) throw new CloudException('handover_evidence_required');
     }
 
-    private function current(Grant $grant): void
+    private function current(Grant $grant): array
     {
         $this->registry->actor($grant->admin_id);
         $snapshot = $this->registry->snapshot($grant->service_id, $grant->service_revision);
@@ -277,6 +293,9 @@ final class MachineFailoverHandover
         $release = ServerMachineRelease::query()->useWritePdo()->find($grant->release['id']);
         if (!$release || $release->status !== ServerMachineRelease::STATUS_ACTIVE
             || !MachineIntentJson::same($release->only(self::RELEASE_FIELDS), $grant->release)) throw new CloudException('release_changed');
+        if (isset($grant->stop_receipt['manual_usdo1']))
+            MachineUsdo1HandoverScope::assertCurrent($grant->stop_receipt['manual_usdo1'], $snapshot, $grant->execution_id);
+        return $snapshot;
     }
 
     private function requireSettled(int $service, ?string $original = null): void
