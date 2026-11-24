@@ -9,7 +9,8 @@ use App\Services\ServerMachine\Cloud\MachineFailoverHandoverEvidence as Evidence
 final class HandoverEvidenceFixture
 {
     private const NAMES = [Evidence::STOP => 'fixture-old-writer', Evidence::CLOSE => 'fixture-reviewer',
-        Evidence::MANUAL_STOP => 'fixture-manual-fence'];
+        Evidence::MANUAL_STOP => 'fixture-manual-fence', Evidence::MANUAL_ROLLBACK => 'fixture-rollback-authority',
+        Evidence::SOURCE_ADMISSION => 'fixture-source-reviewer'];
     private static array $keys = [];
 
     public static function trust(): void
@@ -53,6 +54,20 @@ final class HandoverEvidenceFixture
             'manual_scope_sha256' => Evidence::hash($pin)]), 'observed_at' => $now, 'valid_until' => $now + 60,
             'writer' => 'aliyun_console', 'fence_state' => 'fenced_until_handback', 'fence_id' => 'fixture-console-fence',
             'queued' => 0, 'in_flight' => 0, 'unresolved' => 0, 'baseline_sha256' => $pin['baseline_sha256']]);
+    }
+
+    public static function manualRollback(array $scope, array $overrides = []): array
+    {
+        $now = now()->getTimestamp();
+        return self::sign(Evidence::MANUAL_ROLLBACK, $overrides + ['scope_sha256' => Evidence::hash($scope),
+            'observed_at' => $now, 'valid_until' => $now + 60, 'decision' => 'restore_original_a']);
+    }
+
+    public static function sourceAdmission(array $scope): array
+    {
+        $now = now()->getTimestamp();
+        return self::sign(Evidence::SOURCE_ADMISSION, ['scope_sha256' => Evidence::hash($scope), 'observed_at' => $now,
+            'valid_until' => $now + 60, 'decision' => 'admit_existing_source']);
     }
 
     private static function sign(string $purpose, array $body): array

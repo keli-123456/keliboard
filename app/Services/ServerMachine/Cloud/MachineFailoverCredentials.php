@@ -51,7 +51,7 @@ class MachineFailoverCredentials
             $full = Account::query()->findOrFail($account->id);
             if (!$health->status($full, $policy->only(['region', 'size', 'image']))['eligible']) continue;
             $ids = $health->sameAccountIds($full);
-            $history = Task::query()->whereIn('account_id', $ids);
+            $history = Task::query()->creationAttempts()->whereIn('account_id', $ids);
             $attempts = (clone $history)->where('created_at', '>=', time() - 86400)->count();
             $last = (clone $history)->max('created_at');
             if ($last !== null && $last + $policy->cooldown_seconds > time()) continue;

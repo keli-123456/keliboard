@@ -35,7 +35,7 @@ class MachineFailoverRunner
     }
     public function enroll(string $id): void
     {
-        if (!$this->enabled()) return;
+        if (!$this->enabled() || $this->manualUsdo1($id)) return;
         $run = Execution::query()->findOrFail($id); app(MachineFailoverServiceRegistry::class)->actor($run->admin_id);
         if ($run->status !== 'running') return;
         Runtime::query()->firstOrCreate(['execution_id' => $id]); $this->dispatch($id);
@@ -86,9 +86,9 @@ class MachineFailoverRunner
         Runtime::query()->whereKey($id)->whereNull('stop_requested_at')->update(['next_check_at' => time()]);
         return true;
     }
-    private function dispatch(string $id, bool $scheduled = false): bool
+    private function dispatch(string $id, bool $scheduled = false, bool $isolated = false): bool
     {
-        if (!$this->enabled()) return false;
+        if (!$isolated && (!$this->enabled() || $this->manualUsdo1($id))) return false;
         $ticket = bin2hex(random_bytes(24));
         try {
             $row = DB::transaction(function () use ($id, $ticket, $scheduled) {
@@ -107,6 +107,10 @@ class MachineFailoverRunner
             $this->requestStop($id, $this->reason($error->getMessage())); $this->settleStop($id); return false;
         }
         if (!$row) return false;
+        if ($isolated) {
+            $this->processTicket($id, $row->generation, $ticket, true);
+            return true;
+        }
         try { MachineFailoverRunJob::dispatch($id, $row->generation, $ticket)->delay(now()->addSeconds(max(0, $row->next_check_at - time())))->afterCommit(); }
         catch (\Throwable) {
             if (Runtime::query()->whereKey($id)->where('generation', $row->generation)->where('state', 'queued')->update(['reason' => 'queue_unavailable']))
@@ -116,7 +120,33 @@ class MachineFailoverRunner
     }
     public function process(string $id, int $generation, string $ticket): void
     {
-        if (!$this->enabled()) return;
+        if (!$this->enabled() || $this->manualUsdo1($id)) return;
+        $this->processTicket($id, $generation, $ticket);
+    }
+
+    public function pulseUsdo1(string $grantId, int $admin): array
+    {
+        app(MachineFailoverExecutionGate::class)->assertAllowed('usdo1_execution_tick');
+        $entry = app(MachineUsdo1TimedExecution::class);
+        $view = $entry->status($grantId, $admin);
+        if (!$id = $view['execution_id']) throw new CloudException('usdo1_execution_not_started');
+        if ($view['expired'] || $view['revoked'] || $view['stop_requested']) return $entry->stop($grantId, $admin);
+        if ($view['status'] === 'running') {
+            Runtime::query()->firstOrCreate(['execution_id' => $id]);
+            $this->dispatch($id, isolated: true);
+        }
+        return $entry->status($grantId, $admin);
+    }
+
+    private function manualUsdo1(string $id): bool
+    {
+        $grant = \App\Models\MachineFailoverHandoverGrant::class;
+        if (!Schema::hasColumns($grant::TABLE, ['stop_receipt'])) return false;
+        return isset($grant::query()->useWritePdo()->where('execution_id', $id)->first()?->stop_receipt['manual_usdo1']);
+    }
+
+    private function processTicket(string $id, int $generation, string $ticket, bool $isolated = false): void
+    {
         $lock = Cache::lock('machine-native:run:' . $id, 120);
         if (!$lock->get()) return;
         $previous = app()->bound(MachineFailoverLease::class) ? app(MachineFailoverLease::class) : null;
@@ -165,7 +195,7 @@ class MachineFailoverRunner
                         'next_check_at' => time() + ($urgent && !$waiting ? 1 : ($sampling ? 10 : 20)), 'next_dispatch_at' => 0, 'reason' => $waiting])->save();
                     $this->event($row, $state === 'finished' ? 'finished' : 'yielded', $waiting);
                 });
-                if ($state === 'idle') $this->dispatch($id, true);
+                if ($state === 'idle' && !$isolated) $this->dispatch($id, true);
             }
         } finally {
             if ($previous) app()->instance(MachineFailoverLease::class, $previous); else app()->forgetInstance(MachineFailoverLease::class);
@@ -206,6 +236,7 @@ class MachineFailoverRunner
         $result['enabled'] = true;
         foreach (Runtime::query()->whereNull('stop_requested_at')->whereIn('state', ['idle', 'queued', 'processing'])
             ->where('next_check_at', '<=', time())->orderBy('next_check_at')->orderBy('execution_id')->limit(20)->get() as $row) {
+            if ($this->manualUsdo1($row->execution_id)) continue;
             $run = Execution::query()->find($row->execution_id);
             if (!$run || $run->status !== 'running') {
                 // A crash after the run's terminal commit must not clog the due-ticket sweep.

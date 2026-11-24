@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace Keli\Acceptance;
 
 use App\Services\ServerMachine\Cloud\MachineIntentJson as Json;
+use App\Services\ServerMachine\Cloud\MachineUsdo1HandoverScope;
 use App\Services\ServerMachine\Dns\MachineDnsRecordSetProvider;
 use App\Services\ServerMachine\MachineEntryProbe;
 
@@ -38,15 +39,20 @@ final class Usdo1ExistingA
         private \Closure $load,
         private \Closure $save,
         private \Closure $clock,
+        private bool $manualBaseline = false,
     ) {
         $this->contract = new MachineDnsRecordSetProvider;
         $this->baseline = $this->snapshot($baseline);
         $this->wireMarker = MachineDnsRecordSetProvider::aliyunMarker($marker);
         self::need(preg_match('/^keli-accept-[a-z0-9-]{8,70}$/D', $run) === 1
-            && $this->baseline['TTL'] === 60 && $this->baseline['Value'] !== $source && self::isIPv4($source)
+            && ($manualBaseline
+                ? Json::same($this->baseline, MachineUsdo1HandoverScope::baseline($baseline)) && $this->baseline['Value'] === $source
+                : $this->baseline['TTL'] === 60 && $this->baseline['Value'] !== $source)
+            && self::isIPv4($source)
             && !str_starts_with($this->baseline['Remark'], 'keli-set-')
             && 0 < $startedAt && $startedAt + 2100 < $deadline && $deadline <= $startedAt + 7200, 'scope_invalid');
-        $this->binding = hash('sha256', Json::encode([$run, $this->baseline, $source, $marker, $startedAt, $deadline]));
+        $this->binding = hash('sha256', Json::encode([$run, $this->baseline, $source, $marker, $startedAt, $deadline,
+            ...($manualBaseline ? ['manual-usdo1-a-v1'] : [])]));
     }
 
     private static function need(bool $ok, string $code): void
@@ -109,7 +115,7 @@ final class Usdo1ExistingA
                     && !in_array($state['candidate'], [$this->source, $this->baseline['Value']], true)
                 : $state['candidate'] === null)
             && ($state['restored_at'] === null || is_int($state['restored_at']) && $state['restored_at'] > 0)
-            && (!in_array($state['phase'], ['source', 'candidate', 'restored'], true) || $state['published'])
+            && (!in_array($state['phase'], $this->manualBaseline ? ['candidate', 'restored'] : ['source', 'candidate', 'restored'], true) || $state['published'])
             && ($state['phase'] !== 'candidate' || $state['candidate'] !== null), 'journal_changed');
         if ($state['pending'] !== null) {
             $step = $state['pending']['step'] ?? null;
@@ -135,7 +141,7 @@ final class Usdo1ExistingA
     {
         $state['phase'] = $phase;
         $state['pending'] = null;
-        if ($phase === 'source' || $phase === 'candidate') $state['published'] = true;
+        if ($phase === 'candidate' || ($phase === 'source' && !$this->manualBaseline)) $state['published'] = true;
         if ($phase === 'restored') $state['restored_at'] = ($this->clock)();
         $this->persist($state);
         return $state;
@@ -188,7 +194,14 @@ final class Usdo1ExistingA
     {
         $state = $this->state();
         if ($state['phase'] === 'baseline') $state = $this->write($state, 'claim');
-        if ($state['phase'] === 'claimed') $state = $this->write($state, 'publish-source');
+        if ($state['phase'] === 'claimed') {
+            if ($this->manualBaseline) {
+                self::need(!$state['stopped'] && $state['pending'] === null && ($this->clock)() < $this->deadline - 2100
+                    && $this->current() === $this->expected('source', null), 'source_not_ready');
+                // The original A already points to #17 at TTL 600; claiming must not rewrite its address.
+                $state = $this->complete($state, 'source');
+            } else $state = $this->write($state, 'publish-source');
+        }
         self::need($state['phase'] === 'source' && !$state['stopped'] && $state['pending'] === null
             && $this->current() === $this->expected('source', null), 'source_not_ready');
         return $this->contract->record(self::SET, $this->expected('source', null));
@@ -244,6 +257,10 @@ final class Usdo1ExistingA
     {
         $this->stopAndSettle();
         $state = $this->state();
+        if ($state['phase'] === 'source' && $this->manualBaseline) {
+            self::need($this->current() === $this->expected('claimed', null), 'snapshot_changed');
+            $state = $this->complete($state, 'claimed');
+        }
         if ($state['phase'] === 'source' || $state['phase'] === 'candidate') $state = $this->write($state, 'restore-' . $state['phase']);
         if ($state['phase'] === 'restored') $state = $this->write($state, 'unclaim-restored');
         if ($state['phase'] === 'claimed') $state = $this->write($state, 'unclaim-baseline');

@@ -373,13 +373,18 @@ final class NativeFailoverConcurrentFixture
     public function cleanup(): void
     {
         if (!$this->owned) return;
+        self::cleanupOwned();
+        $this->owned = false;
+    }
+    public static function cleanupOwned(): void
+    {
         self::assertOwner(); $redis = self::rawRedis();
         if ($redis->get(self::prefix() . 'owner') !== self::$owner) throw new \RuntimeException('Cleanup ownership mismatch.');
         $keys = $redis->keys(self::prefix() . '*'); if ($keys) $redis->del($keys);
         if ($redis->keys(self::prefix() . '*') !== []) throw new \RuntimeException('Redis fixture cleanup incomplete.');
         $redis->close();
         foreach (DB::select('SHOW TABLES') as $row) { $table = (string) array_values((array) $row)[0]; if ($table !== 'native_fixture_owner') Schema::drop($table); }
-        Schema::drop('native_fixture_owner'); $this->owned = false;
+        Schema::drop('native_fixture_owner');
     }
     public static function assertOwner(): void
     {

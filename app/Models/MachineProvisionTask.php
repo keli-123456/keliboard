@@ -5,6 +5,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class MachineProvisionTask extends Model
 {
+    public const EXISTING_SOURCE_ADOPTED = 'existing_source_adopted';
     public const TERMINAL = ['awaiting_acceptance', 'accepted', 'failed', 'cancelled', 'needs_review'];
     protected $table = 'v2_machine_provision_task';
     protected $guarded = [];
@@ -16,4 +17,10 @@ class MachineProvisionTask extends Model
         'admin_id' => 'integer', 'account_id' => 'integer', 'account_revision' => 'integer', 'machine_id' => 'integer', 'replacement_id' => 'integer',
         'bootstrap_at' => 'integer', 'dispatched_at' => 'integer', 'next_check_at' => 'integer', 'deadline_at' => 'integer',
         'finished_at' => 'integer', 'created_at' => 'timestamp', 'updated_at' => 'timestamp'];
+
+    public function scopeCreationAttempts($query)
+    {
+        return $query->where(fn ($q) => $q->whereNull('reason')->orWhere('reason', '!=', self::EXISTING_SOURCE_ADOPTED)
+            ->orWhere('status', '!=', 'accepted')->orWhereNotNull('dispatched_at'));
+    }
 }

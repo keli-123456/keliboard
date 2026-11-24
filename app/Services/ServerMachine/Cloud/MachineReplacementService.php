@@ -117,7 +117,7 @@ class MachineReplacementService
             throw new CloudException($policy->credential_group_id ? 'credential_group_daily_budget' : 'daily_budget');
         $accountId = $input['account_id'];
         $quotaIds = app(MachineCloudCredentialHealth::class)->sameAccountIds(\App\Models\MachineCloudAccount::query()->findOrFail($accountId));
-        $history = Task::query()->whereIn('account_id', $quotaIds);
+        $history = Task::query()->creationAttempts()->whereIn('account_id', $quotaIds);
         app(MachineProvisionLimits::class)->assertAvailable(\App\Models\MachineCloudAccount::query()->findOrFail($accountId), $current?->id, $attempt?->id);
         $previous = (clone $history)->when($current, fn ($query) => $query->where('id', '!=', $current->id))->max('created_at');
         if ($previous !== null && $previous + $policy->cooldown_seconds > time()) throw new CloudException('replacement_cooldown');

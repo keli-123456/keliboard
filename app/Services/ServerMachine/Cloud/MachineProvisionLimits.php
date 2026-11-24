@@ -52,7 +52,7 @@ class MachineProvisionLimits
 
     public function policyReached(Policy $policy, ?string $except = null): bool
     {
-        return self::reached(Task::query()->where('machine_id', $policy->machine_id)->where('slot', $policy->slot)
+        return self::reached(Task::query()->creationAttempts()->where('machine_id', $policy->machine_id)->where('slot', $policy->slot)
             ->when($except, fn ($query) => $query->where('id', '!=', $except))
             ->where('created_at', '>=', time() - 86400)->count(), (int) $policy->daily_limit);
     }
@@ -89,7 +89,7 @@ class MachineProvisionLimits
         }
         return ['external_ids' => array_values(array_unique($resources)), 'reserved' => $reserved, 'active' => $active,
             'used' => count(array_unique($resources)) + $reserved,
-            'attempts_24h' => (clone $history)->where('created_at', '>=', time() - 86400)->count(),
+            'attempts_24h' => (clone $history)->creationAttempts()->where('created_at', '>=', time() - 86400)->count(),
             'power_active' => MachineCloudTask::query()->whereIn('resource_id', Resource::query()->whereIn('account_id', $ids)->select('id'))
                 ->whereNotIn('status', MachineCloudTask::TERMINAL)->exists()];
     }
