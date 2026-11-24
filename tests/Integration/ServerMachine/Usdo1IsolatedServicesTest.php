@@ -88,18 +88,18 @@ final class Usdo1IsolatedServicesTest extends MachineFailoverNativeBridgeTest
         [$server,$port] = $this->serve();
         $secret = $this->usdo1FixtureSecret($task);
         $valid = ['task_id'=>$task->id, 'installation_id'=>$task->installation_id, 'state'=>'succeeded'];
-        self::assertSame(401, $this->callback($port, $valid, str_repeat('0', 64)));
-        self::assertSame(401, $this->callback($port, array_replace($valid, ['installation_id' => str_repeat('f', 32)]), $secret));
-        self::assertSame(401, $this->callback($port, array_replace($valid, ['task_id' => '00000000-0000-4000-8000-000000000001']), $secret));
+        self::assertSame(401, $this->sendFixtureCallback($port, $valid, str_repeat('0', 64)));
+        self::assertSame(401, $this->sendFixtureCallback($port, array_replace($valid, ['installation_id' => str_repeat('f', 32)]), $secret));
+        self::assertSame(401, $this->sendFixtureCallback($port, array_replace($valid, ['task_id' => '00000000-0000-4000-8000-000000000001']), $secret));
         self::assertNull($task->fresh()->bootstrap_state);
-        self::assertSame(200, $this->callback($port, $valid, $secret));
+        self::assertSame(200, $this->sendFixtureCallback($port, $valid, $secret));
         self::assertSame('succeeded', $task->fresh()->bootstrap_state);
         $this->finish($server, true);
         [$server,$port] = $this->serve();
-        self::assertSame(200, $this->callback($port, $valid, $secret));
+        self::assertSame(200, $this->sendFixtureCallback($port, $valid, $secret));
         self::assertSame(1, DB::table('v2_machine_provision_step')->where('task_id', $task->id)->where('state', 'bootstrap_succeeded')->count());
         self::assertSame('stopped', $plan['package']->stop($plan['grant'])['status']);
-        self::assertSame(401, $this->callback($port, $valid, $secret));
+        self::assertSame(401, $this->sendFixtureCallback($port, $valid, $secret));
         $this->finish($server, true);
         self::assertSame(0, $this->events('dns_write'));
         self::assertSame(1, $this->events('create'));
@@ -162,7 +162,7 @@ final class Usdo1IsolatedServicesTest extends MachineFailoverNativeBridgeTest
         return [$pid,$port];
     }
 
-    private function callback(int $port, array $data, string $secret): int
+    private function sendFixtureCallback(int $port, array $data, string $secret): int
     {
         $context = stream_context_create(['http'=>['method'=>'POST','timeout'=>6,'ignore_errors'=>true,'follow_location'=>0,
             'header'=>"Content-Type: application/json\r\nAuthorization: Bearer $secret\r\n", 'content'=>json_encode($data, JSON_THROW_ON_ERROR)]]);

@@ -81,7 +81,7 @@ jobs:
           python3 - <<'PY'
           import json, os, pathlib, xml.etree.ElementTree as ET
           report = pathlib.Path("artifacts/usdo1-raw.xml")
-          if report.is_file():
+          if report.is_file() and report.stat().st_size:
               cases = list(ET.parse(report).getroot().iter("testcase"))
               result = {
                   "commit": os.environ["GITHUB_SHA"],
