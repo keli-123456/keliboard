@@ -61,6 +61,8 @@ class ProvisionBootstrap
         $usdo1?->assertIndependent($origin);
         if (!Str::isUuid($task) || !preg_match('/^[a-f0-9]{32}$/D', $installation)
             || !preg_match('/^[a-f0-9]{64}$/D', $secret)) throw new CloudException('invalid_bootstrap_identity');
+        $private = $usdo1?->privateCallback;
+        if ($usdo1 && !$private) throw new CloudException('usdo1_private_callback_unconfigured');
         $directory = '/var/lib/kelinode-provision/' . $task;
         $install = str_replace(["\r\n", "\r"], "\n", app(MachineInstallScript::class)->render($origin, $machine, 'kelinode-rs'));
         $diagnostics = strtr((string) file_get_contents(resource_path('server-machine/provision-diagnostics.sh')),
@@ -92,11 +94,12 @@ report_result() {
     state=failed
     if [ "$code" -eq 0 ]; then state=succeeded; : > "$directory/succeeded"; fi
     printf '{"task_id":"{{TASK}}","installation_id":"%s","state":"%s"}' "$identity" "$state" > "$directory/result.json"
-    if command -v curl >/dev/null 2>&1; then
-        curl --fail --silent --show-error --connect-timeout 3 --max-time 10 --retry 3 --retry-delay 2 --retry-max-time 25 --config "$directory/callback.conf" --data-binary "@$directory/result.json" --output /dev/null 2>/dev/null || true
+    if command -v curl >/dev/null 2>&1{{CALLBACK_ROUTE_GUARD}}; then
+        curl{{CALLBACK_TRANSPORT}} --fail --silent --show-error --connect-timeout 3 --max-time 10 --retry 3 --retry-delay 2 --retry-max-time 25 --config "$directory/callback.conf" --data-binary "@$directory/result.json" --output /dev/null 2>/dev/null || true
     fi
     exit "$code"
 }
+{{CALLBACK_PREFLIGHT}}
 trap report_result EXIT
 trap terminate_installer TERM
 if declare -F keli_provision_stage >/dev/null; then keli_provision_stage identity || true; fi
@@ -127,12 +130,29 @@ wait "$installer_pid"
 installer_pid=
 if declare -F keli_provision_stage >/dev/null; then keli_provision_stage complete || true; fi
 SH;
+        $preflight = $private ? file_get_contents(resource_path('server-machine/usdo1-callback-preflight.sh')) : '';
+        if ($private && (!is_string($preflight) || $preflight === '')) throw new CloudException('usdo1_private_callback_unconfigured');
         $script = str_replace(["\r\n", "\r"], "\n", strtr($script, ['{{DIRECTORY}}' => $directory, '{{IDENTITY}}' => $installation,
-            '{{TASK}}' => $task, '{{DIAGNOSTICS}}' => $diagnostics]));
-        $callback = 'url = "' . ($usdo1?->origin ?? $origin) . MachineUsdo1LaunchScope::CALLBACK_PATH . '"' . "\n"
-            . 'header = "Authorization: Bearer ' . $secret . '"' . "\nheader = \"Content-Type: application/json\"\n";
+            '{{TASK}}' => $task, '{{DIAGNOSTICS}}' => $diagnostics,
+            '{{CALLBACK_PREFLIGHT}}' => $private ? strtr($preflight, ['{{PRIVATE_IP}}' => $private->ip, '{{PRIVATE_DEVICE}}' => $private->interface]) : '',
+            '{{CALLBACK_ROUTE_GUARD}}' => $private ? ' && private_callback_route' : '',
+            '{{CALLBACK_TRANSPORT}}' => $private ? ' -q --config "$directory/callback-transport.conf"' : '']));
+        $url = 'url = "' . ($usdo1?->origin ?? $origin) . MachineUsdo1LaunchScope::CALLBACK_PATH . '"' . "\n";
+        $headers = 'header = "Authorization: Bearer ' . $secret . '"' . "\nheader = \"Content-Type: application/json\"\n";
+        $inputs = ['install.sh' => $install, 'bootstrap.sh' => $script, 'callback.conf' => $private ? $headers : $url . $headers];
+        if ($private) {
+            $host = substr($usdo1->origin, strlen('https://'));
+            $inputs['callback-transport.conf'] = $url . 'resolve = "' . $host . ':443:' . $private->ip . '"' . "\n"
+                . 'interface = "if!' . $private->interface . '"' . "\nnoproxy = \"*\"\nproto = \"=https\"\nmax-redirs = 0\n";
+            if ($private->ca !== null) {
+                $inputs['callback-ca.pem'] = $private->ca;
+                $inputs['callback-trust.d/.keep'] = "This directory has no additional trust roots.\n";
+                $inputs['callback-transport.conf'] .= 'cacert = "' . $directory . '/callback-ca.pem"' . "\n"
+                    . 'capath = "' . $directory . '/callback-trust.d"' . "\n";
+            }
+        }
         $files = [];
-        foreach (['install.sh' => $install, 'bootstrap.sh' => $script, 'callback.conf' => $callback] as $name => $body) {
+        foreach ($inputs as $name => $body) {
             $files[] = ['path' => $directory . '/' . $name, 'owner' => 'root:root', 'permissions' => '0600', 'content' => $body];
         }
         $data = self::compactFiles("#cloud-config\n" . Yaml::dump(['write_files' => $files, 'runcmd' => [['bash', $directory . '/bootstrap.sh']]], 8, 2, Yaml::DUMP_MULTI_LINE_LITERAL_BLOCK));

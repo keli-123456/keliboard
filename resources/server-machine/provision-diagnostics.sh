@@ -32,7 +32,7 @@ _keli_provision_record() (
 
 keli_provision_stage() {
   case "${1:-}" in
-    bootstrap_start|identity|already_completed|installer|arguments|dependencies|bbr|system_tuning|egress_guard|installer_download|installer_permissions|native_install|lock|base_dependencies|version_resolution|manifest_download|archive_download|archive_verify|unpack|binary_install|binary_verify|configuration|geo_rules|legacy_cleanup|service_install|complete)
+    bootstrap_start|callback_preflight|identity|already_completed|installer|arguments|dependencies|bbr|system_tuning|egress_guard|installer_download|installer_permissions|native_install|lock|base_dependencies|version_resolution|manifest_download|archive_download|archive_verify|unpack|binary_install|binary_verify|configuration|geo_rules|legacy_cleanup|service_install|complete)
       _keli_diag_phase="$1" ;;
     *) return 0 ;;
   esac

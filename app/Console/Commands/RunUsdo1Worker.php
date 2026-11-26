@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\Services\ServerMachine\Cloud\CloudException;
+use App\Services\ServerMachine\Cloud\MachineUsdo1DataClient;
 use App\Services\ServerMachine\Cloud\MachineUsdo1LaunchScope;
-use App\Services\ServerMachine\Cloud\MachineUsdo1Runtime;
 use Illuminate\Console\Command;
 
 final class RunUsdo1Worker extends Command
@@ -18,8 +18,7 @@ final class RunUsdo1Worker extends Command
     {
         try {
             MachineUsdo1LaunchScope::assertProcess('cli');
-            $scope = MachineUsdo1LaunchScope::fromEnvironment();
-            $result = app(MachineUsdo1Runtime::class)->pulse($scope);
+            $result = MachineUsdo1DataClient::fromEnvironment('worker')->tick();
             $this->line(json_encode(array_intersect_key($result, array_flip(['status', 'runtime', 'expired', 'revoked', 'stop_requested'])), JSON_THROW_ON_ERROR));
             return self::SUCCESS;
         } catch (\Throwable $error) {

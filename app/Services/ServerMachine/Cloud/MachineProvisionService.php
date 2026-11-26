@@ -103,8 +103,10 @@ class MachineProvisionService
             if ($isolated !== null) $hash = hash('sha256', $hash . ':' . json_encode($isolated, JSON_THROW_ON_ERROR));
             $attempt = $attemptId === null ? null : \App\Models\MachineFailoverAttempt::query()->findOrFail($attemptId);
             $usdo1 = app()->bound(MachineUsdo1LaunchScope::class) ? app(MachineUsdo1LaunchScope::class) : null;
-            if ($usdo1 && (!$attempt || $attempt->ordinal !== 1 || $plan['machine_id'] !== MachineUsdo1HandoverScope::MACHINE))
+            if ($usdo1 && (!$attempt || $attempt->ordinal !== 1 || $plan['machine_id'] !== MachineUsdo1HandoverScope::MACHINE
+                || ($plan['provider'] ?? 'linode') !== 'linode'))
                 throw new CloudException('usdo1_launch_execution_changed');
+            if ($usdo1 && !$usdo1->privateCallback) throw new CloudException('usdo1_private_callback_unconfigured');
             if ($attempt) {
                 app(MachineFailoverNativeBridge::class)->assertAttempt($attempt);
                 $member = \App\Models\MachineFailoverExecutionMember::query()->findOrFail($attempt->execution_member_id);
@@ -119,7 +121,8 @@ class MachineProvisionService
                 $hash = hash('sha256', $hash . ':' . $replacementPlan);
             }
             if ($existing = Task::query()->where('request_key', $key)->first()) {
-                if (!hash_equals($existing->plan_hash, $hash) || ($existing->payload['usdo1_callback_origin'] ?? null) !== $usdo1?->origin)
+                if (!hash_equals($existing->plan_hash, $hash) || ($existing->payload['usdo1_callback_origin'] ?? null) !== $usdo1?->origin
+                    || ($existing->payload['usdo1_callback_transport_sha256'] ?? null) !== $usdo1?->privateCallback?->fingerprint())
                     throw new CloudException('request_conflict');
                 return $this->present($existing);
             }
@@ -153,7 +156,8 @@ class MachineProvisionService
                     'machine_authority' => hash('sha256', (string) $machine->token), 'plan_hash' => $hash, 'slot' => $plan['slot'],
                     'installation_id' => $installation, 'callback_hash' => hash('sha256', $secret), 'marker' => $marker,
                     'payload' => ['plan' => $plan, 'request' => $request] + ($isolated === null ? [] : ['isolated_acceptance' => $isolated])
-                        + ($usdo1 === null ? [] : ['usdo1_callback_origin' => $usdo1->origin])
+                        + ($usdo1 === null ? [] : ['usdo1_callback_origin' => $usdo1->origin,
+                            'usdo1_callback_transport_sha256' => $usdo1->privateCallback->fingerprint()])
                         + ($attempt === null ? [] : ['coordinated_attempt' => $attempt->id]), 'status' => 'queued',
                     'deadline_at' => time() + max(120, min(1200, (int) config('machine_provision.timeout_seconds', 1200)))];
                 if ($replacementId !== null) $attributes['replacement_id'] = $replacementId;

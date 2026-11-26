@@ -24,6 +24,9 @@ use App\Services\ServerMachine\Cloud\MachineFailoverServiceRegistry;
 use App\Services\ServerMachine\Cloud\MachineIntentJson as Json;
 use App\Services\ServerMachine\Cloud\MachineUsdo1HandoverScope as Scope;
 use App\Services\ServerMachine\Cloud\MachineUsdo1LaunchScope;
+use App\Services\ServerMachine\Cloud\MachineUsdo1DataBroker;
+use App\Services\ServerMachine\Cloud\MachineUsdo1DataClient;
+use App\Services\ServerMachine\Cloud\MachineUsdo1PrivateCallback;
 use App\Services\ServerMachine\Cloud\MachineUsdo1Runtime;
 use App\Services\ServerMachine\Cloud\MachineProvisionService;
 use Illuminate\Support\Carbon;
@@ -144,7 +147,8 @@ trait TestsUsdo1IntegratedExecution
     public function test_usdo1_worker_pins_independent_callback_and_only_one_native_create(): void
     {
         ['package'=>$package,'grant'=>$grant,'admin'=>$admin,'run'=>$run] = $this->prepareUsdo1Package('success');
-        $launch = new MachineUsdo1LaunchScope($grant, $admin, 'https://receipt.example.test');
+        $launch = new MachineUsdo1LaunchScope($grant, $admin, 'https://receipt.example.test',
+            new MachineUsdo1PrivateCallback('10.25.0.1', 'wg-keli123'));
         $closed = app(MachineFailoverExecutionGate::class);
         $this->code('orchestration_disabled', fn () => app(MachineUsdo1Runtime::class)->pulse($launch));
         app()->instance(MachineFailoverExecutionGate::class, new class extends MachineFailoverExecutionGate {
@@ -163,7 +167,13 @@ trait TestsUsdo1IntegratedExecution
         $task = $this->task();
         self::assertSame($launch->origin, $task->payload['usdo1_callback_origin']);
         $data = Yaml::parse(base64_decode($task->payload['request']['metadata']['user_data'], true));
-        self::assertStringContainsString('url = "' . $launch->origin . MachineUsdo1LaunchScope::CALLBACK_PATH . '"', $data['write_files'][2]['content']);
+        $transport = $data['write_files'][3]['content'];
+        self::assertStringContainsString('url = "' . $launch->origin . MachineUsdo1LaunchScope::CALLBACK_PATH . '"', $transport);
+        self::assertStringContainsString('resolve = "receipt.example.test:443:10.25.0.1"', $transport);
+        self::assertStringContainsString('interface = "if!wg-keli123"', $transport);
+        self::assertStringNotContainsString('Authorization', $transport);
+        self::assertStringNotContainsString('url =', $data['write_files'][2]['content']);
+        self::assertSame($launch->privateCallback->fingerprint(), $task->payload['usdo1_callback_transport_sha256']);
         self::assertSame('https://panel.example.test', $task->payload['plan']['panel_origin']);
         self::assertFalse(app()->bound(MachineUsdo1LaunchScope::class));
 
@@ -171,8 +181,16 @@ trait TestsUsdo1IntegratedExecution
         $server = ['HTTPS'=>'on','HTTP_HOST'=>'receipt.example.test','REQUEST_URI'=>MachineUsdo1LaunchScope::CALLBACK_PATH,
             'REQUEST_METHOD'=>'POST','CONTENT_TYPE'=>'application/json','HTTP_AUTHORIZATION'=>'Bearer ' . $secret];
         $receipt = ['task_id'=>$task->id,'installation_id'=>$task->installation_id,'state'=>'succeeded'];
+        $broker = new MachineUsdo1DataBroker($launch, str_repeat('6', 64), str_repeat('7', 64),
+            fn ($scope, $id, $installation, $key, $state) => $package->callback($grant, $id, $installation, $key, $state, $scope),
+            fn () => throw new \LogicException('receipt lane must never advance'));
+        $client = new MachineUsdo1DataClient('receipt', str_repeat('6', 64), function ($socket, $path, $auth, $body) use ($broker) {
+            self::assertSame('/run/keli-usdo1/data-receipt.sock', $socket);
+            [$status, $result] = $broker->respond('receipt', 'POST', $path, $auth, $body);
+            return [$status, Json::encode($result)];
+        });
         $receive = fn (array $input) => MachineUsdo1Runtime::receive($launch, $server, Json::encode($input),
-            fn ($scope, $id, $installation, $key, $state) => $package->callback($grant, $id, $installation, $key, $state, $scope));
+            fn ($scope, $id, $installation, $key, $state) => $client->receipt($id, $installation, $key, $state));
         $this->code('orchestration_disabled', fn () => app(MachineUsdo1Runtime::class)->callback(
             $launch, $task->id, $task->installation_id, $secret, 'succeeded'));
         config(['machine_provision.allow_live' => true]);
@@ -205,7 +223,8 @@ trait TestsUsdo1IntegratedExecution
             'run'=>$run,'plan'=>$plan,'f'=>$f,'sourceInstance'=>$sourceInstance] = $prepared;
         $record = &$prepared['record']; $writes = &$prepared['writes']; $resolver = &$prepared['resolver'];
         $id = $run['execution_id'];
-        $launch = $dedicated ? new MachineUsdo1LaunchScope($grant, $prepared['admin'], 'https://receipt.example.test') : null;
+        $launch = $dedicated ? new MachineUsdo1LaunchScope($grant, $prepared['admin'], 'https://receipt.example.test',
+            new MachineUsdo1PrivateCallback('10.25.0.1', 'wg-keli123')) : null;
         self::assertSame($run, $package->start($grant, $plan->id));
         if ($mode === 'success') {
             $closedGate = app(MachineFailoverExecutionGate::class);
