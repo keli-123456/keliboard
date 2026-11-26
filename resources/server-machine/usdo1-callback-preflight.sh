@@ -11,8 +11,9 @@ private_callback_route() {
     [[ "${fields[0]:-}" =~ ^[0-9]+(\.[0-9]+){3}(/[1-9][0-9]?)?$ ]] || return 1
     for ((i = 0; i + 1 < ${#fields[@]}; i++)); do
         if [ "${fields[i]}" = dev ]; then
-            [ "${fields[i + 1]}" = "$private_callback_device" ]
-            return
+            # An implicit return can inherit the installer's failure while in the EXIT trap.
+            if [ "${fields[i + 1]}" = "$private_callback_device" ]; then return 0; fi
+            return 1
         fi
     done
     return 1
