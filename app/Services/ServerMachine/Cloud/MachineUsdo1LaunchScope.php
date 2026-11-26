@@ -14,8 +14,8 @@ final readonly class MachineUsdo1LaunchScope
     public const RECOVERY_SECONDS = 2100;
     public string $origin;
 
-    public function __construct(public string $grant, public int $admin, string $origin)
-    {
+    public function __construct(public string $grant, public int $admin, string $origin,
+        public ?MachineUsdo1PrivateCallback $privateCallback = null) {
         if (!Str::isUuid($grant) || strtolower($grant) !== $grant || $admin < 1) {
             throw new CloudException('usdo1_launch_scope_invalid');
         }
@@ -25,13 +25,13 @@ final readonly class MachineUsdo1LaunchScope
         }
     }
 
-    public static function fromEnvironment(): self
+    public static function fromEnvironment(bool $forProvision = false): self
     {
         $admin = filter_var(getenv('KELI_USDO1_ADMIN_ID'), FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
         $grant = getenv('KELI_USDO1_GRANT_ID');
         $origin = getenv('KELI_USDO1_CALLBACK_ORIGIN');
         if (!$admin || !is_string($grant) || !is_string($origin)) throw new CloudException('usdo1_launch_unconfigured');
-        return new self($grant, $admin, $origin);
+        return new self($grant, $admin, $origin, $forProvision ? MachineUsdo1PrivateCallback::fromEnvironment() : null);
     }
 
     public static function assertProcess(string $sapi): void

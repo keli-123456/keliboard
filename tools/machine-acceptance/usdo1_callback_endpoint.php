@@ -2,15 +2,9 @@
 
 declare(strict_types=1);
 
+use App\Services\ServerMachine\Cloud\MachineUsdo1DataClient;
 use App\Services\ServerMachine\Cloud\MachineUsdo1LaunchScope;
 use App\Services\ServerMachine\Cloud\MachineUsdo1Runtime;
-use Illuminate\Cache\CacheServiceProvider;
-use Illuminate\Database\DatabaseServiceProvider;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Encryption\EncryptionServiceProvider;
-use Illuminate\Foundation\Bootstrap\{LoadConfiguration, LoadEnvironmentVariables};
-use Illuminate\Redis\RedisServiceProvider;
-use Illuminate\Support\Facades\Facade;
 
 // Only mount this file as SCRIPT_FILENAME on the dedicated HTTPS virtual host.
 ini_set('display_errors', '0');
@@ -23,17 +17,8 @@ if (PHP_SAPI === 'fpm-fcgi' && ($_SERVER['HTTPS'] ?? '') === 'on') {
         $scope = MachineUsdo1LaunchScope::fromEnvironment();
         $body = file_get_contents('php://input', false, null, 0, 2049);
         $status = $body === false ? 400 : MachineUsdo1Runtime::receive($scope, $_SERVER, $body,
-            static function (...$receipt) use ($root): bool {
-                $app = require $root . '/bootstrap/app.php';
-                $app->bootstrapWith([LoadEnvironmentVariables::class, LoadConfiguration::class]);
-                // Bind facades without package discovery writing to the read-only release.
-                Facade::clearResolvedInstances();
-                Facade::setFacadeApplication($app);
-                foreach ([DatabaseServiceProvider::class, RedisServiceProvider::class,
-                    CacheServiceProvider::class, EncryptionServiceProvider::class] as $provider) $app->register($provider);
-                Model::setConnectionResolver($app['db']);
-                Model::unsetEventDispatcher();
-                return $app->make(MachineUsdo1Runtime::class)->callback(...$receipt);
+            static function (MachineUsdo1LaunchScope $scope, string $task, string $installation, string $secret, string $state): bool {
+                return MachineUsdo1DataClient::fromEnvironment('receipt')->receipt($task, $installation, $secret, $state);
             });
     } catch (\Throwable) {
         $status = 503;
