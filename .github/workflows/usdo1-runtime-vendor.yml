@@ -1,0 +1,48 @@
+name: Build isolated service 123 runtime dependencies
+
+on:
+  push:
+    branches: [audit/usdo1-runtime-vendor-20261126]
+
+permissions:
+  contents: read
+
+jobs:
+  vendor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 13
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build locked runtime dependencies on Debian 13
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=0c9c6324dd126432e384551949022c2bdb82b59c
+          test "$(git rev-parse HEAD^)" = "$base"
+          git diff --quiet "$base" HEAD -- . ':!.github'
+          src="$(mktemp -d "$RUNNER_TEMP/usdo1-vendor-src.XXXXXX")"
+          git archive "$GITHUB_SHA" | tar -x -C "$src"
+          test ! -e "$src/.env"
+          rm -- "$src/.dockerignore"
+          docker build --pull -f "$src/.github/ci/usdo1-vendor.Dockerfile" -t usdo1-vendor:ci "$src"
+      - name: Verify and freeze runtime-only archive offline
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$RUNNER_TEMP/usdo1-vendor-output"
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --mount "type=bind,source=$RUNNER_TEMP/usdo1-vendor-output,target=/out" \
+            -e "KELI_BUILD_SHA=$GITHUB_SHA" usdo1-vendor:ci python3 -B .github/ci/usdo1-vendor-freeze.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: service-123-runtime-vendor-0c9c6324
+          path: |
+            ${{ runner.temp }}/usdo1-vendor-output/manifest.json
+            ${{ runner.temp }}/usdo1-vendor-output/vendor.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3

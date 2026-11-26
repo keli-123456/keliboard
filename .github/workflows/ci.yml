@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches-ignore:
+      - audit/usdo1-runtime-vendor-20261126
   pull_request:
     types: [opened, synchronize, reopened]
 
