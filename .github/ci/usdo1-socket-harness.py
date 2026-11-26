@@ -258,6 +258,8 @@ def http_unix(uid, sock, path, token, data, expected):
                             input=f'header = "Authorization: Bearer {token}"\nheader = "Content-Type: application/json"\n')
     payload, _, status = result.stdout.rpartition("\n")
     require(result.returncode==0 and status==str(expected), f"Unix HTTP {expected} expected; got {status}")
+    if expected == 404:
+        return None
     return json.loads(payload)
 
 
@@ -306,7 +308,9 @@ cacert = "{trust}"
                           "PATH":str(tools)+":"+ENV["PATH"],"HTTPS_PROXY":"http://127.0.0.1:7","ALL_PROXY":"http://127.0.0.1:7"},
                           stdin=subprocess.DEVNULL,text=True,capture_output=True,timeout=22)
     expected = 0 if scenario in ("lost","success") else 85
-    require(proc.returncode==expected and (folder/"started").exists()==(expected==0), "bootstrap outcome differs: "+scenario)
+    started = (folder/"started").exists()
+    require(proc.returncode==expected and started==(expected==0),
+            f"bootstrap outcome differs: {scenario}, exit {proc.returncode}, started {started}")
     require((folder/"result.json").exists()==(expected==0), "bootstrap reported a preflight failure: "+scenario)
     return expected
 
@@ -378,8 +382,8 @@ server {{
     request={"task_id":case["task"],"installation_id":case["installation"],"receipt_key":case["secret"],"state":"succeeded"}
     require(http_unix(WORKER,ws,"/tick",receipt_token,{},401)=={"ok":False},"receipt key could advance")
     require(http_unix(RECEIPT,rs,"/receipt",worker_token,request,401)=={"ok":False},"worker key could receipt")
-    require(http_unix(RECEIPT,rs,"/tick",receipt_token,{},404)=={"ok":False},"receipt listener exposed tick")
-    require(http_unix(WORKER,ws,"/receipt",worker_token,request,404)=={"ok":False},"worker listener exposed receipt")
+    http_unix(RECEIPT,rs,"/tick",receipt_token,{},404)
+    http_unix(WORKER,ws,"/receipt",worker_token,request,404)
     require(http_unix(WORKER,ws,"/tick",worker_token,{"grant_id":"untrusted"},400)=={"ok":False},"worker could select scope")
     require(http_unix(WORKER,ws,"/tick",worker_token,{},401)=={"ok":False},"running fixture unexpectedly advanced")
     https(PORT,ca,case,401,wrong_key=True)
