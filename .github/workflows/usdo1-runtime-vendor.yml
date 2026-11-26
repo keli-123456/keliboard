@@ -36,6 +36,7 @@ jobs:
           set -euo pipefail
           install -d -m 0700 "$RUNNER_TEMP/usdo1-vendor-output"
           docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" -e HOME=/tmp -e COMPOSER_HOME=/tmp/composer-verify \
             --mount "type=bind,source=$RUNNER_TEMP/usdo1-vendor-output,target=/out" \
             -e "KELI_BUILD_SHA=$GITHUB_SHA" usdo1-vendor:ci python3 -B .github/ci/usdo1-vendor-freeze.py
       - uses: actions/upload-artifact@v4
