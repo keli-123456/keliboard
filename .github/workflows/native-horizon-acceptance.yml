@@ -44,8 +44,6 @@ jobs:
       KELI_NATIVE_USER: keli_native_fixture
       KELI_NATIVE_PASSWORD: ephemeral-operator-ci-only
       KELI_NATIVE_ISOLATION: REPEATABLE READ
-      KELI_NATIVE_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
-      KELI_NATIVE_REDIS_PORT: ${{ job.services.redis.ports[6379] }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,6 +56,9 @@ jobs:
           coverage: none
       - run: composer install --no-interaction --no-progress --prefer-dist --no-scripts
       - name: Exercise kernel fault with live isolated business queues
+        env:
+          KELI_NATIVE_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
+          KELI_NATIVE_REDIS_PORT: ${{ job.services.redis.ports[6379] }}
         run: |
           set -euo pipefail
           mkdir -p artifacts
