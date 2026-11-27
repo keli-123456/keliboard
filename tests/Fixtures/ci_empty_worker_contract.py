@@ -13,6 +13,13 @@ TRIAL_REASONS={'required_function_unavailable','wrong_worker_identity','wrong_wo
                'cached_file_unverified','worker_command_not_registered','worker_command_source_mismatch',
                'isolated_redis_ping_failed','exception','php_fatal','queue_command_nonzero'}
 
+def decode_heartbeat(wire):
+    if not isinstance(wire,str):return None
+    if re.fullmatch(r'[a-f0-9]{32}',wire):return wire
+    # Laravel RedisStore serializes string values when the connection has no serializer.
+    match=re.fullmatch(r's:32:"([a-f0-9]{32})";',wire)
+    return match.group(1) if match else None
+
 def child_trace(raw):
     stages=[]
     first=None

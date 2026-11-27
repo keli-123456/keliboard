@@ -13,7 +13,7 @@ import tarfile
 import tempfile
 import time
 
-from ci_empty_worker_contract import child_trace, remove_trial_files
+from ci_empty_worker_contract import child_trace, decode_heartbeat, remove_trial_files
 
 ROOT = Path(__file__).resolve().parents[2]
 CASE = sys.argv[1]
@@ -62,7 +62,7 @@ def show(key):
 
 
 def known_quiescent():
-    return show("ActiveState") in {"inactive", "failed"} and show("MainPID") == "0"
+    return show("ActiveState") in {"inactive", "failed"} and (show("MainPID")=="0" or show("LoadState")=="not-found")
 
 
 def wait_for(fn, limit, reason):
@@ -231,11 +231,15 @@ try:
     cache=trial/"bootstrap-cache/operator-config.php"
     if CASE=="heartbeat":
         pid=wait_for(live_worker,18,"worker_identity_not_observed")
-        beat=wait_for(lambda:redis_query("GET",HEARTBEAT),9,"no_heartbeat_observed")
+        wire=wait_for(lambda:redis_query("GET",HEARTBEAT),9,"no_heartbeat_observed")
+        beat=decode_heartbeat(wire)
+        need(beat is not None,"heartbeat_encoding_unverified")
+        report["cache_wire"]="serialized_string" if wire != beat else "raw_string"
         for _ in range(3):
-            need(re.fullmatch("[a-f0-9]{32}",beat) and live_worker()==pid and empty()
-                 and redis_query("GET",HEARTBEAT)==beat and 10500<=redis_query("PTTL",HEARTBEAT)<=15000,
-                 "heartbeat_readback_failed")
+            need(live_worker()==pid,"worker_identity_changed_during_heartbeat")
+            need(empty(),"isolated_queues_not_empty_during_heartbeat")
+            need(decode_heartbeat(redis_query("GET",HEARTBEAT))==beat,"heartbeat_owner_changed")
+            need(10500<=redis_query("PTTL",HEARTBEAT)<=15000,"heartbeat_ttl_not_refreshing")
             time.sleep(4)
         trace=capture_error()
         need(trace["first_error"] is None and trace["stages"]==["runtime","autoload","config_cache","child_exec",
@@ -246,7 +250,7 @@ try:
         run("systemctl","stop",UNIT)
         wait_for(lambda:redis_query("GET",HEARTBEAT) is None,16,"heartbeat_remained_after_stop")
         need(empty(),"queue_changed_on_stop")
-        report.update(heartbeat_samples=3,config_cache=True,heartbeat_removed=True,worker_non_root=True,
+        report.update(heartbeat_samples=3,config_cache=True,heartbeat_removed=True,worker_non_root=True,queue_empty=True,
                       cpu_percent=25,memory_mib=192,swap_mib=0,pids_limit=8)
     else:
         wait_for(known_quiescent,22,"injury_fixture_did_not_stop")
@@ -272,7 +276,7 @@ finally:
     release_error=[]
     if launched:
         try:
-            run("systemctl","stop",UNIT)
+            if not known_quiescent():run("systemctl","stop",UNIT)
             need(known_quiescent(),"worker_cleanup_unconfirmed")
         except Exception as e:release_error.append(type(e).__name__)
     try:
