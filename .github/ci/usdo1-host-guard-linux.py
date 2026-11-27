@@ -63,7 +63,7 @@ async def serve(kind, work):
                 self.transport.sendto(data, addr)
 
     if kind == "baseline":
-        servers = [await asyncio.start_server(conn, PUBLIC, 43000)]
+        servers = [await asyncio.start_server(conn, PUBLIC, 43000), await asyncio.start_server(conn, PUBLIC6, 43000)]
     else:
         tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         tls.load_cert_chain(work / "tls.pem", work / "tls.key")
@@ -228,6 +228,7 @@ def main(work):
                                     start_new_session=True, env=ENV, stdin=subprocess.DEVNULL)
         wait_for(lambda: (work/"baseline.ready").exists(), "unrelated baseline")
         sends("baseline", OTHER, PUBLIC, True)
+        sends("baseline", OTHER6, PUBLIC6, True)
 
         (work/"conf").mkdir(mode=0o700)
         (work/"state").mkdir(mode=0o700)
@@ -274,6 +275,7 @@ NoNewPrivileges=yes
         wait_for(lambda: (work/"leased.ready").exists(), "isolated endpoints")
         require(original_hash() == original, "unrelated nft rules changed when arming")
         sends("baseline", OTHER, PUBLIC, True)
+        sends("baseline", OTHER6, PUBLIC6, True)
         sends("udp", ALLOWED, PUBLIC, True)
         sends("udp", OTHER, PUBLIC, False)
         sends("udp", OTHER6, PUBLIC6, False)
@@ -302,6 +304,7 @@ NoNewPrivileges=yes
                 "leased ports still listening")
         require(original_hash() == original, "unrelated nft rules changed after cleanup")
         sends("baseline", OTHER, PUBLIC, True)
+        sends("baseline", OTHER6, PUBLIC6, True)
         print("USDO1_HOST_GUARD_CI " + json.dumps({"udp_candidate_only":True,"https_private_only":True,
             "kernel_expired_while_cleanup_blocked":True,"control_sigkill":True,"independent_systemd_cleanup":True,
             "baseline_rules_and_traffic_unchanged":True,"private_media":"isolated_veth_no_wireguard",
@@ -328,5 +331,7 @@ if __name__ == "__main__":
         sys.exit(probe(sys.argv[2], sys.argv[3], sys.argv[4], Path(sys.argv[5])))
     else:
         os.umask(0o077)
-        with tempfile.TemporaryDirectory(prefix="keli123-guard-ci-", dir="/run") as d:
+        executable_parent = Path("/usr/local/libexec")
+        executable_parent.mkdir(mode=0o755, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="keli123-guard-ci-", dir=executable_parent) as d:
             main(Path(d))
