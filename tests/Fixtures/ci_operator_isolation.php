@@ -51,7 +51,7 @@ function prepareBusiness(): void {
         else $key[] = 'server_type';
         $t->unsignedInteger('record_at'); $t->char('record_type', 1);
         foreach (['u', 'd', 'created_at', 'updated_at'] as $column) $t->unsignedBigInteger($column);
-        $t->unique([...$key, 'record_at', 'record_type']);
+        $t->unique([...$key, 'record_at', 'record_type'], 'fixture_stat_key');
     });
     Schema::create('v2_stat_job_receipt', function (Blueprint $t) { $t->uuid('delivery_id')->primary(); $t->char('content_hash', 64); $t->unsignedInteger('applied_at'); });
     (require base_path('database/migrations/2026_09_20_000001_create_traffic_batch_receipts.php'))->up();
