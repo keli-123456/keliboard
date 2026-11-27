@@ -117,8 +117,10 @@ try {
                 while (microtime(true) < $until) hash('sha256', str_repeat('c', 8192));
                 Fixture::event('cpu_ceiling_exercised');
                 while (Fixture::control('allocate') !== true && microtime(true) < $until + 35) usleep(100000);
+                Fixture::event('allocating_under_limit');
                 $allocated = [];
-                for ($i = 0; $i < 40; $i++) $allocated[] = str_repeat(chr(65 + ($i % 26)), 8 * 1024 * 1024);
+                for ($i = 0; $i < 40; $i++) $allocated[] = random_bytes(8 * 1024 * 1024);
+                Fixture::event('allocation_exceeded_limit');
                 throw new RuntimeException('Kernel memory ceiling failed to stop allocation');
             });
             exit(runConsole(true));
@@ -163,6 +165,8 @@ try {
         $user = DB::table('v2_user')->find(9000);
         echo json_encode(['ready' => Cache::get(Queue::OPERATOR_HEARTBEAT) !== null, 'entered' => (int) (clone $events)->where('kind', 'operator_enter')->value('reference'),
             'timeouts' => (clone $events)->where('kind', 'operator_timed_out')->count(), 'cpu' => (clone $events)->where('kind', 'cpu_ceiling_exercised')->count(),
+            'allocation_started' => (clone $events)->where('kind', 'allocating_under_limit')->count(),
+            'allocation_exceeded' => (clone $events)->where('kind', 'allocation_exceeded_limit')->count(),
             'creates_and_dns' => (clone $events)->whereIn('kind', ['create', 'dns_write'])->count(), 'run' => Execution::query()->value('status'),
             'stat' => (int) DB::table('v2_stat_server')->where('server_id', 777)->value('u'), 'stat_receipts' => DB::table('v2_stat_job_receipt')->count(),
             'traffic_u' => (int) $user->u, 'traffic_d' => (int) $user->d, 'traffic_receipts' => DB::table('v2_traffic_batch')->whereNotNull('sync_finished_at')->count(),

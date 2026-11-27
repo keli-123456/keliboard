@@ -69,8 +69,9 @@ def business_checkpoint(worker, ordinal):
 config = configparser.ConfigParser(interpolation=None)
 config.optionxform = str
 config.read(ROOT / "docs/operations/keliboard-failover-operator.service")
-profile = {key: config["Service"][key] for key in ("CPUQuota", "MemoryMax", "TasksMax", "RuntimeMaxSec", "TimeoutStopSec")}
-assert profile == {"CPUQuota": "25%", "MemoryMax": "192M", "TasksMax": "8", "RuntimeMaxSec": "17min", "TimeoutStopSec": "85s"}
+profile = {key: config["Service"][key] for key in ("CPUQuota", "MemoryMax", "MemorySwapMax", "OOMPolicy", "TasksMax", "RuntimeMaxSec", "TimeoutStopSec")}
+assert profile == {"CPUQuota": "25%", "MemoryMax": "192M", "MemorySwapMax": "0", "OOMPolicy": "stop",
+                   "TasksMax": "8", "RuntimeMaxSec": "17min", "TimeoutStopSec": "85s"}
 assert not subprocess.check_output(["systemctl", "list-units", "--all", "--no-legend", UNIT], text=True, timeout=5).strip()
 business = None
 seeded = False
@@ -81,7 +82,7 @@ try:
     business_checkpoint(business, 1)
 
     subprocess.run(["sudo", "-n", "systemd-run", "--quiet", "--unit", UNIT, f"--uid={os.getuid()}",
-                    f"--gid={os.getgid()}", f"--working-directory={ROOT}", "--property=Type=exec", "--property=OOMPolicy=stop",
+                    f"--gid={os.getgid()}", f"--working-directory={ROOT}", "--property=Type=exec",
                     "--property=IPAddressDeny=any", "--property=IPAddressAllow=localhost", "--property=NoNewPrivileges=yes",
                     *[f"--property={key}={value}" for key, value in profile.items()],
                     *[f"--setenv={key}={value}" for key, value in ENV.items()], "--",
@@ -92,6 +93,7 @@ try:
     path = pathlib.Path("/sys/fs/cgroup" + cgroup)
     quota, period = map(int, (path / "cpu.max").read_text().split())
     assert quota * 4 == period and int((path / "memory.max").read_text()) == 192 * 1024 * 1024
+    assert (path / "memory.swap.max").read_text().strip() == "0"
     assert int((path / "pids.max").read_text()) == 8
     call("launch")
     started = time.monotonic()
@@ -108,6 +110,8 @@ try:
         assert int(stats["nr_throttled"]) > 0, "CPU quota did not throttle"
         evidence["throttled_periods"] = int(stats["nr_throttled"])
         call("allocate")
+        wait_for(lambda: status()["allocation_started"] == 1, 10, "Allocation never reached the cgroup")
+        assert status()["allocation_exceeded"] == 0, "Allocation crossed the hard cap without OOM"
 
     wait_for(lambda: show("ActiveState") in {"failed", "inactive"}, 96, "Manual worker did not stop within the fixture deadline")
     if CASE == "timeout":
