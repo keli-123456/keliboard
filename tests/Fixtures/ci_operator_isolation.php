@@ -33,6 +33,7 @@ function requireFixture(bool $condition, string $reason): void {
 }
 function operatorConfig(): void {
     config(['machine_failover.operator_enabled' => true, 'machine_failover.runner_enabled' => false,
+        'machine_failover.workflow' => \App\Services\ServerMachine\Cloud\MachineFailoverWorkflow::READINESS,
         'machine_failover.allow_replacement' => false, 'machine_failover.allow_rotation' => false, 'machine_provision.allow_live' => false,
         'machine_acceptance.allow_readiness' => false, 'machine_acceptance.allow_verification' => false, 'machine_acceptance.allow_dns' => false]);
     app()->instance(MachineFailoverExecutionGate::class, new MachineFailoverExecutionGate());
