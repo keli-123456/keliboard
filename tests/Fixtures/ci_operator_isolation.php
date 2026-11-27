@@ -123,8 +123,17 @@ try {
         prepareBusiness();
         $grant = \App\Models\MachineFailoverHandoverGrant::query()->sole();
         $source = Task::query()->sole();
+        $legacyMachine = \App\Models\ServerMachine::query()->create([
+            'name' => 'fixture legacy independent machine', 'token' => str_repeat('e', 32), 'is_active' => true,
+        ]);
+        $legacyAccount = \App\Models\MachineCloudAccount::query()->create([
+            'name' => 'fixture legacy independent account', 'provider' => 'digitalocean',
+            'credentials' => ['api_token' => 'synthetic-receipt-only'], 'revision' => 1,
+        ]);
         $legacy = $source->replicate();
-        $legacy->fill(['id' => (string) Str::uuid(), 'request_key' => hash('sha256', $owner), 'marker' => 'fixture-legacy-' . $owner,
+        $legacy->fill(['id' => (string) Str::uuid(), 'machine_id' => $legacyMachine->id, 'machine_authority' => hash('sha256', $legacyMachine->token),
+            'account_id' => $legacyAccount->id, 'account_revision' => $legacyAccount->revision,
+            'request_key' => hash('sha256', $owner), 'marker' => 'fixture-legacy-' . $owner,
             'installation_id' => str_repeat('2', 32), 'callback_hash' => hash('sha256', str_repeat('4', 64)),
             'status' => 'waiting_initialization', 'dispatched_at' => time(), 'deadline_at' => time() + 300])->save();
         Fixture::control('grant', $grant->id, true);
