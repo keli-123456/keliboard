@@ -1,4 +1,4 @@
-name: Manual failover isolated process limits
+name: Isolated empty worker startup
 
 on:
   workflow_dispatch:
@@ -12,38 +12,15 @@ permissions:
   contents: read
 
 jobs:
-  isolation:
-    if: github.ref_name == 'codex/operator-handover-ci-20261127'
-    name: Isolated Linux (${{ matrix.fault }})
+  empty-worker:
+    if: github.ref_name == 'codex/operator-empty-worker-ci-20261128'
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 8
+    name: Empty worker (${{ matrix.case }})
     strategy:
       fail-fast: false
       matrix:
-        fault: ${{ fromJSON(inputs.scope == 'smoke' && '["timeout","recovery"]' || '["kill","timeout","limits","recovery"]') }}
-    services:
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_DATABASE: keli_acceptance_native_failover
-          MYSQL_USER: keli_native_fixture
-          MYSQL_PASSWORD: ephemeral-operator-ci-only
-          MYSQL_ROOT_PASSWORD: ephemeral-operator-root-only
-        ports: ["127.0.0.1::3306"]
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent" --health-interval=5s --health-timeout=5s --health-retries=24
-      redis:
-        image: redis:7-alpine
-        ports: ["127.0.0.1::6379"]
-        options: >-
-          --health-cmd="redis-cli ping" --health-interval=5s --health-timeout=5s --health-retries=12
-    env:
-      KELI_NATIVE_ACCEPTANCE: "1"
-      KELI_NATIVE_HOST: 127.0.0.1
-      KELI_NATIVE_DATABASE: keli_acceptance_native_failover
-      KELI_NATIVE_USER: keli_native_fixture
-      KELI_NATIVE_PASSWORD: ephemeral-operator-ci-only
-      KELI_NATIVE_ISOLATION: REPEATABLE READ
+        case: [heartbeat, missing-signal, missing-socket]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,30 +28,22 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.2"
-          extensions: pdo_mysql, pdo_sqlite, redis, pcntl, posix, mbstring, openssl
+          extensions: pcntl, posix, redis, pdo_sqlite, mbstring, openssl
           tools: composer:v2
           coverage: none
-      - run: composer install --no-interaction --no-progress --prefer-dist --no-scripts
-      - name: Regression for handover, receipts and business lanes
-        if: matrix.fault == 'recovery'
-        run: >-
-          php vendor/bin/phpunit --do-not-cache-result
-          --filter '(MachineFailoverHandoverTest|test_handover_|test_operator_|test_revoked_operator|StatBatchJobsTest|StatUserJobTest|TrafficFetchJobTest|TrafficBatchServiceTest|test_authenticated_receipt_is_idempotent|test_receipts_need_bearer|test_public_receipt_route)'
-          tests/Unit/Services/MachineFailoverNativeBridgeTest.php
-          tests/Unit/Services/MachineFailoverHandoverTest.php
-          tests/Unit/Jobs/StatBatchJobsTest.php tests/Unit/Jobs/StatUserJobTest.php tests/Unit/Jobs/TrafficFetchJobTest.php
-          tests/Unit/Services/TrafficBatchServiceTest.php tests/Unit/Services/MachineProvisionTest.php
-      - name: Exercise kernel fault with live isolated business queues
-        env:
-          KELI_NATIVE_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
-          KELI_NATIVE_REDIS_PORT: ${{ job.services.redis.ports[6379] }}
+      - run: composer install --no-interaction --no-progress --prefer-dist --no-dev --no-scripts
+      - name: Acquire disposable Redis runtime
+        run: docker pull redis:7-alpine
+      - name: Exercise isolated PHP process and retain sanitized evidence
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          python3 -B tests/Fixtures/ci_operator_isolation.py ${{ matrix.fault }} | tee artifacts/isolation.json
+          sudo -n --preserve-env=GITHUB_ACTIONS,GITHUB_WORKFLOW,GITHUB_REF_NAME,GITHUB_REPOSITORY,GITHUB_WORKSPACE \
+            python3 -B tests/Fixtures/ci_empty_worker.py "${{ matrix.case }}" >artifacts/isolation.json
+          cat artifacts/isolation.json
       - uses: actions/upload-artifact@v4
-        if: success()
+        if: always()
         with:
-          name: isolation-${{ matrix.fault }}
+          name: isolation-${{ matrix.case }}
           path: artifacts/isolation.json
           retention-days: 7
