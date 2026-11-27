@@ -245,6 +245,10 @@ try {
             'provider_barrier' => (clone $events)->where('kind', 'barrier')->where('reference', 'create_after')->count(),
             'stop_evidence' => (clone $events)->where('kind', 'grant_revoked')->count(),
             'closed' => (clone $events)->where('kind', 'grant_closed')->count(),
+            'runtime_state' => Runtime::query()->value('state'), 'runtime_reason' => Runtime::query()->value('reason'),
+            'member_phase' => \App\Models\MachineFailoverExecutionMember::query()->value('phase'),
+            'member_reason' => \App\Models\MachineFailoverExecutionMember::query()->value('reason'),
+            'worker_error' => (clone $events)->where('kind', 'worker_error')->latest('id')->value('reference'),
             'operator_generation' => Runtime::query()->value('generation')], JSON_THROW_ON_ERROR) . PHP_EOL;
     }
 } catch (Throwable $error) {

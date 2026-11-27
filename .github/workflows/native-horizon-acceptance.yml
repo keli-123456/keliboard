@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        fault: [kill, timeout, limits, recovery]
+        fault: ${{ fromJSON(inputs.scope == 'smoke' && '["timeout","recovery"]' || '["kill","timeout","limits","recovery"]') }}
     services:
       mysql:
         image: mysql:8.4

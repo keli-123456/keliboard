@@ -169,6 +169,11 @@ try:
     if CASE == "recovery":
         wait_for(lambda: status()["provider_barrier"] == 1, 14, "Mock create never reached its acknowledgement boundary")
     business_checkpoint(business, 2, int(CASE == "recovery"))
+    if CASE == "timeout":
+        # Leave the current oneshot running, but do not let the periodic timer
+        # replace its timeout result with a new invocation before readback.
+        process_proof(wait_for(lambda: status()["timer_process"], 24, "Timer did not run the advance service"))
+        sudo("systemctl", "stop", TIMER)
 
     evidence = {"case": CASE, "cpu_percent": 25, "memory_bytes": 192 * 1024 * 1024, "processes": 8}
     if CASE in {"kill", "recovery"}:
@@ -201,7 +206,6 @@ try:
     if CASE == "timeout":
         assert status()["timeouts"] == 1 and 70 <= time.monotonic() - started <= 95
         wait_for(lambda: show("Result", ADVANCE) == "timeout", 20, "Advance process did not hard time out")
-        sudo("systemctl", "stop", TIMER)
         elapsed = (int(show("ExecMainExitTimestampMonotonic", ADVANCE)) - int(show("ExecMainStartTimestampMonotonic", ADVANCE))) / 1e6
         assert 28 <= elapsed <= 42, "Advance unit did not stop at its hard deadline"
         process_proof(status()["timer_process"])
@@ -218,6 +222,24 @@ try:
     assert state["legacy_failover"] == 0 and state["legacy_admin"] == 1 and state["creates_and_dns"] == int(CASE == "recovery")
     evidence.update(stat_receipts=3, traffic_receipts=3, legacy_receipts=1, old_queue_reroutes=0, production_writes=0, worker_non_root=True)
     print(json.dumps(evidence, sort_keys=True))
+except Exception:
+    if seeded:
+        try:
+            state = status()
+            keys = ("run", "runtime_state", "runtime_reason", "member_phase", "member_reason", "worker_error",
+                    "timer_ticks", "provider_barrier", "creates_and_dns", "timeouts")
+            print("CI_DIAGNOSTIC", json.dumps({k: state.get(k) for k in keys}), flush=True)
+        except Exception:
+            pass
+    for unit in (UNIT, ADVANCE, TIMER):
+        diagnostic = {k: show(k, unit) for k in ("ActiveState", "SubState", "Result", "ExecMainCode", "ExecMainStatus", "ConditionResult")}
+        print("CI_DIAGNOSTIC", unit, json.dumps(diagnostic), flush=True)
+        logs = subprocess.run(["sudo", "-n", "journalctl", "-u", unit, "-n", "18", "--no-pager", "-o", "cat"],
+                              check=False, capture_output=True, text=True, timeout=5).stdout
+        for line in logs.splitlines():
+            if line.startswith("Fixture failed:") or any(s in line for s in ("Failed with result", "timed out", "status=", "skipped")):
+                print("CI_DIAGNOSTIC", line[:250], flush=True)
+    raise
 finally:
     if installed:
         sudo("systemctl", "stop", TIMER, ADVANCE, UNIT, timeout=92, check=False)
