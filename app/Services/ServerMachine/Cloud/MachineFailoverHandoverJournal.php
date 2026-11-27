@@ -26,6 +26,7 @@ final class MachineFailoverHandoverJournal
         $plans = $members->pluck('plan_id')->all(); sort($plans);
         $intent = [$run->service_id, $run->service_revision, $plans, $run->payload['release'], ['workflow' => MachineFailoverWorkflow::READINESS],
             ['handover_grant_id' => $run->payload['handover_grant_id']]];
+        if (MachineFailoverOperatorPermit::matches($run)) $intent[] = ['launch_mode' => MachineFailoverOperatorPermit::MODE];
         if (!$plans || count(array_unique($plans)) !== count($plans)
             || !hash_equals($run->intent_hash, hash('sha256', json_encode($intent, JSON_THROW_ON_ERROR)))) $this->changed();
         $attempts = Attempt::query()->whereIn('execution_member_id', $members->modelKeys())->orderBy('ordinal')->lockForUpdate()->get()->groupBy('execution_member_id');

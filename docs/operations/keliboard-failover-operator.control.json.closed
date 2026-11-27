@@ -1,0 +1,13 @@
+{
+  "service_id": 0,
+  "service_revision": 0,
+  "member_id": 0,
+  "machine_id": 0,
+  "release_id": 0,
+  "admin_id": 0,
+  "old_writer": "manual",
+  "stop_issuer": "",
+  "stop_public_key": "",
+  "closure_issuer": "",
+  "closure_public_key": ""
+}

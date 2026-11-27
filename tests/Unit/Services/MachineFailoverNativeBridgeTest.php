@@ -629,7 +629,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
     public static function jsonProviders(): array { return [['digitalocean'], ['vultr']]; }
 
     private function startSets(array $types = ['A', 'AAAA'], string $dnsProvider = 'cloudflare', int $setCount = 1, bool $legacyDns = true,
-        bool $handover = false, ?\Closure $usdo1 = null): array
+        bool $handover = false, ?\Closure $usdo1 = null, bool $operator = false): array
     {
         foreach (['2026_11_09_180000_create_machine_failover_dns_sets.php', '2026_11_09_200000_create_machine_dns_set_runtime.php',
             '2026_11_10_010000_create_machine_native_address_proofs.php'] as $file) (require base_path('database/migrations/' . $file))->up();
@@ -648,7 +648,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
             MachineOwnedInstance::query()->where('task_id', $task->id)->update(['resource_id' => $resource->id]);
         }
         $service = app(MachineFailoverServiceRegistry::class)->save(['name' => 'Native sets fixture', 'max_parallel' => count($this->fixtures),
-            'attempt_limit' => $usdo1 ? 1 : 4, 'monthly_cap_usd' => 400, 'members' => array_map(fn ($f) => ['policy_id' => $f['policy']->id,
+            'attempt_limit' => $usdo1 || $operator ? 1 : 4, 'monthly_cap_usd' => 400, 'members' => array_map(fn ($f) => ['policy_id' => $f['policy']->id,
                 'policy_revision' => $f['policy']->revision, 'name' => $f['machine']->name, 'priority' => $f['machine']->id, 'enabled' => true]
                 + ($usdo1 ? ['attempt_limit' => 1] : []), $this->fixtures)], $this->admin->id);
         $credential = $dnsProvider === 'cloudflare' ? MachineDnsCredential::query()->first() : MachineDnsCredential::query()->create([
@@ -656,7 +656,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $input = ['service_id' => $service['id'], 'service_revision' => 1,
             'credential_id' => $credential->id, 'credential_revision' => 1, 'zone' => $dnsProvider === 'cloudflare' ? str_repeat('c', 32) : 'example.test',
             'zone_name' => 'example.test', 'hostname' => 'native-sets.example.test', 'ttl' => $dnsProvider === 'cloudflare' ? 60 : 600,
-            'members' => array_map(fn ($m) => ['member_id' => $m['id'], 'types' => $types, 'lines' => $dnsProvider === 'cloudflare'
+            'members' => array_map(fn ($m) => ['member_id' => $m['id'], 'types' => $types, 'lines' => $operator || $dnsProvider === 'cloudflare'
                 ? ['default'] : ['default', 'telecom', 'unicom']], $service['members'])];
         if ($usdo1) {
             $input['zone'] = $input['zone_name'] = \Keli\Acceptance\Usdo1ExistingA::ZONE;
@@ -677,6 +677,7 @@ class MachineFailoverNativeBridgeTest extends TestCase
                     'RR' => substr($set['hostname'], 0, -strlen('.' . $input['zone_name'])), 'DomainName' => $input['zone_name'], 'Line' => $slot['line'], 'TTL' => 600, 'Remark' => $slot['marker'], 'Status' => 'ENABLE', 'Locked' => false];
         }
         if ($usdo1) return $usdo1($service, $view);
+        if ($operator) return ['revision' => $view['service_revision']] + $service;
         return app(MachineFailoverNativeBridge::class)->start($service['id'], $view['service_revision'], array_map(fn ($f) => MachineFailoverPlan::query()
             ->where('policy_id', $f['policy']->id)->latest('id')->value('id'), $this->fixtures), $this->release->id, str_repeat('d', 32), $this->admin->id,
             handoverGrantId: $handover ? $this->issueHandover($service['id'], $view['service_revision']) : null);

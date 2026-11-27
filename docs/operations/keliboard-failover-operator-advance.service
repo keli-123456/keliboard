@@ -1,0 +1,25 @@
+[Unit]
+Description=Advance only an already authorized manual failover
+ConditionPathExists=/etc/keliboard-failover/operator.env
+Requisite=keliboard-failover-operator.service
+After=keliboard-failover-operator.service
+
+[Service]
+Type=oneshot
+User=keliboard-failover
+Group=keliboard-failover
+WorkingDirectory=/opt/keliboard-failover/current
+EnvironmentFile=/etc/keliboard-failover/operator.env
+Environment=APP_CONFIG_CACHE=/opt/keliboard-failover/current/bootstrap/cache/operator-config.php
+ExecStart=/usr/bin/php -d memory_limit=160M artisan machines:advance-operator-failover
+CPUQuota=25%
+MemoryMax=192M
+MemorySwapMax=0
+OOMPolicy=stop
+TasksMax=8
+TimeoutStartSec=30s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/keliboard-failover/current/storage
+UMask=0077

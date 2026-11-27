@@ -246,13 +246,14 @@ class MachineFailoverRunner
         return $result;
     }
 
-    public function advanceOperator(bool $stopsOnly = false): array
+    public function advanceOperator(bool $stopsOnly = false, ?string $grantId = null): array
     {
         $result = ['enabled' => false, 'queued' => 0, 'stopped' => 0];
         $grant = \App\Models\MachineFailoverHandoverGrant::class;
         if (!$this->available() || !Schema::hasTable($grant::TABLE)) return $result;
         // The handover journal has exactly one writer slot. Never discover new work here.
-        $id = $grant::query()->useWritePdo()->whereNotNull('writer_slot')->value('execution_id');
+        $id = $grant::query()->useWritePdo()->whereNotNull('writer_slot')
+            ->when($grantId !== null, fn ($query) => $query->whereKey($grantId))->value('execution_id');
         $run = $id ? Execution::query()->useWritePdo()->find($id) : null;
         if (!MachineFailoverOperatorPermit::matches($run)) return $result;
         $row = Runtime::query()->useWritePdo()->find($id);

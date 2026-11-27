@@ -19,7 +19,8 @@ final class MachineFailoverOperatorPermit
 {
     public const MODE = 'operator_v1';
     private const WORK = ['runner', 'advance', 'context', 'native_task', 'queue', 'node_readiness', 'dns_readback', 'dns_write',
-        'native_address_verify', 'native_address_read', 'native_dns_admission', 'native_dns_prepare', 'native_dns_binding', 'native_dns_complete'];
+        'native_address_verify', 'native_address_read', 'native_dns_admission', 'native_dns_prepare', 'native_dns_binding', 'native_dns_complete',
+        'dns_set_start', 'dns_set_advance', 'dns_set_transport', 'dns_set_read', 'dns_set_write'];
     private const LEGACY_SWITCHES = ['machine_failover.runner_enabled', 'machine_failover.admission_enabled', 'machine_failover.allow_replacement',
         'machine_failover.allow_rotation', 'machine_failover.allow_candidate_retry', 'machine_provision.allow_live',
         'machine_acceptance.allow_readiness', 'machine_acceptance.allow_verification', 'machine_acceptance.allow_dns'];
@@ -60,11 +61,27 @@ final class MachineFailoverOperatorPermit
         return ($run?->payload['launch_mode'] ?? null) === self::MODE;
     }
 
+    public static function issuedForOperator(?Grant $grant): bool
+    {
+        return ($grant?->stop_receipt['launch_mode'] ?? null) === self::MODE
+            && !isset($grant->stop_receipt['manual_usdo1']);
+    }
+
+    public static function readback(Grant $grant, int $admin, callable $work): array
+    {
+        if (!self::issuedForOperator($grant) || !is_string($grant->execution_id))
+            throw new CloudException('handover_not_authorized');
+        $run = app(MachineFailoverHandover::class)->stoppedOriginal($grant->execution_id, $admin);
+        if (!self::matches($run) || ($run->payload['handover_grant_id'] ?? null) !== $grant->id)
+            throw new CloudException('operator_scope_changed');
+        return (new self('readback', $grant->id, $run->id, [], []))->within($work);
+    }
+
     public static function start(string $grantId, int $service, int $revision, int $release, int $admin, array $planIds, callable $work): array
     {
         self::requireEnabled();
         $grant = Grant::query()->useWritePdo()->find($grantId);
-        if (!$grant || isset($grant->stop_receipt['manual_usdo1'])) throw new CloudException('handover_not_authorized');
+        if (!self::issuedForOperator($grant)) throw new CloudException('handover_not_authorized');
         app(MachineFailoverHandover::class)->assertStart($grantId, $service, $revision, $release, $admin);
         $policies = Plan::query()->useWritePdo()->whereIn('id', $planIds)->pluck('policy_id')->all();
         if (count($policies) !== count($planIds) || !$policies) throw new CloudException('operator_scope_changed');
@@ -109,6 +126,7 @@ final class MachineFailoverOperatorPermit
 
     public function allows(string $operation): bool
     {
+        if ($this->phase === 'readback') return in_array($operation, ['handover_readback', 'dns_set_read'], true);
         if (!self::enabled()) return false;
         return match ($this->phase) {
             'start' => $operation === 'start',
@@ -116,6 +134,11 @@ final class MachineFailoverOperatorPermit
             'callback' => in_array($operation, ['context', 'native_task'], true),
             default => false,
         };
+    }
+
+    public function requireReadbackRun(string $execution): void
+    {
+        if ($this->phase !== 'readback' || $this->execution !== $execution) throw new CloudException('operator_scope_changed');
     }
 
     public function allowsStart(?string $grant, array $plans): bool

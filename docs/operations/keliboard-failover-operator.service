@@ -2,6 +2,7 @@
 Description=Keliboard manual failover worker (standalone)
 StartLimitIntervalSec=120
 StartLimitBurst=3
+ConditionPathExists=/etc/keliboard-failover/operator.env
 
 [Service]
 Type=exec
@@ -9,6 +10,7 @@ User=keliboard-failover
 Group=keliboard-failover
 WorkingDirectory=/opt/keliboard-failover/current
 EnvironmentFile=/etc/keliboard-failover/operator.env
+Environment=APP_CONFIG_CACHE=/opt/keliboard-failover/current/bootstrap/cache/operator-config.php
 ExecStart=/usr/bin/php -d memory_limit=160M artisan machines:work-operator-failover
 CPUQuota=25%
 MemoryMax=192M

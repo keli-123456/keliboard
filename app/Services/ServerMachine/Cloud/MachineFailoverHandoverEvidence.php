@@ -11,14 +11,14 @@ final class MachineFailoverHandoverEvidence
     private const MAX_AGE = 300;
 
     // Use independent, trusted public keys per purpose. No production authority is configured here.
-    public function __construct(private array $trustedKeys = []) {}
+    public function __construct(private array $trustedKeys = [], private string $oldWriter = 'tanzhen') {}
 
     public function stopped(array $scope, int $admin, ?array $proof, int $now): array
     {
         $body = $this->body($proof, ['scope_sha256', 'observed_at', 'valid_until', 'writer', 'fence_state', 'fence_id',
             'queued', 'in_flight', 'unresolved', 'baseline_sha256']);
         $receipt = $this->verify(self::STOP, $proof, $body, $scope + ['operator_id' => $admin], $now);
-        if ($body['writer'] !== 'tanzhen' || $body['fence_state'] !== 'fenced_until_handback'
+        if ($body['writer'] !== $this->oldWriter || $body['fence_state'] !== 'fenced_until_handback'
             || !is_string($body['fence_id']) || !preg_match('/^[A-Za-z0-9_-]{8,96}$/D', $body['fence_id'])
             || $body['queued'] !== 0 || $body['in_flight'] !== 0 || $body['unresolved'] !== 0
             || !$this->digest($body['baseline_sha256'])) throw new CloudException('handover_stop_unconfirmed');

@@ -1,0 +1,8 @@
+[Unit]
+Description=Poll the manual failover journal after explicit enablement
+
+[Timer]
+OnActiveSec=15s
+OnUnitActiveSec=15s
+AccuracySec=1s
+Unit=keliboard-failover-operator-advance.service
