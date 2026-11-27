@@ -86,7 +86,7 @@ class MachineProvisionService
 
     private function enqueue(array $input, string $requestId, int $admin, ?int $replacementPlan = null, ?array $isolated = null, ?string $attemptId = null): array
     {
-        $this->gate();
+        if ($attemptId === null) $this->gate();
         if (!$this->available()) throw new CloudException('migration_required');
         if (!preg_match('/^[a-f0-9]{32}$/D', $requestId)) throw new CloudException('invalid_request_id');
         $plan = ProvisionPlan::normalize($input);
@@ -96,11 +96,13 @@ class MachineProvisionService
         return Cache::lock('machine-provision:slot:' . hash('sha256', $plan['machine_id'] . ':' . $plan['slot']), 120)
             ->block(2, fn () => $this->quotaLocked($plan['provider'] ?? 'linode', fn () => $this->locked($plan['account_id'], function () use ($plan, $requestId, $admin, $replacementPlan, $isolated, $attemptId) {
             $this->actor($admin);
-            $this->testMachine($plan['machine_id']);
+            $attempt = $attemptId === null ? null : \App\Models\MachineFailoverAttempt::query()->findOrFail($attemptId);
+            $operator = MachineFailoverOperatorPermit::current()?->allowsAttempt($attempt) === true;
+            $this->gate($operator);
+            if (!$operator) $this->testMachine($plan['machine_id']);
             $key = hash('sha256', $admin . ':' . $requestId);
             $hash = hash('sha256', json_encode($plan, JSON_THROW_ON_ERROR));
             if ($isolated !== null) $hash = hash('sha256', $hash . ':' . json_encode($isolated, JSON_THROW_ON_ERROR));
-            $attempt = $attemptId === null ? null : \App\Models\MachineFailoverAttempt::query()->findOrFail($attemptId);
             if ($attempt) {
                 app(MachineFailoverNativeBridge::class)->assertAttempt($attempt);
                 $member = \App\Models\MachineFailoverExecutionMember::query()->findOrFail($attempt->execution_member_id);
@@ -176,7 +178,9 @@ class MachineProvisionService
             if (!$task || in_array($task->status, Task::TERMINAL, true) || $task->next_check_at > time()) return;
             $phase = 'admission';
             try {
-                $this->gate(); $this->actor($task->admin_id); $this->testMachine($task->machine_id);
+                $permit = MachineFailoverOperatorPermit::current(); $operator = $permit?->allowsTask($task) === true;
+                $this->gate($operator); $this->actor($task->admin_id);
+                if (!$operator) $this->testMachine($task->machine_id);
                 if ($task->deadline_at <= time()) {
                     $reason = !$task->dispatched_at ? 'deadline' : ($task->external_id ? 'reports_timeout' : 'create_not_resolved');
                     $this->move($task, $task->dispatched_at ? 'needs_review' : 'failed', $reason); return;
@@ -208,7 +212,8 @@ class MachineProvisionService
                     $provider->preflight($account, $payload['plan']);
                     app(MachineProvisionLimits::class)->assertDispatch($account, $task);
                     $health->authenticatedRead($account, 'preflight');
-                    $this->gate(); $this->actor($task->admin_id); $this->testMachine($task->machine_id);
+                    $this->gate($operator); $this->actor($task->admin_id);
+                    if (!$operator) $this->testMachine($task->machine_id);
                     if ($account->fresh()?->revision !== $task->account_revision) throw new CloudException('account_changed');
                     $current = $machine->fresh();
                     if (!$current || !$current->is_active || !hash_equals($task->machine_authority, hash('sha256', (string) $current->token))) throw new CloudException('source_changed');
@@ -228,7 +233,8 @@ class MachineProvisionService
                     });
                     try {
                         $phase = 'create';
-                        $snapshot = $provider->create($account, $payload['request'], $task->dispatched_at);
+                        $send = fn () => $provider->create($account, $payload['request'], $task->dispatched_at);
+                        $snapshot = $operator ? $permit->create($task, $send) : $send();
                         if (!$this->acceptSnapshot($task, $snapshot)) return;
                         if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
                         $health->resolveIntent($account, $task->id);
@@ -298,15 +304,24 @@ class MachineProvisionService
 
     public function callback(string $id, string $installation, string $secret, string $state): bool
     {
-        if (config('machine_provision.allow_live') !== true || !$this->available() || !Str::isUuid($id)
+        if ((config('machine_provision.allow_live') !== true && !MachineFailoverOperatorPermit::enabled()) || !$this->available() || !Str::isUuid($id)
             || !preg_match('/^[a-f0-9]{64}$/D', $secret) || !preg_match('/^[a-f0-9]{32}$/D', $installation)
             || !in_array($state, ['succeeded', 'failed'], true)) throw new CloudException('invalid_callback');
         $task = Task::query()->find($id);
         if (!$task || !hash_equals($task->callback_hash, hash('sha256', $secret)) || !hash_equals($task->installation_id, $installation)
             || !$task->dispatched_at || $task->deadline_at < time()) throw new CloudException('invalid_callback');
-        return $this->locked($task->account_id, fn () => DB::transaction(function () use ($id, $installation, $secret, $state) {
-            $task = Task::query()->findOrFail($id);
-            if (config('machine_provision.allow_live') !== true || !hash_equals($task->callback_hash, hash('sha256', $secret))
+        $permit = config('machine_provision.allow_live') !== true ? MachineFailoverOperatorPermit::forCallback($task) : null;
+        if ($permit) return $permit->within(fn () => $this->recordCallback($task, $installation, $secret, $state));
+        return $this->recordCallback($task, $installation, $secret, $state);
+    }
+
+    private function recordCallback(Task $initial, string $installation, string $secret, string $state): bool
+    {
+        $id = $initial->id;
+        return $this->locked($initial->account_id, fn () => DB::transaction(function () use ($id, $installation, $secret, $state) {
+            $task = Task::query()->useWritePdo()->findOrFail($id);
+            if ((config('machine_provision.allow_live') !== true && MachineFailoverOperatorPermit::current()?->allowsTask($task) !== true)
+                || !hash_equals($task->callback_hash, hash('sha256', $secret))
                 || !hash_equals($task->installation_id, $installation) || !$task->dispatched_at
                 || $task->deadline_at <= time()) throw new CloudException('invalid_callback');
             if (in_array($task->status, Task::TERMINAL, true)) return false;
@@ -365,7 +380,7 @@ class MachineProvisionService
             && $now < $task->deadline_at && $task->bootstrap_state !== 'failed'
             && in_array($task->status, ['dispatching', 'outcome_unknown', 'waiting_provider'], true);
     }
-    private function gate(): void { if (config('machine_provision.allow_live') !== true) throw new CloudException('provisioning_disabled'); }
+    private function gate(bool $operator = false): void { if (!$operator && config('machine_provision.allow_live') !== true) throw new CloudException('provisioning_disabled'); }
     private function origin(array $plan): void
     {
         if (!hash_equals($this->bootstrap->configuredOrigin(), $plan['panel_origin'])) throw new CloudException('panel_origin_changed');

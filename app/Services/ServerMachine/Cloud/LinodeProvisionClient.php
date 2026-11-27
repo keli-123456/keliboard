@@ -48,7 +48,8 @@ class LinodeProvisionClient extends LinodeClient implements ProvisionClient
     public function create(MachineCloudAccount $account, array $request, int $since): array
     {
         MachineProvisionProviders::assertProvider($account, 'linode');
-        if (config('machine_provision.allow_live') !== true) throw new CloudException('provisioning_disabled');
+        if (config('machine_provision.allow_live') !== true && !MachineFailoverOperatorPermit::allowsCreate($account, $request, $since))
+            throw new CloudException('provisioning_disabled');
         self::assertMetadataSize($request['metadata']['user_data'] ?? null);
         try {
             $response = Http::withToken($account->credentials['api_token'])->acceptJson()->withoutRedirecting()

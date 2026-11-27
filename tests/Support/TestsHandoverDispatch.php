@@ -2,6 +2,7 @@
 
 namespace Tests\Support;
 
+use App\Jobs\MachineFailoverOperatorRunJob;
 use App\Jobs\MachineFailoverRunJob;
 use App\Models\MachineDnsCredential;
 use App\Models\MachineFailoverAttempt as Attempt;
@@ -16,9 +17,14 @@ use App\Services\ServerMachine\Cloud\MachineFailoverHandover;
 use App\Services\ServerMachine\Cloud\MachineFailoverHandoverEvidence;
 use App\Services\ServerMachine\Cloud\MachineFailoverHandoverRecovery;
 use App\Services\ServerMachine\Cloud\MachineFailoverNativeBridge;
+use App\Services\ServerMachine\Cloud\MachineFailoverOperator;
+use App\Services\ServerMachine\Cloud\MachineFailoverOperatorPermit;
+use App\Services\ServerMachine\Cloud\MachineFailoverQueue;
 use App\Services\ServerMachine\Cloud\MachineFailoverServiceRegistry;
+use App\Services\ServerMachine\Cloud\MachineProvisionService;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -50,6 +56,124 @@ trait TestsHandoverDispatch
     private function revokeHandover(): void
     {
         app(MachineFailoverHandover::class)->revoke(Grant::query()->firstOrFail()->id, $this->admin->id);
+    }
+
+    private function operatorService(): array
+    {
+        $this->nodeReadiness = true; $this->runtimeSchema(); $this->enable();
+        $fixture = $this->fixtures[0];
+        $service = app(MachineFailoverServiceRegistry::class)->save(['name' => 'Operator fixture', 'max_parallel' => 1,
+            'attempt_limit' => 1, 'members' => [['policy_id' => $fixture['policy']->id, 'policy_revision' => $fixture['policy']->revision,
+                'name' => $fixture['machine']->name, 'priority' => 1, 'enabled' => true]]], $this->admin->id);
+        $this->issueHandover($service['id'], $service['revision']);
+        config(['machine_failover.operator_enabled' => true, 'machine_failover.allow_replacement' => false,
+            'machine_failover.allow_rotation' => false, 'machine_provision.allow_live' => false,
+            'machine_acceptance.allow_readiness' => false, 'machine_acceptance.allow_verification' => false, 'machine_acceptance.allow_dns' => false,
+            'queue.connections.' . MachineFailoverQueue::CONNECTION => ['driver' => 'redis', 'retry_after' => MachineFailoverQueue::RETRY_AFTER]]);
+        $this->operatorConsumer(true);
+        app()->instance(MachineFailoverExecutionGate::class, new MachineFailoverExecutionGate());
+        return $service;
+    }
+
+    private function operatorConsumer(bool $running): void
+    {
+        if ($running) Cache::put(MachineFailoverQueue::OPERATOR_HEARTBEAT, str_repeat('a', 32), MachineFailoverQueue::OPERATOR_HEARTBEAT_SECONDS);
+        else Cache::forget(MachineFailoverQueue::OPERATOR_HEARTBEAT);
+    }
+
+    private function operatorTick(array $run): array
+    {
+        Runtime::query()->whereKey($run['id'])->update(['next_check_at' => 0]);
+        $this->task()->fill(['next_check_at' => 0])->save();
+        $this->runner()->advanceOperator();
+        $job = Bus::dispatched(MachineFailoverOperatorRunJob::class)->last(fn ($job) => $job->execution === $run['id']);
+        $job->handle($this->runner());
+        return app(MachineFailoverNativeBridge::class)->report($run['id'], $this->admin->id);
+    }
+
+    public function test_operator_ticket_is_bound_to_one_run_while_the_legacy_switches_stay_closed(): void
+    {
+        $service = $this->operatorService(); $admin = $this->admin->id;
+        $operator = app(MachineFailoverOperator::class);
+        $inspect = fn () => $operator->preview($service['id'], $service['revision'], $admin);
+        config(['machine_failover.operator_enabled' => false]);
+        self::assertSame('orchestration_disabled', $inspect()['blocker']);
+        config(['machine_failover.operator_enabled' => true]);
+        $this->operatorConsumer(false);
+        self::assertSame('runner_disabled', $inspect()['blocker']);
+        $this->operatorConsumer(true);
+        $preview = $inspect();
+        self::assertNull($preview['blocker'], json_encode($preview));
+        self::assertNull($operator->receipt($service['id'], $preview['request_id'], $admin)['execution_id']);
+        $this->code('provisioning_disabled', fn () => app(MachineProvisionService::class)->queue([], str_repeat('a', 32), $admin));
+        $this->code('orchestration_disabled', fn () => app(MachineFailoverExecutionGate::class)->assertAllowed('admission'));
+        $accepted = $operator->start($service['id'], $preview['confirmation'], $admin);
+        self::assertSame($accepted, $operator->start($service['id'], $preview['confirmation'], $admin));
+        self::assertSame($accepted, $operator->receipt($service['id'], $preview['request_id'], $admin));
+        self::assertSame(MachineFailoverOperatorPermit::MODE, Execution::query()->sole()->payload['launch_mode']);
+        self::assertSame($accepted['execution_id'], Grant::query()->sole()->execution_id);
+        self::assertSame(1, Runtime::query()->count());
+        Bus::assertDispatchedTimes(MachineFailoverOperatorRunJob::class, 1);
+        Bus::assertNotDispatched(MachineFailoverRunJob::class);
+        $lost = Bus::dispatched(MachineFailoverOperatorRunJob::class)->last();
+        self::assertSame(MachineFailoverQueue::OPERATOR_NAME, $lost->queue);
+        config(['machine_failover.runner_enabled' => true]);
+        app()->instance(MachineFailoverExecutionGate::class, new class extends MachineFailoverExecutionGate {
+            public function assertAllowed(string $operation): void { if ($operation !== 'runner') parent::assertAllowed($operation); }
+        });
+        (new MachineFailoverRunJob($lost->execution, $lost->generation, $lost->ticket))->handle($this->runner());
+        self::assertSame('queued', Runtime::query()->sole()->state);
+        self::assertSame(0, Attempt::query()->count());
+        config(['machine_failover.runner_enabled' => false]);
+        app()->instance(MachineFailoverExecutionGate::class, new MachineFailoverExecutionGate());
+        Runtime::query()->whereKey($accepted['execution_id'])->update(['next_dispatch_at' => 0]);
+        self::assertSame(0, $this->runner()->advance()['queued']);
+        $this->operatorConsumer(false);
+        self::assertSame(0, $this->runner()->advanceOperator()['queued']);
+        Bus::assertDispatchedTimes(MachineFailoverOperatorRunJob::class, 1);
+        $this->operatorConsumer(true);
+        self::assertSame(1, $this->runner()->advanceOperator()['queued']);
+        $lost->handle($this->runner());
+        self::assertCount(0, $this->posts);
+        $job = Bus::dispatched(MachineFailoverOperatorRunJob::class)->last();
+        $job->handle($this->runner()); $job->handle($this->runner());
+        self::assertCount(1, $this->posts);
+        $run = ['id' => $accepted['execution_id']];
+        $task = $this->task();
+        $this->code('invalid_callback', fn () => app(MachineProvisionService::class)->callback($task->id,
+            $task->installation_id, str_repeat('0', 64), 'succeeded'));
+        $this->runtimeReady($run);
+        $run = $this->operatorTick($run);
+        self::assertSame('awaiting_dns', $run['members'][0]['phase'], json_encode($run));
+        self::assertSame('completed', $this->operatorTick($run)['status']);
+        Runtime::query()->whereKey($run['id'])->update(['state' => 'processing', 'lease_until' => time() + 30]);
+        self::assertSame(0, $this->runner()->advanceOperator(true)['queued']);
+        self::assertSame('finished', Runtime::query()->findOrFail($run['id'])->state);
+        self::assertSame(1, $this->dnsWrites);
+        self::assertCount(1, $this->posts);
+        self::assertNull(MachineFailoverOperatorPermit::current());
+        self::assertFalse(config('machine_provision.allow_live'));
+        self::assertFalse(config('machine_failover.runner_enabled'));
+        self::assertFalse(config('machine_acceptance.allow_dns'));
+        Bus::assertNotDispatched(\App\Jobs\MachineProvisionJob::class);
+    }
+
+    public function test_revoked_operator_ticket_cannot_claim_a_provider_intent(): void
+    {
+        $service = $this->operatorService(); $operator = app(MachineFailoverOperator::class); $admin = $this->admin->id;
+        $preview = $operator->preview($service['id'], $service['revision'], $admin);
+        $accept = $operator->start($service['id'], $preview['confirmation'], $admin);
+        $job = Bus::dispatched(MachineFailoverOperatorRunJob::class)->last();
+        $this->revokeHandover();
+        $this->operatorConsumer(false);
+        self::assertSame(1, $this->runner()->advanceOperator()['stopped']);
+        $job->handle($this->runner()); $job->handle($this->runner());
+        self::assertSame('stopped', $operator->receipt($service['id'], $preview['request_id'], $admin)['status']);
+        self::assertSame('handover_revoked', Runtime::query()->findOrFail($accept['execution_id'])->reason);
+        self::assertSame(0, Attempt::query()->count());
+        self::assertCount(0, $this->posts);
+        self::assertSame(0, $this->dnsWrites);
+        self::assertNull(MachineFailoverOperatorPermit::current());
     }
 
     public function test_handover_binds_native_intent_before_enqueue_and_rejects_a_stale_ticket(): void
