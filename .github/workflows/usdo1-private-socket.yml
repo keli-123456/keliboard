@@ -1,0 +1,43 @@
+name: Service 123 isolated enrollment and TLS acceptance
+
+on:
+  push:
+    branches: [audit/usdo1-enrollment-linux-20261127]
+
+permissions:
+  contents: read
+
+jobs:
+  isolated:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare pinned Debian 13 image in runner only
+        timeout-minutes: 9
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$(mktemp -d "$RUNNER_TEMP/usdo1-unix.XXXXXX")"
+          git archive "$GITHUB_SHA" | tar -x -C "$src"
+          test ! -e "$src/.env"
+          rm -- "$src/.dockerignore"
+          docker build --pull -f "$src/.github/ci/usdo1-socket.Dockerfile" -t usdo1-socket:ci "$src"
+      - name: Verify enrollment races, actual Unix ACLs and loopback receipts
+        timeout-minutes: 4
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --init --network none --cap-drop NET_RAW --cap-drop NET_ADMIN \
+            --security-opt no-new-privileges --memory 1536m --pids-limit 128 usdo1-socket:ci \
+            bash -euc '
+              ulimit -c 0
+              php -r "exit(PHP_VERSION === \"8.4.28\" ? 0 : 1);"
+              composer check-platform-reqs --no-interaction >/dev/null
+              php -d memory_limit=768M vendor/bin/phpunit --do-not-cache-result --fail-on-skipped --fail-on-warning \
+                --filter "MachineUsdo1(DataBroker|Launch|ExistingA|ProductionEntry)Test|test_usdo1_|MachineProvisionTest::test_(default_phase|preview|queue_is_encrypted|bootstrap_origin|only_configured_panel|cloud_init|create_sends_only|authenticated_receipt|receipts_need|public_receipt_route)"
+              (cd tools/machine-acceptance && python3 -B -m unittest -v test_usdo1_enrollment test_usdo1_private_preflight test_bootstrap_diagnostics test_usdo1_fault_lease test_driver_journal)
+              python3 -B .github/ci/usdo1-socket-harness.py
+            '
