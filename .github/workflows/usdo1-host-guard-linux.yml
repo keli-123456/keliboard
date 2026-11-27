@@ -1,0 +1,29 @@
+name: Service 123 isolated host guard acceptance
+
+on:
+  push:
+    branches: [audit/usdo1-host-guard-linux-20261127]
+
+permissions:
+  contents: read
+
+jobs:
+  host-guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run local host guard regressions
+        working-directory: tools/machine-acceptance
+        run: python3 -B -m unittest -v test_usdo1_host_guard
+      - name: Prepare standalone kernel test tools on runner
+        timeout-minutes: 3
+        run: |
+          sudo apt-get -q update
+          sudo apt-get -qy --no-install-recommends install nftables iproute2 openssl
+          test "$(cat /proc/1/comm)" = systemd
+      - name: Exercise nftables and independent systemd expiry without an uplink
+        timeout-minutes: 3
+        run: sudo /usr/bin/python3 -B .github/ci/usdo1-host-guard-linux.py

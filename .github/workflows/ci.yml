@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches-ignore:
+      - audit/usdo1-host-guard-linux-20261127
   pull_request:
     types: [opened, synchronize, reopened]
 
