@@ -62,6 +62,22 @@ function aclAdmin(bool $create): void {
             '+zrem','+zrangebyscore','+zremrangebyrank','+mget','+incr']);
     requireFixture(in_array($reply,[true,'OK'],true),'fixture_acl_creation_failed');
 }
+function aclDiagnostics(): array {
+    $r=fixtureRedis(); $identity=aclIdentity()['username']; $prefix=Fixture::prefix(); $codes=[];
+    foreach ($r->rawCommand('ACL','LOG','64') ?: [] as $entry) {
+        if (array_is_list($entry)) {
+            $row=[];
+            foreach (array_chunk($entry,2) as [$name,$value]) $row[$name]=$value;
+        } else $row=$entry;
+        if (($row['username'] ?? '')!==$identity) continue;
+        $object=(string)($row['object'] ?? '');
+        if (str_starts_with($object,$prefix)) $object=substr($object,strlen($prefix));
+        if (preg_match('/^queues:(stat|traffic_fetch|admin_operations|machine_failover)(:|$)/D',$object)) continue;
+        $object=preg_replace('/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|[a-f0-9]{8,}/i','<fixture-id>',$object);
+        if (preg_match('/^[a-zA-Z0-9_:.<>-]{1,140}$/D',$object)) $codes[] = ($row['reason'] ?? 'unknown').':'.$object;
+    }
+    return array_values(array_unique($codes));
+}
 function useRestrictedRedis(): void {
     $id = aclIdentity(); $r = fixtureRedis();
     requireFixture($r->auth([$id['username'],$id['password']]) && $r->ping() !== false,'fixture_acl_identity_failed');
@@ -292,6 +308,8 @@ try {
         echo json_encode(['ready' => Cache::get(Queue::OPERATOR_HEARTBEAT) !== null,
             'preflight_barrier' => (clone $events)->where('kind','barrier')->where('reference','preflight')->count(),
             'acl_checks' => (int) (clone $events)->where('kind','restricted_acl')->latest('id')->value('reference'),
+            'unexpected_acl' => aclDiagnostics(),
+            'caught_fixture_fault' => (clone $events)->where('kind','fixture_private_exception')->latest('id')->value('reference'),
             'shared_listener' => (clone $events)->where('kind','shared_horizon_failure_listener')->count(),
             'shared_failed_unchanged' => DB::table('failed_jobs')->count() === 1 && DB::table('failed_jobs')->value('payload') === 'existing_fixture',
             'task_signature' => $candidate ? hash('sha256',$attempt->id.':'.$candidate->id.':'.$candidate->marker.':'.$candidate->dispatched_at) : null,

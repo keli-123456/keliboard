@@ -244,7 +244,8 @@ except Exception:
         try:
             state = status()
             keys = ("run", "runtime_state", "runtime_reason", "member_phase", "member_reason", "worker_error",
-                    "timer_ticks", "provider_barrier", "preflight_barrier", "creates_and_dns", "acl_checks", "shared_listener")
+                    "timer_ticks", "provider_barrier", "preflight_barrier", "creates_and_dns", "acl_checks", "shared_listener",
+                    "unexpected_acl", "caught_fixture_fault")
             print("CI_DIAGNOSTIC", json.dumps({k: state.get(k) for k in keys}), flush=True)
         except Exception:
             pass

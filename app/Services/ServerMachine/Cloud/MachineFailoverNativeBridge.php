@@ -174,7 +174,12 @@ class MachineFailoverNativeBridge
                         if ($attempt) $this->attemptStatus($attempt, $task?->dispatched_at ? 'retained' : 'cancelled');
                         $this->phase($row, $partial ? 'needs_review' : ($task?->dispatched_at ? 'retained' : 'cancelled'), $reason);
                     } else $this->phase($row, 'needs_review', preg_match('/^[a-z_]{1,60}$/D', $reason) ? $reason : 'internal_failure');
-                } catch (\Throwable) { $this->phase($row, 'needs_review', 'internal_failure'); }
+                } catch (\Throwable $error) {
+                    if (getenv('GITHUB_WORKFLOW') === 'Manual failover failure journal')
+                        \Tests\Support\NativeFailoverConcurrentFixture::event('fixture_private_exception',
+                            \Tests\Support\NativeFailoverConcurrentFixture::errorCode($error));
+                    $this->phase($row, 'needs_review', 'internal_failure');
+                }
             });
             if ($singleMember) { $runner->cursor($id, $row->id); break; }
         }
