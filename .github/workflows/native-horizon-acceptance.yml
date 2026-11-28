@@ -2,6 +2,11 @@ name: Manual failover failure journal
 
 on:
   workflow_dispatch:
+    inputs:
+      cases:
+        type: choice
+        options: [full, recovery]
+        default: full
 
 permissions:
   contents: read
@@ -15,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        fault: [timeout, recovery]
+        fault: ${{ fromJSON(inputs.cases == 'recovery' && '["recovery"]' || '["timeout","recovery"]') }}
     services:
       mysql:
         image: mysql:8.4

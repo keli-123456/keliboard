@@ -318,6 +318,7 @@ try {
             'shared_failed_unchanged' => DB::table('failed_jobs')->count() === 1 && DB::table('failed_jobs')->value('payload') === 'existing_fixture',
             'task_signature' => $candidate ? hash('sha256',$attempt->id.':'.$candidate->id.':'.$candidate->marker.':'.$candidate->dispatched_at) : null,
             'provider_known' => $candidate?->external_id !== null,'candidate_attempts' => Attempt::count(),
+            'member_lock_ttl' => $attempt ? fixtureRedis()->ttl(Fixture::prefix().'cache:machine-native:member:'.$attempt->execution_member_id) : null,
             'recovered_events' => DB::table('v2_machine_failover_runtime_event')->where('kind','recovered')->count(),
             'creates_and_dns' => (clone $events)->whereIn('kind', ['create', 'dns_write'])->count(), 'run' => Execution::query()->value('status'),
             'stat' => (int) DB::table('v2_stat_server')->where('server_id', 777)->value('u'), 'stat_receipts' => DB::table('v2_stat_job_receipt')->count(),

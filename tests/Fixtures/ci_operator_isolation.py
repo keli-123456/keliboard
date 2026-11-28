@@ -202,6 +202,7 @@ try:
 
     evidence = {"case": CASE, "cpu_percent": 25, "memory_bytes": 192 * 1024 * 1024, "processes": 8, "redis_denials": 12}
     if CASE == "recovery":
+        assert 270 <= first["member_lock_ttl"] <= 300, "Live member lock did not use its real TTL"
         sudo("systemctl", "kill", "--signal=KILL", "--kill-whom=main", UNIT)
         wait_for(lambda: (new := status()["worker_process"]) and new["pid"] != pid, 20, "Worker did not restart")
         interrupted = wait_for(lambda: (j := journal_state()["failures"]) and j.get(delivery["delivery"]),
@@ -211,9 +212,11 @@ try:
         assert early["recovered_events"] == 0 and not early["provider_known"], "Original lease was bypassed"
         def restored():
             s = status()
+            assert s["run"] == "running" and s["creates_and_dns"] == 1 and not s["unexpected_acl"]
             return s if s["recovered_events"] >= 1 and s["provider_known"] else None
-        recovered = wait_for(restored, 165, "Leased task never resumed its original create intent")
-        assert time.monotonic() - started >= 116 and recovered["candidate_attempts"] == 1 and recovered["creates_and_dns"] == 1
+        recovered = wait_for(restored, 360, "Leased task never resumed its original create intent")
+        elapsed = round(time.monotonic() - started, 2)
+        assert elapsed >= 285 and recovered["candidate_attempts"] == 1 and recovered["creates_and_dns"] == 1
         assert recovered["task_signature"] == first["task_signature"]
         assert journal_state()["failures"][delivery["delivery"]] == interrupted
         call("revoke")
@@ -223,7 +226,8 @@ try:
         call("read-close")
         assert status()["closed"] == 1
         evidence.update(timer_non_root=True, sigkill_first_error=True, original_task_resumed=True, stopped_after_revocation=True,
-                        original_readback=True, closure_verified=True, simulated_creates=1, lease_wait_seconds=round(time.monotonic()-started))
+                        original_readback=True, closure_verified=True, simulated_creates=1, recovery_wait_seconds=elapsed,
+                        initial_member_lock_ttl=first["member_lock_ttl"])
     else:
         wait_for(lambda: show("ActiveState") in {"failed", "inactive"}, 96, "Manual worker did not stop within the fixture deadline")
         timeout = journal_state()["failures"][delivery["delivery"]]
