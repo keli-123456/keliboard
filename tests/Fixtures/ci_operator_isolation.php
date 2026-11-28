@@ -160,7 +160,7 @@ function runConsole(string $mode): int {
     return $cli->run(new \Symfony\Component\Console\Input\ArrayInput(match ($mode) {
         'worker' => ['command' => 'machines:work-operator-failover'],
         'timer' => ['command' => 'machines:advance-operator-failover'],
-        'business' => ['command' => 'queue:work', 'connection' => 'redis', '--queue' => 'stat,traffic_fetch', '--sleep' => 1, '--max-time' => 300, '--tries' => 1],
+        'business' => ['command' => 'queue:work', 'connection' => 'redis', '--queue' => 'stat,traffic_fetch', '--sleep' => 1, '--max-time' => 900, '--tries' => 1],
     }),
         new \Symfony\Component\Console\Output\NullOutput());
 }
