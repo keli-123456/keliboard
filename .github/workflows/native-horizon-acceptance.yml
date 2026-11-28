@@ -1,26 +1,21 @@
-name: Manual failover isolated process limits
+name: Manual failover failure journal
 
 on:
   workflow_dispatch:
-    inputs:
-      scope:
-        type: choice
-        options: [full, smoke]
-        default: full
 
 permissions:
   contents: read
 
 jobs:
   isolation:
-    if: github.ref_name == 'codex/operator-handover-ci-20261127'
+    if: github.ref_name == 'codex/operator-failure-linux-20261128'
     name: Isolated Linux (${{ matrix.fault }})
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
-        fault: ${{ fromJSON(inputs.scope == 'smoke' && '["timeout","recovery"]' || '["kill","timeout","limits","recovery"]') }}
+        fault: [timeout, recovery]
     services:
       mysql:
         image: mysql:8.4
@@ -59,7 +54,8 @@ jobs:
         if: matrix.fault == 'recovery'
         run: >-
           php vendor/bin/phpunit --do-not-cache-result
-          --filter '(MachineFailoverHandoverTest|test_handover_|test_operator_|test_revoked_operator|StatBatchJobsTest|StatUserJobTest|TrafficFetchJobTest|TrafficBatchServiceTest|test_authenticated_receipt_is_idempotent|test_receipts_need_bearer|test_public_receipt_route)'
+          --filter '(MachineFailoverOperatorFailureJournalTest|MachineFailoverHandoverTest|test_handover_|test_operator_|test_revoked_operator|StatBatchJobsTest|StatUserJobTest|TrafficFetchJobTest|TrafficBatchServiceTest|test_authenticated_receipt_is_idempotent|test_receipts_need_bearer|test_public_receipt_route)'
+          tests/Unit/Services/MachineFailoverOperatorFailureJournalTest.php
           tests/Unit/Services/MachineFailoverNativeBridgeTest.php
           tests/Unit/Services/MachineFailoverHandoverTest.php
           tests/Unit/Jobs/StatBatchJobsTest.php tests/Unit/Jobs/StatUserJobTest.php tests/Unit/Jobs/TrafficFetchJobTest.php

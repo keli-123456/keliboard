@@ -122,8 +122,7 @@ trait TestsHandoverDispatch
     {
         $policy = $this->operatorPolicy($this->operatorService(false));
         config(['machine_failover.operator_enabled' => false]);
-        $this->code('orchestration_disabled', fn () => app(\App\Console\Commands\WorkMachineFailoverOperator::class)
-            ->handle(app(\Illuminate\Contracts\Events\Dispatcher::class)));
+        $this->code('orchestration_disabled', fn () => app(\App\Console\Commands\WorkMachineFailoverOperator::class)->handle());
         $input = $this->operatorScopeInput();
         $scope = $this->operatorControl($policy, 'scope', $input)['scope'];
         $this->code('operator_scope_changed', fn () => $this->operatorControl(['machine_id' => 17] + $policy, 'scope', $input));
@@ -261,6 +260,26 @@ trait TestsHandoverDispatch
         $job = Bus::dispatched(MachineFailoverOperatorRunJob::class)->last(fn ($job) => $job->execution === $run['id']);
         $job->handle($this->runner());
         return app(MachineFailoverNativeBridge::class)->report($run['id'], $this->admin->id);
+    }
+
+    public function test_operator_provision_without_its_runtime_never_falls_back_to_the_old_queue(): void
+    {
+        $service = $this->operatorService(); $this->operatorConsumer(true);
+        $operator = app(MachineFailoverOperator::class);
+        $preview = $operator->preview($service['id'], $service['revision'], $this->admin->id);
+        $accepted = $operator->start($service['id'], $preview['confirmation'], $this->admin->id);
+        Bus::dispatched(MachineFailoverOperatorRunJob::class)->last()->handle($this->runner());
+        $task = $this->task();
+        Runtime::query()->whereKey($accepted['execution_id'])->delete();
+        config(['machine_failover.operator_enabled' => false]);
+        self::assertFalse(config('machine_failover.runner_enabled'));
+        self::assertTrue($this->runner()->wakeTask($task));
+        self::assertFalse($this->runner()->workerOwns($task));
+        self::assertSame('runtime_migration_required', DB::table('v2_machine_provision_step')
+            ->where('task_id', $task->id)->where('state', 'routing_blocked')->sole()->reason);
+        Bus::assertNotDispatched(\App\Jobs\MachineProvisionJob::class);
+        self::assertCount(1, $this->posts);
+        self::assertSame(0, $this->dnsWrites);
     }
 
     public function test_operator_ticket_is_bound_to_one_run_while_the_legacy_switches_stay_closed(): void

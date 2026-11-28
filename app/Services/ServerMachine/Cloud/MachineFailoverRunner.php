@@ -13,10 +13,12 @@ use App\Services\ServerMachine\MachineOperationNotifier;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 
 class MachineFailoverRunner
 {
+    public const PROVISION_ROUTE_BLOCKED = 'routing_blocked';
     private const EVENTS = 'v2_machine_failover_runtime_event';
     private const REASONS = ['cancelled_by_admin', 'permission_revoked', 'deadline', 'native_context_changed', 'config_changed',
         'native_lease_lost', 'native_stop_requested', 'runner_disabled', 'queue_unavailable', 'worker_interrupted', 'worker_busy', 'worker_failed', 'orchestration_disabled',
@@ -85,15 +87,50 @@ class MachineFailoverRunner
     }
     public function workerOwns(Task $task): bool
     {
-        $id = $this->managed($task); if (!$id) return true;
-        if (!isset($task->payload['coordinated_attempt']) || !Attempt::query()->whereKey($task->payload['coordinated_attempt'])->where('task_id', $task->id)->exists()) return false;
-        try { $this->guard($id); return true; } catch (CloudException) { return false; }
+        [$execution, $failure] = $this->provisionRoute($task);
+        if ($failure !== null) { $this->recordBlockedProvision($task, $failure); return false; }
+        if ($execution === null) return true;
+        try { $this->guard($execution); return true; } catch (CloudException) { return false; }
     }
     public function wakeTask(Task $task): bool
     {
-        $id = $this->managed($task); if (!$id) return false;
-        Runtime::query()->whereKey($id)->whereNull('stop_requested_at')->update(['next_check_at' => time()]);
+        [$execution, $failure] = $this->provisionRoute($task);
+        if ($failure !== null) { $this->recordBlockedProvision($task, $failure); return true; }
+        if ($execution === null) return false;
+        Runtime::query()->whereKey($execution)->whereNull('stop_requested_at')->update(['next_check_at' => time()]);
         return true;
+    }
+    /** @return array{?string, ?string} Execution for the runner, or a reason to reject routing. */
+    private function provisionRoute(Task $task): array
+    {
+        $payload = $task->payload ?? [];
+        $marked = array_key_exists('coordinated_attempt', $payload);
+        $attempt = Schema::hasTable('v2_machine_failover_attempt')
+            ? Attempt::query()->useWritePdo()->where('task_id', $task->id)->first(['id', 'execution_member_id']) : null;
+        if (!$attempt) return [null, $marked ? 'native_lineage_changed' : null];
+
+        // Routing needs both the payload marker and the current persisted association.
+        if (($payload['coordinated_attempt'] ?? null) !== $attempt->id || !Schema::hasTable('v2_machine_failover_execution_member')
+            || !Schema::hasTable('v2_machine_failover_execution')) return [null, 'native_lineage_changed'];
+        $member = Member::query()->useWritePdo()->find($attempt->execution_member_id, ['id', 'execution_id', 'attempt_id']);
+        $run = $member && $member->attempt_id === $attempt->id ? Execution::query()->useWritePdo()->find($member->execution_id) : null;
+        if (!$run || $run->status !== 'running') return [null, 'native_lineage_changed'];
+        if (Schema::hasTable('v2_machine_failover_runtime') && Runtime::query()->useWritePdo()->whereKey($run->id)->exists())
+            return $this->available() ? [$run->id, null] : [null, 'runtime_migration_required'];
+        if (MachineFailoverOperatorPermit::matches($run) || app(MachineFailoverHandover::class)->requiredFor($run)
+            || array_key_exists('admission', $run->payload ?? []) || config('machine_failover.runner_enabled') === true)
+            return [null, 'runtime_migration_required'];
+        return [null, null];
+    }
+
+    private function recordBlockedProvision(Task $task, string $reason): void
+    {
+        try {
+            DB::table('v2_machine_provision_step')->insertOrIgnore(['task_id' => $task->id,
+                'state' => self::PROVISION_ROUTE_BLOCKED, 'reason' => $reason, 'created_at' => time()]);
+        } catch (\Throwable) {
+            Log::warning('Provision routing blocked; unable to retain task audit.', ['reason' => $reason]);
+        }
     }
     private function dispatch(string $id, bool $scheduled = false, bool $operator = false): bool
     {

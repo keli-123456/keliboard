@@ -1913,6 +1913,43 @@ class MachineFailoverNativeBridgeTest extends TestCase
         $this->stopRuntime($run); $this->assertSame('needs_review', Member::query()->first()->phase);
         $this->assertSame($before, Http::recorded()->count());
     }
+    public static function brokenProvisionRoutes(): array
+    {
+        return [
+            'missing reverse association' => ['unbound', 'native_lineage_changed'],
+            'wrong marker' => ['wrong_marker', 'native_lineage_changed'],
+            'null marker' => ['null_marker', 'native_lineage_changed'],
+            'superseded attempt' => ['superseded', 'native_lineage_changed'],
+            'missing runtime' => ['runtime', 'runtime_migration_required'],
+            'missing runtime events' => ['events', 'runtime_migration_required'],
+        ];
+    }
+    #[DataProvider('brokenProvisionRoutes')]
+    public function test_runner_blocks_broken_provision_routes_without_using_the_legacy_queue(string $fault, string $reason): void
+    {
+        $run = $this->tick($this->runtimeStart());
+        $task = $this->task(); $task->fill(['next_check_at' => 0])->save();
+        $attempt = Attempt::query()->where('task_id', $task->id)->firstOrFail();
+        match ($fault) {
+            'unbound' => $attempt->update(['task_id' => null]),
+            'wrong_marker', 'null_marker' => $task->update(['payload' => array_replace($task->payload,
+                ['coordinated_attempt' => $fault === 'null_marker' ? null : (string) Str::uuid()])]),
+            'superseded' => Member::query()->whereKey($attempt->execution_member_id)->update(['attempt_id' => null]),
+            'runtime' => \App\Models\MachineFailoverRuntime::query()->whereKey($run['id'])->delete(),
+            'events' => Schema::drop('v2_machine_failover_runtime_event'),
+        };
+        $before = $task->fresh()->only(['status', 'reason', 'dispatched_at', 'external_id']);
+        $calls = Http::recorded()->count(); $service = app(MachineProvisionService::class);
+        self::assertSame(['queued' => 1], $service->advance());
+        self::assertSame(['queued' => 0], $service->advance());
+        (new \App\Jobs\MachineProvisionJob($task->id))->handle($service);
+        Bus::assertNotDispatched(\App\Jobs\MachineProvisionJob::class);
+        $steps = DB::table('v2_machine_provision_step')->where('task_id', $task->id)->where('state', 'routing_blocked');
+        self::assertSame(1, $steps->count());
+        self::assertSame($reason, $steps->value('reason'));
+        self::assertSame($before, $task->fresh()->only(array_keys($before)));
+        self::assertSame($calls, Http::recorded()->count());
+    }
     public function test_runner_stop_does_not_cancel_a_dns_transition_with_changed_lineage(): void
     {
         $run = $this->tick($this->runtimeStart()); $this->runtimeReady($run); $run = $this->tick($run);

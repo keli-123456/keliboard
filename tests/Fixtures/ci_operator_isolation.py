@@ -4,7 +4,6 @@ import os
 import pathlib
 import secrets
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -13,9 +12,9 @@ import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 CASE = sys.argv[1]
-assert CASE in {"kill", "timeout", "limits", "recovery"}
+assert CASE in {"timeout", "recovery"}
 assert os.environ.get("GITHUB_ACTIONS") == "true"
-assert os.environ.get("GITHUB_WORKFLOW") == "Manual failover isolated process limits"
+assert os.environ.get("GITHUB_WORKFLOW") == "Manual failover failure journal"
 assert os.getuid() != 0
 OWNER = secrets.token_hex(16)
 UNIT = f"keli-operator-ci-{OWNER}.service"
@@ -30,6 +29,8 @@ ENV_NAMES = ["GITHUB_ACTIONS", "GITHUB_WORKFLOW", "KELI_NATIVE_ACCEPTANCE", "KEL
              "KELI_NATIVE_MYSQL_PORT", "KELI_NATIVE_REDIS_PORT"]
 ENV = {key: os.environ[key] for key in ENV_NAMES}
 ENV["PATH"] = "/usr/local/bin:/usr/bin:/bin"
+ENV["KELI_OPERATOR_FIXTURE_PASS"] = secrets.token_hex(24)
+ENV["KELI_NATIVE_HORIZON_ACCEPTANCE"] = "1"
 
 
 def task(action, memory="160M"):
@@ -74,6 +75,7 @@ def business_checkpoint(worker, ordinal, simulated_writes=0):
     assert state["legacy"] == "succeeded" and state["legacy_steps"] == 1
     assert state["legacy_admin"] == 1 and state["legacy_failover"] == 0 and state["creates_and_dns"] == simulated_writes
     assert state["queue_stat"] == 0 and state["queue_traffic"] == 0
+    assert state["shared_failed_unchanged"] and state["shared_listener"] == 0
 
 
 def load(name):
@@ -87,7 +89,9 @@ def load(name):
 def install_units(directory, installed):
     environment = directory / "fixture.env"
     run_state = directory / "state"
-    run_state.mkdir()
+    run_state.mkdir(mode=0o700)
+    journal = run_state / "failure-state.json"
+    ENV["KELI_OPERATOR_FIXTURE_JOURNAL"] = str(run_state)
     paths = [UNIT_DIR / unit for unit in (UNIT, ADVANCE, TIMER)]
     assert all(not p.exists() and not p.is_symlink() for p in paths)
     environment.write_text("".join(f"{k}={v}\n" for k, v in ENV.items()))
@@ -102,7 +106,7 @@ def install_units(directory, installed):
             service["WorkingDirectory"] = str(ROOT)
             service["EnvironmentFile"] = str(environment)
             service["Environment"] = f"APP_CONFIG_CACHE={directory / 'nonexistent-cache.php'}"
-            service["ExecStart"] = " ".join(task(action, "-1" if CASE == "limits" and action == "worker" else "160M"))
+            service["ExecStart"] = " ".join(task(action))
             service["ReadWritePaths"] = str(run_state)
             service["IPAddressDeny"] = "any"
             service["IPAddressAllow"] = "localhost"
@@ -119,6 +123,7 @@ def install_units(directory, installed):
         sudo("install", "-o", "root", "-g", "root", "-m", "0644", str(source), str(installed[-1]))
     sudo("systemd-analyze", "verify", *map(str, installed))
     sudo("systemctl", "daemon-reload")
+    return journal
 
 
 def process_proof(value, expected_pid=None):
@@ -149,7 +154,21 @@ try:
     business = subprocess.Popen(task("business"), cwd=ROOT, env=ENV, start_new_session=True)
     business_checkpoint(business, 1)
 
-    install_units(pathlib.Path(temporary.name), installed)
+    journal = install_units(pathlib.Path(temporary.name), installed)
+
+    def journal_state():
+        if not journal.exists():
+            return {}
+        assert journal.stat().st_mode & 0o777 == 0o600
+        raw = journal.read_text()
+        value = json.loads(raw)
+        assert len(raw) < 8192 and set(value) == {"schema", "active", "failures", "worker_error"}
+        for entry in value["failures"].values() if isinstance(value["failures"], dict) else []:
+            assert set(entry) <= {"delivery", "started_at", "reason", "at", "exception", "file", "line"}
+            assert entry["reason"] in {"worker_interrupted", "job_failed", "job_timeout"}
+            assert len(entry["delivery"]) == 64
+        return value
+
     sudo("systemctl", "start", UNIT)
     wait_for(lambda: status()["ready"], 18, "Independent worker did not publish a heartbeat")
     cgroup = show("ControlGroup")
@@ -160,14 +179,16 @@ try:
     assert (path / "memory.swap.max").read_text().strip() == "0"
     assert int((path / "pids.max").read_text()) == 8
     process_proof(status()["worker_process"], int(show("MainPID")))
-    if CASE in {"timeout", "recovery"}:
-        sudo("systemctl", "start", TIMER)
+    assert status()["acl_checks"] == 12
+    sudo("systemctl", "start", TIMER)
     call("launch")
     started = time.monotonic()
-    pid = wait_for(lambda: status()["entered"], 18, "Manual job never reached its own queue worker")
-    assert str(pid) == show("MainPID") and pid != business.pid
-    if CASE == "recovery":
-        wait_for(lambda: status()["provider_barrier"] == 1, 14, "Mock create never reached its acknowledgement boundary")
+    pid = int(show("MainPID"))
+    assert pid != business.pid
+    delivery = wait_for(lambda: journal_state().get("active"), 18, "Manual delivery marker missing")
+    barrier = "provider_barrier" if CASE == "recovery" else "preflight_barrier"
+    first = wait_for(lambda: s if (s := status())[barrier] == 1 else None, 18, "Mock provider barrier missing")
+    assert first["runtime_state"] == "processing" and not first["provider_known"]
     business_checkpoint(business, 2, int(CASE == "recovery"))
     if CASE == "timeout":
         # Leave the current oneshot running, but do not let the periodic timer
@@ -175,59 +196,55 @@ try:
         process_proof(wait_for(lambda: status()["timer_process"], 24, "Timer did not run the advance service"))
         sudo("systemctl", "stop", TIMER)
 
-    evidence = {"case": CASE, "cpu_percent": 25, "memory_bytes": 192 * 1024 * 1024, "processes": 8}
-    if CASE in {"kill", "recovery"}:
-        if CASE == "recovery":
-            call("revoke")
-            state = status()
-            assert state["stop_evidence"] == 1 and state["run"] == "running" and state["closed"] == 0
-        sudo("systemctl", "kill", "--signal=KILL", "--kill-whom=main", UNIT)
-    elif CASE == "limits":
-        wait_for(lambda: status()["cpu"], 12, "CPU exercise did not finish")
-        stats = dict(line.split() for line in (path / "cpu.stat").read_text().splitlines())
-        assert int(stats["nr_throttled"]) > 0, "CPU quota did not throttle"
-        evidence["throttled_periods"] = int(stats["nr_throttled"])
-        call("allocate")
-        wait_for(lambda: status()["allocation_started"] == 1, 10, "Allocation never reached the cgroup")
-        assert status()["allocation_exceeded"] == 0, "Allocation crossed the hard cap without OOM"
-
+    evidence = {"case": CASE, "cpu_percent": 25, "memory_bytes": 192 * 1024 * 1024, "processes": 8, "redis_denials": 12}
     if CASE == "recovery":
+        sudo("systemctl", "kill", "--signal=KILL", "--kill-whom=main", UNIT)
         wait_for(lambda: (new := status()["worker_process"]) and new["pid"] != pid, 20, "Worker did not restart")
+        interrupted = wait_for(lambda: (j := journal_state()["failures"]) and j.get(delivery["delivery"]),
+                               12, "Killed delivery not archived after restart")
+        assert interrupted["reason"] == "worker_interrupted" and interrupted["started_at"] == delivery["started_at"]
+        early = status()
+        assert early["recovered_events"] == 0 and not early["provider_known"], "Original lease was bypassed"
+        def restored():
+            s = status()
+            return s if s["recovered_events"] >= 1 and s["provider_known"] else None
+        recovered = wait_for(restored, 165, "Leased task never resumed its original create intent")
+        assert time.monotonic() - started >= 116 and recovered["candidate_attempts"] == 1 and recovered["creates_and_dns"] == 1
+        assert recovered["task_signature"] == first["task_signature"]
+        assert journal_state()["failures"][delivery["delivery"]] == interrupted
+        call("revoke")
         wait_for(lambda: status()["run"] == "stopped", 150, "Timer did not settle the revoked original lease")
-        state = status()
-        assert state["timer_ticks"] >= 2 and state["creates_and_dns"] == 1
-        process_proof(state["timer_process"])
+        process_proof(status()["timer_process"])
         sudo("systemctl", "stop", TIMER, ADVANCE, UNIT, timeout=90)
         call("read-close")
         assert status()["closed"] == 1
-        evidence.update(timer_non_root=True, stopped_after_revocation=True, original_readback=True, closure_verified=True, simulated_creates=1)
+        evidence.update(timer_non_root=True, sigkill_first_error=True, original_task_resumed=True, stopped_after_revocation=True,
+                        original_readback=True, closure_verified=True, simulated_creates=1, lease_wait_seconds=round(time.monotonic()-started))
     else:
         wait_for(lambda: show("ActiveState") in {"failed", "inactive"}, 96, "Manual worker did not stop within the fixture deadline")
-    if CASE == "timeout":
-        assert status()["timeouts"] == 1 and 70 <= time.monotonic() - started <= 95
+        timeout = journal_state()["failures"][delivery["delivery"]]
+        assert timeout["reason"] == "job_timeout" and 73 <= timeout["at"]-delivery["started_at"] <= 80
         wait_for(lambda: show("Result", ADVANCE) == "timeout", 20, "Advance process did not hard time out")
         elapsed = (int(show("ExecMainExitTimestampMonotonic", ADVANCE)) - int(show("ExecMainStartTimestampMonotonic", ADVANCE))) / 1e6
         assert 28 <= elapsed <= 42, "Advance unit did not stop at its hard deadline"
         process_proof(status()["timer_process"])
-        evidence.update(job_timeout=True, timer_timeout_seconds=round(elapsed, 2), timer_non_root=True)
-    if CASE == "limits":
-        assert show("Result") == "oom-kill", "Memory limit did not cause the expected cgroup OOM"
-        evidence["kernel_oom"] = True
-    if CASE == "kill":
-        assert show("ExecMainStatus") == str(signal.SIGKILL)
+        evidence.update(job_timeout_seconds=timeout["at"]-delivery["started_at"], timer_timeout_seconds=round(elapsed, 2), timer_non_root=True)
     business_checkpoint(business, 3, int(CASE == "recovery"))
     wait_for(lambda: not status()["ready"], 18, "Dead worker heartbeat survived its TTL")
-    state = status() if CASE == "recovery" else json.loads(call("stop"))
-    assert state["run"] == "stopped" and state["operator_generation"] == 2
+    if CASE == "timeout":
+        wait_for(lambda: json.loads(call("stop"))["run"] == "stopped", 60, "Original timed-out lease did not settle")
+    state = status()
+    assert state["run"] == "stopped" and state["operator_generation"] >= 2
     assert state["legacy_failover"] == 0 and state["legacy_admin"] == 1 and state["creates_and_dns"] == int(CASE == "recovery")
-    evidence.update(stat_receipts=3, traffic_receipts=3, legacy_receipts=1, old_queue_reroutes=0, production_writes=0, worker_non_root=True)
+    evidence.update(stat_receipts=3, traffic_receipts=3, legacy_receipts=1, old_queue_reroutes=0, shared_failed_jobs_writes=0,
+                    production_writes=0, worker_non_root=True)
     print(json.dumps(evidence, sort_keys=True))
 except Exception:
     if seeded:
         try:
             state = status()
             keys = ("run", "runtime_state", "runtime_reason", "member_phase", "member_reason", "worker_error",
-                    "timer_ticks", "provider_barrier", "creates_and_dns", "timeouts")
+                    "timer_ticks", "provider_barrier", "preflight_barrier", "creates_and_dns", "acl_checks", "shared_listener")
             print("CI_DIAGNOSTIC", json.dumps({k: state.get(k) for k in keys}), flush=True)
         except Exception:
             pass

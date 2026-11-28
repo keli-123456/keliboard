@@ -36,6 +36,59 @@ use Tests\Unit\Services\MachineFailoverNativeBridgeTest;
 function requireFixture(bool $condition, string $reason): void {
     if (!$condition) throw new RuntimeException($reason);
 }
+function fixtureRedis(): Redis {
+    $r = new Redis();
+    requireFixture($r->connect('127.0.0.1', (int) getenv('KELI_NATIVE_REDIS_PORT'), 2), 'fixture_redis_unavailable');
+    return $r;
+}
+function aclIdentity(): array {
+    $password = getenv('KELI_OPERATOR_FIXTURE_PASS');
+    requireFixture(is_string($password) && preg_match('/^[a-f0-9]{48}$/D',$password) === 1, 'fixture_acl_scope_missing');
+    return ['username'=>'operator_'.Fixture::$owner, 'password'=>$password];
+}
+function aclAdmin(bool $create): void {
+    $id = aclIdentity(); $redis = fixtureRedis(); $p = Fixture::prefix();
+    if (!$create) { $redis->rawCommand('ACL','DELUSER',$id['username']); return; }
+    $queue = 'queues:'.Queue::OPERATOR_NAME;
+    $rw = [$queue,$queue.':delayed',$queue.':reserved',$queue.':notify','cache:'.Queue::OPERATOR_HEARTBEAT,
+        'cache:machine-native:run:*','cache:machine-native:member:*','cache:machine-failover:write',
+        'cache:machine-cloud:quota:linode','cache:machine-cloud:health:linode','cache:machine-cloud:account:*',
+        'cache:machine-provision:slot:*','cache:machine-operation-notice:*','fixture-barrier:create_after','fixture-barrier:preflight'];
+    $ro = ['cache:illuminate:queue:restart','cache:illuminate:queue:paused:'.Queue::CONNECTION.':'.Queue::OPERATOR_NAME,
+        'fixture-control:fault','fixture-control:release','fixture-control:record_sets','cache:machine_addresses:*','cache:node_instances:*'];
+    $reply = $redis->rawCommand('ACL','SETUSER',$id['username'],'reset','on','>'.$id['password'],
+        ...[...array_map(fn ($k) => '~'.$p.$k,$rw),...array_map(fn ($k) => '%R~'.$p.$k,$ro),
+            '+ping','+select','+get','+set','+setex','+del','+exists','+eval','+llen','+lpop','+rpush','+zadd','+zcard',
+            '+zrem','+zrangebyscore','+zremrangebyrank','+mget','+incr']);
+    requireFixture(in_array($reply,[true,'OK'],true),'fixture_acl_creation_failed');
+}
+function useRestrictedRedis(): void {
+    $id = aclIdentity(); $r = fixtureRedis();
+    requireFixture($r->auth([$id['username'],$id['password']]) && $r->ping() !== false,'fixture_acl_identity_failed');
+    foreach (['stat','traffic_fetch','admin_operations',Queue::NAME] as $name) {
+        $key = Fixture::prefix().'queues:'.$name;
+        foreach ([['LLEN',$key],['RPUSH',$key,'fixture_must_be_denied'],
+            ['EVAL',\Illuminate\Queue\LuaScripts::size(),'3',$key,$key.':delayed',$key.':reserved']] as $command) {
+            $r->clearLastError(); $error = '';
+            try { $reply = $r->rawCommand(...$command); $error = (string) $r->getLastError(); }
+            catch (RedisException $exception) { $reply = false; $error = $exception->getMessage(); }
+            requireFixture($reply === false && str_contains($error,'NOPERM'),'legacy_queue_acl_too_broad');
+        }
+    }
+    $r->close();
+    config(['database.redis.default'=>array_replace(config('database.redis.default'),$id),
+        'machine_failover.operator_failure_directory'=>getenv('KELI_OPERATOR_FIXTURE_JOURNAL'),
+        'queue.failed'=>['driver'=>'database-uuids','database'=>'default','table'=>'failed_jobs']]);
+    app()->forgetInstance('redis');
+    (new \Illuminate\Redis\RedisServiceProvider(app()))->register();
+    $cache = new \Illuminate\Cache\CacheManager(app());
+    app()->instance('cache',$cache);
+    app()->instance('cache.store',$cache->store());
+    \Illuminate\Support\Facades\Facade::clearResolvedInstance('cache');
+    \Illuminate\Support\Facades\Facade::clearResolvedInstance('redis');
+    requireFixture(app('redis')->connection()->ping() !== false,'restricted_redis_manager_unavailable');
+    Fixture::event('restricted_acl', '12');
+}
 function operatorConfig(): void {
     config(['machine_failover.operator_enabled' => true, 'machine_failover.runner_enabled' => false,
         'machine_failover.workflow' => \App\Services\ServerMachine\Cloud\MachineFailoverWorkflow::READINESS,
@@ -44,6 +97,12 @@ function operatorConfig(): void {
     app()->instance(MachineFailoverExecutionGate::class, new MachineFailoverExecutionGate());
 }
 function prepareBusiness(): void {
+    Schema::create('failed_jobs', function (Blueprint $t) {
+        $t->id(); $t->string('uuid')->unique(); $t->text('connection'); $t->text('queue');
+        $t->longText('payload'); $t->longText('exception'); $t->timestamp('failed_at')->useCurrent();
+    });
+    DB::table('failed_jobs')->insert(['uuid'=>'fixture_preexisting_failure','connection'=>'redis','queue'=>'stat',
+        'payload'=>'existing_fixture','exception'=>'existing_fixture']);
     Schema::table('v2_user', fn (Blueprint $t) => $t->unsignedBigInteger('u')->default(0));
     Schema::table('v2_user', fn (Blueprint $t) => $t->unsignedBigInteger('d')->default(0));
     Schema::table('v2_user', fn (Blueprint $t) => $t->unsignedInteger('t')->default(0));
@@ -98,8 +157,8 @@ function processProof(string $kind): void {
 try {
     Fixture::configuration(getenv());
     [$self, $owner, $action, $case] = $argv;
-    requireFixture(PHP_OS_FAMILY === 'Linux' && posix_geteuid() !== 0 && getenv('GITHUB_WORKFLOW') === 'Manual failover isolated process limits'
-        && preg_match('/^[a-f0-9]{32}$/D', $owner) === 1 && in_array($case, ['kill', 'timeout', 'limits', 'recovery'], true), 'fixture_only');
+    requireFixture(PHP_OS_FAMILY === 'Linux' && posix_geteuid() !== 0 && getenv('GITHUB_WORKFLOW') === 'Manual failover failure journal'
+        && preg_match('/^[a-f0-9]{32}$/D', $owner) === 1 && in_array($case, ['timeout', 'recovery'], true), 'fixture_only');
     if ($action === 'seed') {
         Fixture::$owner = $owner; Fixture::$worker = 'seed';
         $seed = new class('test_operator_ticket_is_bound_to_one_run_while_the_legacy_switches_stay_closed') extends MachineFailoverNativeBridgeTest {
@@ -109,6 +168,8 @@ try {
         $seed->bootFixture();
         $queue = config('queue.connections.' . Queue::CONNECTION);
         $service = (new ReflectionMethod(MachineFailoverNativeBridgeTest::class, 'operatorService'))->invoke($seed);
+        aclAdmin(true);
+        if ($case === 'timeout') Fixture::control('fault', 'preflight', true);
         if ($case === 'recovery') {
             $policy = (new ReflectionMethod(MachineFailoverNativeBridgeTest::class, 'operatorPolicy'))->invoke($seed, $service);
             $keys = (new ReflectionProperty(HandoverEvidenceFixture::class, 'keys'))->getValue();
@@ -144,22 +205,10 @@ try {
         if ($action === 'worker') {
             processProof('worker_process');
             operatorConfig();
-            app('events')->listen(\Illuminate\Queue\Events\JobTimedOut::class, fn () => Fixture::event('operator_timed_out'));
-            app('events')->listen(\Illuminate\Queue\Events\JobProcessing::class, function ($event) use ($case) {
-                requireFixture($event->connectionName === Queue::CONNECTION && $event->job->getQueue() === Queue::OPERATOR_NAME
-                    && $event->job->resolveName() === MachineFailoverOperatorRunJob::class, 'manual_queue_crossed');
-                Fixture::event('operator_enter', (string) getmypid());
-                if ($case === 'recovery') return;
-                if ($case !== 'limits') { sleep(110); return; }
-                $until = microtime(true) + 5;
-                while (microtime(true) < $until) hash('sha256', str_repeat('c', 8192));
-                Fixture::event('cpu_ceiling_exercised');
-                while (Fixture::control('allocate') !== true && microtime(true) < $until + 35) usleep(100000);
-                Fixture::event('allocating_under_limit');
-                $allocated = [];
-                for ($i = 0; $i < 40; $i++) $allocated[] = random_bytes(8 * 1024 * 1024);
-                Fixture::event('allocation_exceeded_limit');
-                throw new RuntimeException('Kernel memory ceiling failed to stop allocation');
+            useRestrictedRedis();
+            app('events')->listen(\Illuminate\Queue\Events\JobFailed::class, function ($e): void {
+                Fixture::event('shared_horizon_failure_listener');
+                app('queue.failer')->log($e->connectionName,$e->job->getQueue(),$e->job->getRawBody(),$e->exception);
             });
             exit(runConsole('worker'));
         }
@@ -190,7 +239,7 @@ try {
                 'installation_id' => str_repeat('2', 32), 'state' => 'succeeded'], JSON_THROW_ON_ERROR));
             $response = app(MachineProvisionController::class)->result($request, app(MachineProvisionService::class));
             requireFixture($response->getStatusCode() === 200 && $response->getData(true)['data']['accepted'] === true, 'legacy_callback_rejected');
-        } elseif ($action === 'allocate') Fixture::control('allocate', true, true);
+        }
         elseif ($action === 'revoke' || $action === 'read-close') {
             requireFixture($case === 'recovery' && getenv('GITHUB_ACTIONS') === 'true', 'fixture_only');
             operatorConfig();
@@ -205,7 +254,7 @@ try {
             } else {
                 $attempt = Attempt::query()->sole();
                 $task = Task::query()->findOrFail($attempt->task_id);
-                requireFixture($task->external_id === null && $task->status === 'needs_review', 'provider_ack_not_lost');
+                requireFixture($task->external_id !== null && $task->status === 'needs_review', 'provider_ack_not_recovered');
                 $before = $task->getRawOriginal();
                 $observed = $control->execute($policy, 'read-cloud', $grant + ['attempt_id' => $attempt->id]);
                 requireFixture($observed['result'] === 'matched_original', 'original_provider_identity_not_reconciled');
@@ -228,6 +277,7 @@ try {
             app(MachineFailoverRunner::class)->advanceOperator();
             app(MachineFailoverRunner::class)->advance();
         } elseif ($action === 'cleanup') {
+            aclAdmin(false);
             $fixture = new Fixture();
             (new ReflectionProperty(Fixture::class, 'owned'))->setValue($fixture, true);
             $fixture->cleanup();
@@ -237,10 +287,16 @@ try {
         $queue = app('queue')->connection('redis');
         $events = DB::table('native_fixture_event');
         $user = DB::table('v2_user')->find(9000);
-        echo json_encode(['ready' => Cache::get(Queue::OPERATOR_HEARTBEAT) !== null, 'entered' => (int) (clone $events)->where('kind', 'operator_enter')->value('reference'),
-            'timeouts' => (clone $events)->where('kind', 'operator_timed_out')->count(), 'cpu' => (clone $events)->where('kind', 'cpu_ceiling_exercised')->count(),
-            'allocation_started' => (clone $events)->where('kind', 'allocating_under_limit')->count(),
-            'allocation_exceeded' => (clone $events)->where('kind', 'allocation_exceeded_limit')->count(),
+        $attempt = Attempt::query()->first();
+        $candidate = $attempt?->task_id ? Task::query()->find($attempt->task_id) : null;
+        echo json_encode(['ready' => Cache::get(Queue::OPERATOR_HEARTBEAT) !== null,
+            'preflight_barrier' => (clone $events)->where('kind','barrier')->where('reference','preflight')->count(),
+            'acl_checks' => (int) (clone $events)->where('kind','restricted_acl')->latest('id')->value('reference'),
+            'shared_listener' => (clone $events)->where('kind','shared_horizon_failure_listener')->count(),
+            'shared_failed_unchanged' => DB::table('failed_jobs')->count() === 1 && DB::table('failed_jobs')->value('payload') === 'existing_fixture',
+            'task_signature' => $candidate ? hash('sha256',$attempt->id.':'.$candidate->id.':'.$candidate->marker.':'.$candidate->dispatched_at) : null,
+            'provider_known' => $candidate?->external_id !== null,'candidate_attempts' => Attempt::count(),
+            'recovered_events' => DB::table('v2_machine_failover_runtime_event')->where('kind','recovered')->count(),
             'creates_and_dns' => (clone $events)->whereIn('kind', ['create', 'dns_write'])->count(), 'run' => Execution::query()->value('status'),
             'stat' => (int) DB::table('v2_stat_server')->where('server_id', 777)->value('u'), 'stat_receipts' => DB::table('v2_stat_job_receipt')->count(),
             'traffic_u' => (int) $user->u, 'traffic_d' => (int) $user->d, 'traffic_receipts' => DB::table('v2_traffic_batch')->whereNotNull('sync_finished_at')->count(),

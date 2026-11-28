@@ -9,6 +9,7 @@ return [
     'observe_enabled' => filter_var(env('MACHINE_FAILOVER_OBSERVE_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
     // Only admin-confirmed, handover-bound tasks; never enables automatic admission.
     'operator_enabled' => filter_var(env('MACHINE_FAILOVER_OPERATOR_ENABLED', false), FILTER_VALIDATE_BOOLEAN),
+    'operator_failure_directory' => env('MACHINE_FAILOVER_OPERATOR_FAILURE_DIRECTORY'),
     // Recovers existing native intents only; the separate hard gate still rejects all execution.
     'runner_enabled' => false,
     // Internal, revision-pinned admission only; the execution gate still rejects it.
