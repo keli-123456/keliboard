@@ -260,6 +260,7 @@ class MachineInstanceAcceptance
 
     public function gate(int $policy, string $key): void
     {
+        if (in_array($key, ['allow_readiness', 'allow_dns'], true) && MachineFailoverOperatorPermit::current()?->allowsPolicy($policy)) return;
         if (config('machine_acceptance.' . $key) !== true || !in_array($policy, config('machine_acceptance.allowed_policy_ids', []), true)) throw new CloudException('acceptance_disabled');
     }
 

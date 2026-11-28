@@ -67,7 +67,7 @@ class MachineReplacementService
     {
         $input = ProvisionPlan::normalize($input);
         $plan = Plan::query()->findOrFail($planId);
-        $this->gate($plan->policy_id);
+        if (MachineFailoverOperatorPermit::current()?->allowsPlan($planId) !== true) $this->gate($plan->policy_id);
         $policy = Policy::query()->findOrFail($plan->policy_id);
         if ($plan->policy_revision !== $policy->revision) throw new CloudException('config_changed');
         if ($attempt) app(MachineFailoverNativeBridge::class)->assertAttempt($attempt, $current);

@@ -2,6 +2,7 @@
 namespace App\Services\ServerMachine\Cloud;
 
 use App\Jobs\MachineFailoverRunJob;
+use App\Jobs\MachineFailoverOperatorRunJob;
 use App\Models\MachineDnsTransition;
 use App\Models\MachineFailoverAttempt as Attempt;
 use App\Models\MachineFailoverExecution as Execution;
@@ -12,14 +13,17 @@ use App\Services\ServerMachine\MachineOperationNotifier;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 
 class MachineFailoverRunner
 {
+    public const PROVISION_ROUTE_BLOCKED = 'routing_blocked';
     private const EVENTS = 'v2_machine_failover_runtime_event';
     private const REASONS = ['cancelled_by_admin', 'permission_revoked', 'deadline', 'native_context_changed', 'config_changed',
         'native_lease_lost', 'native_stop_requested', 'runner_disabled', 'queue_unavailable', 'worker_interrupted', 'worker_busy', 'worker_failed', 'orchestration_disabled',
-        'handover_revoked', 'handover_expired', 'handover_not_authorized', 'handover_execution_pending', 'handover_execution_changed', 'handover_scope_changed'];
+        'handover_revoked', 'handover_expired', 'handover_not_authorized', 'handover_execution_pending', 'handover_execution_changed', 'handover_scope_changed',
+        'operator_scope_changed'];
 
     public function available(): bool
     {
@@ -27,18 +31,24 @@ class MachineFailoverRunner
             'v2_machine_failover_attempt', 'v2_machine_provision_task', 'v2_machine_dns_transition'] as $table) if (!Schema::hasTable($table)) return false;
         return true;
     }
-    private function enabled(): bool
+    private function enabled(bool $operator = false): bool
     {
-        if (config('machine_failover.runner_enabled') !== true || !$this->available()) return false;
-        try { app(MachineFailoverExecutionGate::class)->assertAllowed('runner'); return true; }
+        if (($operator ? !MachineFailoverOperatorPermit::enabled() : config('machine_failover.runner_enabled') !== true) || !$this->available()) return false;
+        try {
+            if ($operator) MachineFailoverOperatorPermit::requireEnabled();
+            else app(MachineFailoverExecutionGate::class)->assertAllowed('runner');
+            return true;
+        }
         catch (CloudException) { return false; }
     }
-    public function enroll(string $id): void
+    public function enroll(string $id, bool $operator = false): void
     {
-        if (!$this->enabled() || $this->manualUsdo1($id)) return;
-        $run = Execution::query()->findOrFail($id); app(MachineFailoverServiceRegistry::class)->actor($run->admin_id);
+        if (!$this->enabled($operator) || $this->manualUsdo1($id)) return;
+        $run = Execution::query()->useWritePdo()->findOrFail($id);
+        if (MachineFailoverOperatorPermit::matches($run) !== $operator) return;
+        app(MachineFailoverServiceRegistry::class)->actor($run->admin_id);
         if ($run->status !== 'running') return;
-        Runtime::query()->firstOrCreate(['execution_id' => $id]); $this->dispatch($id);
+        Runtime::query()->firstOrCreate(['execution_id' => $id]); $this->dispatch($id, operator: $operator);
     }
     public function managed(Task $task): ?string
     {
@@ -66,7 +76,8 @@ class MachineFailoverRunner
         if (!$this->available()) throw new CloudException('runtime_migration_required');
         if ($row->stop_requested_at) throw new CloudException('native_stop_requested');
         if ($requireLease) {
-            if (config('machine_failover.runner_enabled') !== true) throw new CloudException('runner_disabled');
+            if (MachineFailoverOperatorPermit::matches($run)) MachineFailoverOperatorPermit::requireEnabled();
+            elseif (config('machine_failover.runner_enabled') !== true) throw new CloudException('runner_disabled');
             $lease = app()->bound(MachineFailoverLease::class) ? app(MachineFailoverLease::class) : null;
             if (!$lease || $lease->execution !== $id || !$this->owns($row, $lease->generation, $lease->ticket)) throw new CloudException('native_lease_lost');
         }
@@ -76,24 +87,60 @@ class MachineFailoverRunner
     }
     public function workerOwns(Task $task): bool
     {
-        $id = $this->managed($task); if (!$id) return true;
-        if (!isset($task->payload['coordinated_attempt']) || !Attempt::query()->whereKey($task->payload['coordinated_attempt'])->where('task_id', $task->id)->exists()) return false;
-        try { $this->guard($id); return true; } catch (CloudException) { return false; }
+        [$execution, $failure] = $this->provisionRoute($task);
+        if ($failure !== null) { $this->recordBlockedProvision($task, $failure); return false; }
+        if ($execution === null) return true;
+        try { $this->guard($execution); return true; } catch (CloudException) { return false; }
     }
     public function wakeTask(Task $task): bool
     {
-        $id = $this->managed($task); if (!$id) return false;
-        Runtime::query()->whereKey($id)->whereNull('stop_requested_at')->update(['next_check_at' => time()]);
+        [$execution, $failure] = $this->provisionRoute($task);
+        if ($failure !== null) { $this->recordBlockedProvision($task, $failure); return true; }
+        if ($execution === null) return false;
+        Runtime::query()->whereKey($execution)->whereNull('stop_requested_at')->update(['next_check_at' => time()]);
         return true;
     }
-    private function dispatch(string $id, bool $scheduled = false, bool $isolated = false): bool
+    /** @return array{?string, ?string} Execution for the runner, or a reason to reject routing. */
+    private function provisionRoute(Task $task): array
     {
-        if (!$isolated && (!$this->enabled() || $this->manualUsdo1($id))) return false;
+        $payload = $task->payload ?? [];
+        $marked = array_key_exists('coordinated_attempt', $payload);
+        $attempt = Schema::hasTable('v2_machine_failover_attempt')
+            ? Attempt::query()->useWritePdo()->where('task_id', $task->id)->first(['id', 'execution_member_id']) : null;
+        if (!$attempt) return [null, $marked ? 'native_lineage_changed' : null];
+
+        // Routing needs both the payload marker and the current persisted association.
+        if (($payload['coordinated_attempt'] ?? null) !== $attempt->id || !Schema::hasTable('v2_machine_failover_execution_member')
+            || !Schema::hasTable('v2_machine_failover_execution')) return [null, 'native_lineage_changed'];
+        $member = Member::query()->useWritePdo()->find($attempt->execution_member_id, ['id', 'execution_id', 'attempt_id']);
+        $run = $member && $member->attempt_id === $attempt->id ? Execution::query()->useWritePdo()->find($member->execution_id) : null;
+        if (!$run || $run->status !== 'running') return [null, 'native_lineage_changed'];
+        if (Schema::hasTable('v2_machine_failover_runtime') && Runtime::query()->useWritePdo()->whereKey($run->id)->exists())
+            return $this->available() ? [$run->id, null] : [null, 'runtime_migration_required'];
+        if (MachineFailoverOperatorPermit::matches($run) || app(MachineFailoverHandover::class)->requiredFor($run)
+            || array_key_exists('admission', $run->payload ?? []) || config('machine_failover.runner_enabled') === true)
+            return [null, 'runtime_migration_required'];
+        return [null, null];
+    }
+
+    private function recordBlockedProvision(Task $task, string $reason): void
+    {
+        try {
+            DB::table('v2_machine_provision_step')->insertOrIgnore(['task_id' => $task->id,
+                'state' => self::PROVISION_ROUTE_BLOCKED, 'reason' => $reason, 'created_at' => time()]);
+        } catch (\Throwable) {
+            Log::warning('Provision routing blocked; unable to retain task audit.', ['reason' => $reason]);
+        }
+    }
+    private function dispatch(string $id, bool $scheduled = false, bool $isolated = false, bool $operator = false): bool
+    {
+        if ($isolated ? ($operator || !$this->manualUsdo1($id)) : (!$this->enabled($operator) || $this->manualUsdo1($id))) return false;
         $ticket = bin2hex(random_bytes(24));
         try {
-            $row = DB::transaction(function () use ($id, $ticket, $scheduled) {
-                $row = Runtime::query()->whereKey($id)->lockForUpdate()->first(); $run = Execution::query()->find($id);
-                if (!$row || !$run || $run->status !== 'running' || $row->stop_requested_at || !$scheduled && $row->next_check_at > time()
+            $row = DB::transaction(function () use ($id, $ticket, $scheduled, $operator) {
+                $row = Runtime::query()->whereKey($id)->lockForUpdate()->first(); $run = Execution::query()->useWritePdo()->find($id);
+                if (!$row || !$run || MachineFailoverOperatorPermit::matches($run) !== $operator || $run->status !== 'running'
+                    || $row->stop_requested_at || !$scheduled && $row->next_check_at > time()
                     || $row->state === 'processing' && $row->lease_until > time() || $row->state === 'queued' && $row->next_dispatch_at > time()) return null;
                 $handover = app(MachineFailoverHandover::class);
                 if ($handover->requiredFor($run)) $handover->assertNewWork($id);
@@ -108,10 +155,13 @@ class MachineFailoverRunner
         }
         if (!$row) return false;
         if ($isolated) {
-            $this->processTicket($id, $row->generation, $ticket, true);
+            $this->processTicket($id, $row->generation, $ticket, isolated: true);
             return true;
         }
-        try { MachineFailoverRunJob::dispatch($id, $row->generation, $ticket)->delay(now()->addSeconds(max(0, $row->next_check_at - time())))->afterCommit(); }
+        try {
+            $job = $operator ? MachineFailoverOperatorRunJob::class : MachineFailoverRunJob::class;
+            $job::dispatch($id, $row->generation, $ticket)->delay(now()->addSeconds(max(0, $row->next_check_at - time())))->afterCommit();
+        }
         catch (\Throwable) {
             if (Runtime::query()->whereKey($id)->where('generation', $row->generation)->where('state', 'queued')->update(['reason' => 'queue_unavailable']))
                 $this->event($row, 'queue_failed', 'queue_unavailable');
@@ -145,15 +195,22 @@ class MachineFailoverRunner
         return isset($grant::query()->useWritePdo()->where('execution_id', $id)->first()?->stop_receipt['manual_usdo1']);
     }
 
-    private function processTicket(string $id, int $generation, string $ticket, bool $isolated = false): void
+    public function processOperator(string $id, int $generation, string $ticket): void
+    {
+        if (!$this->enabled(true) || $this->manualUsdo1($id)) return;
+        $this->processTicket($id, $generation, $ticket, operator: true);
+    }
+
+    private function processTicket(string $id, int $generation, string $ticket, bool $isolated = false, bool $operator = false): void
     {
         $lock = Cache::lock('machine-native:run:' . $id, 120);
         if (!$lock->get()) return;
         $previous = app()->bound(MachineFailoverLease::class) ? app(MachineFailoverLease::class) : null;
         try {
-            $row = DB::transaction(function () use ($id, $generation, $ticket) {
-                $row = Runtime::query()->whereKey($id)->lockForUpdate()->first(); $run = Execution::query()->find($id);
-                if (!$row || !$run || $run->status !== 'running' || $row->stop_requested_at || $row->state !== 'queued' || $row->next_check_at > time()
+            $row = DB::transaction(function () use ($id, $generation, $ticket, $operator) {
+                $row = Runtime::query()->whereKey($id)->lockForUpdate()->first(); $run = Execution::query()->useWritePdo()->find($id);
+                if (!$row || !$run || MachineFailoverOperatorPermit::matches($run) !== $operator || $run->status !== 'running'
+                    || $row->stop_requested_at || $row->state !== 'queued' || $row->next_check_at > time()
                     || $row->generation !== $generation || !hash_equals($row->ticket_hash ?? '', hash('sha256', $ticket))) return null;
                 $row->fill(['state' => 'processing', 'lease_until' => time() + 120, 'revision' => $row->revision + 1])->save();
                 $this->event($row, 'claimed'); return $row;
@@ -165,7 +222,9 @@ class MachineFailoverRunner
             try {
                 app(MachineFailoverServiceRegistry::class)->actor($run->admin_id);
                 if ($run->deadline_at <= time()) throw new CloudException('deadline');
-                app(MachineFailoverNativeBridge::class)->advance($id, $run->admin_id, true);
+                $step = fn () => app(MachineFailoverNativeBridge::class)->advance($id, $run->admin_id, true);
+                if ($operator) MachineFailoverOperatorPermit::worker($run, $step);
+                else $step();
             } catch (LockTimeoutException) { $waiting = 'worker_busy'; }
             catch (CloudException $error) {
                 if (!in_array($error->getMessage(), ['native_lease_lost', 'native_stop_requested'], true)) $this->requestStop($id, $this->reason($error->getMessage()), $generation, $ticket);
@@ -195,7 +254,7 @@ class MachineFailoverRunner
                         'next_check_at' => time() + ($urgent && !$waiting ? 1 : ($sampling ? 10 : 20)), 'next_dispatch_at' => 0, 'reason' => $waiting])->save();
                     $this->event($row, $state === 'finished' ? 'finished' : 'yielded', $waiting);
                 });
-                if ($state === 'idle' && !$isolated) $this->dispatch($id, true);
+                if ($state === 'idle' && !$isolated) $this->dispatch($id, true, operator: $operator);
             }
         } finally {
             if ($previous) app()->instance(MachineFailoverLease::class, $previous); else app()->forgetInstance(MachineFailoverLease::class);
@@ -238,17 +297,9 @@ class MachineFailoverRunner
             ->where('next_check_at', '<=', time())->orderBy('next_check_at')->orderBy('execution_id')->limit(20)->get() as $row) {
             if ($this->manualUsdo1($row->execution_id)) continue;
             $run = Execution::query()->find($row->execution_id);
+            if (MachineFailoverOperatorPermit::matches($run)) continue;
             if (!$run || $run->status !== 'running') {
-                // A crash after the run's terminal commit must not clog the due-ticket sweep.
-                DB::transaction(function () use ($row) {
-                    $current = Runtime::query()->whereKey($row->execution_id)->lockForUpdate()->first();
-                    $run = Execution::query()->find($row->execution_id);
-                    if (!$current || $current->stop_requested_at || !in_array($current->state, ['idle', 'queued', 'processing'], true)
-                        || $run?->status === 'running') return;
-                    $current->fill(['state' => 'finished', 'ticket_hash' => null, 'lease_until' => null,
-                        'revision' => $current->revision + 1, 'reason' => $run ? null : 'native_context_changed'])->save();
-                    $this->event($current, 'finished', $current->reason);
-                });
+                $this->settleTerminal($row->execution_id);
                 continue;
             }
             try { app(MachineFailoverServiceRegistry::class)->actor($run->admin_id); if ($run->deadline_at <= time()) throw new CloudException('deadline'); }
@@ -256,6 +307,57 @@ class MachineFailoverRunner
             if ($this->dispatch($row->execution_id)) $result['queued']++;
         }
         return $result;
+    }
+
+    public function advanceOperator(bool $stopsOnly = false, ?string $grantId = null): array
+    {
+        $result = ['enabled' => false, 'queued' => 0, 'stopped' => 0];
+        $grant = \App\Models\MachineFailoverHandoverGrant::class;
+        if (!$this->available() || !Schema::hasTable($grant::TABLE)) return $result;
+        // The handover journal has exactly one writer slot. Never discover new work here.
+        $id = $grant::query()->useWritePdo()->whereNotNull('writer_slot')
+            ->when($grantId !== null, fn ($query) => $query->whereKey($grantId))->value('execution_id');
+        $run = $id ? Execution::query()->useWritePdo()->find($id) : null;
+        if (!MachineFailoverOperatorPermit::matches($run)) return $result;
+        $row = Runtime::query()->useWritePdo()->find($id);
+        if (!$row || !in_array($row->state, ['idle', 'queued', 'processing', 'stopping'], true)) return $result;
+        if ($row->stop_requested_at) {
+            if ($this->settleStop($id)) $result['stopped']++;
+            return $result;
+        }
+        if ($run->status !== 'running') { $this->settleTerminal($id); return $result; }
+        try {
+            MachineFailoverOperatorPermit::requireEnabled();
+            app(MachineFailoverServiceRegistry::class)->actor($run->admin_id);
+            if ($run->deadline_at <= time()) throw new CloudException('deadline');
+            app(MachineFailoverHandover::class)->assertNewWork($id);
+        } catch (CloudException $error) {
+            $this->requestStop($id, $this->reason($error->getMessage()));
+            if ($this->settleStop($id)) $result['stopped']++;
+            return $result;
+        }
+        if (!$stopsOnly) {
+            $result['enabled'] = true;
+            // Use the dedicated process; an offline operator worker must not fill any queue.
+            try { MachineFailoverOperatorPermit::requireConsumer(); }
+            catch (CloudException) { return $result; }
+            if ($this->dispatch($id, operator: true)) $result['queued']++;
+        }
+        return $result;
+    }
+
+    private function settleTerminal(string $id): void
+    {
+        // Recover a crash between the terminal run commit and the runtime receipt.
+        DB::transaction(function () use ($id) {
+            $current = Runtime::query()->whereKey($id)->lockForUpdate()->first();
+            $run = Execution::query()->useWritePdo()->find($id);
+            if (!$current || $current->stop_requested_at || !in_array($current->state, ['idle', 'queued', 'processing'], true)
+                || $run?->status === 'running') return;
+            $current->fill(['state' => 'finished', 'ticket_hash' => null, 'lease_until' => null,
+                'revision' => $current->revision + 1, 'reason' => $run ? null : 'native_context_changed'])->save();
+            $this->event($current, 'finished', $current->reason);
+        });
     }
     public function stop(string $id, int $revision, string $request, int $admin): array
     {

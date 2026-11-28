@@ -37,14 +37,16 @@ class MachineFailoverNativeBridge
         ?string $handoverGrantId = null): array
     {
         $this->gate->assertAllowed('start'); $this->registry->actor($admin);
-        if ($handoverGrantId !== null && ($admission !== null || config('machine_failover.runner_enabled') !== true
+        $operator = MachineFailoverOperatorPermit::current();
+        if ($operator && (!$operator->allowsStart($handoverGrantId, $planIds) || $admission !== null)) throw new CloudException('operator_scope_changed');
+        if ($handoverGrantId !== null && ($admission !== null || !$operator && config('machine_failover.runner_enabled') !== true
             || !app(MachineFailoverRunner::class)->available())) throw new CloudException('handover_scope_invalid');
         if (!$this->available()) throw new CloudException('migration_required');
         if (!preg_match('/^[a-f0-9]{32}$/D', $request) || !array_is_list($planIds) || !$planIds || count($planIds) > 10
             || count(array_unique($planIds, SORT_REGULAR)) !== count($planIds)) throw new CloudException('invalid_native_intent');
         foreach ($planIds as $id) if (!is_int($id) || $id < 1) throw new CloudException('invalid_native_intent');
         sort($planIds);
-        $result = $this->registry->locked(fn () => DB::transaction(function () use ($service, $revision, $planIds, $releaseId, $request, $admin, $admission, $handoverGrantId) {
+        $result = $this->registry->locked(fn () => DB::transaction(function () use ($service, $revision, $planIds, $releaseId, $request, $admin, $admission, $handoverGrantId, $operator) {
             $this->gate->assertAllowed('start'); $this->registry->actor($admin);
             $snapshot = $this->registry->snapshot($service, $revision);
             foreach ($snapshot['members'] as $member) {
@@ -60,6 +62,7 @@ class MachineFailoverNativeBridge
             if ($workflow === MachineFailoverWorkflow::READINESS) $intentData[] = ['workflow' => $workflow];
             if ($admission !== null) $intentData[] = $admission;
             if ($handoverGrantId !== null) $intentData[] = ['handover_grant_id' => $handoverGrantId];
+            if ($operator) $intentData[] = ['launch_mode' => MachineFailoverOperatorPermit::MODE];
             $intent = $admission === null ? $this->hash($intentData) : hash('sha256', MachineIntentJson::encode($intentData));
             if ($old) {
                 if (!hash_equals($old->intent_hash, $intent)) throw new CloudException('request_conflict');
@@ -105,7 +108,7 @@ class MachineFailoverNativeBridge
                 $rows[] = ['member_id' => $match[0]['id'], 'policy_id' => $policy->id, 'policy_revision' => $policy->revision, 'plan_id' => $id,
                     'episode_key' => $source['episode_key'], 'payload' => ['source' => $source, 'priority' => $match[0]['priority'],
                         'source_instance_id' => $active->id] + $dnsPayload
-                        + (($retry = app(MachineCandidateRetry::class)->pin($policy, $workflow)) === null ? [] : ['candidate_retry' => $retry])];
+                        + (($retry = $operator ? null : app(MachineCandidateRetry::class)->pin($policy, $workflow)) === null ? [] : ['candidate_retry' => $retry])];
             }
             if ($admission !== null) app(MachineFailoverAdmission::class)->assertStart($admission, $snapshot, $release, array_column($rows, 'episode_key', 'plan_id'));
             $run = Execution::query()->create(['id' => (string) Str::uuid(), 'service_id' => $service, 'service_revision' => $revision,
@@ -113,14 +116,16 @@ class MachineFailoverNativeBridge
                 'payload' => ['snapshot' => $snapshot, 'release' => $release]
                     + ($workflow === MachineFailoverWorkflow::READINESS ? ['workflow' => $workflow] : []) + ($sources ? ['dns_sources' => $sources] : [])
                     + ($admission === null ? [] : ['admission' => $admission])
+                    + ($operator ? ['launch_mode' => MachineFailoverOperatorPermit::MODE] : [])
                     + ($handoverGrantId === null ? [] : ['handover_grant_id' => $handoverGrantId]),
                 'deadline_at' => min(time() + 1200, $handoverExpiry ?? PHP_INT_MAX)]);
             foreach ($rows as $row) Member::query()->create($row + ['execution_id' => $run->id]);
             if ($handoverGrantId !== null) app(MachineFailoverHandover::class)->bindExecution($handoverGrantId, $run->id);
+            if ($operator) Runtime::query()->firstOrCreate(['execution_id' => $run->id]);
             return $this->report($run->id, $admin);
         }));
         app(\App\Services\ServerMachine\MachineOperationNotifier::class)->failoverRun($result['id']);
-        app(MachineFailoverRunner::class)->enroll($result['id']);
+        app(MachineFailoverRunner::class)->enroll($result['id'], operator: $operator !== null);
         return $result;
     }
 
@@ -553,6 +558,11 @@ class MachineFailoverNativeBridge
     private function context(Execution $run, bool $requireLease = true): void
     {
         MachineFailoverWorkflow::forRun($run);
+        $operator = MachineFailoverOperatorPermit::current();
+        if ($operator || MachineFailoverOperatorPermit::matches($run)) {
+            if (!$operator) throw new CloudException('orchestration_disabled');
+            $operator->requireRun($run, $requireLease);
+        }
         $this->gate->assertAllowed('context'); app(MachineFailoverRunner::class)->guard($run->id, $requireLease); $this->registry->actor($run->admin_id);
         if ($run->status !== 'running' || $run->deadline_at <= time()) throw new CloudException('native_intent_expired');
         if (!hash_equals($run->context_hash, $this->registry->fingerprint($this->registry->snapshot($run->service_id, $run->service_revision)))) throw new CloudException('native_context_changed');

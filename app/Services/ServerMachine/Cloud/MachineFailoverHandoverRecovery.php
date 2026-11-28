@@ -103,6 +103,7 @@ final class MachineFailoverHandoverRecovery
     private function original(string $executionId, string $attemptId, int $admin): array
     {
         $this->gate->assertAllowed('handover_readback');
+        MachineFailoverOperatorPermit::current()?->requireReadbackRun($executionId);
         $run = $this->handover->stoppedOriginal($executionId, $admin);
         $attempt = Attempt::query()->useWritePdo()->find($attemptId);
         $member = $attempt ? Member::query()->useWritePdo()->find($attempt->execution_member_id) : null;

@@ -25,9 +25,9 @@ final class MachineFailoverHandover
 
     public function __construct(private MachineFailoverServiceRegistry $registry) {}
 
-    public function issue(array $scope, int $admin, ?array $proof = null): string
+    public function issue(array $scope, int $admin, ?array $proof = null, ?string $mode = null, ?string $authority = null): string
     {
-        return $this->issueGrant($scope, $admin, $proof, null);
+        return $this->issueGrant($scope, $admin, $proof, null, $mode, $authority);
     }
 
     public function issueManualUsdo1(array $scope, int $admin, array $pin, array $proof): string
@@ -36,9 +36,12 @@ final class MachineFailoverHandover
         return $this->issueGrant($scope, $admin, $proof, $pin);
     }
 
-    private function issueGrant(array $scope, int $admin, ?array $proof, ?array $pin): string
+    private function issueGrant(array $scope, int $admin, ?array $proof, ?array $pin, ?string $mode = null, ?string $authority = null): string
     {
         $this->available();
+        if (($mode === null && $authority !== null)
+            || ($mode !== null && ($mode !== MachineFailoverOperatorPermit::MODE || !$this->digest($authority))))
+            throw new CloudException('handover_scope_invalid');
         $keys = ['service_id', 'service_revision', 'context_hash', 'release', 'evidence_sha256', 'expires_at'];
         if (count($scope) !== count($keys) || array_diff(array_keys($scope), $keys)
             || !is_int($scope['service_id']) || $scope['service_id'] < 1
@@ -47,7 +50,7 @@ final class MachineFailoverHandover
             || !$this->validRelease($scope['release'])) throw new CloudException('handover_scope_invalid');
 
         try {
-            return $this->registry->locked(fn () => DB::transaction(function () use ($scope, $admin, $proof, $pin) {
+            return $this->registry->locked(fn () => DB::transaction(function () use ($scope, $admin, $proof, $pin, $mode, $authority) {
                 $this->registry->actor($admin);
                 $this->window(now()->getTimestamp(), $scope['expires_at']);
                 if (Grant::query()->useWritePdo()->where('evidence_sha256', $scope['evidence_sha256'])->exists())
@@ -61,8 +64,9 @@ final class MachineFailoverHandover
                 $grant->issued_at = now()->getTimestamp();
                 $this->window($grant->issued_at, $grant->expires_at);
                 $evidence = app(MachineFailoverHandoverEvidence::class);
+                $bound = $mode === null ? [] : ['launch_mode' => $mode, 'authority_sha256' => $authority];
                 if ($pin !== null) MachineUsdo1HandoverScope::assertCurrent($pin, $snapshot);
-                $grant->stop_receipt = $pin === null ? $evidence->stopped($scope, $admin, $proof, $grant->issued_at)
+                $grant->stop_receipt = $pin === null ? $evidence->stopped($scope + $bound, $admin, $proof, $grant->issued_at) + $bound
                     : $evidence->stoppedManual($scope, $admin, $pin, $proof, $grant->issued_at);
                 $grant->save();
                 return $grant->id;
@@ -258,6 +262,7 @@ final class MachineFailoverHandover
             || $run->created_at < $grant->issued_at || $run->deadline_at > $grant->expires_at
             || !hash_equals($grant->context_hash, $run->context_hash)
             || ($payload['handover_grant_id'] ?? null) !== $grant->id
+            || ($payload['launch_mode'] ?? null) !== ($grant->stop_receipt['launch_mode'] ?? null)
             || ($payload['workflow'] ?? null) !== MachineFailoverWorkflow::READINESS
             || !is_array($payload['snapshot'] ?? null)
             || !hash_equals($grant->context_hash, $this->registry->fingerprint($payload['snapshot']))

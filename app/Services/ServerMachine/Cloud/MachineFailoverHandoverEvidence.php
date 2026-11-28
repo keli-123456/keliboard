@@ -14,11 +14,11 @@ final class MachineFailoverHandoverEvidence
     private const MAX_AGE = 300;
 
     // Use independent, trusted public keys per purpose. No production authority is configured here.
-    public function __construct(private array $trustedKeys = []) {}
+    public function __construct(private array $trustedKeys = [], private string $oldWriter = 'tanzhen') {}
 
     public function stopped(array $scope, int $admin, ?array $proof, int $now): array
     {
-        return $this->stopReceipt(self::STOP, 'tanzhen', $scope + ['operator_id' => $admin], $proof, $now);
+        return $this->stopReceipt(self::STOP, $this->oldWriter, $scope + ['operator_id' => $admin], $proof, $now);
     }
 
     public function stoppedManual(array $scope, int $admin, array $pin, ?array $proof, int $now): array

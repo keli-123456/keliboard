@@ -40,7 +40,8 @@ trait JsonProvisioning
     public function create(MachineCloudAccount $account, array $request, int $since): array
     {
         MachineProvisionProviders::assertProvider($account, static::PROVISION_PROVIDER); $this->creationRequest($request);
-        if (config('machine_provision.allow_live') !== true) throw new CloudException('provisioning_disabled');
+        if (config('machine_provision.allow_live') !== true && !MachineFailoverOperatorPermit::allowsCreate($account, $request, $since))
+            throw new CloudException('provisioning_disabled');
         $data = $this->request($account, 'POST', $this->provisionPath(), $request);
         try {
             $raw = $data[$account->provider === 'digitalocean' ? 'droplet' : 'instance'] ?? null;

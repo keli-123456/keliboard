@@ -6,6 +6,9 @@ final class MachineFailoverQueue
 {
     public const CONNECTION = 'redis_failover';
     public const NAME = 'machine_failover';
+    public const OPERATOR_NAME = 'machine_failover_operator';
+    public const OPERATOR_HEARTBEAT = 'machine-failover:operator-worker:ready';
+    public const OPERATOR_HEARTBEAT_SECONDS = 15;
     public const JOB_TIMEOUT = 75;
     public const RETRY_AFTER = 90;
 
