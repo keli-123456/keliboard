@@ -54,6 +54,11 @@ function aclAdmin(bool $create): void {
         'cache:machine-native:run:*','cache:machine-native:member:*','cache:machine-failover:write',
         'cache:machine-cloud:quota:linode','cache:machine-cloud:health:linode','cache:machine-cloud:account:*',
         'cache:machine-provision:slot:*','cache:machine-operation-notice:*','fixture-barrier:create_after','fixture-barrier:preflight'];
+    $policy=\App\Models\MachineFailoverPolicy::query()->sole();
+    if ($policy->credential_group_id) {
+        $pool=app(\App\Services\ServerMachine\Cloud\MachineFailoverCredentials::class)->pool($policy->credential_group_id,'linode');
+        $rw[]='cache:machine-cloud:catalog:'.$pool['fingerprint'];
+    }
     $ro = ['cache:illuminate:queue:restart','cache:illuminate:queue:paused:'.Queue::CONNECTION.':'.Queue::OPERATOR_NAME,
         'fixture-control:fault','fixture-control:release','fixture-control:record_sets','cache:machine_addresses:*','cache:node_instances:*'];
     $reply = $redis->rawCommand('ACL','SETUSER',$id['username'],'reset','on','>'.$id['password'],
@@ -309,7 +314,6 @@ try {
             'preflight_barrier' => (clone $events)->where('kind','barrier')->where('reference','preflight')->count(),
             'acl_checks' => (int) (clone $events)->where('kind','restricted_acl')->latest('id')->value('reference'),
             'unexpected_acl' => aclDiagnostics(),
-            'caught_fixture_fault' => (clone $events)->where('kind','fixture_private_exception')->latest('id')->value('reference'),
             'shared_listener' => (clone $events)->where('kind','shared_horizon_failure_listener')->count(),
             'shared_failed_unchanged' => DB::table('failed_jobs')->count() === 1 && DB::table('failed_jobs')->value('payload') === 'existing_fixture',
             'task_signature' => $candidate ? hash('sha256',$attempt->id.':'.$candidate->id.':'.$candidate->marker.':'.$candidate->dispatched_at) : null,

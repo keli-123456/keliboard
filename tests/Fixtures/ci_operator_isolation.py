@@ -187,7 +187,11 @@ try:
     assert pid != business.pid
     delivery = wait_for(lambda: journal_state().get("active"), 18, "Manual delivery marker missing")
     barrier = "provider_barrier" if CASE == "recovery" else "preflight_barrier"
-    first = wait_for(lambda: s if (s := status())[barrier] == 1 else None, 18, "Mock provider barrier missing")
+    def entered():
+        s = status()
+        assert s["run"] != "needs_review", "Manual path stopped before the simulated provider barrier"
+        return s if s[barrier] == 1 else None
+    first = wait_for(entered, 18, "Mock provider barrier missing")
     assert first["runtime_state"] == "processing" and not first["provider_known"]
     business_checkpoint(business, 2, int(CASE == "recovery"))
     if CASE == "timeout":
@@ -245,7 +249,7 @@ except Exception:
             state = status()
             keys = ("run", "runtime_state", "runtime_reason", "member_phase", "member_reason", "worker_error",
                     "timer_ticks", "provider_barrier", "preflight_barrier", "creates_and_dns", "acl_checks", "shared_listener",
-                    "unexpected_acl", "caught_fixture_fault")
+                    "unexpected_acl")
             print("CI_DIAGNOSTIC", json.dumps({k: state.get(k) for k in keys}), flush=True)
         except Exception:
             pass
