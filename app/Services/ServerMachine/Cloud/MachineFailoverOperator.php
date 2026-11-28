@@ -117,7 +117,7 @@ final class MachineFailoverOperator
             if (count($ids) > 10) throw new CloudException('invalid_native_intent');
             $grant = Grant::query()->useWritePdo()->where('service_id', $service)->where('service_revision', $revision)
                 ->where('admin_id', $admin)->whereNotNull('writer_slot')->whereNull('execution_id')->first();
-            if (!$grant || isset($grant->stop_receipt['manual_usdo1'])) throw new CloudException('handover_not_authorized');
+            if (!MachineFailoverOperatorPermit::issuedForOperator($grant)) throw new CloudException('handover_not_authorized');
             $release = $grant->release['id'] ?? 0;
             if (!is_int($release) || $release < 1) throw new CloudException('release_unavailable');
             $expiry = $this->handover->assertStart($grant->id, $service, $revision, $release, $admin);

@@ -21,6 +21,7 @@ use App\Services\ServerMachine\Cloud\ProvisionPlan;
 use App\Services\ServerMachine\MachineAddressInventory;
 use App\Services\ServerMachine\MachineEntryProbe;
 use App\Support\Setting;
+use Illuminate\Bus\UniqueLock;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Http\Request;
@@ -214,6 +215,27 @@ class MachineProvisionTest extends TestCase
         $this->code('request_conflict', fn () => $this->service->queue($this->plan(['region' => 'jp-tyo-3']), str_repeat('a', 32), $this->admin->id));
         $this->code('task_active', fn () => $this->service->queue($this->plan(), str_repeat('b', 32), $this->admin->id));
         Http::assertNothingSent(); Bus::assertDispatched(MachineProvisionJob::class, fn ($job) => $job->queue === 'admin_operations' && $job->connection === 'redis');
+    }
+
+    public function test_blocked_coordinated_tasks_do_not_starve_ordinary_provisioning(): void
+    {
+        $ordinary = $this->task(); Bus::fake();
+        (new UniqueLock(app('cache')->store()))->release(new MachineProvisionJob($ordinary->id));
+        for ($i = 0; $i < 10; ++$i) {
+            $task = $ordinary->replicate();
+            $task->fill(['id' => (string) \Illuminate\Support\Str::uuid(), 'request_key' => hash('sha256', 'request-'.$i),
+                'marker' => hash('sha256', 'marker-'.$i), 'installation_id' => substr(hash('sha256', 'fixture-'.$i), 0, 32), 'created_at' => time() - 60,
+                'payload' => $ordinary->payload + ['coordinated_attempt' => (string) \Illuminate\Support\Str::uuid()]])->save();
+        }
+
+        self::assertSame(['queued' => 10], $this->service->advance());
+        Bus::assertNotDispatched(MachineProvisionJob::class);
+        self::assertSame(['queued' => 1], $this->service->advance());
+        Bus::assertDispatchedTimes(MachineProvisionJob::class, 1);
+        Bus::assertDispatched(MachineProvisionJob::class, fn ($job) => $job->taskId === $ordinary->id
+            && $job->queue === 'admin_operations' && $job->connection === 'redis');
+        self::assertSame(10, DB::table('v2_machine_provision_step')->where('state', 'routing_blocked')->count());
+        Http::assertNothingSent();
     }
 
     public function test_accepted_tasks_allow_replacement_but_still_count_against_daily_budget(): void

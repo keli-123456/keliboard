@@ -1,97 +1,57 @@
-name: Native Failover Horizon Acceptance
+name: Manual failover lane ACL
 
 on:
   workflow_dispatch:
-    inputs:
-      scope:
-        description: Isolated smoke or complete real-duration lease acceptance
-        type: choice
-        options: [full, smoke]
-        default: full
 
 permissions:
   contents: read
 
-concurrency:
-  group: native-horizon-isolated-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  daemon:
-    name: Horizon real leases (${{ matrix.isolation }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        isolation: ["REPEATABLE READ", "READ COMMITTED"]
+  lane-acl:
+    if: github.ref_name == 'codex/operator-lane-acl-20261128'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 9
     services:
       mysql:
-        image: mysql:8.4
+        image: mysql:5.7.44
         env:
-          MYSQL_DATABASE: keli_acceptance_native_failover
-          MYSQL_USER: keli_native_fixture
-          MYSQL_PASSWORD: ephemeral-native-ci-only
-          MYSQL_ROOT_PASSWORD: ephemeral-native-root-only
-        ports:
-          - 127.0.0.1::3306
+          MYSQL_DATABASE: keli_operator_acl_ci
+          MYSQL_ROOT_HOST: '%'
+          MYSQL_ROOT_PASSWORD: discarded-container-fixture-root
+        ports: ['127.0.0.1::3306']
         options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=24
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent" --health-interval=5s --health-timeout=5s --health-retries=24
       redis:
         image: redis:7-alpine
-        ports:
-          - 127.0.0.1::6379
+        ports: ['127.0.0.1::6379']
         options: >-
-          --health-cmd="redis-cli ping"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=12
-    env:
-      KELI_NATIVE_ACCEPTANCE: "1"
-      KELI_NATIVE_HORIZON_ACCEPTANCE: "1"
-      KELI_NATIVE_HOST: "127.0.0.1"
-      KELI_NATIVE_DATABASE: keli_acceptance_native_failover
-      KELI_NATIVE_USER: keli_native_fixture
-      KELI_NATIVE_PASSWORD: ephemeral-native-ci-only
-      KELI_NATIVE_ISOLATION: ${{ matrix.isolation }}
+          --health-cmd="redis-cli ping" --health-interval=5s --health-timeout=5s --health-retries=12
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: "8.2"
-          extensions: pdo_mysql, pdo_sqlite, redis, pcntl, posix, mbstring, openssl
+          php-version: '8.2'
+          extensions: pdo_mysql, pdo_sqlite, redis, mbstring, openssl
           tools: composer:v2
           coverage: none
-      - name: Install locked test dependencies without application startup
-        run: composer install --no-interaction --no-progress --prefer-dist --no-scripts
-      - name: Verify scoped Horizon console startup and neighbor isolation
-        if: inputs.scope == 'smoke'
+      - run: composer install --no-interaction --no-progress --prefer-dist --no-scripts
+      - name: Test exact queue and database grants
         env:
-          KELI_NATIVE_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
-          KELI_NATIVE_REDIS_PORT: ${{ job.services.redis.ports[6379] }}
+          FIXTURE_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
+          FIXTURE_REDIS_PORT: ${{ job.services.redis.ports[6379] }}
+          FIXTURE_MYSQL_ROOT: discarded-container-fixture-root
         run: |
-          mkdir -p artifacts
-          php -d memory_limit=512M vendor/bin/phpunit -c phpunit-native-horizon.xml --filter test_horizon_console_is_isolated --stop-on-error --stop-on-failure --log-junit artifacts/native-horizon.xml
-      - name: Observe actual 75s timeout, 120s lease, 300s member lock and daemon restart
-        if: inputs.scope == 'full'
-        env:
-          KELI_NATIVE_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
-          KELI_NATIVE_REDIS_PORT: ${{ job.services.redis.ports[6379] }}
-        run: |
-          mkdir -p artifacts
-          php -d memory_limit=512M vendor/bin/phpunit -c phpunit-native-horizon.xml --stop-on-error --stop-on-failure --log-junit artifacts/native-horizon.xml
-      - name: Preserve aggregate daemon acceptance evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-horizon-${{ strategy.job-index }}
-          path: |
-            artifacts/native-horizon.xml
-            artifacts/native-horizon-summary.jsonl
-          if-no-files-found: ignore
-          retention-days: 7
+          set -euo pipefail
+          python3 -c 'import os,json; print(json.dumps(dict(schema="keli_operator_acl_ci",mysql_port=int(os.environ["FIXTURE_MYSQL_PORT"]),redis_port=int(os.environ["FIXTURE_REDIS_PORT"]),mysql_root_password=os.environ["FIXTURE_MYSQL_ROOT"])))' | php tests/Fixtures/ci_operator_acl.php ci
+      - name: Regression for manual routing and legacy receipts
+        run: >-
+          php vendor/bin/phpunit --do-not-cache-result
+          --filter '::test_(operator_|revoked_operator_|runner_|initially_unreachable_source|handover_binds_|handover_persisted_|queue_is_encrypted|blocked_coordinated_tasks|create_sends_only_one_post|ambiguous_create_only|authenticated_receipt|public_receipt_route)'
+          tests/Unit/Services/MachineFailoverNativeBridgeTest.php tests/Unit/Services/MachineProvisionTest.php
+      - name: Regression for stat and traffic jobs
+        run: >-
+          php vendor/bin/phpunit --do-not-cache-result
+          tests/Unit/Jobs/StatBatchJobsTest.php tests/Unit/Jobs/StatUserJobTest.php
+          tests/Unit/Jobs/TrafficFetchJobTest.php tests/Unit/Services/TrafficBatchServiceTest.php

@@ -176,6 +176,7 @@ class MachineProvisionService
         $this->quotaLocked($initial->payload['plan']['provider'] ?? 'linode', fn () => $this->locked($initial->account_id, function () use ($id, $readbackOnly) {
             $task = Task::query()->find($id);
             if (!$task || in_array($task->status, Task::TERMINAL, true) || $task->next_check_at > time()) return;
+            if (!app(MachineFailoverRunner::class)->workerOwns($task)) return;
             $phase = 'admission';
             try {
                 $permit = MachineFailoverOperatorPermit::current(); $operator = $permit?->allowsTask($task) === true;
@@ -351,7 +352,10 @@ class MachineProvisionService
     public function advance(): array
     {
         if (config('machine_provision.allow_live') !== true || !$this->available()) return ['queued' => 0];
-        $rows = Task::query()->whereNotIn('status', Task::TERMINAL)->where('next_check_at', '<=', time())->orderBy('created_at')->limit(10)->get();
+        $rows = Task::query()->whereNotIn('status', Task::TERMINAL)->where('next_check_at', '<=', time())
+            ->whereNotExists(fn ($steps) => $steps->from('v2_machine_provision_step')
+                ->whereColumn('task_id', 'v2_machine_provision_task.id')->where('state', MachineFailoverRunner::PROVISION_ROUTE_BLOCKED))
+            ->orderBy('created_at')->limit(10)->get();
         foreach ($rows as $task) $this->dispatch($task);
         return ['queued' => $rows->count()];
     }
@@ -391,7 +395,7 @@ class MachineProvisionService
     }
     private function actor(int $id): void
     {
-        $admin = User::query()->find($id);
+        $admin = User::query()->find($id, ['id', 'is_admin', 'banned']);
         if (!$admin || !$admin->is_admin || $admin->banned) throw new CloudException('permission_revoked');
     }
     private function locked(int $account, callable $work): mixed { return Cache::lock('machine-cloud:account:' . $account, 120)->block(2, $work); }
