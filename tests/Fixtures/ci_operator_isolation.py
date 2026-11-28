@@ -228,6 +228,7 @@ try:
         evidence.update(timer_non_root=True, sigkill_first_error=True, original_task_resumed=True, stopped_after_revocation=True,
                         original_readback=True, closure_verified=True, simulated_creates=1, recovery_wait_seconds=elapsed,
                         initial_member_lock_ttl=first["member_lock_ttl"])
+        print("RECOVERY_CHECKPOINT", json.dumps(evidence, sort_keys=True), flush=True)
     else:
         wait_for(lambda: show("ActiveState") in {"failed", "inactive"}, 96, "Manual worker did not stop within the fixture deadline")
         timeout = journal_state()["failures"][delivery["delivery"]]

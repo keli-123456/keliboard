@@ -217,7 +217,8 @@ try {
             'account_id' => $legacyAccount->id, 'account_revision' => $legacyAccount->revision,
             'request_key' => hash('sha256', $owner), 'marker' => 'fixture-legacy-' . $owner,
             'installation_id' => str_repeat('2', 32), 'callback_hash' => hash('sha256', str_repeat('4', 64)),
-            'status' => 'waiting_initialization', 'dispatched_at' => time(), 'deadline_at' => time() + 300])->save();
+            // Keep the existing legacy receipt admissible through the real 300-second killed-worker lock and final readback.
+            'status' => 'waiting_initialization', 'dispatched_at' => time(), 'deadline_at' => time() + 900])->save();
         Fixture::control('grant', $grant->id, true);
         Fixture::control('legacy', $legacy->id, true);
         Fixture::control('service', $service['id'], true);
